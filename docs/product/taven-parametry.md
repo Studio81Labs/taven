@@ -214,10 +214,10 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | **`strop_spend_v0`** | **5 000 Kč** do jednoho kanálu |
 | Lhůta na individuální nabídku | 24 h v pracovní dny |
 | Slíbená dodací lhůta | ⚠ trh: 1–2 dny jednoduché, garance 72 h |
-| **`payment_reservation_minutes`** | **⚠ 15 minut**; pozdější capture musí zdroje znovu získat, nebo se ihned refunduje |
+| **`payment_reservation_minutes`** | **⚠ 15 minut**; pozdější capture smí zdroje znovu získat jen před business cutoffem, jinak se ihned celý refunduje |
 | **`balance_payment_days`** | **⚠ 7 dní** od QC individuální zakázky; pak explicitní `OrderSettlement` |
 | **`abandoned_item_retention_days`** | **⚠ 30 dní** od `cancelled_settled`; pak auditovaná recyklace/zničení |
-| **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak nejdřív zavřít revision capture window, zrušit neaktivovaný batch, refundovat nečerpanou část a uzavřít `partially_fulfilled`; pozdní capture se celý kompenzuje |
+| **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak nejdřív zavřít revision capture window, zrušit neaktivovaný batch, refundovat nečerpanou část a uzavřít `partially_fulfilled`; odmítnutí revize deadline hned ruší a pozdní capture se celý kompenzuje |
 | Reklamační okno pro zádržné (síť) | 7 dní od doručení |
 | **`source_model_retention_days`** | **90 dní** od terminálního stavu objednávky nebo expirace nabídky; jednotně pro zdrojové STL, 3MF i STEP |
 | **`undelivered_reproduction_retention_days`** | **⚠ 90 dní** od terminálního stavu bez doručení; pak smazat rekonstruovatelný artefakt, pokud neběží incident/claim/legal hold |
