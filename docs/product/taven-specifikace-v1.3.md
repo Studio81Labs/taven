@@ -286,10 +286,10 @@ cena_celkem    = cena_tisku + doprava + small_order_surcharge
 **Báze pro `rezerva_pretisk` je definovaná explicitně**, jinak ji každý implementátor aplikuje jinam:
 
 ```
-rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk)
+rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk + amortizace)
 ```
 
-`handling_pretisk` je peněžní částka: používá stejnou sazbu práce a stejné násobnosti podložek a kusů jako hlavní výpočet. Nezahrnuje `handling_order_fix`, `handling_pack` ani `shipping_trip` — ty se při přetisku chyceném doma neopakují.
+`handling_pretisk` je peněžní částka: používá stejnou sazbu práce a stejné násobnosti podložek a kusů jako hlavní výpočet. Nezahrnuje `handling_order_fix`, `handling_pack` ani `shipping_trip` — ty se při přetisku chyceném doma neopakují. `amortizace` v bázi je očekávané opotřebení životnosti stroje při opakovaném tisku; v v0 a hobby režimu je při návratnosti ∞ stále nulová.
 
 **Nekryje ale odmítnutí až po doručení.** To stojí navíc dopravu a balení, a to obojím směrem. Dokud není změřený first-pass yield, sedí tohle riziko v marži; jakmile bude, patří sem druhá složka s vlastní mírou.
 
@@ -420,6 +420,8 @@ V v0 i v1 obě fáze splynou (jeden stroj), ale **šev tam musí být**.
 
 **STEP může obsahovat sestavu.** Když soubor obsahuje víc těles, ukaž je jako seznam a nech zákazníka vybrat, které se tisknou; každé naceň jako samostatný `OrderItem`. Nad práh → individuální nabídka. U STL tenhle případ neexistuje.
 
+Cache nikdy neidentifikuje vstup jen hashem celého uploadu. Každý `OrderItem` odkazuje na immutable `ModelGeometry`: u STL/3MF je to kanonická tisknutelná geometrie, u STEP deterministicky extrahované vybrané těleso nebo podmnožina těl po tesselaci s verzovanou tolerancí. `geometry_hash = sha256(canonical_geometry_bytes)`; dvě tělesa jednoho STEP souboru tak mají rozdílný klíč, geometricky totožné výstupy mohou cache bezpečně sdílet.
+
 ### 5.4 Výstupní formáty
 
 | Stroj | Formát | Přenos |
@@ -449,7 +451,7 @@ Každý nález má úroveň `info` / `warning` (risk checkbox) / `blocking` (→
 
 ### 5.6 Cache
 
-Klíč reference slice je `sha256(ModelFile) + reference_profile_revision_id + parts_per_plate`. Klíč production slice je `sha256(ModelFile) + machine_profile_revision_id + machine_calibration_revision_id + parts_per_plate`. Revision ID je globálně unikátní immutable snapshot, takže se nemohou srazit lokální čísla verzí dvou profilů ani dvou fyzických strojů. `MachineCalibration` obsahuje `flow_ratio` a XY/elephant-foot kompenzace; změna kteréhokoli override vytvoří novou revizi a G-code z jiné kalibrace nelze vrátit z cache.
+Klíč reference slice je `geometry_hash + reference_profile_revision_id + parts_per_plate`. Klíč production slice je `geometry_hash + machine_profile_revision_id + machine_calibration_revision_id + parts_per_plate`. `geometry_hash` patří konkrétnímu `ModelGeometry`, ne kontejnerovému `ModelFile`. Revision ID je globálně unikátní immutable snapshot, takže se nemohou srazit lokální čísla verzí dvou profilů ani dvou fyzických strojů. `MachineCalibration` obsahuje `flow_ratio` a XY/elephant-foot kompenzace; změna kteréhokoli override vytvoří novou revizi a G-code z jiné kalibrace nelze vrátit z cache.
 
 `SliceResult` reprezentuje jednu konkrétní obsazenost podložky; pro jeden kus je `parts_per_plate = 1`, u dávky se plná a poslední částečná podložka cachují samostatně a výsledek nabídky se z nich složí. Závazná cena smí použít jen reference výsledek; production výsledek si ukládá obě strojové verze.
 
@@ -505,8 +507,9 @@ První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dnesk
 | `Order` / `OrderItem` | ✓ | ✓ | fulfilment objednávky; platby a od v1 zásilky jsou kolekce potomků |
 | `Payment` | ✓ | ✓ | více transakcí na objednávku; role `full` / `deposit` / `balance` + refundace |
 | `OrderPhase` | — | ✓ | `sample` / `batch`; vlastní model, cenový snapshot, joby a zásilky |
-| `OrderRevision` | — | ✓ | nový `ModelFile`, reslice, cenový rozdíl a přijetí zákazníkem |
+| `OrderRevision` | — | ✓ | nový model, reslice, cenový rozdíl, přijetí a `revision_amount_due` |
 | `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem |
+| `ModelGeometry` | ✓ | ✓ | kanonická geometrie tělesa/podmnožiny; vlastní `geometry_hash` |
 | `SliceResult` | ✓ | ✓ | reference klíč s profile version; production navíc s calibration version |
 | `PreflightFinding` | ✓ | ✓ | nález + úroveň + zda zákazník akceptoval |
 | `Job` | ✓ | ✓ | přiřaditelný jednomu uzlu; přetisk odkazuje přes `replaces_job_id` |
@@ -520,6 +523,7 @@ První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dnesk
 | `CostInput` | ✓ | ✓ | nákupy filamentu, sazba energie, spotřební materiál |
 | `HandlingSession` | ✓ | ✓ | aktivní práce: komponenta, začátek/konec, počty a zdroj měření |
 | `ShipmentPlan` | ✓ | ✓ | plán celého množství/fáze; kategorie, objem, hmotnost a cena |
+| `EligibilitySnapshot` | ✓ | ✓ | stroje společně způsobilé pro model, konfiguraci a barvu |
 | `Shipment` | — | ✓ | více na objednávku; u fázované objednávky patří k `OrderPhase` |
 | `Claim` | ✓ | ✓ | reklamace oddělená od fulfilment stavu objednávky |
 | `AuditEvent` | — | ✓ | |
@@ -559,7 +563,7 @@ created → accepted → gcode_ready → printing
 ```
 Odbočky: `printing → failed`, `photo_submitted → qc_rejected`.
 
-Obě neúspěšné větve mají explicitní příkaz `create_replacement`: atomicky vytvoří nový `Job` ve stavu `created` s `replaces_job_id` na neúspěšný job. Původní job zůstane terminálně `failed` nebo `qc_rejected`, aby se neztratil first-pass yield. Pokud se nepřetiskuje, obsluha musí objednávku převést do `cancelled → refunded`; zaplacená objednávka nesmí zůstat bez aktivního nebo úspěšného listového jobu.
+Obě neúspěšné větve mají explicitní příkaz `create_replacement`: atomicky vytvoří nový `Job` ve stavu `created` s `replaces_job_id` na neúspěšný job. Původní job zůstane terminálně `failed` nebo `qc_rejected`, aby se neztratil first-pass yield. Pokud se nepřetiskuje, zruší se neúspěšná fáze a všechny dosud nezačaté fáze. Objednávka bez dříve doručené fáze přejde do `cancelled → refunded`; objednávka s doručeným sample se po vrácení nečerpané části uzavře `partially_fulfilled`. Potvrzená objednávka nesmí zůstat bez aktivního/úspěšného listového jobu ani finančního vypořádání.
 
 **Časová razítka stavových přechodů měří průchod procesem, ne aktivní handling.** Mezi přechody je tisk, čekání ve frontě, čekání na zákazníka i doprava, takže jejich rozdíl nesmí vstoupit do nákladů práce.
 
@@ -573,15 +577,17 @@ quote → sample (1 ks) → zákazník potvrdí fit
 ```
 Cena obou fází pro **původní `ModelFile`** se zamkne už při nacenění, takže zákazník od začátku ví celkovou částku. Potvrzení fitu beze změny modelu aktivuje batch za zamčenou cenu.
 
-Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Batch se do té doby neaktivuje. Cena sample fáze ani už vzniklé náklady se zpětně nemění; odmítnutí revize přepne batch do `cancelled`, vrátí dosud nečerpanou část platby a po finančním vypořádání uzavře agregát jako `partially_fulfilled`. Guard není konkrétní `payment_status`, ale `amount_due = 0` a `refundable_balance = 0`, takže částečná refundace je platný terminální výsledek. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
+Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Zvýšení ceny vytvoří `balance` Payment navázaný na revizi a `revision_amount_due`; batch se aktivuje teprve po přijetí revize **a** `revision_amount_due = 0`. Původní záloha tedy nestačí k výrobě zdražené geometrie. Snížení ceny zvýší `refundable_balance`, ale výrobu neblokuje.
 
-Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu nebo přijetím `OrderRevision`. Cena všech plánovaných zásilek je součástí příslušného cenového snapshotu.
+Cena sample fáze ani už vzniklé náklady se zpětně nemění; odmítnutí revize přepne batch do `cancelled`, vrátí dosud nečerpanou část platby a po finančním vypořádání uzavře agregát jako `partially_fulfilled`. Guard terminálního vypořádání není konkrétní `payment_status`, ale `amount_due = 0` a `refundable_balance = 0`, takže částečná refundace je platný terminální výsledek. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
+
+Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu beze změny, nebo přijetím `OrderRevision` s `revision_amount_due = 0`. Cena všech plánovaných zásilek je součástí příslušného cenového snapshotu.
 
 ```
 sample: active → in_production → shipped → delivered → awaiting_confirmation → completed
 batch:  locked → active → in_production → shipped → delivered → completed
         locked → awaiting_revision → active
-        locked | awaiting_revision → cancelled
+        locked | awaiting_revision | active | in_production → cancelled
 ```
 Události sample fáze stav celkové objednávky za `in_production` neposouvají. Poslední aktivní fáze — běžně batch — řídí **všechny** zbývající přechody agregátu: schválení QC `in_production → qc_passed`, plná úhrada a připravená finální zásilka `→ ready_to_ship`, předání dopravci `→ shipped`, doručení `→ delivered` a uzavření `→ completed`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu.
 
@@ -597,18 +603,19 @@ new → in_review → quoted → accepted → (vytvoří Order)
 2. `Job` nesmí opustit `created` bez přiřazeného `Node`.
 3. `confirmed` vyžaduje zachycenou plnou platbu u automatické nabídky nebo zachycenou zálohu u individuální nabídky.
 4. `shipped` vyžaduje odvozený `payment_status = paid`; záloha sama nikdy nestačí.
-5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `parts_per_plate`.
+5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `geometry_hash` konkrétního `ModelGeometry` i `parts_per_plate`.
 6. `Order` nesmí být `confirmed` bez reference na **verzi ceníku a verzi podmínek**.
 7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
 8. Závazná cena smí vzniknout jen z deterministického výpočtu.
 9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
-10. Neúspěšný job zaplacené objednávky musí mít navazující `Job` přes `replaces_job_id`, nebo objednávka musí přejít do `cancelled → refunded`.
+10. Neúspěšný job musí mít navazující `Job` přes `replaces_job_id`, nebo se jeho fáze zruší: bez dříve dodané fáze následuje `cancelled → refunded`, po dodaném sample finančně vypořádané `partially_fulfilled`.
 11. Každá zásilka fázované objednávky patří právě k jedné `OrderPhase`; sample zásilka nesmí dokončit celou objednávku a poslední fáze musí vyvolat všechny mezistavy agregátu.
-12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu a přijetí `OrderRevision` zákazníkem; odmítnutý batch končí finančně vypořádaným `partially_fulfilled` agregátem.
+12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu, přijetí `OrderRevision` zákazníkem a `revision_amount_due = 0`; odmítnutý batch končí finančně vypořádaným `partially_fulfilled` agregátem.
 13. Production `SliceResult` a přijatý `Job` musí držet immutable `machine_profile_revision_id` i `machine_calibration_revision_id` konkrétního stroje.
 14. Závazná cena musí mít `ShipmentPlan` pro celé množství každé fáze; žádný plánovaný balík nesmí překročit objemový ani hmotnostní limit kategorie.
 15. `Claim` je jediná cesta pro reklamaci po doručení; nikdy nepřepisuje terminální fulfilment stav objednávky.
-16. Každá změna stavu zapisuje `AuditEvent` (od v1).
+16. Závazná cena a capture platby vyžadují neprázdný, čerstvý `EligibilitySnapshot`; vybraná barva musí existovat na nejméně jednom stroji způsobilém pro všechny ostatní požadavky.
+17. Každá změna stavu zapisuje `AuditEvent` (od v1).
 
 ### 6.5 Švy pro síť
 
@@ -652,7 +659,9 @@ Plus jeden příznak: **„díl musí do něčeho zapadnout / má lícované roz
 
 ### 7.3 Barvy
 
-**Zákazník sklad nikdy nevidí.** Paleta je odvozená ze sjednocení dostupných barev; co nikdo nemá, se nenabízí. V v0 je paleta obsah tří AMS.
+**Zákazník sklad nikdy nevidí.** Paleta není globální sjednocení inventáře. Nejdřív se pro aktuální geometrii a konfiguraci vyfiltrují stroje, které společně splňují build volume, materiál, aktivní `MachineProfile`, trysku, tier/certifikaci, kapacitu a cooldown. Teprve paleta je sjednocení barev v `Inventory` **těchto způsobilých strojů**. Po výběru barvy musí zůstat alespoň jeden stroj; jinak se barva skryje a závazná cena nevznikne.
+
+Výsledek se uloží jako krátce platný `EligibilitySnapshot`. Bezprostředně před capture platby se stejný predikát přepočítá a vybraná barva/inventář i kapacita se rezervují na TTL objednávky. V v0 je množina jediný vlastní stroj a paleta obsah jeho tři AMS; s heterogenní sítí se nikdy nesmí nabízet barva ze stroje, který ostatní požadavky zakázky nesplní.
 
 ### 7.4 Množstevní varianty
 
@@ -895,7 +904,7 @@ Klouzavé okno 30 jobů. Nový uzel postupuje **výkonem, ne časem**.
 
 ### 11.7 Routing
 
-**Filtr způsobilosti musí proběhnout dřív, než job komukoli blikne:** build volume ≥ bbox + rezerva; nasazený materiál a barva; typ trysky odpovídá materiálu; tier ≥ tier objednávky; volná kapacita; není v cooldownu.
+**Filtr způsobilosti musí proběhnout dřív, než vznikne paleta a závazná cena, znovu před capture platby a nakonec předtím, než job komukoli blikne.** Všechny tři kroky používají stejný verzovaný predikát: build volume ≥ bbox + rezerva; aktivní `MachineProfile`; nasazený materiál a barva; typ trysky odpovídá materiálu; tier/certifikace ≥ požadavek objednávky; volná kapacita; není v cooldownu. Routing smí množinu po zaplacení jen zužovat o změny reálného času, nikdy odhalit, že při quote nebyl způsobilý žádný stroj.
 
 ```
 Vlna 1 (0–15 min):   tier A do 50 km od doručovací adresy   payout ×1.00

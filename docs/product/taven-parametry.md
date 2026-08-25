@@ -95,10 +95,11 @@ handling_pretisk = sazba_prace_h × (
                     handling_plate × podložek
                   + handling_piece × qty       (degresivní)
                   + postprocessing )
-rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk)
+rezerva_pretisk = mira_zmetku × (
+                    material + machine + handling_pretisk + amortizace )
 ```
 
-`handling_pretisk` je už peněžní částka a používá stejné násobnosti podložek a kusů jako hlavní handling. Bez `handling_order_fix`, `handling_pack` a `shipping_trip` — ty se při přetisku chyceném doma neopakují. **Odmítnutí po doručení tím kryté není** (stojí navíc dopravu a balení oběma směry) a sedí zatím v marži.
+`handling_pretisk` je už peněžní částka a používá stejné násobnosti podložek a kusů jako hlavní handling. Bez `handling_order_fix`, `handling_pack` a `shipping_trip` — ty se při přetisku chyceném doma neopakují. `amortizace` kryje opakované čerpání životnosti stroje a při návratnosti ∞ je nula. **Odmítnutí po doručení tím kryté není** (stojí navíc dopravu a balení oběma směry) a sedí zatím v marži.
 
 ---
 
