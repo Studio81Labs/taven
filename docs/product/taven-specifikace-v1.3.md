@@ -530,6 +530,9 @@ První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dnesk
 | `Job` | ✓ | ✓ | přiřaditelný jednomu uzlu; přetisk odkazuje přes `replaces_job_id` |
 | `Node` / `Machine` / `Inventory` | ✓ | ✓ | uzel jediný, entity ale existují |
 | `InventoryReservation` | ✓ | ✓ | gramáž z konkrétních kompatibilních zásob, TTL před capture a commit při přijetí jobu |
+| `CapacityReservation` | ✓ | ✓ | nekolidující strojové intervaly pro všechny plánované podložky včetně bufferu |
+| `ProductionReservation` | ✓ | ✓ | atomická skupina inventory + capacity rezervací jedné objednávky/fáze na jednom uzlu |
+| `ReplacementRequest` | ✓ | ✓ | trvalá recovery povinnost od neúspěšného jobu/claimu až k rezervovanému náhradnímu jobu nebo stornu |
 | `ReferenceProfile` | ✓ | ✓ | `material × quality`, bez modelu stroje; jen quote slice |
 | `MachineCapability` | ✓ | ✓ | statické schopnosti modelu stroje |
 | `MachineProfile` | ✓ | ✓ | `model × nozzle × material × quality`; jen produkční slice |
@@ -569,7 +572,7 @@ Objednávkový `payment_status` je projekce všech jejích plateb, ne náhrada j
 ```
 opened → investigating → resolved_rejected | resolved_reprint | resolved_refund
 ```
-Claim lze otevřít proti doručené položce nebo fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`. `resolved_reprint` vytvoří náhradní `Job`; `resolved_refund` spustí refundaci konkrétních `Payment`.
+Claim lze otevřít proti doručené položce nebo fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`. `resolved_reprint` vytvoří `ReplacementRequest`, který smí vytvořit náhradní `Job` až s čerstvou produkční rezervací; `resolved_refund` spustí refundaci konkrétních `Payment`.
 
 Pro claim otevřený do snapshotovaného `claim_until` čte `resolved_reprint` kanonickou geometrii a immutable slice vstupy z `ReproductionArtifact`; nezávisí tedy na tom, zda už byl zdrojový `ModelFile` po 90 dnech smazán. Otevřený claim prodlouží retenci artefaktu až do svého terminálního vyřešení.
 
@@ -581,7 +584,9 @@ created → accepted → gcode_ready → printing
 ```
 Odbočky: `printing → failed`, `photo_submitted → qc_rejected`.
 
-Obě neúspěšné větve mají explicitní příkaz `create_replacement`: atomicky vytvoří nový `Job` ve stavu `created` s `replaces_job_id` na neúspěšný job. Původní job zůstane terminálně `failed` nebo `qc_rejected`, aby se neztratil first-pass yield. Pokud se nepřetiskuje, zruší se neúspěšná fáze a všechny dosud nezačaté fáze. Objednávka bez dříve doručené fáze přejde do `cancelled → refunded`; objednávka s doručeným sample se po vrácení nečerpané části uzavře `partially_fulfilled`. Potvrzená objednávka nesmí zůstat bez aktivního/úspěšného listového jobu ani finančního vypořádání.
+Obě neúspěšné větve vytvoří trvalý `ReplacementRequest` navázaný na neúspěšný job; stejnou cestu používá `Claim` s výsledkem reprint. Příkaz `create_replacement` nejdřív vytvoří čerstvý `EligibilitySnapshot` a znovu vyhodnotí aktuální požadavek materiálu/kapacity. V jedné transakci získá novou `ProductionReservation` — čerstvou gramáž i nekolidující strojové intervaly — a teprve pak vytvoří nový `Job` ve stavu `created` s `replaces_job_id`. Spotřeba původního jobu se nikdy nepovažuje za rezervaci přetisku. Původní job zůstane terminálně `failed` nebo `qc_rejected`, aby se neztratil first-pass yield.
+
+Pokud novou rezervaci nelze získat, `ReplacementRequest` zůstane auditovatelně `pending_capacity`, job se nevytvoří ani nenabídne a systém opakuje hledání jen do provozního deadline. Pak se request i neúspěšná fáze zruší. Objednávka bez dříve doručené fáze přejde do `cancelled → refunded`; objednávka s doručeným sample se po vrácení nečerpané části uzavře `partially_fulfilled`. Potvrzená objednávka tedy musí mít aktivní/úspěšný listový job, otevřený `ReplacementRequest` s deadlinem, nebo finanční vypořádání.
 
 **Časová razítka stavových přechodů měří průchod procesem, ne aktivní handling.** Mezi přechody je tisk, čekání ve frontě, čekání na zákazníka i doprava, takže jejich rozdíl nesmí vstoupit do nákladů práce.
 
@@ -593,19 +598,23 @@ quote → sample (1 ks) → zákazník potvrdí fit
       nebo nahraje revidovaný model
       → dávka (N ks)
 ```
-Cena obou fází pro **původní `ModelFile`** se zamkne už při nacenění, takže zákazník od začátku ví celkovou částku. Potvrzení fitu beze změny modelu aktivuje batch za zamčenou cenu.
+Cena obou fází pro **původní `ModelFile`** se zamkne už při nacenění, takže zákazník od začátku ví celkovou částku. Potvrzení fitu beze změny modelu cenu nemění, ale před aktivací vytvoří čerstvý `EligibilitySnapshot` a atomicky revaliduje nebo přeskládá drženou batch `ProductionReservation`; prošlý či kolidující interval se nikdy nepovažuje za kapacitu.
 
-Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Zvýšení ceny vytvoří `balance` Payment navázaný na revizi a `revision_amount_due`; batch se aktivuje teprve po přijetí revize **a** `revision_amount_due = 0`. Původní záloha tedy nestačí k výrobě zdražené geometrie. Snížení ceny zvýší `refundable_balance`, ale výrobu neblokuje.
+Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek, `required_material_g`, požadované strojové intervaly i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Příkaz přijetí revize vždy vytvoří čerstvý `EligibilitySnapshot` a atomicky nahradí původní batch `ProductionReservation` rezervací nové gramáže a kapacity. Dokud to nelze, přijetí se necommitne, revize zůstává `awaiting_capacity` a batch se neaktivuje.
+
+Zvýšení ceny vytvoří `balance` Payment navázaný na revizi a `revision_amount_due`; jeho capture smí začít až po nové rezervaci. Batch se aktivuje teprve po přijetí revize, `revision_amount_due = 0` **a** nové `ProductionReservation` ve stavu `held`. Původní záloha tedy nestačí k výrobě zdražené geometrie. Snížení ceny zvýší `refundable_balance`, ale nemění stejný požadavek na novou rezervaci — nižší cena může stále znamenat více materiálu nebo delší obsazení stroje.
 
 Cena sample fáze ani už vzniklé náklady se zpětně nemění; odmítnutí revize přepne batch do `cancelled`, vrátí dosud nečerpanou část platby a po finančním vypořádání uzavře agregát jako `partially_fulfilled`. Guard terminálního vypořádání není konkrétní `payment_status`, ale `amount_due = 0` a `refundable_balance = 0`, takže částečná refundace je platný terminální výsledek. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
 
-Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu beze změny, nebo přijetím `OrderRevision` s `revision_amount_due = 0`. Cena všech plánovaných zásilek je součástí příslušného cenového snapshotu.
+Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu beze změny s čerstvě revalidovanou `ProductionReservation`, nebo přijetím `OrderRevision` s `revision_amount_due = 0` a novou rezervací ve stavu `held`. Cena všech plánovaných zásilek je součástí příslušného cenového snapshotu.
 
 ```
 sample: active → in_production → shipped → delivered → awaiting_confirmation → completed
 batch:  locked → active → in_production → shipped → delivered → completed
-        locked → awaiting_revision → active
-        locked | awaiting_revision | active | in_production → cancelled
+        locked → awaiting_capacity → active
+        locked → awaiting_revision → awaiting_capacity → active
+                                    → active
+        locked | awaiting_revision | awaiting_capacity | active | in_production → cancelled
 ```
 Události sample fáze stav celkové objednávky za `in_production` neposouvají. Poslední aktivní fáze — běžně batch — řídí **všechny** zbývající přechody agregátu: schválení QC `in_production → qc_passed`, finanční vypořádání aktuálního snapshotu a připravená finální zásilka `→ ready_to_ship`, předání dopravci `→ shipped`, doručení `→ delivered` a uzavření `→ completed`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu.
 
@@ -626,13 +635,13 @@ new → in_review → quoted → accepted → (vytvoří Order)
 7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
 8. Závazná cena smí vzniknout jen z deterministického výpočtu.
 9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
-10. Neúspěšný job musí mít navazující `Job` přes `replaces_job_id`, nebo se jeho fáze zruší: bez dříve dodané fáze následuje `cancelled → refunded`, po dodaném sample finančně vypořádané `partially_fulfilled`.
+10. Neúspěšný job musí mít otevřený `ReplacementRequest` s deadlinem; navazující `Job` přes `replaces_job_id` smí vzniknout jen atomicky s čerstvou `ProductionReservation`. Jinak se jeho fáze zruší: bez dříve dodané fáze následuje `cancelled → refunded`, po dodaném sample finančně vypořádané `partially_fulfilled`.
 11. Každá zásilka fázované objednávky patří právě k jedné `OrderPhase`; sample zásilka nesmí dokončit celou objednávku a poslední fáze musí vyvolat všechny mezistavy agregátu.
-12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu, přijetí `OrderRevision` zákazníkem a `revision_amount_due = 0`; odmítnutý batch končí finančně vypořádaným `partially_fulfilled` agregátem.
+12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu, čerstvého `EligibilitySnapshot`, atomicky nahrazené `ProductionReservation`, přijetí `OrderRevision` zákazníkem a `revision_amount_due = 0`; požadavek na materiál a kapacitu platí i při zlevnění, odmítnutý batch končí finančně vypořádaným `partially_fulfilled` agregátem.
 13. Production `SliceResult` a přijatý `Job` musí držet immutable `machine_profile_revision_id` i `machine_calibration_revision_id` konkrétního stroje.
 14. Závazná cena musí mít `ShipmentPlan` pro celé množství každé fáze; žádný plánovaný balík nesmí překročit objemový ani hmotnostní limit kategorie.
 15. `Claim` je jediná cesta pro reklamaci po doručení; nikdy nepřepisuje terminální fulfilment stav objednávky.
-16. Závazná cena a capture platby vyžadují neprázdný, čerstvý `EligibilitySnapshot`; alespoň jeden způsobilý uzel musí mít pro vybranou barvu `available_g ≥ required_material_g` a capture smí začít až po atomickém vytvoření kapacitní `InventoryReservation` celé požadované gramáže.
+16. Závazná cena a capture platby vyžadují neprázdný, čerstvý `EligibilitySnapshot`; alespoň jeden způsobilý uzel musí mít pro vybranou barvu `available_g ≥ required_material_g` i nekolidující strojové intervaly a capture smí začít až po atomickém vytvoření společné `ProductionReservation` pro celou gramáž i kapacitu.
 17. Každá změna stavu zapisuje `AuditEvent` (od v1).
 
 ### 6.5 Švy pro síť
@@ -677,9 +686,11 @@ Plus jeden příznak: **„díl musí do něčeho zapadnout / má lícované roz
 
 ### 7.3 Barvy
 
-**Zákazník sklad nikdy nevidí.** Paleta není globální sjednocení inventáře. Nejdřív se pro aktuální geometrii a konfiguraci vyfiltrují stroje, které společně splňují build volume, materiál, aktivní `MachineProfile`, trysku, tier/certifikaci, kapacitu a cooldown. Referenční slice celého množství určí `required_material_g` včetně všech podložek, podpor a purge; `available_g` je fyzicky evidovaná gramáž kompatibilních zásob uzlu minus jejich aktivní rezervace. Teprve paleta je sjednocení barev uzlů, pro které `available_g ≥ required_material_g`. Po výběru barvy musí zůstat alespoň jeden takový uzel; jinak se barva skryje a závazná cena nevznikne.
+**Zákazník sklad nikdy nevidí.** Paleta není globální sjednocení inventáře. Nejdřív se pro aktuální geometrii a konfiguraci vyfiltrují stroje, které společně splňují build volume, materiál, aktivní `MachineProfile`, trysku, tier/certifikaci a cooldown. Referenční slice celého množství určí `required_material_g` včetně všech podložek, podpor a purge a zároveň délku všech požadovaných strojových intervalů včetně termínového bufferu. `available_g` je fyzicky evidovaná gramáž kompatibilních zásob uzlu minus jejich aktivní rezervace; dostupná kapacita je kalendář stroje minus nekolidující aktivní `CapacityReservation`. Teprve paleta je sjednocení barev uzlů, pro které lze současně umístit celé množství a platí `available_g ≥ required_material_g`. Po výběru barvy musí zůstat alespoň jeden takový plán; jinak se barva skryje a závazná cena nevznikne.
 
-Výsledek včetně `required_material_g`, vyhovujících uzlů a pozorované dostupné gramáže se uloží jako krátce platný `EligibilitySnapshot`. Bezprostředně před capture platby se stejný predikát přepočítá a v jedné databázové transakci s řádkovým zámkem vznikne kapacitní `InventoryReservation` na celé `required_material_g` z kompatibilních zásob jednoho uzlu. Teprve úspěch rezervace povolí capture; souběžný checkout nemůže tutéž gramáž utratit podruhé. Rezervace má TTL jen po dobu nedokončené platby: neúspěch ji uvolní, úspěšný capture ji přepne na `held` bez expirace, přijetí jobu na spotřebu a storno vrátí nevyužitou gramáž. V v0 je množina jediný vlastní stroj a paleta obsah jeho tři AMS; s heterogenní sítí se nikdy nesmí nabízet barva ze stroje, který ostatní požadavky zakázky nebo její celou gramáž nesplní.
+Výsledek včetně `required_material_g`, konkrétního plánu intervalů, vyhovujících uzlů a pozorované dostupnosti se uloží jako krátce platný `EligibilitySnapshot`. Bezprostředně před capture platby se stejný predikát přepočítá. Jedna databázová transakce zamkne řádky zásob i kalendář vybraného stroje a vytvoří společnou `ProductionReservation`: `InventoryReservation` na celé `required_material_g` a nekolidující `CapacityReservation` pro všechny plánované podložky. Teprve úspěch obou částí povolí capture; souběžný checkout nemůže utratit tutéž gramáž ani slíbit stejný strojový interval podruhé.
+
+`ProductionReservation` má TTL jen po dobu nedokončené platby nebo nepřijaté revize: neúspěch ji uvolní, úspěšný capture (nebo přijatá revize bez doplatku) ji přepne na `held` bez expirace, přijetí jobu materiál commitne do spotřeby a kapacitu do plánu a storno vrátí nevyužité zdroje. V v0 je množina jediný vlastní stroj a paleta obsah jeho tři AMS; s heterogenní sítí se nikdy nesmí nabízet barva ze stroje, který ostatní požadavky, celou gramáž a plánované intervaly zakázky nesplní.
 
 ### 7.4 Množstevní varianty
 
@@ -922,7 +933,7 @@ Klouzavé okno 30 jobů. Nový uzel postupuje **výkonem, ne časem**.
 
 ### 11.7 Routing
 
-**Filtr způsobilosti musí proběhnout dřív, než vznikne paleta a závazná cena, znovu před capture platby a nakonec předtím, než job komukoli blikne.** Všechny tři kroky používají stejný verzovaný predikát: build volume ≥ bbox + rezerva; aktivní `MachineProfile`; nasazený materiál a barva; `available_g ≥ required_material_g` po odečtení aktivních rezervací; typ trysky odpovídá materiálu; tier/certifikace ≥ požadavek objednávky; volná kapacita; není v cooldownu. Před capture se gramáž atomicky rezervuje na jednom vyhovujícím uzlu a nabídku jobu smí vidět jen aktuální držitel rezervace. Při odmítnutí nebo timeoutu se celá rezervace atomicky přesune na další právě způsobilý uzel ještě před odesláním další nabídky; pokud přesun není možný, job se nikomu nezobrazí a spustí se provozní eskalace/refundace.
+**Filtr způsobilosti musí proběhnout dřív, než vznikne paleta a závazná cena, znovu před capture platby a nakonec předtím, než job komukoli blikne.** Všechny tři kroky používají stejný verzovaný predikát: build volume ≥ bbox + rezerva; aktivní `MachineProfile`; nasazený materiál a barva; `available_g ≥ required_material_g` po odečtení aktivních rezervací; typ trysky odpovídá materiálu; tier/certifikace ≥ požadavek objednávky; nekolidující strojové intervaly pro všechny podložky; není v cooldownu. Před capture se materiál i kapacita atomicky rezervují na jednom vyhovujícím uzlu a nabídku jobu smí vidět jen aktuální držitel `ProductionReservation`. Při odmítnutí nebo timeoutu se celá skupina gramáže a intervalů atomicky přesune na další právě způsobilý uzel ještě před odesláním další nabídky; pokud přesun není možný, job se nikomu nezobrazí a spustí se provozní eskalace/refundace.
 
 ```
 Vlna 1 (0–15 min):   nejvýše skórovaný způsobilý držitel rezervace   payout ×1.00

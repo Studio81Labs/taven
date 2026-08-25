@@ -19,7 +19,7 @@
 
 Do ceníku vstupuje **vážený průměr posledních nákupů**, ne aktuální cena. Skutečná spotřeba se účtuje proti konkrétní cívce (`Inventory.price_per_g`).
 
-Každá zásoba eviduje fyzicky ověřené `remaining_g`; pro nabídku se používá `available_g = remaining_g − aktivní InventoryReservation`. `required_material_g` bere závazný slice celého množství včetně všech podložek, podpor a purge. Capture platby smí začít až po atomické rezervaci celé gramáže na jednom způsobilém uzlu.
+Každá zásoba eviduje fyzicky ověřené `remaining_g`; pro nabídku se používá `available_g = remaining_g − aktivní InventoryReservation`. `required_material_g` bere závazný slice celého množství včetně všech podložek, podpor a purge. Tentýž slice určuje strojové intervaly včetně termínového bufferu. Capture platby smí začít až po atomické společné `ProductionReservation` celé gramáže a nekolidující kapacity jednoho způsobilého uzlu; stejné pravidlo platí pro revizi i každý přetisk.
 
 **V0 nabízené materiály:** PLA, PETG.
 
