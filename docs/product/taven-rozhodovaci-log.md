@@ -1,0 +1,87 @@
+# Taven — rozhodovací log
+
+**Append-only.** Záznamy se **nikdy needitují ani nemažou.** Když se rozhodnutí změní, přidá se nový záznam, který to staré ruší, a u starého se doplní jen odkaz „zrušeno #N".
+
+Účelem není evidence rozhodnutí — ta je v specifikaci. Účelem je uchovat **důvody a zamítnuté alternativy**, protože právě ty se zapomínají první a právě kvůli nim se stejná debata otevírá podruhé.
+
+---
+
+| # | Rozhodnutí | Zdůvodnění | Zamítnutá alternativa | Stav |
+|---|---|---|---|---|
+| 1 | Služba-first, síť později | vlastní nevyužitá tiskárna je skutečný problém; poptávka neexistuje | platforma-first | platí |
+| 2 | Platforma je prodávající, ne zprostředkovatel | jinak nemá nástroj na vynucení kvality a zákazník nemá koho žalovat | marketplace / zprostředkovatel | platí |
+| 3 | Cenu stanoví platforma, maker jen přijme/nepřijme | aukce = závod ke dnu v kvalitě a nekonzistentní zkušenost | aukční model | platí |
+| 4 | Zůstat neplátcem DPH | jednodušší procesing, cenová výhoda v B2C | plátcovství od začátku | platí |
+| 5 | Dvoufázový slicing (referenční / strojový) | slicovat každý model × každý stroj při poptávce je kombinatorický nesmysl | jednofázový | platí |
+| 6 | OrcaSlicer CLI v Dockeru | jedna binárka pokryje Bambu i Prusu, vendorem udržované profily, umí `.gcode.3mf` i paint 3MF | PrusaSlicer CLI (nepokrývá Bambu formát), CuraEngine (ruční profily) | platí |
+| 7 | Cena z referenčního slice, výplata pevná | rychlejší stroj vydělá víc za hodinu → tlačí síť k lepšímu hardwaru sama | cena podle konkrétního stroje | platí |
+| 8 | Barva jako filtr způsobilosti; nedostupná se skryje | neprosakuje stav sítě do zákaznického rozhraní | zobrazovat NA / delay | platí |
+| 9 | Slicovat podložku, ne díl | čas na kus není lineární — drobný díl sám tiskne pomalu kvůli minimálnímu času vrstvy | `cena_1ks × qty` | platí |
+| 10 | **Podmíněně závazná cena** | trh se naučil závaznost nevydávat, protože auto-nacenění bývá špatné; závazné jen v mezích, kde stroj ví, co dělá | závazná na všechno / jen orientační jako konkurence | platí |
+| 11 | AI jen jako jednosměrné veto | nejhorší selhání je pak falešný poplach, nikdy špatná závazná cena | AI rozhoduje o způsobilosti oběma směry | platí |
+| 12 | AI odložena za validaci | architektonické pravidlo drží prostor, `ai-worker` se staví až bude co optimalizovat | `ai-worker` v v1 | platí |
+| 13 | Multicolor jednoho dílu jako individuální nabídka | odpad při purge je funkcí stroje, ne modelu → rozbíjelo by to invariant „cena z referenčního slice"; bez automatické ceny není co rozbít | automatické nacenění multicoloru | platí |
+| 14 | Nestavět malovátko barev, přijmout 3MF s paint daty | měsíce práce vs. dny; cílovka Bambu Studio nebo Orca už používá | browserový color painter | platí |
+| 15 | Individuální nabídka jako jedna obecná úniková cesta | jedna feature pokryje šest případů včetně zákazníků bez souboru | zvláštní cesta pro každý případ | platí |
+| 16 | Platba 100 % předem u automatické nabídky | díl na míru je jinak odpad; záloha znamená dvě platby a vymáhání doplatku | záloha u všech objednávek | platí |
+| 17 | Certifikace zdarma místo výdělkové rampy bez IČO | soustavnost se posuzuje podle vzorce chování a úmyslu; rampa riziko nesnižuje dost | 3 zakázky / 8 000 Kč bez IČO | platí |
+| 18 | Transparentní rozpad ceny | konzistentní se způsobem, jak jsou stavěné ostatní projekty; zákazník vidí tisk, dopravu i slevu zvlášť | doprava zabalená v ceně jako u konkurence | platí |
+| 19 | Práh dopravy zdarma ~1 000 Kč, ne 5 000 | práh, kterého nikdo nedosáhne, je dekorace; smyslem je, aby si člověk s objednávkou za 900 přihodil | vysoký práh | platí |
+| 20 | Express = předběhnutí fronty, ne kurýr | žádné nové náklady, zpeněžuje volnou kapacitu; kurýr by omezil na Brno a okolí | expresní doprava | platí |
+| 21 | Kapacitní brána expresu měří **zásahy obsluhy**, ne hodiny | jeden dvacetihodinový tisk přes noc je v pořádku, pět čtyřhodinových podložek ne | brána podle hodin tisku | platí |
+| 22 | Hodnotový strop automatu | prémie za bezbariérovost funguje na malých objednávkách; riziko se kryje — špatně naceněná malá zakázka stojí padesátikorunu, velká tisíce | automat na jakoukoli částku | platí |
+| 23 | Node scope na dotazech od prvního dne | zpětné zavedení multi-tenancy není přidání sloupce, ale audit každého query | jednouživatelský admin | platí |
+| 24 | Makerské UI uvnitř administrace, datový šev zachován | samostatný portál je práce bez uživatele; přesun obrazovek je levný, přepis datové vrstvy ne | samostatná `/maker` aplikace hned | platí |
+| 25 | Sledování přes tokenizovanou URL bez účtu | registrace u jednorázové objednávky je překážka v nejcitlivějším místě trychtýře | uživatelské účty | platí |
+| 26 | Pevný stavový automat, konfigurovatelné jen politiky | obecný workflow engine stojí násobek a nikdy se nepoužije jinak než jedním způsobem | konfigurovatelné přechody | platí |
+| 27 | ~~Amortizace nevstupuje do ceny, sleduje se bokem~~ | — | — | **zrušeno #33** |
+| 28 | Jedno jméno pro obě fáze, žádný rebranding | rebranding zahodí vybudované SEO, což je deklarovaný kanál | solo značka → přejmenování na síť | platí |
+| 29 | Validace obsahuje celý automatický quote | landing s formulářem by validoval obecnou poptávku po tisku, kterou obsluhuje dvacet firem — ne diferenciaci | landing + poptávkový formulář jako v0 | platí |
+| 30 | Contribution margin místo hrubé marže, CAC zvlášť | 30% hrubá marže může vypadat dobře, zatímco každá objednávka pálí peníze | hrubá marže | platí |
+| 31 | Kill criterion má strop na reklamní spend | 10 objednávek za 20 000 Kč není validace | jen počet objednávek | platí |
+| 32 | Síť je výsledek rozhodovací brány, ne v2 | síť řeší kapacitní problém; když ho nemáš, neřeší nic. Druhý stroj je výchozí varianta | síť jako automatické pokračování | platí |
+| 33 | **Amortizace jako parametr s explicitní dobou návratnosti** (`cena stroje / návratnost v h`) | dělá z předpokladu číselník místo skryté volby; v0 a hobby režim = ∞, tedy 0 Kč/h; při rozhodování o 2. stroji se přepne na reálnou hodnotu | ruší #27 | platí |
+| 34 | **Marže se aplikuje na celý výrobní náklad, ne na cenu materiálu** | model z Prusa blogu počítá marži jako 30 % z materiálu — u téže práce vyjde marže 1 Kč u levného PLA a 393 Kč u karbonu; tvoje riziko a čas s cívkou nesouvisejí | marže z ceny materiálu | platí |
+| 35 | **Sazba práce 300 Kč/h — operátorská, ne vývojářská** | byznys zpeněžuje stojící stroj a poloprázdný večer; při vývojářské sazbě je model ztrátový. Benchmark: co by stál brigádník. Test poctivosti: přežije to, až to nebudeš dělat ty? | vlastní čas jako „zadarmo" nebo za vývojářskou sazbu | platí |
+| 36 | **Handling se měří ze stavového automatu, ne stopkami** | časová razítka přechodů `accepted→printing→printed→packed→handed_over` dají handling z prvních ~20 reálných zakázek; měření nemusí předcházet spuštění, jen verdiktu | stopky a měření před spuštěním | platí |
+| 37 | **Provoz a validace jsou dva oddělené režimy** | při 1 zakázce měsíčně nezměříš FPY, konverzi po pásmech ani podíl souborů v automatu; nesměšovat, jinak vznikne rok „nějak to funguje" bez jediného čísla | jeden režim s průběžnou validací | platí |
+| 38 | **Fixní náklady v idle téměř nulové** | hobby režim je přijatelný koncový stav, takže musí být bezúdržbový; projekt nezabije rozhodnutí, ale otrávenost z měsíčních nákladů bez odezvy | optimalizovat jen procenta z transakcí | platí |
+| 39 | **Platební brána bez měsíčního paušálu** | při 1–2 objednávkách měsíčně sežere paušál 200 Kč marži ze dvou zakázek; ruší dřívější doporučení Comgate podle procent | brána vybraná podle transakčních procent | platí |
+| 40 | **Risk checkboxy nezaškrtnuté** | explicitní acknowledgement je silnější produktově i právně, a právě o ten argument při reklamaci jde | předzaškrtnuté jako u PCBWay | platí |
+| 41 | **Zkušební kus jako fáze objednávky, ne e-mailová domluva** | trh iteraci běžně dělá, ale e-mailem přes 4–6 zpráv; u nás je to stav v objednávce se zamčenou cenou obou fází | nová poptávka pro dávku | platí |
+| 42 | **Slibujeme věrnost modelu, ne lícování** | zákaznické modely bývají laděné empiricky na jiné tiskárně a nesou skrytou kompenzaci — přesnější tisk je pak fitově horší. Konkrétní podoba rozdělení „vada tisku vs. vada modelu" | garance lícování | platí |
+| 43 | **STEP jako univerzální vstup** | neutrální formát, exportuje ho každý, nezavazuje k ekosystému; nativní formáty s historií dospecifikovat, až je zákazníci budou umět dodat | vyžadovat nativní CAD formáty | platí |
+| 44 | **Ceník, specifikace a log jako tři oddělené artefakty** | jednorázový osmdesátistránkový dokument se přestane udržovat, když se v něm mění cena filamentu; různá frekvence změn = různé soubory | jeden živý dokument | platí |
+| 45 | **Roadmapa spouštěči, ne termíny** | datum ve firmě o jednom člověku s kolísavou kapacitou nikdy nesedí a nutí ho posouvat | kvartální roadmapa | platí |
+| 46 | **Revize dokumentace se spouští událostí, ne kalendářem** | při 12 objednávkách ročně nemá měsíční revize co revidovat; hodina nad specifikací musí něco vrátit | pravidelná měsíční revize | platí |
+
+---
+
+## Nezapsaná, ale platná pravidla
+
+Věci, které nejsou rozhodnutím o produktu, ale o tom, jak se rozhoduje:
+
+**Test návratnosti featury.** Featura, která ušetří 5 minut na objednávce, ušetří při 1–2 objednávkách měsíčně **12 Kč měsíčně**. Cokoli nad jeden večer práce se při tom objemu nikdy nevrátí. Při 30 objednávkách měsíčně ušetří tatáž featura 375 Kč a týden práce se zaplatí. **Stejná featura má podle režimu dvacetipětinásobně jinou hodnotu** — přepočítej ji proti aktuálnímu objemu, ne proti tomu, ve který doufáš.
+
+Výjimka: cokoli, co snižuje fixní náklady nebo tření natolik, že provoz zůstane bezúdržbový, se staví vždy (viz #38).
+
+**Známé riziko projektu.** Spadl už jednou pod stůl (leden 2026) kvůli kapacitě, ve prospěch jednodušších věcí ve frontě. Nebylo to špatné rozhodnutí — byla to absence pravidla. Test výše to pravidlo dodává.
+
+---
+
+## Doplněno po revizi v1.2 → v1.3
+
+| # | Rozhodnutí | Zdůvodnění | Zamítnutá alternativa | Stav |
+|---|---|---|---|---|
+| 47 | **Handling rozložen na komponenty před měřením** (`order_fix`, `plate`, `piece`, `pack`, `shipping_trip`, `postprocessing`) | jedno číslo „30 min" směšuje aktivní práci, práci na podložku a logistickou cestu; po 20 objednávkách bys věděl, že handling je 23 minut, ale ne co z toho jde batchovat | jeden souhrnný `handling_fix` | platí |
+| 48 | **`shipping_trip` se při nízkém objemu nealokuje** | jedna cesta na jednu zásilku znamená plný náklad; handling na objednávku je v hobby režimu horší, ne lepší. Alokace začne fungovat od několika zásilek týdně | alokovat cestu vždy | platí |
+| 49 | **`poplatek_priprava` → `small_order_surcharge`** | příprava je už v `cena_tisku` přes `handling`; původní název tvrdil zákazníkovi opak a účetně to bylo dvojí účtování | ponechat název | platí |
+| 50 | **`min_print_price` se vztahuje na `cena_tisku`, ne na částku u pokladny** | bez explicitní definice se „minimální objednávka 250 Kč" za rok přečte jako nejnižší možný účet, přičemž checkout floor je 335–385 Kč | nedefinovat | platí |
+| 51 | **`koef_kvality` zrušen; čas se bere ze skutečného slice** | slicer řekne 6 h 12 min přesně; násobit to ručním koeficientem znamená zahodit výhodu deterministické ceny. Obchodní přirážka smí existovat, ale musí se tak jmenovat a stát vedle času | koeficient nad strojovým časem | platí |
+| 52 | **Referenční profily per materiál × kvalita, ne jeden generický PLA** | PETG má jiné rychlosti a teploty; nacenit ho podle PLA slice je systematicky vedle. Invariant zní „nezávislý na stroji", ne „nezávislý na materiálu". Slicuje se líně, až pro zvolenou kombinaci | jeden globální referenční profil | ruší část #7 |
+| 53 | **Ve v0 slicer-native arrange, ne vlastní packing engine** | Orca má vlastní arrangement; psát k němu paralelní 2D packing je práce navíc bez odpovídajícího přínosu. Princip „slicuj podložku" zůstává, implementace se zjednodušuje | vlastní 2D packing v v0 | platí |
+| 54 | **STEP není blocker vydání v0** | přináší tesselaci s deterministickou tolerancí, jednotky, sestavy, náhled a novou plochu na selhání; úkolem v0 je ověřit instant quote, ne pokrýt formáty | STEP jako součást v0 | platí |
+| 55 | **Kampaň měří „first-order profitable", ne „valid / invalid"** | byznys s CM 120 Kč, CAC 170 Kč a třetinovou opakovaností je zdravý, jen se nezaplatí z první objednávky; binární brána by ho zabila | binární brána `CAC ≤ CM` | zpřesňuje #31 |
+| 56 | **Opakovanost je hlavní otázkou placené akvizice, ne celého projektu** | může vyjít vysoký podíl organiky, drahý CAC, nízká opakovanost, zdravá CM — a stroj se přesto vytěžuje. Pro cíl „zpeněžit nevyužitou H2S" je to platný výsledek | opakovanost jako hlavní otázka projektu | platí |
+| 57 | **Báze pro `rezerva_pretisk` definovaná explicitně** — `material + machine + handling_plate + handling_piece + postprocessing` | „5 % variabilního nákladu" si každý implementátor vyloží jinak; položky, které se při přetisku chyceném doma neopakují (`order_fix`, `pack`, `shipping_trip`), do báze nepatří. Odmítnutí po doručení kryté není a sedí zatím v marži | volná formulace „z variabilního nákladu" | platí |
+| 58 | **Spouštěč `small_order_surcharge` podle gramáže je prozatímní** | gramáž je proxy převzatá z trhu, ale materiál tvoří jen malou část nákladu; pravděpodobnějším spouštěčem je `cena_tisku < X` nebo `handling / cena_tisku > Y`. Pro v0 zůstává 100 g a sleduje se jako metrika | fixovat 100 g jako strukturu | platí |
