@@ -1,7 +1,7 @@
 # Taven repository foundation plan
 
-**Status:** proposed  
-**Scope:** repository and delivery foundation only; no product features  
+**Status:** proposed
+**Scope:** repository and delivery foundation only; no product features
 **Prepared:** 2026-08-25
 
 ## 1. Reference repositories and adopted conventions
