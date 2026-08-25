@@ -217,9 +217,9 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | **`payment_reservation_minutes`** | **⚠ 15 minut**; pozdější capture smí zdroje znovu získat jen před business cutoffem, jinak se ihned celý refunduje |
 | **`balance_payment_days`** | **⚠ 7 dní** od QC individuální zakázky; pak explicitní `OrderSettlement` |
 | **`abandoned_item_retention_days`** | **⚠ 30 dní** od `cancelled_settled`; pak auditovaná recyklace/zničení |
-| **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak nejdřív zavřít revision capture window, zrušit neaktivovaný batch, refundovat nečerpanou část a uzavřít `partially_fulfilled`; odmítnutí revize deadline hned ruší a pozdní capture se celý kompenzuje |
+| **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak nejdřív zavřít revision capture window, odebrat batch z `contract_total`, zrušit jej, refundovat nečerpanou část a uzavřít `partially_fulfilled`; odmítnutí revize deadline hned ruší a pozdní capture se celý kompenzuje |
 | Reklamační okno pro zádržné (síť) | 7 dní od doručení |
-| **`source_model_retention_days`** | **90 dní** od terminálního stavu objednávky nebo expirace nabídky; jednotně pro zdrojové STL, 3MF i STEP |
+| **`source_model_retention_days`** | **90 dní**; počáteční deadline vzniká už při uploadu pro STL/3MF/STEP i mezivýstupy, Quote jej jen prodlouží a aktivní Order drží hold do terminálního přepočtu |
 | **`undelivered_reproduction_retention_days`** | **⚠ 90 dní** od terminálního stavu bez doručení; pak smazat rekonstruovatelný artefakt, pokud neběží incident/claim/legal hold |
 | **`reproduction_artifact_retention`** | nejméně do snapshotovaného `claim_until` z přijaté verze podmínek; ⚠ přesnou lhůtu potvrdit s právním poradcem, aktivní claim/právní hold ji prodlužuje |
 
