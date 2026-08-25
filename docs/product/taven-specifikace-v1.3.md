@@ -225,7 +225,7 @@ Konstrukce záruky **odděluje vadu tisku od vady modelu**:
 
 To není formalita. Zákaznické modely bývají doladěné empiricky na jedné konkrétní tiskárně a nesou její skrytou kompenzaci; na kalibrovaném stroji pak **vyjdou přesněji a přestanou sedět**. Nikdy neslibuj lícování, slibuj věrnost modelu.
 
-Reklamace je samostatná entita `Claim` navázaná na objednávku, položku a případně fázi. Lze ji otevřít po `delivered`, `completed` i `partially_fulfilled`; nemění zpětně terminální fulfilment stav objednávky. Výsledek claimu může vytvořit náhradní job, refundaci nebo zamítnutí s důvodem a vlastním auditem.
+Reklamace je samostatná entita `Claim` navázaná na objednávku, položku, fázi nebo zásilku. Lze ji otevřít po `delivered`, `completed` i `partially_fulfilled`, a pro `Shipment.lost | returned` už ve stavu objednávky `shipped`. Terminální fulfilment stav zpětně nemění; pre-delivery incident může vytvořit náhradní zásilku/job nebo finančně vypořádané storno, každý výsledek s vlastním auditem.
 
 Při přijetí objednávky se snapshotuje verze reklamační politiky z přijatých podmínek; při doručení každé položky nebo fáze z ní vznikne konkrétní `claim_until`. Standardní samoobslužný `Claim` lze otevřít do příslušného termínu; zákonná nebo smluvní výjimka jej může prodloužit právním holdem. Pozdější požadavek jde do ručního právního posouzení a bez zachovaného reprodukčního artefaktu vyžaduje nový upload zákazníka.
 
@@ -245,7 +245,7 @@ Souhlas se zveřejněním fotografií hotových dílů, odmítnutelný checkboxe
 
 Retence se neváže na příponu souboru. Každý nahraný zdrojový `ModelFile` — **STL, 3MF i STEP** — při expiraci nabídky nebo přechodu objednávky do terminálního stavu dostane `source_delete_after` podle společného parametru `source_model_retention_days` (výchozí hodnota v parametrech §10). Mazací job v tento den odstraní zdrojový upload a formátově specifické mezisoubory; u expirované nabídky bez objednávky odstraní i veškerou rekonstruovatelnou geometrii.
 
-U přijaté objednávky vzniká zvlášť šifrovaný immutable `ReproductionArtifact`: kanonické produkční bajty `ModelGeometry` a reference na přesné revize profilů, kalibrace a cenového/slice snapshotu. Zdrojový STEP nebo 3MF tak nemusí zůstat uložený, ale reklamaci lze reprodukovat. Artefakt má `reproduction_delete_after` nejdříve v `claim_until`; aktivní reklamace nebo právní hold termín prodlouží. Po odpadnutí poslední překážky mazací job odstraní artefakt a ponechá jen auditní metadata a hash, nikoli rekonstruovatelnou geometrii.
+U přijaté objednávky vzniká zvlášť šifrovaný immutable `ReproductionArtifact`: kanonické produkční bajty `ModelGeometry` a reference na přesné revize profilů, kalibrace, `PrintConfigRevision` a cenového/slice snapshotu. Zdrojový STEP nebo 3MF tak nemusí zůstat uložený, ale reklamaci lze reprodukovat. Před doručením se `reproduction_delete_after` nenastaví; po doručení nesmí být dříve než příslušné `claim_until`. Aktivní incident zásilky, reklamace nebo právní hold termín prodlouží. Po odpadnutí poslední překážky mazací job odstraní artefakt a ponechá jen auditní metadata a hash, nikoli rekonstruovatelnou geometrii.
 
 ### 3.8 Právní kontrola
 
@@ -465,9 +465,11 @@ Každý nález má úroveň `info` / `warning` (risk checkbox) / `blocking` (→
 
 ### 5.6 Cache
 
-Klíč reference slice je `geometry_hash + reference_profile_revision_id + parts_per_plate`. Klíč production slice je `geometry_hash + machine_profile_revision_id + machine_calibration_revision_id + parts_per_plate`. `geometry_hash` patří konkrétnímu `ModelGeometry`, ne kontejnerovému `ModelFile`. Revision ID je globálně unikátní immutable snapshot, takže se nemohou srazit lokální čísla verzí dvou profilů ani dvou fyzických strojů. `MachineCalibration` obsahuje `flow_ratio` a XY/elephant-foot kompenzace; změna kteréhokoli override vytvoří novou revizi a G-code z jiné kalibrace nelze vrátit z cache.
+Klíč reference slice je `geometry_hash + reference_profile_revision_id + print_config_revision_id + parts_per_plate`. Klíč production slice je `geometry_hash + machine_profile_revision_id + machine_calibration_revision_id + print_config_revision_id + parts_per_plate`. `PrintConfigRevision` je immutable snapshot zvolené úrovně výplně (procento i vzor) a všech dalších konfiguračních voleb, které mění toolpath; výplň tedy není skrytá ve kvalitě. `geometry_hash` patří konkrétnímu `ModelGeometry`, ne kontejnerovému `ModelFile`. Revision ID je globálně unikátní immutable snapshot, takže se nemohou srazit lokální čísla verzí dvou profilů ani dvou fyzických strojů. `MachineCalibration` obsahuje `flow_ratio` a XY/elephant-foot kompenzace; změna kteréhokoli override vytvoří novou revizi a G-code z jiné kalibrace nebo jiné výplně nelze vrátit z cache.
 
 `SliceResult` reprezentuje jednu konkrétní obsazenost podložky; pro jeden kus je `parts_per_plate = 1`, u dávky se plná a poslední částečná podložka cachují samostatně a výsledek nabídky se z nich složí. Závazná cena smí použít jen reference výsledek; production výsledek si ukládá obě strojové verze.
+
+**Reference slice určuje zákaznickou cenu, nikdy rezervaci heterogenního stroje.** Pro každý kandidátní fyzický stroj vznikne před rezervací `CandidateResourceEstimate` z jeho `MachineProfile`, `MachineCalibration`, `PrintConfigRevision`, rozměru podložky a machine-specific arrangementu celého množství. Jeho klíč obsahuje všechny production vstupy plus `quantity` a `arrangement_revision_id`. Agreguje počet podložek, jejich intervaly a gramáž ze strojových `SliceResult`; g-code se v této fázi neukládá ani nedá odeslat do stroje. Produkční G-code vznikne až po `accepted` ze stejných immutable vstupů. Kandidát bez čerstvého odhadu se nesmí objevit v závazném `EligibilitySnapshot`.
 
 ### 5.7 Async a UX ceny
 
@@ -495,7 +497,7 @@ Právně čisté: hrubý odhad je výslovně nezávazný, závazná cena vzniká
 
 ## §6 Datový model
 
-### 6.1 Pět matic — nesloučit
+### 6.1 Šest vstupů — nesloučit
 
 ```
 ReferenceProfile   (verzovaný, materiál × kvalita; bez stroje)      platforma
@@ -503,11 +505,12 @@ MachineCapability  (statická, per model stroje)                    platforma
 MachineProfile     (verzovaný, model × tryska × materiál × kvalita) platforma
 MachineCalibration (verzovaná, per konkrétní stroj)                 maker
 Inventory          (dynamická, per konkrétní stroj uzlu)            maker
+PrintConfigRevision(verzovaná výplň + další toolpath volby)         objednávka
                                       ↓
                  = nabídka, kterou zákazník vidí a síť umí vyrobit
 ```
 
-První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dneska**. `ReferenceProfile` nikdy nemá vazbu na model stroje a používá se výhradně pro závaznou zákaznickou cenu. `MachineProfile` vždy patří kombinaci modelu, trysky, materiálu a kvality; `MachineCalibration` k němu přidává verzované odchylky konkrétního kusu. Produkční G-code používá oba snapshoty. Nastavení ani verze se nesmí sdílet jen proto, že v v0 běží na jednom fyzickém stroji.
+První tři popisují **svět**, `MachineCalibration` a `Inventory` **tenhle konkrétní stroj dneska** a `PrintConfigRevision` immutable volbu konkrétní objednávky. `ReferenceProfile` nikdy nemá vazbu na model stroje a používá se výhradně pro závaznou zákaznickou cenu. `MachineProfile` vždy patří kombinaci modelu, trysky, materiálu a kvality; `MachineCalibration` k němu přidává verzované odchylky konkrétního kusu. Reference i production slice používají tutéž `PrintConfigRevision`, produkční G-code navíc oba strojové snapshoty. Nastavení ani verze se nesmí sdílet jen proto, že v v0 běží na jednom fyzickém stroji.
 
 **Maker nikdy nenahrává vlastní profil** — registruje jen schopnost (model, tryska, materiály, build volume, počet AMS). Ovlivnit smí pouze kalibrační odchylky svého kusu: `xy_hole_compensation`, `xy_contour_compensation`, `elephant_foot_compensation`, `flow_ratio`. Každé uložení vytvoří immutable `MachineCalibration` verzi; minulý job vždy ukazuje na snapshot, se kterým vznikl jeho G-code.
 
@@ -525,7 +528,8 @@ První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dnesk
 | `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem |
 | `ModelGeometry` | ✓ | ✓ | kanonická geometrie tělesa/podmnožiny; vlastní `geometry_hash` |
 | `ReproductionArtifact` | ✓ | ✓ | šifrovaná produkční geometrie + immutable vstupy pro případný claim; retence nejméně do `claim_until` |
-| `SliceResult` | ✓ | ✓ | reference klíč s profile version; production navíc s calibration version |
+| `SliceResult` | ✓ | ✓ | vždy `PrintConfigRevision`; reference klíč s profile version, production navíc s calibration version |
+| `CandidateResourceEstimate` | ✓ | ✓ | machine-specific plate plan, gramáž a intervaly; bez použitelného G-code |
 | `PreflightFinding` | ✓ | ✓ | nález + úroveň + zda zákazník akceptoval |
 | `Job` | ✓ | ✓ | přiřaditelný jednomu uzlu; přetisk odkazuje přes `replaces_job_id` |
 | `Node` / `Machine` / `Inventory` | ✓ | ✓ | uzel jediný, entity ale existují |
@@ -537,14 +541,15 @@ První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dnesk
 | `MachineCapability` | ✓ | ✓ | statické schopnosti modelu stroje |
 | `MachineProfile` | ✓ | ✓ | `model × nozzle × material × quality`; jen produkční slice |
 | `MachineCalibration` | ✓ | ✓ | immutable override snapshot konkrétního stroje |
+| `PrintConfigRevision` | ✓ | ✓ | zvolená výplň a další toolpath volby; součást každého slice klíče |
 | `PriceList` | ✓ | ✓ | verzovaný; objednávka drží referenci |
 | `QuoteRequest` / `Quote` | ✓ | ✓ | individuální nabídka |
 | `CostInput` | ✓ | ✓ | nákupy filamentu, sazba energie, spotřební materiál |
 | `HandlingSession` | ✓ | ✓ | aktivní práce: komponenta, začátek/konec, počty a zdroj měření |
 | `ShipmentPlan` | ✓ | ✓ | plán celého množství/fáze; kategorie, objem, hmotnost a cena |
-| `EligibilitySnapshot` | ✓ | ✓ | stroje společně způsobilé pro model, konfiguraci a barvu |
-| `Shipment` | — | ✓ | více na objednávku; u fázované objednávky patří k `OrderPhase` |
-| `Claim` | ✓ | ✓ | reklamace oddělená od fulfilment stavu objednávky |
+| `EligibilitySnapshot` | ✓ | ✓ | způsobilí kandidáti s vlastním `CandidateResourceEstimate`, konfigurací a barvou |
+| `Shipment` | ✓ | ✓ | jedna běžně v v0, více/fáze v v1; náhrada odkazuje přes `replaces_shipment_id` |
+| `Claim` | ✓ | ✓ | reklamace dílu nebo incident zásilky oddělený od fulfilment stavu objednávky |
 | `AuditEvent` | — | ✓ | |
 | `Offer`, `QualityEvent`, `Certification`, `Payout` | — | — | jen při stavbě sítě |
 
@@ -557,24 +562,31 @@ draft → quoted → confirmed → in_production → qc_passed
 ```
 `confirmed` znamená, že je uhrazená částka potřebná ke startu: u automatické nabídky 100 %, u individuální nabídky záloha. `ready_to_ship → shipped` se neřídí názvem odvozeného `payment_status`, ale aktuálním cenovým snapshotem: guard vyžaduje `amount_due = 0` a `refundable_balance = 0`. Samotná záloha proto nestačí, zatímco finančně vypořádané snížení ceny může být po částečné refundaci bezpečně odesláno i se stavem `partially_refunded`.
 
-Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship → cancelled`; `cancelled → refunded`, pokud už byla zachycena platba; `in_production → partially_fulfilled`, pokud je nejméně jedna fáze doručená a všechny zbývající jsou zrušené a finančně vypořádané. Nezaplacené `cancelled` je terminální, zaplacené přejde na `refunded` až po úspěšném vrácení všech zachycených plateb. `completed`, `partially_fulfilled` a `refunded` jsou terminální fulfilment stavy; pozdější reklamace je nemění.
+Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship → cancelled`; `cancelled → refunded`, pokud už byla zachycena platba; `in_production | shipped → partially_fulfilled`, pokud je nejméně jedna fáze doručená a všechny zbývající jsou zrušené a finančně vypořádané. Při ztracené nebo vrácené zásilce bez dříve doručené fáze může finančně vypořádaný refund vést `shipped → cancelled → refunded`. Nezaplacené `cancelled` je terminální, zaplacené přejde na `refunded` až po úspěšném vrácení všech zachycených plateb. `completed`, `partially_fulfilled` a `refunded` jsou terminální fulfilment stavy; pozdější reklamace je nemění.
+
+**Shipment**
+```
+planned → label_created → handed_over → in_transit → delivered
+in_transit → lost | returned
+```
+`lost` a `returned` jsou terminální stavy konkrétní zásilky a automaticky otevřou `Claim` proti zásilce, i když objednávka ještě není `delivered`. Výsledek `resolved_reship` vytvoří nový `Shipment` s `replaces_shipment_id`; `resolved_reprint` jde přes rezervovaný `ReplacementRequest`. Během náhradního fulfilmentu zůstává agregát `shipped` a do `delivered` smí přejít až po doručení všech požadovaných zásilek nebo jejich náhrad. Pokud zákazník zvolí refund, použije se větev `refunded` nebo `partially_fulfilled` výše, takže nedoručená zaplacená objednávka nezůstane viset.
 
 **Payment**
 ```
 created → pending → captured
 pending → failed
-captured → refund_pending → partially_refunded | refunded
-partially_refunded → refund_pending → refunded
+captured | partially_refunded → refund_pending
+refund_pending → partially_refunded | refunded
 ```
-Objednávkový `payment_status` je projekce všech jejích plateb, ne náhrada jejich historie.
+Každý refund je samostatná idempotentní transakce a `refunded_amount` je součet úspěšných refundací konkrétního capture. Po webhooku se stav vrátí do `partially_refunded`, dokud `refunded_amount < captured_amount`; teprve rovnost znamená `refunded`. Opakované dílčí refundace jsou tedy stejnou smyčkou, nikoli falešným přechodem do plného refundu. Objednávkový `payment_status` je projekce všech jejích plateb, ne náhrada jejich historie.
 
 **Claim**
 ```
-opened → investigating → resolved_rejected | resolved_reprint | resolved_refund
+opened → investigating → resolved_rejected | resolved_reship | resolved_reprint | resolved_refund
 ```
-Claim lze otevřít proti doručené položce nebo fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`. `resolved_reprint` vytvoří `ReplacementRequest`, který smí vytvořit náhradní `Job` až s čerstvou produkční rezervací; `resolved_refund` spustí refundaci konkrétních `Payment`.
+Claim lze otevřít proti doručené položce/fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`, a proti `Shipment` ve stavu `lost` nebo `returned`, i když je objednávka teprve `shipped`. `resolved_reship` vytvoří navázanou zásilku, `resolved_reprint` vytvoří `ReplacementRequest`, který smí vytvořit náhradní `Job` až s čerstvou produkční rezervací, a `resolved_refund` spustí refundaci konkrétních `Payment`.
 
-Pro claim otevřený do snapshotovaného `claim_until` čte `resolved_reprint` kanonickou geometrii a immutable slice vstupy z `ReproductionArtifact`; nezávisí tedy na tom, zda už byl zdrojový `ModelFile` po 90 dnech smazán. Otevřený claim prodlouží retenci artefaktu až do svého terminálního vyřešení.
+Pro post-delivery claim otevřený do snapshotovaného `claim_until` čte `resolved_reprint` kanonickou geometrii a immutable slice vstupy z `ReproductionArtifact`; nezávisí tedy na tom, zda už byl zdrojový `ModelFile` po 90 dnech smazán. Před doručením nemá reprodukční artefakt expiraci; otevřený shipment incident nebo claim prodlouží jeho retenci až do terminálního vyřešení.
 
 **Job**
 ```
@@ -630,7 +642,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 2. `Job` nesmí opustit `created` bez přiřazeného `Node`.
 3. `confirmed` vyžaduje zachycenou plnou platbu u automatické nabídky nebo zachycenou zálohu u individuální nabídky.
 4. `shipped` vyžaduje vůči aktuálnímu cenovému snapshotu `amount_due = 0` a `refundable_balance = 0`; záloha sama nikdy nestačí, ale dokončená částečná refundace odeslání neblokuje.
-5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `geometry_hash` konkrétního `ModelGeometry` i `parts_per_plate`.
+5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `geometry_hash` konkrétního `ModelGeometry`, `print_config_revision_id` i `parts_per_plate`; machine-specific odhad rezervace používá oddělený `CandidateResourceEstimate`.
 6. `Order` nesmí být `confirmed` bez reference na **verzi ceníku a verzi podmínek**.
 7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
 8. Závazná cena smí vzniknout jen z deterministického výpočtu.
@@ -640,7 +652,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu, čerstvého `EligibilitySnapshot`, atomicky nahrazené `ProductionReservation`, přijetí `OrderRevision` zákazníkem a `revision_amount_due = 0`; požadavek na materiál a kapacitu platí i při zlevnění, odmítnutý batch končí finančně vypořádaným `partially_fulfilled` agregátem.
 13. Production `SliceResult` a přijatý `Job` musí držet immutable `machine_profile_revision_id` i `machine_calibration_revision_id` konkrétního stroje.
 14. Závazná cena musí mít `ShipmentPlan` pro celé množství každé fáze; žádný plánovaný balík nesmí překročit objemový ani hmotnostní limit kategorie.
-15. `Claim` je jediná cesta pro reklamaci po doručení; nikdy nepřepisuje terminální fulfilment stav objednávky.
+15. `Claim` je jediná cesta pro reklamaci po doručení i incident po předání dopravci; terminální fulfilment stav nepřepisuje, ale z `shipped` smí po nedoručení vyvolat náhradní fulfilment nebo finančně vypořádané storno.
 16. Závazná cena a capture platby vyžadují neprázdný, čerstvý `EligibilitySnapshot`; alespoň jeden způsobilý uzel musí mít pro vybranou barvu `available_g ≥ required_material_g` i nekolidující strojové intervaly a capture smí začít až po atomickém vytvoření společné `ProductionReservation` pro celou gramáž i kapacitu.
 17. Každá změna stavu zapisuje `AuditEvent` (od v1).
 
@@ -686,9 +698,11 @@ Plus jeden příznak: **„díl musí do něčeho zapadnout / má lícované roz
 
 ### 7.3 Barvy
 
-**Zákazník sklad nikdy nevidí.** Paleta není globální sjednocení inventáře. Nejdřív se pro aktuální geometrii a konfiguraci vyfiltrují stroje, které společně splňují build volume, materiál, aktivní `MachineProfile`, trysku, tier/certifikaci a cooldown. Referenční slice celého množství určí `required_material_g` včetně všech podložek, podpor a purge a zároveň délku všech požadovaných strojových intervalů včetně termínového bufferu. `available_g` je fyzicky evidovaná gramáž kompatibilních zásob uzlu minus jejich aktivní rezervace; dostupná kapacita je kalendář stroje minus nekolidující aktivní `CapacityReservation`. Teprve paleta je sjednocení barev uzlů, pro které lze současně umístit celé množství a platí `available_g ≥ required_material_g`. Po výběru barvy musí zůstat alespoň jeden takový plán; jinak se barva skryje a závazná cena nevznikne.
+**Zákazník sklad nikdy nevidí.** Paleta není globální sjednocení inventáře. Nejdřív se pro aktuální geometrii a konfiguraci vyfiltrují stroje, které splňují build volume, materiál, aktivní `MachineProfile`, trysku, tier/certifikaci a cooldown. Reference slice zůstává jen vstupem zákaznické ceny. Každý kandidátní fyzický stroj má vlastní `CandidateResourceEstimate`: machine-specific arrangement celého množství a metriky slice s jeho profilem a kalibrací určí jeho `required_material_g`, počet podložek i délku intervalů včetně termínového bufferu. Menší nebo pomalejší stroj tedy nikdy nedědí gramáž ani kapacitu reference stroje.
 
-Výsledek včetně `required_material_g`, konkrétního plánu intervalů, vyhovujících uzlů a pozorované dostupnosti se uloží jako krátce platný `EligibilitySnapshot`. Bezprostředně před capture platby se stejný predikát přepočítá. Jedna databázová transakce zamkne řádky zásob i kalendář vybraného stroje a vytvoří společnou `ProductionReservation`: `InventoryReservation` na celé `required_material_g` a nekolidující `CapacityReservation` pro všechny plánované podložky. Teprve úspěch obou částí povolí capture; souběžný checkout nemůže utratit tutéž gramáž ani slíbit stejný strojový interval podruhé.
+`available_g` je fyzicky evidovaná gramáž kompatibilních zásob uzlu minus jejich aktivní rezervace; dostupná kapacita je kalendář stroje minus nekolidující aktivní `CapacityReservation`. Teprve paleta je sjednocení barev kandidátů, pro které lze současně umístit jejich celý machine-specific plán a platí jejich vlastní `available_g ≥ required_material_g`. Po výběru barvy musí zůstat alespoň jeden takový plán; jinak se barva skryje a závazná cena nevznikne.
+
+Výsledek ukládá do krátce platného `EligibilitySnapshot` **per kandidát** ID `CandidateResourceEstimate`, jeho `required_material_g`, konkrétní plán intervalů a pozorovanou dostupnost. Bezprostředně před capture platby se odhad vybraného stroje i stejný predikát přepočítají. Jedna databázová transakce zamkne řádky zásob i kalendář právě tohoto stroje a vytvoří společnou `ProductionReservation`: `InventoryReservation` na jeho celou požadovanou gramáž a nekolidující `CapacityReservation` pro jeho podložky. Teprve úspěch obou částí povolí capture; souběžný checkout nemůže utratit tutéž gramáž ani slíbit stejný strojový interval podruhé.
 
 `ProductionReservation` má TTL jen po dobu nedokončené platby nebo nepřijaté revize: neúspěch ji uvolní, úspěšný capture (nebo přijatá revize bez doplatku) ji přepne na `held` bez expirace, přijetí jobu materiál commitne do spotřeby a kapacitu do plánu a storno vrátí nevyužité zdroje. V v0 je množina jediný vlastní stroj a paleta obsah jeho tři AMS; s heterogenní sítí se nikdy nesmí nabízet barva ze stroje, který ostatní požadavky, celou gramáž a plánované intervaly zakázky nesplní.
 
@@ -933,7 +947,9 @@ Klouzavé okno 30 jobů. Nový uzel postupuje **výkonem, ne časem**.
 
 ### 11.7 Routing
 
-**Filtr způsobilosti musí proběhnout dřív, než vznikne paleta a závazná cena, znovu před capture platby a nakonec předtím, než job komukoli blikne.** Všechny tři kroky používají stejný verzovaný predikát: build volume ≥ bbox + rezerva; aktivní `MachineProfile`; nasazený materiál a barva; `available_g ≥ required_material_g` po odečtení aktivních rezervací; typ trysky odpovídá materiálu; tier/certifikace ≥ požadavek objednávky; nekolidující strojové intervaly pro všechny podložky; není v cooldownu. Před capture se materiál i kapacita atomicky rezervují na jednom vyhovujícím uzlu a nabídku jobu smí vidět jen aktuální držitel `ProductionReservation`. Při odmítnutí nebo timeoutu se celá skupina gramáže a intervalů atomicky přesune na další právě způsobilý uzel ještě před odesláním další nabídky; pokud přesun není možný, job se nikomu nezobrazí a spustí se provozní eskalace/refundace.
+**Filtr způsobilosti musí proběhnout dřív, než vznikne paleta a závazná cena, znovu před capture platby a nakonec předtím, než job komukoli blikne.** Všechny tři kroky používají stejný verzovaný predikát, ale gramáž, počet podložek a intervaly berou z `CandidateResourceEstimate` konkrétního stroje: build volume ≥ bbox + rezerva; aktivní `MachineProfile`; nasazený materiál a barva; candidate `available_g ≥ required_material_g` po odečtení aktivních rezervací; typ trysky odpovídá materiálu; tier/certifikace ≥ požadavek objednávky; nekolidující candidate intervaly; není v cooldownu. Před capture se materiál i kapacita atomicky rezervují na jednom vyhovujícím uzlu a nabídku jobu smí vidět jen aktuální držitel `ProductionReservation`.
+
+Při odmítnutí nebo timeoutu vznikne pro další stroj čerstvý machine-specific odhad. Jedna transakce na něm rezervuje **jeho** gramáž a intervaly a teprve po úspěchu uvolní předchozí skupinu; hodnoty se mezi různými stroji nekopírují. Až potom se odešle další nabídka. Pokud přesun není možný, job se nikomu nezobrazí a spustí se provozní eskalace/refundace.
 
 ```
 Vlna 1 (0–15 min):   nejvýše skórovaný způsobilý držitel rezervace   payout ×1.00

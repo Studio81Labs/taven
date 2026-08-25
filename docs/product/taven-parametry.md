@@ -19,7 +19,7 @@
 
 Do ceníku vstupuje **vážený průměr posledních nákupů**, ne aktuální cena. Skutečná spotřeba se účtuje proti konkrétní cívce (`Inventory.price_per_g`).
 
-Každá zásoba eviduje fyzicky ověřené `remaining_g`; pro nabídku se používá `available_g = remaining_g − aktivní InventoryReservation`. `required_material_g` bere závazný slice celého množství včetně všech podložek, podpor a purge. Tentýž slice určuje strojové intervaly včetně termínového bufferu. Capture platby smí začít až po atomické společné `ProductionReservation` celé gramáže a nekolidující kapacity jednoho způsobilého uzlu; stejné pravidlo platí pro revizi i každý přetisk.
+Každá zásoba eviduje fyzicky ověřené `remaining_g`; pro nabídku se používá `available_g = remaining_g − aktivní InventoryReservation`. Závazný reference slice určuje jen zákaznickou cenu. Pro každý kandidátní fyzický stroj počítá `CandidateResourceEstimate` z jeho profilu, kalibrace a arrangementu celého množství vlastní `required_material_g`, podložky a intervaly včetně termínového bufferu. Capture platby smí začít až po atomické společné `ProductionReservation` gramáže a nekolidující kapacity vybraného stroje; stejné pravidlo platí pro revizi i každý přetisk.
 
 **V0 nabízené materiály:** PLA, PETG.
 
@@ -185,12 +185,14 @@ Osobní odběr není součástí v0 ani ekonomiky sítě; checkout podporuje jen
 
 **Referenční profily jsou per materiál × kvalita, nezávislé na stroji.** Ne jeden generický PLA profil pro celý svět — PETG má jiné rychlosti a teploty, takže by nabídka byla systematicky vedle.
 
-| Profil | Tryska | Vrstva | Výplň |
-|---|---|---|---|
-| `REF/PLA/návrhová` | 0,4 | ⚠ 0,28 | 10 % |
-| `REF/PLA/standardní` | 0,4 | 0,2 | 15 % gyroid |
-| `REF/PLA/jemná` | 0,4 | ⚠ 0,12 | 15 % |
-| `REF/PETG/*` | 0,4 | dtto | dtto |
+| Profil | Tryska | Vrstva |
+|---|---|---|
+| `REF/PLA/návrhová` | 0,4 | ⚠ 0,28 |
+| `REF/PLA/standardní` | 0,4 | 0,2 |
+| `REF/PLA/jemná` | 0,4 | ⚠ 0,12 |
+| `REF/PETG/*` | 0,4 | dtto |
+
+Výplň je nezávislá volba `dekorativní` 10 % / `běžná` 20 % / `pevná` 40 %. Její procento, vzor a všechny další toolpath volby tvoří immutable `PrintConfigRevision`, která vstupuje do klíče reference, candidate i production slice; profil kvality ji nesmí tiše přepsat.
 
 Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného slice daného profilu.
 
