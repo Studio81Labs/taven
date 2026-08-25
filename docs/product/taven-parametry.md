@@ -217,7 +217,7 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | **`payment_reservation_minutes`** | **⚠ 15 minut**; pozdější capture musí zdroje znovu získat, nebo se ihned refunduje |
 | **`balance_payment_days`** | **⚠ 7 dní** od QC individuální zakázky; pak explicitní `OrderSettlement` |
 | **`abandoned_item_retention_days`** | **⚠ 30 dní** od `cancelled_settled`; pak auditovaná recyklace/zničení |
-| **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak zrušit neaktivovaný batch, refundovat nečerpanou část a uzavřít `partially_fulfilled` |
+| **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak nejdřív zavřít revision capture window, zrušit neaktivovaný batch, refundovat nečerpanou část a uzavřít `partially_fulfilled`; pozdní capture se celý kompenzuje |
 | Reklamační okno pro zádržné (síť) | 7 dní od doručení |
 | **`source_model_retention_days`** | **90 dní** od terminálního stavu objednávky nebo expirace nabídky; jednotně pro zdrojové STL, 3MF i STEP |
 | **`undelivered_reproduction_retention_days`** | **⚠ 90 dní** od terminálního stavu bez doručení; pak smazat rekonstruovatelný artefakt, pokud neběží incident/claim/legal hold |
