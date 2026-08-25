@@ -225,7 +225,7 @@ Konstrukce záruky **odděluje vadu tisku od vady modelu**:
 
 To není formalita. Zákaznické modely bývají doladěné empiricky na jedné konkrétní tiskárně a nesou její skrytou kompenzaci; na kalibrovaném stroji pak **vyjdou přesněji a přestanou sedět**. Nikdy neslibuj lícování, slibuj věrnost modelu.
 
-Reklamace je samostatná entita `Claim` navázaná na objednávku, položku, fázi nebo zásilku. Lze ji otevřít po `delivered`, `completed` i `partially_fulfilled`, a pro `Shipment.lost | returned` už ve stavu objednávky `shipped`. Terminální fulfilment stav zpětně nemění; pre-delivery incident může vytvořit náhradní zásilku/job nebo finančně vypořádané storno, každý výsledek s vlastním auditem.
+Reklamace je samostatná entita `Claim` navázaná na objednávku, položku, fázi nebo zásilku. Lze ji otevřít po `delivered`, `completed` i `partially_fulfilled`, a pro `Shipment.lost | returned` už ve stavu agregátu `in_production` (mezifáze) nebo `shipped` (finální/jediná fáze). Terminální fulfilment stav zpětně nemění; pre-delivery incident může vytvořit náhradní zásilku/job nebo finančně vypořádané storno, každý výsledek s vlastním auditem.
 
 Při přijetí objednávky se snapshotuje verze reklamační politiky z přijatých podmínek; při doručení každé položky nebo fáze z ní vznikne konkrétní `claim_until`. Standardní samoobslužný `Claim` lze otevřít do příslušného termínu; zákonná nebo smluvní výjimka jej může prodloužit právním holdem. Pozdější požadavek jde do ručního právního posouzení a bez zachovaného reprodukčního artefaktu vyžaduje nový upload zákazníka.
 
@@ -245,7 +245,9 @@ Souhlas se zveřejněním fotografií hotových dílů, odmítnutelný checkboxe
 
 Retence se neváže na příponu souboru. Každý nahraný zdrojový `ModelFile` — **STL, 3MF i STEP** — při expiraci nabídky nebo přechodu objednávky do terminálního stavu dostane `source_delete_after` podle společného parametru `source_model_retention_days` (výchozí hodnota v parametrech §10). Mazací job v tento den odstraní zdrojový upload a formátově specifické mezisoubory; u expirované nabídky bez objednávky odstraní i veškerou rekonstruovatelnou geometrii.
 
-U přijaté objednávky vzniká zvlášť šifrovaný immutable `ReproductionArtifact`: kanonické produkční bajty `ModelGeometry` a reference na přesné revize profilů, kalibrace, `PrintConfigRevision` a cenového/slice snapshotu. Zdrojový STEP nebo 3MF tak nemusí zůstat uložený, ale reklamaci lze reprodukovat. Před doručením se `reproduction_delete_after` nenastaví; po doručení nesmí být dříve než příslušné `claim_until`. Aktivní incident zásilky, reklamace nebo právní hold termín prodlouží. Po odpadnutí poslední překážky mazací job odstraní artefakt a ponechá jen auditní metadata a hash, nikoli rekonstruovatelnou geometrii.
+U přijaté objednávky vzniká zvlášť šifrovaný `ReproductionArtifact` s kanonickými produkčními bajty `ModelGeometry`, přijatou `PrintConfigRevision` a reference/cenovým snapshotem. Machine-specific vstupy se k němu nepřipisují předem. Každé přijetí jobu **po finálním routingu** atomicky vytvoří draft `ReproductionArtifactVersion` navázaný na `OrderItem`/`OrderPhase` a `produced_by_job_id`; z jeho `ProductionReservation` kopíruje přesná ID `CandidateResourceEstimate`, `MachineProfile`, `MachineCalibration` a konfigurace. Přechod `gcode_ready` doplní skutečný production `SliceResult` a digest výstupního artefaktu a verzi immutable uzamkne. Přesměrovaný nebo náhradní job dostane novou verzi a neúspěšná/nedoručená verze se označí `superseded`, nikdy nepřepíše.
+
+Claim vybírá sealed verzi skutečně doručeného jobu/fáze, takže po smazání zdrojového STEP nebo 3MF stále reprodukuje to, co zákazník obdržel, nikoli původně rezervovaný stroj. Před doručením se `reproduction_delete_after` nenastaví; po doručení nesmí být dříve než příslušné `claim_until`. Aktivní incident zásilky, reklamace nebo právní hold termín prodlouží. Po odpadnutí poslední překážky mazací job odstraní artefakt i jeho produkční verze a ponechá jen auditní metadata a hash, nikoli rekonstruovatelnou geometrii.
 
 ### 3.8 Právní kontrola
 
@@ -529,7 +531,7 @@ První tři popisují **svět**, `MachineCalibration` a `Inventory` **tenhle kon
 | `OrderRevision` | — | ✓ | nový model, reslice, cenový rozdíl, fee-aware `PaymentSchedule`, přijetí a `revision_amount_due` |
 | `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem |
 | `ModelGeometry` | ✓ | ✓ | kanonická geometrie tělesa/podmnožiny; vlastní `geometry_hash` |
-| `ReproductionArtifact` | ✓ | ✓ | šifrovaná produkční geometrie + immutable vstupy pro případný claim; retence nejméně do `claim_until` |
+| `ReproductionArtifact` / `Version` | ✓ | ✓ | draft při acceptance, sealed s production slice při `gcode_ready`; claim volí skutečně doručenou |
 | `SliceResult` | ✓ | ✓ | vždy `PrintConfigRevision`; reference klíč s profile version, production navíc s calibration version |
 | `CandidateResourceEstimate` | ✓ | ✓ | machine-specific plate plan, gramáž a intervaly; bez použitelného G-code |
 | `PreflightFinding` | ✓ | ✓ | nález + úroveň + zda zákazník akceptoval |
@@ -571,7 +573,9 @@ Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_pass
 planned → label_created → handed_over → in_transit → delivered
 in_transit → lost | returned
 ```
-`lost` a `returned` jsou terminální stavy konkrétní zásilky a automaticky otevřou `Claim` proti zásilce, i když objednávka ještě není `delivered`. Výsledek `resolved_reship` vytvoří nový `Shipment` s `replaces_shipment_id`; `resolved_reprint` jde přes rezervovaný `ReplacementRequest`. Během náhradního fulfilmentu zůstává agregát `shipped` a do `delivered` smí přejít až po doručení všech požadovaných zásilek nebo jejich náhrad. Pokud zákazník zvolí refund, použije se větev `refunded` nebo `partially_fulfilled` výše, takže nedoručená zaplacená objednávka nezůstane viset.
+`lost` a `returned` jsou terminální stavy konkrétní zásilky a automaticky otevřou `Claim` proti zásilce, i když objednávka ještě není `delivered`. Výsledek `resolved_reship` vytvoří nový `Shipment` s `replaces_shipment_id`; `resolved_reprint` jde přes rezervovaný `ReplacementRequest`.
+
+Náhradní fulfilment **zachová aktuální agregátní stav podle fáze**: ztracený sample je mezifáze, takže objednávka zůstává `in_production` a doručení náhrady vrátí sample do `awaiting_confirmation`; ztracená finální/jediná zásilka zůstává `shipped` a do `delivered` přejde až po doručení náhrady. Žádná recovery větev proto nevynucuje skok `in_production → shipped`. Pokud zákazník zvolí refund, z aktuálního stavu se použije větev `cancelled → refunded` nebo `partially_fulfilled` výše, takže nedoručená zaplacená objednávka nezůstane viset.
 
 **Payment**
 ```
@@ -586,9 +590,9 @@ Každý refund je samostatná idempotentní transakce a `refunded_amount` je sou
 ```
 opened → investigating → resolved_rejected | resolved_reship | resolved_reprint | resolved_refund
 ```
-Claim lze otevřít proti doručené položce/fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`, a proti `Shipment` ve stavu `lost` nebo `returned`, i když je objednávka teprve `shipped`. `resolved_reship` vytvoří navázanou zásilku, `resolved_reprint` vytvoří `ReplacementRequest`, který smí vytvořit náhradní `Job` až s čerstvou produkční rezervací, a `resolved_refund` spustí refundaci konkrétních `Payment`.
+Claim lze otevřít proti doručené položce/fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`, a proti `Shipment` ve stavu `lost` nebo `returned`, i když je agregát teprve `in_production` nebo `shipped`. `resolved_reship` vytvoří navázanou zásilku, `resolved_reprint` vytvoří `ReplacementRequest`, který smí vytvořit náhradní `Job` až s čerstvou produkční rezervací, a `resolved_refund` spustí refundaci konkrétních `Payment`.
 
-Pro post-delivery claim otevřený do snapshotovaného `claim_until` čte `resolved_reprint` kanonickou geometrii a immutable slice vstupy z `ReproductionArtifact`; nezávisí tedy na tom, zda už byl zdrojový `ModelFile` po 90 dnech smazán. Před doručením nemá reprodukční artefakt expiraci; otevřený shipment incident nebo claim prodlouží jeho retenci až do terminálního vyřešení.
+Pro post-delivery claim otevřený do snapshotovaného `claim_until` čte `resolved_reprint` kanonickou geometrii a immutable slice vstupy z `ReproductionArtifactVersion.produced_by_job_id` skutečně doručené položky/fáze; nezávisí tedy na tom, zda už byl zdrojový `ModelFile` po 90 dnech smazán nebo zda byl původní job přesměrován. Před doručením nemá reprodukční artefakt expiraci; otevřený shipment incident nebo claim prodlouží jeho retenci až do terminálního vyřešení.
 
 **Job**
 ```
@@ -621,8 +625,11 @@ Cena sample fáze ani už vzniklé náklady se zpětně nemění; odmítnutí re
 
 Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu beze změny s čerstvě revalidovanou `ProductionReservation`, nebo přijetím `OrderRevision` s `revision_amount_due = 0` a novou rezervací ve stavu `held`. Cena všech plánovaných zásilek je součástí příslušného cenového snapshotu.
 
+Doručení sample nastaví `confirmation_deadline_at = delivered_at + sample_confirmation_days`. Deadline zůstává aktivní pro batch `locked | awaiting_revision | awaiting_capacity` a končí jen jeho aktivací nebo stornem; samotný upload rozpracované revize jej nemaže. Pokud batch do deadline není aktivní, atomický timeout přepne sample `awaiting_confirmation → confirmation_expired`, zruší batch, okamžitě uvolní jeho `ProductionReservation` a spustí refund celé nečerpané batch části cenového i platebního snapshotu. Systémem zaviněné `awaiting_capacity` smí deadline prodloužit jen explicitní auditovanou událostí oznámenou zákazníkovi, nikdy potichu. Po `amount_due = 0` a `refundable_balance = 0` agregát přejde z `in_production` do terminálního `partially_fulfilled`; doručený sample se tím nepředstírá jako neuskutečněný. Deadline i odeslané připomínky jsou auditované.
+
 ```
-sample: active → in_production → shipped → delivered → awaiting_confirmation → completed
+sample: active → in_production → shipped → delivered → awaiting_confirmation
+awaiting_confirmation → completed | confirmation_expired
 batch:  locked → active → in_production → shipped → delivered → completed
         locked → awaiting_capacity → active
         locked → awaiting_revision → awaiting_capacity → active
@@ -651,11 +658,12 @@ new → in_review → quoted → accepted → (vytvoří Order)
 10. Neúspěšný job musí mít otevřený `ReplacementRequest` s deadlinem; navazující `Job` přes `replaces_job_id` smí vzniknout jen atomicky s čerstvou `ProductionReservation`. Jinak se jeho fáze zruší: bez dříve dodané fáze následuje `cancelled → refunded`, po dodaném sample finančně vypořádané `partially_fulfilled`.
 11. Každá zásilka fázované objednávky patří právě k jedné `OrderPhase`; sample zásilka nesmí dokončit celou objednávku a poslední fáze musí vyvolat všechny mezistavy agregátu.
 12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu, čerstvého `EligibilitySnapshot`, atomicky nahrazené `ProductionReservation`, přijetí `OrderRevision` zákazníkem a `revision_amount_due = 0`; požadavek na materiál a kapacitu platí i při zlevnění, odmítnutý batch končí finančně vypořádaným `partially_fulfilled` agregátem.
-13. `ProductionReservation`, production `SliceResult` a přijatý `Job` drží tatáž immutable ID candidate odhadu, `MachineProfile`, `MachineCalibration` a `PrintConfigRevision`; job je při přijetí kopíruje z rezervace a aktivní revize je smí nahradit jen společně s atomickým re-estimate/re-reserve.
+13. `ProductionReservation`, production `SliceResult`, přijatý `Job` a jeho sealed `ReproductionArtifactVersion` drží tatáž immutable ID candidate odhadu, `MachineProfile`, `MachineCalibration` a `PrintConfigRevision`; acceptance je kopíruje z rezervace, `gcode_ready` verzi uzamkne a aktivní revize je smí nahradit jen společně s atomickým re-estimate/re-reserve.
 14. Závazná cena musí mít `ShipmentPlan` pro celé množství každé fáze; žádný plánovaný balík nesmí překročit objemový ani hmotnostní limit kategorie.
-15. `Claim` je jediná cesta pro reklamaci po doručení i incident po předání dopravci; terminální fulfilment stav nepřepisuje, ale z `shipped` smí po nedoručení vyvolat náhradní fulfilment nebo finančně vypořádané storno.
+15. `Claim` je jediná cesta pro reklamaci po doručení i incident po předání dopravci; náhradní fulfilment zachová `in_production` u mezifáze a `shipped` u finální fáze, refund vyvolá finančně vypořádané storno bez zakázaného skoku agregátu.
 16. Závazná cena a capture platby vyžadují neprázdný, čerstvý `EligibilitySnapshot`; alespoň jeden způsobilý uzel musí mít pro vybranou barvu `available_g ≥ required_material_g` i nekolidující strojové intervaly a capture smí začít až po atomickém vytvoření společné `ProductionReservation` pro celou gramáž i kapacitu.
 17. Každá změna stavu zapisuje `AuditEvent` (od v1).
+18. Sample v `awaiting_confirmation` musí mít `confirmation_deadline_at`; timeout atomicky zruší a odrezervuje batch, spustí refund nečerpané části a po vypořádání uzavře agregát `partially_fulfilled`.
 
 ### 6.5 Švy pro síť
 
@@ -705,7 +713,7 @@ Plus jeden příznak: **„díl musí do něčeho zapadnout / má lícované roz
 
 Výsledek ukládá do krátce platného `EligibilitySnapshot` **per kandidát** ID `CandidateResourceEstimate`, jeho `required_material_g`, konkrétní plán intervalů a pozorovanou dostupnost. Bezprostředně před capture platby se odhad vybraného stroje i stejný predikát přepočítají. Jedna databázová transakce zamkne řádky zásob i kalendář právě tohoto stroje a vytvoří společnou `ProductionReservation`: `InventoryReservation` na jeho celou požadovanou gramáž a nekolidující `CapacityReservation` pro jeho podložky. Teprve úspěch obou částí povolí capture; souběžný checkout nemůže utratit tutéž gramáž ani slíbit stejný strojový interval podruhé.
 
-`ProductionReservation` má TTL jen po dobu nedokončené platby nebo nepřijaté revize: neúspěch ji uvolní, úspěšný capture (nebo přijatá revize bez doplatku) ji přepne na `held` bez expirace. Přijetí jobu přepne gramáž na `allocated` a intervaly na `scheduled`, nikoli ještě na spotřebu; až `printing` commitne materiál k průběžnému vyúčtování. Pre-print failure uvolní celou gramáž a nevyužitou kapacitu, in-print failure zapíše skutečnou spotřebu a vrátí zbytek, storno obdobně uvolní všechny nepoužité zdroje. V v0 je množina jediný vlastní stroj a paleta obsah jeho tři AMS; s heterogenní sítí se nikdy nesmí nabízet barva ze stroje, který ostatní požadavky, celou gramáž a plánované intervaly zakázky nesplní.
+`ProductionReservation` má platební TTL jen po dobu nedokončené platby nebo nepřijaté revize: neúspěch ji uvolní, úspěšný capture (nebo přijatá revize bez doplatku) ji přepne na `held`. `Held` nemá krátké checkout TTL, ale podléhá business deadlinům fáze — zejména `confirmation_deadline_at` u batch po doručení sample — takže zdroje nikdy nezůstanou blokované bez časové hranice. Přijetí jobu přepne gramáž na `allocated` a intervaly na `scheduled`, nikoli ještě na spotřebu; až `printing` commitne materiál k průběžnému vyúčtování. Pre-print failure uvolní celou gramáž a nevyužitou kapacitu, in-print failure zapíše skutečnou spotřebu a vrátí zbytek, storno obdobně uvolní všechny nepoužité zdroje. V v0 je množina jediný vlastní stroj a paleta obsah jeho tři AMS; s heterogenní sítí se nikdy nesmí nabízet barva ze stroje, který ostatní požadavky, celou gramáž a plánované intervaly zakázky nesplní.
 
 ### 7.4 Množstevní varianty
 
@@ -771,7 +779,7 @@ Podmínka: **je čistě poradní a jednosměrná** (invariant §6.4 bod 8).
 
 Registrace **schopnosti**, ne profilu. Kalibrační overridy konkrétního kusu.
 
-Kalibrační overridy se nikdy nepřepisují na místě. Uložení vytvoří novou `MachineCalibration`; rozpracované a historické joby zůstávají na své verzi. Už `CandidateResourceEstimate` a navazující `ProductionReservation` snapshotují konkrétní `machine_profile_revision_id`, `machine_calibration_revision_id` a `print_config_revision_id`. Přijetí jobu tyto ID **kopíruje z rezervace**, nikdy z právě aktivního nastavení stroje, takže produkční G-code používá stejné vstupy jako rezervované gramy a intervaly.
+Kalibrační overridy se nikdy nepřepisují na místě. Uložení vytvoří novou `MachineCalibration`; rozpracované a historické joby zůstávají na své verzi. Už `CandidateResourceEstimate` a navazující `ProductionReservation` snapshotují konkrétní `machine_profile_revision_id`, `machine_calibration_revision_id` a `print_config_revision_id`. Přijetí jobu tyto ID **kopíruje z rezervace**, nikdy z právě aktivního nastavení stroje, takže produkční G-code používá stejné vstupy jako rezervované gramy a intervaly. Tatáž transakce vytvoří draft `ReproductionArtifactVersion` pro tento job; `gcode_ready` ji doplní production výsledkem a uzamkne. Dřívější odmítnutý/přesměrovaný kandidát verzi vytvořit nemůže.
 
 Pokud se před přijetím musí použít novější aktivní kalibrace, systém nejdřív vytvoří nový candidate odhad a atomicky nahradí materiálovou i kapacitní rezervaci; teprve pak lze job přijmout. Když novou rezervaci nelze získat, job se nepřijme a pokračuje routing/escalation path.
 

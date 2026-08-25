@@ -213,6 +213,7 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | **`strop_spend_v0`** | **5 000 Kč** do jednoho kanálu |
 | Lhůta na individuální nabídku | 24 h v pracovní dny |
 | Slíbená dodací lhůta | ⚠ trh: 1–2 dny jednoduché, garance 72 h |
+| **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak uvolnit batch rezervaci, refundovat nečerpanou část a uzavřít `partially_fulfilled` |
 | Reklamační okno pro zádržné (síť) | 7 dní od doručení |
 | **`source_model_retention_days`** | **90 dní** od terminálního stavu objednávky nebo expirace nabídky; jednotně pro zdrojové STL, 3MF i STEP |
 | **`reproduction_artifact_retention`** | nejméně do snapshotovaného `claim_until` z přijaté verze podmínek; ⚠ přesnou lhůtu potvrdit s právním poradcem, aktivní claim/právní hold ji prodlužuje |
