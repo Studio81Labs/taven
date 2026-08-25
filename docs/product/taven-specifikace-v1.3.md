@@ -211,7 +211,7 @@ Přechod na plátcovství není úprava parametru — v ten den buď zdražíš 
 
 Tisknutý díl na míru nemá pro nikoho jiného hodnotu. Zvyklost trhu to potvrzuje.
 
-Platba není jeden sloupec na objednávce. `Order` má kolekci `Payment`, každý se samostatnou částkou, rolí `full` / `deposit` / `balance`, stavem brány a identifikátorem transakce. Automatická nabídka má jednu `full` platbu; individuální nabídka nejméně `deposit` a `balance`. Vrácení peněz se váže ke konkrétní zachycené platbě, aby šlo smířit částečné i úplné refundace. `payment_status` objednávky (`unpaid` / `partially_paid` / `paid` / `partially_refunded` / `refunded`) se odvozuje z těchto transakcí, není ručně přepisovaný stav.
+Platba není jeden sloupec na objednávce. `Order` má kolekci `Payment`, každý se samostatnou částkou, rolí `full` / `deposit` / `balance`, stavem brány a identifikátorem transakce. Automatická nabídka má jednu `full` platbu; individuální nabídka nejméně `deposit` a `balance`. Vrácení peněz se váže ke konkrétní zachycené platbě, aby šlo smířit částečné i úplné refundace. `payment_status` objednávky (`unpaid` / `partially_paid` / `paid` / `partially_refunded` / `refunded`) se odvozuje z těchto transakcí, není ručně přepisovaný stav. Stejně odvozené jsou `amount_due` a `refundable_balance` vůči právě platnému cenovému snapshotu; právě jejich nula určuje finanční vypořádání částečně splněné objednávky.
 
 **Brána:** rozhodující je **absence měsíčního paušálu** (viz log #39), povinné je **bankovní tlačítko vedle karty**. Schovat za jedno rozhraní — je to nejsnáze vyměnitelná komponenta.
 
@@ -224,6 +224,8 @@ Konstrukce záruky **odděluje vadu tisku od vady modelu**:
 > Tiskneme věrně podle dodaného modelu. Pokud byl model laděný na jiné tiskárně, může se lícování lišit — to není vada tisku.
 
 To není formalita. Zákaznické modely bývají doladěné empiricky na jedné konkrétní tiskárně a nesou její skrytou kompenzaci; na kalibrovaném stroji pak **vyjdou přesněji a přestanou sedět**. Nikdy neslibuj lícování, slibuj věrnost modelu.
+
+Reklamace je samostatná entita `Claim` navázaná na objednávku, položku a případně fázi. Lze ji otevřít po `delivered`, `completed` i `partially_fulfilled`; nemění zpětně terminální fulfilment stav objednávky. Výsledek claimu může vytvořit náhradní job, refundaci nebo zamítnutí s důvodem a vlastním auditem.
 
 ### 3.5 Makeři a IČO (jen při stavbě sítě)
 
@@ -339,7 +341,15 @@ Orca má vlastní arrangement se svými omezeními a psát k němu paralelní 2D
 
 ### 4.6 Přepravní kategorie
 
-Bounding box počítá preflight; přidej obalovou rezervu a urči kategorii automaticky. Bin packing **neřeš přesně** — kategorie jsou hrubé, na hraně zaokrouhluj nahoru.
+Bounding box počítá preflight, ale kategorie se nesmí určit jen z jednoho dílu. Před závaznou cenou vznikne deterministický `ShipmentPlan` pro **celé množství každé fáze**:
+
+1. největší jednotlivý díl se musí vejít do rozměrů zvolené kategorie po přidání obalové rezervy
+2. odhad zabraného objemu je `Σ(bbox_volume × qty) / koeficient_plnění_krabice`
+3. odhad hmotnosti je materiál všech kusů + hmotnost obalu
+4. kusy se deterministicky rozdělí do nejmenší kategorie, která nepřekročí objem ani hmotnost; při překročení vznikne další plánovaná zásilka
+5. na hraně se zaokrouhluje nahoru; co se nevejde do žádné podporované kategorie, jde do individuální nabídky
+
+Vlastní přesný 3D bin packing **nestav** — pro hrubé přepravní kategorie stačí konzervativní first-fit nad bbox objemem a hmotností. `ShipmentPlan` je součást cenového snapshotu; fázovaná objednávka plánuje sample a batch odděleně a revize modelu přepočítá jen zbývající zásilky.
 
 Tvrdá podmínka: **největší jednotlivý díl** se musí vejít do rozměrů krabice.
 
@@ -439,7 +449,9 @@ Každý nález má úroveň `info` / `warning` (risk checkbox) / `blocking` (→
 
 ### 5.6 Cache
 
-Klíč `sha256(ModelFile) + profile_kind + profile_version + parts_per_plate`, kde `profile_kind` je `reference` nebo `machine`. `SliceResult` reprezentuje jednu konkrétní obsazenost podložky; pro jeden kus je `parts_per_plate = 1`, u dávky se plná a poslední částečná podložka cachují samostatně a výsledek nabídky se z nich složí. Závazná cena smí použít jen výsledek s `profile_kind = reference`.
+Klíč reference slice je `sha256(ModelFile) + reference_profile_revision_id + parts_per_plate`. Klíč production slice je `sha256(ModelFile) + machine_profile_revision_id + machine_calibration_revision_id + parts_per_plate`. Revision ID je globálně unikátní immutable snapshot, takže se nemohou srazit lokální čísla verzí dvou profilů ani dvou fyzických strojů. `MachineCalibration` obsahuje `flow_ratio` a XY/elephant-foot kompenzace; změna kteréhokoli override vytvoří novou revizi a G-code z jiné kalibrace nelze vrátit z cache.
+
+`SliceResult` reprezentuje jednu konkrétní obsazenost podložky; pro jeden kus je `parts_per_plate = 1`, u dávky se plná a poslední částečná podložka cachují samostatně a výsledek nabídky se z nich složí. Závazná cena smí použít jen reference výsledek; production výsledek si ukládá obě strojové verze.
 
 ### 5.7 Async a UX ceny
 
@@ -467,20 +479,21 @@ Právně čisté: hrubý odhad je výslovně nezávazný, závazná cena vzniká
 
 ## §6 Datový model
 
-### 6.1 Čtyři matice — nesloučit
+### 6.1 Pět matic — nesloučit
 
 ```
 ReferenceProfile   (verzovaný, materiál × kvalita; bez stroje)      platforma
 MachineCapability  (statická, per model stroje)                    platforma
 MachineProfile     (verzovaný, model × tryska × materiál × kvalita) platforma
+MachineCalibration (verzovaná, per konkrétní stroj)                 maker
 Inventory          (dynamická, per konkrétní stroj uzlu)            maker
                                       ↓
                  = nabídka, kterou zákazník vidí a síť umí vyrobit
 ```
 
-První tři popisují **svět**, čtvrtá **tenhle stroj dneska**. `ReferenceProfile` nikdy nemá vazbu na model stroje a používá se výhradně pro závaznou zákaznickou cenu. `MachineProfile` vždy patří kombinaci modelu, trysky, materiálu a kvality a používá se výhradně pro produkční G-code. Oba typy jsou verzované odděleně; jejich nastavení ani verze se nesmí sdílet jen proto, že v v0 běží na jednom fyzickém stroji.
+První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dneska**. `ReferenceProfile` nikdy nemá vazbu na model stroje a používá se výhradně pro závaznou zákaznickou cenu. `MachineProfile` vždy patří kombinaci modelu, trysky, materiálu a kvality; `MachineCalibration` k němu přidává verzované odchylky konkrétního kusu. Produkční G-code používá oba snapshoty. Nastavení ani verze se nesmí sdílet jen proto, že v v0 běží na jednom fyzickém stroji.
 
-**Maker nikdy nenahrává vlastní profil** — registruje jen schopnost (model, tryska, materiály, build volume, počet AMS). Ovlivnit smí pouze kalibrační odchylky svého kusu: `xy_hole_compensation`, `xy_contour_compensation`, `elephant_foot_compensation`, `flow_ratio`.
+**Maker nikdy nenahrává vlastní profil** — registruje jen schopnost (model, tryska, materiály, build volume, počet AMS). Ovlivnit smí pouze kalibrační odchylky svého kusu: `xy_hole_compensation`, `xy_contour_compensation`, `elephant_foot_compensation`, `flow_ratio`. Každé uložení vytvoří immutable `MachineCalibration` verzi; minulý job vždy ukazuje na snapshot, se kterým vznikl jeho G-code.
 
 **Na `Inventory` patří `price_per_g` a `vendor`.** Pak umíš každý job naúčtovat proti **skutečně spotřebovaným cívkám** a postavit vedle sebe plánovanou a realizovanou marži. Rozdíl mezi nimi je to, co chceš vidět — bez toho spotový nákup na Alze nikdy neuvidíš.
 
@@ -494,18 +507,21 @@ První tři popisují **svět**, čtvrtá **tenhle stroj dneska**. `ReferencePro
 | `OrderPhase` | — | ✓ | `sample` / `batch`; vlastní model, cenový snapshot, joby a zásilky |
 | `OrderRevision` | — | ✓ | nový `ModelFile`, reslice, cenový rozdíl a přijetí zákazníkem |
 | `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem |
-| `SliceResult` | ✓ | ✓ | klíč `hash(ModelFile + profile_kind + profile_version + parts_per_plate)` |
+| `SliceResult` | ✓ | ✓ | reference klíč s profile version; production navíc s calibration version |
 | `PreflightFinding` | ✓ | ✓ | nález + úroveň + zda zákazník akceptoval |
 | `Job` | ✓ | ✓ | přiřaditelný jednomu uzlu; přetisk odkazuje přes `replaces_job_id` |
 | `Node` / `Machine` / `Inventory` | ✓ | ✓ | uzel jediný, entity ale existují |
 | `ReferenceProfile` | ✓ | ✓ | `material × quality`, bez modelu stroje; jen quote slice |
 | `MachineCapability` | ✓ | ✓ | statické schopnosti modelu stroje |
 | `MachineProfile` | ✓ | ✓ | `model × nozzle × material × quality`; jen produkční slice |
+| `MachineCalibration` | ✓ | ✓ | immutable override snapshot konkrétního stroje |
 | `PriceList` | ✓ | ✓ | verzovaný; objednávka drží referenci |
 | `QuoteRequest` / `Quote` | ✓ | ✓ | individuální nabídka |
 | `CostInput` | ✓ | ✓ | nákupy filamentu, sazba energie, spotřební materiál |
 | `HandlingSession` | ✓ | ✓ | aktivní práce: komponenta, začátek/konec, počty a zdroj měření |
+| `ShipmentPlan` | ✓ | ✓ | plán celého množství/fáze; kategorie, objem, hmotnost a cena |
 | `Shipment` | — | ✓ | více na objednávku; u fázované objednávky patří k `OrderPhase` |
+| `Claim` | ✓ | ✓ | reklamace oddělená od fulfilment stavu objednávky |
 | `AuditEvent` | — | ✓ | |
 | `Offer`, `QualityEvent`, `Certification`, `Payout` | — | — | jen při stavbě sítě |
 
@@ -518,7 +534,7 @@ draft → quoted → confirmed → in_production → qc_passed
 ```
 `confirmed` znamená, že je uhrazená částka potřebná ke startu: u automatické nabídky 100 %, u individuální nabídky záloha. `ready_to_ship → shipped` má guard na plný `payment_status = paid`, tedy i doplatek individuální nabídky.
 
-Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship → cancelled`; `cancelled → refunded`, pokud už byla zachycena platba; `delivered → disputed → refunded | resolved`. Nezaplacené `cancelled` je terminální, zaplacené přejde na `refunded` až po úspěšném vrácení všech zachycených plateb.
+Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship → cancelled`; `cancelled → refunded`, pokud už byla zachycena platba; `in_production → partially_fulfilled`, pokud je nejméně jedna fáze doručená a všechny zbývající jsou zrušené a finančně vypořádané. Nezaplacené `cancelled` je terminální, zaplacené přejde na `refunded` až po úspěšném vrácení všech zachycených plateb. `completed`, `partially_fulfilled` a `refunded` jsou terminální fulfilment stavy; pozdější reklamace je nemění.
 
 **Payment**
 ```
@@ -528,6 +544,12 @@ captured → refund_pending → partially_refunded | refunded
 partially_refunded → refund_pending → refunded
 ```
 Objednávkový `payment_status` je projekce všech jejích plateb, ne náhrada jejich historie.
+
+**Claim**
+```
+opened → investigating → resolved_rejected | resolved_reprint | resolved_refund
+```
+Claim lze otevřít proti doručené položce nebo fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`. `resolved_reprint` vytvoří náhradní `Job`; `resolved_refund` spustí refundaci konkrétních `Payment`.
 
 **Job**
 ```
@@ -551,13 +573,15 @@ quote → sample (1 ks) → zákazník potvrdí fit
 ```
 Cena obou fází pro **původní `ModelFile`** se zamkne už při nacenění, takže zákazník od začátku ví celkovou částku. Potvrzení fitu beze změny modelu aktivuje batch za zamčenou cenu.
 
-Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Batch se do té doby neaktivuje. Cena sample fáze ani už vzniklé náklady se zpětně nemění; odmítnutí revize batch zruší a vrátí jen dosud nečerpanou část platby. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
+Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Batch se do té doby neaktivuje. Cena sample fáze ani už vzniklé náklady se zpětně nemění; odmítnutí revize přepne batch do `cancelled`, vrátí dosud nečerpanou část platby a po finančním vypořádání uzavře agregát jako `partially_fulfilled`. Guard není konkrétní `payment_status`, ale `amount_due = 0` a `refundable_balance = 0`, takže částečná refundace je platný terminální výsledek. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
 
 Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu nebo přijetím `OrderRevision`. Cena všech plánovaných zásilek je součástí příslušného cenového snapshotu.
 
 ```
 sample: active → in_production → shipped → delivered → awaiting_confirmation → completed
 batch:  locked → active → in_production → shipped → delivered → completed
+        locked → awaiting_revision → active
+        locked | awaiting_revision → cancelled
 ```
 Události sample fáze stav celkové objednávky za `in_production` neposouvají. Poslední aktivní fáze — běžně batch — řídí **všechny** zbývající přechody agregátu: schválení QC `in_production → qc_passed`, plná úhrada a připravená finální zásilka `→ ready_to_ship`, předání dopravci `→ shipped`, doručení `→ delivered` a uzavření `→ completed`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu.
 
@@ -580,8 +604,11 @@ new → in_review → quoted → accepted → (vytvoří Order)
 9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
 10. Neúspěšný job zaplacené objednávky musí mít navazující `Job` přes `replaces_job_id`, nebo objednávka musí přejít do `cancelled → refunded`.
 11. Každá zásilka fázované objednávky patří právě k jedné `OrderPhase`; sample zásilka nesmí dokončit celou objednávku a poslední fáze musí vyvolat všechny mezistavy agregátu.
-12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu a přijetí `OrderRevision` zákazníkem.
-13. Každá změna stavu zapisuje `AuditEvent` (od v1).
+12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu a přijetí `OrderRevision` zákazníkem; odmítnutý batch končí finančně vypořádaným `partially_fulfilled` agregátem.
+13. Production `SliceResult` a přijatý `Job` musí držet immutable `machine_profile_revision_id` i `machine_calibration_revision_id` konkrétního stroje.
+14. Závazná cena musí mít `ShipmentPlan` pro celé množství každé fáze; žádný plánovaný balík nesmí překročit objemový ani hmotnostní limit kategorie.
+15. `Claim` je jediná cesta pro reklamaci po doručení; nikdy nepřepisuje terminální fulfilment stav objednávky.
+16. Každá změna stavu zapisuje `AuditEvent` (od v1).
 
 ### 6.5 Švy pro síť
 
@@ -691,6 +718,8 @@ Podmínka: **je čistě poradní a jednosměrná** (invariant §6.4 bod 8).
 
 Registrace **schopnosti**, ne profilu. Kalibrační overridy konkrétního kusu.
 
+Kalibrační overridy se nikdy nepřepisují na místě. Uložení vytvoří novou `MachineCalibration`; rozpracované a historické joby zůstávají na své verzi, nové joby snapshotují právě aktivní verzi při přijetí.
+
 **Inventář je zdroj palety, kterou vidí zákazník** — musí být rychlý na údržbu, přepnutí cívky pár kliknutí. Jinak se přestane aktualizovat a paleta začne lhát.
 
 Kapacita: plánované okno tisku, pauza, max souběžných jobů. **Vstup pro kapacitní bránu expresu.**
@@ -719,7 +748,7 @@ Dnešní objednávky, poptávky s odpočtem do 24h lhůty, joby po termínu, fro
 
 ### 9.2 Objednávky
 
-Seznam s filtrem. Detail: položky, ceny s odkazem na verzi ceníku, slice výsledky, preflight nálezy a co zákazník akceptoval, platby, zásilky, časová osa.
+Seznam s filtrem. Detail: položky, ceny s odkazem na verzi ceníku, slice výsledky, preflight nálezy a co zákazník akceptoval, platby, zásilky, reklamace, časová osa.
 
 Ruční zásahy: změna stavu, storno a vrácení, přepsání ceny (**s povinným důvodem do auditu**), přeposlání e-mailů.
 

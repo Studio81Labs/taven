@@ -115,6 +115,8 @@ rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk)
 
 U fázované objednávky se doprava, obal a `handling_pack` počítají pro každou plánovanou zásilku zvlášť; sample a batch se neposílají současně a nelze je sloučit do jedné sazby. Práh dopravy zdarma se vyhodnotí jednou nad `cena_tisku_zaklad` a případně nuluje zákaznický součet dopravy, nikoli skutečné náklady v CM.
 
+`ShipmentPlan` počítá celé množství, ne jen největší díl: potřebný objem je `Σ(bbox_volume × qty) / koeficient_plnění_krabice`, hmotnost zahrnuje materiál všech kusů a obal. Překročení objemu nebo hmotnosti vytvoří další plánovanou zásilku a tím další sazbu dopravy, obal i balicí handling.
+
 **Limity přepravních kategorií**
 
 | Kategorie | Limity |
