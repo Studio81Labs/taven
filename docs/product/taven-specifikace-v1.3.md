@@ -213,6 +213,8 @@ Tisknutý díl na míru nemá pro nikoho jiného hodnotu. Zvyklost trhu to potvr
 
 Platba není jeden sloupec na objednávce. `Order` má kolekci `Payment`, každý se samostatnou částkou, rolí `full` / `deposit` / `balance`, stavem brány a identifikátorem transakce. Automatická nabídka má jednu `full` platbu; individuální nabídka nejméně `deposit` a `balance`. Cenový snapshot zároveň drží immutable `PaymentSchedule` se všemi plánovanými capture a jejich fee pravidly, aby cena zahrnula fixní poplatek každé transakce. Vrácení peněz se váže ke konkrétní zachycené platbě, aby šlo smířit částečné i úplné refundace. `payment_status` objednávky (`unpaid` / `partially_paid` / `paid` / `partially_refunded` / `refunded`) se odvozuje z těchto transakcí, není ručně přepisovaný stav. Stejně odvozené jsou `amount_due` a `refundable_balance` vůči právě platnému cenovému snapshotu; právě jejich nula určuje finanční vypořádání částečně splněné objednávky.
 
+Každý `balance` Payment navíc ukládá `capture_authorized` a `capture_cutoff_at`. Webhook capture, timeout doplatku i settlement zamykají stejný řádek Payment a Order, takže po uzavření capture okna nelze pozdní úspěch použít k obnovení objednávky ani přepsání immutable settlementu; je pouze podkladem pro okamžitou plnou kompenzační refundaci.
+
 **Brána:** rozhodující je **absence měsíčního paušálu** (viz log #39), povinné je **bankovní tlačítko vedle karty**. Schovat za jedno rozhraní — je to nejsnáze vyměnitelná komponenta.
 
 ### 3.4 Odstoupení a záruka
@@ -384,6 +386,8 @@ Tvrdá podmínka: **největší jednotlivý díl** se musí vejít do rozměrů 
 
 **Prodávat s garancí vrácení příplatku.** V českém vzorku to nikdo nenabízí a při funkční kapacitní bráně to nic nestojí. Podmínkou legitimity je **poctivý standardní termín** — jinak express jen prodává zpátky rezervu, což lidé při druhé objednávce poznají.
 
+Garance se vypořádává idempotentní událostí `ExpressSlaBreach`, když `qc_passed_at` nevznikne do `express_due_at = confirmed_at + 24 h`. Událost nejdřív vytvoří novou immutable revizi aktuálního cenového snapshotu s `contract_total' = contract_total − express_priplatek` a aktivuje ji jako `PriceAdjustment(kind = express_sla_credit)`; původní snapshot se nemění. Teprve proti takto snížené smluvní ceně přepočítá `refundable_balance = max(0, net_captured − contract_total')` a pod stejným zámkem Payment i aktivních refundů vytvoří `RefundTransaction` na dosud nevrácenou a žádným pending refundem nealokovanou část příplatku s klíčem `order_id + express_due_at + price_snapshot_id`. Pokud příplatek už zahrnul jiný úplný refund nebo settlement, částka je nulová a druhý refund nevznikne. Clock worker i `handoff_shipment` vyhodnotí po `express_due_at` tutéž událost pod zámkem; předání proto nemůže předběhnout dosud nezapsaný SLA credit. Úspěšný webhook vrátí `refundable_balance` na nulu; retry a alert pokračují do vypořádání a pre-handoff zásilka zůstává mezitím blokovaná. Refund tedy nikdy nevytvoří falešný doplatek základní objednávky a opakované vyhodnocení SLA nevrátí příplatek dvakrát.
+
 **Kapacitní brána — default zapnuto, měří zásahy obsluhy, ne hodiny.** Jeden dvacetihodinový tisk přes noc je v pořádku, pět čtyřhodinových podložek ne, protože mezi nimi musí někdo sejmout díly. Podmínky v parametrech §10. Když padnou, volba se **nezobrazí**.
 
 ### 4.8 Meze automatu
@@ -531,9 +535,11 @@ První tři popisují **svět**, `MachineCalibration` a `Inventory` **tenhle kon
 |---|---|---|---|
 | `Customer` | ✓ | ✓ | bez povinné registrace |
 | `Order` / `OrderItem` | ✓ | ✓ | fulfilment objednávky; platby a od v1 zásilky jsou kolekce potomků |
-| `Payment` | ✓ | ✓ | více transakcí na objednávku; role `full` / `deposit` / `balance` + refundace |
+| `Payment` | ✓ | ✓ | více transakcí na objednávku; role `full` / `deposit` / `balance`, capture cutoff + refundace |
 | `PaymentSchedule` | ✓ | ✓ | immutable plán všech capture a fee sazeb použitý pro gross-up cenového snapshotu |
 | `OrderSettlement` | ✓ | ✓ | earned/refund/write-off snapshot pro zrušení po vzniklých nákladech nebo opuštěném doplatku |
+| `PostSettlementCaptureCompensation` | ✓ | ✓ | plná refundace provider capture doručeného až po cutoffu; settlement ani fulfilment znovu neotevírá |
+| `PriceAdjustment` | ✓ | ✓ | immutable následník cenového snapshotu; včetně idempotentního `express_sla_credit` před refundem příplatku |
 | `OrderPhase` | — | ✓ | `sample` / `batch`; vlastní model, cenový snapshot, joby a zásilky |
 | `OrderRevision` | — | ✓ | nový model, reslice, cenový rozdíl, fee-aware `PaymentSchedule`, přijetí a `revision_amount_due` |
 | `FulfilmentSlot` | ✓ | ✓ | naceněný doručovaný kus se `settlement_amount`; spojuje aktuální Job lineage s právě jednou parcel allocation |
@@ -583,7 +589,9 @@ recovery_pending → cancelled
 
 Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship | recovery_pending → cancelled`; `in_production | shipped | recovery_pending → partially_fulfilled`, pokud je nejméně jeden `FulfilmentSlot` doručený a každý zbývající slot je doručený nebo finančně vypořádaný jako `cancelled_refunded`. Při ztracené/vrácené zásilce nebo vyčerpané post-QC recovery bez jediného doručeného slotu vede dokončený refund přes `shipped | recovery_pending → cancelled → refunded`. Nezaplacené `cancelled` je terminální. Zrušená objednávka se zachycenou platbou skončí `refunded`, pokud nevznikla zasloužená hodnota, nebo `cancelled_settled` přes explicitní `OrderSettlement`; blanket pravidlo „každý capture celý vrátit“ neplatí po doložené výrobě. `completed`, `partially_fulfilled`, `refunded` a `cancelled_settled` jsou terminální fulfilment stavy; pozdější reklamace je nemění.
 
-U individuální nabídky vytvoří dokončení QC zbývající `balance` Payment a nastaví `balance_due_at = qc_approved_at + balance_payment_days`; agregát čeká v `awaiting_balance`. Po připomínkách a marném deadline vznikne immutable `OrderSettlement`: `earned_amount` je nejvýše prokazatelně vzniklá a v přijatých podmínkách sjednaná hodnota s guardem `0 ≤ earned_amount ≤ contract_total`, `retained_amount = min(captured_total, earned_amount)`, `refund_amount = captured_total − retained_amount`, `written_off_amount = max(0, earned_amount − captured_total)` a `unearned_cancelled_amount = contract_total − earned_amount`. Po úspěšném refundu případného přebytku se pro settlement snapshot odvodí `amount_due = 0` a `refundable_balance = 0`, objednávka přejde do `cancelled_settled` a výrobek se drží jen do `abandoned_item_delete_after = now + abandoned_item_retention_days`, poté se auditovaně recykluje/zničí. Záloha tedy není automaticky propadná ani automaticky celá vratná; politiku musí před spuštěním potvrdit právní poradce.
+U individuální nabídky vytvoří dokončení QC zbývající `balance` Payment a nastaví `balance_due_at = qc_approved_at + balance_payment_days`; agregát čeká v `awaiting_balance`. Po připomínkách a marném deadline timeout v jedné databázové transakci zamkne Order i balance Payment, nastaví `capture_authorized = false`, `capture_cutoff_at = now`, přepne dosud `pending` Payment na `voided`, zapíše idempotentní outbox příkaz ke zrušení provider intentu a teprve potom vytvoří immutable `OrderSettlement`. `earned_amount` je nejvýše prokazatelně vzniklá a v přijatých podmínkách sjednaná hodnota s guardem `0 ≤ earned_amount ≤ contract_total`, `retained_amount = min(captured_total, earned_amount)`, `refund_amount = captured_total − retained_amount`, `written_off_amount = max(0, earned_amount − captured_total)` a `unearned_cancelled_amount = contract_total − earned_amount`; počítají se jen capture, jejichž webhook získal tento zámek před cutoffem.
+
+Webhook a timeout soutěží o stejný zámek. Vyhraje-li capture před timeoutem, je součástí settlementových součtů. Přijde-li úspěšný provider capture až po `capture_authorized = false`, existujícím `OrderSettlement` nebo terminálním stavu Order, handler jej auditovaně zapíše, ale objednávku znovu neotevře a settlement nemění; v téže transakci přepne `voided → refund_pending`, vytvoří `PostSettlementCaptureCompensation` na celou pozdě zachycenou částku a plnou `RefundTransaction` s idempotency klíčem `late_balance_capture + provider_transaction_id`. Capture po cutoffu se z immutable settlementových `captured_total` i z jeho odvozených Order `amount_due`/`refundable_balance` vyloučí; vlastní `compensation_balance` zůstává viditelný v provozu, automaticky se retryuje a alertuje až do nuly. Po úspěšném refundu přebytku známého při settlementu Order přejde do `cancelled_settled`; pozdější kompenzace tento terminální fulfilment stav ani `abandoned_item_delete_after` nemění. Záloha tedy není automaticky propadná ani automaticky celá vratná a pozdní doplatek nikdy nezmění dispoziční větev; politiku musí před spuštěním potvrdit právní poradce.
 
 **Shipment**
 ```
@@ -598,8 +606,9 @@ Náhradní fulfilment **zachová aktuální agregátní stav podle fáze**: ztra
 **Payment**
 ```
 created → pending → captured
-pending → failed
+pending → failed | voided
 captured | partially_refunded → refund_pending
+voided → refund_pending (jen po doloženém provider late capture)
 refund_pending → partially_refunded | refunded
 ```
 Každý refund je samostatná idempotentní transakce a `refunded_amount` je součet úspěšných refundací konkrétního capture. Po webhooku se stav vrátí do `partially_refunded`, dokud `refunded_amount < captured_amount`; teprve rovnost znamená `refunded`. Opakované dílčí refundace jsou tedy stejnou smyčkou, nikoli falešným přechodem do plného refundu. Objednávkový `payment_status` je projekce všech jejích plateb, ne náhrada jejich historie.
@@ -625,6 +634,7 @@ Pro post-delivery claim otevřený do snapshotovaného `claim_until` čte přech
 ```
 created → accepted → gcode_ready → printing → printed → photo_submitted → qc_approved → packed → handed_over → settled
 created → cancelled
+photo_submitted → qc_rejected
 accepted | gcode_ready | printing | printed | photo_submitted | qc_approved | packed → failed
 accepted | gcode_ready | printing | printed | photo_submitted | qc_approved | packed → cancelled
 ```
@@ -667,11 +677,16 @@ batch:  locked → active → in_production → qc_passed → shipped → delive
         locked → awaiting_capacity → active
         locked → awaiting_revision → awaiting_capacity → active
                                     → active
-        locked | awaiting_revision | awaiting_capacity | active | in_production → cancelled
+        locked | awaiting_revision | awaiting_capacity | active | in_production | qc_passed → cancelled
+cancelled → cancelled_refunded | cancelled_settled
 qc_passed → recovery_pending → qc_passed
 shipped | recovery_pending → partially_fulfilled | cancelled_refunded
 ```
-Události sample fáze stav celkové objednávky za `in_production` neposouvají. Každá fáze snapshotuje `required_fulfilment_slots` tak, aby každý naceněný kus patřil právě jednomu slotu; Job může plnit více slotů jen uvnitř jediného `ShipmentPlan` a jeden plán může agregovat více Jobů. Do `qc_passed` smí fáze přejít až tehdy, když každý slot má právě jeden aktuální Job lineage leaf ve stavu `qc_approved | packed | handed_over | settled` a nemá otevřený `ReplacementRequest`; schválení prvního z více jobů nestačí. Do `delivered` smí přejít až po doručení každého aktuálního Shipment lineage leaf. Směs doručených a `cancelled_refunded` slotů končí `partially_fulfilled`; pokud není doručený žádný slot a všechny jsou refundované, fáze končí `cancelled_refunded` a agregát bez jiné dodané fáze pokračuje `cancelled → refunded`. Poslední aktivní fáze — běžně batch — teprve po splnění příslušné bariéry řídí **všechny** zbývající přechody agregátu: `in_production → qc_passed`; plně předplacená objednávka s připravenými zásilkami `→ ready_to_ship`, individuální nabídka s doplatkem `→ awaiting_balance → ready_to_ship`; první handoff `→ shipped`, všechny doručené sloty `→ delivered` a uzavření `→ completed`, případně smíšený terminální výsledek `→ partially_fulfilled`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu a marný doplatek končí přes `cancelled_settled`.
+Události sample fáze stav celkové objednávky za `in_production` neposouvají. Každá fáze snapshotuje `required_fulfilment_slots` tak, aby každý naceněný kus patřil právě jednomu slotu; Job může plnit více slotů jen uvnitř jediného `ShipmentPlan` a jeden plán může agregovat více Jobů. Do `qc_passed` smí fáze přejít až tehdy, když každý slot má právě jeden aktuální Job lineage leaf ve stavu `qc_approved | packed | handed_over | settled` a nemá otevřený `ReplacementRequest`; schválení prvního z více jobů nestačí. Do `delivered` smí přejít až po doručení každého aktuálního Shipment lineage leaf. Směs doručených a `cancelled_refunded` slotů končí `partially_fulfilled`; pokud není doručený žádný slot a všechny jsou refundované, fáze končí `cancelled_refunded` a agregát bez jiné dodané fáze pokračuje `cancelled → refunded`.
+
+Storno po QC, ale před prvním handoff, zamkne fázi, její Joby i Shipmenty stejnou transakcí jako `handoff_shipment`: finální Order může být `qc_passed | awaiting_balance | ready_to_ship`, zatímco jeho fáze je stále `qc_passed`, proto musí fáze přejít `qc_passed → cancelled`. Všechny pre-handoff Joby skončí `cancelled`, zásilky a štítky se zneplatní a rezervace se vypořádají podle skutečné spotřeby. Bez zachycených peněz je `cancelled` terminální; jinak fáze skončí až jako `cancelled_refunded` po úplném vrácení nezasloužené hodnoty nebo `cancelled_settled` po vlastním immutable settlementu a nulových `amount_due` i `refundable_balance`. Order smí dokončit odpovídající `refunded | cancelled_settled` větev až poté, takže pod terminálním agregátem nezůstane fáze v `qc_passed`.
+
+Poslední aktivní fáze — běžně batch — teprve po splnění příslušné bariéry řídí **všechny** zbývající přechody agregátu: `in_production → qc_passed`; plně předplacená objednávka s připravenými zásilkami `→ ready_to_ship`, individuální nabídka s doplatkem `→ awaiting_balance → ready_to_ship`; první handoff `→ shipped`, všechny doručené sloty `→ delivered` a uzavření `→ completed`, případně smíšený terminální výsledek `→ partially_fulfilled`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu a marný doplatek končí přes `cancelled_settled`.
 
 **QuoteRequest**
 ```
@@ -716,6 +731,10 @@ new → in_review → quoted → accepted → (vytvoří Order)
 33. Jeden Job nesmí obsahovat `FulfilmentSlot` z více `ShipmentPlan`; `handoff_shipment` atomicky předá jeden Shipment a všechny jeho přispívající packed Joby, takže každý Job projde `packed → handed_over` nejvýše jednou.
 34. Claimový reprint používá z doručeného artefaktu jen kanonickou geometrii, přijatou zákaznickou konfiguraci a evidenční odkaz; vlastní candidate/profile/calibration/production slice musí nová `ReproductionArtifactVersion` převzít z čerstvé rezervace náhradního Jobu.
 35. Každý terminální Order musí mít `reproduction_delete_after` rovný nejpozdějšímu použitelnému termínu: maximu `claim_until` doručených slotů a, pokud žádný slot nebyl doručen nebo existuje nedoručená verze, `terminal_at + undelivered_reproduction_retention_days`; otevřený incident, Claim nebo legal hold datum pouze prodlužuje.
+36. QC zamítnutí musí použít deklarovaný terminální přechod `photo_submitted → qc_rejected`, vytvořit `ReplacementRequest` a nesmí se vykázat jako obecný produkční `failed`.
+37. Timeout doplatku musí před vytvořením `OrderSettlement` pod stejným zámkem zneplatnit balance capture; provider capture zpracovaný po cutoffu nebo settlementu se nesmí započíst do splnění objednávky a musí v téže transakci spustit idempotentní plnou refundaci.
+38. Porušení expresního SLA musí před refundem příplatku aktivovat následnou immutable revizi cenového snapshotu, která odebere přesně `express_priplatek`; teprve poté může refund snížit `refundable_balance` bez vytvoření nového `amount_due`.
+39. Storno finální fáze po QC a před handoff musí převést `OrderPhase.qc_passed → cancelled` a po finančním vypořádání do `cancelled_refunded | cancelled_settled`; Order nesmí být terminální, dokud jeho fáze terminální není.
 
 ### 6.5 Švy pro síť
 
