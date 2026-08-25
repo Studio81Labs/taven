@@ -77,7 +77,7 @@ Vzorec: `cena stroje / požadovaná doba návratnosti v hodinách`
 
 **Pozor na `shipping_trip` při nízkém objemu.** Alokuje se na počet zásilek v jedné cestě — ale při 1–2 objednávkách měsíčně je jedna cesta na jednu zásilku, tedy **plný náklad, nikoli alokovaný**. Handling na objednávku je v hobby režimu horší, ne lepší. Alokace začne fungovat až od několika zásilek týdně.
 
-Všechny komponenty se měří **ze stavového automatu**, ne stopkami.
+Stavový automat měří průchod zakázky a SLA, **ne aktivní práci** — intervaly mezi stavy obsahují tisk, frontu, čekání na zákazníka i dopravu. Handling se měří přes explicitní `HandlingSession` s komponentou, začátkem/koncem a počtem obsloužených podložek, kusů nebo zásilek. Administrace používá start/stop časovač; kde není praktický (zejména `shipping_trip`), zapíše se strukturovaně přímo naměřená délka se zdrojem `manual`. Pro CM se nikdy neodvozuje aktivní práce z pouhého rozdílu stavových časových značek.
 
 ---
 
@@ -91,12 +91,14 @@ Všechny komponenty se měří **ze stavového automatu**, ne stopkami.
 **Báze výpočtu je závazná:**
 
 ```
-rezerva_pretisk = mira_zmetku × ( material + machine
-                                + handling_plate + handling_piece
-                                + postprocessing )
+handling_pretisk = sazba_prace_h × (
+                    handling_plate × podložek
+                  + handling_piece × qty       (degresivní)
+                  + postprocessing )
+rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk)
 ```
 
-Bez `handling_order_fix`, `handling_pack` a `shipping_trip` — ty se při přetisku chyceném doma neopakují. **Odmítnutí po doručení tím kryté není** (stojí navíc dopravu a balení oběma směry) a sedí zatím v marži.
+`handling_pretisk` je už peněžní částka a používá stejné násobnosti podložek a kusů jako hlavní handling. Bez `handling_order_fix`, `handling_pack` a `shipping_trip` — ty se při přetisku chyceném doma neopakují. **Odmítnutí po doručení tím kryté není** (stojí navíc dopravu a balení oběma směry) a sedí zatím v marži.
 
 ---
 
@@ -128,7 +130,7 @@ Bez `handling_order_fix`, `handling_pack` a `shipping_trip` — ty se při přet
 | `marže` | ⚠ dopočítat proti stropu | |
 | **`min_print_price`** | **250 Kč** | ✓ trh: alvipek 200, M3Dtisk 250 |
 | **`small_order_surcharge`** | **50 Kč** u zakázek do 100 g | ✓ trh: studio3dtisk |
-| **`prah_doprava_zdarma`** | **⚠ 1 000 Kč** | start; revize po 50 objednávkách. Počítá se z `cena_tisku`, ne z celkové částky |
+| **`prah_doprava_zdarma`** | **⚠ 1 000 Kč** | start; revize po 50 objednávkách. Počítá se z `cena_tisku_zaklad` před expresním příplatkem |
 | **`koef_express`** | **×2,0** | ✓ trh: Bakuralab +100 % |
 | Výplň | 10 / 20 / 40 % | dekorativní / běžná / pevná |
 

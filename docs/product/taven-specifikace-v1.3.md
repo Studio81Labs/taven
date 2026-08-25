@@ -116,7 +116,7 @@ Nejhorší varianta je rok organického provozu s deseti zakázkami, po kterém 
 CM = cena_celkem
      − materiál
      − variabilní strojové náklady (elektřina + opotřebení)
-     − handling × sazba_prace_h
+     − handling
      − doprava (hrubá)
      − poplatek platební brány
      − obalový materiál
@@ -257,11 +257,17 @@ handling    = sazba_prace_h × (
               + handling_pack
               + shipping_trip / zásilek_v_cestě
               + postprocessing )
+handling_pretisk = sazba_prace_h × (
+                    handling_plate × podložek
+                  + handling_piece × qty       (degresivní)
+                  + postprocessing )
 amortizace  = cena_stroje / návratnost_h × čas_h
 
 vyrobni_naklad = material + machine + handling + amortizace + rezerva_pretisk
-cena_tisku     = max(min_print_price, vyrobni_naklad × (1 + marže)) × koef_express
-doprava        = sazba(kategorie) | 0 pokud cena_tisku ≥ prah_doprava_zdarma
+cena_tisku_zaklad = max(min_print_price, vyrobni_naklad × (1 + marže))
+express_priplatek  = cena_tisku_zaklad × (koef_express − 1)
+cena_tisku         = cena_tisku_zaklad + express_priplatek
+doprava            = sazba(kategorie) | 0 pokud cena_tisku_zaklad ≥ prah_doprava_zdarma
 cena_celkem    = cena_tisku + doprava + small_order_surcharge
 ```
 
@@ -274,14 +280,10 @@ cena_celkem    = cena_tisku + doprava + small_order_surcharge
 **Báze pro `rezerva_pretisk` je definovaná explicitně**, jinak ji každý implementátor aplikuje jinam:
 
 ```
-rezerva_pretisk = mira_zmetku × ( material
-                                + machine
-                                + handling_plate
-                                + handling_piece
-                                + postprocessing )
+rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk)
 ```
 
-Nezahrnuje `handling_order_fix`, `handling_pack` ani `shipping_trip` — ty se při přetisku chyceném doma neopakují.
+`handling_pretisk` je peněžní částka: používá stejnou sazbu práce a stejné násobnosti podložek a kusů jako hlavní výpočet. Nezahrnuje `handling_order_fix`, `handling_pack` ani `shipping_trip` — ty se při přetisku chyceném doma neopakují.
 
 **Nekryje ale odmítnutí až po doručení.** To stojí navíc dopravu a balení, a to obojím směrem. Dokud není změřený first-pass yield, sedí tohle riziko v marži; jakmile bude, patří sem druhá složka s vlastní mírou.
 
@@ -289,7 +291,7 @@ Nezahrnuje `handling_order_fix`, `handling_pack` ani `shipping_trip` — ty se p
 
 **Amortizace je parametr s explicitní dobou návratnosti**, ne skrytý předpoklad. V v0 a hobby režimu ∞, tedy nula.
 
-**Práh dopravy zdarma se počítá z `cena_tisku`**, ne z celkové částky včetně expresu — jinak si někdo koupí dopravu zdarma tím, že si připlatí za spěch.
+**Práh dopravy zdarma se počítá z `cena_tisku_zaklad`**, tedy z ceny před expresním příplatkem — jinak si někdo koupí dopravu zdarma tím, že si připlatí za spěch.
 
 ### 4.2 Co v ceně dominuje
 
@@ -490,6 +492,7 @@ První dvě popisují **svět**, třetí **tenhle stroj dneska**. „Kvality" ne
 | `PriceList` | ✓ | ✓ | verzovaný; objednávka drží referenci |
 | `QuoteRequest` / `Quote` | ✓ | ✓ | individuální nabídka |
 | `CostInput` | ✓ | ✓ | nákupy filamentu, sazba energie, spotřební materiál |
+| `HandlingSession` | ✓ | ✓ | aktivní práce: komponenta, začátek/konec, počty a zdroj měření |
 | `Shipment` | — | ✓ | v v0 mimo systém |
 | `AuditEvent` | — | ✓ | |
 | `Offer`, `QualityEvent`, `Certification`, `Payout` | — | — | jen při stavbě sítě |
@@ -511,7 +514,9 @@ created → accepted → gcode_ready → printing
 ```
 Odbočky: `printing → failed`, `photo_submitted → qc_rejected`.
 
-**Časová razítka těchto přechodů jsou zdrojem měření handlingu** (§2.2) — nemusíš měřit stopkami, vypadne to z prvních ~20 zakázek.
+**Časová razítka stavových přechodů měří průchod procesem, ne aktivní handling.** Mezi přechody je tisk, čekání ve frontě, čekání na zákazníka i doprava, takže jejich rozdíl nesmí vstoupit do nákladů práce.
+
+Aktivní práci zachycuje samostatný `HandlingSession`: `component`, `started_at`, `ended_at`, vazba na objednávku/job a jmenovatele `plate_count`, `piece_count` nebo `shipment_count`. Administrace nabídne start/stop časovač; pro činnost bez časovače (zejména `shipping_trip`) je povolený strukturovaný ruční zápis délky se zdrojem `manual`. U dávkové práce se zapíše jedna relace a počet obsloužených jednotek, aby šla doba správně rozpočítat. Stavové časové značky zůstávají pro SLA a provozní metriky, `HandlingSession` pro CM a kalibraci parametrů.
 
 **Fázovaná objednávka (v1)**
 ```
