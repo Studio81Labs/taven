@@ -370,6 +370,8 @@ Bounding box počítá preflight, ale kategorie se nesmí určit jen z jednoho d
 
 Vlastní přesný 3D bin packing **nestav** — pro hrubé přepravní kategorie stačí konzervativní first-fit nad bbox objemem a hmotností. `ShipmentPlan` je součást cenového snapshotu; fázovaná objednávka plánuje sample a batch odděleně a revize modelu přepočítá jen zbývající zásilky.
 
+Každý plán zároveň deterministicky rozdělí `FulfilmentSlot` všech naceněných kusů právě do jedné plánované zásilky; skutečný `Shipment` tuto množinu snapshotuje. Cenový snapshot každému slotu přiřadí `settlement_amount` a každé zásilce vlastní účtovanou dopravu/handling tak, aby jejich součet přesně odpovídal ceně fáze; refund ztracené parcely proto má předem danou částku bez zpětného přepočtu doručených kusů. Fáze je `delivered` až tehdy, když je doručený každý aktuální list všech povinných shipment lineage. Pokud je alespoň jeden slot doručený a všechny ostatní jsou buď doručené, nebo po incidentu finančně vypořádané jako `cancelled_refunded`, fáze i objednávka skončí `partially_fulfilled`. První z více balíků tedy nikdy nedokončí celou fázi a ztráta druhého nikdy nevynutí refund už doručených kusů.
+
 Tvrdá podmínka: **největší jednotlivý díl** se musí vejít do rozměrů krabice.
 
 **Strukturální napětí, vědomě přijaté:** diferenciace vůči hobbistovi s P1S je velký build plate, ale přesně ty zakázky vypadávají z levné boxové sítě.
@@ -430,7 +432,7 @@ V v0 i v1 obě fáze splynou (jeden stroj), ale **šev tam musí být**.
 
 | Formát | Přímé flow | Modelářská práce | Blokuje vydání v0? |
 |---|---|---|---|
-| STL, 3MF | ✓ | ✗ | **ano** |
+| STL, 3MF bez paint/multimaterial metadat | ✓ | ✗ | **ano** |
 | OBJ | ✓ | ✗ | ne |
 | **STEP** | ✓ (slicery ho importují) | ✓ univerzální vstup | **ne** |
 | nativní CAD (f3d, sldprt) | ✗ | až později | ne |
@@ -462,11 +464,14 @@ Každý nález má úroveň `info` / `warning` (risk checkbox) / `blocking` (→
 | **Měřítko / jednotky** | heuristika nad bboxem | warning nebo dotaz | v0 |
 | Tenké stěny < 2× šířka extruze | vlastní | warning | v0 |
 | Rozsah podpěr | ze slice | warning nad prahem | v0 |
+| **3MF paint, více material/extruder assignmentů** | parser 3MF archivu před slicingem | **blocking → individuální nabídka** | v0/v1 |
 | Sestava ve STEPu (víc těles) | vlastní | dotaz | v0 |
 | Počet objektů, stabilita | vlastní | info | v0 |
 | Reliéfní text pod prahem | AI | warning | post-validation |
 
 **Kontrola měřítka:** STL neobsahuje jednotky. Zákazník modelující v palcích pošle díl 25,4× větší nebo menší, aniž by si toho všiml — proto má PCBWay ve formuláři výslovný přepínač jednotek. Stačí pravidlo nad bboxem, který stejně počítáš.
+
+**3MF se nesmí zploštit potichu.** Ještě před kanonizací geometrie a referenčním slicem parser projde model relationships, paint data a material/extruder assignmenty. Jakýkoli vícemateriálový nebo malovaný jeden díl nastaví blocking finding, nevydá závaznou automatickou cenu a přesměruje soubor do custom requestu, dokud nebude existovat machine-specific multicolor odhad včetně purge odpadu.
 
 ### 5.6 Cache
 
@@ -532,6 +537,7 @@ První tři popisují **svět**, `MachineCalibration` a `Inventory` **tenhle kon
 | `OrderSettlement` | ✓ | ✓ | earned/refund/write-off snapshot pro zrušení po vzniklých nákladech nebo opuštěném doplatku |
 | `OrderPhase` | — | ✓ | `sample` / `batch`; vlastní model, cenový snapshot, joby a zásilky |
 | `OrderRevision` | — | ✓ | nový model, reslice, cenový rozdíl, fee-aware `PaymentSchedule`, přijetí a `revision_amount_due` |
+| `FulfilmentSlot` | ✓ | ✓ | naceněný doručovaný kus se `settlement_amount`; spojuje aktuální Job lineage s právě jednou parcel allocation |
 | `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem |
 | `ModelGeometry` | ✓ | ✓ | kanonická geometrie tělesa/podmnožiny; vlastní `geometry_hash` |
 | `ReproductionArtifact` / `Version` | ✓ | ✓ | draft při acceptance, sealed s production slice při `gcode_ready`; claim volí skutečně doručenou |
@@ -573,7 +579,7 @@ qc_passed | awaiting_balance | ready_to_ship → recovery_pending → qc_passed
 ```
 `confirmed` znamená, že je uhrazená částka potřebná ke startu: u automatické nabídky 100 %, u individuální nabídky záloha. `ready_to_ship → shipped` se neřídí názvem odvozeného `payment_status`, ale aktuálním cenovým snapshotem: guard vyžaduje `amount_due = 0` a `refundable_balance = 0`. Samotná záloha proto nestačí, zatímco finančně vypořádané snížení ceny může být po částečné refundaci bezpečně odesláno i se stavem `partially_refunded`.
 
-Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship → cancelled`; `in_production | shipped → partially_fulfilled`, pokud je nejméně jedna fáze doručená a všechny zbývající jsou zrušené a finančně vypořádané. Při ztracené nebo vrácené zásilce bez dříve doručené fáze může finančně vypořádaný refund vést `shipped → cancelled → refunded`. Nezaplacené `cancelled` je terminální. Zrušená objednávka se zachycenou platbou skončí `refunded`, pokud nevznikla zasloužená hodnota, nebo `cancelled_settled` přes explicitní `OrderSettlement`; blanket pravidlo „každý capture celý vrátit“ neplatí po doložené výrobě. `completed`, `partially_fulfilled`, `refunded` a `cancelled_settled` jsou terminální fulfilment stavy; pozdější reklamace je nemění.
+Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship → cancelled`; `in_production | shipped → partially_fulfilled`, pokud je nejméně jeden `FulfilmentSlot` doručený a každý zbývající slot je doručený nebo finančně vypořádaný jako `cancelled_refunded`. Při ztracené nebo vrácené zásilce bez jediného doručeného slotu může finančně vypořádaný refund vést `shipped → cancelled → refunded`. Nezaplacené `cancelled` je terminální. Zrušená objednávka se zachycenou platbou skončí `refunded`, pokud nevznikla zasloužená hodnota, nebo `cancelled_settled` přes explicitní `OrderSettlement`; blanket pravidlo „každý capture celý vrátit“ neplatí po doložené výrobě. `completed`, `partially_fulfilled`, `refunded` a `cancelled_settled` jsou terminální fulfilment stavy; pozdější reklamace je nemění.
 
 U individuální nabídky vytvoří dokončení QC zbývající `balance` Payment a nastaví `balance_due_at = qc_approved_at + balance_payment_days`; agregát čeká v `awaiting_balance`. Po připomínkách a marném deadline vznikne immutable `OrderSettlement`: `earned_amount` je nejvýše prokazatelně vzniklá a v přijatých podmínkách sjednaná hodnota s guardem `0 ≤ earned_amount ≤ contract_total`, `retained_amount = min(captured_total, earned_amount)`, `refund_amount = captured_total − retained_amount`, `written_off_amount = max(0, earned_amount − captured_total)` a `unearned_cancelled_amount = contract_total − earned_amount`. Po úspěšném refundu případného přebytku se pro settlement snapshot odvodí `amount_due = 0` a `refundable_balance = 0`, objednávka přejde do `cancelled_settled` a výrobek se drží jen do `abandoned_item_delete_after = now + abandoned_item_retention_days`, poté se auditovaně recykluje/zničí. Záloha tedy není automaticky propadná ani automaticky celá vratná; politiku musí před spuštěním potvrdit právní poradce.
 
@@ -583,7 +589,7 @@ planned → label_created → handed_over → in_transit → delivered
 in_transit → lost | returned
 lost → recovered
 ```
-`lost` a `returned` automaticky otevřou `Claim` proti zásilce, i když objednávka ještě není `delivered`. `resolved_reship` má tvrdý guard `status ∈ {returned, recovered} && custody_confirmed_at != null && re_qc_passed_at != null`; teprve fyzicky převzatý a znovu zkontrolovaný výrobek smí dostat nový `Shipment` s `replaces_shipment_id`. Dokud zásilka zůstává `lost`, povolené výsledky jsou jen rezervovaný `resolved_reprint` nebo `resolved_refund` — prázdný reshipment nikdy nevznikne.
+`lost` a `returned` automaticky otevřou `Claim` proti zásilce, i když objednávka ještě není `delivered`. Volba `reship_pending` má tvrdý guard `status ∈ {returned, recovered} && custody_confirmed_at != null && re_qc_passed_at != null`; teprve fyzicky převzatý a znovu zkontrolovaný výrobek smí dostat nový `Shipment` s `replaces_shipment_id` a Claim skončí `resolved_reship` až jeho doručením. Dokud zásilka zůstává `lost`, povolené volby jsou jen rezervovaný `reprint_pending` nebo `refund_pending` — prázdný reshipment nikdy nevznikne.
 
 Náhradní fulfilment **zachová aktuální agregátní stav podle fáze**: ztracený sample je mezifáze, takže objednávka zůstává `in_production` a doručení náhrady vrátí sample do `awaiting_confirmation`; ztracená finální/jediná zásilka zůstává `shipped` a do `delivered` přejde až po doručení náhrady. Žádná recovery větev proto nevynucuje skok `in_production → shipped`. Pokud zákazník zvolí refund, z aktuálního stavu se použije větev `cancelled → refunded` nebo `partially_fulfilled` výše, takže nedoručená zaplacená objednávka nezůstane viset.
 
@@ -598,11 +604,17 @@ Každý refund je samostatná idempotentní transakce a `refunded_amount` je sou
 
 **Claim**
 ```
-opened → investigating → resolved_rejected | resolved_reship | resolved_reprint | resolved_refund
+opened → investigating → resolved_rejected | reship_pending | reprint_pending | refund_pending
+reship_pending → reship_shipped → resolved_reship
+reprint_pending → replacement_in_production → replacement_shipped → resolved_reprint
+reship_pending | reship_shipped | reprint_pending | replacement_in_production | replacement_shipped → refund_pending
+refund_pending → resolved_refund
 ```
-Claim lze otevřít proti doručené položce/fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`, a proti `Shipment` ve stavu `lost`, `returned` nebo `recovered`, i když je agregát teprve `in_production` nebo `shipped`. `resolved_reship` je dostupný jen pro fyzicky převzatý `returned | recovered` výrobek po re-QC, `resolved_reprint` vytvoří `ReplacementRequest`, který smí vytvořit náhradní `Job` až s čerstvou produkční rezervací, a `resolved_refund` spustí refundaci konkrétních `Payment`. Když claimový `ReplacementRequest` atomicky získá rezervaci a vytvoří konkrétní náhradní Job, ve stejné transakci vydá immutable-scope jednorázové `ReplacementFulfilmentAuthorization` navázané na `claim_id`, nový `job_id` a původní `shipment_id`; má `replacement_amount_due = 0`, povolí právě jeden nový `Shipment.replaces_shipment_id` a jeho použití nemění aktuální stav původní objednávky — ať je během pre-delivery incidentu `in_production | shipped`, nebo po doručení terminální.
+Claim lze otevřít proti doručené položce/fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`, a proti `Shipment` ve stavu `lost`, `returned` nebo `recovered`, i když je agregát teprve `in_production` nebo `shipped`. Volba reprintu nastaví `reprint_pending` a vytvoří `ReplacementRequest`; Claim ještě není vyřešený. Když request atomicky získá čerstvou produkční rezervaci a vytvoří konkrétní náhradní Job, přejde Claim do `replacement_in_production` a ve stejné transakci vydá immutable-scope jednorázové `ReplacementFulfilmentAuthorization` navázané na `claim_id`, nový `job_id` a původní `shipment_id`. Autorizace má `replacement_amount_due = 0`, povolí právě jeden nový `Shipment.replaces_shipment_id`; Claim přejde přes `replacement_shipped` do `resolved_reprint` teprve webhookem o doručení náhrady a stav původní objednávky se nemění.
 
-Pro post-delivery claim otevřený do snapshotovaného `claim_until` čte `resolved_reprint` kanonickou geometrii a immutable slice vstupy z `ReproductionArtifactVersion.produced_by_job_id` skutečně doručené položky/fáze; nezávisí tedy na tom, zda už byl zdrojový `ModelFile` po 90 dnech smazán nebo zda byl původní job přesměrován. Před doručením nemá reprodukční artefakt expiraci; otevřený shipment incident nebo claim prodlouží jeho retenci až do terminálního vyřešení.
+Volba refundu i fallback z neúspěšného reship/reprintu nastaví nejprve `refund_pending` a idempotentně spustí přesnou refundaci dotčených `FulfilmentSlot` proti konkrétním capture; až úspěšný platební webhook nastaví `resolved_refund`. U pre-delivery incidentu se dosud nedoručené refundované sloty teprve tehdy označí `cancelled_refunded` a přepočítá se agregát; u post-delivery reklamace zůstává původní slot `delivered` a terminální Order beze změny. Vyprší-li provozní deadline claimového `ReplacementRequest` bez rezervace nebo náhradní fulfilment selže bez dalšího pokusu, request se auditovaně zruší a Claim automaticky přejde do této refund větve. Terminální `resolved_reprint | resolved_reship | resolved_refund` tedy vždy dokazují skutečně doručenou náhradu/reship nebo dokončené finanční vypořádání, nikoli pouhou volbu operátora.
+
+Pro post-delivery claim otevřený do snapshotovaného `claim_until` čte přechod do `reprint_pending` kanonickou geometrii a immutable slice vstupy z `ReproductionArtifactVersion.produced_by_job_id` skutečně doručené položky/fáze; nezávisí tedy na tom, zda už byl zdrojový `ModelFile` po 90 dnech smazán nebo zda byl původní job přesměrován. Před doručením nemá reprodukční artefakt expiraci; otevřený shipment incident nebo claim prodlouží jeho retenci až do terminálního vyřešení.
 
 **Job**
 ```
@@ -615,11 +627,11 @@ accepted | gcode_ready | printing | printed | photo_submitted | qc_approved | pa
 
 `failed` ukládá `failure_stage = preparation | gcode | machine | printing | post_print | post_qc | packing` a důvod. Větve před tiskem pokrývají odstoupení makera/G-code/poruchu; `printing` zmetek; `printed | photo_submitted` ztrátu nebo poškození při dokončení; `qc_approved | packed` poškození při balení nebo ztrátu před předáním dopravci. `photo_submitted → qc_rejected` zůstává další terminální neúspěšná větev. Všechny pre-handoff neúspěchy používají stejnou auditovanou `ReplacementRequest`/cancellation recovery; až `handed_over` převádí ztrátu na `Shipment` incident. Post-QC failure vždy přepne dotčenou fázi z `qc_passed` do `recovery_pending`; u finální/jediné fáze totéž přepne agregát z `qc_passed | awaiting_balance | ready_to_ship`, zneplatní aktivní `balance_due_at` a zachová existující `PaymentSchedule` i capture. Po QC náhrady se fáze i případný agregát vrátí do `qc_passed`: při `amount_due = 0` agregát pokračuje do `ready_to_ship`, jinak do `awaiting_balance` s novým `balance_due_at`; nemůže tedy nechat objednávku v odesílatelném stavu bez výrobku ani požadovat již uhrazený doplatek podruhé. Měří se odděleně a nezhoršuje tiskový FPY.
 
-Příkaz `handoff_job` má společný transakční guard s přechodem zásilky do `handed_over`. U běžné finální nebo jediné fáze vyžaduje `Order.status = ready_to_ship`, `amount_due = 0` a `refundable_balance = 0`; u mezifázového sample vyžaduje `OrderPhase.status = qc_passed` a `phase_amount_due = 0` podle aktuálního `PaymentSchedule`. Třetí, úzce vymezená větev je claimová náhrada: vyžaduje QC náhradního jobu a dosud nepoužité `ReplacementFulfilmentAuthorization` pro přesně tento Job a Claim, v téže transakci autorizaci spotřebuje a vytvoří jediný navázaný Shipment. Původní Order si zachová `in_production | shipped` při pre-delivery incidentu nebo svůj terminální stav po doručení. Pouhá možnost kliknout na Job `packed → handed_over` tedy nemůže obejít finanční ani claim stav.
+Příkaz `handoff_job` má společný transakční guard s přechodem zásilky do `handed_over`. U běžné finální nebo jediné fáze vyžaduje `amount_due = 0`, `refundable_balance = 0` a buď `Order.status = ready_to_ship` pro první parcelu, nebo `Order.status = shipped` pro další dosud nepředaný `ShipmentPlan` téže QC-passed fáze; první handoff posune agregát do `shipped`, další jej tam ponechají. U mezifázového sample vyžaduje `OrderPhase.status = qc_passed` a `phase_amount_due = 0` podle aktuálního `PaymentSchedule`. Třetí, úzce vymezená větev je claimová náhrada: vyžaduje QC náhradního jobu a dosud nepoužité `ReplacementFulfilmentAuthorization` pro přesně tento Job a Claim, v téže transakci autorizaci spotřebuje a vytvoří jediný navázaný Shipment. Původní Order si zachová `in_production | shipped` při pre-delivery incidentu nebo svůj terminální stav po doručení. Pouhá možnost kliknout na Job `packed → handed_over` tedy nemůže obejít finanční ani claim stav.
 
 Obě neúspěšné větve vytvoří trvalý `ReplacementRequest` navázaný na neúspěšný job; stejnou cestu používá `Claim` s výsledkem reprint. Původní `ProductionReservation` se nejdřív vypořádá podle fáze: před `printing` uvolní veškerou gramáž a nevyužité intervaly, během/po tisku zapíše skutečnou spotřebu a uvolní jen zbytek. Příkaz `create_replacement` potom vytvoří čerstvý `EligibilitySnapshot` a znovu vyhodnotí aktuální požadavek materiálu/kapacity. V jedné transakci získá novou `ProductionReservation` — čerstvou gramáž i nekolidující strojové intervaly — a teprve pak vytvoří nový `Job` ve stavu `created` s `replaces_job_id`. Stará rezervace ani spotřebovaný materiál nikdy nekryjí nový pokus. Původní job zůstane terminálně `failed` nebo `qc_rejected`, aby se neztratil first-pass yield.
 
-Pokud novou rezervaci nelze získat, `ReplacementRequest` zůstane auditovatelně `pending_capacity`, job se nevytvoří ani nenabídne a systém opakuje hledání jen do provozního deadline. Pak se request i neúspěšná fáze zruší. Objednávka bez dříve doručené fáze přejde do `cancelled → refunded`; objednávka s doručeným sample se po vrácení nečerpané části uzavře `partially_fulfilled`. Potvrzená objednávka tedy musí mít aktivní/úspěšný listový job, otevřený `ReplacementRequest` s deadlinem, nebo finanční vypořádání.
+Pokud novou rezervaci nelze získat, `ReplacementRequest` zůstane auditovatelně `pending_capacity`, job se nevytvoří ani nenabídne a systém opakuje hledání jen do provozního deadline. Pak se request z výrobního selhání i neúspěšná fáze zruší: objednávka bez jediného doručeného slotu přejde do `cancelled → refunded`, objednávka s alespoň jedním doručeným slotem se po vrácení nedoručené části uzavře `partially_fulfilled`. Request vytvořený Claimem místo změny původního Order přepne Claim do `refund_pending` fallbacku popsaného výše. Potvrzená objednávka tedy musí mít aktivní/úspěšný listový job, otevřený `ReplacementRequest` s deadlinem, nebo finanční vypořádání.
 
 **Časová razítka stavových přechodů měří průchod procesem, ne aktivní handling.** Mezi přechody je tisk, čekání ve frontě, čekání na zákazníka i doprava, takže jejich rozdíl nesmí vstoupit do nákladů práce.
 
@@ -635,7 +647,7 @@ Cena obou fází pro **původní `ModelFile`** se zamkne už při nacenění, ta
 
 Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek, `required_material_g`, požadované strojové intervaly i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Příkaz přijetí revize vždy vytvoří čerstvý `EligibilitySnapshot` a atomicky získá novou batch `ProductionReservation` pro přepočtenou gramáž a kapacitu. Dokud to nelze, přijetí se necommitne, revize zůstává `awaiting_capacity` a batch se neaktivuje.
 
-Zvýšení ceny vytvoří `balance` Payment navázaný na revizi a `revision_amount_due`; jeho capture smí začít až po nové rezervaci. Batch se aktivuje teprve po přijetí revize, `revision_amount_due = 0` **a** nové `ProductionReservation` ve stavu `held`. Původní záloha tedy nestačí k výrobě zdražené geometrie. Snížení ceny zvýší `refundable_balance`, ale nemění stejný požadavek na novou rezervaci — nižší cena může stále znamenat více materiálu nebo delší obsazení stroje.
+Zvýšení ceny vytvoří `balance` Payment navázaný na revizi a `revision_amount_due`; jeho capture smí začít až po nové rezervaci. Batch se aktivuje teprve po přijetí revize, `revision_amount_due = 0` **a** nové `ProductionReservation` ve stavu `held`. Původní záloha tedy nestačí k výrobě zdražené geometrie. Snížení ceny nemění stejný požadavek na novou rezervaci — nižší cena může stále znamenat více materiálu nebo delší obsazení stroje. Přijetí revize v jedné transakci odvodí `net_captured = captured_total − refunded_total`, `revision_amount_due = max(0, revised_contract_total − net_captured)` a `refundable_balance = max(0, net_captured − revised_contract_total)`. Je-li `refundable_balance > 0`, vytvoří na přesně tuto částku idempotentní `RefundTransaction` s klíčem `order_revision_id` a přepne dotčené capture do `refund_pending`; jinak sleva pouze sníží budoucí doplatek. Úspěšný webhook sníží odvozený `refundable_balance` na nulu; automatické retry a provozní alert pokračují do vypořádání a handoff zůstává do té doby blokovaný.
 
 Cena sample fáze ani už vzniklé náklady se zpětně nemění; odmítnutí revize přepne batch do `cancelled`, vrátí dosud nečerpanou část platby a po finančním vypořádání uzavře agregát jako `partially_fulfilled`. Guard terminálního vypořádání není konkrétní `payment_status`, ale `amount_due = 0` a `refundable_balance = 0`, takže částečná refundace je platný terminální výsledek. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
 
@@ -645,15 +657,17 @@ Doručení sample nastaví `confirmation_deadline_at = delivered_at + sample_con
 
 ```
 sample: active → in_production → qc_passed → shipped → delivered → awaiting_confirmation
+sample: shipped → partially_fulfilled
 awaiting_confirmation → completed | confirmation_expired
 batch:  locked → active → in_production → qc_passed → shipped → delivered → completed
+batch:  shipped → partially_fulfilled
         locked → awaiting_capacity → active
         locked → awaiting_revision → awaiting_capacity → active
                                     → active
         locked | awaiting_revision | awaiting_capacity | active | in_production → cancelled
 qc_passed → recovery_pending → qc_passed
 ```
-Události sample fáze stav celkové objednávky za `in_production` neposouvají. Každá fáze snapshotuje `required_fulfilment_slots` pro všechny nezrušené položky a podložky. Do `qc_passed` smí přejít až tehdy, když každý slot má právě jeden aktuální list lineage ve stavu `qc_approved | packed | handed_over | settled` a nemá otevřený `ReplacementRequest`; schválení prvního z více jobů nestačí. Poslední aktivní fáze — běžně batch — teprve po splnění této bariéry řídí **všechny** zbývající přechody agregátu: `in_production → qc_passed`; plně předplacená objednávka s připravenou zásilkou `→ ready_to_ship`, individuální nabídka s doplatkem `→ awaiting_balance → ready_to_ship`; předání dopravci `→ shipped`, doručení `→ delivered` a uzavření `→ completed`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu a marný doplatek končí přes `cancelled_settled`.
+Události sample fáze stav celkové objednávky za `in_production` neposouvají. Každá fáze snapshotuje `required_fulfilment_slots` tak, aby každý naceněný kus patřil právě jednomu slotu; Job může plnit více slotů a každý slot patří právě do jedné plánované zásilky. Do `qc_passed` smí fáze přejít až tehdy, když každý slot má právě jeden aktuální Job lineage leaf ve stavu `qc_approved | packed | handed_over | settled` a nemá otevřený `ReplacementRequest`; schválení prvního z více jobů nestačí. Do `delivered` smí přejít až po doručení každého aktuálního Shipment lineage leaf; směs doručených a `cancelled_refunded` slotů končí `partially_fulfilled`. Poslední aktivní fáze — běžně batch — teprve po splnění příslušné bariéry řídí **všechny** zbývající přechody agregátu: `in_production → qc_passed`; plně předplacená objednávka s připravenými zásilkami `→ ready_to_ship`, individuální nabídka s doplatkem `→ awaiting_balance → ready_to_ship`; první handoff `→ shipped`, všechny doručené sloty `→ delivered` a uzavření `→ completed`, případně smíšený terminální výsledek `→ partially_fulfilled`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu a marný doplatek končí přes `cancelled_settled`.
 
 **QuoteRequest**
 ```
@@ -672,7 +686,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
 8. Závazná cena smí vzniknout jen z deterministického výpočtu.
 9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
-10. Neúspěšný job musí mít otevřený `ReplacementRequest` s deadlinem; navazující `Job` přes `replaces_job_id` smí vzniknout jen atomicky s čerstvou `ProductionReservation`. Jinak se jeho fáze zruší: bez dříve dodané fáze následuje `cancelled → refunded`, po dodaném sample finančně vypořádané `partially_fulfilled`.
+10. Neúspěšný job musí mít otevřený `ReplacementRequest` s deadlinem; navazující `Job` přes `replaces_job_id` smí vzniknout jen atomicky s čerstvou `ProductionReservation`. Jinak se jeho slot/fáze zruší: bez jediného dříve doručeného `FulfilmentSlot` následuje `cancelled → refunded`, s alespoň jedním doručeným slotem finančně vypořádané `partially_fulfilled`.
 11. Každá zásilka fázované objednávky patří právě k jedné `OrderPhase`; sample zásilka nesmí dokončit celou objednávku a poslední fáze musí vyvolat všechny mezistavy agregátu.
 12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu, čerstvého `EligibilitySnapshot`, atomicky získané nové `ProductionReservation`, přijetí `OrderRevision` zákazníkem a `revision_amount_due = 0`; požadavek na materiál a kapacitu platí i při zlevnění, odmítnutý batch končí finančně vypořádaným `partially_fulfilled` agregátem.
 13. `ProductionReservation`, production `SliceResult`, přijatý `Job` a jeho sealed `ReproductionArtifactVersion` drží tatáž immutable ID candidate odhadu, `MachineProfile`, `MachineCalibration` a `PrintConfigRevision`; acceptance je kopíruje z rezervace, `gcode_ready` verzi uzamkne a aktivní revize je smí nahradit jen společně s atomickým re-estimate/re-reserve.
@@ -682,13 +696,17 @@ new → in_review → quoted → accepted → (vytvoří Order)
 17. Každá změna stavu zapisuje `AuditEvent` (od v1).
 18. Sample v `awaiting_confirmation` musí mít `confirmation_deadline_at`; timeout atomicky zruší neaktivovaný batch, uvolní případnou krátkou aktivační rezervaci, spustí refund nečerpané části a po vypořádání uzavře agregát `partially_fulfilled`.
 19. Individuální objednávka v `awaiting_balance` musí mít `balance_due_at`; timeout vytvoří `OrderSettlement`, vypořádá přebytek capture a write-off doplatku a uzavře `cancelled_settled`, takže výrobek ani pohledávka nezůstanou otevřené bez deadline.
-20. `resolved_reship` vyžaduje fyzicky převzatou zásilku `returned | recovered` a nové QC; `lost` bez custody smí skončit jen rezervovaným reprintem nebo refundem.
+20. `reship_pending` vyžaduje fyzicky převzatou zásilku `returned | recovered` a nové QC; `resolved_reship` vznikne až doručením navázané zásilky. `lost` bez custody smí zvolit jen `reprint_pending` nebo `refund_pending`.
 21. Selhání `Job` po QC a před handoff musí převést dotčenou fázi do `recovery_pending`; u finální/jediné fáze přejde do recovery i agregát. Návrat do odesílatelného stavu vyžaduje QC náhrady a znovuvyhodnocení `amount_due` bez druhého capture již uhrazené částky.
-22. `handoff_job` smí v jedné transakci předat zásilku jen z finančně autorizované fáze: běžná finální/jediná fáze vyžaduje `Order.ready_to_ship`, `amount_due = 0` a `refundable_balance = 0`; mezifázový sample vyžaduje `OrderPhase.qc_passed` a `phase_amount_due = 0`; claimový reprint vyžaduje a atomicky spotřebuje jednorázové `ReplacementFulfilmentAuthorization` přesně pro daný Claim a Job.
+22. `handoff_job` smí v jedné transakci předat zásilku jen z finančně autorizované fáze: běžná finální/jediná fáze vyžaduje nulové finanční zůstatky a `Order.ready_to_ship` pro první parcelu nebo `Order.shipped` pro další nepředaný plán téže QC-passed fáze; mezifázový sample vyžaduje `OrderPhase.qc_passed` a `phase_amount_due = 0`; claimový reprint vyžaduje a atomicky spotřebuje jednorázové `ReplacementFulfilmentAuthorization` přesně pro daný Claim a Job.
 23. `OrderPhase.qc_passed` vyžaduje schválený aktuální lineage leaf pro každý `required_fulfilment_slot` a žádný otevřený `ReplacementRequest`; jednotlivý Job nesmí posunout vícejobovou fázi ani agregát předčasně.
 24. Úspěšný capture smí potvrdit objednávku nebo revizi jen s dosud neexpirovanou `ProductionReservation`; opožděný webhook musí zdroje atomicky znovu získat, a pokud to nelze, nesmí vytvořit Job a musí zachycenou platbu okamžitě kompenzovat refundem.
 25. Před potvrzením fitu se fyzické zdroje rezervují jen pro sample; cenově zamčený batch získá vlastní čerstvou `ProductionReservation` až při aktivaci, takže přeprava ani recovery vzorku nemůže držet batch zdroje bez deadline.
 26. Storno objednávky, fáze nebo claimu před handoff musí terminálně zrušit všechny její aktivní Joby, uzamknout závod s handoff a vypořádat rezervaci podle skutečné spotřeby; stav `failed` se nesmí používat pro obchodní storno.
+27. Každý `FulfilmentSlot` patří právě do jedné plánované zásilky; fáze ani Order nesmí být `delivered | completed`, dokud nejsou doručené všechny aktuální Shipment lineage leaf. Doručené plus finančně vypořádané `cancelled_refunded` sloty končí `partially_fulfilled` i uvnitř jediné fáze.
+28. Claim smí být terminálně `resolved_reprint | resolved_reship` až po doručení navázané zásilky a `resolved_refund` až po úspěšném refund webhooku; vypršený claimový `ReplacementRequest` musí automaticky přejít do auditované refund větve.
+29. Přijetí zlevňující `OrderRevision` musí z nového snapshotu odvodit doplatek/přeplatek a při `refundable_balance > 0` idempotentně vytvořit refund přesně této částky a přepnout dotčený capture do `refund_pending`; handoff zůstává blokovaný do úspěšného webhooku.
+30. 3MF s paint daty nebo více material/extruder assignmenty nesmí v v0/v1 získat závaznou automatickou cenu; blocking preflight jej pošle do individuální nabídky před kanonizací a slicingem.
 
 ### 6.5 Švy pro síť
 
@@ -1018,9 +1036,9 @@ Architekturně tentýž problém jako FastyBird — discovery, stavový automat,
 
 **Různé díly v různých barvách** — levné, bez odpadového problému, jen `OrderItem.color`. **Lze i v v1.**
 
-**Vícebarevný jeden díl** — zákazník musí dodat přiřazení barev (holý STL to nenese); AMS proplachuje a u dvoubarevného dílu skončí 30–50 % materiálu v purge věži; **odpad je funkcí stroje, ne modelu** (jednonozzlové AMS vs. dual nozzle vs. IDEX se liší násobně), což rozbíjí invariant §6.4 bod 4.
+**Vícebarevný jeden díl** — zákazník musí dodat přiřazení barev (holý STL to nenese); AMS proplachuje a u dvoubarevného dílu skončí 30–50 % materiálu v purge věži; **odpad je funkcí stroje, ne modelu** (jednonozzlové AMS vs. dual nozzle vs. IDEX se liší násobně), což bez nového modelu rozbíjí invarianty deterministické zákaznické ceny nezávislé na makerovi (§6.4 body 8–9).
 
-Řešení: **custom request** do té doby, pak **nestavět malovátko, přijmout 3MF s paint daty** — OrcaSlicer CLI to umí slicnout přímo. Dny, ne měsíce.
+Řešení: **custom request** do té doby; v v0/v1 parser paint/material metadata detekuje jako blocking preflight a nesmí je potichu zahodit. Později **nestavět malovátko, přijmout 3MF s paint daty**, ale až s machine-specific cenou purge a rezervací všech barev — OrcaSlicer CLI ho umí slicnout přímo. Dny, ne měsíce.
 
 ### 11.11 Tisk z materiálu zákazníka
 
