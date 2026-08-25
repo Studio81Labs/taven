@@ -114,7 +114,7 @@ rezerva_pretisk = mira_zmetku × (
 | Koeficient plnění krabice | 0,55–0,65 |
 | Hmotnost obalu | 150–250 g |
 
-U fázované objednávky se doprava, obal a `handling_pack` počítají pro každou plánovanou zásilku zvlášť; sample a batch se neposílají současně a nelze je sloučit do jedné sazby. Práh dopravy zdarma se vyhodnotí jednou nad `cena_tisku_zaklad` a případně nuluje zákaznický součet dopravy, nikoli skutečné náklady v CM.
+U fázované objednávky se doprava, obal a `handling_pack` počítají pro každou plánovanou zásilku zvlášť; sample a batch se neposílají současně a nelze je sloučit do jedné sazby. Práh dopravy zdarma se vyhodnotí jednou nad `cena_tisku_pred_subvenci` a případně nuluje zákaznický součet dopravy, nikoli skutečné náklady v CM. Neúčtovaná část skutečného nákladu dopravce vstupuje do nákladové báze před marží a celý checkout se hrubuje o poplatek brány.
 
 `ShipmentPlan` počítá celé množství, ne jen největší díl: potřebný objem je `Σ(bbox_volume × qty) / koeficient_plnění_krabice`, hmotnost zahrnuje materiál všech kusů a obal. Překročení objemu nebo hmotnosti vytvoří další plánovanou zásilku a tím další sazbu dopravy, obal i balicí handling.
 
@@ -135,7 +135,7 @@ U fázované objednávky se doprava, obal a `handling_pack` počítají pro kaž
 | `marže` | ⚠ dopočítat proti stropu | |
 | **`min_print_price`** | **250 Kč** | ✓ trh: alvipek 200, M3Dtisk 250 |
 | **`small_order_surcharge`** | **50 Kč** u zakázek do 100 g | ✓ trh: studio3dtisk |
-| **`prah_doprava_zdarma`** | **⚠ 1 000 Kč** | start; revize po 50 objednávkách. Počítá se z `cena_tisku_zaklad` před expresním příplatkem |
+| **`prah_doprava_zdarma`** | **⚠ 1 000 Kč** | start; revize po 50 objednávkách. Počítá se z `cena_tisku_pred_subvenci` před dotovanou dopravou, bránou a expresním příplatkem |
 | **`koef_express`** | **×2,0** | ✓ trh: Bakuralab +100 % |
 | Výplň | 10 / 20 / 40 % | dekorativní / běžná / pevná |
 
@@ -208,7 +208,7 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | Lhůta na individuální nabídku | 24 h v pracovní dny |
 | Slíbená dodací lhůta | ⚠ trh: 1–2 dny jednoduché, garance 72 h |
 | Reklamační okno pro zádržné (síť) | 7 dní od doručení |
-| Retence STL | 90 dní |
+| **`source_model_retention_days`** | **90 dní** od terminálního stavu objednávky nebo expirace nabídky; jednotně pro STL, 3MF i STEP, s odkladem při claimu/revizi/právním holdu |
 
 **Kapacitní brána expresu**
 

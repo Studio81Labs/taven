@@ -241,6 +241,8 @@ Neexistuje legální způsob, jak mít pravidelné makery bez IČO. Limit 50 000
 
 Souhlas se zveřejněním fotografií hotových dílů, odmítnutelný checkboxem. **Zdrojová CAD data jsou citlivější než STL** — retenční politika i mlčenlivost je musí zmiňovat výslovně a u firemních zákazníků počítej s NDA.
 
+Retence se neváže na příponu souboru. Každý nahraný zdrojový `ModelFile` — **STL, 3MF i STEP** — při expiraci nabídky nebo přechodu objednávky do terminálního stavu dostane `delete_after` podle společného parametru `source_model_retention_days` (výchozí hodnota v parametrech §10). Aktivní reklamace, otevřená revize nebo právní hold smazání odloží; po odpadnutí poslední překážky se termín znovu naplánuje. Mazací job odstraní originál i formátově specifické odvozené soubory z objektového úložiště a ponechá jen auditní metadata a hash, nikoli rekonstruovatelnou geometrii.
+
 ### 3.8 Právní kontrola
 
 §3.4, §3.5, §3.6 a obchodní podmínky ověřit s poradcem před spuštěním. Konkurenční VOP použít jako **strukturu a checklist, nikoli jako text**.
@@ -267,14 +269,20 @@ handling_pretisk = sazba_prace_h × (
                   + postprocessing )
 amortizace  = cena_stroje / návratnost_h × čas_h
 obal        = Σ obalový_materiál(zásilka_i)
+dopravni_naklad = Σ skutečný_náklad_dopravce(zásilka_i)
 
 vyrobni_naklad = material + machine + handling + amortizace + obal + rezerva_pretisk
-cena_tisku_zaklad = max(min_print_price, vyrobni_naklad × (1 + marže))
+cena_tisku_pred_subvenci = max(min_print_price, vyrobni_naklad × (1 + marže))
+doprava            = 0 pokud cena_tisku_pred_subvenci ≥ prah_doprava_zdarma
+                   | Σ zákaznická_sazba(zásilka_i.kategorie) jinak
+dotovana_doprava   = max(0, dopravni_naklad − doprava)
+naklad_s_prodejem  = vyrobni_naklad + dotovana_doprava
+cena_tisku_zaklad  = max(min_print_price, naklad_s_prodejem × (1 + marže))
 express_priplatek  = cena_tisku_zaklad × (koef_express − 1)
 cena_tisku         = cena_tisku_zaklad + express_priplatek
-doprava            = 0 pokud cena_tisku_zaklad ≥ prah_doprava_zdarma
-                   | Σ sazba(zásilka_i.kategorie) jinak
-cena_celkem    = cena_tisku + doprava + small_order_surcharge
+mezisoucet          = cena_tisku + doprava + small_order_surcharge
+cena_celkem         = nejmenší x, pro které
+                      x − poplatek_platebni_brany(x) ≥ mezisoucet
 ```
 
 **Žádný `koef_kvality`.** Kvalita mění výšku vrstvy, tedy čas — a ten dává slicer přímo. Násobit přesně spočítaných 6 h 12 min ručním koeficientem znamená zahodit přesně tu výhodu, kvůli které se slicuje. Pokud má u jemné kvality existovat obchodní přirážka, ať se jmenuje přirážka a stojí vedle, ne v čase.
@@ -297,9 +305,11 @@ rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk + amorti
 
 **Amortizace je parametr s explicitní dobou návratnosti**, ne skrytý předpoklad. V v0 a hobby režimu ∞, tedy nula.
 
-**Práh dopravy zdarma se počítá z `cena_tisku_zaklad`**, tedy z ceny před expresním příplatkem — jinak si někdo koupí dopravu zdarma tím, že si připlatí za spěch.
+**Práh dopravy zdarma se počítá z `cena_tisku_pred_subvenci`**, tedy z ceny před započtením dotované dopravy, poplatku brány i expresního příplatku. Dotovaná doprava tak sama objednávku nekvalifikuje a nikdo si dopravu zdarma nekoupí připlacením za spěch.
 
 **Přepravní náklady se počítají přes všechny plánované zásilky.** Běžná objednávka má jednu; fázovaná objednávka má nejméně sample a batch. Každá zásilka má vlastní kategorii, obal, `handling_pack` a alokaci cesty. Práh dopravy zdarma nuluje součet sazeb dopravce, ne počet zásilek ani jejich náklad v CM.
+
+**Nevyhnutelné prodejní náklady nesmějí propadnout pod cenovou podlahu.** Rozdíl mezi skutečným nákladem dopravce a částkou účtovanou zákazníkovi vstupuje do nákladové báze ještě před marží. Nad výsledným mezisoučtem se cena hrubuje podle konkrétního sazebníku platební brány; pro pravidlo `p × x + f` je `cena_celkem = (mezisoucet + f) / (1 − p)`. Po odečtení brány proto stále zbývá celý mezisoučet a doprava zdarma neznamená zápornou CM na nominální podlaze.
 
 ### 4.2 Co v ceně dominuje
 
@@ -536,7 +546,7 @@ První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dnesk
 draft → quoted → confirmed → in_production → qc_passed
       → ready_to_ship → shipped → delivered → completed
 ```
-`confirmed` znamená, že je uhrazená částka potřebná ke startu: u automatické nabídky 100 %, u individuální nabídky záloha. `ready_to_ship → shipped` má guard na plný `payment_status = paid`, tedy i doplatek individuální nabídky.
+`confirmed` znamená, že je uhrazená částka potřebná ke startu: u automatické nabídky 100 %, u individuální nabídky záloha. `ready_to_ship → shipped` se neřídí názvem odvozeného `payment_status`, ale aktuálním cenovým snapshotem: guard vyžaduje `amount_due = 0` a `refundable_balance = 0`. Samotná záloha proto nestačí, zatímco finančně vypořádané snížení ceny může být po částečné refundaci bezpečně odesláno i se stavem `partially_refunded`.
 
 Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship → cancelled`; `cancelled → refunded`, pokud už byla zachycena platba; `in_production → partially_fulfilled`, pokud je nejméně jedna fáze doručená a všechny zbývající jsou zrušené a finančně vypořádané. Nezaplacené `cancelled` je terminální, zaplacené přejde na `refunded` až po úspěšném vrácení všech zachycených plateb. `completed`, `partially_fulfilled` a `refunded` jsou terminální fulfilment stavy; pozdější reklamace je nemění.
 
@@ -589,7 +599,7 @@ batch:  locked → active → in_production → shipped → delivered → comple
         locked → awaiting_revision → active
         locked | awaiting_revision | active | in_production → cancelled
 ```
-Události sample fáze stav celkové objednávky za `in_production` neposouvají. Poslední aktivní fáze — běžně batch — řídí **všechny** zbývající přechody agregátu: schválení QC `in_production → qc_passed`, plná úhrada a připravená finální zásilka `→ ready_to_ship`, předání dopravci `→ shipped`, doručení `→ delivered` a uzavření `→ completed`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu.
+Události sample fáze stav celkové objednávky za `in_production` neposouvají. Poslední aktivní fáze — běžně batch — řídí **všechny** zbývající přechody agregátu: schválení QC `in_production → qc_passed`, finanční vypořádání aktuálního snapshotu a připravená finální zásilka `→ ready_to_ship`, předání dopravci `→ shipped`, doručení `→ delivered` a uzavření `→ completed`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu.
 
 **QuoteRequest**
 ```
@@ -602,7 +612,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 1. G-code se generuje **až po** `accepted`.
 2. `Job` nesmí opustit `created` bez přiřazeného `Node`.
 3. `confirmed` vyžaduje zachycenou plnou platbu u automatické nabídky nebo zachycenou zálohu u individuální nabídky.
-4. `shipped` vyžaduje odvozený `payment_status = paid`; záloha sama nikdy nestačí.
+4. `shipped` vyžaduje vůči aktuálnímu cenovému snapshotu `amount_due = 0` a `refundable_balance = 0`; záloha sama nikdy nestačí, ale dokončená částečná refundace odeslání neblokuje.
 5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `geometry_hash` konkrétního `ModelGeometry` i `parts_per_plate`.
 6. `Order` nesmí být `confirmed` bez reference na **verzi ceníku a verzi podmínek**.
 7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
@@ -825,7 +835,7 @@ Určuje `min_order`, práh dopravy zdarma, **hodnotový strop automatu**, a hlav
 web (Vue 3 + TS) ────┐
 administrace ────────┼──► api (Node + TS) ──► PostgreSQL
                      │          │              Redis (BullMQ)
-(/maker až se sítí) ─┘          │              S3 (STL, gcode, fotky)
+(/maker až se sítí) ─┘          │              S3 (zdrojové modely, gcode, fotky)
                                 ├──► slicer-worker (Docker + OrcaSlicer CLI)
                                 ├──► carrier adapter (Packeta)      [v1]
                                 ├──► ai-worker                [post-validation]
@@ -834,7 +844,7 @@ administrace ────────┼──► api (Node + TS) ──► Post
 
 - **Node + TypeScript**, **PostgreSQL** (stavové automaty, konzistence peněz), **BullMQ** (slicing je dlouhá úloha)
 - **Slicer worker odděleně a on-demand** — jiný scale profil (CPU-bound), jiný lifecycle (verzovaná image), a v hobby režimu nesmí běžet trvale
-- **S3-compatible** — STL se maže podle retence, G-code po dokončení jobu
+- **S3-compatible** — všechny zdrojové `ModelFile` (STL, 3MF i STEP) se mažou podle společného `delete_after`, G-code po dokončení jobu
 - **Multi-tenancy od prvního dne** (§6.5)
 - **Vyměnitelné adaptéry** za jedno rozhraní: platební brána, dopravce, AI poskytovatel
 - **Privacy:** maker vidí minimum; žádné trackery nad rámec nutného měření reklamy; retenční politika je součástí podmínek, ne interní poznámka
