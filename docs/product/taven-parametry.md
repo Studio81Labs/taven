@@ -139,7 +139,7 @@ U fázované objednávky se doprava, obal a `handling_pack` počítají pro kaž
 | **`min_print_price`** | **250 Kč** | ✓ trh: alvipek 200, M3Dtisk 250 |
 | **`small_order_surcharge`** | **50 Kč** u zakázek do 100 g | ✓ trh: studio3dtisk |
 | **`prah_doprava_zdarma`** | **⚠ 1 000 Kč** | start; revize po 50 objednávkách. Počítá se z `cena_tisku_pred_subvenci` před dotovanou dopravou, bránou a expresním příplatkem |
-| **`koef_express`** | **×2,0** | ✓ trh: Bakuralab +100 % |
+| **`koef_express`** | **×2,0** | ✓ trh: Bakuralab +100 %; jen Order s jedinou `OrderPhase(kind = single)`, nikdy sample/batch |
 | Výplň | 10 / 20 / 40 % | dekorativní / běžná / pevná |
 
 **`min_print_price` se vztahuje na `cena_tisku`, ne na částku u pokladny.** Bez tohoto rozlišení bude někdo za rok číst „minimální objednávka 250 Kč" jako nejnižší možný účet.
