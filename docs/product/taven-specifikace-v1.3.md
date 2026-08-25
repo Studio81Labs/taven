@@ -251,25 +251,27 @@ Souhlas se zveřejněním fotografií hotových dílů, odmítnutelný checkboxe
 
 ```
 material    = gramáž_g × sazba_materiálu
-machine     = čas_h × sazba_stroj_h          ← čas ze slice zvoleného profilu
+machine     = čas_h × sazba_stroj_h          ← čas ze slice zvoleného ReferenceProfile
 handling    = sazba_prace_h × (
                 handling_order_fix
               + handling_plate × podložek
               + handling_piece × qty          (degresivní)
-              + handling_pack
-              + shipping_trip / zásilek_v_cestě
+              + handling_pack × počet_plánovaných_zásilek
+              + Σ(shipping_trip / zásilek_v_cestě_i)
               + postprocessing )
 handling_pretisk = sazba_prace_h × (
                     handling_plate × podložek
                   + handling_piece × qty       (degresivní)
                   + postprocessing )
 amortizace  = cena_stroje / návratnost_h × čas_h
+obal        = Σ obalový_materiál(zásilka_i)
 
-vyrobni_naklad = material + machine + handling + amortizace + rezerva_pretisk
+vyrobni_naklad = material + machine + handling + amortizace + obal + rezerva_pretisk
 cena_tisku_zaklad = max(min_print_price, vyrobni_naklad × (1 + marže))
 express_priplatek  = cena_tisku_zaklad × (koef_express − 1)
 cena_tisku         = cena_tisku_zaklad + express_priplatek
-doprava            = sazba(kategorie) | 0 pokud cena_tisku_zaklad ≥ prah_doprava_zdarma
+doprava            = 0 pokud cena_tisku_zaklad ≥ prah_doprava_zdarma
+                   | Σ sazba(zásilka_i.kategorie) jinak
 cena_celkem    = cena_tisku + doprava + small_order_surcharge
 ```
 
@@ -294,6 +296,8 @@ rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk)
 **Amortizace je parametr s explicitní dobou návratnosti**, ne skrytý předpoklad. V v0 a hobby režimu ∞, tedy nula.
 
 **Práh dopravy zdarma se počítá z `cena_tisku_zaklad`**, tedy z ceny před expresním příplatkem — jinak si někdo koupí dopravu zdarma tím, že si připlatí za spěch.
+
+**Přepravní náklady se počítají přes všechny plánované zásilky.** Běžná objednávka má jednu; fázovaná objednávka má nejméně sample a batch. Každá zásilka má vlastní kategorii, obal, `handling_pack` a alokaci cesty. Práh dopravy zdarma nuluje součet sazeb dopravce, ne počet zásilek ani jejich náklad v CM.
 
 ### 4.2 Co v ceně dominuje
 
@@ -389,7 +393,7 @@ V v0 i v1 obě fáze splynou (jeden stroj), ale **šev tam musí být**.
 
 ### 5.2 Jádro
 
-**OrcaSlicer CLI v Dockeru.** Image je **verzovaná a immutable** — upgrade binárky mění výstup a tedy cenu; nikdy automaticky, vždy s přepočtem ceníku a novou `profile_version`.
+**OrcaSlicer CLI v Dockeru.** Image je **verzovaná a immutable** — upgrade binárky mění výstup a tedy cenu; nikdy automaticky, vždy s přepočtem ceníku a novými verzemi všech dotčených `ReferenceProfile` a `MachineProfile`.
 
 **Zafixovat toleranci tesselace STEP.** Mění gramáž i čas, takže její změna změní cenu u téhož souboru a padne reprodukovatelnost, na které stojí cache i verzování ceníku. Patří mezi parametry referenčního profilu.
 
@@ -435,7 +439,7 @@ Každý nález má úroveň `info` / `warning` (risk checkbox) / `blocking` (→
 
 ### 5.6 Cache
 
-Klíč `sha256(ModelFile) + profile_version + parts_per_plate`. `SliceResult` reprezentuje jednu konkrétní obsazenost podložky; pro jeden kus je `parts_per_plate = 1`, u dávky se plná a poslední částečná podložka cachují samostatně a výsledek nabídky se z nich složí.
+Klíč `sha256(ModelFile) + profile_kind + profile_version + parts_per_plate`, kde `profile_kind` je `reference` nebo `machine`. `SliceResult` reprezentuje jednu konkrétní obsazenost podložky; pro jeden kus je `parts_per_plate = 1`, u dávky se plná a poslední částečná podložka cachují samostatně a výsledek nabídky se z nich složí. Závazná cena smí použít jen výsledek s `profile_kind = reference`.
 
 ### 5.7 Async a UX ceny
 
@@ -463,17 +467,18 @@ Právně čisté: hrubý odhad je výslovně nezávazný, závazná cena vzniká
 
 ## §6 Datový model
 
-### 6.1 Tři matice — nesloučit
+### 6.1 Čtyři matice — nesloučit
 
 ```
-Capability   (statická, per model stroje)                platforma
-Profile      (verzovaná, per model × tryska × materiál × kvalita)   platforma
-Inventory    (dynamická, per konkrétní stroj uzlu)       maker
-                              ↓
-             = nabídka, kterou zákazník vidí
+ReferenceProfile   (verzovaný, materiál × kvalita; bez stroje)      platforma
+MachineCapability  (statická, per model stroje)                    platforma
+MachineProfile     (verzovaný, model × tryska × materiál × kvalita) platforma
+Inventory          (dynamická, per konkrétní stroj uzlu)            maker
+                                      ↓
+                 = nabídka, kterou zákazník vidí a síť umí vyrobit
 ```
 
-První dvě popisují **svět**, třetí **tenhle stroj dneska**. „Kvality" nejsou vlastnost stroje, ale **existence profilu** pro danou kombinaci.
+První tři popisují **svět**, čtvrtá **tenhle stroj dneska**. `ReferenceProfile` nikdy nemá vazbu na model stroje a používá se výhradně pro závaznou zákaznickou cenu. `MachineProfile` vždy patří kombinaci modelu, trysky, materiálu a kvality a používá se výhradně pro produkční G-code. Oba typy jsou verzované odděleně; jejich nastavení ani verze se nesmí sdílet jen proto, že v v0 běží na jednom fyzickém stroji.
 
 **Maker nikdy nenahrává vlastní profil** — registruje jen schopnost (model, tryska, materiály, build volume, počet AMS). Ovlivnit smí pouze kalibrační odchylky svého kusu: `xy_hole_compensation`, `xy_contour_compensation`, `elephant_foot_compensation`, `flow_ratio`.
 
@@ -486,13 +491,16 @@ První dvě popisují **svět**, třetí **tenhle stroj dneska**. „Kvality" ne
 | `Customer` | ✓ | ✓ | bez povinné registrace |
 | `Order` / `OrderItem` | ✓ | ✓ | fulfilment objednávky; platby a od v1 zásilky jsou kolekce potomků |
 | `Payment` | ✓ | ✓ | více transakcí na objednávku; role `full` / `deposit` / `balance` + refundace |
-| `OrderPhase` | — | ✓ | `sample` / `batch`; vlastní joby a zásilky pod jednou objednávkou |
+| `OrderPhase` | — | ✓ | `sample` / `batch`; vlastní model, cenový snapshot, joby a zásilky |
+| `OrderRevision` | — | ✓ | nový `ModelFile`, reslice, cenový rozdíl a přijetí zákazníkem |
 | `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem |
-| `SliceResult` | ✓ | ✓ | klíč `hash(ModelFile + ProfileVersion + parts_per_plate)` |
+| `SliceResult` | ✓ | ✓ | klíč `hash(ModelFile + profile_kind + profile_version + parts_per_plate)` |
 | `PreflightFinding` | ✓ | ✓ | nález + úroveň + zda zákazník akceptoval |
 | `Job` | ✓ | ✓ | přiřaditelný jednomu uzlu; přetisk odkazuje přes `replaces_job_id` |
 | `Node` / `Machine` / `Inventory` | ✓ | ✓ | uzel jediný, entity ale existují |
-| `MachineCapability` / `Profile` | ✓ | ✓ | číselníky |
+| `ReferenceProfile` | ✓ | ✓ | `material × quality`, bez modelu stroje; jen quote slice |
+| `MachineCapability` | ✓ | ✓ | statické schopnosti modelu stroje |
+| `MachineProfile` | ✓ | ✓ | `model × nozzle × material × quality`; jen produkční slice |
 | `PriceList` | ✓ | ✓ | verzovaný; objednávka drží referenci |
 | `QuoteRequest` / `Quote` | ✓ | ✓ | individuální nabídka |
 | `CostInput` | ✓ | ✓ | nákupy filamentu, sazba energie, spotřební materiál |
@@ -541,15 +549,17 @@ quote → sample (1 ks) → zákazník potvrdí fit
       nebo nahraje revidovaný model
       → dávka (N ks)
 ```
-Cena obou fází se **zamkne už při nacenění**, takže zákazník od začátku ví celkovou částku. Revidovaný model se přiloží ke stejné objednávce jako nová verze `ModelFile`, ne jako nová poptávka. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
+Cena obou fází pro **původní `ModelFile`** se zamkne už při nacenění, takže zákazník od začátku ví celkovou částku. Potvrzení fitu beze změny modelu aktivuje batch za zamčenou cenu.
 
-Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu nebo přiložením revidovaného `ModelFile`. Cena obou zásilek je součástí částky zamčené při nabídce.
+Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Batch se do té doby neaktivuje. Cena sample fáze ani už vzniklé náklady se zpětně nemění; odmítnutí revize batch zruší a vrátí jen dosud nečerpanou část platby. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
+
+Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu nebo přijetím `OrderRevision`. Cena všech plánovaných zásilek je součástí příslušného cenového snapshotu.
 
 ```
 sample: active → in_production → shipped → delivered → awaiting_confirmation → completed
 batch:  locked → active → in_production → shipped → delivered → completed
 ```
-Celková objednávka zůstává `in_production`, dokud sample čeká na potvrzení nebo batch není dokončený; do `delivered` přejde až s doručením poslední aktivní fáze.
+Události sample fáze stav celkové objednávky za `in_production` neposouvají. Poslední aktivní fáze — běžně batch — řídí **všechny** zbývající přechody agregátu: schválení QC `in_production → qc_passed`, plná úhrada a připravená finální zásilka `→ ready_to_ship`, předání dopravci `→ shipped`, doručení `→ delivered` a uzavření `→ completed`. Agregát tedy nikdy nepřeskakuje mezistavy pevného automatu.
 
 **QuoteRequest**
 ```
@@ -563,14 +573,15 @@ new → in_review → quoted → accepted → (vytvoří Order)
 2. `Job` nesmí opustit `created` bez přiřazeného `Node`.
 3. `confirmed` vyžaduje zachycenou plnou platbu u automatické nabídky nebo zachycenou zálohu u individuální nabídky.
 4. `shipped` vyžaduje odvozený `payment_status = paid`; záloha sama nikdy nestačí.
-5. `SliceResult` použitý pro cenu je vždy referenční profil, nikdy strojový, a jeho klíč obsahuje `parts_per_plate`.
+5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `parts_per_plate`.
 6. `Order` nesmí být `confirmed` bez reference na **verzi ceníku a verzi podmínek**.
 7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
 8. Závazná cena smí vzniknout jen z deterministického výpočtu.
 9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
 10. Neúspěšný job zaplacené objednávky musí mít navazující `Job` přes `replaces_job_id`, nebo objednávka musí přejít do `cancelled → refunded`.
-11. Každá zásilka fázované objednávky patří právě k jedné `OrderPhase`; sample zásilka nesmí dokončit celou objednávku.
-12. Každá změna stavu zapisuje `AuditEvent` (od v1).
+11. Každá zásilka fázované objednávky patří právě k jedné `OrderPhase`; sample zásilka nesmí dokončit celou objednávku a poslední fáze musí vyvolat všechny mezistavy agregátu.
+12. Revidovaný `ModelFile` nesmí aktivovat batch bez nového deterministického slice, cenového snapshotu a přijetí `OrderRevision` zákazníkem.
+13. Každá změna stavu zapisuje `AuditEvent` (od v1).
 
 ### 6.5 Švy pro síť
 
@@ -718,11 +729,11 @@ Fronta s SLA odpočtem. Tvorba nabídky: položky, ceny, termín, platnost → t
 
 ### 9.4 Katalog strojů a profily
 
-CRUD nad `MachineCapability` a nad kombinacemi `(model × tryska × materiál × kvalita)` s verzí, changelogem a stavem.
+Tři oddělené katalogy: `ReferenceProfile` pro `(materiál × kvalita)` bez stroje, `MachineCapability` pro statické schopnosti modelů a `MachineProfile` pro `(model × tryska × materiál × kvalita)`. Referenční a strojové profily mají vlastní verze, changelog a stav.
 
-**Testovací slice přímo v administraci:** nahrát referenční model, spustit proti profilu, porovnat s předchozí verzí. Bez toho se profily neladí, jen hádají.
+**Testovací slice přímo v administraci:** nahrát referenční model, zvolit quote nebo production režim, spustit proti odpovídajícímu typu profilu a porovnat s jeho předchozí verzí. Bez toho se profily neladí, jen hádají.
 
-**Aktivace nové verze profilu spustí upozornění na přepočet ceníku.**
+**Aktivace nové verze `ReferenceProfile` spustí upozornění na přepočet ceníku.** Aktivace `MachineProfile` mění jen budoucí produkční G-code a zákaznickou cenu nepřepočítává.
 
 ### 9.5 Ceník a nákladový model
 

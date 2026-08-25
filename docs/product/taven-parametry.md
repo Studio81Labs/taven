@@ -113,6 +113,8 @@ rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk)
 | Koeficient plnění krabice | 0,55–0,65 |
 | Hmotnost obalu | 150–250 g |
 
+U fázované objednávky se doprava, obal a `handling_pack` počítají pro každou plánovanou zásilku zvlášť; sample a batch se neposílají současně a nelze je sloučit do jedné sazby. Práh dopravy zdarma se vyhodnotí jednou nad `cena_tisku_zaklad` a případně nuluje zákaznický součet dopravy, nikoli skutečné náklady v CM.
+
 **Limity přepravních kategorií**
 
 | Kategorie | Limity |
