@@ -116,7 +116,7 @@ rezerva_pretisk = mira_zmetku × (
 | Koeficient plnění krabice | 0,55–0,65 |
 | Hmotnost obalu | 150–250 g |
 
-U fázované objednávky se doprava, obal a `handling_pack` počítají pro každou plánovanou zásilku zvlášť; sample a batch se neposílají současně a nelze je sloučit do jedné sazby. Práh dopravy zdarma se vyhodnotí jednou nad `cena_tisku_pred_subvenci` a případně nuluje zákaznický součet dopravy, nikoli skutečné náklady v CM. Neúčtovaná část skutečného nákladu dopravce vstupuje do nákladové báze před marží a celý checkout se hrubuje o poplatek brány.
+U fázované objednávky se doprava, obal a `handling_pack` počítají pro každou plánovanou zásilku zvlášť; sample a batch se neposílají současně a nelze je sloučit do jedné sazby. Práh dopravy zdarma se vyhodnotí jednou nad `cena_tisku_pred_subvenci` a případně nuluje zákaznický součet dopravy, nikoli skutečné náklady v CM. Neúčtovaná část skutečného nákladu dopravce vstupuje do nákladové báze před marží a checkout se hrubuje o součet poplatků všech capture v `PaymentSchedule`; individuální `deposit` + `balance` proto nesou fixní složku dvakrát.
 
 `ShipmentPlan` počítá celé množství, ne jen největší díl: potřebný objem je `Σ(bbox_volume × qty) / koeficient_plnění_krabice`, hmotnost zahrnuje materiál všech kusů a obal. Překročení objemu nebo hmotnosti vytvoří další plánovanou zásilku a tím další sazbu dopravy, obal i balicí handling.
 
@@ -158,7 +158,7 @@ checkout floor                       ≈ 343–394 Kč
 
 `koef_kvality` **zrušen** — čas jemného profilu dává slicer přímo, viz §9.
 
-**Ilustrativní checkout podlahy** při `cena_tisku = 250 Kč`, dopravě 85 Kč a bráně 1,5 % + 3 Kč:
+**Ilustrativní checkout podlahy pro jednu `full` platbu** při `cena_tisku = 250 Kč`, dopravě 85 Kč a bráně 1,5 % + 3 Kč. Individuální nabídka s `deposit` + `balance` se hrubuje o dvě fixní složky:
 
 | Scénář | Podlaha |
 |---|---|
