@@ -211,6 +211,8 @@ Přechod na plátcovství není úprava parametru — v ten den buď zdražíš 
 
 Tisknutý díl na míru nemá pro nikoho jiného hodnotu. Zvyklost trhu to potvrzuje.
 
+Platba není jeden sloupec na objednávce. `Order` má kolekci `Payment`, každý se samostatnou částkou, rolí `full` / `deposit` / `balance`, stavem brány a identifikátorem transakce. Automatická nabídka má jednu `full` platbu; individuální nabídka nejméně `deposit` a `balance`. Vrácení peněz se váže ke konkrétní zachycené platbě, aby šlo smířit částečné i úplné refundace. `payment_status` objednávky (`unpaid` / `partially_paid` / `paid` / `partially_refunded` / `refunded`) se odvozuje z těchto transakcí, není ručně přepisovaný stav.
+
 **Brána:** rozhodující je **absence měsíčního paušálu** (viz log #39), povinné je **bankovní tlačítko vedle karty**. Schovat za jedno rozhraní — je to nejsnáze vyměnitelná komponenta.
 
 ### 3.4 Odstoupení a záruka
@@ -433,7 +435,7 @@ Každý nález má úroveň `info` / `warning` (risk checkbox) / `blocking` (→
 
 ### 5.6 Cache
 
-Klíč `sha256(ModelFile) + profile_version` (+ `parts_per_plate` u dávek).
+Klíč `sha256(ModelFile) + profile_version + parts_per_plate`. `SliceResult` reprezentuje jednu konkrétní obsazenost podložky; pro jeden kus je `parts_per_plate = 1`, u dávky se plná a poslední částečná podložka cachují samostatně a výsledek nabídky se z nich složí.
 
 ### 5.7 Async a UX ceny
 
@@ -482,29 +484,42 @@ První dvě popisují **svět**, třetí **tenhle stroj dneska**. „Kvality" ne
 | Entita | v0 | v1 | Poznámka |
 |---|---|---|---|
 | `Customer` | ✓ | ✓ | bez povinné registrace |
-| `Order` / `OrderItem` | ✓ | ✓ | jedna platba, jedna zásilka |
+| `Order` / `OrderItem` | ✓ | ✓ | fulfilment objednávky; platby a od v1 zásilky jsou kolekce potomků |
+| `Payment` | ✓ | ✓ | více transakcí na objednávku; role `full` / `deposit` / `balance` + refundace |
+| `OrderPhase` | — | ✓ | `sample` / `batch`; vlastní joby a zásilky pod jednou objednávkou |
 | `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem |
-| `SliceResult` | ✓ | ✓ | klíč `hash(ModelFile + ProfileVersion)` |
+| `SliceResult` | ✓ | ✓ | klíč `hash(ModelFile + ProfileVersion + parts_per_plate)` |
 | `PreflightFinding` | ✓ | ✓ | nález + úroveň + zda zákazník akceptoval |
-| `Job` | ✓ | ✓ | přiřaditelná jednomu uzlu |
+| `Job` | ✓ | ✓ | přiřaditelný jednomu uzlu; přetisk odkazuje přes `replaces_job_id` |
 | `Node` / `Machine` / `Inventory` | ✓ | ✓ | uzel jediný, entity ale existují |
 | `MachineCapability` / `Profile` | ✓ | ✓ | číselníky |
 | `PriceList` | ✓ | ✓ | verzovaný; objednávka drží referenci |
 | `QuoteRequest` / `Quote` | ✓ | ✓ | individuální nabídka |
 | `CostInput` | ✓ | ✓ | nákupy filamentu, sazba energie, spotřební materiál |
 | `HandlingSession` | ✓ | ✓ | aktivní práce: komponenta, začátek/konec, počty a zdroj měření |
-| `Shipment` | — | ✓ | v v0 mimo systém |
+| `Shipment` | — | ✓ | více na objednávku; u fázované objednávky patří k `OrderPhase` |
 | `AuditEvent` | — | ✓ | |
 | `Offer`, `QualityEvent`, `Certification`, `Payout` | — | — | jen při stavbě sítě |
 
 ### 6.3 Stavové automaty
 
-**Order**
+**Order — fulfilment**
 ```
-draft → quoted → paid → in_production → qc_passed
-      → shipped → delivered → completed
+draft → quoted → confirmed → in_production → qc_passed
+      → ready_to_ship → shipped → delivered → completed
 ```
-Odbočky: `quoted → expired`, `delivered → disputed → refunded | resolved`.
+`confirmed` znamená, že je uhrazená částka potřebná ke startu: u automatické nabídky 100 %, u individuální nabídky záloha. `ready_to_ship → shipped` má guard na plný `payment_status = paid`, tedy i doplatek individuální nabídky.
+
+Odbočky: `quoted → expired | cancelled`; `confirmed | in_production | qc_passed | ready_to_ship → cancelled`; `cancelled → refunded`, pokud už byla zachycena platba; `delivered → disputed → refunded | resolved`. Nezaplacené `cancelled` je terminální, zaplacené přejde na `refunded` až po úspěšném vrácení všech zachycených plateb.
+
+**Payment**
+```
+created → pending → captured
+pending → failed
+captured → refund_pending → partially_refunded | refunded
+partially_refunded → refund_pending → refunded
+```
+Objednávkový `payment_status` je projekce všech jejích plateb, ne náhrada jejich historie.
 
 **Job**
 ```
@@ -513,6 +528,8 @@ created → accepted → gcode_ready → printing
         → packed → handed_over → settled
 ```
 Odbočky: `printing → failed`, `photo_submitted → qc_rejected`.
+
+Obě neúspěšné větve mají explicitní příkaz `create_replacement`: atomicky vytvoří nový `Job` ve stavu `created` s `replaces_job_id` na neúspěšný job. Původní job zůstane terminálně `failed` nebo `qc_rejected`, aby se neztratil first-pass yield. Pokud se nepřetiskuje, obsluha musí objednávku převést do `cancelled → refunded`; zaplacená objednávka nesmí zůstat bez aktivního nebo úspěšného listového jobu.
 
 **Časová razítka stavových přechodů měří průchod procesem, ne aktivní handling.** Mezi přechody je tisk, čekání ve frontě, čekání na zákazníka i doprava, takže jejich rozdíl nesmí vstoupit do nákladů práce.
 
@@ -526,6 +543,14 @@ quote → sample (1 ks) → zákazník potvrdí fit
 ```
 Cena obou fází se **zamkne už při nacenění**, takže zákazník od začátku ví celkovou částku. Revidovaný model se přiloží ke stejné objednávce jako nová verze `ModelFile`, ne jako nová poptávka. Trh tuhle iteraci běžně dělá — ale e-mailem přes čtyři až šest zpráv.
 
+Každá fáze je samostatný `OrderPhase`; sample a batch mají vlastní joby a vlastní `Shipment`. Doručení vzorku dokončí pouze sample fázi a přepne ji na čekání na potvrzení, nikoli celou objednávku na `delivered`. Batch se aktivuje až potvrzením fitu nebo přiložením revidovaného `ModelFile`. Cena obou zásilek je součástí částky zamčené při nabídce.
+
+```
+sample: active → in_production → shipped → delivered → awaiting_confirmation → completed
+batch:  locked → active → in_production → shipped → delivered → completed
+```
+Celková objednávka zůstává `in_production`, dokud sample čeká na potvrzení nebo batch není dokončený; do `delivered` přejde až s doručením poslední aktivní fáze.
+
 **QuoteRequest**
 ```
 new → in_review → quoted → accepted → (vytvoří Order)
@@ -536,13 +561,16 @@ new → in_review → quoted → accepted → (vytvoří Order)
 
 1. G-code se generuje **až po** `accepted`.
 2. `Job` nesmí opustit `created` bez přiřazeného `Node`.
-3. `paid` předchází `in_production`. Bez výjimky.
-4. `SliceResult` použitý pro cenu je vždy referenční profil, nikdy strojový.
-5. `Order` nesmí být `paid` bez reference na **verzi ceníku a verzi podmínek**.
-6. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
-7. Závazná cena smí vzniknout jen z deterministického výpočtu.
-8. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
-9. Každá změna stavu zapisuje `AuditEvent` (od v1).
+3. `confirmed` vyžaduje zachycenou plnou platbu u automatické nabídky nebo zachycenou zálohu u individuální nabídky.
+4. `shipped` vyžaduje odvozený `payment_status = paid`; záloha sama nikdy nestačí.
+5. `SliceResult` použitý pro cenu je vždy referenční profil, nikdy strojový, a jeho klíč obsahuje `parts_per_plate`.
+6. `Order` nesmí být `confirmed` bez reference na **verzi ceníku a verzi podmínek**.
+7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
+8. Závazná cena smí vzniknout jen z deterministického výpočtu.
+9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
+10. Neúspěšný job zaplacené objednávky musí mít navazující `Job` přes `replaces_job_id`, nebo objednávka musí přejít do `cancelled → refunded`.
+11. Každá zásilka fázované objednávky patří právě k jedné `OrderPhase`; sample zásilka nesmí dokončit celou objednávku.
+12. Každá změna stavu zapisuje `AuditEvent` (od v1).
 
 ### 6.5 Švy pro síť
 
@@ -680,7 +708,7 @@ Dnešní objednávky, poptávky s odpočtem do 24h lhůty, joby po termínu, fro
 
 ### 9.2 Objednávky
 
-Seznam s filtrem. Detail: položky, ceny s odkazem na verzi ceníku, slice výsledky, preflight nálezy a co zákazník akceptoval, platba, zásilka, časová osa.
+Seznam s filtrem. Detail: položky, ceny s odkazem na verzi ceníku, slice výsledky, preflight nálezy a co zákazník akceptoval, platby, zásilky, časová osa.
 
 Ruční zásahy: změna stavu, storno a vrácení, přepsání ceny (**s povinným důvodem do auditu**), přeposlání e-mailů.
 
