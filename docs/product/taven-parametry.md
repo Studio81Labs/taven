@@ -19,6 +19,8 @@
 
 Do ceníku vstupuje **vážený průměr posledních nákupů**, ne aktuální cena. Skutečná spotřeba se účtuje proti konkrétní cívce (`Inventory.price_per_g`).
 
+Každá zásoba eviduje fyzicky ověřené `remaining_g`; pro nabídku se používá `available_g = remaining_g − aktivní InventoryReservation`. `required_material_g` bere závazný slice celého množství včetně všech podložek, podpor a purge. Capture platby smí začít až po atomické rezervaci celé gramáže na jednom způsobilém uzlu.
+
 **V0 nabízené materiály:** PLA, PETG.
 
 ---
@@ -145,7 +147,9 @@ U fázované objednávky se doprava, obal a `handling_pack` počítají pro kaž
 min_print_price   = 250 Kč
 + small_order_surcharge (pod 100 g)  = 50 Kč
 + doprava                            = ~85 Kč
-checkout floor                       ≈ 335–385 Kč
+mezisoučet                           = 335–385 Kč
++ hrubé pokrytí brány (1,5 % + 3 Kč)
+checkout floor                       ≈ 343–394 Kč
 ```
 
 **`small_order_surcharge` je obchodní přirážka, ne úhrada přípravy.** Příprava je už zahrnutá v `cena_tisku` přes `handling_*`. Původní název „poplatek za přípravu" tvrdil zákazníkovi opak a účetně to bylo dvojí účtování.
@@ -154,14 +158,14 @@ checkout floor                       ≈ 335–385 Kč
 
 `koef_kvality` **zrušen** — čas jemného profilu dává slicer přímo, viz §9.
 
-**Ověřené podlahy** (při 300 Kč/h a 30 min handlingu, malá zakázka ~20 g, 1 h):
+**Ilustrativní checkout podlahy** při `cena_tisku = 250 Kč`, dopravě 85 Kč a bráně 1,5 % + 3 Kč:
 
 | Scénář | Podlaha |
 |---|---|
-| Zasílaná objednávka | **~345 Kč** |
-| **Osobní odběr** | **~240 Kč** |
+| Zasílaná objednávka bez `small_order_surcharge` | **~343 Kč** |
+| Zasílaná objednávka do 100 g s `small_order_surcharge` | **~394 Kč** |
 
-Osobní odběr posouvá podlahu o ~105 Kč. Malé zakázky, které doprava zabíjí, jsou s osobním odběrem životaschopné.
+Osobní odběr není součástí v0 ani ekonomiky sítě; checkout podporuje jen dopravce. Případné zavedení vyžaduje vlastní anonymizovaný předávací workflow a nový přepočet podlahy.
 
 ---
 
@@ -208,7 +212,8 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | Lhůta na individuální nabídku | 24 h v pracovní dny |
 | Slíbená dodací lhůta | ⚠ trh: 1–2 dny jednoduché, garance 72 h |
 | Reklamační okno pro zádržné (síť) | 7 dní od doručení |
-| **`source_model_retention_days`** | **90 dní** od terminálního stavu objednávky nebo expirace nabídky; jednotně pro STL, 3MF i STEP, s odkladem při claimu/revizi/právním holdu |
+| **`source_model_retention_days`** | **90 dní** od terminálního stavu objednávky nebo expirace nabídky; jednotně pro zdrojové STL, 3MF i STEP |
+| **`reproduction_artifact_retention`** | nejméně do snapshotovaného `claim_until` z přijaté verze podmínek; ⚠ přesnou lhůtu potvrdit s právním poradcem, aktivní claim/právní hold ji prodlužuje |
 
 **Kapacitní brána expresu**
 

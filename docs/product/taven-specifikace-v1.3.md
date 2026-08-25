@@ -227,6 +227,8 @@ To není formalita. Zákaznické modely bývají doladěné empiricky na jedné 
 
 Reklamace je samostatná entita `Claim` navázaná na objednávku, položku a případně fázi. Lze ji otevřít po `delivered`, `completed` i `partially_fulfilled`; nemění zpětně terminální fulfilment stav objednávky. Výsledek claimu může vytvořit náhradní job, refundaci nebo zamítnutí s důvodem a vlastním auditem.
 
+Při přijetí objednávky se snapshotuje verze reklamační politiky z přijatých podmínek; při doručení každé položky nebo fáze z ní vznikne konkrétní `claim_until`. Standardní samoobslužný `Claim` lze otevřít do příslušného termínu; zákonná nebo smluvní výjimka jej může prodloužit právním holdem. Pozdější požadavek jde do ručního právního posouzení a bez zachovaného reprodukčního artefaktu vyžaduje nový upload zákazníka.
+
 ### 3.5 Makeři a IČO (jen při stavbě sítě)
 
 Neexistuje legální způsob, jak mít pravidelné makery bez IČO. Limit 50 000 Kč pro příležitostné příjmy řeší **daňové osvobození, ne povinnost mít živnost**; rozhodující je soustavnost podle §420 OZ. Platforma je navíc dokonalá evidence.
@@ -241,11 +243,13 @@ Neexistuje legální způsob, jak mít pravidelné makery bez IČO. Limit 50 000
 
 Souhlas se zveřejněním fotografií hotových dílů, odmítnutelný checkboxem. **Zdrojová CAD data jsou citlivější než STL** — retenční politika i mlčenlivost je musí zmiňovat výslovně a u firemních zákazníků počítej s NDA.
 
-Retence se neváže na příponu souboru. Každý nahraný zdrojový `ModelFile` — **STL, 3MF i STEP** — při expiraci nabídky nebo přechodu objednávky do terminálního stavu dostane `delete_after` podle společného parametru `source_model_retention_days` (výchozí hodnota v parametrech §10). Aktivní reklamace, otevřená revize nebo právní hold smazání odloží; po odpadnutí poslední překážky se termín znovu naplánuje. Mazací job odstraní originál i formátově specifické odvozené soubory z objektového úložiště a ponechá jen auditní metadata a hash, nikoli rekonstruovatelnou geometrii.
+Retence se neváže na příponu souboru. Každý nahraný zdrojový `ModelFile` — **STL, 3MF i STEP** — při expiraci nabídky nebo přechodu objednávky do terminálního stavu dostane `source_delete_after` podle společného parametru `source_model_retention_days` (výchozí hodnota v parametrech §10). Mazací job v tento den odstraní zdrojový upload a formátově specifické mezisoubory; u expirované nabídky bez objednávky odstraní i veškerou rekonstruovatelnou geometrii.
+
+U přijaté objednávky vzniká zvlášť šifrovaný immutable `ReproductionArtifact`: kanonické produkční bajty `ModelGeometry` a reference na přesné revize profilů, kalibrace a cenového/slice snapshotu. Zdrojový STEP nebo 3MF tak nemusí zůstat uložený, ale reklamaci lze reprodukovat. Artefakt má `reproduction_delete_after` nejdříve v `claim_until`; aktivní reklamace nebo právní hold termín prodlouží. Po odpadnutí poslední překážky mazací job odstraní artefakt a ponechá jen auditní metadata a hash, nikoli rekonstruovatelnou geometrii.
 
 ### 3.8 Právní kontrola
 
-§3.4, §3.5, §3.6 a obchodní podmínky ověřit s poradcem před spuštěním. Konkurenční VOP použít jako **strukturu a checklist, nikoli jako text**.
+§3.4–§3.7 a obchodní podmínky ověřit s poradcem před spuštěním. Konkurenční VOP použít jako **strukturu a checklist, nikoli jako text**.
 
 ---
 
@@ -327,7 +331,7 @@ Při 300 Kč/h a 30 minutách handlingu je struktura malé zakázky zhruba tato:
 
 Podlaha se počítá z parametrů. Strop je 4–6 Kč/g hlavního tržního pásma. **Umístění: spodní polovina pásma.**
 
-Ověřené podlahy jsou v parametrech §7. Klíčové zjištění: **osobní odběr posouvá podlahu o ~105 Kč** a dělá životaschopnými malé zakázky, které doprava zabíjí.
+Ověřená podlaha je v parametrech §7. V0 počítá pouze se zasláním přes dopravce; osobní odběr se do ekonomiky ani síťové brány nezapočítává, dokud nebude mít vlastní checkout a předávací workflow zachovávající soukromí zákazníka.
 
 ### 4.4 Publikovaný ceník
 
@@ -520,10 +524,12 @@ První tři popisují **svět**, poslední dvě **tenhle konkrétní stroj dnesk
 | `OrderRevision` | — | ✓ | nový model, reslice, cenový rozdíl, přijetí a `revision_amount_due` |
 | `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem |
 | `ModelGeometry` | ✓ | ✓ | kanonická geometrie tělesa/podmnožiny; vlastní `geometry_hash` |
+| `ReproductionArtifact` | ✓ | ✓ | šifrovaná produkční geometrie + immutable vstupy pro případný claim; retence nejméně do `claim_until` |
 | `SliceResult` | ✓ | ✓ | reference klíč s profile version; production navíc s calibration version |
 | `PreflightFinding` | ✓ | ✓ | nález + úroveň + zda zákazník akceptoval |
 | `Job` | ✓ | ✓ | přiřaditelný jednomu uzlu; přetisk odkazuje přes `replaces_job_id` |
 | `Node` / `Machine` / `Inventory` | ✓ | ✓ | uzel jediný, entity ale existují |
+| `InventoryReservation` | ✓ | ✓ | gramáž z konkrétních kompatibilních zásob, TTL před capture a commit při přijetí jobu |
 | `ReferenceProfile` | ✓ | ✓ | `material × quality`, bez modelu stroje; jen quote slice |
 | `MachineCapability` | ✓ | ✓ | statické schopnosti modelu stroje |
 | `MachineProfile` | ✓ | ✓ | `model × nozzle × material × quality`; jen produkční slice |
@@ -564,6 +570,8 @@ Objednávkový `payment_status` je projekce všech jejích plateb, ne náhrada j
 opened → investigating → resolved_rejected | resolved_reprint | resolved_refund
 ```
 Claim lze otevřít proti doručené položce nebo fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`. `resolved_reprint` vytvoří náhradní `Job`; `resolved_refund` spustí refundaci konkrétních `Payment`.
+
+Pro claim otevřený do snapshotovaného `claim_until` čte `resolved_reprint` kanonickou geometrii a immutable slice vstupy z `ReproductionArtifact`; nezávisí tedy na tom, zda už byl zdrojový `ModelFile` po 90 dnech smazán. Otevřený claim prodlouží retenci artefaktu až do svého terminálního vyřešení.
 
 **Job**
 ```
@@ -624,7 +632,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 13. Production `SliceResult` a přijatý `Job` musí držet immutable `machine_profile_revision_id` i `machine_calibration_revision_id` konkrétního stroje.
 14. Závazná cena musí mít `ShipmentPlan` pro celé množství každé fáze; žádný plánovaný balík nesmí překročit objemový ani hmotnostní limit kategorie.
 15. `Claim` je jediná cesta pro reklamaci po doručení; nikdy nepřepisuje terminální fulfilment stav objednávky.
-16. Závazná cena a capture platby vyžadují neprázdný, čerstvý `EligibilitySnapshot`; vybraná barva musí existovat na nejméně jednom stroji způsobilém pro všechny ostatní požadavky.
+16. Závazná cena a capture platby vyžadují neprázdný, čerstvý `EligibilitySnapshot`; alespoň jeden způsobilý uzel musí mít pro vybranou barvu `available_g ≥ required_material_g` a capture smí začít až po atomickém vytvoření kapacitní `InventoryReservation` celé požadované gramáže.
 17. Každá změna stavu zapisuje `AuditEvent` (od v1).
 
 ### 6.5 Švy pro síť
@@ -669,9 +677,9 @@ Plus jeden příznak: **„díl musí do něčeho zapadnout / má lícované roz
 
 ### 7.3 Barvy
 
-**Zákazník sklad nikdy nevidí.** Paleta není globální sjednocení inventáře. Nejdřív se pro aktuální geometrii a konfiguraci vyfiltrují stroje, které společně splňují build volume, materiál, aktivní `MachineProfile`, trysku, tier/certifikaci, kapacitu a cooldown. Teprve paleta je sjednocení barev v `Inventory` **těchto způsobilých strojů**. Po výběru barvy musí zůstat alespoň jeden stroj; jinak se barva skryje a závazná cena nevznikne.
+**Zákazník sklad nikdy nevidí.** Paleta není globální sjednocení inventáře. Nejdřív se pro aktuální geometrii a konfiguraci vyfiltrují stroje, které společně splňují build volume, materiál, aktivní `MachineProfile`, trysku, tier/certifikaci, kapacitu a cooldown. Referenční slice celého množství určí `required_material_g` včetně všech podložek, podpor a purge; `available_g` je fyzicky evidovaná gramáž kompatibilních zásob uzlu minus jejich aktivní rezervace. Teprve paleta je sjednocení barev uzlů, pro které `available_g ≥ required_material_g`. Po výběru barvy musí zůstat alespoň jeden takový uzel; jinak se barva skryje a závazná cena nevznikne.
 
-Výsledek se uloží jako krátce platný `EligibilitySnapshot`. Bezprostředně před capture platby se stejný predikát přepočítá a vybraná barva/inventář i kapacita se rezervují na TTL objednávky. V v0 je množina jediný vlastní stroj a paleta obsah jeho tři AMS; s heterogenní sítí se nikdy nesmí nabízet barva ze stroje, který ostatní požadavky zakázky nesplní.
+Výsledek včetně `required_material_g`, vyhovujících uzlů a pozorované dostupné gramáže se uloží jako krátce platný `EligibilitySnapshot`. Bezprostředně před capture platby se stejný predikát přepočítá a v jedné databázové transakci s řádkovým zámkem vznikne kapacitní `InventoryReservation` na celé `required_material_g` z kompatibilních zásob jednoho uzlu. Teprve úspěch rezervace povolí capture; souběžný checkout nemůže tutéž gramáž utratit podruhé. Rezervace má TTL jen po dobu nedokončené platby: neúspěch ji uvolní, úspěšný capture ji přepne na `held` bez expirace, přijetí jobu na spotřebu a storno vrátí nevyužitou gramáž. V v0 je množina jediný vlastní stroj a paleta obsah jeho tři AMS; s heterogenní sítí se nikdy nesmí nabízet barva ze stroje, který ostatní požadavky zakázky nebo její celou gramáž nesplní.
 
 ### 7.4 Množstevní varianty
 
@@ -697,7 +705,7 @@ Pole: popis, účel dílu, fotky (u překreslení ze tří stran s referenčním
 
 ### 7.7 Checkout
 
-Rekapitulace s rozpadem ceny; widget Zásilkovny pro **výběr výdejního místa** (v checkoutu, ne u makera); fakturační údaje **bez povinné registrace**; souhlas s podmínkami a **výslovné potvrzení výjimky z odstoupení**; checkbox souhlasu se zveřejněním fotek; platba kartou i **bankovním tlačítkem**.
+Rekapitulace s rozpadem ceny; widget Zásilkovny pro **výběr výdejního místa** (v checkoutu, ne u makera); fakturační údaje **bez povinné registrace**; souhlas s podmínkami a **výslovné potvrzení výjimky z odstoupení**; checkbox souhlasu se zveřejněním fotek; platba kartou i **bankovním tlačítkem**. V0 ani síť zatím nenabízí osobní odběr — vyžadoval by samostatný anonymizovaný předávací workflow, který není součástí scope.
 
 ### 7.8 Sledování
 
@@ -844,7 +852,7 @@ administrace ────────┼──► api (Node + TS) ──► Post
 
 - **Node + TypeScript**, **PostgreSQL** (stavové automaty, konzistence peněz), **BullMQ** (slicing je dlouhá úloha)
 - **Slicer worker odděleně a on-demand** — jiný scale profil (CPU-bound), jiný lifecycle (verzovaná image), a v hobby režimu nesmí běžet trvale
-- **S3-compatible** — všechny zdrojové `ModelFile` (STL, 3MF i STEP) se mažou podle společného `delete_after`, G-code po dokončení jobu
+- **S3-compatible** — všechny zdrojové `ModelFile` (STL, 3MF i STEP) se mažou podle společného `source_delete_after`; minimální `ReproductionArtifact` přijaté objednávky zůstává nejméně do `claim_until`, G-code se maže po dokončení jobu
 - **Multi-tenancy od prvního dne** (§6.5)
 - **Vyměnitelné adaptéry** za jedno rozhraní: platební brána, dopravce, AI poskytovatel
 - **Privacy:** maker vidí minimum; žádné trackery nad rámec nutného měření reklamy; retenční politika je součástí podmínek, ne interní poznámka
@@ -870,18 +878,18 @@ Bod 2 je zásadní: **pokud cena neuživí amortizaci nového stroje, nepomůže
 
 | Varianta | Náklad | Pro | Proti |
 |---|---|---|---|
-| **Další vlastní stroj** | kapitál | nulová variance kvality, žádná právní složitost, žádné výplaty ani routing | váže kapitál, neřeší geografii |
-| **Síť externích makerů** | měsíce vývoje + trvalý provoz | škáluje bez kapitálu, **geografická blízkost → osobní odběr (~105 Kč/objednávka)**, elastická kapacita | variance kvality, IČO a smlouvy, výplaty, routing, disintermediace, FPY jako trvalé riziko |
+| **Další vlastní stroj** | kapitál | nulová variance kvality, žádná právní složitost, žádné výplaty ani routing | váže kapitál, hůř absorbuje krátké špičky |
+| **Síť externích makerů** | měsíce vývoje + trvalý provoz | škáluje bez kapitálu platformy, elastická kapacita | variance kvality, IČO a smlouvy, výplaty, routing, disintermediace, FPY jako trvalé riziko |
 | **Outsourcing na existující farmu** | žádný vývoj | okamžité, bez kvalitativního rizika | nízká marže, závislost, můžou tě obejít |
 
-**Výchozí předpoklad je koupit druhý stroj.** Síť musí prokázat, že řeší něco, co druhý stroj neřeší — realisticky jen **geografickou distribuci** a **kapitálovou nenáročnost**.
+**Výchozí předpoklad je koupit druhý stroj.** Síť musí prokázat, že řeší něco, co druhý stroj neřeší — realisticky **kapitálovou nenáročnost platformy** nebo špičky, pro které by další vlastní stroj většinu času stál. Geografická blízkost sama nic nešetří: v navrženém checkoutu jde každá zásilka přes dopravce a zákazník s makerem kvůli privacy hranici nekomunikuje.
 
 ```
 Brána §11
- ├─ kapacitní problém + zdravá ekonomika + geografie nebo chybějící kapitál → síť (§11.4+)
- ├─ kapacitní problém + zdravá ekonomika, ale ani jedno z toho             → druhý stroj
- ├─ kapacitní problém + nezdravá ekonomika                                 → přecenit, ne škálovat
- └─ žádný kapacitní problém                                                → nic; provoz beze změny
+ ├─ kapacitní problém + zdravá ekonomika + chybějící kapitál / krátké špičky → síť (§11.4+)
+ ├─ kapacitní problém + zdravá ekonomika, stabilní vytížení a kapitál        → druhý stroj
+ ├─ kapacitní problém + nezdravá ekonomika                                   → přecenit, ne škálovat
+ └─ žádný kapacitní problém                                                  → nic; provoz beze změny
 ```
 
 ### 11.4 Onboarding a certifikace
@@ -914,12 +922,12 @@ Klouzavé okno 30 jobů. Nový uzel postupuje **výkonem, ne časem**.
 
 ### 11.7 Routing
 
-**Filtr způsobilosti musí proběhnout dřív, než vznikne paleta a závazná cena, znovu před capture platby a nakonec předtím, než job komukoli blikne.** Všechny tři kroky používají stejný verzovaný predikát: build volume ≥ bbox + rezerva; aktivní `MachineProfile`; nasazený materiál a barva; typ trysky odpovídá materiálu; tier/certifikace ≥ požadavek objednávky; volná kapacita; není v cooldownu. Routing smí množinu po zaplacení jen zužovat o změny reálného času, nikdy odhalit, že při quote nebyl způsobilý žádný stroj.
+**Filtr způsobilosti musí proběhnout dřív, než vznikne paleta a závazná cena, znovu před capture platby a nakonec předtím, než job komukoli blikne.** Všechny tři kroky používají stejný verzovaný predikát: build volume ≥ bbox + rezerva; aktivní `MachineProfile`; nasazený materiál a barva; `available_g ≥ required_material_g` po odečtení aktivních rezervací; typ trysky odpovídá materiálu; tier/certifikace ≥ požadavek objednávky; volná kapacita; není v cooldownu. Před capture se gramáž atomicky rezervuje na jednom vyhovujícím uzlu a nabídku jobu smí vidět jen aktuální držitel rezervace. Při odmítnutí nebo timeoutu se celá rezervace atomicky přesune na další právě způsobilý uzel ještě před odesláním další nabídky; pokud přesun není možný, job se nikomu nezobrazí a spustí se provozní eskalace/refundace.
 
 ```
-Vlna 1 (0–15 min):   tier A do 50 km od doručovací adresy   payout ×1.00
-Vlna 2 (15–45 min):  tier A + B, celá ČR                     payout ×1.08
-Vlna 3 (45–120 min): všichni způsobilí                       payout ×1.15
+Vlna 1 (0–15 min):   nejvýše skórovaný způsobilý držitel rezervace   payout ×1.00
+Vlna 2 (15–45 min):  další způsobilý tier A/B po přesunu rezervace   payout ×1.08
+Vlna 3 (45–120 min): další způsobilý uzel po přesunu rezervace       payout ×1.15
 ```
 
 *Tato čísla nelze navrhnout dopředu — bez reálných makerů by se psala z fantazie a po třetím uzlu přepisovala. Výchozí odhad k okamžité revizi.*
