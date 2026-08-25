@@ -75,9 +75,10 @@ Vzorec: `cena stroje / požadovaná doba návratnosti v hodinách`
 | `handling_piece` | kus | ne | ⚠ začištění, kontrola, třídění |
 | `handling_pack` | zásilka | ne | ⚠ balení, štítek |
 | `shipping_trip` | **cesta**, ne zásilka | **ano** | ⚠ cesta k Z-BOXu |
+| **`shipping_trip_pricing_divisor`** | závazná cena | — | **1 v v0/hobby**; verzovaný očekávaný počet zásilek na cestu |
 | `postprocessing` | zakázka | ne | ⚠ nad rámec začištění; jinak 0 |
 
-**Pozor na `shipping_trip` při nízkém objemu.** Alokuje se na počet zásilek v jedné cestě — ale při 1–2 objednávkách měsíčně je jedna cesta na jednu zásilku, tedy **plný náklad, nikoli alokovaný**. Handling na objednávku je v hobby režimu horší, ne lepší. Alokace začne fungovat až od několika zásilek týdně.
+**Pozor na `shipping_trip` při nízkém objemu.** Do závazné ceny vstupuje jen verzovaný `shipping_trip_pricing_divisor`; při 1–2 objednávkách měsíčně je 1, tedy **plný náklad, nikoli domnělá budoucí alokace**. Skutečný počet zásilek sdílejících cestu se zapisuje až do `HandlingSession` pro realizovanou CM. Divisor ceníku lze zvýšit teprve podle naměřených cest od několika zásilek týdně a nikdy se zpětně nepřepočítává do přijatých nabídek.
 
 Stavový automat měří průchod zakázky a SLA, **ne aktivní práci** — intervaly mezi stavy obsahují tisk, frontu, čekání na zákazníka i dopravu. Handling se měří přes explicitní `HandlingSession` s komponentou, začátkem/koncem a počtem obsloužených podložek, kusů nebo zásilek. Administrace používá start/stop časovač; kde není praktický (zejména `shipping_trip`), zapíše se strukturovaně přímo naměřená délka se zdrojem `manual`. Pro CM se nikdy neodvozuje aktivní práce z pouhého rozdílu stavových časových značek.
 
@@ -213,6 +214,8 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | **`strop_spend_v0`** | **5 000 Kč** do jednoho kanálu |
 | Lhůta na individuální nabídku | 24 h v pracovní dny |
 | Slíbená dodací lhůta | ⚠ trh: 1–2 dny jednoduché, garance 72 h |
+| **`balance_payment_days`** | **⚠ 7 dní** od QC individuální zakázky; pak explicitní `OrderSettlement` |
+| **`abandoned_item_retention_days`** | **⚠ 30 dní** od `cancelled_settled`; pak auditovaná recyklace/zničení |
 | **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak uvolnit batch rezervaci, refundovat nečerpanou část a uzavřít `partially_fulfilled` |
 | Reklamační okno pro zádržné (síť) | 7 dní od doručení |
 | **`source_model_retention_days`** | **90 dní** od terminálního stavu objednávky nebo expirace nabídky; jednotně pro zdrojové STL, 3MF i STEP |
