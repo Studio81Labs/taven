@@ -29,6 +29,23 @@ const parseKey = (key) => {
   };
 };
 
+const isRangeConfinedToMajor = (value, major) => {
+  const simpleRange = value.match(/^(\^|~)(\d+)(?:\.\d+){0,2}$/);
+  if (simpleRange) return Number(simpleRange[2]) === major;
+
+  const partialRange = value.match(/^(\d+)(?:\.(?:\d+|x|\*))(?:\.(?:x|\*))?$/);
+  if (partialRange) return Number(partialRange[1]) === major;
+
+  const boundedRange = value.match(
+    /^>=\s*(\d+)(?:\.\d+){0,2}\s+<\s*(\d+)(?:\.0(?:\.0)?)?$/,
+  );
+  return (
+    boundedRange !== null &&
+    Number(boundedRange[1]) === major &&
+    Number(boundedRange[2]) === major + 1
+  );
+};
+
 const crossMajorErrors = ({
   key,
   name,
@@ -37,16 +54,16 @@ const crossMajorErrors = ({
   valueMajor,
   comments,
 }) => {
-  const upperBound = value.match(/<\s*(\d+)/)?.[1];
+  const exact = /^\d+\.\d+\.\d+$/.test(value);
   const crossesMajor =
     valueMajor !== selectorMajor ||
-    (upperBound !== undefined && Number(upperBound) !== selectorMajor + 1);
+    (!exact && !isRangeConfinedToMajor(value, selectorMajor));
 
   if (!crossesMajor) return [];
 
-  if (!/^\d+\.\d+\.\d+$/.test(value)) {
+  if (!exact) {
     return [
-      `${file}: override '${key}' has a non-exact range outside ${name}'s selected major; cross-major targets must pin one exact release`,
+      `${file}: override '${key}' has a range that is not confined to ${name}'s selected major; cross-major targets must pin one exact release`,
     ];
   }
 
@@ -63,7 +80,10 @@ const crossMajorErrors = ({
 if (process.argv.includes("--self-test")) {
   const cases = [
     ["same-major caret", "^7.1.0", 7, [], 0],
+    ["same-major partial", "7.x", 7, [], 0],
     ["same-major bounded", ">=7.1.0 <8", 7, [], 0],
+    ["same-major unbounded", ">=7.1.0", 7, [], 1],
+    ["same-major disjoint", ">=7.1.0 <8 || >=9", 7, [], 1],
     ["cross-major caret", "^8.0.0", 7, [], 1],
     ["cross-major bounded", ">=8.0.0 <9", 7, [], 1],
     ["cross-major exact without advisory", "8.0.0", 7, [], 1],
