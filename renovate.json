@@ -1,0 +1,50 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>Studio81Labs/.github:renovate-base"],
+  "description": [
+    "Taven inherits the Studio81Labs dependency and supply-chain policy.",
+    "The one-day minimumReleaseAge is mirrored in pnpm-workspace.yaml."
+  ],
+  "packageRules": [
+    {
+      "description": "Keep formatter updates isolated because they can rewrite the repository",
+      "matchPackageNames": ["prettier"],
+      "groupName": "prettier",
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Do not automatically rewrite audited pnpm overrides",
+      "matchDepTypes": ["pnpm-workspace.overrides"],
+      "minimumReleaseAge": "7 days",
+      "enabled": false
+    },
+    {
+      "matchFileNames": ["apps/backend/**"],
+      "semanticCommitScope": "backend",
+      "addLabels": ["backend"]
+    },
+    {
+      "matchFileNames": ["apps/web/**"],
+      "semanticCommitScope": "web",
+      "addLabels": ["web"]
+    },
+    {
+      "matchFileNames": ["apps/admin/**"],
+      "semanticCommitScope": "admin",
+      "addLabels": ["admin"]
+    },
+    {
+      "matchFileNames": [
+        "apps/slicer-worker/**",
+        "packages/slicer-contracts/**"
+      ],
+      "semanticCommitScope": "worker",
+      "addLabels": ["worker"]
+    },
+    {
+      "matchFileNames": ["packages/openapi/**", "packages/openapi-client/**"],
+      "semanticCommitScope": "contract",
+      "addLabels": ["contract"]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+:root {
+  color-scheme: light;
+  --taven-color-ink: #181512;
+  --taven-color-paper: #f7f3ec;
+  --taven-color-surface: #ffffff;
+  --taven-color-accent: #d85d35;
+  --taven-color-success: #25705a;
+  --taven-radius-panel: 16px;
+  --taven-font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--taven-color-ink);
+  background: var(--taven-color-paper);
+  font-family: var(--taven-font-sans);
+}

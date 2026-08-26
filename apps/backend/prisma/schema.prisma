@@ -1,0 +1,9 @@
+// Prisma is the persistence seam. Product models land with their reviewed SQL
+// migrations; the foundation intentionally declares no speculative tables.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}

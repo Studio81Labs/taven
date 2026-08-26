@@ -1,0 +1,12 @@
+pnpm-lock.yaml
+pnpm-workspace.yaml
+**/*.lock
+dist/
+build/
+.nuxt/
+.output/
+coverage/
+docs/product/
+apps/backend/src/generated/
+packages/openapi/openapi.json
+packages/openapi-client/generated/

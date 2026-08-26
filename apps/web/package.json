@@ -1,0 +1,23 @@
+{
+  "name": "@taven/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Taven public Nuxt application",
+  "scripts": {
+    "postinstall": "nuxt prepare",
+    "build": "nuxt build",
+    "dev": "nuxt dev --port 3000",
+    "start": "node .output/server/index.mjs",
+    "lint": "eslint .",
+    "typecheck": "nuxt typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@taven/openapi-client": "workspace:*",
+    "@taven/ui-web": "workspace:*",
+    "nuxt": "^4.2.0",
+    "vue": "^3.5.0"
+  }
+}

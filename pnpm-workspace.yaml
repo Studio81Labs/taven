@@ -1,0 +1,50 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Ported from Studio81Labs/nexcue after auditing Taven's initial dependency
+# graph. New package versions must age for one day before they can resolve.
+minimumReleaseAge: 1440
+blockExoticSubdeps: true
+trustPolicy: no-downgrade
+
+# semver 6.x predates npm provenance and is reached through Babel in Nuxt's
+# development toolchain. Pin the audited version rather than exempting the
+# package name or newer attested majors.
+trustPolicyExclude:
+  - semver@6.3.1
+
+# openapi-typescript 7.13 declares TypeScript ^5 even though its generated-only
+# CLI works under the repository's sibling-aligned TypeScript 6 baseline.
+# Keep the exception scoped to that parent/peer pair.
+peerDependencyRules:
+  allowedVersions:
+    "openapi-typescript>typescript": "^5 || ^6"
+
+# Only packages present in Taven's initial graph and known to require install
+# scripts are allowed to build. Re-audit with every new framework or native
+# dependency; do not add sibling-repository exceptions speculatively.
+allowBuilds:
+  "@nestjs/core": true
+  "@parcel/watcher": true
+  "@prisma/client": true
+  "@prisma/engines": true
+  # Optional telemetry/native accelerators are not required by Taven. Deny
+  # their install scripts explicitly; their parents provide JS fallbacks.
+  "@scarf/scarf": false
+  esbuild: true
+  msgpackr-extract: false
+  prisma: true
+  sharp: true
+
+overrides:
+  # chokidar 4.0.2/4.0.3 lost provenance within an otherwise-attested major.
+  # Nest's tooling accepts ^4.0.0, so route it to the last attested release.
+  # Remove when a later reachable release restores attestations.
+  chokidar@4.0.3: 4.0.1
+  # GHSA-5p4m-2wfm-xmqj. Remove when all parents resolve js-yaml >= 4.3.1.
+  "js-yaml@4": ">=4.3.1 <5"
+  # GHSA-pm4m-ph32-ghv5. Remove when @nestjs/swagger stops pinning 5.2.1.
+  js-yaml@5.2.1: 5.2.3
+  # CVE-2026-40345. Prisma 7 pins 7.1.5; remove when it adopts >= 8.
+  "deepmerge-ts@7.1.5": 8.0.0
