@@ -1606,10 +1606,20 @@ def compare(local_read, sibling_read) -> list[dict]:
             handled.add(job_id)
         return handled
 
-    invalid_cross_stack_paths: set[str] = set()
-    for path in CROSS_STACK_REQUIRED:
+    invalid_topology_paths: set[str] = set()
+    for path, capability_marker in TOPOLOGY_GATED.items():
         ours, theirs = local_read(path), sibling_read(path)
-        capability_sides = marker_sides(TOPOLOGY_GATED[path])
+        owner_marker = (
+            STACK_TOPOLOGY_GATED[path]
+            if path in STACK_TOPOLOGY_GATED and path not in CROSS_STACK_REQUIRED
+            else capability_marker
+        )
+        capability_sides = marker_sides(owner_marker)
+        # Preserve the established no-capability topology gate for optional
+        # artifacts. Once either repository owns the capability, however,
+        # validate each repository locally before any pair-level skip.
+        if not any(capability_sides) and path not in CROSS_STACK_REQUIRED:
+            continue
         missing_owner = (
             capability_sides[0] and ours is None,
             capability_sides[1] and theirs is None,
@@ -1620,11 +1630,12 @@ def compare(local_read, sibling_read) -> list[dict]:
         )
         if not any(missing_owner) and not any(unexpected_nonowner):
             continue
+        topology = "mobile topology" if path in CROSS_STACK_REQUIRED else "topology"
         for invalid, detail in (
-            (missing_owner, "mobile topology expects an artifact {side}, but it is absent"),
+            (missing_owner, f"{topology} expects an artifact {{side}}, but it is absent"),
             (
                 unexpected_nonowner,
-                "mobile topology expects no artifact {side} without a mobile capability",
+                f"{topology} expects no artifact {{side}} without its owning capability",
             ),
         ):
             if not any(invalid):
@@ -1637,10 +1648,10 @@ def compare(local_read, sibling_read) -> list[dict]:
                     "detail": detail.format(side=side),
                 }
             )
-        invalid_cross_stack_paths.add(path)
+        invalid_topology_paths.add(path)
 
     for path in IDENTICAL:
-        if path in invalid_cross_stack_paths:
+        if path in invalid_topology_paths:
             continue
         ours, theirs = local_read(path), sibling_read(path)
         if topology_skips_artifact(path, ours, theirs):
@@ -1754,7 +1765,7 @@ def compare(local_read, sibling_read) -> list[dict]:
     ours_pins: dict[tuple[str, str], dict[str, str]] = {}
     theirs_pins: dict[tuple[str, str], dict[str, str]] = {}
     for path in ACTION_WORKFLOWS:
-        if path in invalid_cross_stack_paths:
+        if path in invalid_topology_paths:
             continue
         local_text, sibling_text = local_read(path), sibling_read(path)
         # Entry ownership is a repository-local invariant, so validate it
@@ -2068,7 +2079,7 @@ def compare(local_read, sibling_read) -> list[dict]:
         )
 
     for path in JOB_NAME_WORKFLOWS:
-        if path in invalid_cross_stack_paths:
+        if path in invalid_topology_paths:
             continue
         local_text, sibling_text = local_read(path), sibling_read(path)
         ours = job_names(local_text, path, "here")
@@ -3140,7 +3151,7 @@ def self_test() -> int:
     # Missing owned cross-stack workflows are reported by the stronger
     # presence contract above, so they do not also produce stale-manifest
     # duplicates here.
-    expected_stale = set(ACTION_WORKFLOWS) - CROSS_STACK_REQUIRED
+    expected_stale = set(ACTION_WORKFLOWS) - set(TOPOLOGY_GATED)
     assert len(found) == len(expected_stale), len(found)
 
     # A commented-out step and an embedded string. Grepping the raw text read
@@ -3513,16 +3524,17 @@ def self_test() -> int:
     # The same absence between two Flutter repos is a real finding again.
     absent_there = {MARKER: "name: app\n", GATED_FILE: None}
     found = [f for f in compare(repo(**both_flutter).get, repo(**absent_there).get) if f["name"] == GATED_FILE]
-    assert found and found[0]["detail"] == "present here, absent there", found
+    assert found and found[0]["detail"] == (
+        "topology expects an artifact there, but it is absent"
+    ), found
     # Content drift in a gated file is reported when both sides share the
-    # owning stack. A different stack is an explicit implementation boundary;
-    # the broad capability-marker cases below remain strict when files exist.
+    # owning stack. Across stacks the non-owner must not retain a stale copy.
     changed = {MARKER: "name: app\n", GATED_FILE: "different\n"}
     found = [f for f in compare(repo(**both_flutter).get, repo(**changed).get) if f["name"] == GATED_FILE]
     assert len(found) == 1, found
     marker_one_side = {GATED_FILE: "different\n"}
     found = [f for f in compare(repo(**both_flutter).get, repo(**marker_one_side).get) if f["name"] == GATED_FILE]
-    assert found == [], f"different mobile stacks may carry different helpers: {found}"
+    assert len(found) == 1 and "expects no artifact there" in found[0]["detail"], found
 
     # Release guards exist in both mobile stacks even though their contents
     # differ. A React Native owner deleting its copy must not be hidden by the
@@ -3575,7 +3587,7 @@ def self_test() -> int:
         )
         if f["name"] == RELEASE_HELPER
     ]
-    assert len(found) == 1 and "without a mobile capability" in found[0]["detail"], found
+    assert len(found) == 1 and "without its owning capability" in found[0]["detail"], found
     missing_mobile_release = {
         MARKER: "name: app\n",
         MOBILE_MARKER: None,
@@ -3588,6 +3600,36 @@ def self_test() -> int:
             repo(**non_mobile_with_release).get,
         )
         if f["name"] == RELEASE_HELPER
+    ]
+    assert len(found) == 2, found
+    assert any("expects an artifact here" in f["detail"] for f in found), found
+    assert any("expects no artifact there" in f["detail"] for f in found), found
+
+    # Capability-owned workflows are repository-local invariants too. An
+    # identical copy on a non-owner is stale topology, not agreement, and an
+    # owner deletion plus that stale copy must expose both repairs at once.
+    MARKETING_WF = ".github/workflows/marketing-ci.yml"
+    MARKETING_MARKER = "apps/marketing/package.json"
+    marketing_copy = wf("actions/checkout@1111111 # v1")
+    marketing_owner = {MARKETING_MARKER: "{}\n", MARKETING_WF: marketing_copy}
+    marketing_nonowner_stale = {MARKETING_MARKER: None, MARKETING_WF: marketing_copy}
+    found = [
+        f
+        for f in compare(
+            repo(**marketing_owner).get,
+            repo(**marketing_nonowner_stale).get,
+        )
+        if f["name"].endswith("marketing-ci.yml")
+    ]
+    assert len(found) == 1 and "expects no artifact there" in found[0]["detail"], found
+    marketing_owner_missing = {MARKETING_MARKER: "{}\n", MARKETING_WF: None}
+    found = [
+        f
+        for f in compare(
+            repo(**marketing_owner_missing).get,
+            repo(**marketing_nonowner_stale).get,
+        )
+        if f["name"].endswith("marketing-ci.yml")
     ]
     assert len(found) == 2, found
     assert any("expects an artifact here" in f["detail"] for f in found), found
@@ -3615,7 +3657,9 @@ def self_test() -> int:
         for f in compare(repo(**both_flutter).get, repo(**{MARKER: "name: app\n", GATED_WF: None}).get)
         if f["name"] == GATED_WF
     ]
-    assert found and found[0]["detail"] == "present here, absent there", found
+    assert found and found[0]["detail"] == (
+        "topology expects an artifact there, but it is absent"
+    ), found
 
     # Action workflows use a broader capability gate. A repo with no mobile
     # surface is not behind on mobile-release.yml; two repos that both declare
@@ -3689,7 +3733,7 @@ def self_test() -> int:
     package_owner_missing = {PACKAGE_WF: None, "packages/core/package.json": "{}\n"}
     found = [
         f for f in compare(repo(**package_owner).get, repo(**package_owner_missing).get)
-        if f["name"] == "packages-ci.yml"
+        if f["name"].endswith("packages-ci.yml")
     ]
     assert len(found) == 1, f"an owner deleting package CI must report: {found}"
     package_non_owner = {
@@ -3703,7 +3747,7 @@ def self_test() -> int:
             repo(**package_owner_missing).get,
             repo(**package_non_owner).get,
         )
-        if f["name"] == "packages-ci.yml"
+        if f["name"].endswith("packages-ci.yml")
     ]
     assert len(found) == 1, f"an owner deletion must report against a non-owner: {found}"
     package_pin_here = {PACKAGE_WF: wf("actions/x@1111111 # v1")}
@@ -3770,7 +3814,7 @@ def self_test() -> int:
     }
     gated_jobs_there = {
         CAPABILITY_GATED_WF: jobs_yaml(("build", "mobile: changed")),
-        MOBILE_MARKER: None,
+        MOBILE_MARKER: "{}\n",
     }
     found = [
         f for f in compare(repo(**gated_jobs_here).get, repo(**gated_jobs_there).get)
