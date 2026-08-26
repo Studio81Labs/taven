@@ -2087,27 +2087,6 @@ def compare(local_read, sibling_read) -> list[dict]:
         handled_topology_jobs.update(
             validate_local_topology_jobs(path, theirs, 1, "there")
         )
-        if path in invalid_topology_paths:
-            continue
-        if topology_skips_artifact(path, local_text, sibling_text):
-            continue
-        # A workflow the manifest names but a repo does not have is itself the
-        # finding, for the same reason ACTION_WORKFLOWS reports it: silently
-        # skipping shrinks the comparison and a smaller comparison looks like
-        # convergence.
-        if ours is None or theirs is None:
-            if ours is None and theirs is None:
-                findings.append(
-                    {
-                        "kind": "jobname",
-                        "name": path,
-                        "detail": "in neither repo — stale entry in JOB_NAME_WORKFLOWS",
-                    }
-                )
-            else:
-                missing = "absent here, present there" if ours is None else "present here, absent there"
-                findings.append({"kind": "jobname", "name": path, "detail": missing})
-            continue
         poker_pair = marker_sides("apps/backend/pyproject.toml")[0] != marker_sides(
             "apps/backend/pyproject.toml"
         )[1]
@@ -2124,6 +2103,8 @@ def compare(local_read, sibling_read) -> list[dict]:
                 (ours, python_sides[0], 0, "here"),
                 (theirs, python_sides[1], 1, "there"),
             ):
+                if names is None:
+                    continue
                 expected = dict(layouts["python" if is_python else "node"])
                 if path == ".github/workflows/backend-ci.yml" and not is_python:
                     database_marker = marker_sides("apps/backend/src/data-source.ts")
@@ -2160,6 +2141,27 @@ def compare(local_read, sibling_read) -> list[dict]:
                             }
                         )
             handled_topology_jobs.update(controlled_jobs)
+        if path in invalid_topology_paths:
+            continue
+        if topology_skips_artifact(path, local_text, sibling_text):
+            continue
+        # A workflow the manifest names but a repo does not have is itself the
+        # finding, for the same reason ACTION_WORKFLOWS reports it: silently
+        # skipping shrinks the comparison and a smaller comparison looks like
+        # convergence.
+        if ours is None or theirs is None:
+            if ours is None and theirs is None:
+                findings.append(
+                    {
+                        "kind": "jobname",
+                        "name": path,
+                        "detail": "in neither repo — stale entry in JOB_NAME_WORKFLOWS",
+                    }
+                )
+            else:
+                missing = "absent here, present there" if ours is None else "present here, absent there"
+                findings.append({"kind": "jobname", "name": path, "detail": missing})
+            continue
         for (pair_path, marker), (marked, unmarked) in EXPECTED_TOPOLOGY_JOB_PAIRS.items():
             if pair_path != path:
                 continue
