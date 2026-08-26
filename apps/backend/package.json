@@ -13,7 +13,7 @@
     "typecheck": "pnpm db:generate && tsc -p tsconfig.json --noEmit",
     "test": "vitest run --exclude 'test/**'",
     "test:e2e": "vitest run test/app.e2e.test.ts",
-    "test:watch": "vitest",
+    "test:watch": "vitest --exclude 'test/**'",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",

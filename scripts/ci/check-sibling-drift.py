@@ -302,6 +302,7 @@ ACTION_TOPOLOGY_GATED = {
 ACTION_ENTRY_TOPOLOGY_GATED = {
     (".github/workflows/admin-ci.yml", "actions/download-artifact"): "apps/marketing/package.json",
     (".github/workflows/ci-scripts.yml", "actions/setup-node"): "scripts/ci/check-workflow-coverage.mjs",
+    (".github/workflows/packages-ci.yml", "actions/download-artifact"): "packages/ingest/package.json",
 }
 
 # Some shared workflows contain optional jobs owned by a narrower capability.
@@ -1293,6 +1294,13 @@ def compare(local_read, sibling_read) -> list[dict]:
             return True
         return marker_open(marker)
 
+    def action_shapes_comparable(path: str) -> bool:
+        """Whether one-sided actions represent drift rather than topology."""
+        if not gate_open(path, ACTION_TOPOLOGY_GATED):
+            return False
+        stack_marker = STACK_TOPOLOGY_GATED.get(path)
+        return stack_marker is None or len(set(marker_sides(stack_marker))) == 1
+
     def topology_skips_artifact(
         path: str,
         ours,
@@ -1473,21 +1481,25 @@ def compare(local_read, sibling_read) -> list[dict]:
                     "detail": "in neither repo — stale entry in ACTION_WORKFLOWS",
                 }
             )
-        # In a topology-independent shared workflow, adding or replacing an
-        # action on only one side is drift too. Keep the existing pins-nothing
-        # finding singular when one whole set is empty; this closes the quieter
-        # case where both sides still share at least one other action and a set
-        # intersection would otherwise discard the new action.
+        # In a shared workflow owned by both repositories, adding or replacing
+        # an action on only one side is drift too. A broad capability gate
+        # excuses this only while ownership is asymmetric, and a stack gate
+        # only across different implementations; merely listing a workflow in
+        # ACTION_TOPOLOGY_GATED must not silence drift between two owners. Keep
+        # the existing pins-nothing finding singular when one whole set is
+        # empty; this closes the quieter case where both sides still share at
+        # least one other action and a set intersection would discard the new
+        # action.
         if (
             here
             and there
             and our_file_pins
             and their_file_pins
-            and path not in ACTION_TOPOLOGY_GATED
+            and action_shapes_comparable(path)
         ):
             for action in sorted(set(our_file_pins) ^ set(their_file_pins)):
                 marker = ACTION_ENTRY_TOPOLOGY_GATED.get((path, action))
-                if marker is not None and not marker_open(marker):
+                if marker is not None and len(set(marker_sides(marker))) != 1:
                     continue
                 refs = our_file_pins.get(action) or their_file_pins[action]
                 described = " + ".join(
@@ -2569,6 +2581,19 @@ def self_test() -> int:
         if f["kind"] == "action" and "admin-ci.yml" in f["name"]
     ]
     assert found == [], f"optional job actions follow their capability: {found}"
+    admin_without_capability_with_download = {
+        ".github/workflows/admin-ci.yml": admin_with_download[".github/workflows/admin-ci.yml"],
+        "apps/marketing/package.json": None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**admin_without_capability_with_download).get,
+            repo(**admin_without_capability).get,
+        )
+        if f["kind"] == "action" and "admin-ci.yml" in f["name"]
+    ]
+    assert len(found) == 1, f"entry gates require asymmetric ownership: {found}"
     admin_owner_without_download = {
         ".github/workflows/admin-ci.yml": wf("actions/checkout@1111111 # v1"),
     }
@@ -2582,7 +2607,8 @@ def self_test() -> int:
         ".github/workflows/mobile-ci.yml": wf(
             "actions/checkout@1111111 # v1",
             "owner/flutter-only@2222222 # v2",
-        )
+        ),
+        "apps/mobile/pubspec.yaml": "name: flutter_app\n",
     }
     mobile_plus_theirs = {
         ".github/workflows/mobile-ci.yml": wf(
@@ -2692,6 +2718,16 @@ def self_test() -> int:
         if f["kind"] == "action" and f["name"].startswith("actions/x")
     ]
     assert len(found) == 1, f"present gated workflows must compare pins: {found}"
+
+    mobile_actions_here = {
+        MOBILE_ACTION_WF: wf("actions/shared@1111111 # v1", "actions/extra@2222222 # v2")
+    }
+    mobile_actions_there = {MOBILE_ACTION_WF: wf("actions/shared@1111111 # v1")}
+    found = [
+        f for f in compare(repo(**mobile_actions_here).get, repo(**mobile_actions_there).get)
+        if f["kind"] == "action" and f["name"].startswith("actions/extra")
+    ]
+    assert len(found) == 1, f"two capability owners must report one-sided actions: {found}"
 
     PACKAGE_WF = ".github/workflows/packages-ci.yml"
     found = [
