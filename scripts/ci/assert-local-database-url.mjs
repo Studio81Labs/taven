@@ -110,6 +110,13 @@ export function validateLocalDatabaseUrl(raw, expected = COMPOSE_DEFAULTS) {
     return `DATABASE_URL must use the Taven Compose database ${expected.database} (found ${database || "no database"})`;
   }
 
+  const unsupportedParameters = [...url.searchParams.keys()].filter(
+    (parameter) => parameter !== "schema",
+  );
+  if (unsupportedParameters.length > 0) {
+    return `DATABASE_URL may only use the schema query parameter (found ${[...new Set(unsupportedParameters)].join(", ")})`;
+  }
+
   const schemas = url.searchParams.getAll("schema");
   if (schemas.length > 1 || schemas.some((schema) => schema !== "public")) {
     return `DATABASE_URL must use the default PostgreSQL schema public (found ${schemas.join(", ") || "no schema"})`;
@@ -175,6 +182,16 @@ if (process.argv.includes("--self-test")) {
       "postgresql://taven:pw@127.0.0.1:5435/taven?schema=public",
       defaults,
       undefined,
+    ],
+    [
+      "postgresql://taven:pw@127.0.0.1:5435/taven?host=/var/run/postgresql",
+      defaults,
+      "may only use the schema query parameter",
+    ],
+    [
+      "postgresql://taven:pw@127.0.0.1:5435/taven?schema=public&port=5432",
+      defaults,
+      "may only use the schema query parameter",
     ],
     [
       "postgresql://taven@db.internal:5435/taven",

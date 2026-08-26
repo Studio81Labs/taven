@@ -414,16 +414,20 @@ EXPECTED_TOPOLOGY_OWNED_JOBS = {
         True,
         "contract: openapi spec",
     ),
+}
+
+# Some capability owners share a job ID but prove different work. Select the
+# exact claim by the most specific topology marker, in order. The final core
+# marker is deliberately after slicer-contracts because both Taven and TableTap
+# own packages/core, while only Taven has the slicer contract package.
+EXPECTED_TOPOLOGY_JOB_NAME_VARIANTS = {
     (".github/workflows/packages-ci.yml", "build"): (
-        "capability:independent-packages",
-        True,
-        frozenset(
-            {
-                "packages: build & test",
-                "packages: build, test & typecheck",
-                "packages: lint, typecheck, test & build",
-            }
+        ("apps/ingest/package.json", "packages: build, test & typecheck"),
+        (
+            "packages/slicer-contracts/package.json",
+            "packages: lint, typecheck, test & build",
         ),
+        ("packages/core/package.json", "packages: build & test"),
     ),
 }
 
@@ -1716,11 +1720,6 @@ def compare(local_read, sibling_read) -> list[dict]:
             ):
                 owns_job = has_marker == owned_when_marked
                 actual_name = names.get(job_id)
-                expected_names = (
-                    frozenset({expected_name})
-                    if isinstance(expected_name, str)
-                    else expected_name
-                )
                 if owns_job and actual_name is None:
                     findings.append(
                         {
@@ -1729,15 +1728,12 @@ def compare(local_read, sibling_read) -> list[dict]:
                             "detail": f"topology expects job `{job_id}` {side}, but it is absent",
                         }
                     )
-                elif owns_job and actual_name not in expected_names:
-                    expected_display = " or ".join(
-                        f"`{name}`" for name in sorted(expected_names)
-                    )
+                elif owns_job and actual_name != expected_name:
                     findings.append(
                         {
                             "kind": "jobname",
                             "name": path,
-                            "detail": f"job `{job_id}` {side}: expected {expected_display}, found `{actual_name}`",
+                            "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
                         }
                     )
                 elif not owns_job and actual_name is not None:
@@ -1746,6 +1742,47 @@ def compare(local_read, sibling_read) -> list[dict]:
                             "kind": "jobname",
                             "name": path,
                             "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
+                        }
+                    )
+            handled_topology_jobs.add(job_id)
+        for (variant_path, job_id), variants in EXPECTED_TOPOLOGY_JOB_NAME_VARIANTS.items():
+            if variant_path != path:
+                continue
+            for names, side_index, side in (
+                (ours, 0, "here"),
+                (theirs, 1, "there"),
+            ):
+                expected_name = next(
+                    (
+                        name
+                        for marker, name in variants
+                        if marker_sides(marker)[side_index]
+                    ),
+                    None,
+                )
+                actual_name = names.get(job_id)
+                if expected_name is None and actual_name is not None:
+                    findings.append(
+                        {
+                            "kind": "jobname",
+                            "name": path,
+                            "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
+                        }
+                    )
+                elif expected_name is not None and actual_name is None:
+                    findings.append(
+                        {
+                            "kind": "jobname",
+                            "name": path,
+                            "detail": f"topology expects job `{job_id}` {side}, but it is absent",
+                        }
+                    )
+                elif expected_name is not None and actual_name != expected_name:
+                    findings.append(
+                        {
+                            "kind": "jobname",
+                            "name": path,
+                            "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
                         }
                     )
             handled_topology_jobs.add(job_id)
@@ -1935,7 +1972,7 @@ def self_test() -> int:
                 ".github/workflows/packages-ci.yml": (
                     "jobs:\n"
                     "  build:\n"
-                    "    name: \"packages: lint, typecheck, test & build\"\n"
+                    "    name: \"packages: build & test\"\n"
                 ),
             }
         )
@@ -3018,16 +3055,62 @@ def self_test() -> int:
     assert len(found) == 1, f"present gated workflows must compare job names: {found}"
 
     valid_package = {
-        PACKAGE_WF: jobs_yaml(
-            ("build", "packages: lint, typecheck, test & build")
-        )
+        PACKAGE_WF: jobs_yaml(("build", "packages: build & test"))
     }
     renamed_package = {
-        PACKAGE_WF: jobs_yaml(("build", "packages: stale claim"))
+        PACKAGE_WF: jobs_yaml(("build", "packages: build, test & typecheck"))
     }
     found = [
         f
         for f in compare(repo(**valid_package).get, repo(**renamed_package).get)
+        if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
+    ]
+    assert len(found) == 1 and "expected" in found[0]["detail"], found
+    taven_package = {
+        PACKAGE_WF: jobs_yaml(
+            ("build", "packages: lint, typecheck, test & build")
+        ),
+        "packages/slicer-contracts/package.json": "{}\n",
+    }
+    found = [
+        f
+        for f in compare(repo(**valid_package).get, repo(**taven_package).get)
+        if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
+    ]
+    assert found == [], f"the slicer package topology owns Taven's exact claim: {found}"
+    taven_with_tabletap_claim = {
+        PACKAGE_WF: jobs_yaml(("build", "packages: build & test")),
+        "packages/slicer-contracts/package.json": "{}\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**taven_package).get,
+            repo(**taven_with_tabletap_claim).get,
+        )
+        if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
+    ]
+    assert len(found) == 1 and "expected" in found[0]["detail"], found
+    tarmoto_package = {
+        PACKAGE_WF: jobs_yaml(
+            ("prepare-openapi", "contract: openapi spec"),
+            ("build", "packages: build, test & typecheck"),
+        ),
+        "apps/ingest/package.json": "{}\n",
+    }
+    tarmoto_with_weaker_claim = {
+        **tarmoto_package,
+        PACKAGE_WF: jobs_yaml(
+            ("prepare-openapi", "contract: openapi spec"),
+            ("build", "packages: build & test"),
+        ),
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**tarmoto_package).get,
+            repo(**tarmoto_with_weaker_claim).get,
+        )
         if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
     ]
     assert len(found) == 1 and "expected" in found[0]["detail"], found
