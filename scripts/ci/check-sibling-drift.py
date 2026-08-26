@@ -1334,12 +1334,6 @@ def compare(local_read, sibling_read) -> list[dict]:
     def marker_open(marker: str) -> bool:
         return all(marker_sides(marker))
 
-    def gate_open(path: str, gates=TOPOLOGY_GATED) -> bool:
-        marker = gates.get(path)
-        if marker is None:
-            return True
-        return marker_open(marker)
-
     def action_shapes_comparable(path: str) -> bool:
         """Whether one-sided actions represent drift rather than topology."""
         stack_marker = STACK_TOPOLOGY_GATED.get(path)
@@ -1363,9 +1357,38 @@ def compare(local_read, sibling_read) -> list[dict]:
         job layout is being compared.
         """
         stack_marker = stack_gates.get(path)
-        if stack_marker is not None and not marker_open(stack_marker):
-            return True
-        return (ours is None or theirs is None) and not gate_open(path, gates)
+        if stack_marker is not None:
+            stack_sides = marker_sides(stack_marker)
+            if not any(stack_sides):
+                # Neither repository implements this stack. Its owned helper
+                # may legitimately be absent even when both repos have a
+                # broader mobile surface (for example, two React Native apps).
+                return True
+            if stack_sides[0] != stack_sides[1]:
+                # Across implementations, contents are not comparable, but
+                # the owning side must still retain its artifact. Checking
+                # that first prevents deleting the Flutter copy from looking
+                # like an expected Flutter/non-Flutter difference.
+                owned = ours if stack_sides[0] else theirs
+                return owned is not None
+
+        marker = gates.get(path)
+        if marker is None:
+            return False
+        sides = marker_sides(marker)
+        if all(sides):
+            return False
+        if not any(sides):
+            # With no owner on either side, absence is expected and a
+            # one-sided leftover does not make the capability shared.
+            return ours is None or theirs is None
+
+        # Exactly one repository owns the capability. Topology explains the
+        # artifact's absence only when the owner still has its copy. Without
+        # this ownership check, deleting the owner's file made two absences
+        # compare as topology and silently removed the protection.
+        owned = ours if sides[0] else theirs
+        return owned is not None and (ours is None or theirs is None)
 
     for path in IDENTICAL:
         ours, theirs = local_read(path), sibling_read(path)
@@ -3017,6 +3040,20 @@ def self_test() -> int:
         if f["name"] == "packages-ci.yml"
     ]
     assert len(found) == 1, f"an owner deleting package CI must report: {found}"
+    package_non_owner = {
+        PACKAGE_WF: None,
+        "packages/core/package.json": None,
+        "packages/shared/package.json": None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**package_owner_missing).get,
+            repo(**package_non_owner).get,
+        )
+        if f["name"] == "packages-ci.yml"
+    ]
+    assert len(found) == 1, f"an owner deletion must report against a non-owner: {found}"
     package_pin_here = {PACKAGE_WF: wf("actions/x@1111111 # v1")}
     package_pin_there = {PACKAGE_WF: wf("actions/x@2222222 # v2")}
     found = [

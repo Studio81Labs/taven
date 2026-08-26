@@ -22,7 +22,10 @@ name: Prune Stale Caches
 # The rule: keep the newest entry per key family, drop the rest. A family is
 # the key with its trailing content hashes stripped, so
 # `node-cache-Linux-x64-pnpm-<hash>` collapses to `node-cache-Linux-x64-pnpm`
-# and only the most recently used survives. Deleting a superseded content-hash
+# and only the most recently created survives. Creation time is immutable;
+# last-access time is not, so rerunning an old main revision must not make its
+# obsolete key displace the cache produced for the current line of development.
+# Deleting a superseded content-hash
 # key costs nothing measurable: it is a key nothing requests any more.
 #
 # NOT handled here, deliberately: a whole family going obsolete. The Flutter
@@ -125,9 +128,12 @@ jobs:
           for fam, items in sorted(groups.items()):
               if len(items) < 2:
                   continue
-              items.sort(key=lambda c: c["last_accessed_at"], reverse=True)
+              # Never select by last_accessed_at. Restoring an obsolete key
+              # from a rerun of an old main revision makes that value current
+              # without making the key useful to present-day builds.
+              items.sort(key=lambda c: c["created_at"], reverse=True)
               keep, rest = items[0], items[1:]
-              print(f"{fam}: {len(items)} entries, keeping {keep['last_accessed_at'][:16]}")
+              print(f"{fam}: {len(items)} entries, keeping creation {keep['created_at'][:16]}")
               for c in rest:
                   doomed.append(c)
                   freed += c["size_in_bytes"]
