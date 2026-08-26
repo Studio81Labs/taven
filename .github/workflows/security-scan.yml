@@ -2,10 +2,10 @@
 name: Security Scan
 
 # Dependency advisories change over time, so OSV runs for pull requests,
-# pushes, the weekly schedule and manual audits. Code and newly introduced
-# secrets are properties of a change, so they gate pull requests. A scanner
-# upgrade also rechecks the complete history because new detectors have never
-# inspected old commits.
+# pushes, the weekly schedule and manual audits. Code is checked on pull
+# requests; newly introduced secrets are checked on pull requests and direct
+# pushes. A scanner upgrade also rechecks the complete history because new
+# detectors have never inspected old commits.
 
 on:
   pull_request:
@@ -32,7 +32,7 @@ env:
 jobs:
   secrets:
     name: "security: secrets"
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,26 +41,33 @@ jobs:
 
       - name: Detect a scanner change
         id: mode
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+          if [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
+            echo "Initial push — a full-history scan will run."
+          elif git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
                | grep -qx '\.github/workflows/security-scan\.yml'; then
             echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "scanner-changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: TruffleHog — pull request range
-        if: github.event_name == 'pull_request'
+      - name: TruffleHog — change range
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
+          if [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "Initial push is covered by the full-history scan."
+            exit 0
+          fi
           docker run --rm -v "${GITHUB_WORKSPACE}:/repo" -w /repo \
             "$TRUFFLEHOG_IMAGE" git file:///repo \
             --results=verified,unknown --since-commit "$BASE_SHA" --branch "$HEAD_SHA" \

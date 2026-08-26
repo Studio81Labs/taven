@@ -379,13 +379,24 @@ EXPECTED_JOB_DIFFS = {
     (".github/workflows/_release-version-gate.yml", "check"): "version-source topology (pubspec vs package.json)",
 }
 
-# Most expected differences are already constrained by a workflow capability
-# gate. These two live in a workflow every backend has, so their exception is
-# valid only when exactly one side declares Tarmoto's TypeORM data source. A
-# global exemption hid a missing Taven e2e job as soon as Taven joined the loop.
+# Every expected difference has a marker that identifies the topology forcing
+# it. An exception without a marker is global, which would hide drift between
+# two repositories that share the same topology.
 EXPECTED_JOB_DIFF_MARKERS = {
+    (".github/workflows/mobile-ci.yml", "mobile"): "apps/mobile/android/app/src/staging/google-services.json",
     (".github/workflows/backend-ci.yml", "schema"): "apps/backend/src/data-source.ts",
     (".github/workflows/backend-ci.yml", "test-e2e"): "apps/backend/src/data-source.ts",
+    (".github/workflows/backend-deploy.yml", "version-gate"): "apps/ingest/package.json",
+    (".github/workflows/admin-deploy.yml", "resolve"): "apps/ingest/package.json",
+    (".github/workflows/_release-version-gate.yml", "check"): "apps/mobile/package.json",
+}
+
+# These two topology differences rename a job that exists on both sides. All
+# other expected entries describe one-sided jobs and stop being exempt as soon
+# as both repositories define the job.
+EXPECTED_PRESENT_JOB_NAME_DIFFS = {
+    (".github/workflows/mobile-ci.yml", "mobile"),
+    (".github/workflows/_release-version-gate.yml", "check"),
 }
 
 SHARED_PRESET = "github>Studio81Labs/.github:renovate-base"
@@ -1590,9 +1601,13 @@ def compare(local_read, sibling_read) -> list[dict]:
                 continue
             if (path, job) in EXPECTED_JOB_DIFFS:
                 marker = EXPECTED_JOB_DIFF_MARKERS.get((path, job))
-                if marker is None or (
-                    (our_name is None) != (their_name is None)
+                if (
+                    marker is not None
                     and marker_sides(marker)[0] != marker_sides(marker)[1]
+                    and (
+                        (our_name is None) != (their_name is None)
+                        or (path, job) in EXPECTED_PRESENT_JOB_NAME_DIFFS
+                    )
                 ):
                     continue
             if our_name is None or their_name is None:
@@ -2714,12 +2729,76 @@ def self_test() -> int:
     # else in the same file.
     assert (".github/workflows/mobile-ci.yml", "mobile") in EXPECTED_JOB_DIFFS
     MOB = ".github/workflows/mobile-ci.yml"
+    FLAVOR_MARKER = "apps/mobile/android/app/src/staging/google-services.json"
     # mobile-ci is topology-gated now, and this case describes the Flutter
-    # pair — both sides carry the marker so the gate is open.
-    allowed = {MOB: jobs_yaml(("mobile", "mobile: a"), ("other", "mobile: x")), MARKER: "name: app\n"}
+    # pair — both sides carry the stack marker, while only one carries the
+    # per-flavor source-set marker that forces the expected name difference.
+    allowed = {
+        MOB: jobs_yaml(("mobile", "mobile: a"), ("other", "mobile: x")),
+        MARKER: "name: app\n",
+        FLAVOR_MARKER: "{}\n",
+    }
     against = {MOB: jobs_yaml(("mobile", "mobile: b"), ("other", "mobile: y")), MARKER: "name: app\n"}
     found = [f for f in compare(repo(**allowed).get, repo(**against).get) if f["kind"] == "jobname"]
     assert len(found) == 1 and "`other`" in found[0]["detail"], found
+    same_flavor = {
+        MOB: jobs_yaml(("mobile", "mobile: a"), ("other", "mobile: x")),
+        MARKER: "name: app\n",
+    }
+    found = [
+        f for f in compare(repo(**same_flavor).get, repo(**against).get)
+        if f["kind"] == "jobname"
+    ]
+    assert len(found) == 2, f"same-topology job names must stay strict: {found}"
+
+    INGEST_MARKER = "apps/ingest/package.json"
+    BACKEND_DEPLOY_WF = ".github/workflows/backend-deploy.yml"
+    deploy_with_gate = {
+        BACKEND_DEPLOY_WF: jobs_yaml(
+            ("version-gate", "release: version gate"),
+            ("deploy", "backend: deploy"),
+        )
+    }
+    ingest_without_gate = {
+        BACKEND_DEPLOY_WF: jobs_yaml(("deploy", "backend: deploy")),
+        INGEST_MARKER: "{}\n",
+    }
+    found = [
+        f for f in compare(repo(**deploy_with_gate).get, repo(**ingest_without_gate).get)
+        if f["kind"] == "jobname" and f["name"] == BACKEND_DEPLOY_WF
+    ]
+    assert found == [], f"ingest orchestration owns the one-sided gate: {found}"
+    renamed_gate = {
+        BACKEND_DEPLOY_WF: jobs_yaml(
+            ("version-gate", "release: renamed gate"),
+            ("deploy", "backend: deploy"),
+        )
+    }
+    found = [
+        f for f in compare(repo(**deploy_with_gate).get, repo(**renamed_gate).get)
+        if f["kind"] == "jobname" and f["name"] == BACKEND_DEPLOY_WF
+    ]
+    assert len(found) == 1, f"same-topology deploy names must stay strict: {found}"
+
+    RELEASE_GATE_WF = ".github/workflows/_release-version-gate.yml"
+    flutter_gate = {RELEASE_GATE_WF: jobs_yaml(("check", "tag matches pubspec"))}
+    react_native_gate = {
+        RELEASE_GATE_WF: jobs_yaml(("check", "tag matches the mobile version")),
+        "apps/mobile/package.json": "{}\n",
+    }
+    found = [
+        f for f in compare(repo(**flutter_gate).get, repo(**react_native_gate).get)
+        if f["kind"] == "jobname" and f["name"] == RELEASE_GATE_WF
+    ]
+    assert found == [], f"version-source topology may rename the check: {found}"
+    renamed_flutter_gate = {
+        RELEASE_GATE_WF: jobs_yaml(("check", "tag matches renamed pubspec"))
+    }
+    found = [
+        f for f in compare(repo(**flutter_gate).get, repo(**renamed_flutter_gate).get)
+        if f["kind"] == "jobname" and f["name"] == RELEASE_GATE_WF
+    ]
+    assert len(found) == 1, f"same-source release names must stay strict: {found}"
 
     # Backend schema/e2e exceptions are Tarmoto-specific, not global. Two
     # Prisma repositories must report a missing e2e job; a TypeORM-to-Prisma
