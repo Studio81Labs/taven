@@ -55,8 +55,10 @@ jobs:
             echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
             echo "range_available=false" >> "$GITHUB_OUTPUT"
             echo "Previous commit is unreachable — a full-history scan will run."
-          elif git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-               | grep -qx '\.github/workflows/security-scan\.yml'; then
+          # Ask Git for this path directly. A name-only stream into grep -q
+          # can SIGPIPE under pipefail after an early match on a large push.
+          elif ! git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            .github/workflows/security-scan.yml; then
             echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
             echo "range_available=true" >> "$GITHUB_OUTPUT"
           else

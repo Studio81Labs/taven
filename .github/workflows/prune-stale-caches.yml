@@ -111,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 <<'PY'
-          import collections, hashlib, json, os, re, shutil, subprocess
+          import collections, hashlib, json, os, re, subprocess
 
           repo = os.environ["REPO"]
           dry = os.environ.get("DRY_RUN") == "true"
@@ -165,9 +165,23 @@ jobs:
           # Cache identity is (key, version), not key alone. Both pinned cache
           # implementations derive version as sha256(paths + compression +
           # salt); this mirrors actions/cache@v6.1.0 and the cache toolkit
-          # vendored by actions/setup-node@v7.0.0. If those actions change the
-          # algorithm, update this alongside their digest pin.
-          compression = "zstd-without-long" if shutil.which("zstd") else "gzip"
+          # vendored by actions/setup-node@v7.0.0. Their getVersion helper runs
+          # exactly `zstd --quiet --version`, combines stdout/stderr, and uses
+          # zstd-without-long for every non-empty result. Mirror that behavior
+          # rather than inferring a token merely from the executable's path.
+          # If those action pins change the algorithm, update this alongside
+          # their digest pin.
+          try:
+              zstd = subprocess.run(
+                  ["zstd", "--quiet", "--version"],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+              zstd_version = (zstd.stdout + zstd.stderr).strip()
+          except OSError:
+              zstd_version = ""
+          compression = "zstd-without-long" if zstd_version else "gzip"
 
           def cache_version(*paths):
               components = [*paths, compression, "1.0"]
