@@ -325,7 +325,10 @@ JOB_NAME_WORKFLOWS = [
     ".github/workflows/backend-ci.yml",
     ".github/workflows/backend-deploy.yml",
     ".github/workflows/ci-scripts.yml",
+    ".github/workflows/cleanup-pr-caches.yml",
     ".github/workflows/flutter-pin-check.yml",
+    ".github/workflows/format-check.yml",
+    ".github/workflows/labeler.yml",
     ".github/workflows/marketing-ci.yml",
     ".github/workflows/marketing-deploy.yml",
     ".github/workflows/mobile-ci.yml",
@@ -333,6 +336,7 @@ JOB_NAME_WORKFLOWS = [
     ".github/workflows/openapi-check.yml",
     ".github/workflows/security-scan.yml",
     ".github/workflows/sibling-drift.yml",
+    ".github/workflows/prune-stale-caches.yml",
 ]
 
 # Job-name differences that are EXPECTED, each with the reason. An entry here is
@@ -1764,11 +1768,10 @@ def compare(local_read, sibling_read) -> list[dict]:
                 if (
                     marker is not None
                     and marker_sides(marker)[0] != marker_sides(marker)[1]
-                    and (
-                        (our_name is None) != (their_name is None)
-                        or frozenset((our_name, their_name))
-                        == EXPECTED_PRESENT_JOB_NAME_PAIRS.get((path, job))
-                    )
+                    and our_name is not None
+                    and their_name is not None
+                    and frozenset((our_name, their_name))
+                    == EXPECTED_PRESENT_JOB_NAME_PAIRS.get((path, job))
                 ):
                     continue
             if our_name is None or their_name is None:
@@ -3063,6 +3066,16 @@ def self_test() -> int:
     }
     found = [f for f in compare(repo(**allowed).get, repo(**against).get) if f["kind"] == "jobname"]
     assert len(found) == 1 and "`other`" in found[0]["detail"], found
+    missing_mobile = {
+        MOB: jobs_yaml(("other", "mobile: y")),
+        MARKER: "name: app\n",
+        FLAVOR_MARKER: "{}\n",
+    }
+    found = [
+        f for f in compare(repo(**missing_mobile).get, repo(**against).get)
+        if f["kind"] == "jobname" and f["name"] == MOB
+    ]
+    assert len(found) == 1 and "job `mobile` absent here" in found[0]["detail"], found
     same_flavor = {
         MOB: jobs_yaml(
             (

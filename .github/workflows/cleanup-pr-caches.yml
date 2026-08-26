@@ -19,7 +19,10 @@ name: Cleanup PR Caches
 # the second sweep: 8 caches, 4.97 GB, all on merged pull requests.
 
 on:
-  pull_request:
+  # The target event executes this base-branch workflow with a writable token,
+  # including when the closed PR came from a fork. This job never checks out or
+  # executes PR code; it uses only GitHub's integer PR number to delete caches.
+  pull_request_target:
     types: [closed]
 
 permissions:

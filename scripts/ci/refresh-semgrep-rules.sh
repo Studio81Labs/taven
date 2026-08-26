@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ported from Studio81Labs/nexcue@5ad500da3611a53d79389bb4861e04bc270cd428
 set -euo pipefail
 
 # Regenerates the vendored semgrep rules in .semgrep/.
