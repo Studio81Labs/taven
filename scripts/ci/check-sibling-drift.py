@@ -251,7 +251,7 @@ TOPOLOGY_GATED = {
     "scripts/lib/resolve-flutter.sh": "apps/mobile/pubspec.yaml",
     "scripts/ci/check-podfile-lock.py": "apps/mobile/pubspec.yaml",
     "scripts/ci/check-release-tag.sh": "apps/mobile/pubspec.yaml",
-    "scripts/ci/check-semgrep-fixture.py": "apps/mobile/pubspec.yaml",
+    "scripts/ci/check-semgrep-fixture.py": "apps/mobile/.gitignore",
     "scripts/ci/compare-marketing-version.py": "apps/marketing/package.json",
     ".github/workflows/flutter-pin-check.yml": "apps/mobile/pubspec.yaml",
     ".github/workflows/mobile-ci.yml": "apps/mobile/pubspec.yaml",
@@ -2466,6 +2466,30 @@ def self_test() -> int:
         if f["name"] == "mobile-release.yml"
     ]
     assert found and found[0]["detail"] == "present here, absent there", found
+
+    # The Semgrep fixture verifier is shared across Flutter and React Native.
+    # Its gate must use the broad mobile capability, not Flutter's pubspec, or
+    # every Tarmoto comparison silently stops checking the helper.
+    SEMGREP_HELPER = "scripts/ci/check-semgrep-fixture.py"
+    flutter_helper = {
+        SEMGREP_HELPER: "flutter copy\n",
+        "apps/mobile/pubspec.yaml": "name: app\n",
+    }
+    react_native_helper = {
+        SEMGREP_HELPER: "react native copy\n",
+        "apps/mobile/pubspec.yaml": None,
+    }
+    found = [
+        f for f in compare(repo(**flutter_helper).get, repo(**react_native_helper).get)
+        if f["name"] == SEMGREP_HELPER
+    ]
+    assert len(found) == 1, f"cross-stack Semgrep helper drift must report: {found}"
+    no_mobile_helper = {MOBILE_MARKER: None, SEMGREP_HELPER: None}
+    found = [
+        f for f in compare(repo().get, repo(**no_mobile_helper).get)
+        if f["name"] == SEMGREP_HELPER
+    ]
+    assert found == [], f"a sibling without mobile has no fixture helper: {found}"
 
     # --- job names -------------------------------------------------------
     JOB_WF = ".github/workflows/backend-ci.yml"
