@@ -72,11 +72,11 @@ pnpm overrides:check
 ```
 
 Run `pnpm sibling:check` to compare shared infrastructure against Nexcue,
-Tarmoto, and TableTap through GitHub. It uses `SIBLING_TOKEN`, or the token from
-an authenticated `gh` CLI, and provisions its locked Python dependency in a
-temporary directory. For the narrower local Nexcue runtime baseline, check out
-Nexcue beside this repository and run `pnpm baseline:check`; override that
-checkout location with `NEXCUE_REPO_PATH` when necessary.
+Tarmoto, TableTap, and Poker Hero through GitHub. It uses `SIBLING_TOKEN`, or the
+token from an authenticated `gh` CLI, and provisions its locked Python
+dependency in a temporary directory. For the narrower local Nexcue runtime
+baseline, check out Nexcue beside this repository and run `pnpm baseline:check`;
+override that checkout location with `NEXCUE_REPO_PATH` when necessary.
 
 Regenerate the OpenAPI artifact and typed client after changing backend DTOs or
 Swagger decorators:

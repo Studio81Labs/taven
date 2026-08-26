@@ -38,18 +38,21 @@ Use `pnpm bootstrap` for a fresh checkout and `pnpm infra:up` or
 
 ## Sibling repositories
 
-Taven, `Studio81Labs/nexcue`, `Studio81Labs/tarmoto`, and
-`Studio81Labs/tabletap` share repository automation, supply-chain policy, and
-CI conventions. Each repository runs `sibling-drift.yml` every Monday against
-the other three and maintains one `infra-drift` issue. The workflow needs a
-`SIBLING_READ_TOKEN` fine-grained PAT with Contents: Read on all three sibling
-repositories.
+Taven, `Studio81Labs/nexcue`, `Studio81Labs/tarmoto`,
+`Studio81Labs/tabletap`, and `Studio81Labs/poker-hero` are the Studio81 Labs
+project family and share repository automation, supply-chain policy, and CI
+conventions. Each repository runs `sibling-drift.yml` every Monday against the
+other four and maintains one local `infra-drift` issue. The secret-bearing job
+runs only from the trusted default branch. It uses the repository secret
+`SIBLING_READ_TOKEN`, a fine-grained PAT with Contents: Read limited to the
+private sibling repositories; public siblings need no additional entitlement.
 
 Shared infrastructure moves in both directions. Ported files carry a
 `# ported from Studio81Labs/<repo>@<sha>` provenance header (or the equivalent
 HTML comment in Markdown). Taven intentionally has no mobile, marketing, or
-deployment surfaces; the drift checker treats capability-gated files and jobs
-as topology rather than asking Taven to add placeholder workflows.
+deployment surfaces. Poker Hero uses FastAPI and a React/Vite PWA. The drift
+checker treats those capability-gated files and jobs as topology rather than
+asking either repository to add placeholder workflows.
 
 ## Workflow
 
