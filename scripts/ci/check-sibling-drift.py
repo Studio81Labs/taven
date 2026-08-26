@@ -232,6 +232,7 @@ IDENTICAL = [
     # Safe to compare byte-for-byte only because SIBLING now comes from the
     # environment and strip_provenance() removes the ported-from header.
     "scripts/ci/check-sibling-drift.py",
+    "scripts/ci/sibling-drift-requirements.txt",
 ]
 
 # Capability markers may excuse an ABSENT owned artifact, but never disable the
@@ -274,12 +275,22 @@ STACK_TOPOLOGY_GATED = {
 # satisfy the drift checker.
 ACTION_TOPOLOGY_GATED = {
     ".github/workflows/_build-openapi.yml": "apps/marketing/package.json",
+    ".github/workflows/_release-version-gate.yml": "apps/mobile/.gitignore",
     ".github/workflows/admin-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/backend-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-ci.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-deploy.yml": "apps/marketing/package.json",
+    ".github/workflows/flutter-pin-check.yml": "apps/mobile/pubspec.yaml",
     ".github/workflows/mobile-ci.yml": "apps/mobile/.gitignore",
     ".github/workflows/mobile-release.yml": "apps/mobile/.gitignore",
+}
+
+# packages-ci.yml exists only where hand-written packages have an independent
+# pipeline; Nexcue's generated clients are covered by its OpenAPI workflows.
+# If both sides have packages-ci its pins are strict, while the known one-sided
+# presence remains capability topology.
+EXPECTED_ONE_SIDED_ACTION_WORKFLOWS = {
+    ".github/workflows/packages-ci.yml": "independent hand-written package pipeline",
 }
 
 # Some shared workflows contain optional jobs owned by a narrower capability.
@@ -436,10 +447,12 @@ KEYS = [
     ("renovate.json", "shared preset", "json", shared_preset),
 ]
 
-# Workflows scanned for action pins. Both repos have all of these; per-app
-# workflows are excluded because their presence differs by topology.
+# Workflows scanned for action pins. This includes shared workflows that
+# currently use no actions so adding the first action on only one side is still
+# visible. Capability gates above handle surfaces a sibling does not own.
 ACTION_WORKFLOWS = [
     ".github/workflows/_build-openapi.yml",
+    ".github/workflows/_release-version-gate.yml",
     ".github/workflows/openapi-check.yml",
     ".github/workflows/lint-pr.yml",
     ".github/workflows/labeler.yml",
@@ -451,6 +464,14 @@ ACTION_WORKFLOWS = [
     ".github/workflows/marketing-deploy.yml",
     ".github/workflows/mobile-ci.yml",
     ".github/workflows/mobile-release.yml",
+    ".github/workflows/ci-scripts.yml",
+    ".github/workflows/cleanup-pr-caches.yml",
+    ".github/workflows/flutter-pin-check.yml",
+    ".github/workflows/format-check.yml",
+    ".github/workflows/packages-ci.yml",
+    ".github/workflows/prune-stale-caches.yml",
+    ".github/workflows/security-scan.yml",
+    ".github/workflows/sibling-drift.yml",
 ]
 
 # Deliberately NOT compared, with the reason. Kept in code because the useful
@@ -1331,6 +1352,11 @@ def compare(local_read, sibling_read) -> list[dict]:
     theirs_pins: dict[tuple[str, str], dict[str, str]] = {}
     for path in ACTION_WORKFLOWS:
         local_text, sibling_text = local_read(path), sibling_read(path)
+        if (
+            path in EXPECTED_ONE_SIDED_ACTION_WORKFLOWS
+            and (local_text is None) != (sibling_text is None)
+        ):
+            continue
         if topology_skips_artifact(
             path, local_text, sibling_text, ACTION_TOPOLOGY_GATED, {}
         ):
@@ -1669,7 +1695,10 @@ def self_test() -> int:
         # Established siblings declare both broad capabilities compared by the
         # action-pin manifest. Individual tests can remove a marker explicitly
         # to model a deliberately smaller sibling.
-        files.update({marker: "marker\n" for marker in set(ACTION_TOPOLOGY_GATED.values())})
+        broad_markers = set(ACTION_TOPOLOGY_GATED.values()) - set(
+            STACK_TOPOLOGY_GATED.values()
+        )
+        files.update({marker: "marker\n" for marker in broad_markers})
         files.update(overrides)
         return {k: v for k, v in files.items() if v is not None}
 
@@ -2338,7 +2367,15 @@ def self_test() -> int:
     assert "release-2026-b" in found[0]["detail"], found
 
     # Gone from both: a manifest entry that no longer compares anything.
-    found = [f for f in compare(repo(**{k: None for k in ACTION_WORKFLOWS}).get, repo(**{k: None for k in ACTION_WORKFLOWS}).get) if f["kind"] == "workflow"]
+    gone_actions = {path: None for path in ACTION_WORKFLOWS}
+    gone_actions.update(
+        {marker: "marker\n" for marker in set(ACTION_TOPOLOGY_GATED.values())}
+    )
+    found = [
+        f
+        for f in compare(repo(**gone_actions).get, repo(**gone_actions).get)
+        if f["kind"] == "workflow"
+    ]
     assert len(found) == len(ACTION_WORKFLOWS), len(found)
     assert "stale entry" in found[0]["detail"], found
 
@@ -2528,6 +2565,20 @@ def self_test() -> int:
         if f["kind"] == "action" and f["name"].startswith("actions/x")
     ]
     assert len(found) == 1, f"present gated workflows must compare pins: {found}"
+
+    PACKAGE_WF = ".github/workflows/packages-ci.yml"
+    found = [
+        f for f in compare(repo().get, repo(**{PACKAGE_WF: None}).get)
+        if f["name"] == "packages-ci.yml"
+    ]
+    assert found == [], f"one-sided package workflow is capability topology: {found}"
+    package_pin_here = {PACKAGE_WF: wf("actions/x@1111111 # v1")}
+    package_pin_there = {PACKAGE_WF: wf("actions/x@2222222 # v2")}
+    found = [
+        f for f in compare(repo(**package_pin_here).get, repo(**package_pin_there).get)
+        if f["kind"] == "action" and f["name"].startswith("actions/x")
+    ]
+    assert len(found) == 1, f"shared package workflows must compare pins: {found}"
 
     # The Semgrep fixture verifier is shared across Flutter and React Native.
     # Its gate must use the broad mobile capability, not Flutter's pubspec, or

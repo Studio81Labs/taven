@@ -1,3 +1,4 @@
+# ported from Studio81Labs/tabletap@a36cebcd
 name: Prune Stale Caches
 
 # Deletes superseded Actions caches on refs/heads/main.

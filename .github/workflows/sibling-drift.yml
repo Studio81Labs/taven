@@ -81,10 +81,17 @@ jobs:
         # active step from `# uses: actions/checkout@old`, and treating either
         # as a pin invents drift. PyYAML is usually on the runner image but is
         # not a documented guarantee, and the script hard-exits on the missing
-        # import. Same install-if-missing guard as ci-scripts.yml.
+        # import. The fallback is exact, wheel-only and hash-checked before the
+        # later step receives the cross-repository read token.
         run: |
           python3 -c "import yaml" 2>/dev/null \
-            || pip install --quiet --disable-pip-version-check pyyaml
+            || python3 -m pip install \
+              --quiet \
+              --disable-pip-version-check \
+              --no-deps \
+              --only-binary=:all: \
+              --require-hashes \
+              --requirement scripts/ci/sibling-drift-requirements.txt
 
       - name: Verify the comparison logic
         # The self-test runs before the comparison, not after: if the comparison
