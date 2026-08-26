@@ -105,16 +105,329 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
   command: TransitionCommand<S>,
 ): void {
   const leaves = command.context?.shipmentLineageLeafStatuses;
+  const normalizedLeaves = Array.isArray(leaves) ? [...leaves] : undefined;
   if (
-    !Array.isArray(leaves) ||
-    leaves.length === 0 ||
-    leaves.some((status) => status !== "delivered")
+    normalizedLeaves === undefined ||
+    normalizedLeaves.length === 0 ||
+    normalizedLeaves.some((status) => status !== "delivered")
   ) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
       command.target,
       "delivery requires every current shipment lineage leaf to be delivered",
+    );
+  }
+}
+
+function requireVerifiedMatchingRefundWebhook<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const paymentId = command.context?.paymentId;
+  const webhookPaymentId = command.context?.refundWebhookPaymentId;
+  const refundTransactionId = command.context?.refundTransactionId;
+  const webhookRefundTransactionId =
+    command.context?.refundWebhookRefundTransactionId;
+  if (
+    typeof paymentId !== "string" ||
+    paymentId.length === 0 ||
+    webhookPaymentId !== paymentId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "refund completion requires a webhook for this exact payment",
+    );
+  }
+  if (
+    typeof refundTransactionId !== "string" ||
+    refundTransactionId.length === 0 ||
+    webhookRefundTransactionId !== refundTransactionId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "refund completion requires a webhook for this exact refund transaction",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "refundWebhookAuthenticated",
+    "refund completion requires an authenticated provider webhook",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "refundWebhookVerified",
+    "refund completion requires a verified provider webhook",
+  );
+  if (command.context?.refundWebhookStatus !== "succeeded") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "refund completion requires a successful refund webhook result",
+    );
+  }
+  if (command.context?.refundWebhookProjectedTarget !== command.target) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "refund webhook result must project this exact refund target",
+    );
+  }
+}
+
+function requireBalancePaymentDeadlineSetup<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  if (command.context?.balancePaymentRole !== "balance") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "awaiting balance requires a Payment with the balance role",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "balancePaymentOrderMatches",
+    "awaiting balance requires the balance payment to belong to this order",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "balancePaymentCreated",
+    "awaiting balance requires its balance payment to be created",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "balancePaymentScheduleComplete",
+    "awaiting balance requires a complete balance payment schedule",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "balanceDueAtSet",
+    "awaiting balance requires a balance payment deadline",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "balancePaymentDeadlineSetupAtomic",
+    "the balance payment and deadline must be persisted atomically",
+  );
+}
+
+function requireVerifiedMatchingProviderPaymentEvent<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const paymentId = command.context?.paymentId;
+  const eventPaymentId = command.context?.providerEventPaymentId;
+  if (
+    typeof paymentId !== "string" ||
+    paymentId.length === 0 ||
+    eventPaymentId !== paymentId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "provider event must match this exact payment",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "providerPaymentEventAuthenticated",
+    "payment outcome requires an authenticated provider event",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerPaymentEventVerified",
+    "payment outcome requires a verified provider event",
+  );
+  if (command.context?.providerPaymentEventStatus !== command.target) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "provider event outcome must match the payment transition target",
+    );
+  }
+}
+
+function isJobCancellationReason(
+  value: unknown,
+): value is JobCancellationReason {
+  return (
+    value === "routing_exhausted" ||
+    value === "order_cancelled" ||
+    value === "phase_cancelled" ||
+    value === "claim_withdrawn"
+  );
+}
+
+function isJobFailureStage(value: unknown): value is JobFailureStage {
+  return (
+    value === "preparation" ||
+    value === "gcode" ||
+    value === "machine" ||
+    value === "printing" ||
+    value === "post_print" ||
+    value === "post_qc" ||
+    value === "packing"
+  );
+}
+
+function requireJobReplacementObligation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementRequestCreated",
+    "the failed or rejected job requires a replacement request",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementDeadlineSet",
+    "the failed or rejected job requires a replacement deadline",
+  );
+}
+
+function requireRecoveryObligation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  requireFlag(
+    lifecycle,
+    command,
+    "verifiedPostQcFailure",
+    "recovery requires a verified post-QC failure",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementObligationCreated",
+    "recovery requires its replacement obligation",
+  );
+}
+
+function requireShipmentCancellationReleased<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  requireFlag(
+    lifecycle,
+    command,
+    "shipmentJobsAndReservationsReleased",
+    "shipment cancellation requires its jobs and reservations to be released",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "parentCancellationBarrierReleased",
+    "shipment cancellation requires its parent cancellation barrier to be released",
+  );
+}
+
+function requireVerifiedMatchingProviderShipmentEvent<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const shipmentId = command.context?.shipmentId;
+  const eventShipmentId = command.context?.providerEventShipmentId;
+  if (
+    typeof shipmentId !== "string" ||
+    shipmentId.length === 0 ||
+    eventShipmentId !== shipmentId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "provider event must match this exact shipment",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "providerEventAuthenticated",
+    "shipment outcome requires an authenticated provider event",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerEventVerified",
+    "shipment outcome requires a verified provider event",
+  );
+  if (command.context?.providerEventStatus !== command.target) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "provider event outcome must match the shipment transition target",
+    );
+  }
+}
+
+function requireVerifiedCurrentRemedyDelivery<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const currentLeafId = command.context?.currentRemedyShipmentLineageLeafId;
+  const eventShipmentId = command.context?.providerEventShipmentId;
+  if (
+    typeof currentLeafId !== "string" ||
+    currentLeafId.length === 0 ||
+    eventShipmentId !== currentLeafId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "delivery must be proved by an event for the current remedy shipment lineage leaf",
+    );
+  }
+  if (command.context?.currentRemedyShipmentLineageLeafStatus !== "delivered") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "the current remedy shipment lineage leaf must be delivered",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "providerEventAuthenticated",
+    "remedy delivery requires an authenticated provider event",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerEventVerified",
+    "remedy delivery requires a verified provider event",
+  );
+  if (command.context?.providerEventStatus !== "delivered") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "remedy delivery requires a matching delivered provider event",
     );
   }
 }
@@ -213,6 +526,53 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
         "a voided payment may be refunded only after verified late capture",
       );
     }
+    if (command.current === "pending" && command.target === "failed") {
+      requireVerifiedMatchingProviderPaymentEvent("Payment", command);
+    }
+    if (command.current === "pending" && command.target === "voided") {
+      requireFlag(
+        "Payment",
+        command,
+        "captureWindowClosed",
+        "voiding requires the capture window to be closed",
+      );
+      requireFlag(
+        "Payment",
+        command,
+        "captureCutoffSet",
+        "voiding requires the capture cutoff to be recorded",
+      );
+      requireFlag(
+        "Payment",
+        command,
+        "providerVoidOutboxCreated",
+        "voiding requires the provider void command to be persisted",
+      );
+    }
+    if (
+      (command.current === "captured" ||
+        command.current === "partially_refunded") &&
+      command.target === "refund_pending"
+    ) {
+      requireFlag(
+        "Payment",
+        command,
+        "scopedRefundTransactionCreated",
+        "refund pending requires its scoped refund transaction",
+      );
+      requireFlag(
+        "Payment",
+        command,
+        "refundPriceAdjustmentActivated",
+        "refund pending requires its price adjustment to be activated",
+      );
+    }
+    if (
+      command.current === "refund_pending" &&
+      (command.target === "partially_refunded" || command.target === "refunded")
+    ) {
+      requireVerifiedMatchingRefundWebhook("Payment", command);
+    }
   },
 };
 
@@ -271,6 +631,26 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     cancelled: ["refunded", "cancelled_settled"],
   },
   guard: (command) => {
+    if (command.current === "draft" && command.target === "quoted") {
+      requireFlag(
+        "Order",
+        command,
+        "singleOrderPhaseCreated",
+        "quoting requires the single OrderPhase to be created",
+      );
+      requireFlag(
+        "Order",
+        command,
+        "immutableFulfilmentSlotsCreated",
+        "quoting requires immutable fulfilment slots",
+      );
+      requireFlag(
+        "Order",
+        command,
+        "setupAtomic",
+        "order setup requires the phase and slots to be persisted atomically",
+      );
+    }
     if (command.current === "quoted" && command.target === "confirmed") {
       requireFlag(
         "Order",
@@ -290,6 +670,20 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "verifiedQcReadiness",
         "quality control requires a complete projected slot readiness result",
       );
+    }
+    if (
+      command.current === "qc_passed" &&
+      command.target === "awaiting_balance"
+    ) {
+      requireBalancePaymentDeadlineSetup("Order", command);
+    }
+    if (
+      (command.current === "qc_passed" ||
+        command.current === "awaiting_balance" ||
+        command.current === "ready_to_ship") &&
+      command.target === "recovery_pending"
+    ) {
+      requireRecoveryObligation("Order", command);
     }
     if (command.current === "ready_to_ship" && command.target === "shipped") {
       requireFlag(
@@ -327,6 +721,12 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     }
     if (command.current === "qc_passed" && command.target === "ready_to_ship") {
       requireZeroBalances("Order", command);
+      requireFlag(
+        "Order",
+        command,
+        "completeShipmentReadiness",
+        "ready to ship requires every shipment to be ready for handoff",
+      );
     }
     if (command.current === "shipped" && command.target === "delivered") {
       requireAllShipmentLineageLeavesDelivered("Order", command);
@@ -338,6 +738,17 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "preHandoffShipmentCancellationsCompleted",
         "all pre-handoff shipment cancellations must complete before cancellation",
       );
+      if (
+        command.current === "shipped" ||
+        command.current === "recovery_pending"
+      ) {
+        requireFlag(
+          "Order",
+          command,
+          "recoveryFinancialSettlementCompleted",
+          "post-handoff cancellation requires its recovery financial settlement",
+        );
+      }
     }
     if (
       command.target === "completed" ||
@@ -358,6 +769,23 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       (command.target === "refunded" || command.target === "cancelled_settled")
     ) {
       requireProjectedFinancialTerminalTarget("Order", command);
+    }
+    if (
+      command.current === "awaiting_balance" &&
+      command.target === "cancelled_settled"
+    ) {
+      requireFlag(
+        "Order",
+        command,
+        "balanceCaptureClosed",
+        "balance settlement requires the capture window to be closed",
+      );
+      requireFlag(
+        "Order",
+        command,
+        "immutableOrderSettlementCompleted",
+        "balance settlement requires the immutable order settlement",
+      );
     }
     if (
       command.target === "refunded" ||
@@ -432,6 +860,12 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           "quality control requires a complete projected slot readiness result",
         );
       }
+      if (
+        command.current === "qc_passed" &&
+        command.target === "recovery_pending"
+      ) {
+        requireRecoveryObligation("OrderPhase(single)", command);
+      }
       if (command.current === "qc_passed" && command.target === "shipped") {
         requireFlag(
           "OrderPhase(single)",
@@ -455,6 +889,18 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           command,
           "preHandoffShipmentCancellationsCompleted",
           "all pre-handoff shipment cancellations must complete before cancellation",
+        );
+      }
+      if (
+        (command.current === "shipped" ||
+          command.current === "recovery_pending") &&
+        command.target === "cancelled_refunded"
+      ) {
+        requireFlag(
+          "OrderPhase(single)",
+          command,
+          "recoveryFinancialSettlementCompleted",
+          "post-handoff cancellation requires its recovery financial settlement",
         );
       }
       if (
@@ -533,12 +979,116 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
     handed_over: ["settled"],
   },
   guard: (command) => {
+    if (command.current === "created" && command.target === "cancelled") {
+      if (!isJobCancellationReason(command.context?.cancellationReason)) {
+        throw new TransitionGuardError(
+          "Job",
+          command.current,
+          command.target,
+          "cancellation requires a valid cancellation reason",
+        );
+      }
+      requireFlag(
+        "Job",
+        command,
+        "offersClosed",
+        "cancellation requires all routing offers to be closed",
+      );
+      requireFlag(
+        "Job",
+        command,
+        "productionReservationReleased",
+        "cancellation requires its production reservation to be released",
+      );
+    }
     if (command.current === "created" && command.target === "accepted") {
       requireFlag(
         "Job",
         command,
         "nodeAssigned",
         "acceptance requires a verified node assignment",
+      );
+    }
+    if (command.current === "accepted" && command.target === "gcode_ready") {
+      requireFlag(
+        "Job",
+        command,
+        "productionSliceFromReservationSnapshot",
+        "G-code requires a production slice from the reservation snapshot",
+      );
+      requireFlag(
+        "Job",
+        command,
+        "reproductionArtifactSealed",
+        "G-code requires its reproduction artifact to be sealed",
+      );
+    }
+    if (command.current === "printed" && command.target === "photo_submitted") {
+      requireFlag(
+        "Job",
+        command,
+        "qcPhotoAssetStored",
+        "photo submission requires the QC PhotoAsset to be stored",
+      );
+      requireFlag(
+        "Job",
+        command,
+        "photoRetentionDeadlineSet",
+        "photo submission requires the PhotoAsset retention deadline",
+      );
+    }
+    if (
+      command.current === "photo_submitted" &&
+      command.target === "qc_approved"
+    ) {
+      requireFlag(
+        "Job",
+        command,
+        "qcApprovalVerified",
+        "QC approval requires a verified QC decision",
+      );
+    }
+    if (
+      command.current === "photo_submitted" &&
+      command.target === "qc_rejected"
+    ) {
+      requireFlag(
+        "Job",
+        command,
+        "qcRejectionVerified",
+        "QC rejection requires a verified QC decision",
+      );
+      requireJobReplacementObligation("Job", command);
+    }
+    if (command.target === "failed") {
+      if (!isJobFailureStage(command.context?.failureStage)) {
+        throw new TransitionGuardError(
+          "Job",
+          command.current,
+          command.target,
+          "failure requires a valid failure stage",
+        );
+      }
+      const failureReason = command.context?.failureReason;
+      if (
+        typeof failureReason !== "string" ||
+        failureReason.trim().length === 0
+      ) {
+        throw new TransitionGuardError(
+          "Job",
+          command.current,
+          command.target,
+          "failure requires a non-blank failure reason",
+        );
+      }
+      requireJobReplacementObligation("Job", command);
+    }
+    if (command.current === "packed" && command.target === "handed_over") {
+      requireFlag(
+        "Job",
+        command,
+        "contextHandoffCompleted",
+        "handoff requires its complete context-specific transaction",
       );
     }
   },
@@ -569,6 +1119,26 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
     lost: ["recovered"],
   },
   guard: (command) => {
+    if (command.current === "planned" && command.target === "cancelled") {
+      requireShipmentCancellationReleased("Shipment", command);
+    }
+    if (
+      command.current === "label_created" &&
+      command.target === "cancellation_pending"
+    ) {
+      requireFlag(
+        "Shipment",
+        command,
+        "labelInvalidated",
+        "cancellation requires the carrier label to be invalidated",
+      );
+      requireFlag(
+        "Shipment",
+        command,
+        "providerVoidOutboxCreated",
+        "cancellation requires the provider void command to be persisted",
+      );
+    }
     if (command.target === "handed_over") {
       requireFlag(
         "Shipment",
@@ -597,6 +1167,27 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
         command,
         "verifiedProviderVoid",
         "cancellation requires the provider to verify its void result",
+      );
+      requireShipmentCancellationReleased("Shipment", command);
+    }
+    if (command.current === "handed_over" && command.target === "in_transit") {
+      requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
+    }
+    if (
+      command.current === "in_transit" &&
+      (command.target === "delivered" ||
+        command.target === "lost" ||
+        command.target === "returned")
+    ) {
+      requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
+    }
+    if (command.current === "lost" && command.target === "recovered") {
+      requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
+      requireFlag(
+        "Shipment",
+        command,
+        "custodyConfirmed",
+        "recovery requires confirmed shipment custody",
       );
     }
   },
@@ -633,35 +1224,43 @@ const claimTerminalProjection: Readonly<
 };
 
 function isClaimSlotResolutionTerminalStatus(
-  status: ClaimSlotResolutionStatus,
+  status: unknown,
 ): status is ClaimSlotResolutionTerminalStatus {
-  return Object.prototype.hasOwnProperty.call(claimTerminalProjection, status);
+  return (
+    typeof status === "string" &&
+    Object.prototype.hasOwnProperty.call(claimTerminalProjection, status)
+  );
 }
 
 /** Projects a claim's terminal status from every child resolution disposition. */
 export function projectClaimTerminalStatus(
   statuses: readonly ClaimSlotResolutionStatus[],
 ): ClaimStatus | undefined {
+  const normalizedStatuses = [...statuses];
   if (
-    statuses.length === 0 ||
-    statuses.some((status) => !isClaimSlotResolutionTerminalStatus(status))
+    normalizedStatuses.length === 0 ||
+    normalizedStatuses.some(
+      (status) => !isClaimSlotResolutionTerminalStatus(status),
+    )
   ) {
     return undefined;
   }
 
-  const firstStatus = statuses[0];
+  const firstStatus = normalizedStatuses[0];
   if (firstStatus === undefined) {
     return undefined;
   }
   if (!isClaimSlotResolutionTerminalStatus(firstStatus)) {
     return undefined;
   }
-  if (statuses.every((status) => status === firstStatus)) {
+  if (normalizedStatuses.every((status) => status === firstStatus)) {
     return claimTerminalProjection[firstStatus];
   }
 
   if (
-    statuses.some((status) => status === "rejected" || status === "withdrawn")
+    normalizedStatuses.some(
+      (status) => status === "rejected" || status === "withdrawn",
+    )
   ) {
     return undefined;
   }
@@ -936,6 +1535,14 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
         );
       }
       if (
+        (command.current === "reship_shipped" &&
+          command.target === "delivered_reship") ||
+        (command.current === "replacement_shipped" &&
+          command.target === "delivered_reprint")
+      ) {
+        requireVerifiedCurrentRemedyDelivery("ClaimSlotResolution", command);
+      }
+      if (
         (command.current === "pending" ||
           command.current === "recovery_pending") &&
         command.target === "reship_pending"
@@ -960,6 +1567,18 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           command,
           "freshQcPassed",
           "reship selection requires fresh quality control after recovery",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "reshipmentAuthorizationCreated",
+          "reship selection requires its custody-backed authorization",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "reshipmentAuthorizationSetupAtomic",
+          "reship authorization must be created atomically with the reship setup",
         );
       }
       if (command.target === "withdrawn") {

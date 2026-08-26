@@ -25,8 +25,38 @@ const permittedContext = {
   quoteAvailable: true,
   captureAuthorized: true,
   verifiedLateCapture: true,
+  paymentId: "payment-1",
+  providerEventPaymentId: "payment-1",
+  providerPaymentEventAuthenticated: true,
+  providerPaymentEventVerified: true,
+  refundWebhookPaymentId: "payment-1",
+  refundTransactionId: "refund-1",
+  refundWebhookRefundTransactionId: "refund-1",
+  refundWebhookAuthenticated: true,
+  refundWebhookVerified: true,
+  refundWebhookStatus: "succeeded",
+  captureWindowClosed: true,
+  captureCutoffSet: true,
+  providerVoidOutboxCreated: true,
+  scopedRefundTransactionCreated: true,
+  refundPriceAdjustmentActivated: true,
+  singleOrderPhaseCreated: true,
+  immutableFulfilmentSlotsCreated: true,
+  setupAtomic: true,
   completeReservationCaptured: true,
   verifiedQcReadiness: true,
+  balancePaymentRole: "balance",
+  balancePaymentOrderMatches: true,
+  balancePaymentCreated: true,
+  balancePaymentScheduleComplete: true,
+  balanceDueAtSet: true,
+  balancePaymentDeadlineSetupAtomic: true,
+  completeShipmentReadiness: true,
+  verifiedPostQcFailure: true,
+  replacementObligationCreated: true,
+  balanceCaptureClosed: true,
+  immutableOrderSettlementCompleted: true,
+  recoveryFinancialSettlementCompleted: true,
   shipmentHandoffAuthorized: true,
   handoffReconciliation: true,
   handoffSettlementCompleted: true,
@@ -38,6 +68,19 @@ const permittedContext = {
   verifiedProviderVoid: true,
   contextHandoffCompleted: true,
   nodeAssigned: true,
+  cancellationReason: "routing_exhausted",
+  offersClosed: true,
+  productionReservationReleased: true,
+  failureStage: "machine",
+  failureReason: "machine fault",
+  replacementRequestCreated: true,
+  replacementDeadlineSet: true,
+  productionSliceFromReservationSnapshot: true,
+  reproductionArtifactSealed: true,
+  qcPhotoAssetStored: true,
+  photoRetentionDeadlineSet: true,
+  qcApprovalVerified: true,
+  qcRejectionVerified: true,
   shipmentStatus: "returned",
   custodyConfirmed: true,
   freshQcPassed: true,
@@ -46,6 +89,8 @@ const permittedContext = {
   verifiedShipmentIncident: true,
   reshipmentAuthorizationConsumed: true,
   reshipmentHandoffCompleted: true,
+  reshipmentAuthorizationCreated: true,
+  reshipmentAuthorizationSetupAtomic: true,
   replacementSetProjected: true,
   replacementResourcePlanProjected: true,
   replacementReservationsCreated: true,
@@ -54,6 +99,15 @@ const permittedContext = {
   replacementFulfilmentAuthorizationConsumed: true,
   replacementFulfilmentHandoffCompleted: true,
   preHandoffShipmentCancellationsCompleted: true,
+  shipmentId: "shipment-1",
+  providerEventShipmentId: "shipment-1",
+  providerEventAuthenticated: true,
+  providerEventVerified: true,
+  currentRemedyShipmentLineageLeafId: "shipment-1",
+  currentRemedyShipmentLineageLeafStatus: "delivered",
+  shipmentJobsAndReservationsReleased: true,
+  parentCancellationBarrierReleased: true,
+  labelInvalidated: true,
   claimCreditScopeCreated: true,
   claimSlotCreditActivated: true,
   scopedRefundTransactionSucceeded: true,
@@ -83,6 +137,12 @@ function claimSlotStatusesForTarget(target: string): readonly string[] {
 function contextForTransition(target: string) {
   return {
     ...permittedContext,
+    refundWebhookProjectedTarget: target,
+    providerPaymentEventStatus: target,
+    providerEventStatus:
+      target === "delivered_reship" || target === "delivered_reprint"
+        ? "delivered"
+        : target,
     claimSlotResolutionStatuses: claimSlotStatusesForTarget(target),
     financialTerminalTarget: target,
     completionProjectedTarget: target,
@@ -190,9 +250,12 @@ describe("v0 lifecycle policy tables", () => {
     [quoteRequestPolicy, "quoted", "accepted"],
     [paymentPolicy, "pending", "captured"],
     [paymentPolicy, "voided", "refund_pending"],
+    [paymentPolicy, "refund_pending", "partially_refunded"],
+    [paymentPolicy, "refund_pending", "refunded"],
     [orderPolicy, "quoted", "confirmed"],
     [orderPolicy, "in_production", "qc_passed"],
     [orderPolicy, "recovery_pending", "qc_passed"],
+    [orderPolicy, "qc_passed", "awaiting_balance"],
     [orderPolicy, "qc_passed", "ready_to_ship"],
     [orderPolicy, "ready_to_ship", "shipped"],
     [orderPolicy, "awaiting_balance", "shipped"],
@@ -203,9 +266,13 @@ describe("v0 lifecycle policy tables", () => {
     [singleOrderPhasePolicy, "recovery_pending", "qc_passed"],
     [singleOrderPhasePolicy, "shipped", "delivered"],
     [jobPolicy, "created", "accepted"],
+    [jobPolicy, "packed", "handed_over"],
     [shipmentPolicy, "label_created", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "cancelled"],
+    [shipmentPolicy, "in_transit", "delivered"],
+    [shipmentPolicy, "in_transit", "lost"],
+    [shipmentPolicy, "in_transit", "returned"],
     [claimPolicy, "active", "withdrawn"],
     [claimSlotResolutionPolicy, "pending", "rejected"],
     [claimSlotResolutionPolicy, "pending", "refund_pending"],
@@ -218,6 +285,8 @@ describe("v0 lifecycle policy tables", () => {
       "replacement_shipped",
     ],
     [claimSlotResolutionPolicy, "refund_pending", "refunded"],
+    [claimSlotResolutionPolicy, "reship_shipped", "delivered_reship"],
+    [claimSlotResolutionPolicy, "replacement_shipped", "delivered_reprint"],
   ] as const)(
     "rejects %s exceptional edge without its command guard",
     (policy, current, target) => {
@@ -470,7 +539,11 @@ describe("v0 lifecycle policy tables", () => {
         current: "cancellation_pending",
         target: "cancelled",
         idempotencyKey: "provider-void-verified",
-        context: { verifiedProviderVoid: true },
+        context: {
+          verifiedProviderVoid: true,
+          shipmentJobsAndReservationsReleased: true,
+          parentCancellationBarrierReleased: true,
+        },
       }),
     ).toEqual({
       kind: "changed",
@@ -492,6 +565,20 @@ describe("v0 lifecycle policy tables", () => {
           idempotencyKey: "recovery-qc-readiness-missing",
         }),
       ).toThrow(TransitionGuardError);
+
+      const sparseShipmentStatuses = ["delivered"] as string[];
+      sparseShipmentStatuses.length = 2;
+      expect(() =>
+        transition(policy, {
+          current: "shipped",
+          target: "delivered",
+          idempotencyKey: "delivery-leaves-sparse",
+          context: {
+            shipmentLineageLeafStatuses: sparseShipmentStatuses,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+
       expect(
         transition(policy, {
           current: "recovery_pending",
@@ -530,7 +617,11 @@ describe("v0 lifecycle policy tables", () => {
         current: "qc_passed",
         target: "ready_to_ship",
         idempotencyKey: "qc-ready-cleared",
-        context: { amountDueMinor: 0n, refundableBalanceMinor: 0n },
+        context: {
+          amountDueMinor: 0n,
+          refundableBalanceMinor: 0n,
+          completeShipmentReadiness: true,
+        },
       }),
     ).toEqual({
       kind: "changed",
@@ -787,6 +878,8 @@ describe("v0 lifecycle policy tables", () => {
     const context = {
       reshipmentAuthorizationConsumed: true,
       reshipmentHandoffCompleted: true,
+      reshipmentAuthorizationCreated: true,
+      reshipmentAuthorizationSetupAtomic: true,
       [missingFlag]: false,
     };
     expect(() =>
@@ -986,6 +1079,8 @@ describe("v0 lifecycle policy tables", () => {
             shipmentStatus,
             custodyConfirmed: true,
             freshQcPassed: true,
+            reshipmentAuthorizationCreated: true,
+            reshipmentAuthorizationSetupAtomic: true,
           },
         }),
       ).toThrow(TransitionGuardError);
@@ -999,6 +1094,8 @@ describe("v0 lifecycle policy tables", () => {
         shipmentStatus: "recovered",
         custodyConfirmed: true,
         freshQcPassed: true,
+        reshipmentAuthorizationCreated: true,
+        reshipmentAuthorizationSetupAtomic: true,
         [missingFlag]: false,
       };
       expect(() =>
@@ -1029,6 +1126,8 @@ describe("v0 lifecycle policy tables", () => {
             shipmentStatus,
             custodyConfirmed: true,
             freshQcPassed: true,
+            reshipmentAuthorizationCreated: true,
+            reshipmentAuthorizationSetupAtomic: true,
           },
         }),
       ).toEqual({
@@ -1036,6 +1135,590 @@ describe("v0 lifecycle policy tables", () => {
         previous: current,
         current: "reship_pending",
       });
+    },
+  );
+
+  it.each(["refundWebhookAuthenticated", "refundWebhookVerified"] as const)(
+    "requires %s before a Payment can record a refund webhook result",
+    (missingFlag) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "refund_pending",
+          target: "partially_refunded",
+          idempotencyKey: `payment-refund-${missingFlag}`,
+          context: {
+            paymentId: "payment-1",
+            refundWebhookPaymentId: "payment-1",
+            refundTransactionId: "refund-1",
+            refundWebhookRefundTransactionId: "refund-1",
+            refundWebhookAuthenticated: true,
+            refundWebhookVerified: true,
+            refundWebhookStatus: "succeeded",
+            refundWebhookProjectedTarget: "partially_refunded",
+            [missingFlag]: false,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["refundWebhookPaymentId", "another-payment"],
+    ["refundWebhookRefundTransactionId", "another-refund"],
+    ["refundWebhookStatus", "failed"],
+    ["refundWebhookProjectedTarget", "partially_refunded"],
+  ] as const)(
+    "rejects a refund webhook with non-matching %s",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "refund_pending",
+          target: "refunded",
+          idempotencyKey: `payment-refund-${field}`,
+          context: {
+            paymentId: "payment-1",
+            refundWebhookPaymentId: "payment-1",
+            refundTransactionId: "refund-1",
+            refundWebhookRefundTransactionId: "refund-1",
+            refundWebhookAuthenticated: true,
+            refundWebhookVerified: true,
+            refundWebhookStatus: "succeeded",
+            refundWebhookProjectedTarget: "refunded",
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each(["partially_refunded", "refunded"] as const)(
+    "records Payment %s only from its matching successful verified refund webhook",
+    (target) => {
+      expect(
+        transition(paymentPolicy, {
+          current: "refund_pending",
+          target,
+          idempotencyKey: `payment-refund-success-${target}`,
+          context: {
+            paymentId: "payment-1",
+            refundWebhookPaymentId: "payment-1",
+            refundTransactionId: "refund-1",
+            refundWebhookRefundTransactionId: "refund-1",
+            refundWebhookAuthenticated: true,
+            refundWebhookVerified: true,
+            refundWebhookStatus: "succeeded",
+            refundWebhookProjectedTarget: target,
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "refund_pending",
+        current: target,
+      });
+    },
+  );
+
+  it.each([
+    "balancePaymentOrderMatches",
+    "balancePaymentCreated",
+    "balancePaymentScheduleComplete",
+    "balanceDueAtSet",
+    "balancePaymentDeadlineSetupAtomic",
+  ] as const)(
+    "requires %s before Order qc_passed -> awaiting_balance",
+    (missingFlag) => {
+      expect(() =>
+        transition(orderPolicy, {
+          current: "qc_passed",
+          target: "awaiting_balance",
+          idempotencyKey: `balance-setup-${missingFlag}`,
+          context: {
+            balancePaymentRole: "balance",
+            balancePaymentOrderMatches: true,
+            balancePaymentCreated: true,
+            balancePaymentScheduleComplete: true,
+            balanceDueAtSet: true,
+            balancePaymentDeadlineSetupAtomic: true,
+            [missingFlag]: false,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["balancePaymentRole", undefined],
+    ["balancePaymentRole", "deposit"],
+    ["balancePaymentOrderMatches", false],
+  ] as const)(
+    "rejects balance setup with invalid %s evidence",
+    (field, value) => {
+      expect(() =>
+        transition(orderPolicy, {
+          current: "qc_passed",
+          target: "awaiting_balance",
+          idempotencyKey: `balance-setup-${field}-${String(value)}`,
+          context: {
+            balancePaymentRole: "balance",
+            balancePaymentOrderMatches: true,
+            balancePaymentCreated: true,
+            balancePaymentScheduleComplete: true,
+            balanceDueAtSet: true,
+            balancePaymentDeadlineSetupAtomic: true,
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("enters awaiting_balance only after the balance Payment and deadline are atomically set", () => {
+    expect(
+      transition(orderPolicy, {
+        current: "qc_passed",
+        target: "awaiting_balance",
+        idempotencyKey: "balance-setup-complete",
+        context: {
+          balancePaymentRole: "balance",
+          balancePaymentOrderMatches: true,
+          balancePaymentCreated: true,
+          balancePaymentScheduleComplete: true,
+          balanceDueAtSet: true,
+          balancePaymentDeadlineSetupAtomic: true,
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "qc_passed",
+      current: "awaiting_balance",
+    });
+  });
+
+  it("requires the complete shipment handoff transaction before a packed Job is handed over", () => {
+    expect(() =>
+      transition(jobPolicy, {
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "job-handoff-missing",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(
+      transition(jobPolicy, {
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "job-handoff-complete",
+        context: { contextHandoffCompleted: true },
+      }),
+    ).toEqual({ kind: "changed", previous: "packed", current: "handed_over" });
+  });
+
+  it.each([
+    ["providerEventAuthenticated", false],
+    ["providerEventVerified", false],
+    ["providerEventShipmentId", "another-shipment"],
+    ["providerEventStatus", "lost"],
+  ] as const)(
+    "rejects an in-transit delivery event with non-matching %s",
+    (field, value) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          current: "in_transit",
+          target: "delivered",
+          idempotencyKey: `shipment-delivery-${field}`,
+          context: {
+            shipmentId: "shipment-1",
+            providerEventShipmentId: "shipment-1",
+            providerEventAuthenticated: true,
+            providerEventVerified: true,
+            providerEventStatus: "delivered",
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each(["delivered", "lost", "returned"] as const)(
+    "accepts in_transit -> %s only from its matching authenticated provider event",
+    (target) => {
+      expect(
+        transition(shipmentPolicy, {
+          current: "in_transit",
+          target,
+          idempotencyKey: `shipment-event-${target}`,
+          context: {
+            shipmentId: "shipment-1",
+            providerEventShipmentId: "shipment-1",
+            providerEventAuthenticated: true,
+            providerEventVerified: true,
+            providerEventStatus: target,
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "in_transit", current: target });
+    },
+  );
+
+  it.each([
+    ["currentRemedyShipmentLineageLeafStatus", "in_transit"],
+    ["providerEventShipmentId", "superseded-remedy-shipment"],
+    ["providerEventAuthenticated", false],
+    ["providerEventVerified", false],
+    ["providerEventStatus", "lost"],
+  ] as const)(
+    "rejects a remedy delivery without exact current lineage proof (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "reship_shipped",
+          target: "delivered_reship",
+          idempotencyKey: `reship-delivery-${field}`,
+          context: {
+            currentRemedyShipmentLineageLeafId: "remedy-shipment-1",
+            currentRemedyShipmentLineageLeafStatus: "delivered",
+            providerEventShipmentId: "remedy-shipment-1",
+            providerEventAuthenticated: true,
+            providerEventVerified: true,
+            providerEventStatus: "delivered",
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["reship_shipped", "delivered_reship"],
+    ["replacement_shipped", "delivered_reprint"],
+  ] as const)(
+    "records %s -> %s only from the matching delivered remedy lineage leaf",
+    (current, target) => {
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          current,
+          target,
+          idempotencyKey: `remedy-delivery-${target}`,
+          context: {
+            currentRemedyShipmentLineageLeafId: "remedy-shipment-1",
+            currentRemedyShipmentLineageLeafStatus: "delivered",
+            providerEventShipmentId: "remedy-shipment-1",
+            providerEventAuthenticated: true,
+            providerEventVerified: true,
+            providerEventStatus: "delivered",
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: target });
+    },
+  );
+
+  it.each([
+    [
+      jobPolicy,
+      "created",
+      "cancelled",
+      ["offersClosed", "productionReservationReleased"],
+    ],
+    [
+      jobPolicy,
+      "accepted",
+      "gcode_ready",
+      ["productionSliceFromReservationSnapshot", "reproductionArtifactSealed"],
+    ],
+    [
+      jobPolicy,
+      "printed",
+      "photo_submitted",
+      ["qcPhotoAssetStored", "photoRetentionDeadlineSet"],
+    ],
+    [jobPolicy, "photo_submitted", "qc_approved", ["qcApprovalVerified"]],
+    [
+      jobPolicy,
+      "photo_submitted",
+      "qc_rejected",
+      [
+        "qcRejectionVerified",
+        "replacementRequestCreated",
+        "replacementDeadlineSet",
+      ],
+    ],
+    [
+      jobPolicy,
+      "accepted",
+      "failed",
+      ["replacementRequestCreated", "replacementDeadlineSet"],
+    ],
+    [
+      paymentPolicy,
+      "pending",
+      "failed",
+      ["providerPaymentEventAuthenticated", "providerPaymentEventVerified"],
+    ],
+    [
+      paymentPolicy,
+      "pending",
+      "voided",
+      ["captureWindowClosed", "captureCutoffSet", "providerVoidOutboxCreated"],
+    ],
+    [
+      paymentPolicy,
+      "captured",
+      "refund_pending",
+      ["scopedRefundTransactionCreated", "refundPriceAdjustmentActivated"],
+    ],
+    [
+      paymentPolicy,
+      "partially_refunded",
+      "refund_pending",
+      ["scopedRefundTransactionCreated", "refundPriceAdjustmentActivated"],
+    ],
+    [
+      orderPolicy,
+      "draft",
+      "quoted",
+      [
+        "singleOrderPhaseCreated",
+        "immutableFulfilmentSlotsCreated",
+        "setupAtomic",
+      ],
+    ],
+    [orderPolicy, "qc_passed", "ready_to_ship", ["completeShipmentReadiness"]],
+    [
+      orderPolicy,
+      "qc_passed",
+      "recovery_pending",
+      ["verifiedPostQcFailure", "replacementObligationCreated"],
+    ],
+    [
+      orderPolicy,
+      "awaiting_balance",
+      "recovery_pending",
+      ["verifiedPostQcFailure", "replacementObligationCreated"],
+    ],
+    [
+      orderPolicy,
+      "ready_to_ship",
+      "recovery_pending",
+      ["verifiedPostQcFailure", "replacementObligationCreated"],
+    ],
+    [
+      singleOrderPhasePolicy,
+      "qc_passed",
+      "recovery_pending",
+      ["verifiedPostQcFailure", "replacementObligationCreated"],
+    ],
+    [
+      orderPolicy,
+      "awaiting_balance",
+      "cancelled_settled",
+      ["balanceCaptureClosed", "immutableOrderSettlementCompleted"],
+    ],
+    [
+      orderPolicy,
+      "shipped",
+      "cancelled",
+      ["recoveryFinancialSettlementCompleted"],
+    ],
+    [
+      orderPolicy,
+      "recovery_pending",
+      "cancelled",
+      ["recoveryFinancialSettlementCompleted"],
+    ],
+    [
+      singleOrderPhasePolicy,
+      "shipped",
+      "cancelled_refunded",
+      ["recoveryFinancialSettlementCompleted"],
+    ],
+    [
+      singleOrderPhasePolicy,
+      "recovery_pending",
+      "cancelled_refunded",
+      ["recoveryFinancialSettlementCompleted"],
+    ],
+    [
+      shipmentPolicy,
+      "planned",
+      "cancelled",
+      [
+        "shipmentJobsAndReservationsReleased",
+        "parentCancellationBarrierReleased",
+      ],
+    ],
+    [
+      shipmentPolicy,
+      "label_created",
+      "cancellation_pending",
+      ["labelInvalidated", "providerVoidOutboxCreated"],
+    ],
+    [
+      shipmentPolicy,
+      "cancellation_pending",
+      "cancelled",
+      [
+        "shipmentJobsAndReservationsReleased",
+        "parentCancellationBarrierReleased",
+      ],
+    ],
+    [
+      shipmentPolicy,
+      "handed_over",
+      "in_transit",
+      ["providerEventAuthenticated", "providerEventVerified"],
+    ],
+    [
+      shipmentPolicy,
+      "lost",
+      "recovered",
+      [
+        "providerEventAuthenticated",
+        "providerEventVerified",
+        "custodyConfirmed",
+      ],
+    ],
+    [
+      claimSlotResolutionPolicy,
+      "pending",
+      "reship_pending",
+      ["reshipmentAuthorizationCreated", "reshipmentAuthorizationSetupAtomic"],
+    ],
+    [
+      claimSlotResolutionPolicy,
+      "recovery_pending",
+      "reship_pending",
+      ["reshipmentAuthorizationCreated", "reshipmentAuthorizationSetupAtomic"],
+    ],
+  ] as const)(
+    "rejects %s -> %s when %s is missing",
+    (policy, current, target, flags) => {
+      for (const flag of flags) {
+        expect(() =>
+          transition(policy, {
+            current,
+            target,
+            idempotencyKey: `missing-${current}-${target}-${flag}`,
+            context: { ...contextForTransition(target), [flag]: false },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    [jobPolicy, "created", "cancelled"],
+    [jobPolicy, "accepted", "gcode_ready"],
+    [jobPolicy, "printed", "photo_submitted"],
+    [jobPolicy, "photo_submitted", "qc_approved"],
+    [jobPolicy, "photo_submitted", "qc_rejected"],
+    [paymentPolicy, "pending", "failed"],
+    [paymentPolicy, "pending", "voided"],
+    [paymentPolicy, "captured", "refund_pending"],
+    [paymentPolicy, "partially_refunded", "refund_pending"],
+    [orderPolicy, "draft", "quoted"],
+    [orderPolicy, "qc_passed", "ready_to_ship"],
+    [orderPolicy, "qc_passed", "recovery_pending"],
+    [orderPolicy, "awaiting_balance", "recovery_pending"],
+    [orderPolicy, "ready_to_ship", "recovery_pending"],
+    [orderPolicy, "awaiting_balance", "cancelled_settled"],
+    [orderPolicy, "shipped", "cancelled"],
+    [orderPolicy, "recovery_pending", "cancelled"],
+    [singleOrderPhasePolicy, "qc_passed", "recovery_pending"],
+    [singleOrderPhasePolicy, "shipped", "cancelled_refunded"],
+    [singleOrderPhasePolicy, "recovery_pending", "cancelled_refunded"],
+    [shipmentPolicy, "planned", "cancelled"],
+    [shipmentPolicy, "label_created", "cancellation_pending"],
+    [shipmentPolicy, "cancellation_pending", "cancelled"],
+    [shipmentPolicy, "handed_over", "in_transit"],
+    [shipmentPolicy, "lost", "recovered"],
+    [claimSlotResolutionPolicy, "pending", "reship_pending"],
+    [claimSlotResolutionPolicy, "recovery_pending", "reship_pending"],
+  ] as const)(
+    "accepts %s -> %s with complete command evidence",
+    (policy, current, target) => {
+      expect(
+        transition(policy, {
+          current,
+          target,
+          idempotencyKey: `complete-${current}-${target}`,
+          context: contextForTransition(target),
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: target });
+    },
+  );
+
+  it.each([
+    ["created", "cancelled"],
+    ["accepted", "failed"],
+    ["gcode_ready", "failed"],
+    ["printing", "failed"],
+    ["printed", "failed"],
+    ["photo_submitted", "failed"],
+    ["qc_approved", "failed"],
+    ["packed", "failed"],
+  ] as const)(
+    "requires valid Job cancellation/failure details for %s -> %s",
+    (current, target) => {
+      const context = contextForTransition(target);
+      expect(() =>
+        transition(jobPolicy, {
+          current,
+          target,
+          idempotencyKey: `job-details-${current}-${target}`,
+          context: {
+            ...context,
+            ...(target === "cancelled"
+              ? { cancellationReason: "not-a-reason" }
+              : { failureStage: "not-a-stage", failureReason: " " }),
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["providerEventPaymentId", "another-payment"],
+    ["providerPaymentEventStatus", "voided"],
+  ] as const)(
+    "rejects Payment failure with a non-matching provider event %s",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "failed",
+          idempotencyKey: `payment-failure-${field}`,
+          context: { ...contextForTransition("failed"), [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["failureStage", "not-a-stage"],
+    ["failureReason", "   "],
+  ] as const)("rejects a failed Job with invalid %s", (field, value) => {
+    expect(() =>
+      transition(jobPolicy, {
+        current: "printing",
+        target: "failed",
+        idempotencyKey: `job-failure-${field}`,
+        context: { ...contextForTransition("failed"), [field]: value },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["providerEventShipmentId", "another-shipment"],
+    ["providerEventStatus", "lost"],
+  ] as const)(
+    "rejects Shipment recovery with a non-matching provider event %s",
+    (field, value) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          current: "lost",
+          target: "recovered",
+          idempotencyKey: `shipment-recovery-${field}`,
+          context: { ...contextForTransition("recovered"), [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
     },
   );
 
@@ -1080,6 +1763,23 @@ describe("v0 lifecycle policy tables", () => {
       ).toEqual({ kind: "changed", previous: "active", current: target });
     },
   );
+
+  it("rejects sparse child disposition arrays", () => {
+    const sparseClaimStatuses = ["refunded"] as string[];
+    sparseClaimStatuses.length = 2;
+
+    expect(() =>
+      transition(claimPolicy, {
+        current: "active",
+        target: "resolved_refund",
+        idempotencyKey: "claim-sparse-dispositions",
+        context: {
+          claimSlotResolutionStatuses: sparseClaimStatuses,
+          cleanPostDeliveryQualityClaim: true,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 });
 
 describe("Quote ownership", () => {
