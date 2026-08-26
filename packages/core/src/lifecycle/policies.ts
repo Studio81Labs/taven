@@ -475,6 +475,185 @@ function requireAtomicOrderPhaseCompletion<S extends string>(
   );
 }
 
+function requireAtomicOrderPhaseProductionStart<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  if (
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.productionStartOrderId !== orderId ||
+    command.context?.productionStartPhaseOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.productionStartPhaseId !== phaseId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "production start must bind the exact Order and its single phase",
+    );
+  }
+  if (
+    command.context?.phaseKind !== "single" ||
+    command.context?.productionStartOrderPreviousStatus !== "confirmed" ||
+    command.context?.productionStartOrderTargetStatus !== "in_production" ||
+    command.context?.productionStartPhasePreviousStatus !== "active" ||
+    command.context?.productionStartPhaseTargetStatus !== "in_production"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "production start must persist the matching Order and phase status pair",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "productionStartCompleted",
+    "production start requires both aggregate results",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "productionStartAtomic",
+    "Order and phase production start must be atomic",
+  );
+}
+
+type OrderTerminalPhaseDisposition = Readonly<{
+  phasePrevious: "shipped" | "recovery_pending" | "qc_passed" | "cancelled";
+  phaseIntermediate?: "cancelled";
+  phaseTarget:
+    "partially_fulfilled" | "cancelled_refunded" | "cancelled_settled";
+}>;
+
+function expectedOrderTerminalPhaseDisposition(
+  orderPrevious: string,
+  orderTarget: string,
+): OrderTerminalPhaseDisposition | undefined {
+  if (orderTarget === "partially_fulfilled") {
+    if (orderPrevious === "shipped") {
+      return { phasePrevious: "shipped", phaseTarget: "partially_fulfilled" };
+    }
+    if (orderPrevious === "recovery_pending") {
+      return {
+        phasePrevious: "recovery_pending",
+        phaseTarget: "partially_fulfilled",
+      };
+    }
+  }
+  if (orderPrevious === "cancelled" && orderTarget === "refunded") {
+    return {
+      phasePrevious: "cancelled",
+      phaseTarget: "cancelled_refunded",
+    };
+  }
+  if (orderPrevious === "cancelled" && orderTarget === "cancelled_settled") {
+    return {
+      phasePrevious: "cancelled",
+      phaseTarget: "cancelled_settled",
+    };
+  }
+  if (
+    orderPrevious === "awaiting_balance" &&
+    orderTarget === "cancelled_settled"
+  ) {
+    return {
+      phasePrevious: "qc_passed",
+      phaseIntermediate: "cancelled",
+      phaseTarget: "cancelled_settled",
+    };
+  }
+  return undefined;
+}
+
+function requireAtomicOrderTerminalPhaseDisposition<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const expected = expectedOrderTerminalPhaseDisposition(
+    command.current,
+    command.target,
+  );
+  if (expected === undefined) {
+    return;
+  }
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  const actualPhasePrevious = command.context?.orderTerminalPhasePreviousStatus;
+  const phaseAlreadyTerminal = actualPhasePrevious === expected.phaseTarget;
+  if (
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.orderTerminalPhaseOrderId !== orderId ||
+    command.context?.orderTerminalPhaseOwnerOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.orderTerminalPhaseId !== phaseId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "terminal disposition must bind the exact Order and its single phase",
+    );
+  }
+  if (
+    command.context?.phaseKind !== "single" ||
+    command.context?.orderTerminalPhaseOrderPreviousStatus !==
+      command.current ||
+    command.context?.orderTerminalPhaseOrderTargetStatus !== command.target ||
+    (actualPhasePrevious !== expected.phasePrevious && !phaseAlreadyTerminal) ||
+    command.context?.orderTerminalPhaseTargetStatus !== expected.phaseTarget ||
+    command.context?.orderTerminalPhaseIntermediateStatus !==
+      (phaseAlreadyTerminal ? undefined : expected.phaseIntermediate)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "terminal Order outcome requires the exact matching phase disposition",
+    );
+  }
+  if (expected.phaseIntermediate !== undefined) {
+    if (!phaseAlreadyTerminal) {
+      requireFlag(
+        lifecycle,
+        command,
+        "orderTerminalPhaseCancellationCompleted",
+        "direct balance settlement must complete phase cancellation first",
+      );
+    }
+    requireFlag(
+      lifecycle,
+      command,
+      "preHandoffShipmentCancellationsCompleted",
+      "direct balance settlement must complete pre-handoff shipment cancellation",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "orderTerminalPhaseCompleted",
+    "terminal Order outcome requires its terminal phase result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    phaseAlreadyTerminal
+      ? "orderTerminalPhaseCommittedBeforeOrder"
+      : "orderTerminalPhaseAtomic",
+    phaseAlreadyTerminal
+      ? "the terminal phase result must be committed before its parent Order outcome"
+      : "terminal phase disposition and parent Order outcome must be atomic",
+  );
+}
+
 function requireAllShipmentLineageLeavesDelivered<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2053,7 +2232,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     draft: ["quoted"],
     quoted: ["confirmed", "expired", "cancelled"],
     confirmed: ["in_production", "cancelled"],
-    in_production: ["qc_passed", "partially_fulfilled", "cancelled"],
+    in_production: ["qc_passed", "cancelled"],
     qc_passed: [
       "awaiting_balance",
       "ready_to_ship",
@@ -2096,6 +2275,9 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     }
     if (command.current === "quoted" && command.target === "confirmed") {
       requireAtomicConfirmationActivation("Order", command);
+    }
+    if (command.current === "confirmed" && command.target === "in_production") {
+      requireAtomicOrderPhaseProductionStart("Order", command);
     }
     if (
       command.current === "quoted" &&
@@ -2196,6 +2378,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     if (command.current === "delivered" && command.target === "completed") {
       requireAtomicOrderPhaseCompletion("Order", command);
     }
+    requireAtomicOrderTerminalPhaseDisposition("Order", command);
     if (command.target === "cancelled") {
       requireFlag(
         "Order",
@@ -2303,6 +2486,9 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
     guard: (command) => {
       if (command.current === "quoted" && command.target === "active") {
         requireAtomicConfirmationActivation("OrderPhase(single)", command);
+      }
+      if (command.current === "active" && command.target === "in_production") {
+        requireAtomicOrderPhaseProductionStart("OrderPhase(single)", command);
       }
       if (
         (command.current === "in_production" ||
@@ -3048,9 +3234,17 @@ function requireCompleteClaimResolutionSet<S extends string>(
 ): ClaimSlotResolutionStatus[] {
   const claimId = command.context?.claimId;
   const expectedIdsValue = command.context?.expectedClaimSlotResolutionIds;
+  const expectedSlotIdsValue = command.context?.expectedClaimSlotIds;
+  const expectedBindingsValue = command.context?.expectedClaimResolutionSlots;
   const resolutionsValue = command.context?.claimSlotResolutions;
   const expectedIds = Array.isArray(expectedIdsValue)
     ? [...expectedIdsValue]
+    : undefined;
+  const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
+    ? [...expectedSlotIdsValue]
+    : undefined;
+  const expectedBindings = Array.isArray(expectedBindingsValue)
+    ? [...expectedBindingsValue]
     : undefined;
   const resolutions = Array.isArray(resolutionsValue)
     ? [...resolutionsValue]
@@ -3065,6 +3259,14 @@ function requireCompleteClaimResolutionSet<S extends string>(
       (id) => typeof id !== "string" || id.trim().length === 0,
     ) ||
     new Set(expectedIds).size !== expectedIds.length ||
+    expectedSlotIds === undefined ||
+    expectedSlotIds.length !== expectedIds.length ||
+    expectedSlotIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(expectedSlotIds).size !== expectedSlotIds.length ||
+    expectedBindings === undefined ||
+    expectedBindings.length !== expectedIds.length ||
     resolutions === undefined ||
     resolutions.length !== expectedIds.length
   ) {
@@ -3076,7 +3278,52 @@ function requireCompleteClaimResolutionSet<S extends string>(
     );
   }
   const ownedIds = expectedIds as string[];
+  const ownedSlotIds = expectedSlotIds as string[];
+  const expectedSlotByResolution = new Map<string, string>();
+  const boundSlotIds = new Set<string>();
+  for (const value of expectedBindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim resolution ownership requires exact resolution-to-slot bindings",
+      );
+    }
+    const binding = value as Readonly<Record<string, unknown>>;
+    const resolutionId = binding.resolutionId;
+    const slotId = binding.slotId;
+    if (
+      typeof resolutionId !== "string" ||
+      !ownedIds.includes(resolutionId) ||
+      expectedSlotByResolution.has(resolutionId) ||
+      typeof slotId !== "string" ||
+      !ownedSlotIds.includes(slotId) ||
+      boundSlotIds.has(slotId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim resolution ownership bindings must cover each exact child and slot once",
+      );
+    }
+    expectedSlotByResolution.set(resolutionId, slotId);
+    boundSlotIds.add(slotId);
+  }
+  if (
+    ownedIds.some((id) => !expectedSlotByResolution.has(id)) ||
+    ownedSlotIds.some((id) => !boundSlotIds.has(id))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim resolution ownership bindings cannot omit an owned child or slot",
+    );
+  }
   const projectedIds = new Set<string>();
+  const projectedSlotIds = new Set<string>();
   const statuses: ClaimSlotResolutionStatus[] = [];
   for (const value of resolutions) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -3089,6 +3336,7 @@ function requireCompleteClaimResolutionSet<S extends string>(
     }
     const resolution = value as Readonly<Record<string, unknown>>;
     const id = resolution.id;
+    const slotId = resolution.slotId;
     const status = resolution.status;
     if (
       typeof id !== "string" ||
@@ -3096,6 +3344,13 @@ function requireCompleteClaimResolutionSet<S extends string>(
       projectedIds.has(id) ||
       !ownedIds.includes(id) ||
       resolution.claimId !== claimId ||
+      typeof slotId !== "string" ||
+      slotId.trim().length === 0 ||
+      projectedSlotIds.has(slotId) ||
+      !ownedSlotIds.includes(slotId) ||
+      expectedSlotByResolution.get(id) !== slotId ||
+      resolution.activeClaimIdBefore !== claimId ||
+      resolution.activeClaimIdAfter !== null ||
       typeof status !== "string"
     ) {
       throw new TransitionGuardError(
@@ -3106,14 +3361,18 @@ function requireCompleteClaimResolutionSet<S extends string>(
       );
     }
     projectedIds.add(id);
+    projectedSlotIds.add(slotId);
     statuses.push(status as ClaimSlotResolutionStatus);
   }
-  if (ownedIds.some((id) => !projectedIds.has(id))) {
+  if (
+    ownedIds.some((id) => !projectedIds.has(id)) ||
+    ownedSlotIds.some((id) => !projectedSlotIds.has(id))
+  ) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
       command.target,
-      "Claim child projection cannot omit an owned resolution",
+      "Claim child projection cannot omit an owned resolution or slot",
     );
   }
   requireFlag(
@@ -3121,6 +3380,48 @@ function requireCompleteClaimResolutionSet<S extends string>(
     command,
     "claimResolutionSetComplete",
     "Claim terminal projection requires the authoritative complete child set",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimSlotOwnershipReleased",
+    "terminal Claim must release every owned slot",
+  );
+  const previousDeleteAfter =
+    command.context?.claimRetentionPreviousDeleteAfter;
+  const targetDeleteAfter = command.context?.claimRetentionTargetDeleteAfter;
+  if (
+    command.context?.claimRetentionClaimId !== claimId ||
+    command.context?.claimRetentionHoldPreviousStatus !== "active_claim" ||
+    command.context?.claimRetentionHoldTargetStatus !== "released" ||
+    !(previousDeleteAfter instanceof Instant) ||
+    !(targetDeleteAfter instanceof Instant) ||
+    targetDeleteAfter.compare(previousDeleteAfter) < 0
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "terminal Claim must release its exact retention hold and recompute a valid deadline",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "claimRetentionDeadlineRecomputed",
+    "terminal Claim must recompute its retention deadline",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimRetentionReleased",
+    "terminal Claim must release its retention hold",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimTerminalCleanupAtomic",
+    "Claim finalization, slot release, and retention cleanup must be atomic",
   );
   return statuses;
 }

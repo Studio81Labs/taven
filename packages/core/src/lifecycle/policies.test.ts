@@ -202,6 +202,27 @@ const permittedContext = {
   orderCompletionPhaseTargetStatus: "completed",
   phaseCompletionCompleted: true,
   orderPhaseCompletionAtomic: true,
+  productionStartOrderId: "order-1",
+  productionStartPhaseOrderId: "order-1",
+  productionStartPhaseId: "phase-1",
+  productionStartOrderPreviousStatus: "confirmed",
+  productionStartOrderTargetStatus: "in_production",
+  productionStartPhasePreviousStatus: "active",
+  productionStartPhaseTargetStatus: "in_production",
+  productionStartCompleted: true,
+  productionStartAtomic: true,
+  orderTerminalPhaseOrderId: "order-1",
+  orderTerminalPhaseOwnerOrderId: "order-1",
+  orderTerminalPhaseId: "phase-1",
+  orderTerminalPhaseOrderPreviousStatus: "cancelled",
+  orderTerminalPhaseOrderTargetStatus: "refunded",
+  orderTerminalPhasePreviousStatus: "cancelled",
+  orderTerminalPhaseTargetStatus: "cancelled_refunded",
+  orderTerminalPhaseIntermediateStatus: undefined,
+  orderTerminalPhaseCancellationCompleted: true,
+  orderTerminalPhaseCompleted: true,
+  orderTerminalPhaseCommittedBeforeOrder: false,
+  orderTerminalPhaseAtomic: true,
   orderItemId: "order-item-1",
   nodeAssigned: true,
   cancellationReason: "order_cancelled",
@@ -276,14 +297,30 @@ const permittedContext = {
   claimId: "claim-1",
   claimResolutionSetClaimId: "claim-1",
   expectedClaimSlotResolutionIds: ["claim-resolution-1"],
+  expectedClaimSlotIds: ["claim-slot-1"],
+  expectedClaimResolutionSlots: [
+    { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+  ],
   claimSlotResolutions: [
     {
       id: "claim-resolution-1",
       claimId: "claim-1",
+      slotId: "claim-slot-1",
+      activeClaimIdBefore: "claim-1",
+      activeClaimIdAfter: null,
       status: "refunded",
     },
   ],
   claimResolutionSetComplete: true,
+  claimSlotOwnershipReleased: true,
+  claimRetentionClaimId: "claim-1",
+  claimRetentionHoldPreviousStatus: "active_claim",
+  claimRetentionHoldTargetStatus: "released",
+  claimRetentionPreviousDeleteAfter: Instant.parse("2026-02-01T00:00:00.000Z"),
+  claimRetentionTargetDeleteAfter: Instant.parse("2026-02-02T00:00:00.000Z"),
+  claimRetentionDeadlineRecomputed: true,
+  claimRetentionReleased: true,
+  claimTerminalCleanupAtomic: true,
   remedyCancellationCompleted: true,
   reshipmentAuthorizationConsumed: true,
   reshipmentHandoffCompleted: true,
@@ -393,16 +430,40 @@ function claimResolutionEvidence(statuses: readonly string[]) {
   const expectedClaimSlotResolutionIds = statuses.map(
     (_status, index) => `claim-resolution-${index + 1}`,
   );
+  const expectedClaimSlotIds = statuses.map(
+    (_status, index) => `claim-slot-${index + 1}`,
+  );
   return {
     claimId: "claim-1",
     claimResolutionSetClaimId: "claim-1",
     expectedClaimSlotResolutionIds,
+    expectedClaimSlotIds,
+    expectedClaimResolutionSlots: expectedClaimSlotResolutionIds.map(
+      (resolutionId, index) => ({
+        resolutionId,
+        slotId: expectedClaimSlotIds[index],
+      }),
+    ),
     claimSlotResolutions: statuses.map((status, index) => ({
       id: expectedClaimSlotResolutionIds[index],
       claimId: "claim-1",
+      slotId: expectedClaimSlotIds[index],
+      activeClaimIdBefore: "claim-1",
+      activeClaimIdAfter: null,
       status,
     })),
     claimResolutionSetComplete: true,
+    claimSlotOwnershipReleased: true,
+    claimRetentionClaimId: "claim-1",
+    claimRetentionHoldPreviousStatus: "active_claim",
+    claimRetentionHoldTargetStatus: "released",
+    claimRetentionPreviousDeleteAfter: Instant.parse(
+      "2026-02-01T00:00:00.000Z",
+    ),
+    claimRetentionTargetDeleteAfter: Instant.parse("2026-02-02T00:00:00.000Z"),
+    claimRetentionDeadlineRecomputed: true,
+    claimRetentionReleased: true,
+    claimTerminalCleanupAtomic: true,
   };
 }
 
@@ -425,9 +486,42 @@ function orderCancellationPhaseDisposition(current?: string): {
   return { previous: "qc_passed", target: "cancelled" };
 }
 
+function orderTerminalPhaseDisposition(
+  current?: string,
+  target?: string,
+): {
+  readonly previous: string;
+  readonly intermediate: string | undefined;
+  readonly target: string;
+} {
+  if (target === "partially_fulfilled") {
+    return {
+      previous: current === "recovery_pending" ? "recovery_pending" : "shipped",
+      intermediate: undefined,
+      target: "partially_fulfilled",
+    };
+  }
+  if (current === "awaiting_balance" && target === "cancelled_settled") {
+    return {
+      previous: "qc_passed",
+      intermediate: "cancelled",
+      target: "cancelled_settled",
+    };
+  }
+  return {
+    previous: "cancelled",
+    intermediate: undefined,
+    target: target === "refunded" ? "cancelled_refunded" : "cancelled_settled",
+  };
+}
+
 function contextForTransition(target: string, current?: string) {
   const cancellationPhaseDisposition =
     orderCancellationPhaseDisposition(current);
+  const terminalPhaseDisposition = orderTerminalPhaseDisposition(
+    current,
+    target,
+  );
   const claimSlotResolutionStatuses = claimSlotStatusesForTarget(target);
   const resolutionEvidence = claimResolutionEvidence(
     claimSlotResolutionStatuses,
@@ -490,6 +584,11 @@ function contextForTransition(target: string, current?: string) {
     phaseCancellationOrderPreviousStatus: current,
     phaseCancellationPhasePreviousStatus: cancellationPhaseDisposition.previous,
     phaseCancellationPhaseTargetStatus: cancellationPhaseDisposition.target,
+    orderTerminalPhaseOrderPreviousStatus: current,
+    orderTerminalPhaseOrderTargetStatus: target,
+    orderTerminalPhasePreviousStatus: terminalPhaseDisposition.previous,
+    orderTerminalPhaseIntermediateStatus: terminalPhaseDisposition.intermediate,
+    orderTerminalPhaseTargetStatus: terminalPhaseDisposition.target,
   };
 }
 
@@ -599,6 +698,7 @@ describe("v0 lifecycle policy tables", () => {
     [paymentPolicy, "refund_pending", "partially_refunded"],
     [paymentPolicy, "refund_pending", "refunded"],
     [orderPolicy, "quoted", "confirmed"],
+    [orderPolicy, "confirmed", "in_production"],
     [orderPolicy, "in_production", "qc_passed"],
     [orderPolicy, "recovery_pending", "qc_passed"],
     [orderPolicy, "qc_passed", "awaiting_balance"],
@@ -608,6 +708,7 @@ describe("v0 lifecycle policy tables", () => {
     [orderPolicy, "awaiting_balance", "ready_to_ship"],
     [orderPolicy, "shipped", "delivered"],
     [singleOrderPhasePolicy, "quoted", "active"],
+    [singleOrderPhasePolicy, "active", "in_production"],
     [singleOrderPhasePolicy, "in_production", "qc_passed"],
     [singleOrderPhasePolicy, "recovery_pending", "qc_passed"],
     [singleOrderPhasePolicy, "shipped", "delivered"],
@@ -935,7 +1036,6 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     [orderPolicy, "delivered", "completed"],
-    [orderPolicy, "in_production", "partially_fulfilled"],
     [orderPolicy, "shipped", "partially_fulfilled"],
     [orderPolicy, "recovery_pending", "partially_fulfilled"],
     [singleOrderPhasePolicy, "delivered", "completed"],
@@ -997,6 +1097,156 @@ describe("v0 lifecycle policy tables", () => {
       }
     },
   );
+
+  it.each([
+    ["orderId", " "],
+    ["productionStartOrderId", "another-order"],
+    ["productionStartPhaseOrderId", "another-order"],
+    ["phaseId", "\t"],
+    ["productionStartPhaseId", "another-phase"],
+    ["phaseKind", "sample"],
+    ["productionStartOrderPreviousStatus", "quoted"],
+    ["productionStartOrderTargetStatus", "confirmed"],
+    ["productionStartPhasePreviousStatus", "quoted"],
+    ["productionStartPhaseTargetStatus", "active"],
+    ["productionStartCompleted", false],
+    ["productionStartAtomic", false],
+  ] as const)(
+    "rejects atomic production start with invalid %s",
+    (field, value) => {
+      for (const [policy, current] of [
+        [orderPolicy, "confirmed"],
+        [singleOrderPhasePolicy, "active"],
+      ] as const) {
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "in_production",
+            idempotencyKey: `production-start-${policy.name}-${field}`,
+            context: {
+              ...contextForTransition("in_production", current),
+              [field]: value,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["shipped", "partially_fulfilled"],
+    ["recovery_pending", "partially_fulfilled"],
+    ["cancelled", "refunded"],
+    ["cancelled", "cancelled_settled"],
+    ["awaiting_balance", "cancelled_settled"],
+  ] as const)(
+    "persists the exact terminal single-phase result for Order %s -> %s",
+    (current, target) => {
+      expect(
+        transition(orderPolicy, {
+          current,
+          target,
+          idempotencyKey: `order-terminal-phase-${current}-${target}`,
+          context: contextForTransition(target, current),
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: target });
+
+      const baseContext = contextForTransition(target, current);
+      for (const [field, value] of [
+        ["orderId", " "],
+        ["orderTerminalPhaseOrderId", "another-order"],
+        ["orderTerminalPhaseOwnerOrderId", "another-order"],
+        ["phaseId", "\t"],
+        ["orderTerminalPhaseId", "another-phase"],
+        ["phaseKind", "sample"],
+        ["orderTerminalPhaseOrderPreviousStatus", "quoted"],
+        ["orderTerminalPhaseOrderTargetStatus", "completed"],
+        ["orderTerminalPhasePreviousStatus", "active"],
+        ["orderTerminalPhaseTargetStatus", "completed"],
+        ["orderTerminalPhaseCompleted", false],
+        ["orderTerminalPhaseAtomic", false],
+      ] as const) {
+        expect(() =>
+          transition(orderPolicy, {
+            current,
+            target,
+            idempotencyKey: `order-terminal-phase-${current}-${target}-${field}`,
+            context: { ...baseContext, [field]: value },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["orderTerminalPhaseIntermediateStatus", undefined],
+    ["orderTerminalPhaseCancellationCompleted", false],
+    ["preHandoffShipmentCancellationsCompleted", false],
+  ] as const)(
+    "rejects direct balance settlement with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(orderPolicy, {
+          current: "awaiting_balance",
+          target: "cancelled_settled",
+          idempotencyKey: `direct-balance-terminal-phase-${field}`,
+          context: {
+            ...contextForTransition("cancelled_settled", "awaiting_balance"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["shipped", "partially_fulfilled", "partially_fulfilled"],
+    ["recovery_pending", "partially_fulfilled", "partially_fulfilled"],
+    ["cancelled", "refunded", "cancelled_refunded"],
+    ["cancelled", "cancelled_settled", "cancelled_settled"],
+    ["awaiting_balance", "cancelled_settled", "cancelled_settled"],
+  ] as const)(
+    "accepts a terminal phase committed before Order %s -> %s",
+    (current, target, phaseTarget) => {
+      const context = {
+        ...contextForTransition(target, current),
+        orderTerminalPhasePreviousStatus: phaseTarget,
+        orderTerminalPhaseIntermediateStatus: undefined,
+        orderTerminalPhaseCommittedBeforeOrder: true,
+        orderTerminalPhaseAtomic: false,
+      };
+      expect(
+        transition(orderPolicy, {
+          current,
+          target,
+          idempotencyKey: `terminal-phase-before-order-${current}-${target}`,
+          context,
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: target });
+      expect(() =>
+        transition(orderPolicy, {
+          current,
+          target,
+          idempotencyKey: `terminal-phase-before-order-uncommitted-${current}-${target}`,
+          context: {
+            ...context,
+            orderTerminalPhaseCommittedBeforeOrder: false,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("does not expose the phased in-production partial outcome in v0", () => {
+    expect(() =>
+      transition(orderPolicy, {
+        current: "in_production",
+        target: "partially_fulfilled",
+        idempotencyKey: "v0-no-phased-partial-outcome",
+        context: contextForTransition("partially_fulfilled", "in_production"),
+      }),
+    ).toThrow(InvalidTransitionError);
+  });
 
   it("blocks ordinary handoff while either financial balance is non-zero", () => {
     expect(() =>
@@ -1141,6 +1391,7 @@ describe("v0 lifecycle policy tables", () => {
           target,
           idempotencyKey: `financial-match-${target}`,
           context: {
+            ...contextForTransition(target, "cancelled"),
             amountDueMinor: 0n,
             refundableBalanceMinor: 0n,
             completionProjected: true,
@@ -1629,6 +1880,10 @@ describe("v0 lifecycle policy tables", () => {
           target: policy === orderPolicy ? "refunded" : "cancelled_refunded",
           idempotencyKey: "captured-cancellation-refund",
           context: {
+            ...contextForTransition(
+              policy === orderPolicy ? "refunded" : "cancelled_refunded",
+              "cancelled",
+            ),
             paymentStatus: "paid",
             amountDueMinor: 0n,
             refundableBalanceMinor: 0n,
@@ -3665,9 +3920,84 @@ describe("v0 lifecycle policy tables", () => {
       }),
     ],
     [
+      "duplicate expected slot identity",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        expectedClaimSlotIds: [
+          evidence.expectedClaimSlotIds[0],
+          evidence.expectedClaimSlotIds[0],
+        ],
+      }),
+    ],
+    [
+      "foreign projected slot",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: [
+          evidence.claimSlotResolutions[0],
+          { ...evidence.claimSlotResolutions[1], slotId: "foreign-slot" },
+        ],
+      }),
+    ],
+    [
+      "duplicate projected slot",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: [
+          evidence.claimSlotResolutions[0],
+          {
+            ...evidence.claimSlotResolutions[1],
+            slotId: evidence.claimSlotResolutions[0]?.slotId,
+          },
+        ],
+      }),
+    ],
+    [
+      "swapped resolution-to-slot binding",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: [
+          {
+            ...evidence.claimSlotResolutions[0],
+            slotId: evidence.claimSlotResolutions[1]?.slotId,
+          },
+          {
+            ...evidence.claimSlotResolutions[1],
+            slotId: evidence.claimSlotResolutions[0]?.slotId,
+          },
+        ],
+      }),
+    ],
+    [
+      "foreign active Claim owner",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: [
+          evidence.claimSlotResolutions[0],
+          {
+            ...evidence.claimSlotResolutions[1],
+            activeClaimIdBefore: "another-claim",
+          },
+        ],
+      }),
+    ],
+    [
+      "retained active Claim owner",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: [
+          evidence.claimSlotResolutions[0],
+          {
+            ...evidence.claimSlotResolutions[1],
+            activeClaimIdAfter: "claim-1",
+          },
+        ],
+      }),
+    ],
+    [
       "incomplete-set flag",
       (_evidence: ReturnType<typeof claimResolutionEvidence>) => ({
         claimResolutionSetComplete: false,
+      }),
+    ],
+    [
+      "ownership-release flag",
+      (_evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotOwnershipReleased: false,
       }),
     ],
   ] as const)("rejects Claim resolution with %s", (_case, mutate) => {
@@ -3684,6 +4014,35 @@ describe("v0 lifecycle policy tables", () => {
       }),
     ).toThrow(TransitionGuardError);
   });
+
+  it.each([
+    ["claimRetentionClaimId", "another-claim"],
+    ["claimRetentionHoldPreviousStatus", "released"],
+    ["claimRetentionHoldTargetStatus", "active_claim"],
+    ["claimRetentionPreviousDeleteAfter", "not-an-instant"],
+    [
+      "claimRetentionTargetDeleteAfter",
+      Instant.parse("2026-01-31T00:00:00.000Z"),
+    ],
+    ["claimRetentionDeadlineRecomputed", false],
+    ["claimRetentionReleased", false],
+    ["claimTerminalCleanupAtomic", false],
+  ] as const)(
+    "rejects Claim terminal cleanup with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(claimPolicy, {
+          current: "active",
+          target: "resolved_refund",
+          idempotencyKey: `claim-terminal-cleanup-${field}`,
+          context: {
+            ...claimResolutionEvidence(["refunded"]),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it("accepts a complete reordered Claim child set", () => {
     const evidence = claimResolutionEvidence(["delivered_reprint", "refunded"]);
