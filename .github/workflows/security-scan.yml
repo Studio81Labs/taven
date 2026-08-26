@@ -83,8 +83,6 @@ jobs:
       - name: Check pnpm overrides
         run: |
           set -euo pipefail
-          python3 -c "import yaml" 2>/dev/null \
-            || pip install --quiet --disable-pip-version-check pyyaml
           python3 scripts/ci/check-pnpm-overrides.py
 
       - name: OSV Scanner
