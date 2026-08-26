@@ -19,16 +19,18 @@ name: Prune Stale Caches
 # run restores. Evicting those to store a Gradle cache is a straight loss, and
 # it presents as "the new cache didn't help" rather than as an error.
 #
-# The rule: keep the newest entry per key family, drop the rest. A family is
-# the key with its trailing content hashes stripped, so
+# The rule: keep the exact entry current main can request per key family, drop
+# the rest. A family is the key with its trailing content hashes stripped, so
 # `node-cache-Linux-x64-pnpm-<hash>` collapses to `node-cache-Linux-x64-pnpm`
-# and only the most recently created survives. Creation time is immutable;
-# last-access time is not, so rerunning an old main revision must not make its
-# obsolete key displace the cache produced for the current line of development.
-# Deleting a superseded content-hash
-# key costs nothing measurable: it is a key nothing requests any more.
+# and only the key carrying current main's lockfile hash survives. Neither
+# creation nor access time proves that: rerunning an old revision can recreate
+# or restore its obsolete key later. Deleting a superseded content-hash key
+# costs nothing measurable because it is a key current main cannot request.
 #
-# NOT handled here, deliberately: a whole family going obsolete. The Flutter
+# NOT handled here, deliberately: action-managed families whose exact current
+# key cannot be derived from repository inputs (setup-java and ruby/setup-ruby)
+# are left untouched rather than guessed at. A whole family going obsolete is
+# also out of scope. The Flutter
 # version is part of its family name (`flutter-linux-stable-3.41.9-x64`), so
 # bumping the pin starts a new family and leaves the old one intact as its own
 # single entry — around 1.7 GB per superseded SDK. Both repos are on one
@@ -65,11 +67,24 @@ jobs:
       # The only permission this needs, scoped to this job.
       actions: write
     steps:
+      - name: Checkout current main cache inputs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
       - name: Delete superseded main-branch caches
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          # Evaluated after the explicit main checkout. These are the same
+          # hashFiles inputs used by setup-node and the shared explicit mobile
+          # caches; an old rerun cannot change them.
+          CURRENT_PNPM_HASH: ${{ hashFiles('pnpm-lock.yaml') }}
+          CURRENT_GRADLE_HASH: ${{ hashFiles('apps/mobile/android/**/*.gradle*', 'apps/mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          CURRENT_COCOAPODS_HASH: ${{ hashFiles('apps/mobile/ios/Podfile.lock') }}
+          CURRENT_SPM_HASH: ${{ hashFiles('apps/mobile/ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
         run: |
           set -euo pipefail
           python3 <<'PY'
@@ -117,6 +132,30 @@ jobs:
                   key = HASH.sub("", key)
               return key
 
+          current_hashes = {
+              "pnpm": os.environ.get("CURRENT_PNPM_HASH", ""),
+              "gradle": os.environ.get("CURRENT_GRADLE_HASH", ""),
+              "cocoapods": os.environ.get("CURRENT_COCOAPODS_HASH", ""),
+              "spm": os.environ.get("CURRENT_SPM_HASH", ""),
+          }
+
+          def is_current(key):
+              pnpm = current_hashes["pnpm"]
+              return any((
+                  bool(pnpm)
+                  and key.startswith("node-cache-")
+                  and key.endswith(f"-pnpm-{pnpm}"),
+                  bool(current_hashes["gradle"])
+                  and key.startswith("gradle-")
+                  and key.endswith(f"-{current_hashes['gradle']}"),
+                  bool(current_hashes["cocoapods"])
+                  and key.startswith("cocoapods-")
+                  and key.endswith(f"-{current_hashes['cocoapods']}"),
+                  bool(current_hashes["spm"])
+                  and key.startswith("spm-")
+                  and key.endswith(f"-{current_hashes['spm']}"),
+              ))
+
           groups = collections.defaultdict(list)
           for c in caches:
               # main only. PR refs belong to cleanup-pr-caches.yml, and taking
@@ -124,16 +163,33 @@ jobs:
               if c["ref"] == "refs/heads/main":
                   groups[family(c["key"])].append(c)
 
+          protected = [
+              c
+              for items in groups.values()
+              for c in items
+              if is_current(c["key"])
+          ]
+          print(
+              f"::notice::found {len(protected)} source-derived current-main "
+              "cache key(s)"
+          )
+
           doomed, freed = [], 0
           for fam, items in sorted(groups.items()):
               if len(items) < 2:
                   continue
-              # Never select by last_accessed_at. Restoring an obsolete key
-              # from a rerun of an old main revision makes that value current
-              # without making the key useful to present-day builds.
-              items.sort(key=lambda c: c["created_at"], reverse=True)
-              keep, rest = items[0], items[1:]
-              print(f"{fam}: {len(items)} entries, keeping creation {keep['created_at'][:16]}")
+              keep = [c for c in items if is_current(c["key"])]
+              if not keep:
+                  print(
+                      f"{fam}: {len(items)} entries, no source-derived current-main "
+                      "key present; leaving this family untouched"
+                  )
+                  continue
+              rest = [c for c in items if not is_current(c["key"])]
+              print(
+                  f"{fam}: {len(items)} entries, keeping {len(keep)} exact "
+                  "current-main key(s)"
+              )
               for c in rest:
                   doomed.append(c)
                   freed += c["size_in_bytes"]
