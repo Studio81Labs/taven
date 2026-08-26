@@ -25,6 +25,11 @@ for app in backend web admin slicer-worker; do
   fi
 done
 
+# Prisma gives an ambient DATABASE_URL precedence over apps/backend/.env. Guard
+# the effective value before starting services or applying migrations so a
+# developer shell configured for production cannot make bootstrap destructive.
+node --env-file-if-exists=apps/backend/.env scripts/ci/assert-local-database-url.mjs
+
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required"
 corepack pnpm infra:up
 corepack pnpm db:migrate:deploy

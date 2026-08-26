@@ -1,6 +1,12 @@
 # ported from Studio81Labs/nexcue@314cec8972589780072e641591b16eca9805d7dd
 name: Security Scan
 
+# Dependency advisories change over time, so OSV runs for pull requests,
+# pushes, the weekly schedule and manual audits. Code and newly introduced
+# secrets are properties of a change, so they gate pull requests. A scanner
+# upgrade also rechecks the complete history because new detectors have never
+# inspected old commits.
+
 on:
   pull_request:
     branches: [main]
@@ -18,20 +24,37 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Tags let Renovate discover updates; immutable digests are what execute.
   TRUFFLEHOG_IMAGE: ghcr.io/trufflesecurity/trufflehog:3.96.0@sha256:aa821cf4ace8861c7d096d83818cdf7bb9719028a52d37a52eaad44086a52577
   OSV_IMAGE: ghcr.io/google/osv-scanner:v2.5.0@sha256:5b8b38e45bb2c5c4976f0f1f07860551ea6e1f235f642cf215f74d266fec2c1b
+  SEMGREP_IMAGE: semgrep/semgrep:1.173.0@sha256:67319956da3dcb58baf5b322899c15458e3963e7018a86aeeb5cd224e69cb77a
 
 jobs:
   secrets:
     name: "security: secrets"
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Scan pull request range
+      - name: Detect a scanner change
+        id: mode
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+               | grep -qx '\.github/workflows/security-scan\.yml'; then
+            echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "scanner-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: TruffleHog — pull request range
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -43,20 +66,8 @@ jobs:
             --results=verified,unknown --since-commit "$BASE_SHA" --branch "$HEAD_SHA" \
             --fail --no-update --github-actions
 
-      - name: Scan pushed range
-        if: github.event_name == 'push'
-        env:
-          BASE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          docker run --rm -v "${GITHUB_WORKSPACE}:/repo" -w /repo \
-            "$TRUFFLEHOG_IMAGE" git file:///repo \
-            --results=verified,unknown --since-commit "$BASE_SHA" --branch "$HEAD_SHA" \
-            --fail --no-update --github-actions
-
-      - name: Scan full history
-        if: github.event_name == 'workflow_dispatch'
+      - name: TruffleHog — full history
+        if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || steps.mode.outputs.scanner-changed == 'true') }}
         run: |
           set -euo pipefail
           docker run --rm -v "${GITHUB_WORKSPACE}:/repo" -w /repo \
@@ -68,13 +79,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-      - name: Validate pnpm overrides
-        run: node scripts/ci/check-pnpm-overrides.mjs
+
+      - name: Check pnpm overrides
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null \
+            || pip install --quiet --disable-pip-version-check pyyaml
+          python3 scripts/ci/check-pnpm-overrides.py
+
       - name: OSV Scanner
         run: |
           set -euo pipefail
           docker run --rm -v "${GITHUB_WORKSPACE}:/src" -w /src \
             "$OSV_IMAGE" scan source --recursive ./
+
+  code:
+    name: "security: code (semgrep)"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Semgrep
+        run: |
+          set -euo pipefail
+          test -d .semgrep || { echo "::error::.semgrep/ is missing"; exit 1; }
+          RULE_FILES=$(find .semgrep -name '*.yaml' | wc -l | tr -d ' ')
+          test "$RULE_FILES" -gt 0 \
+            || { echo "::error::.semgrep/ contains no rule files"; exit 1; }
+          echo "Running rules from ${RULE_FILES} file(s)"
+          docker run --rm -v "${GITHUB_WORKSPACE}:/src" -w /src \
+            "$SEMGREP_IMAGE" semgrep scan \
+            --config=.semgrep --exclude=.semgrep --metrics=off --error .

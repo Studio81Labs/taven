@@ -6,6 +6,7 @@ build/
 .nuxt/
 .output/
 coverage/
+.semgrep/
 docs/product/
 apps/backend/src/generated/
 packages/openapi/openapi.json

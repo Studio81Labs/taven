@@ -43,11 +43,14 @@ const sharedInputs = [
   ".nvmrc",
 ];
 
-const alwaysOnWorkflows = [
+const requiredWorkflows = [
   "format-check.yml",
   "lint-pr.yml",
   "security-scan.yml",
   "labeler.yml",
+  "cleanup-pr-caches.yml",
+  "prune-stale-caches.yml",
+  "sibling-drift.yml",
 ];
 
 async function requireWorkflow(file, tokens) {
@@ -77,7 +80,7 @@ for (const [file, ownedPaths] of Object.entries(pathFilteredWorkflows)) {
   await requireWorkflow(file, [...ownedPaths, ...sharedInputs]);
 }
 
-for (const file of alwaysOnWorkflows) {
+for (const file of requiredWorkflows) {
   try {
     await access(path.join(repoRoot, ".github/workflows", file));
   } catch {

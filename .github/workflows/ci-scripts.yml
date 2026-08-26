@@ -30,5 +30,12 @@ jobs:
           node-version-file: .nvmrc
       - run: node scripts/ci/check-workflow-coverage.mjs
       - run: node scripts/ci/check-boundaries.mjs
-      - run: node scripts/ci/check-pnpm-overrides.mjs --self-test
-      - run: node scripts/ci/check-pnpm-overrides.mjs
+      - run: node scripts/ci/assert-local-database-url.mjs --self-test
+      - name: Python policy checks
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null \
+            || pip install --quiet --disable-pip-version-check pyyaml
+          python3 scripts/ci/check-pnpm-overrides.py --self-test
+          python3 scripts/ci/check-pnpm-overrides.py
+          python3 scripts/ci/check-sibling-drift.py --self-test
