@@ -68,4 +68,12 @@ jobs:
               missing=1
             }
           done
+          for f in scripts/ci/*.mjs; do
+            [[ -e "$f" ]] || continue
+            grep -q -- "--self-test" "$f" || continue
+            grep -q "node ${f} --self-test" .github/workflows/ci-scripts.yml || {
+              echo "::error::${f} declares --self-test but this workflow does not run it"
+              missing=1
+            }
+          done
           exit "$missing"
