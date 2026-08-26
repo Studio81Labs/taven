@@ -305,12 +305,6 @@ ACTION_ENTRY_TOPOLOGY_GATED = {
     (".github/workflows/packages-ci.yml", "actions/download-artifact"): "packages/ingest/package.json",
 }
 
-# Some shared workflows contain optional jobs owned by a narrower capability.
-# Suppress only that job, not the rest of the workflow.
-JOB_TOPOLOGY_GATED = {
-    (".github/workflows/admin-ci.yml", "prepare-openapi"): "apps/marketing/package.json",
-}
-
 # Workflows whose JOB NAMES are compared, keyed by job id.
 #
 # Job names are the checks list -- the thing someone scans when a pull request
@@ -338,6 +332,7 @@ JOB_NAME_WORKFLOWS = [
     ".github/workflows/mobile-release.yml",
     ".github/workflows/openapi-check.yml",
     ".github/workflows/security-scan.yml",
+    ".github/workflows/sibling-drift.yml",
 ]
 
 # Job-name differences that are EXPECTED, each with the reason. An entry here is
@@ -364,15 +359,6 @@ EXPECTED_JOB_DIFFS = {
     # now build `--no-codesign`; the flavor flag still differs and is real
     # topology, but it lives in the step rather than the job name.
     (".github/workflows/mobile-ci.yml", "mobile"): "android flavor topology",
-    # tarmoto's backend-deploy.yml is a workflow_call-only reusable workflow
-    # gated by its deploy.yml ORCHESTRATOR (which sequences ingest before
-    # backend — a constraint the Prisma pair do not have); the gate job
-    # therefore lives one level up rather than inside this file.
-    (".github/workflows/backend-deploy.yml", "version-gate"): "orchestrator topology (gate lives in deploy.yml)",
-    # tarmoto resolves the deploy environment inline in its admin deploy job;
-    # the Flutter pair carry a separate resolve job for checkout-ref reasons
-    # their admin surface has and tarmoto's does not.
-    (".github/workflows/admin-deploy.yml", "resolve"): "admin checkout-ref topology",
     # The gate compares the tag against each repo's actual version source:
     # pubspec.yaml for Flutter, apps/mobile/package.json for React Native.
     (".github/workflows/_release-version-gate.yml", "check"): "version-source topology (pubspec vs package.json)",
@@ -383,8 +369,6 @@ EXPECTED_JOB_DIFFS = {
 # two repositories that share the same topology.
 EXPECTED_JOB_DIFF_MARKERS = {
     (".github/workflows/mobile-ci.yml", "mobile"): "apps/mobile/android/app/src/staging/google-services.json",
-    (".github/workflows/backend-deploy.yml", "version-gate"): "apps/ingest/package.json",
-    (".github/workflows/admin-deploy.yml", "resolve"): "apps/ingest/package.json",
     (".github/workflows/_release-version-gate.yml", "check"): "apps/mobile/package.json",
 }
 
@@ -396,6 +380,28 @@ EXPECTED_TOPOLOGY_JOB_PAIRS = {
     (".github/workflows/backend-ci.yml", "apps/backend/src/data-source.ts"): (
         ("schema", "backend: schema from zero (real postgres)"),
         ("test-e2e", "backend: e2e (real postgres)"),
+    ),
+}
+
+# Jobs owned by exactly one side of a capability boundary. Unlike a permissible
+# difference in a union, these encode WHO must retain the job and its exact
+# rendered claim, so deleting it from the owning side cannot disappear from the
+# comparison merely because the other topology never had that job.
+EXPECTED_TOPOLOGY_OWNED_JOBS = {
+    (".github/workflows/admin-ci.yml", "prepare-openapi"): (
+        "apps/marketing/package.json",
+        True,
+        "contract: openapi spec",
+    ),
+    (".github/workflows/backend-deploy.yml", "version-gate"): (
+        "apps/ingest/package.json",
+        False,
+        "release: version gate",
+    ),
+    (".github/workflows/admin-deploy.yml", "resolve"): (
+        "apps/ingest/package.json",
+        False,
+        "admin: resolve environment",
     ),
 }
 
@@ -1671,7 +1677,46 @@ def compare(local_read, sibling_read) -> list[dict]:
                 {"kind": "jobname", "name": path, "detail": f"could not read jobs — {broken}"}
             )
             continue
-        suppressed_topology_jobs: set[str] = set()
+        handled_topology_jobs: set[str] = set()
+        for (owned_path, job_id), (
+            marker,
+            owned_when_marked,
+            expected_name,
+        ) in EXPECTED_TOPOLOGY_OWNED_JOBS.items():
+            if owned_path != path:
+                continue
+            our_marker, their_marker = marker_sides(marker)
+            for names, has_marker, side in (
+                (ours, our_marker, "here"),
+                (theirs, their_marker, "there"),
+            ):
+                owns_job = has_marker == owned_when_marked
+                actual_name = names.get(job_id)
+                if owns_job and actual_name is None:
+                    findings.append(
+                        {
+                            "kind": "jobname",
+                            "name": path,
+                            "detail": f"topology expects job `{job_id}` {side}, but it is absent",
+                        }
+                    )
+                elif owns_job and actual_name != expected_name:
+                    findings.append(
+                        {
+                            "kind": "jobname",
+                            "name": path,
+                            "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
+                        }
+                    )
+                elif not owns_job and actual_name is not None:
+                    findings.append(
+                        {
+                            "kind": "jobname",
+                            "name": path,
+                            "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
+                        }
+                    )
+            handled_topology_jobs.add(job_id)
         for (pair_path, marker), (marked, unmarked) in EXPECTED_TOPOLOGY_JOB_PAIRS.items():
             if pair_path != path:
                 continue
@@ -1709,19 +1754,12 @@ def compare(local_read, sibling_read) -> list[dict]:
                     (job_id in ours) == expected_here
                     and (job_id in theirs) != expected_here
                 ):
-                    suppressed_topology_jobs.add(job_id)
+                    handled_topology_jobs.add(job_id)
         for job in sorted(set(ours) | set(theirs)):
             our_name, their_name = ours.get(job), theirs.get(job)
-            marker = JOB_TOPOLOGY_GATED.get((path, job))
-            if (
-                marker is not None
-                and (our_name is None or their_name is None)
-                and not marker_open(marker)
-            ):
+            if job in handled_topology_jobs:
                 continue
             if our_name == their_name:
-                continue
-            if job in suppressed_topology_jobs:
                 continue
             if (path, job) in EXPECTED_JOB_DIFFS:
                 marker = EXPECTED_JOB_DIFF_MARKERS.get((path, job))
@@ -1843,6 +1881,25 @@ def self_test() -> int:
                 marker: "marker\n"
                 for marker in broad_markers
                 if marker not in CAPABILITY_MARKER_PATHS
+            }
+        )
+        files.update(
+            {
+                ".github/workflows/admin-ci.yml": (
+                    "jobs:\n"
+                    "  build:\n    name: \"ci: build\"\n"
+                    "  prepare-openapi:\n    name: \"contract: openapi spec\"\n"
+                ),
+                ".github/workflows/backend-deploy.yml": (
+                    "jobs:\n"
+                    "  build:\n    name: \"ci: build\"\n"
+                    "  version-gate:\n    name: \"release: version gate\"\n"
+                ),
+                ".github/workflows/admin-deploy.yml": (
+                    "jobs:\n"
+                    "  build:\n    name: \"ci: build\"\n"
+                    "  resolve:\n    name: \"admin: resolve environment\"\n"
+                ),
             }
         )
         files.update(overrides)
@@ -2920,7 +2977,10 @@ def self_test() -> int:
     # workflow remain strict for a sibling without the owning capability.
     ADMIN_WF = ".github/workflows/admin-ci.yml"
     with_prepare = {
-        ADMIN_WF: jobs_yaml(("build", "admin: build"), ("prepare-openapi", "contract: prepare"))
+        ADMIN_WF: jobs_yaml(
+            ("build", "admin: build"),
+            ("prepare-openapi", "contract: openapi spec"),
+        )
     }
     without_prepare = {
         ADMIN_WF: jobs_yaml(("build", "admin: build")),
@@ -2931,6 +2991,23 @@ def self_test() -> int:
         if f["kind"] == "jobname" and f["name"] == ADMIN_WF
     ]
     assert found == [], f"an optional job without its capability is topology: {found}"
+    owner_without_prepare = {
+        ADMIN_WF: jobs_yaml(("build", "admin: build")),
+    }
+    found = [
+        f for f in compare(repo(**owner_without_prepare).get, repo(**without_prepare).get)
+        if f["kind"] == "jobname" and f["name"] == ADMIN_WF
+    ]
+    assert len(found) == 1 and "expects job `prepare-openapi` here" in found[0]["detail"], found
+
+    SIBLING_DRIFT_WF = ".github/workflows/sibling-drift.yml"
+    renamed_drift = {SIBLING_DRIFT_WF: jobs_yaml(("drift", "ci: renamed drift"))}
+    expected_drift = {SIBLING_DRIFT_WF: jobs_yaml(("drift", "ci: sibling drift"))}
+    found = [
+        f for f in compare(repo(**expected_drift).get, repo(**renamed_drift).get)
+        if f["kind"] == "jobname" and f["name"] == SIBLING_DRIFT_WF
+    ]
+    assert len(found) == 1, f"the drift workflow's own claim must be compared: {found}"
 
     # An unnamed job compares under its id rather than reading as absent --
     # otherwise adding an explicit `name:` to one repo would report the job as
@@ -3018,6 +3095,43 @@ def self_test() -> int:
         if f["kind"] == "jobname" and f["name"] == BACKEND_DEPLOY_WF
     ]
     assert found == [], f"ingest orchestration owns the one-sided gate: {found}"
+    deploy_without_gate = {
+        BACKEND_DEPLOY_WF: jobs_yaml(("deploy", "backend: deploy")),
+    }
+    found = [
+        f for f in compare(repo(**deploy_without_gate).get, repo(**ingest_without_gate).get)
+        if f["kind"] == "jobname" and f["name"] == BACKEND_DEPLOY_WF
+    ]
+    assert len(found) == 1 and "expects job `version-gate` here" in found[0]["detail"], found
+
+    ADMIN_DEPLOY_WF = ".github/workflows/admin-deploy.yml"
+    deploy_with_resolve = {
+        ADMIN_DEPLOY_WF: jobs_yaml(
+            ("resolve", "admin: resolve environment"),
+            ("deploy", "admin: deploy"),
+        )
+    }
+    ingest_admin_deploy = {
+        ADMIN_DEPLOY_WF: jobs_yaml(("deploy", "admin: deploy")),
+        INGEST_MARKER: "{}\n",
+    }
+    found = [
+        f for f in compare(repo(**deploy_with_resolve).get, repo(**ingest_admin_deploy).get)
+        if f["kind"] == "jobname" and f["name"] == ADMIN_DEPLOY_WF
+    ]
+    assert found == [], f"ingest admin deploy resolves inline: {found}"
+    admin_deploy_without_resolve = {
+        ADMIN_DEPLOY_WF: jobs_yaml(("deploy", "admin: deploy")),
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**admin_deploy_without_resolve).get,
+            repo(**ingest_admin_deploy).get,
+        )
+        if f["kind"] == "jobname" and f["name"] == ADMIN_DEPLOY_WF
+    ]
+    assert len(found) == 1 and "expects job `resolve` here" in found[0]["detail"], found
     renamed_gate = {
         BACKEND_DEPLOY_WF: jobs_yaml(
             ("version-gate", "release: renamed gate"),

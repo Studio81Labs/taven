@@ -28,9 +28,21 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 mkdir -p "$OUT_DIR"
 
+work_dir="$(mktemp -d)"
+trap 'rm -r "$work_dir"' EXIT
+python_deps="$work_dir/python-deps"
+python3 -m pip install \
+  --quiet \
+  --disable-pip-version-check \
+  --no-deps \
+  --only-binary=:all: \
+  --require-hashes \
+  --target "$python_deps" \
+  --requirement scripts/ci/sibling-drift-requirements.txt
+
 for rs in "${RULESETS[@]}"; do
   url="https://semgrep.dev/c/p/${rs}"
-  tmp="$(mktemp)"
+  tmp="$work_dir/${rs}.yaml"
 
   echo "Fetching ${url}"
   # Fail loudly on an HTTP error rather than vendoring an error page as rules,
@@ -38,19 +50,10 @@ for rs in "${RULESETS[@]}"; do
   # 0 and is indistinguishable from a clean repository.
   curl -fsSL "$url" -o "$tmp"
 
-  python3 - "$tmp" "$rs" "$OUT_DIR" <<'PY'
+  PYTHONPATH="$python_deps${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "$tmp" "$rs" "$OUT_DIR" <<'PY'
 import sys, datetime, hashlib, pathlib
-
-try:
-    import yaml
-except ModuleNotFoundError:  # pragma: no cover
-    print(
-        "refresh-semgrep-rules: PyYAML is required. Run `pip install pyyaml` "
-        "(or `pip3 install --user pyyaml`). CI installs it before invoking "
-        "the repository's Python policy scripts.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
+import yaml
 
 src, name, out_dir = sys.argv[1], sys.argv[2], sys.argv[3]
 raw = pathlib.Path(src).read_bytes()
@@ -96,7 +99,6 @@ path.write_text(header + body)
 print(f"  {path}: {len(kept)}/{len(rules)} rules vendored")
 PY
 
-  rm -f "$tmp"
 done
 
 echo
