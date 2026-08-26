@@ -38,6 +38,20 @@ const permittedContext = {
   captureWindowClosed: true,
   captureCutoffSet: true,
   providerVoidOutboxCreated: true,
+  orderId: "order-1",
+  initialPaymentId: "payment-1",
+  initialPaymentOrderId: "order-1",
+  initialCaptureCloseOrderId: "order-1",
+  initialCaptureClosePaymentId: "payment-1",
+  initialPaymentRole: "full",
+  initialPaymentStatus: "voided",
+  initialCaptureWindowClosed: true,
+  initialCaptureCutoffSet: true,
+  initialPaymentVoidOutboxCreated: true,
+  preCapturePhaseCancelled: true,
+  preCaptureFulfilmentSlotsCancelled: true,
+  preCaptureReservationsReleased: true,
+  initialCaptureCloseAtomic: true,
   scopedRefundTransactionCreated: true,
   refundPriceAdjustmentActivated: true,
   singleOrderPhaseCreated: true,
@@ -68,9 +82,13 @@ const permittedContext = {
   verifiedProviderVoid: true,
   contextHandoffCompleted: true,
   nodeAssigned: true,
-  cancellationReason: "routing_exhausted",
+  cancellationReason: "order_cancelled",
   offersClosed: true,
   productionReservationReleased: true,
+  materialConsumptionSettled: true,
+  inventoryReservationReleased: true,
+  capacityReservationReleased: true,
+  labelCancellationBarrierCompleted: true,
   failureStage: "machine",
   failureReason: "machine fault",
   replacementRequestCreated: true,
@@ -139,6 +157,8 @@ function contextForTransition(target: string) {
     ...permittedContext,
     refundWebhookProjectedTarget: target,
     providerPaymentEventStatus: target,
+    initialCaptureCloseReason:
+      target === "expired" ? "checkout_expired" : "checkout_cancelled",
     providerEventStatus:
       target === "delivered_reship" || target === "delivered_reprint"
         ? "delivered"
@@ -1420,6 +1440,17 @@ describe("v0 lifecycle policy tables", () => {
     [
       jobPolicy,
       "accepted",
+      "cancelled",
+      [
+        "materialConsumptionSettled",
+        "inventoryReservationReleased",
+        "capacityReservationReleased",
+        "labelCancellationBarrierCompleted",
+      ],
+    ],
+    [
+      jobPolicy,
+      "accepted",
       "gcode_ready",
       ["productionSliceFromReservationSnapshot", "reproductionArtifactSealed"],
     ],
@@ -1445,6 +1476,16 @@ describe("v0 lifecycle policy tables", () => {
       "accepted",
       "failed",
       ["replacementRequestCreated", "replacementDeadlineSet"],
+    ],
+    [
+      paymentPolicy,
+      "pending",
+      "captured",
+      [
+        "captureAuthorized",
+        "providerPaymentEventAuthenticated",
+        "providerPaymentEventVerified",
+      ],
     ],
     [
       paymentPolicy,
@@ -1478,6 +1519,40 @@ describe("v0 lifecycle policy tables", () => {
         "singleOrderPhaseCreated",
         "immutableFulfilmentSlotsCreated",
         "setupAtomic",
+      ],
+    ],
+    [
+      orderPolicy,
+      "quoted",
+      "expired",
+      [
+        "initialPaymentRole",
+        "initialPaymentStatus",
+        "initialCaptureWindowClosed",
+        "initialCaptureCutoffSet",
+        "initialPaymentVoidOutboxCreated",
+        "preCapturePhaseCancelled",
+        "preCaptureFulfilmentSlotsCancelled",
+        "preCaptureReservationsReleased",
+        "initialCaptureCloseAtomic",
+        "initialCaptureCloseReason",
+      ],
+    ],
+    [
+      orderPolicy,
+      "quoted",
+      "cancelled",
+      [
+        "initialPaymentRole",
+        "initialPaymentStatus",
+        "initialCaptureWindowClosed",
+        "initialCaptureCutoffSet",
+        "initialPaymentVoidOutboxCreated",
+        "preCapturePhaseCancelled",
+        "preCaptureFulfilmentSlotsCancelled",
+        "preCaptureReservationsReleased",
+        "initialCaptureCloseAtomic",
+        "initialCaptureCloseReason",
       ],
     ],
     [orderPolicy, "qc_passed", "ready_to_ship", ["completeShipmentReadiness"]],
@@ -1605,15 +1680,19 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     [jobPolicy, "created", "cancelled"],
+    [jobPolicy, "accepted", "cancelled"],
     [jobPolicy, "accepted", "gcode_ready"],
     [jobPolicy, "printed", "photo_submitted"],
     [jobPolicy, "photo_submitted", "qc_approved"],
     [jobPolicy, "photo_submitted", "qc_rejected"],
+    [paymentPolicy, "pending", "captured"],
     [paymentPolicy, "pending", "failed"],
     [paymentPolicy, "pending", "voided"],
     [paymentPolicy, "captured", "refund_pending"],
     [paymentPolicy, "partially_refunded", "refund_pending"],
     [orderPolicy, "draft", "quoted"],
+    [orderPolicy, "quoted", "expired"],
+    [orderPolicy, "quoted", "cancelled"],
     [orderPolicy, "qc_passed", "ready_to_ship"],
     [orderPolicy, "qc_passed", "recovery_pending"],
     [orderPolicy, "awaiting_balance", "recovery_pending"],
@@ -1647,6 +1726,13 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     ["created", "cancelled"],
+    ["accepted", "cancelled"],
+    ["gcode_ready", "cancelled"],
+    ["printing", "cancelled"],
+    ["printed", "cancelled"],
+    ["photo_submitted", "cancelled"],
+    ["qc_approved", "cancelled"],
+    ["packed", "cancelled"],
     ["accepted", "failed"],
     ["gcode_ready", "failed"],
     ["printing", "failed"],
@@ -1675,17 +1761,147 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
-    ["providerEventPaymentId", "another-payment"],
-    ["providerPaymentEventStatus", "voided"],
+    "accepted",
+    "gcode_ready",
+    "printing",
+    "printed",
+    "photo_submitted",
+    "qc_approved",
+    "packed",
   ] as const)(
-    "rejects Payment failure with a non-matching provider event %s",
+    "settles every resource and label barrier before %s -> cancelled",
+    (current) => {
+      for (const flag of [
+        "materialConsumptionSettled",
+        "inventoryReservationReleased",
+        "capacityReservationReleased",
+        "labelCancellationBarrierCompleted",
+      ] as const) {
+        expect(() =>
+          transition(jobPolicy, {
+            current,
+            target: "cancelled",
+            idempotencyKey: `job-cancellation-${current}-${flag}`,
+            context: {
+              ...contextForTransition("cancelled"),
+              [flag]: false,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+
+      expect(
+        transition(jobPolicy, {
+          current,
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-complete-${current}`,
+          context: {
+            ...contextForTransition("cancelled"),
+            offersClosed: false,
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: "cancelled" });
+    },
+  );
+
+  it.each([
+    ["created", "phase_cancelled"],
+    ["accepted", "routing_exhausted"],
+    ["packed", "routing_exhausted"],
+  ] as const)(
+    "rejects %s -> cancelled with lifecycle-incompatible reason %s",
+    (current, cancellationReason) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current,
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-reason-${current}`,
+          context: {
+            ...contextForTransition("cancelled"),
+            cancellationReason,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["expired", "full"],
+    ["expired", "deposit"],
+    ["cancelled", "full"],
+    ["cancelled", "deposit"],
+  ] as const)(
+    "closes initial capture before quoted -> %s for a %s Payment",
+    (target, initialPaymentRole) => {
+      expect(
+        transition(orderPolicy, {
+          current: "quoted",
+          target,
+          idempotencyKey: `initial-capture-close-${target}-${initialPaymentRole}`,
+          context: {
+            ...contextForTransition(target),
+            initialPaymentRole,
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "quoted", current: target });
+    },
+  );
+
+  it.each([
+    ["expired", "checkout_cancelled"],
+    ["cancelled", "checkout_expired"],
+  ] as const)(
+    "rejects quoted -> %s with mismatched initial close reason %s",
+    (target, initialCaptureCloseReason) => {
+      expect(() =>
+        transition(orderPolicy, {
+          current: "quoted",
+          target,
+          idempotencyKey: `initial-capture-reason-${target}`,
+          context: {
+            ...contextForTransition(target),
+            initialCaptureCloseReason,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["initialPaymentOrderId", "another-order"],
+    ["initialCaptureCloseOrderId", "another-order"],
+    ["initialCaptureClosePaymentId", "another-payment"],
+  ] as const)(
+    "rejects initial capture close evidence with mismatched %s",
     (field, value) => {
+      expect(() =>
+        transition(orderPolicy, {
+          current: "quoted",
+          target: "expired",
+          idempotencyKey: `initial-capture-identity-${field}`,
+          context: {
+            ...contextForTransition("expired"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["captured", "providerEventPaymentId", "another-payment"],
+    ["captured", "providerPaymentEventStatus", "failed"],
+    ["failed", "providerEventPaymentId", "another-payment"],
+    ["failed", "providerPaymentEventStatus", "voided"],
+  ] as const)(
+    "rejects Payment %s with a non-matching provider event %s",
+    (target, field, value) => {
       expect(() =>
         transition(paymentPolicy, {
           current: "pending",
-          target: "failed",
-          idempotencyKey: `payment-failure-${field}`,
-          context: { ...contextForTransition("failed"), [field]: value },
+          target,
+          idempotencyKey: `payment-${target}-${field}`,
+          context: { ...contextForTransition(target), [field]: value },
         }),
       ).toThrow(TransitionGuardError);
     },

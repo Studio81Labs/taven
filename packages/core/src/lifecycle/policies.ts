@@ -267,14 +267,154 @@ function requireVerifiedMatchingProviderPaymentEvent<S extends string>(
   }
 }
 
-function isJobCancellationReason(
+function requireInitialCaptureWindowClosed<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const orderId = command.context?.orderId;
+  const initialPaymentId = command.context?.initialPaymentId;
+  if (
+    typeof orderId !== "string" ||
+    orderId.length === 0 ||
+    command.context?.initialPaymentOrderId !== orderId ||
+    command.context?.initialCaptureCloseOrderId !== orderId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capture-window close result must belong to this exact Order",
+    );
+  }
+  if (
+    typeof initialPaymentId !== "string" ||
+    initialPaymentId.length === 0 ||
+    command.context?.initialCaptureClosePaymentId !== initialPaymentId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capture-window close result must belong to this exact initial Payment",
+    );
+  }
+  if (
+    command.context?.initialPaymentRole !== "full" &&
+    command.context?.initialPaymentRole !== "deposit"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "checkout termination requires its full or deposit Payment",
+    );
+  }
+  if (command.context?.initialPaymentStatus !== "voided") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "checkout termination requires its initial Payment to be voided",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "initialCaptureWindowClosed",
+    "checkout termination requires the initial capture window to be closed",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "initialCaptureCutoffSet",
+    "checkout termination requires its immutable capture cutoff",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "initialPaymentVoidOutboxCreated",
+    "checkout termination requires its provider void command to be persisted",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "preCapturePhaseCancelled",
+    "checkout termination requires its pre-capture phase to be cancelled",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "preCaptureFulfilmentSlotsCancelled",
+    "checkout termination requires its pre-capture slots to be cancelled",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "preCaptureReservationsReleased",
+    "checkout termination requires its phase reservation set to be released",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "initialCaptureCloseAtomic",
+    "checkout termination requires one atomic capture-window close result",
+  );
+
+  const expectedReason =
+    command.target === "expired" ? "checkout_expired" : "checkout_cancelled";
+  if (command.context?.initialCaptureCloseReason !== expectedReason) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      `capture-window close reason must be ${expectedReason}`,
+    );
+  }
+}
+
+function isCreatedJobCancellationReason(
   value: unknown,
-): value is JobCancellationReason {
+): value is "routing_exhausted" | "order_cancelled" {
+  return value === "routing_exhausted" || value === "order_cancelled";
+}
+
+function isPostAcceptanceJobCancellationReason(
+  value: unknown,
+): value is Exclude<JobCancellationReason, "routing_exhausted"> {
   return (
-    value === "routing_exhausted" ||
     value === "order_cancelled" ||
     value === "phase_cancelled" ||
     value === "claim_withdrawn"
+  );
+}
+
+function requirePostAcceptanceJobCancellationSettlement<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  requireFlag(
+    lifecycle,
+    command,
+    "materialConsumptionSettled",
+    "cancellation requires material consumption to be recorded and settled",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "inventoryReservationReleased",
+    "cancellation requires the remaining inventory reservation to be released",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "capacityReservationReleased",
+    "cancellation requires the remaining capacity reservation to be released",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "labelCancellationBarrierCompleted",
+    "cancellation requires every carrier label cancellation barrier to complete",
   );
 }
 
@@ -517,6 +657,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
         "captureAuthorized",
         "capture must be authorized and before its immutable cutoff",
       );
+      requireVerifiedMatchingProviderPaymentEvent("Payment", command);
     }
     if (command.current === "voided" && command.target === "refund_pending") {
       requireFlag(
@@ -658,6 +799,12 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "completeReservationCaptured",
         "capture and the complete phase reservation set must be valid",
       );
+    }
+    if (
+      command.current === "quoted" &&
+      (command.target === "expired" || command.target === "cancelled")
+    ) {
+      requireInitialCaptureWindowClosed("Order", command);
     }
     if (
       (command.current === "in_production" ||
@@ -979,8 +1126,13 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
     handed_over: ["settled"],
   },
   guard: (command) => {
-    if (command.current === "created" && command.target === "cancelled") {
-      if (!isJobCancellationReason(command.context?.cancellationReason)) {
+    if (command.target === "cancelled") {
+      const cancellationReason = command.context?.cancellationReason;
+      const validReason =
+        command.current === "created"
+          ? isCreatedJobCancellationReason(cancellationReason)
+          : isPostAcceptanceJobCancellationReason(cancellationReason);
+      if (!validReason) {
         throw new TransitionGuardError(
           "Job",
           command.current,
@@ -988,18 +1140,22 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
           "cancellation requires a valid cancellation reason",
         );
       }
-      requireFlag(
-        "Job",
-        command,
-        "offersClosed",
-        "cancellation requires all routing offers to be closed",
-      );
-      requireFlag(
-        "Job",
-        command,
-        "productionReservationReleased",
-        "cancellation requires its production reservation to be released",
-      );
+      if (command.current === "created") {
+        requireFlag(
+          "Job",
+          command,
+          "offersClosed",
+          "cancellation requires all routing offers to be closed",
+        );
+        requireFlag(
+          "Job",
+          command,
+          "productionReservationReleased",
+          "cancellation requires its production reservation to be released",
+        );
+      } else {
+        requirePostAcceptanceJobCancellationSettlement("Job", command);
+      }
     }
     if (command.current === "created" && command.target === "accepted") {
       requireFlag(
