@@ -1,4 +1,4 @@
-import { type Instant } from "../primitives/time.js";
+import { Instant } from "../primitives/time.js";
 import {
   TransitionGuardError,
   type TransitionCommand,
@@ -100,6 +100,111 @@ function requireProjectedCompletionTarget<S extends string>(
   }
 }
 
+function requireCompleteConfirmationJobLinks<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  orderId: string,
+  phaseId: string,
+  phaseReservationSetId: string,
+): void {
+  const expectedKeysValue = command.context?.phaseReservationSetPlannedJobKeys;
+  const linksValue = command.context?.confirmationReservationJobLinks;
+  const expectedKeys = Array.isArray(expectedKeysValue)
+    ? [...expectedKeysValue]
+    : undefined;
+  const links = Array.isArray(linksValue) ? [...linksValue] : undefined;
+  if (
+    expectedKeys === undefined ||
+    expectedKeys.length === 0 ||
+    expectedKeys.some(
+      (key) => typeof key !== "string" || key.trim().length === 0,
+    ) ||
+    new Set(expectedKeys).size !== expectedKeys.length ||
+    links === undefined ||
+    links.length !== expectedKeys.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "confirmation requires one Job link for every planned job key",
+    );
+  }
+  const plannedJobKeys = expectedKeys as string[];
+
+  const linkedKeys = new Set<string>();
+  const reservationIds = new Set<string>();
+  const jobIds = new Set<string>();
+  for (const value of links) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "confirmation Job links must be complete identity records",
+      );
+    }
+    const link = value as Readonly<Record<string, unknown>>;
+    const plannedJobKey = link.plannedJobKey;
+    const productionReservationId = link.productionReservationId;
+    const jobId = link.jobId;
+    if (
+      typeof plannedJobKey !== "string" ||
+      plannedJobKey.trim().length === 0 ||
+      typeof productionReservationId !== "string" ||
+      productionReservationId.trim().length === 0 ||
+      typeof jobId !== "string" ||
+      jobId.trim().length === 0 ||
+      link.reservationOrderId !== orderId ||
+      link.reservationPhaseId !== phaseId ||
+      link.reservationSetId !== phaseReservationSetId ||
+      link.reservationPlannedJobKey !== plannedJobKey ||
+      link.reservationJobId !== jobId ||
+      link.jobOrderId !== orderId ||
+      link.jobPhaseId !== phaseId ||
+      link.jobProductionReservationId !== productionReservationId ||
+      link.jobPlannedJobKey !== plannedJobKey ||
+      link.jobStatus !== "created" ||
+      linkedKeys.has(plannedJobKey) ||
+      reservationIds.has(productionReservationId) ||
+      jobIds.has(jobId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "confirmation must create unique Jobs linked to their exact reservations",
+      );
+    }
+    linkedKeys.add(plannedJobKey);
+    reservationIds.add(productionReservationId);
+    jobIds.add(jobId);
+  }
+  if (
+    plannedJobKeys.some((key) => !linkedKeys.has(key)) ||
+    [...linkedKeys].some((key) => !plannedJobKeys.includes(key))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "confirmation Job links must exactly match the planned job key set",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "confirmationJobsCreated",
+    "confirmation requires the complete Job set to be created",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "confirmationJobCreationAtomic",
+    "capture, activation, Job creation, and reservation linking must be atomic",
+  );
+}
+
 function requireAtomicConfirmationActivation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -165,6 +270,13 @@ function requireAtomicConfirmationActivation<S extends string>(
     command,
     "confirmationActivationAtomic",
     "Order confirmation and single-phase activation must be atomic",
+  );
+  requireCompleteConfirmationJobLinks(
+    lifecycle,
+    command,
+    orderId,
+    phaseId,
+    phaseReservationSetId,
   );
 }
 
@@ -311,6 +423,56 @@ function requireAtomicOrderPhaseCancellation<S extends string>(
   if (expectedPhaseDisposition.target === "cancelled_refunded") {
     requireZeroBalances(lifecycle, command);
   }
+}
+
+function requireAtomicOrderPhaseCompletion<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  if (
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.orderCompletionOrderId !== orderId ||
+    command.context?.orderCompletionPhaseOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.orderCompletionPhaseId !== phaseId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "completion must bind the exact Order and its single phase",
+    );
+  }
+  if (
+    command.context?.phaseKind !== "single" ||
+    command.context?.orderCompletionOrderPreviousStatus !== "delivered" ||
+    command.context?.orderCompletionOrderTargetStatus !== "completed" ||
+    command.context?.orderCompletionPhasePreviousStatus !== "delivered" ||
+    command.context?.orderCompletionPhaseTargetStatus !== "completed"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "terminal Order completion requires its matching phase completion result",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "phaseCompletionCompleted",
+    "terminal Order completion requires the phase completion result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "orderPhaseCompletionAtomic",
+    "phase completion and parent Order completion must be atomic",
+  );
 }
 
 function requireAllShipmentLineageLeavesDelivered<S extends string>(
@@ -1611,6 +1773,44 @@ function requireAcceptedQuoteOrderCreation<S extends string>(
   );
 }
 
+function requireQuoteExpirationReached<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const quoteRequestId = command.context?.quoteRequestId;
+  const issuedQuoteId = command.context?.issuedQuoteId;
+  const expiresAt = command.context?.issuedQuoteExpiresAt;
+  const evaluatedAt = command.context?.quoteExpirationEvaluatedAt;
+  if (
+    typeof quoteRequestId !== "string" ||
+    quoteRequestId.trim().length === 0 ||
+    command.context?.issuedQuoteRequestId !== quoteRequestId ||
+    command.context?.quoteExpirationQuoteRequestId !== quoteRequestId ||
+    typeof issuedQuoteId !== "string" ||
+    issuedQuoteId.trim().length === 0 ||
+    command.context?.quoteExpirationIssuedQuoteId !== issuedQuoteId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "quote expiration must bind the exact QuoteRequest and issued Quote",
+    );
+  }
+  if (
+    !(expiresAt instanceof Instant) ||
+    !(evaluatedAt instanceof Instant) ||
+    evaluatedAt.compare(expiresAt) < 0
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "quote expiration requires injected time at or after the immutable deadline",
+    );
+  }
+}
+
 export type QuoteRequestStatus =
   "new" | "in_review" | "quoted" | "accepted" | "rejected" | "expired";
 
@@ -1632,6 +1832,9 @@ export const quoteRequestPolicy: TransitionPolicy<QuoteRequestStatus> = {
         "the immutable quote must still be available",
       );
       requireAcceptedQuoteOrderCreation("QuoteRequest", command);
+    }
+    if (command.current === "quoted" && command.target === "expired") {
+      requireQuoteExpirationReached("QuoteRequest", command);
     }
   },
 };
@@ -1990,6 +2193,9 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     if (command.current === "shipped" && command.target === "delivered") {
       requireAllShipmentLineageLeavesDelivered("Order", command);
     }
+    if (command.current === "delivered" && command.target === "completed") {
+      requireAtomicOrderPhaseCompletion("Order", command);
+    }
     if (command.target === "cancelled") {
       requireFlag(
         "Order",
@@ -2127,6 +2333,9 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
       }
       if (command.current === "shipped" && command.target === "delivered") {
         requireAllShipmentLineageLeavesDelivered("OrderPhase(single)", command);
+      }
+      if (command.current === "delivered" && command.target === "completed") {
+        requireAtomicOrderPhaseCompletion("OrderPhase(single)", command);
       }
       if (
         command.target === "cancelled" ||
@@ -2392,6 +2601,282 @@ export type ShipmentStatus =
   | "returned"
   | "recovered";
 
+function requireAtomicShipmentIncidentRouting<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const shipmentId = command.context?.shipmentId;
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  if (
+    typeof shipmentId !== "string" ||
+    shipmentId.trim().length === 0 ||
+    command.context?.incidentShipmentId !== shipmentId ||
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.incidentOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.incidentPhaseId !== phaseId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "shipment incident routing must bind the exact Shipment, Order, and phase",
+    );
+  }
+  const shipmentSlotIdsValue = command.context?.shipmentFulfilmentSlotIds;
+  const affectedSlotIdsValue = command.context?.incidentAffectedSlotIds;
+  const ownershipsValue = command.context?.shipmentIncidentSlotOwnerships;
+  const routesValue = command.context?.shipmentIncidentSlotRoutes;
+  const shipmentSlotIds = Array.isArray(shipmentSlotIdsValue)
+    ? [...shipmentSlotIdsValue]
+    : undefined;
+  const affectedSlotIds = Array.isArray(affectedSlotIdsValue)
+    ? [...affectedSlotIdsValue]
+    : undefined;
+  const ownerships = Array.isArray(ownershipsValue)
+    ? [...ownershipsValue]
+    : undefined;
+  const routes = Array.isArray(routesValue) ? [...routesValue] : undefined;
+  if (
+    shipmentSlotIds === undefined ||
+    shipmentSlotIds.length === 0 ||
+    shipmentSlotIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(shipmentSlotIds).size !== shipmentSlotIds.length ||
+    affectedSlotIds === undefined ||
+    affectedSlotIds.length !== shipmentSlotIds.length ||
+    affectedSlotIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(affectedSlotIds).size !== affectedSlotIds.length ||
+    ownerships === undefined ||
+    ownerships.length !== shipmentSlotIds.length ||
+    routes === undefined ||
+    routes.length !== shipmentSlotIds.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "shipment incident routing requires the complete affected slot set",
+    );
+  }
+  const authoritativeSlotIds = shipmentSlotIds as string[];
+  const affectedIds = affectedSlotIds as string[];
+  if (
+    authoritativeSlotIds.some((id) => !affectedIds.includes(id)) ||
+    affectedIds.some((id) => !authoritativeSlotIds.includes(id))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "shipment incident affected slots must exactly match Shipment ownership",
+    );
+  }
+  const activeClaimBySlotId = new Map<string, string | null>();
+  for (const value of ownerships) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "shipment incident ownership must identify every affected slot",
+      );
+    }
+    const ownership = value as Readonly<Record<string, unknown>>;
+    const slotId = ownership.slotId;
+    const activeClaimId = ownership.activeClaimId;
+    if (
+      typeof slotId !== "string" ||
+      !affectedIds.includes(slotId) ||
+      activeClaimBySlotId.has(slotId) ||
+      (activeClaimId !== null &&
+        (typeof activeClaimId !== "string" ||
+          activeClaimId.trim().length === 0))
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "shipment incident ownership must be a complete unique slot partition",
+      );
+    }
+    activeClaimBySlotId.set(slotId, activeClaimId as string | null);
+  }
+  if (affectedIds.some((id) => !activeClaimBySlotId.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "shipment incident ownership cannot omit an affected slot",
+    );
+  }
+
+  const originClaimIdValue = command.context?.shipmentOriginClaimId;
+  const originClaimId =
+    typeof originClaimIdValue === "string" &&
+    originClaimIdValue.trim().length > 0
+      ? originClaimIdValue
+      : undefined;
+  if (originClaimIdValue !== null && originClaimId === undefined) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Shipment origin Claim identity must be nonblank or null",
+    );
+  }
+  const newClaimValue = command.context?.shipmentIncidentNewClaim;
+  const newClaim =
+    typeof newClaimValue === "object" &&
+    newClaimValue !== null &&
+    !Array.isArray(newClaimValue)
+      ? (newClaimValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const newClaimId = newClaim?.id;
+  const routedSlotIds = new Set<string>();
+  const incidentRecordIds = new Set<string>();
+  const childResolutionIds = new Set<string>();
+  let unownedSlotCount = 0;
+  for (const value of routes) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "shipment incident slot routes must be complete identity records",
+      );
+    }
+    const route = value as Readonly<Record<string, unknown>>;
+    const slotId = route.slotId;
+    const ownerClaimId = route.ownerClaimId;
+    const routedClaimId = route.routedClaimId;
+    const incidentRecordId = route.incidentRecordId;
+    const childResolutionId = route.childResolutionId;
+    if (
+      typeof slotId !== "string" ||
+      !affectedIds.includes(slotId) ||
+      routedSlotIds.has(slotId) ||
+      ownerClaimId !== activeClaimBySlotId.get(slotId) ||
+      (ownerClaimId !== null &&
+        (typeof ownerClaimId !== "string" ||
+          ownerClaimId.trim().length === 0)) ||
+      typeof routedClaimId !== "string" ||
+      routedClaimId.trim().length === 0 ||
+      typeof incidentRecordId !== "string" ||
+      incidentRecordId.trim().length === 0 ||
+      incidentRecordIds.has(incidentRecordId) ||
+      route.incidentRecordShipmentId !== shipmentId ||
+      route.incidentRecordClaimId !== routedClaimId ||
+      route.incidentRecordSlotId !== slotId ||
+      typeof childResolutionId !== "string" ||
+      childResolutionId.trim().length === 0 ||
+      childResolutionIds.has(childResolutionId) ||
+      route.childResolutionClaimId !== routedClaimId ||
+      route.childResolutionSlotId !== slotId ||
+      route.childResolutionShipmentId !== shipmentId ||
+      route.childResolutionStatus !== "recovery_pending" ||
+      route.claimStatus !== "active" ||
+      route.claimRetentionHoldActive !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "shipment incident must route every slot to an active retained Claim",
+      );
+    }
+    if (originClaimId !== undefined) {
+      if (
+        (ownerClaimId !== null && ownerClaimId !== originClaimId) ||
+        routedClaimId !== originClaimId ||
+        route.createdNewClaim !== false
+      ) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          "origin-Claim Shipment incidents must remain on the exact parent Claim",
+        );
+      }
+    } else if (ownerClaimId === null) {
+      unownedSlotCount += 1;
+      if (routedClaimId !== newClaimId || route.createdNewClaim !== true) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          "unowned incident slots must share the one new incident Claim",
+        );
+      }
+    } else if (
+      routedClaimId !== ownerClaimId ||
+      route.createdNewClaim !== false
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "owned incident slots must remain with their existing Claim",
+      );
+    }
+    routedSlotIds.add(slotId);
+    incidentRecordIds.add(incidentRecordId);
+    childResolutionIds.add(childResolutionId);
+  }
+  if (affectedIds.some((id) => !routedSlotIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "shipment incident routing cannot omit an affected slot",
+    );
+  }
+  if (originClaimId !== undefined || unownedSlotCount === 0) {
+    if (newClaimValue !== null) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "incident routing must not create an unnecessary Claim",
+      );
+    }
+  } else if (
+    typeof newClaimId !== "string" ||
+    newClaimId.trim().length === 0 ||
+    newClaim?.origin !== "shipment_incident" ||
+    newClaim.shipmentId !== shipmentId ||
+    newClaim.orderId !== orderId ||
+    newClaim.phaseId !== phaseId ||
+    newClaim.status !== "active" ||
+    newClaim.retentionHoldActive !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "unowned slots require one exact active incident-backed Claim",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "shipmentIncidentRouted",
+    "lost or returned Shipment requires its complete incident route",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "shipmentIncidentRoutingAtomic",
+    "Shipment outcome and incident recovery routing must be atomic",
+  );
+}
+
 export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
   name: "Shipment",
   initial: ["planned"],
@@ -2466,6 +2951,9 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
         command.target === "returned")
     ) {
       requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
+      if (command.target === "lost" || command.target === "returned") {
+        requireAtomicShipmentIncidentRouting("Shipment", command);
+      }
     }
     if (command.current === "lost" && command.target === "recovered") {
       requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
@@ -2554,6 +3042,89 @@ export function projectClaimTerminalStatus(
   return "resolved_mixed";
 }
 
+function requireCompleteClaimResolutionSet<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): ClaimSlotResolutionStatus[] {
+  const claimId = command.context?.claimId;
+  const expectedIdsValue = command.context?.expectedClaimSlotResolutionIds;
+  const resolutionsValue = command.context?.claimSlotResolutions;
+  const expectedIds = Array.isArray(expectedIdsValue)
+    ? [...expectedIdsValue]
+    : undefined;
+  const resolutions = Array.isArray(resolutionsValue)
+    ? [...resolutionsValue]
+    : undefined;
+  if (
+    typeof claimId !== "string" ||
+    claimId.trim().length === 0 ||
+    command.context?.claimResolutionSetClaimId !== claimId ||
+    expectedIds === undefined ||
+    expectedIds.length === 0 ||
+    expectedIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(expectedIds).size !== expectedIds.length ||
+    resolutions === undefined ||
+    resolutions.length !== expectedIds.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim resolution requires its complete owned child identity set",
+    );
+  }
+  const ownedIds = expectedIds as string[];
+  const projectedIds = new Set<string>();
+  const statuses: ClaimSlotResolutionStatus[] = [];
+  for (const value of resolutions) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim child projection requires identity and status records",
+      );
+    }
+    const resolution = value as Readonly<Record<string, unknown>>;
+    const id = resolution.id;
+    const status = resolution.status;
+    if (
+      typeof id !== "string" ||
+      id.trim().length === 0 ||
+      projectedIds.has(id) ||
+      !ownedIds.includes(id) ||
+      resolution.claimId !== claimId ||
+      typeof status !== "string"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim child projection must match each exact owned resolution once",
+      );
+    }
+    projectedIds.add(id);
+    statuses.push(status as ClaimSlotResolutionStatus);
+  }
+  if (ownedIds.some((id) => !projectedIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim child projection cannot omit an owned resolution",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "claimResolutionSetComplete",
+    "Claim terminal projection requires the authoritative complete child set",
+  );
+  return statuses;
+}
+
 export const claimPolicy: TransitionPolicy<ClaimStatus> = {
   name: "Claim",
   initial: ["opened"],
@@ -2581,22 +3152,8 @@ export const claimPolicy: TransitionPolicy<ClaimStatus> = {
       command.target.startsWith("resolved_") ||
       command.target === "withdrawn"
     ) {
-      const statuses = command.context?.claimSlotResolutionStatuses;
-      if (
-        !Array.isArray(statuses) ||
-        statuses.some((status) => typeof status !== "string")
-      ) {
-        throw new TransitionGuardError(
-          "Claim",
-          command.current,
-          command.target,
-          "every claim slot resolution must have a terminal disposition",
-        );
-      }
-
-      const projected = projectClaimTerminalStatus(
-        statuses as ClaimSlotResolutionStatus[],
-      );
+      const statuses = requireCompleteClaimResolutionSet("Claim", command);
+      const projected = projectClaimTerminalStatus(statuses);
       if (projected !== command.target) {
         throw new TransitionGuardError(
           "Claim",

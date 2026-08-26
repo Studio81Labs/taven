@@ -26,6 +26,10 @@ const permittedContext = {
   quoteRequestId: "quote-request-1",
   issuedQuoteId: "quote-1",
   issuedQuoteRequestId: "quote-request-1",
+  quoteExpirationQuoteRequestId: "quote-request-1",
+  quoteExpirationIssuedQuoteId: "quote-1",
+  issuedQuoteExpiresAt: Instant.parse("2026-01-02T00:00:00.000Z"),
+  quoteExpirationEvaluatedAt: Instant.parse("2026-01-02T00:00:00.000Z"),
   createdOrderQuoteRequestId: "quote-request-1",
   createdOrderSourceQuoteId: "quote-1",
   acceptedOrderId: "order-1",
@@ -119,6 +123,41 @@ const permittedContext = {
   confirmationPhaseTargetStatus: "active",
   confirmationActivationAtomic: true,
   initialCaptureConfirmationAtomic: true,
+  phaseReservationSetPlannedJobKeys: ["planned-job-1", "planned-job-2"],
+  confirmationReservationJobLinks: [
+    {
+      plannedJobKey: "planned-job-1",
+      productionReservationId: "confirmation-reservation-1",
+      jobId: "confirmation-job-1",
+      reservationOrderId: "order-1",
+      reservationPhaseId: "phase-1",
+      reservationSetId: "phase-reservation-set-1",
+      reservationPlannedJobKey: "planned-job-1",
+      reservationJobId: "confirmation-job-1",
+      jobOrderId: "order-1",
+      jobPhaseId: "phase-1",
+      jobProductionReservationId: "confirmation-reservation-1",
+      jobPlannedJobKey: "planned-job-1",
+      jobStatus: "created",
+    },
+    {
+      plannedJobKey: "planned-job-2",
+      productionReservationId: "confirmation-reservation-2",
+      jobId: "confirmation-job-2",
+      reservationOrderId: "order-1",
+      reservationPhaseId: "phase-1",
+      reservationSetId: "phase-reservation-set-1",
+      reservationPlannedJobKey: "planned-job-2",
+      reservationJobId: "confirmation-job-2",
+      jobOrderId: "order-1",
+      jobPhaseId: "phase-1",
+      jobProductionReservationId: "confirmation-reservation-2",
+      jobPlannedJobKey: "planned-job-2",
+      jobStatus: "created",
+    },
+  ],
+  confirmationJobsCreated: true,
+  confirmationJobCreationAtomic: true,
   verifiedQcReadiness: true,
   balancePaymentRole: "balance",
   balancePaymentOrderMatches: true,
@@ -154,6 +193,15 @@ const permittedContext = {
   phaseCancellationPhaseTargetStatus: "cancelled",
   phaseCancellationCompleted: true,
   phaseCancellationAtomic: true,
+  orderCompletionOrderId: "order-1",
+  orderCompletionPhaseOrderId: "order-1",
+  orderCompletionPhaseId: "phase-1",
+  orderCompletionOrderPreviousStatus: "delivered",
+  orderCompletionOrderTargetStatus: "completed",
+  orderCompletionPhasePreviousStatus: "delivered",
+  orderCompletionPhaseTargetStatus: "completed",
+  phaseCompletionCompleted: true,
+  orderPhaseCompletionAtomic: true,
   orderItemId: "order-item-1",
   nodeAssigned: true,
   cancellationReason: "order_cancelled",
@@ -225,6 +273,17 @@ const permittedContext = {
   custodyConfirmed: true,
   freshQcPassed: true,
   cleanPostDeliveryQualityClaim: true,
+  claimId: "claim-1",
+  claimResolutionSetClaimId: "claim-1",
+  expectedClaimSlotResolutionIds: ["claim-resolution-1"],
+  claimSlotResolutions: [
+    {
+      id: "claim-resolution-1",
+      claimId: "claim-1",
+      status: "refunded",
+    },
+  ],
+  claimResolutionSetComplete: true,
   remedyCancellationCompleted: true,
   reshipmentAuthorizationConsumed: true,
   reshipmentHandoffCompleted: true,
@@ -239,6 +298,63 @@ const permittedContext = {
   replacementFulfilmentHandoffCompleted: true,
   preHandoffShipmentCancellationsCompleted: true,
   shipmentId: "shipment-1",
+  incidentShipmentId: "shipment-1",
+  incidentOrderId: "order-1",
+  incidentPhaseId: "phase-1",
+  shipmentFulfilmentSlotIds: ["slot-1", "slot-2"],
+  incidentAffectedSlotIds: ["slot-1", "slot-2"],
+  shipmentIncidentSlotOwnerships: [
+    { slotId: "slot-1", activeClaimId: null },
+    { slotId: "slot-2", activeClaimId: null },
+  ],
+  shipmentOriginClaimId: null,
+  shipmentIncidentNewClaim: {
+    id: "incident-claim-1",
+    origin: "shipment_incident",
+    shipmentId: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "active",
+    retentionHoldActive: true,
+  },
+  shipmentIncidentSlotRoutes: [
+    {
+      slotId: "slot-1",
+      ownerClaimId: null,
+      routedClaimId: "incident-claim-1",
+      incidentRecordId: "incident-record-1",
+      incidentRecordShipmentId: "shipment-1",
+      incidentRecordClaimId: "incident-claim-1",
+      incidentRecordSlotId: "slot-1",
+      childResolutionId: "incident-resolution-1",
+      childResolutionClaimId: "incident-claim-1",
+      childResolutionSlotId: "slot-1",
+      childResolutionShipmentId: "shipment-1",
+      childResolutionStatus: "recovery_pending",
+      claimStatus: "active",
+      claimRetentionHoldActive: true,
+      createdNewClaim: true,
+    },
+    {
+      slotId: "slot-2",
+      ownerClaimId: null,
+      routedClaimId: "incident-claim-1",
+      incidentRecordId: "incident-record-2",
+      incidentRecordShipmentId: "shipment-1",
+      incidentRecordClaimId: "incident-claim-1",
+      incidentRecordSlotId: "slot-2",
+      childResolutionId: "incident-resolution-2",
+      childResolutionClaimId: "incident-claim-1",
+      childResolutionSlotId: "slot-2",
+      childResolutionShipmentId: "shipment-1",
+      childResolutionStatus: "recovery_pending",
+      claimStatus: "active",
+      claimRetentionHoldActive: true,
+      createdNewClaim: true,
+    },
+  ],
+  shipmentIncidentRouted: true,
+  shipmentIncidentRoutingAtomic: true,
   providerEventShipmentId: "shipment-1",
   providerEventAuthenticated: true,
   providerEventVerified: true,
@@ -273,6 +389,23 @@ function claimSlotStatusesForTarget(target: string): readonly string[] {
   }
 }
 
+function claimResolutionEvidence(statuses: readonly string[]) {
+  const expectedClaimSlotResolutionIds = statuses.map(
+    (_status, index) => `claim-resolution-${index + 1}`,
+  );
+  return {
+    claimId: "claim-1",
+    claimResolutionSetClaimId: "claim-1",
+    expectedClaimSlotResolutionIds,
+    claimSlotResolutions: statuses.map((status, index) => ({
+      id: expectedClaimSlotResolutionIds[index],
+      claimId: "claim-1",
+      status,
+    })),
+    claimResolutionSetComplete: true,
+  };
+}
+
 function orderCancellationPhaseDisposition(current?: string): {
   readonly previous: string;
   readonly target: string;
@@ -295,6 +428,10 @@ function orderCancellationPhaseDisposition(current?: string): {
 function contextForTransition(target: string, current?: string) {
   const cancellationPhaseDisposition =
     orderCancellationPhaseDisposition(current);
+  const claimSlotResolutionStatuses = claimSlotStatusesForTarget(target);
+  const resolutionEvidence = claimResolutionEvidence(
+    claimSlotResolutionStatuses,
+  );
   const capacityCaptureCompensation =
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
@@ -346,7 +483,8 @@ function contextForTransition(target: string, current?: string) {
       : target === "delivered_reship" || target === "delivered_reprint"
         ? "delivered"
         : target,
-    claimSlotResolutionStatuses: claimSlotStatusesForTarget(target),
+    claimSlotResolutionStatuses,
+    ...resolutionEvidence,
     financialTerminalTarget: target,
     completionProjectedTarget: target,
     phaseCancellationOrderPreviousStatus: current,
@@ -454,6 +592,7 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     [quoteRequestPolicy, "quoted", "accepted"],
+    [quoteRequestPolicy, "quoted", "expired"],
     [paymentPolicy, "pending", "captured"],
     [paymentPolicy, "pending", "refund_pending"],
     [paymentPolicy, "voided", "refund_pending"],
@@ -534,6 +673,26 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
+    ["quoteRequestId", " "],
+    ["issuedQuoteRequestId", "another-request"],
+    ["quoteExpirationQuoteRequestId", "another-request"],
+    ["issuedQuoteId", "\t"],
+    ["quoteExpirationIssuedQuoteId", "another-quote"],
+    ["issuedQuoteExpiresAt", "2026-01-02T00:00:00.000Z"],
+    ["quoteExpirationEvaluatedAt", "2026-01-02T00:00:00.000Z"],
+    ["quoteExpirationEvaluatedAt", Instant.parse("2026-01-01T23:59:59.999Z")],
+  ] as const)("rejects quote expiration with invalid %s", (field, value) => {
+    expect(() =>
+      transition(quoteRequestPolicy, {
+        current: "quoted",
+        target: "expired",
+        idempotencyKey: `quote-expiration-${field}`,
+        context: { ...permittedContext, [field]: value },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
     ["orderId", ""],
     ["orderId", " "],
     ["confirmationActivationOrderId", "another-order"],
@@ -559,6 +718,10 @@ describe("v0 lifecycle policy tables", () => {
     ["confirmationPhaseTargetStatus", "quoted"],
     ["completeReservationCaptured", false],
     ["confirmationActivationAtomic", false],
+    ["phaseReservationSetPlannedJobKeys", []],
+    ["confirmationReservationJobLinks", []],
+    ["confirmationJobsCreated", false],
+    ["confirmationJobCreationAtomic", false],
   ] as const)(
     "rejects partial Order/phase confirmation with invalid %s",
     (field, value) => {
@@ -664,6 +827,112 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("rejects incomplete or non-bijective confirmation Job links", () => {
+    const firstLink = permittedContext.confirmationReservationJobLinks[0];
+    const secondLink = permittedContext.confirmationReservationJobLinks[1];
+    const sparseKeys = ["planned-job-1"] as string[];
+    sparseKeys.length = 2;
+    const sparseLinks = [firstLink] as Array<typeof firstLink | undefined>;
+    sparseLinks.length = 2;
+    const invalidContexts = [
+      {
+        phaseReservationSetPlannedJobKeys: ["planned-job-1"],
+      },
+      {
+        phaseReservationSetPlannedJobKeys: ["planned-job-1", "planned-job-1"],
+      },
+      { phaseReservationSetPlannedJobKeys: sparseKeys },
+      { confirmationReservationJobLinks: sparseLinks },
+      { confirmationReservationJobLinks: [firstLink] },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          {
+            ...secondLink,
+            plannedJobKey: "foreign-key",
+            reservationPlannedJobKey: "foreign-key",
+            jobPlannedJobKey: "foreign-key",
+          },
+        ],
+      },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          {
+            ...secondLink,
+            productionReservationId: firstLink.productionReservationId,
+            jobProductionReservationId: firstLink.productionReservationId,
+          },
+        ],
+      },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          {
+            ...secondLink,
+            jobId: firstLink.jobId,
+            reservationJobId: firstLink.jobId,
+          },
+        ],
+      },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          { ...secondLink, reservationJobId: "another-job" },
+        ],
+      },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          { ...secondLink, reservationOrderId: "another-order" },
+        ],
+      },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          { ...secondLink, reservationPhaseId: "another-phase" },
+        ],
+      },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          { ...secondLink, reservationSetId: "another-set" },
+        ],
+      },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          { ...secondLink, jobProductionReservationId: "another-reservation" },
+        ],
+      },
+      {
+        confirmationReservationJobLinks: [
+          firstLink,
+          { ...secondLink, jobStatus: "accepted" },
+        ],
+      },
+    ];
+    for (const [index, invalidContext] of invalidContexts.entries()) {
+      for (const [policy, current, target] of [
+        [paymentPolicy, "pending", "captured"],
+        [orderPolicy, "quoted", "confirmed"],
+        [singleOrderPhasePolicy, "quoted", "active"],
+      ] as const) {
+        expect(() =>
+          transition(policy, {
+            current,
+            target,
+            idempotencyKey: `confirmation-job-links-${index}-${target}`,
+            context: {
+              ...contextForTransition(target, current),
+              ...invalidContext,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    }
+  });
+
   it.each([
     [orderPolicy, "delivered", "completed"],
     [orderPolicy, "in_production", "partially_fulfilled"],
@@ -690,6 +959,38 @@ describe("v0 lifecycle policy tables", () => {
               completionProjectedTarget: target,
               amountDueMinor,
               refundableBalanceMinor,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["orderId", " "],
+    ["orderCompletionOrderId", "another-order"],
+    ["orderCompletionPhaseOrderId", "another-order"],
+    ["phaseId", "\t"],
+    ["orderCompletionPhaseId", "another-phase"],
+    ["phaseKind", "sample"],
+    ["orderCompletionOrderPreviousStatus", "shipped"],
+    ["orderCompletionOrderTargetStatus", "delivered"],
+    ["orderCompletionPhasePreviousStatus", "shipped"],
+    ["orderCompletionPhaseTargetStatus", "delivered"],
+    ["phaseCompletionCompleted", false],
+    ["orderPhaseCompletionAtomic", false],
+  ] as const)(
+    "rejects Order/phase completion with invalid %s",
+    (field, value) => {
+      for (const policy of [orderPolicy, singleOrderPhasePolicy] as const) {
+        expect(() =>
+          transition(policy, {
+            current: "delivered",
+            target: "completed",
+            idempotencyKey: `order-phase-completion-${policy.name}-${field}`,
+            context: {
+              ...contextForTransition("completed", "delivered"),
+              [field]: value,
             },
           }),
         ).toThrow(TransitionGuardError);
@@ -1136,6 +1437,7 @@ describe("v0 lifecycle policy tables", () => {
           target,
           idempotencyKey: `completion-target-mismatch-${target}`,
           context: {
+            ...contextForTransition(target, current),
             completionProjected: true,
             completionProjectedTarget: "not-the-target",
             amountDueMinor: 0n,
@@ -1181,6 +1483,7 @@ describe("v0 lifecycle policy tables", () => {
           target,
           idempotencyKey: `completion-target-match-${target}`,
           context: {
+            ...contextForTransition(target, current),
             completionProjected: true,
             completionProjectedTarget: target,
             amountDueMinor: 0n,
@@ -1820,14 +2123,219 @@ describe("v0 lifecycle policy tables", () => {
           target,
           idempotencyKey: `shipment-event-${target}`,
           context: {
-            shipmentId: "shipment-1",
-            providerEventShipmentId: "shipment-1",
-            providerEventAuthenticated: true,
-            providerEventVerified: true,
+            ...contextForTransition(target, "in_transit"),
             providerEventStatus: target,
           },
         }),
       ).toEqual({ kind: "changed", previous: "in_transit", current: target });
+    },
+  );
+
+  it("rejects incomplete Shipment incident routing", () => {
+    const firstRoute = permittedContext.shipmentIncidentSlotRoutes[0];
+    const secondRoute = permittedContext.shipmentIncidentSlotRoutes[1];
+    const sparseRoutes = [firstRoute] as Array<typeof firstRoute | undefined>;
+    sparseRoutes.length = 2;
+    const invalidContexts = [
+      { incidentShipmentId: "another-shipment" },
+      { incidentOrderId: "another-order" },
+      { incidentPhaseId: "another-phase" },
+      { shipmentFulfilmentSlotIds: [] },
+      { shipmentFulfilmentSlotIds: ["slot-1", "slot-1"] },
+      { incidentAffectedSlotIds: ["slot-1"] },
+      { incidentAffectedSlotIds: ["slot-1", "foreign-slot"] },
+      { shipmentIncidentSlotOwnerships: [] },
+      {
+        shipmentIncidentSlotOwnerships: [
+          { slotId: "slot-1", activeClaimId: null },
+          { slotId: "foreign-slot", activeClaimId: null },
+        ],
+      },
+      {
+        shipmentIncidentSlotOwnerships: [
+          { slotId: "slot-1", activeClaimId: null },
+          { slotId: "slot-1", activeClaimId: null },
+        ],
+      },
+      { shipmentIncidentSlotRoutes: [] },
+      { shipmentIncidentSlotRoutes: sparseRoutes },
+      { shipmentOriginClaimId: " " },
+      { shipmentIncidentNewClaim: null },
+      { shipmentIncidentRouted: false },
+      { shipmentIncidentRoutingAtomic: false },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, slotId: "slot-1" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, routedClaimId: "another-claim" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          {
+            ...firstRoute,
+            ownerClaimId: "existing-claim",
+            routedClaimId: "existing-claim",
+            incidentRecordClaimId: "existing-claim",
+            createdNewClaim: false,
+          },
+          secondRoute,
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, incidentRecordShipmentId: "another-shipment" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, incidentRecordClaimId: "another-claim" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, incidentRecordId: firstRoute.incidentRecordId },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, childResolutionId: firstRoute.childResolutionId },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, childResolutionClaimId: "another-claim" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, childResolutionSlotId: "slot-1" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, childResolutionShipmentId: "another-shipment" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, childResolutionStatus: "refund_pending" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, claimStatus: "resolved_refund" },
+        ],
+      },
+      {
+        shipmentIncidentSlotRoutes: [
+          firstRoute,
+          { ...secondRoute, claimRetentionHoldActive: false },
+        ],
+      },
+      {
+        shipmentIncidentNewClaim: {
+          ...permittedContext.shipmentIncidentNewClaim,
+          status: "opened",
+        },
+      },
+    ];
+    for (const target of ["lost", "returned"] as const) {
+      for (const [index, invalidContext] of invalidContexts.entries()) {
+        expect(() =>
+          transition(shipmentPolicy, {
+            current: "in_transit",
+            target,
+            idempotencyKey: `shipment-incident-${target}-${index}`,
+            context: {
+              ...contextForTransition(target, "in_transit"),
+              ...invalidContext,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    }
+  });
+
+  it.each(["existing owners", "mixed ownership", "origin Claim"] as const)(
+    "routes a Shipment incident across %s",
+    (ownership) => {
+      const baseRoutes = permittedContext.shipmentIncidentSlotRoutes;
+      const existingRoute = {
+        ...baseRoutes[0],
+        ownerClaimId: "existing-claim-1",
+        routedClaimId: "existing-claim-1",
+        incidentRecordClaimId: "existing-claim-1",
+        childResolutionClaimId: "existing-claim-1",
+        createdNewClaim: false,
+      };
+      const context =
+        ownership === "origin Claim"
+          ? {
+              ...contextForTransition("lost", "in_transit"),
+              shipmentOriginClaimId: "origin-claim-1",
+              shipmentIncidentNewClaim: null,
+              shipmentIncidentSlotRoutes: baseRoutes.map((route) => ({
+                ...route,
+                routedClaimId: "origin-claim-1",
+                incidentRecordClaimId: "origin-claim-1",
+                childResolutionClaimId: "origin-claim-1",
+                createdNewClaim: false,
+              })),
+            }
+          : {
+              ...contextForTransition("lost", "in_transit"),
+              shipmentIncidentNewClaim:
+                ownership === "existing owners"
+                  ? null
+                  : permittedContext.shipmentIncidentNewClaim,
+              shipmentIncidentSlotOwnerships:
+                ownership === "existing owners"
+                  ? [
+                      { slotId: "slot-1", activeClaimId: "existing-claim-1" },
+                      { slotId: "slot-2", activeClaimId: "existing-claim-2" },
+                    ]
+                  : [
+                      { slotId: "slot-1", activeClaimId: "existing-claim-1" },
+                      { slotId: "slot-2", activeClaimId: null },
+                    ],
+              shipmentIncidentSlotRoutes:
+                ownership === "existing owners"
+                  ? [
+                      existingRoute,
+                      {
+                        ...baseRoutes[1],
+                        ownerClaimId: "existing-claim-2",
+                        routedClaimId: "existing-claim-2",
+                        incidentRecordClaimId: "existing-claim-2",
+                        childResolutionClaimId: "existing-claim-2",
+                        createdNewClaim: false,
+                      },
+                    ]
+                  : [existingRoute, baseRoutes[1]],
+            };
+      expect(
+        transition(shipmentPolicy, {
+          current: "in_transit",
+          target: "lost",
+          idempotencyKey: `shipment-incident-${ownership}`,
+          context,
+        }),
+      ).toEqual({ kind: "changed", previous: "in_transit", current: "lost" });
     },
   );
 
@@ -3063,7 +3571,7 @@ describe("v0 lifecycle policy tables", () => {
           target,
           idempotencyKey: `claim-mismatch-${target}`,
           context: {
-            claimSlotResolutionStatuses,
+            ...claimResolutionEvidence(claimSlotResolutionStatuses),
             cleanPostDeliveryQualityClaim: true,
           },
         }),
@@ -3083,7 +3591,7 @@ describe("v0 lifecycle policy tables", () => {
           target,
           idempotencyKey: `claim-match-${target}`,
           context: {
-            claimSlotResolutionStatuses,
+            ...claimResolutionEvidence(claimSlotResolutionStatuses),
             cleanPostDeliveryQualityClaim: true,
           },
         }),
@@ -3092,8 +3600,9 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it("rejects sparse child disposition arrays", () => {
-    const sparseClaimStatuses = ["refunded"] as string[];
-    sparseClaimStatuses.length = 2;
+    const evidence = claimResolutionEvidence(["refunded", "refunded"]);
+    const sparseClaimResolutions = [evidence.claimSlotResolutions[0]];
+    sparseClaimResolutions.length = 2;
 
     expect(() =>
       transition(claimPolicy, {
@@ -3101,11 +3610,98 @@ describe("v0 lifecycle policy tables", () => {
         target: "resolved_refund",
         idempotencyKey: "claim-sparse-dispositions",
         context: {
-          claimSlotResolutionStatuses: sparseClaimStatuses,
+          ...evidence,
+          claimSlotResolutions: sparseClaimResolutions,
           cleanPostDeliveryQualityClaim: true,
         },
       }),
     ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    [
+      "omitted child",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: evidence.claimSlotResolutions.slice(0, 1),
+      }),
+    ],
+    [
+      "foreign child",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: [
+          evidence.claimSlotResolutions[0],
+          { ...evidence.claimSlotResolutions[1], id: "foreign-resolution" },
+        ],
+      }),
+    ],
+    [
+      "duplicate expected identity",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        expectedClaimSlotResolutionIds: [
+          evidence.expectedClaimSlotResolutionIds[0],
+          evidence.expectedClaimSlotResolutionIds[0],
+        ],
+      }),
+    ],
+    [
+      "duplicate projected identity",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: [
+          evidence.claimSlotResolutions[0],
+          {
+            ...evidence.claimSlotResolutions[1],
+            id: evidence.claimSlotResolutions[0]?.id,
+          },
+        ],
+      }),
+    ],
+    [
+      "foreign Claim owner",
+      (evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimSlotResolutions: [
+          evidence.claimSlotResolutions[0],
+          { ...evidence.claimSlotResolutions[1], claimId: "another-claim" },
+        ],
+      }),
+    ],
+    [
+      "incomplete-set flag",
+      (_evidence: ReturnType<typeof claimResolutionEvidence>) => ({
+        claimResolutionSetComplete: false,
+      }),
+    ],
+  ] as const)("rejects Claim resolution with %s", (_case, mutate) => {
+    const evidence = claimResolutionEvidence(["delivered_reprint", "refunded"]);
+    expect(() =>
+      transition(claimPolicy, {
+        current: "active",
+        target: "resolved_mixed",
+        idempotencyKey: `claim-complete-set-${_case}`,
+        context: {
+          ...evidence,
+          ...mutate(evidence),
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("accepts a complete reordered Claim child set", () => {
+    const evidence = claimResolutionEvidence(["delivered_reprint", "refunded"]);
+    expect(
+      transition(claimPolicy, {
+        current: "active",
+        target: "resolved_mixed",
+        idempotencyKey: "claim-complete-set-reordered",
+        context: {
+          ...evidence,
+          claimSlotResolutions: [...evidence.claimSlotResolutions].reverse(),
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "active",
+      current: "resolved_mixed",
+    });
   });
 });
 
