@@ -35,7 +35,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 -c "import yaml" 2>/dev/null \
-            || pip install --quiet --disable-pip-version-check pyyaml
+            || python3 -m pip install \
+              --quiet \
+              --disable-pip-version-check \
+              --no-deps \
+              --only-binary=:all: \
+              --require-hashes \
+              --requirement scripts/ci/sibling-drift-requirements.txt
           python3 scripts/ci/check-pnpm-overrides.py --self-test
           python3 scripts/ci/check-pnpm-overrides.py
           python3 scripts/ci/check-sibling-drift.py --self-test

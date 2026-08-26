@@ -269,6 +269,17 @@ STACK_TOPOLOGY_GATED = {
     ".github/workflows/mobile-release.yml": "apps/mobile/pubspec.yaml",
 }
 
+# Some capabilities have equivalent markers because sibling implementations
+# use different package names. A repository owns independent package CI when it
+# has either the shared/core package used by Tarmoto or the core package used by
+# Taven and TableTap. Nexcue's generated clients have neither.
+CAPABILITY_MARKER_PATHS = {
+    "capability:independent-packages": (
+        "packages/core/package.json",
+        "packages/shared/package.json",
+    ),
+}
+
 # A shared workflow is compared only when both repositories declare the
 # capability that owns it. This keeps a backend/admin-only sibling in the loop
 # without inventing empty mobile, marketing or deployment workflows merely to
@@ -283,14 +294,7 @@ ACTION_TOPOLOGY_GATED = {
     ".github/workflows/flutter-pin-check.yml": "apps/mobile/pubspec.yaml",
     ".github/workflows/mobile-ci.yml": "apps/mobile/.gitignore",
     ".github/workflows/mobile-release.yml": "apps/mobile/.gitignore",
-}
-
-# packages-ci.yml exists only where hand-written packages have an independent
-# pipeline; Nexcue's generated clients are covered by its OpenAPI workflows.
-# If both sides have packages-ci its pins are strict, while the known one-sided
-# presence remains capability topology.
-EXPECTED_ONE_SIDED_ACTION_WORKFLOWS = {
-    ".github/workflows/packages-ci.yml": "independent hand-written package pipeline",
+    ".github/workflows/packages-ci.yml": "capability:independent-packages",
 }
 
 # Some shared workflows contain optional jobs owned by a narrower capability.
@@ -1248,9 +1252,10 @@ def compare(local_read, sibling_read) -> list[dict]:
 
     def marker_sides(marker: str) -> tuple[bool, bool]:
         if marker not in marker_state:
+            paths = CAPABILITY_MARKER_PATHS.get(marker, (marker,))
             marker_state[marker] = (
-                local_read(marker) is not None,
-                sibling_read(marker) is not None,
+                any(local_read(path) is not None for path in paths),
+                any(sibling_read(path) is not None for path in paths),
             )
         return marker_state[marker]
 
@@ -1352,11 +1357,6 @@ def compare(local_read, sibling_read) -> list[dict]:
     theirs_pins: dict[tuple[str, str], dict[str, str]] = {}
     for path in ACTION_WORKFLOWS:
         local_text, sibling_text = local_read(path), sibling_read(path)
-        if (
-            path in EXPECTED_ONE_SIDED_ACTION_WORKFLOWS
-            and (local_text is None) != (sibling_text is None)
-        ):
-            continue
         if topology_skips_artifact(
             path, local_text, sibling_text, ACTION_TOPOLOGY_GATED, {}
         ):
@@ -1698,7 +1698,13 @@ def self_test() -> int:
         broad_markers = set(ACTION_TOPOLOGY_GATED.values()) - set(
             STACK_TOPOLOGY_GATED.values()
         )
-        files.update({marker: "marker\n" for marker in broad_markers})
+        files.update(
+            {
+                marker: "marker\n"
+                for marker in broad_markers
+                if marker not in CAPABILITY_MARKER_PATHS
+            }
+        )
         files.update(overrides)
         return {k: v for k, v in files.items() if v is not None}
 
@@ -2368,9 +2374,9 @@ def self_test() -> int:
 
     # Gone from both: a manifest entry that no longer compares anything.
     gone_actions = {path: None for path in ACTION_WORKFLOWS}
-    gone_actions.update(
-        {marker: "marker\n" for marker in set(ACTION_TOPOLOGY_GATED.values())}
-    )
+    for marker in set(ACTION_TOPOLOGY_GATED.values()):
+        for marker_path in CAPABILITY_MARKER_PATHS.get(marker, (marker,)):
+            gone_actions[marker_path] = "marker\n"
     found = [
         f
         for f in compare(repo(**gone_actions).get, repo(**gone_actions).get)
@@ -2572,6 +2578,13 @@ def self_test() -> int:
         if f["name"] == "packages-ci.yml"
     ]
     assert found == [], f"one-sided package workflow is capability topology: {found}"
+    package_owner = {PACKAGE_WF: wf("actions/x@1111111 # v1"), "packages/core/package.json": "{}\n"}
+    package_owner_missing = {PACKAGE_WF: None, "packages/core/package.json": "{}\n"}
+    found = [
+        f for f in compare(repo(**package_owner).get, repo(**package_owner_missing).get)
+        if f["name"] == "packages-ci.yml"
+    ]
+    assert len(found) == 1, f"an owner deleting package CI must report: {found}"
     package_pin_here = {PACKAGE_WF: wf("actions/x@1111111 # v1")}
     package_pin_there = {PACKAGE_WF: wf("actions/x@2222222 # v2")}
     found = [
