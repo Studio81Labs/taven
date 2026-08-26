@@ -244,10 +244,27 @@ def advisory_for(raw: str, key: str) -> str | None:
     and an unrelated comment further up is not borrowed.
     """
     lines = raw.splitlines()
-    bare = key.strip('"\'')
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not (stripped.startswith(f"{bare}:") or stripped.startswith(f'"{bare}":')):
+    try:
+        start = next(index for index, line in enumerate(lines) if line == "overrides:")
+    except StopIteration:
+        return None
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" "):
+            break
+        if not line.startswith("  ") or line.startswith("    "):
+            continue
+        entry = line[2:]
+        separator = _mapping_separator(entry)
+        if separator < 0:
+            continue
+        try:
+            candidate = _yaml_string(entry[:separator])
+        except Unparseable:
+            continue
+        if candidate != key:
             continue
         for j in range(i - 1, -1, -1):
             probe = lines[j].strip()
@@ -564,11 +581,25 @@ def self_test(tmp: Path) -> int:
             print(f"         expected failure={expect_failure}, got={got}")
             for e in errs:
                 print(f"         {e[:160]}")
+    desc = "single-quoted cross-major key retains its adjacent advisory"
+    (tmp / "pnpm-workspace.yaml").write_text(
+        "overrides:\n"
+        "  # GHSA-w5hq-g745-h8pq (7.5). Pulled by gaxios.\n"
+        "  'uuid@9.0.1': '11.1.1'\n"
+    )
+    (tmp / "package.json").write_text(json.dumps({"dependencies": {}}))
+    errs = check(tmp)
+    status = "ok " if not errs else "FAIL"
+    print(f"  [{status}] {desc}")
+    if errs:
+        failures += 1
+        for e in errs:
+            print(f"         {e[:160]}")
     print()
     if failures:
-        print(f"::error::self-test: {failures}/{len(SELF_TESTS)} cases behaved wrongly")
+        print(f"::error::self-test: {failures}/{len(SELF_TESTS) + 1} cases behaved wrongly")
         return 1
-    print(f"Self-test OK: {len(SELF_TESTS)} cases, both real regressions caught.")
+    print(f"Self-test OK: {len(SELF_TESTS) + 1} cases, both real regressions caught.")
     return 0
 
 

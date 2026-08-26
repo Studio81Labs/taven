@@ -299,23 +299,23 @@ ACTION_TOPOLOGY_GATED = {
 }
 
 # Optional jobs can introduce actions inside an otherwise shared workflow.
-# Each entry records both its capability marker and which marker state owns the
-# action. This is an assertion, not merely an exemption: the owner must retain
-# the action and the non-owner must not acquire an inverted copy.
+# Each entry records the owning job id, its capability marker, and which marker
+# state owns the action. This is an assertion, not merely an exemption: an
+# action moved to another job no longer satisfies the topology contract.
 ACTION_ENTRY_TOPOLOGY_GATED = {
-    (".github/workflows/admin-ci.yml", "actions/download-artifact"): (
+    (".github/workflows/admin-ci.yml", "build", "actions/download-artifact"): (
         "apps/marketing/package.json",
         True,
     ),
-    (".github/workflows/admin-ci.yml", "actions/upload-artifact"): (
+    (".github/workflows/admin-ci.yml", "build", "actions/upload-artifact"): (
         "apps/marketing/package.json",
         True,
     ),
-    (".github/workflows/ci-scripts.yml", "actions/setup-node"): (
+    (".github/workflows/ci-scripts.yml", "test", "actions/setup-node"): (
         "scripts/ci/check-workflow-coverage.mjs",
         True,
     ),
-    (".github/workflows/packages-ci.yml", "actions/download-artifact"): (
+    (".github/workflows/packages-ci.yml", "build", "actions/download-artifact"): (
         "apps/ingest/package.json",
         True,
     ),
@@ -742,7 +742,7 @@ def enabled_steps(job) -> list:
     ]
 
 
-def runnable_jobs(root) -> list:
+def runnable_job_entries(root) -> list[tuple[str, object]]:
     """Jobs that actually do something: enabled, and holding enabled work.
 
     ONE definition of "runs", because two of them drifted apart twice. Both
@@ -755,19 +755,24 @@ def runnable_jobs(root) -> list:
     if not isinstance(jobs, yaml.MappingNode):
         return []
     alive = []
-    for _, job in jobs.value:
+    for key, job in jobs.value:
         if not (isinstance(job, yaml.MappingNode) and job.value):
             continue
         if statically_disabled(job):
             continue
         calls_workflow = isinstance(_map_get(job, "uses"), yaml.ScalarNode)
         if calls_workflow or enabled_steps(job):
-            alive.append(job)
+            alive.append((str(key.value), job))
     return alive
 
 
-def uses_entries(text: str, path: str) -> list[tuple[str, int]]:
-    """Every executed `uses:` as (value, source line), from the composed tree.
+def runnable_jobs(root) -> list:
+    """Runnable job nodes, retained as the shared definition used by is_blank()."""
+    return [job for _, job in runnable_job_entries(root)]
+
+
+def job_uses_entries(text: str, path: str) -> list[tuple[str, str, int]]:
+    """Every executed `uses:` as (job id, value, source line).
 
     Composed rather than loaded so each value keeps its line number, which is
     what binds a `# vX.Y.Z` annotation to the pin it actually annotates. Labels
@@ -786,16 +791,31 @@ def uses_entries(text: str, path: str) -> list[tuple[str, int]]:
     except yaml.YAMLError as error:
         raise SystemExit(f"::error::{path}: cannot parse as YAML: {error}")
 
-    entries: list[tuple[str, int]] = []
-    for job in runnable_jobs(root):
+    entries: list[tuple[str, str, int]] = []
+    for job_id, job in runnable_job_entries(root):
         called = _map_get(job, "uses")  # a reusable workflow call
         if isinstance(called, yaml.ScalarNode):
-            entries.append((called.value, called.start_mark.line))
+            entries.append((job_id, called.value, called.start_mark.line))
         for step in enabled_steps(job):
             step_uses = _map_get(step, "uses")
             if isinstance(step_uses, yaml.ScalarNode):
-                entries.append((step_uses.value, step_uses.start_mark.line))
+                entries.append((job_id, step_uses.value, step_uses.start_mark.line))
     return entries
+
+
+def uses_entries(text: str, path: str) -> list[tuple[str, int]]:
+    """Every executed `uses:` as (value, source line), across runnable jobs."""
+    return [(value, line) for _, value, line in job_uses_entries(text, path)]
+
+
+def job_actions(text: str, path: str) -> set[tuple[str, str]]:
+    """Remote action names keyed by their owning job id."""
+    actions = set()
+    for job_id, value, _ in job_uses_entries(text, path):
+        parts = split_ref(value)
+        if parts is not None:
+            actions.add((job_id, parts[0]))
+    return actions
 
 
 TRAILING_COMMENT = re.compile(r"#\s*(?P<comment>v?\d+(?:\.\d+)*(?:[-+][\w.]+)?)\s*$")
@@ -1511,6 +1531,8 @@ def compare(local_read, sibling_read) -> list[dict]:
         name = path.rsplit("/", 1)[-1]
         our_file_pins = parse_pins(local_text, path) if local_text else {}
         their_file_pins = parse_pins(sibling_text, path) if sibling_text else {}
+        our_job_actions = job_actions(local_text, path) if local_text else set()
+        their_job_actions = job_actions(sibling_text, path) if sibling_text else set()
         our_unparsed = unparsed_uses(local_text, path) if local_text else []
         their_unparsed = unparsed_uses(sibling_text, path) if sibling_text else []
         # PRESENCE is `is None`, never truthiness. An empty file is present,
@@ -1589,25 +1611,25 @@ def compare(local_read, sibling_read) -> list[dict]:
                 }
             )
         if here and there:
-            for (entry_path, action), (
+            for (entry_path, job_id, action), (
                 marker,
                 owned_when_marked,
             ) in ACTION_ENTRY_TOPOLOGY_GATED.items():
                 if entry_path != path:
                     continue
                 our_marker, their_marker = marker_sides(marker)
-                for pins, has_marker, side in (
-                    (our_file_pins, our_marker, "here"),
-                    (their_file_pins, their_marker, "there"),
+                for actions, has_marker, side in (
+                    (our_job_actions, our_marker, "here"),
+                    (their_job_actions, their_marker, "there"),
                 ):
                     owns_action = has_marker == owned_when_marked
-                    has_action = action in pins
+                    has_action = (job_id, action) in actions
                     if owns_action and not has_action:
                         findings.append(
                             {
                                 "kind": "action",
                                 "name": f"{action} — {name}",
-                                "detail": f"topology expects the action {side}, but it is absent",
+                                "detail": f"topology expects the action in job `{job_id}` {side}, but it is absent",
                             }
                         )
                     elif not owns_action and has_action:
@@ -1615,7 +1637,7 @@ def compare(local_read, sibling_read) -> list[dict]:
                             {
                                 "kind": "action",
                                 "name": f"{action} — {name}",
-                                "detail": f"topology expects no action {side}, but it is present",
+                                "detail": f"topology expects no action in job `{job_id}` {side}, but it is present",
                             }
                         )
         # In a shared workflow owned by both repositories, adding or replacing
@@ -1638,7 +1660,10 @@ def compare(local_read, sibling_read) -> list[dict]:
                 # Capability-owned entries were asserted above, including
                 # ownership polarity and owner-side deletion. Do not add a
                 # second generic one-sided finding for the same violation.
-                if (path, action) in ACTION_ENTRY_TOPOLOGY_GATED:
+                if any(
+                    entry_path == path and entry_action == action
+                    for entry_path, _, entry_action in ACTION_ENTRY_TOPOLOGY_GATED
+                ):
                     continue
                 refs = our_file_pins.get(action) or their_file_pins[action]
                 described = " + ".join(
@@ -3022,6 +3047,31 @@ def self_test() -> int:
         if f["kind"] == "action" and "packages-ci.yml" in f["name"]
     ]
     assert len(found) == 1, f"a shared ingest package alone must not gate the handoff: {found}"
+    package_download_in_wrong_job = {
+        PACKAGE_ACTION_WF: (
+            "jobs:\n"
+            "  prepare-openapi:\n"
+            "    name: \"contract: openapi spec\"\n"
+            "    steps:\n"
+            "      - uses: actions/download-artifact@2222222 # v2\n"
+            "  build:\n"
+            "    name: \"packages: build, test & typecheck\"\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@1111111 # v1\n"
+        ),
+        "apps/ingest/package.json": "{}\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**package_download_in_wrong_job).get,
+            repo(**package_without_ingest).get,
+        )
+        if f["kind"] == "action"
+        and f["name"].startswith("actions/download-artifact")
+    ]
+    assert len(found) == 1, f"a gated action in the wrong job must report: {found}"
+    assert "job `build`" in found[0]["detail"], found
 
     mobile_plus_ours = {
         ".github/workflows/mobile-ci.yml": wf(
