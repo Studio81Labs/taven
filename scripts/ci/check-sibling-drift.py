@@ -239,21 +239,23 @@ IDENTICAL = [
 # comparison of two present artifacts. The markers are deliberately broad:
 # Flutter and React Native both carry apps/mobile/.gitignore, for example.
 TOPOLOGY_GATED = {
-    "scripts/lib/resolve-flutter.sh": "apps/mobile/.gitignore",
-    "scripts/ci/check-podfile-lock.py": "apps/mobile/.gitignore",
-    "scripts/ci/check-release-tag.sh": "apps/mobile/.gitignore",
-    "scripts/ci/check-semgrep-fixture.py": "apps/mobile/.gitignore",
-    "scripts/ci/compare-marketing-version.py": "apps/marketing/package.json",
-    ".github/workflows/flutter-pin-check.yml": "apps/mobile/.gitignore",
-    ".github/workflows/mobile-ci.yml": "apps/mobile/.gitignore",
-    ".github/workflows/mobile-release.yml": "apps/mobile/.gitignore",
+    "scripts/lib/resolve-flutter.sh": "capability:mobile",
+    "scripts/ci/check-podfile-lock.py": "capability:mobile",
+    "scripts/ci/check-release-tag.sh": "capability:mobile",
+    "scripts/ci/check-semgrep-fixture.py": "capability:mobile",
+    "scripts/ci/compare-marketing-version.py": "capability:mobile",
+    ".github/workflows/flutter-pin-check.yml": "capability:mobile",
+    ".github/workflows/mobile-ci.yml": "capability:mobile",
+    ".github/workflows/mobile-release.yml": "capability:mobile",
     ".github/workflows/packages-ci.yml": "capability:independent-packages",
-    ".github/workflows/_build-openapi.yml": "apps/marketing/package.json",
-    ".github/workflows/_release-version-gate.yml": "apps/mobile/.gitignore",
+    ".github/workflows/_build-openapi.yml": "capability:openapi-artifact",
+    ".github/workflows/_release-version-gate.yml": "capability:mobile",
+    ".github/workflows/admin-ci.yml": "apps/admin/package.json",
     ".github/workflows/admin-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/backend-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-ci.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-deploy.yml": "apps/marketing/package.json",
+    ".github/workflows/openapi-check.yml": "capability:openapi",
 }
 
 # A smaller set genuinely has different implementations between Flutter and
@@ -279,6 +281,15 @@ CAPABILITY_MARKER_PATHS = {
         "packages/core/package.json",
         "packages/shared/package.json",
     ),
+    "capability:mobile": (
+        "apps/mobile/package.json",
+        "apps/mobile/pubspec.yaml",
+    ),
+    "capability:openapi": ("packages/openapi/package.json",),
+    "capability:openapi-artifact": (
+        "apps/marketing/package.json",
+        "apps/backend/pyproject.toml",
+    ),
 }
 
 # A shared workflow is compared only when both repositories declare the
@@ -286,15 +297,17 @@ CAPABILITY_MARKER_PATHS = {
 # without inventing empty mobile, marketing or deployment workflows merely to
 # satisfy the drift checker.
 ACTION_TOPOLOGY_GATED = {
-    ".github/workflows/_build-openapi.yml": "apps/marketing/package.json",
-    ".github/workflows/_release-version-gate.yml": "apps/mobile/.gitignore",
+    ".github/workflows/_build-openapi.yml": "capability:openapi-artifact",
+    ".github/workflows/_release-version-gate.yml": "capability:mobile",
+    ".github/workflows/admin-ci.yml": "apps/admin/package.json",
     ".github/workflows/admin-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/backend-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-ci.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/flutter-pin-check.yml": "apps/mobile/pubspec.yaml",
-    ".github/workflows/mobile-ci.yml": "apps/mobile/.gitignore",
-    ".github/workflows/mobile-release.yml": "apps/mobile/.gitignore",
+    ".github/workflows/mobile-ci.yml": "capability:mobile",
+    ".github/workflows/mobile-release.yml": "capability:mobile",
+    ".github/workflows/openapi-check.yml": "capability:openapi",
     ".github/workflows/packages-ci.yml": "capability:independent-packages",
 }
 
@@ -383,6 +396,23 @@ EXPECTED_JOB_DIFFS = {
     # The gate compares the tag against each repo's actual version source:
     # pubspec.yaml for Flutter, apps/mobile/package.json for React Native.
     (".github/workflows/_release-version-gate.yml", "check"): "version-source topology (pubspec vs package.json)",
+}
+
+# Poker Hero's Python backend and always-emitted contract gate use different
+# job layouts from the Node siblings. These exemptions are pair-specific:
+# they activate only when exactly one repository has the Python marker, so the
+# same IDs remain strict between any two Node repositories.
+POKER_JOB_DIFFS = {
+    (".github/workflows/backend-ci.yml", "build"),
+    (".github/workflows/backend-ci.yml", "image"),
+    (".github/workflows/backend-ci.yml", "prepare-openapi"),
+    (".github/workflows/backend-ci.yml", "schema"),
+    (".github/workflows/backend-ci.yml", "test"),
+    (".github/workflows/backend-ci.yml", "test-e2e"),
+    (".github/workflows/openapi-check.yml", "changes"),
+    (".github/workflows/openapi-check.yml", "gate"),
+    (".github/workflows/openapi-check.yml", "prepare-openapi"),
+    (".github/workflows/openapi-check.yml", "validate"),
 }
 
 # Every expected difference has a marker that identifies the topology forcing
@@ -1838,6 +1868,9 @@ def compare(local_read, sibling_read) -> list[dict]:
                 {"kind": "jobname", "name": path, "detail": f"could not read jobs — {broken}"}
             )
             continue
+        poker_pair = marker_sides("apps/backend/pyproject.toml")[0] != marker_sides(
+            "apps/backend/pyproject.toml"
+        )[1]
         handled_topology_jobs: set[str] = set()
         for (owned_path, job_id), (
             marker,
@@ -1922,6 +1955,8 @@ def compare(local_read, sibling_read) -> list[dict]:
         for (pair_path, marker), (marked, unmarked) in EXPECTED_TOPOLOGY_JOB_PAIRS.items():
             if pair_path != path:
                 continue
+            if poker_pair and pair_path == ".github/workflows/backend-ci.yml":
+                continue
             our_marked, their_marked = marker_sides(marker)
             if our_marked == their_marked:
                 continue
@@ -1960,6 +1995,8 @@ def compare(local_read, sibling_read) -> list[dict]:
         for job in sorted(set(ours) | set(theirs)):
             our_name, their_name = ours.get(job), theirs.get(job)
             if job in handled_topology_jobs:
+                continue
+            if poker_pair and (path, job) in POKER_JOB_DIFFS:
                 continue
             if our_name == their_name:
                 continue
@@ -2077,13 +2114,9 @@ def self_test() -> int:
         broad_markers = set(ACTION_TOPOLOGY_GATED.values()) - set(
             STACK_TOPOLOGY_GATED.values()
         )
-        files.update(
-            {
-                marker: "marker\n"
-                for marker in broad_markers
-                if marker not in CAPABILITY_MARKER_PATHS
-            }
-        )
+        for marker in broad_markers:
+            paths = CAPABILITY_MARKER_PATHS.get(marker, (marker,))
+            files.setdefault(paths[0], "marker\n")
         files.update(
             {
                 "packages/core/package.json": "{}\n",
@@ -3227,7 +3260,9 @@ def self_test() -> int:
     # gated entries are exempt while no shared marker exists: between two
     # React Native repos a Flutter guard is absent by design, not stale.
     gone = {path: None for path in IDENTICAL}
-    gone.update({marker: None for marker in set(TOPOLOGY_GATED.values())})
+    for marker in set(TOPOLOGY_GATED.values()):
+        for marker_path in CAPABILITY_MARKER_PATHS.get(marker, (marker,)):
+            gone[marker_path] = None
     found = [f for f in compare(repo(**gone).get, repo(**gone).get) if f["kind"] == "file"]
     ungated = [path for path in IDENTICAL if path not in TOPOLOGY_GATED]
     assert len(found) == len(ungated), found
@@ -3236,7 +3271,8 @@ def self_test() -> int:
     # from both repos is a stale guard again, exactly as before the gate.
     gone_flutter = dict(gone)
     for marker in set(TOPOLOGY_GATED.values()) | set(STACK_TOPOLOGY_GATED.values()):
-        gone_flutter[marker] = "marker\n"
+        marker_path = CAPABILITY_MARKER_PATHS.get(marker, (marker,))[0]
+        gone_flutter[marker_path] = "marker\n"
     found = [f for f in compare(repo(**gone_flutter).get, repo(**gone_flutter).get) if f["kind"] == "file"]
     assert len(found) == len(IDENTICAL), found
 
@@ -3277,7 +3313,7 @@ def self_test() -> int:
     # Action workflows use a broader capability gate. A repo with no mobile
     # surface is not behind on mobile-release.yml; two repos that both declare
     # mobile still must report a missing workflow.
-    MOBILE_MARKER = "apps/mobile/.gitignore"
+    MOBILE_MARKER = "apps/mobile/package.json"
     MOBILE_ACTION_WF = ".github/workflows/mobile-release.yml"
     no_mobile = {MOBILE_MARKER: None, MOBILE_ACTION_WF: None}
     found = [
@@ -3505,6 +3541,30 @@ def self_test() -> int:
     found = [f for f in compare(repo(**extra).get, repo(**base).get) if f["kind"] == "jobname"]
     assert len(found) == 1 and "present here, absent there" in found[0]["detail"], found
 
+    # Poker-only layout exemptions must activate for Python-vs-Node, but the
+    # same job IDs remain strict between two Node siblings.
+    poker_backend = {
+        JOB_WF: jobs_yaml(
+            ("build", "backend: validate artifact"),
+            ("image", "backend: runtime image"),
+        ),
+        "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
+    }
+    node_backend = {JOB_WF: jobs_yaml(("build", "backend: typecheck, test & build"))}
+    found = [
+        f
+        for f in compare(repo(**poker_backend).get, repo(**node_backend).get)
+        if f["kind"] == "jobname" and f["name"] == JOB_WF
+    ]
+    assert found == [], f"Python-vs-Node job layout is pair topology: {found}"
+    other_node = {JOB_WF: jobs_yaml(("build", "backend: lint, test & build"))}
+    found = [
+        f
+        for f in compare(repo(**node_backend).get, repo(**other_node).get)
+        if f["kind"] == "jobname" and f["name"] == JOB_WF
+    ]
+    assert len(found) == 1 and "job `build`" in found[0]["detail"], found
+
     # Optional jobs are gated independently so the shared jobs in the same
     # workflow remain strict for a sibling without the owning capability.
     ADMIN_WF = ".github/workflows/admin-ci.yml"
@@ -3687,10 +3747,15 @@ def self_test() -> int:
     assert len(found) == 1, f"same-topology deploy names must stay strict: {found}"
 
     RELEASE_GATE_WF = ".github/workflows/_release-version-gate.yml"
-    flutter_gate = {RELEASE_GATE_WF: jobs_yaml(("check", "tag matches pubspec"))}
+    flutter_gate = {
+        RELEASE_GATE_WF: jobs_yaml(("check", "tag matches pubspec")),
+        "apps/mobile/package.json": None,
+        "apps/mobile/pubspec.yaml": "name: mobile\n",
+    }
     react_native_gate = {
         RELEASE_GATE_WF: jobs_yaml(("check", "tag matches the mobile version")),
         "apps/mobile/package.json": "{}\n",
+        "apps/mobile/pubspec.yaml": None,
     }
     found = [
         f for f in compare(repo(**flutter_gate).get, repo(**react_native_gate).get)
@@ -3700,6 +3765,7 @@ def self_test() -> int:
     unrelated_native_gate = {
         RELEASE_GATE_WF: jobs_yaml(("check", "release: unrelated claim")),
         "apps/mobile/package.json": "{}\n",
+        "apps/mobile/pubspec.yaml": None,
     }
     found = [
         f for f in compare(repo(**flutter_gate).get, repo(**unrelated_native_gate).get)
@@ -3707,7 +3773,9 @@ def self_test() -> int:
     ]
     assert len(found) == 1, f"topology cannot excuse an arbitrary name: {found}"
     renamed_flutter_gate = {
-        RELEASE_GATE_WF: jobs_yaml(("check", "tag matches renamed pubspec"))
+        RELEASE_GATE_WF: jobs_yaml(("check", "tag matches renamed pubspec")),
+        "apps/mobile/package.json": None,
+        "apps/mobile/pubspec.yaml": "name: mobile\n",
     }
     found = [
         f for f in compare(repo(**flutter_gate).get, repo(**renamed_flutter_gate).get)
