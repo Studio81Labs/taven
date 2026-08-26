@@ -64,13 +64,16 @@ jobs:
 
           COUNT=0
           for ID in $IDS; do
-            if gh api -X DELETE "repos/${REPO}/actions/caches/${ID}" >/dev/null 2>&1; then
+            if DELETE_OUTPUT=$(gh api -X DELETE "repos/${REPO}/actions/caches/${ID}" 2>&1); then
               COUNT=$((COUNT + 1))
+            elif [[ "$DELETE_OUTPUT" == *"(HTTP 404)"* ]]; then
+              # Confirmed race: eviction or another cleanup already achieved
+              # the desired end state after enumeration.
+              echo "::notice::cache ${ID} was already gone"
             else
-              # Deleting is best-effort: a cache can disappear between the list
-              # and the delete (eviction, a concurrent run of this workflow).
-              # That is the desired end state anyway, so do not fail on it.
-              echo "::warning::could not delete cache ${ID} — it may already be gone"
+              echo "::error::failed to delete cache ${ID}"
+              printf '%s\n' "$DELETE_OUTPUT" >&2
+              exit 1
             fi
           done
 

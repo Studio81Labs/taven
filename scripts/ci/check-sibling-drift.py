@@ -297,6 +297,13 @@ ACTION_TOPOLOGY_GATED = {
     ".github/workflows/packages-ci.yml": "capability:independent-packages",
 }
 
+# Optional jobs can introduce actions inside an otherwise shared workflow.
+# Gate only those action entries so the rest of the workflow remains strict.
+ACTION_ENTRY_TOPOLOGY_GATED = {
+    (".github/workflows/admin-ci.yml", "actions/download-artifact"): "apps/marketing/package.json",
+    (".github/workflows/ci-scripts.yml", "actions/setup-node"): "scripts/ci/check-workflow-coverage.mjs",
+}
+
 # Some shared workflows contain optional jobs owned by a narrower capability.
 # Suppress only that job, not the rest of the workflow.
 JOB_TOPOLOGY_GATED = {
@@ -1459,6 +1466,36 @@ def compare(local_read, sibling_read) -> list[dict]:
                     "detail": "in neither repo — stale entry in ACTION_WORKFLOWS",
                 }
             )
+        # In a topology-independent shared workflow, adding or replacing an
+        # action on only one side is drift too. Keep the existing pins-nothing
+        # finding singular when one whole set is empty; this closes the quieter
+        # case where both sides still share at least one other action and a set
+        # intersection would otherwise discard the new action.
+        if (
+            here
+            and there
+            and our_file_pins
+            and their_file_pins
+            and path not in ACTION_TOPOLOGY_GATED
+        ):
+            for action in sorted(set(our_file_pins) ^ set(their_file_pins)):
+                marker = ACTION_ENTRY_TOPOLOGY_GATED.get((path, action))
+                if marker is not None and not marker_open(marker):
+                    continue
+                refs = our_file_pins.get(action) or their_file_pins[action]
+                described = " + ".join(
+                    sorted(f"{label} ({ref})" for ref, label in refs.items())
+                )
+                is_here = action in our_file_pins
+                findings.append(
+                    {
+                        "kind": "action",
+                        "name": f"{action} — {name}",
+                        "detail": f"`{described}` here, absent there"
+                        if is_here
+                        else f"absent here, `{described}` there",
+                    }
+                )
         for values, side in ((our_unparsed, "here"), (their_unparsed, "there")):
             for value in values:
                 findings.append(
@@ -1474,9 +1511,9 @@ def compare(local_read, sibling_read) -> list[dict]:
         for action, refs in their_file_pins.items():
             theirs_pins[(path, action)] = refs
 
-    # Only pairs BOTH repos have. An action in a workflow one repo does not run
-    # that way is a topology difference, not drift, and reporting it is the
-    # noise this check is built to avoid.
+    # Compare ref versions for action names BOTH repositories have. One-sided
+    # actions in topology-independent workflows were reported above; capability
+    # workflows retain this intersection because their implementations differ.
     #
     # Collapsed by (action, our_ref, their_ref): one action drifting identically
     # across eight workflows is ONE fact, and eight rows saying so is the same
@@ -2035,12 +2072,13 @@ def self_test() -> int:
     theirs[".github/workflows/labeler.yml"] = wf("actions/labeler@aaaaaaa # v7")
     assert compare(repo(**ours).get, repo(**theirs).get) == [], "same SHA, coarser comment, must be quiet"
 
-    # An action only ONE repo uses is topology, not drift.
+    # An action only ONE repo uses in a topology-independent workflow is drift.
     theirs = dict(ours)
     theirs[".github/workflows/lint-pr.yml"] = (
         wf("actions/checkout@bbbbbbb # v7.0.1", "pwa-only/action@ddddddd # v1")
     )
-    assert compare(repo(**ours).get, repo(**theirs).get) == [], "one-sided actions must not report"
+    found = [f for f in compare(repo(**ours).get, repo(**theirs).get) if f["kind"] == "action"]
+    assert len(found) == 1 and found[0]["name"].startswith("pwa-only/action"), found
 
     # A pin with no version comment still participates, by SHA.
     theirs = dict(ours)
@@ -2358,7 +2396,7 @@ def self_test() -> int:
     build_lower = {".github/workflows/backend-ci.yml": wf("owner/repo/build@2222222 # v2")}
     found = [f for f in compare(repo(**build_upper).get, repo(**build_lower).get)
              if f["kind"] == "action"]
-    assert found == [], f"different subpaths are different actions: {found}"
+    assert len(found) == 2, f"different subpaths are one-sided actions: {found}"
 
     # ...and the owner/repo halves of such a reference still normalise.
     reusable_upper = {".github/workflows/backend-ci.yml":
@@ -2489,6 +2527,66 @@ def self_test() -> int:
     # ...and the reverse direction, so neither repo is privileged.
     found = compare(repo(**floating).get, repo(**pinned).get)
     assert found[0]["detail"] == "`main` here, `v7.0.1` there", found
+
+    shared_plus_ours = {
+        ".github/workflows/backend-ci.yml": wf(
+            "actions/checkout@1111111 # v1",
+            "owner/ours@2222222 # v2",
+        )
+    }
+    shared_plus_theirs = {
+        ".github/workflows/backend-ci.yml": wf(
+            "actions/checkout@1111111 # v1",
+            "owner/theirs@3333333 # v3",
+        )
+    }
+    found = [
+        f for f in compare(repo(**shared_plus_ours).get, repo(**shared_plus_theirs).get)
+        if f["kind"] == "action" and "backend-ci.yml" in f["name"]
+    ]
+    assert len(found) == 2, f"one-sided shared actions must report: {found}"
+
+    admin_with_download = {
+        ".github/workflows/admin-ci.yml": wf(
+            "actions/checkout@1111111 # v1",
+            "actions/download-artifact@2222222 # v2",
+        )
+    }
+    admin_without_capability = {
+        ".github/workflows/admin-ci.yml": wf("actions/checkout@1111111 # v1"),
+        "apps/marketing/package.json": None,
+    }
+    found = [
+        f for f in compare(repo(**admin_with_download).get, repo(**admin_without_capability).get)
+        if f["kind"] == "action" and "admin-ci.yml" in f["name"]
+    ]
+    assert found == [], f"optional job actions follow their capability: {found}"
+    admin_owner_without_download = {
+        ".github/workflows/admin-ci.yml": wf("actions/checkout@1111111 # v1"),
+    }
+    found = [
+        f for f in compare(repo(**admin_with_download).get, repo(**admin_owner_without_download).get)
+        if f["kind"] == "action" and "admin-ci.yml" in f["name"]
+    ]
+    assert len(found) == 1, f"an owner losing an optional action must report: {found}"
+
+    mobile_plus_ours = {
+        ".github/workflows/mobile-ci.yml": wf(
+            "actions/checkout@1111111 # v1",
+            "owner/flutter-only@2222222 # v2",
+        )
+    }
+    mobile_plus_theirs = {
+        ".github/workflows/mobile-ci.yml": wf(
+            "actions/checkout@1111111 # v1",
+            "owner/native-only@3333333 # v3",
+        )
+    }
+    found = [
+        f for f in compare(repo(**mobile_plus_ours).get, repo(**mobile_plus_theirs).get)
+        if f["kind"] == "action" and "mobile-ci.yml" in f["name"]
+    ]
+    assert found == [], f"capability workflow actions may be topology: {found}"
 
     # A same-line-count content change must still show WHAT changed.
     n1 = {".nvmrc": "22\n"}
