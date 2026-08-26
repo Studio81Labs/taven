@@ -253,10 +253,10 @@ TOPOLOGY_GATED = {
     ".github/workflows/mobile-release.yml": "capability:mobile",
     ".github/workflows/packages-ci.yml": "capability:independent-packages",
     ".github/workflows/_build-openapi.yml": "capability:openapi-artifact",
-    ".github/workflows/_release-version-gate.yml": "capability:mobile",
+    ".github/workflows/_release-version-gate.yml": "capability:versioned-release",
     ".github/workflows/admin-ci.yml": "apps/admin/package.json",
     ".github/workflows/admin-deploy.yml": "apps/marketing/package.json",
-    ".github/workflows/backend-deploy.yml": "apps/marketing/package.json",
+    ".github/workflows/backend-deploy.yml": "capability:backend-deployment",
     ".github/workflows/marketing-ci.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/openapi-check.yml": "capability:openapi",
@@ -290,6 +290,10 @@ CROSS_STACK_REQUIRED = {
 # has either the shared/core package used by Tarmoto or the core package used by
 # Taven and TableTap. Nexcue's generated clients have neither.
 CAPABILITY_MARKER_PATHS = {
+    "capability:backend-deployment": (
+        "apps/marketing/package.json",
+        "apps/backend/pyproject.toml",
+    ),
     "capability:independent-packages": (
         "packages/core/package.json",
         "packages/shared/package.json",
@@ -303,6 +307,11 @@ CAPABILITY_MARKER_PATHS = {
         "apps/marketing/package.json",
         "apps/backend/pyproject.toml",
     ),
+    "capability:versioned-release": (
+        "apps/mobile/package.json",
+        "apps/mobile/pubspec.yaml",
+        "apps/backend/pyproject.toml",
+    ),
 }
 
 # A shared workflow is compared only when both repositories declare the
@@ -311,10 +320,10 @@ CAPABILITY_MARKER_PATHS = {
 # satisfy the drift checker.
 ACTION_TOPOLOGY_GATED = {
     ".github/workflows/_build-openapi.yml": "capability:openapi-artifact",
-    ".github/workflows/_release-version-gate.yml": "capability:mobile",
+    ".github/workflows/_release-version-gate.yml": "capability:versioned-release",
     ".github/workflows/admin-ci.yml": "apps/admin/package.json",
     ".github/workflows/admin-deploy.yml": "apps/marketing/package.json",
-    ".github/workflows/backend-deploy.yml": "apps/marketing/package.json",
+    ".github/workflows/backend-deploy.yml": "capability:backend-deployment",
     ".github/workflows/marketing-ci.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/flutter-pin-check.yml": "apps/mobile/pubspec.yaml",
@@ -3522,6 +3531,92 @@ def self_test() -> int:
     assert len(found) == len(IDENTICAL), found
 
     # --- topology gating ---------------------------------------------------
+    BACKEND_WORKFLOW = ".github/workflows/backend-deploy.yml"
+    node_backend = {
+        "apps/backend/package.json": "{}\n",
+        "apps/backend/pyproject.toml": None,
+        "apps/marketing/package.json": "{}\n",
+        BACKEND_WORKFLOW: (
+            "jobs:\n"
+            "  version-gate:\n"
+            "    name: \"release: version gate\"\n"
+            "    steps: []\n"
+            "  deploy:\n"
+            "    name: \"backend: deploy\"\n"
+            "    steps: []\n"
+        ),
+    }
+    python_backend_missing_deploy = {
+        "apps/backend/package.json": None,
+        "apps/backend/pyproject.toml": "[project]\nname = \"backend\"\n",
+        "apps/marketing/package.json": None,
+        BACKEND_WORKFLOW: None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**node_backend).get,
+            repo(**python_backend_missing_deploy).get,
+        )
+        if f["name"] == BACKEND_WORKFLOW
+    ]
+    assert any(
+        f["kind"] == "workflow"
+        and "absent" in f["detail"]
+        and ("present here" in f["detail"] or "expects an artifact" in f["detail"])
+        for f in found
+    ), f"a backend owner may not lose its deploy workflow: {found}"
+
+    node_backend_action = {
+        **node_backend,
+        BACKEND_WORKFLOW: (
+            "jobs:\n"
+            "  version-gate:\n"
+            "    name: \"release: version gate\"\n"
+            "    steps: []\n"
+            "  deploy:\n"
+            "    name: \"backend: deploy\"\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@1111111 # v1\n"
+        ),
+    }
+    python_backend_without_action = {
+        "apps/backend/package.json": None,
+        "apps/backend/pyproject.toml": "[project]\nname = \"backend\"\n",
+        "apps/marketing/package.json": None,
+        BACKEND_WORKFLOW: wf("actions/setup-python@2222222 # v2"),
+    }
+    backend_action_findings = compare(
+        repo(**node_backend_action).get,
+        repo(**python_backend_without_action).get,
+    )
+    found = [
+        f
+        for f in backend_action_findings
+        if f["kind"] == "action" and "actions/checkout" in f["name"]
+    ]
+    assert found and "backend-deploy.yml" in found[0]["name"], (
+        "backend topology must not hide a one-sided deploy action: "
+        f"{backend_action_findings}"
+    )
+
+    taven_backend_without_deploy = {
+        "apps/backend/package.json": "{}\n",
+        "apps/backend/pyproject.toml": None,
+        "apps/marketing/package.json": None,
+        BACKEND_WORKFLOW: None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**node_backend_action).get,
+            repo(**taven_backend_without_deploy).get,
+        )
+        if f["name"] == BACKEND_WORKFLOW
+        or (f["kind"] == "action" and "backend-deploy.yml" in f["name"])
+    ]
+    assert found == [], f"a backend without a deploy surface is not an owner: {found}"
+
     MARKER = "apps/mobile/pubspec.yaml"
     MOBILE_MARKER = "apps/mobile/package.json"
     GATED_FILE = "scripts/lib/resolve-flutter.sh"
@@ -4353,6 +4448,43 @@ def self_test() -> int:
         if f["kind"] == "jobname" and f["name"] == RELEASE_GATE_WF
     ]
     assert found == [], f"version-source topology may rename the check: {found}"
+    poker_missing_release_gate = {
+        RELEASE_GATE_WF: None,
+        "apps/mobile/package.json": None,
+        "apps/mobile/pubspec.yaml": None,
+        "apps/backend/pyproject.toml": "[project]\nname = \"backend\"\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**flutter_gate).get,
+            repo(**poker_missing_release_gate).get,
+        )
+        if f["name"] == RELEASE_GATE_WF
+    ]
+    assert any(
+        f["kind"] == "workflow"
+        and "absent" in f["detail"]
+        and ("present here" in f["detail"] or "expects an artifact" in f["detail"])
+        for f in found
+    ), f"a versioned Python owner may not lose its release gate: {found}"
+    taven_without_release_gate = {
+        RELEASE_GATE_WF: None,
+        "apps/mobile/package.json": None,
+        "apps/mobile/pubspec.yaml": None,
+        "apps/backend/package.json": "{}\n",
+        "apps/backend/pyproject.toml": None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**flutter_gate).get,
+            repo(**taven_without_release_gate).get,
+        )
+        if f["name"] == RELEASE_GATE_WF
+        or (f["kind"] == "action" and "_release-version-gate.yml" in f["name"])
+    ]
+    assert found == [], f"an unversioned backend is not a release-gate owner: {found}"
     unrelated_native_gate = {
         RELEASE_GATE_WF: jobs_yaml(("check", "release: unrelated claim")),
         "apps/mobile/package.json": "{}\n",
