@@ -303,7 +303,7 @@ ACTION_TOPOLOGY_GATED = {
 ACTION_ENTRY_TOPOLOGY_GATED = {
     (".github/workflows/admin-ci.yml", "actions/download-artifact"): "apps/marketing/package.json",
     (".github/workflows/ci-scripts.yml", "actions/setup-node"): "scripts/ci/check-workflow-coverage.mjs",
-    (".github/workflows/packages-ci.yml", "actions/download-artifact"): "packages/ingest/package.json",
+    (".github/workflows/packages-ci.yml", "actions/download-artifact"): "apps/ingest/package.json",
 }
 
 # Workflows whose JOB NAMES are compared, keyed by job id.
@@ -2830,6 +2830,41 @@ def self_test() -> int:
         if f["kind"] == "action" and "admin-ci.yml" in f["name"]
     ]
     assert len(found) == 1, f"an owner losing an optional action must report: {found}"
+
+    PACKAGE_ACTION_WF = ".github/workflows/packages-ci.yml"
+    package_with_download = {
+        PACKAGE_ACTION_WF: wf(
+            "actions/checkout@1111111 # v1",
+            "actions/download-artifact@2222222 # v2",
+        ),
+        "apps/ingest/package.json": "{}\n",
+    }
+    package_without_ingest = {
+        PACKAGE_ACTION_WF: wf("actions/checkout@1111111 # v1"),
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**package_with_download).get,
+            repo(**package_without_ingest).get,
+        )
+        if f["kind"] == "action" and "packages-ci.yml" in f["name"]
+    ]
+    assert found == [], f"the ingest app owns the package artifact handoff: {found}"
+    package_without_app = {
+        **package_with_download,
+        "apps/ingest/package.json": None,
+        "packages/ingest/package.json": "{}\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**package_without_app).get,
+            repo(**package_without_ingest).get,
+        )
+        if f["kind"] == "action" and "packages-ci.yml" in f["name"]
+    ]
+    assert len(found) == 1, f"a shared ingest package alone must not gate the handoff: {found}"
 
     mobile_plus_ours = {
         ".github/workflows/mobile-ci.yml": wf(
