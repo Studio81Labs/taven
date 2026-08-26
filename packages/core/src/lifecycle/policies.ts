@@ -365,6 +365,16 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
     packed: ["handed_over", "failed", "cancelled"],
     handed_over: ["settled"],
   },
+  guard: (command) => {
+    if (command.current === "created" && command.target === "accepted") {
+      requireFlag(
+        "Job",
+        command,
+        "nodeAssigned",
+        "acceptance requires a verified node assignment",
+      );
+    }
+  },
 };
 
 export type ShipmentStatus =
@@ -425,6 +435,60 @@ export type ClaimStatus =
 
 export type ClaimOrigin = "post_delivery_quality" | "shipment_incident";
 
+export type ClaimSlotResolutionTerminalStatus =
+  | "rejected"
+  | "delivered_reship"
+  | "delivered_reprint"
+  | "refunded"
+  | "withdrawn";
+
+const claimTerminalProjection: Readonly<
+  Record<ClaimSlotResolutionTerminalStatus, ClaimStatus>
+> = {
+  rejected: "resolved_rejected",
+  delivered_reship: "resolved_reship",
+  delivered_reprint: "resolved_reprint",
+  refunded: "resolved_refund",
+  withdrawn: "withdrawn",
+};
+
+function isClaimSlotResolutionTerminalStatus(
+  status: ClaimSlotResolutionStatus,
+): status is ClaimSlotResolutionTerminalStatus {
+  return Object.prototype.hasOwnProperty.call(claimTerminalProjection, status);
+}
+
+/** Projects a claim's terminal status from every child resolution disposition. */
+export function projectClaimTerminalStatus(
+  statuses: readonly ClaimSlotResolutionStatus[],
+): ClaimStatus | undefined {
+  if (
+    statuses.length === 0 ||
+    statuses.some((status) => !isClaimSlotResolutionTerminalStatus(status))
+  ) {
+    return undefined;
+  }
+
+  const firstStatus = statuses[0];
+  if (firstStatus === undefined) {
+    return undefined;
+  }
+  if (!isClaimSlotResolutionTerminalStatus(firstStatus)) {
+    return undefined;
+  }
+  if (statuses.every((status) => status === firstStatus)) {
+    return claimTerminalProjection[firstStatus];
+  }
+
+  if (
+    statuses.some((status) => status === "rejected" || status === "withdrawn")
+  ) {
+    return undefined;
+  }
+
+  return "resolved_mixed";
+}
+
 export const claimPolicy: TransitionPolicy<ClaimStatus> = {
   name: "Claim",
   initial: ["opened"],
@@ -452,12 +516,30 @@ export const claimPolicy: TransitionPolicy<ClaimStatus> = {
       command.target.startsWith("resolved_") ||
       command.target === "withdrawn"
     ) {
-      requireFlag(
-        "Claim",
-        command,
-        "allSlotResolutionsTerminal",
-        "every claim slot resolution must have a terminal disposition",
+      const statuses = command.context?.claimSlotResolutionStatuses;
+      if (
+        !Array.isArray(statuses) ||
+        statuses.some((status) => typeof status !== "string")
+      ) {
+        throw new TransitionGuardError(
+          "Claim",
+          command.current,
+          command.target,
+          "every claim slot resolution must have a terminal disposition",
+        );
+      }
+
+      const projected = projectClaimTerminalStatus(
+        statuses as ClaimSlotResolutionStatus[],
       );
+      if (projected !== command.target) {
+        throw new TransitionGuardError(
+          "Claim",
+          command.current,
+          command.target,
+          `terminal target must match child disposition projection (${projected ?? "non-terminal"})`,
+        );
+      }
     }
     if (
       command.target === "resolved_rejected" ||
@@ -563,6 +645,33 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           command,
           "verifiedShipmentIncident",
           "a shipped remedy can recover only after a verified lost or returned incident",
+        );
+      }
+      if (
+        (command.current === "pending" ||
+          command.current === "recovery_pending") &&
+        command.target === "reship_pending"
+      ) {
+        const shipmentStatus = command.context?.shipmentStatus;
+        if (shipmentStatus !== "returned" && shipmentStatus !== "recovered") {
+          throw new TransitionGuardError(
+            "ClaimSlotResolution",
+            command.current,
+            command.target,
+            "reship selection requires the original shipment to be returned or recovered",
+          );
+        }
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "custodyConfirmed",
+          "reship selection requires confirmed custody of the original shipment",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "freshQcPassed",
+          "reship selection requires fresh quality control after recovery",
         );
       }
       if (command.target === "withdrawn") {

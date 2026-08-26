@@ -31,12 +31,41 @@ const permittedContext = {
   refundableBalanceMinor: 0n,
   verifiedProviderScan: true,
   contextHandoffCompleted: true,
-  allSlotResolutionsTerminal: true,
+  nodeAssigned: true,
+  shipmentStatus: "returned",
+  custodyConfirmed: true,
+  freshQcPassed: true,
   cleanPostDeliveryQualityClaim: true,
   remedyCancellationCompleted: true,
   verifiedShipmentIncident: true,
   completionProjected: true,
 } as const;
+
+function claimSlotStatusesForTarget(target: string): readonly string[] {
+  switch (target) {
+    case "resolved_rejected":
+      return ["rejected"];
+    case "resolved_reprint":
+      return ["delivered_reprint"];
+    case "resolved_reship":
+      return ["delivered_reship"];
+    case "resolved_refund":
+      return ["refunded"];
+    case "resolved_mixed":
+      return ["delivered_reprint", "refunded"];
+    case "withdrawn":
+      return ["withdrawn"];
+    default:
+      return ["refunded"];
+  }
+}
+
+function contextForTransition(target: string) {
+  return {
+    ...permittedContext,
+    claimSlotResolutionStatuses: claimSlotStatusesForTarget(target),
+  };
+}
 
 function errorCode(action: () => unknown): string | undefined {
   try {
@@ -70,7 +99,7 @@ function verifyEveryStatePair<S extends string>(
               current,
               target,
               idempotencyKey: "new",
-              context: permittedContext,
+              context: contextForTransition(target),
             }),
           name,
         ).toThrow(InvalidTransitionError);
@@ -80,7 +109,7 @@ function verifyEveryStatePair<S extends string>(
             current,
             target,
             idempotencyKey: "new",
-            context: permittedContext,
+            context: contextForTransition(target),
           }),
           name,
         ).toEqual({
@@ -142,6 +171,7 @@ describe("v0 lifecycle policy tables", () => {
     [orderPolicy, "quoted", "confirmed"],
     [orderPolicy, "ready_to_ship", "shipped"],
     [singleOrderPhasePolicy, "quoted", "active"],
+    [jobPolicy, "created", "accepted"],
     [shipmentPolicy, "cancellation_pending", "handed_over"],
     [claimPolicy, "active", "withdrawn"],
     [claimSlotResolutionPolicy, "replacement_shipped", "recovery_pending"],
@@ -168,6 +198,116 @@ describe("v0 lifecycle policy tables", () => {
       }),
     ).toThrow(TransitionGuardError);
   });
+
+  it.each([
+    ["pending", "lost"],
+    ["recovery_pending", "lost"],
+  ] as const)(
+    "requires a returned or recovered shipment before %s -> reship_pending",
+    (current, shipmentStatus) => {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current,
+          target: "reship_pending",
+          idempotencyKey: "reship-lost",
+          context: {
+            shipmentStatus,
+            custodyConfirmed: true,
+            freshQcPassed: true,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each(["custodyConfirmed", "freshQcPassed"] as const)(
+    "requires %s before selecting a reship",
+    (missingFlag) => {
+      const context = {
+        shipmentStatus: "recovered",
+        custodyConfirmed: true,
+        freshQcPassed: true,
+        [missingFlag]: false,
+      };
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "recovery_pending",
+          target: "reship_pending",
+          idempotencyKey: `reship-missing-${missingFlag}`,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["pending", "returned"],
+    ["pending", "recovered"],
+    ["recovery_pending", "returned"],
+    ["recovery_pending", "recovered"],
+  ] as const)(
+    "allows %s -> reship_pending after %s shipment custody and fresh QC",
+    (current, shipmentStatus) => {
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          current,
+          target: "reship_pending",
+          idempotencyKey: `reship-${current}-${shipmentStatus}`,
+          context: {
+            shipmentStatus,
+            custodyConfirmed: true,
+            freshQcPassed: true,
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "reship_pending",
+      });
+    },
+  );
+
+  it.each([
+    ["resolved_reprint", ["refunded"]],
+    ["resolved_refund", ["delivered_reprint"]],
+    ["resolved_reship", ["delivered_reprint", "refunded"]],
+    ["resolved_mixed", ["rejected", "refunded"]],
+  ] as const)(
+    "rejects parent target %s when child dispositions project elsewhere",
+    (target, claimSlotResolutionStatuses) => {
+      expect(() =>
+        transition(claimPolicy, {
+          current: "active",
+          target,
+          idempotencyKey: `claim-mismatch-${target}`,
+          context: {
+            claimSlotResolutionStatuses,
+            cleanPostDeliveryQualityClaim: true,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["resolved_refund", ["refunded"]],
+    ["resolved_mixed", ["delivered_reprint", "refunded"]],
+  ] as const)(
+    "accepts parent target %s for the matching child dispositions",
+    (target, claimSlotResolutionStatuses) => {
+      expect(
+        transition(claimPolicy, {
+          current: "active",
+          target,
+          idempotencyKey: `claim-match-${target}`,
+          context: {
+            claimSlotResolutionStatuses,
+            cleanPostDeliveryQualityClaim: true,
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "active", current: target });
+    },
+  );
 });
 
 describe("Quote ownership", () => {
