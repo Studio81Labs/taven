@@ -1451,9 +1451,32 @@ def compare(local_read, sibling_read) -> list[dict]:
             ours, theirs = strip_provenance(ours), strip_provenance(theirs)
             if path == ".editorconfig":
                 flutter_sides = marker_sides("apps/mobile/pubspec.yaml")
+                has_dart = (
+                    bool(EDITORCONFIG_DART_HEADER.search(ours)),
+                    bool(EDITORCONFIG_DART_HEADER.search(theirs)),
+                )
+                missing_dart = (
+                    flutter_sides[0] and not has_dart[0],
+                    flutter_sides[1] and not has_dart[1],
+                )
+                if any(missing_dart):
+                    side = (
+                        "here and there"
+                        if all(missing_dart)
+                        else "here"
+                        if missing_dart[0]
+                        else "there"
+                    )
+                    findings.append(
+                        {
+                            "kind": "file",
+                            "name": path,
+                            "detail": f"Flutter topology expects a [*.dart] section {side}, but it is absent",
+                        }
+                    )
                 invalid_dart = (
-                    not flutter_sides[0] and bool(EDITORCONFIG_DART_HEADER.search(ours)),
-                    not flutter_sides[1] and bool(EDITORCONFIG_DART_HEADER.search(theirs)),
+                    not flutter_sides[0] and has_dart[0],
+                    not flutter_sides[1] and has_dart[1],
                 )
                 dart_sections = (
                     editorconfig_dart_sections(ours),
@@ -1481,7 +1504,7 @@ def compare(local_read, sibling_read) -> list[dict]:
                             "detail": "contains differing [*.dart] sections in repositories without Flutter apps",
                         }
                     )
-                if not all(flutter_sides):
+                if not all(flutter_sides) or any(missing_dart):
                     ours = strip_editorconfig_dart_section(ours)
                     theirs = strip_editorconfig_dart_section(theirs)
         if ours == theirs:
@@ -2148,6 +2171,31 @@ def self_test() -> int:
         if f["name"] == ".editorconfig"
     ]
     assert found == [], f"a trailing Dart section must not leave its separator behind: {found}"
+    missing_flutter_editor = {
+        ".editorconfig": common_editorconfig,
+        "apps/mobile/pubspec.yaml": "name: mobile\n",
+    }
+    found = [
+        f
+        for f in compare(repo(**missing_flutter_editor).get, repo(**plain_editor).get)
+        if f["name"] == ".editorconfig"
+    ]
+    assert len(found) == 1 and "expects a [*.dart] section here" in found[0]["detail"], found
+    found = [
+        f
+        for f in compare(
+            repo(**missing_flutter_editor).get,
+            repo(**missing_flutter_editor).get,
+        )
+        if f["name"] == ".editorconfig"
+    ]
+    assert len(found) == 1 and "here and there" in found[0]["detail"], found
+    found = [
+        f
+        for f in compare(repo(**flutter_editor).get, repo(**missing_flutter_editor).get)
+        if f["name"] == ".editorconfig"
+    ]
+    assert len(found) == 1 and "expects a [*.dart] section there" in found[0]["detail"], found
     invalid_plain_editor = {".editorconfig": flutter_editorconfig}
     found = [
         f for f in compare(repo(**invalid_plain_editor).get, repo(**plain_editor).get)
