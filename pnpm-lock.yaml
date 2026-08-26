@@ -51,7 +51,7 @@ importers:
         specifier: ^17.0.8
         version: 17.3.0
       prettier:
-        specifier: ^3.9.6
+        specifier: 3.9.6
         version: 3.9.6
       tsx:
         specifier: ^4.21.0

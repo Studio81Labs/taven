@@ -1,0 +1,83 @@
+# ported from Studio81Labs/tabletap@a36cebcd
+name: Cleanup PR Caches
+
+# Deletes the Actions caches a pull request created, once it closes.
+#
+# Why this is not housekeeping. GitHub gives a repo 10 GB of cache and evicts
+# least-recently-used above that, and this repo's caches are large: ~2.4 GB for
+# Gradle (#532) and ~1.55 GB for the Flutter SDK, each stored per ref. A handful
+# of concurrent mobile pull requests fills the quota on its own.
+#
+# When it fills, eviction does not pick the useless entries — it picks the least
+# recently used, which is routinely the main-branch cache the next build needs.
+# That is not hypothetical here: the store hit 9.98 GB on 2026-08-16, the Gradle
+# cache added in #532 could not be saved at all, and the Android jobs kept
+# running cold. Two manual sweeps in one day recovered 5 GB each time.
+#
+# A cache on refs/pull/N/merge is unreachable once N is closed — nothing will
+# ever run on that ref again — so this reclaims only dead entries. Measured on
+# the second sweep: 8 caches, 4.97 GB, all on merged pull requests.
+
+on:
+  # The target event executes this base-branch workflow with a writable token,
+  # including when the closed PR came from a fork. This job never checks out or
+  # executes PR code; it uses only GitHub's integer PR number to delete caches.
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: "ci: delete caches for the closed pr"
+    runs-on: ubuntu-latest
+    permissions:
+      # The only job in the repo that needs it, scoped to this job alone.
+      actions: write
+    steps:
+      - name: Delete this PR's caches
+        env:
+          # Via env rather than inline `${{ }}` in the script: PR numbers are
+          # integers and safe, but the habit is what keeps a future edit from
+          # interpolating a title or branch name straight into a shell.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REF="refs/pull/${PR_NUMBER}/merge"
+
+          # An empty successful response is the normal docs-only case. An API
+          # failure must fail this one-shot closed-event run so it can be
+          # investigated instead of being misreported as an empty cache list.
+          # --paginate: `per_page=100` alone stops at the first page, and a
+          # long-lived PR can exceed that through distinct cache KEYS (a
+          # repeated key is a hit, not a new entry). Safe to combine with --jq
+          # here because jq runs per page and the outputs concatenate into one
+          # id per line — unlike a bare --paginate, whose per-page JSON
+          # documents concatenate into something no single parse accepts.
+          IDS=$(gh api --paginate "repos/${REPO}/actions/caches?ref=${REF}&per_page=100" \
+                  --jq '.actions_caches[].id')
+
+          if [ -z "$IDS" ]; then
+            echo "No caches for ${REF}."
+            exit 0
+          fi
+
+          COUNT=0
+          for ID in $IDS; do
+            if DELETE_OUTPUT=$(gh api -X DELETE "repos/${REPO}/actions/caches/${ID}" 2>&1); then
+              COUNT=$((COUNT + 1))
+            elif [[ "$DELETE_OUTPUT" == *"(HTTP 404)"* ]]; then
+              # Confirmed race: eviction or another cleanup already achieved
+              # the desired end state after enumeration.
+              echo "::notice::cache ${ID} was already gone"
+            else
+              echo "::error::failed to delete cache ${ID}"
+              printf '%s\n' "$DELETE_OUTPUT" >&2
+              exit 1
+            fi
+          done
+
+          echo "::notice::Deleted ${COUNT} cache(s) for ${REF}"

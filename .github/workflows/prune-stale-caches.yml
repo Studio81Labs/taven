@@ -1,0 +1,111 @@
+# ported from Studio81Labs/tabletap@a36cebcd
+name: Prune Stale Caches
+
+# Deletes superseded Actions caches on refs/heads/main.
+#
+# Why this is separate from cleanup-pr-caches.yml. That one deletes the caches
+# a PULL REQUEST created, once it closes, because the ref becomes unreachable.
+# Nothing deleted superseded caches on main, and those are a different shape:
+# the ref stays reachable forever, but the KEY does not. Every content-hash
+# cache — node modules keyed by lockfile, Gradle keyed by the build files —
+# writes a fresh entry on each change and leaves the previous one behind,
+# reachable and permanently useless.
+#
+# What that costs. GitHub gives a repo 10 GB and evicts least-recently-used
+# above it. Measured on 2026-08-18: nexcue had TEN node-cache entries on main
+# going back six days, 3.19 GB of the quota, of which one was live. Adding a
+# Gradle cache (~3.3 GB) pushed the store to 10.47 GB, and the two
+# least-recently-used large entries were the Flutter SDK caches every mobile
+# run restores. Evicting those to store a Gradle cache is a straight loss, and
+# it presents as "the new cache didn't help" rather than as an error.
+#
+# The rule: keep the exact key AND internal cache version current main can
+# request per family, drop the rest. A family is the key with its trailing
+# content hashes stripped, so
+# `node-cache-Linux-x64-pnpm-<hash>` collapses to `node-cache-Linux-x64-pnpm`
+# and only the key carrying current main's lockfile hash survives. Neither
+# creation nor access time proves that: rerunning an old revision can recreate
+# or restore its obsolete key later. Deleting a superseded content-hash key
+# costs nothing measurable because it is a key current main cannot request.
+#
+# NOT handled here, deliberately: action-managed families whose exact current
+# key cannot be derived from repository inputs (setup-java and ruby/setup-ruby)
+# are left untouched rather than guessed at. A whole family going obsolete is
+# also out of scope. The Flutter
+# version is part of its family name (`flutter-linux-stable-3.41.9-x64`), so
+# bumping the pin starts a new family and leaves the old one intact as its own
+# single entry — around 1.7 GB per superseded SDK. Both repos are on one
+# version today, so there is nothing to collect; when that changes, the fix is
+# to read the pin from renovate.json and drop families that do not match it.
+
+on:
+  schedule:
+    # Daily, early. Sprawl accumulates over days rather than hours, and a daily
+    # sweep keeps the store clear of the point where a Gradle cache cannot be
+    # saved without evicting an SDK.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted without deleting it"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # One sweep at a time. Two concurrent runs would race on the same delete and
+  # log spurious failures for entries the other already removed.
+  group: prune-stale-caches
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: "ci: prune superseded caches"
+    runs-on: ubuntu-latest
+    permissions:
+      # Scoped to this job: checkout reads current main, then the pruner writes
+      # only Actions cache state.
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout current main cache inputs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Resolve current pnpm cache path
+        run: echo "CURRENT_PNPM_CACHE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - name: Resolve current Flutter cache inputs
+        if: hashFiles('apps/mobile/pubspec.yaml') != ''
+        env:
+          CURRENT_GRADLE_HASH: ${{ hashFiles('apps/mobile/android/**/*.gradle*', 'apps/mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          CURRENT_COCOAPODS_HASH: ${{ hashFiles('apps/mobile/ios/Podfile.lock') }}
+          CURRENT_SPM_HASH: ${{ hashFiles('apps/mobile/ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+        run: |
+          {
+            echo "CURRENT_GRADLE_HASH=$CURRENT_GRADLE_HASH"
+            echo "CURRENT_COCOAPODS_HASH=$CURRENT_COCOAPODS_HASH"
+            echo "CURRENT_SPM_HASH=$CURRENT_SPM_HASH"
+          } >> "$GITHUB_ENV"
+
+      - name: Delete superseded main-branch caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          # Evaluated after the explicit main checkout. This is the same
+          # hashFiles input used by setup-node; an old rerun cannot change it.
+          # Flutter-specific hashes enter through GITHUB_ENV only when the
+          # checked-out tree proves that capability exists.
+          CURRENT_PNPM_HASH: ${{ hashFiles('pnpm-lock.yaml') }}
+        run: python3 scripts/ci/prune-stale-caches.py

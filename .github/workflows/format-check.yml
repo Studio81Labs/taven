@@ -1,5 +1,21 @@
-# ported from Studio81Labs/nexcue@314cec8972589780072e641591b16eca9805d7dd
+# ported from Studio81Labs/tabletap@4471e16f
 name: Format Check
+
+# Enforces Prettier across the repo.
+#
+# Why this exists. Prettier was configured in both siblings but enforced only by
+# lint-staged, which sees STAGED files in a local commit -- so anything landing
+# another way (an edit through the GitHub UI, a `--no-verify` commit, a bot
+# writing a file) was never formatted and nothing noticed. Measured on
+# 2026-08-18: 18 tracked files had drifted here and 48 in nexcue, mostly docs but
+# including real source in both. That is what an unenforced formatter looks like
+# after a few months.
+#
+# It runs on every pull request on purpose: a path filter would have to list
+# every extension Prettier owns, and the failure mode of getting that list wrong
+# is silent (the file drifts and no job claims it). A root-only frozen install
+# keeps the formatter identical to the reviewed lockfile without installing
+# application workspaces or running lifecycle scripts.
 
 on:
   pull_request:
@@ -8,6 +24,8 @@ on:
     branches: [main]
 
 concurrency:
+  # Per-commit, matching security-scan.yml: with a branch-level group, merges
+  # landing in quick succession cancel each other and a commit goes unchecked.
   group: format-check-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
@@ -28,5 +46,8 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm format:check
+      - name: Install locked formatter
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter .
+
+      - name: Check formatting
+        run: pnpm exec prettier --check .

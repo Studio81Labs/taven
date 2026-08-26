@@ -36,6 +36,21 @@ workflow changes and `pnpm overrides:check` after supply-chain override changes.
 Use `pnpm bootstrap` for a fresh checkout and `pnpm infra:up` or
 `pnpm infra:down` to manage its local services.
 
+## Sibling repositories
+
+Taven, `Studio81Labs/nexcue`, `Studio81Labs/tarmoto`, and
+`Studio81Labs/tabletap` share repository automation, supply-chain policy, and
+CI conventions. Each repository runs `sibling-drift.yml` every Monday against
+the other three and maintains one `infra-drift` issue. The workflow needs a
+`SIBLING_READ_TOKEN` fine-grained PAT with Contents: Read on all three sibling
+repositories.
+
+Shared infrastructure moves in both directions. Ported files carry a
+`# ported from Studio81Labs/<repo>@<sha>` provenance header (or the equivalent
+HTML comment in Markdown). Taven intentionally has no mobile, marketing, or
+deployment surfaces; the drift checker treats capability-gated files and jobs
+as topology rather than asking Taven to add placeholder workflows.
+
 ## Workflow
 
 - Branch from `main`; Codex branches use the `codex/` prefix.

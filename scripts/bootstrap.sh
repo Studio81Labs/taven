@@ -25,7 +25,21 @@ for app in backend web admin slicer-worker; do
   fi
 done
 
+# Existing checkouts may retain the localhost spelling copied from the old
+# example. Migrate only that exact generated default; custom URLs remain
+# untouched and still pass through the strict rendered-Compose identity check.
+node scripts/ci/assert-local-database-url.mjs \
+  --migrate-env-file=apps/backend/.env
+
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required"
+
+# Prisma gives an ambient DATABASE_URL precedence over apps/backend/.env.
+# Compare that effective URL with Compose's RENDERED identity, which includes
+# root .env and shell overrides exactly as infra:up will consume them.
+docker compose -f infra/docker/docker-compose.yml config --format json \
+  | node --env-file-if-exists=apps/backend/.env \
+      scripts/ci/assert-local-database-url.mjs --compose-config-stdin
+
 corepack pnpm infra:up
 corepack pnpm db:migrate:deploy
 corepack pnpm openapi:generate

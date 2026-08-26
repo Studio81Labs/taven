@@ -4,7 +4,12 @@ packages:
   - packages/*
 
 # Re-audited against Taven's dependency graph. New package versions must age
-# for one day before they can resolve.
+# for one day before they can resolve. Semgrep's generic rule recommends seven
+# days, but the shared Renovate preset uses one day; raising only this side
+# causes Renovate installs to fail until a release reaches the longer window.
+# Change both policies deliberately rather than silently delaying security
+# updates to satisfy a generic threshold.
+# nosemgrep: package_managers.pnpm.pnpm-missing-minimum-release-age.pnpm-minimum-release-age
 minimumReleaseAge: 1440
 blockExoticSubdeps: true
 trustPolicy: no-downgrade
