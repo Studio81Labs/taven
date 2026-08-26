@@ -35,6 +35,7 @@ const permittedContext = {
   captureAuthorized: true,
   verifiedLateCapture: true,
   paymentId: "payment-1",
+  paymentRole: "full",
   paymentCaptureKind: "settlement",
   providerEventPaymentId: "payment-1",
   providerPaymentTransactionId: "provider-transaction-1",
@@ -110,11 +111,14 @@ const permittedContext = {
   confirmationActivationOrderId: "order-1",
   confirmationActivationPhaseId: "phase-1",
   confirmationActivationPhaseReservationSetId: "phase-reservation-set-1",
+  confirmationActivationPaymentId: "payment-1",
+  confirmationActivationProviderTransactionId: "provider-transaction-1",
   confirmationOrderPreviousStatus: "quoted",
   confirmationOrderTargetStatus: "confirmed",
   confirmationPhasePreviousStatus: "quoted",
   confirmationPhaseTargetStatus: "active",
   confirmationActivationAtomic: true,
+  initialCaptureConfirmationAtomic: true,
   verifiedQcReadiness: true,
   balancePaymentRole: "balance",
   balancePaymentOrderMatches: true,
@@ -141,6 +145,15 @@ const permittedContext = {
   jobId: "job-1",
   phaseId: "phase-1",
   phaseKind: "single",
+  phaseCancellationOrderId: "order-1",
+  phaseCancellationPhaseOrderId: "order-1",
+  phaseCancellationPhaseId: "phase-1",
+  phaseCancellationOrderPreviousStatus: "confirmed",
+  phaseCancellationOrderTargetStatus: "cancelled",
+  phaseCancellationPhasePreviousStatus: "active",
+  phaseCancellationPhaseTargetStatus: "cancelled",
+  phaseCancellationCompleted: true,
+  phaseCancellationAtomic: true,
   orderItemId: "order-item-1",
   nodeAssigned: true,
   cancellationReason: "order_cancelled",
@@ -260,7 +273,28 @@ function claimSlotStatusesForTarget(target: string): readonly string[] {
   }
 }
 
+function orderCancellationPhaseDisposition(current?: string): {
+  readonly previous: string;
+  readonly target: string;
+} {
+  if (current === "confirmed") {
+    return { previous: "active", target: "cancelled" };
+  }
+  if (current === "in_production") {
+    return { previous: "in_production", target: "cancelled" };
+  }
+  if (current === "shipped") {
+    return { previous: "shipped", target: "cancelled_refunded" };
+  }
+  if (current === "recovery_pending") {
+    return { previous: "recovery_pending", target: "cancelled_refunded" };
+  }
+  return { previous: "qc_passed", target: "cancelled" };
+}
+
 function contextForTransition(target: string, current?: string) {
+  const cancellationPhaseDisposition =
+    orderCancellationPhaseDisposition(current);
   const capacityCaptureCompensation =
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
@@ -315,6 +349,9 @@ function contextForTransition(target: string, current?: string) {
     claimSlotResolutionStatuses: claimSlotStatusesForTarget(target),
     financialTerminalTarget: target,
     completionProjectedTarget: target,
+    phaseCancellationOrderPreviousStatus: current,
+    phaseCancellationPhasePreviousStatus: cancellationPhaseDisposition.previous,
+    phaseCancellationPhaseTargetStatus: cancellationPhaseDisposition.target,
   };
 }
 
@@ -506,6 +543,15 @@ describe("v0 lifecycle policy tables", () => {
     ["phaseReservationSetId", ""],
     ["phaseReservationSetId", "\n"],
     ["confirmationActivationPhaseReservationSetId", "another-reservation-set"],
+    ["confirmationActivationPaymentId", "another-payment"],
+    ["paymentRole", "balance"],
+    ["initialPaymentRole", "balance"],
+    ["initialPaymentId", "another-payment"],
+    ["initialPaymentOrderId", "another-order"],
+    [
+      "confirmationActivationProviderTransactionId",
+      "another-provider-transaction",
+    ],
     ["phaseKind", "sample"],
     ["confirmationOrderPreviousStatus", "draft"],
     ["confirmationOrderTargetStatus", "quoted"],
@@ -519,6 +565,7 @@ describe("v0 lifecycle policy tables", () => {
       for (const [policy, current, target] of [
         [orderPolicy, "quoted", "confirmed"],
         [singleOrderPhasePolicy, "quoted", "active"],
+        [paymentPolicy, "pending", "captured"],
       ] as const) {
         expect(() =>
           transition(policy, {
@@ -529,6 +576,91 @@ describe("v0 lifecycle policy tables", () => {
           }),
         ).toThrow(TransitionGuardError);
       }
+    },
+  );
+
+  it.each(["full", "deposit"] as const)(
+    "atomically activates checkout for an initial %s capture",
+    (paymentRole) => {
+      expect(
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "captured",
+          idempotencyKey: `initial-capture-activation-${paymentRole}`,
+          context: {
+            ...contextForTransition("captured", "pending"),
+            paymentRole,
+            initialPaymentRole: paymentRole,
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "pending",
+        current: "captured",
+      });
+    },
+  );
+
+  it.each([
+    ["paymentRole", undefined],
+    ["paymentRole", "adjustment"],
+    ["initialPaymentRole", "balance"],
+    ["initialPaymentId", "another-payment"],
+    ["initialPaymentOrderId", "another-order"],
+    ["initialCaptureConfirmationAtomic", false],
+  ] as const)(
+    "rejects initial capture activation with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "captured",
+          idempotencyKey: `initial-capture-activation-${field}`,
+          context: {
+            ...contextForTransition("captured", "pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("captures a balance Payment without reactivating initial checkout", () => {
+    expect(
+      transition(paymentPolicy, {
+        current: "pending",
+        target: "captured",
+        idempotencyKey: "balance-capture-without-checkout-activation",
+        context: {
+          ...contextForTransition("captured", "pending"),
+          paymentRole: "balance",
+          balancePaymentRole: "balance",
+          confirmationActivationAtomic: false,
+          initialCaptureConfirmationAtomic: false,
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "pending",
+      current: "captured",
+    });
+  });
+
+  it.each([undefined, "deposit"] as const)(
+    "rejects a balance capture with persisted balance role %s",
+    (balancePaymentRole) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "captured",
+          idempotencyKey: `balance-capture-role-${balancePaymentRole}`,
+          context: {
+            ...contextForTransition("captured", "pending"),
+            paymentRole: "balance",
+            balancePaymentRole,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
     },
   );
 
@@ -738,6 +870,78 @@ describe("v0 lifecycle policy tables", () => {
           idempotencyKey: `order-cancellation-${current}`,
         }),
       ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["confirmed", "active", "cancelled"],
+    ["in_production", "in_production", "cancelled"],
+    ["qc_passed", "qc_passed", "cancelled"],
+    ["awaiting_balance", "qc_passed", "cancelled"],
+    ["ready_to_ship", "qc_passed", "cancelled"],
+    ["shipped", "shipped", "cancelled_refunded"],
+    ["recovery_pending", "recovery_pending", "cancelled_refunded"],
+  ] as const)(
+    "atomically cancels the exact %s Order phase from %s to %s",
+    (current, phasePreviousStatus, phaseTargetStatus) => {
+      for (const paymentStatus of ["unpaid", "paid"] as const) {
+        expect(
+          transition(orderPolicy, {
+            current,
+            target: "cancelled",
+            idempotencyKey: `phase-parent-cancellation-${current}-${paymentStatus}`,
+            context: {
+              ...contextForTransition("cancelled", current),
+              paymentStatus,
+              phaseCancellationPhasePreviousStatus: phasePreviousStatus,
+              phaseCancellationPhaseTargetStatus: phaseTargetStatus,
+            },
+          }),
+        ).toEqual({ kind: "changed", previous: current, current: "cancelled" });
+      }
+    },
+  );
+
+  it.each([
+    ["confirmed", "active", "cancelled"],
+    ["in_production", "in_production", "cancelled"],
+    ["qc_passed", "qc_passed", "cancelled"],
+    ["awaiting_balance", "qc_passed", "cancelled"],
+    ["ready_to_ship", "qc_passed", "cancelled"],
+    ["shipped", "shipped", "cancelled_refunded"],
+    ["recovery_pending", "recovery_pending", "cancelled_refunded"],
+  ] as const)(
+    "rejects %s Order cancellation without its exact %s to %s phase result",
+    (current, phasePreviousStatus, phaseTargetStatus) => {
+      const validContext = {
+        ...contextForTransition("cancelled", current),
+        paymentStatus: "unpaid",
+        phaseCancellationPhasePreviousStatus: phasePreviousStatus,
+        phaseCancellationPhaseTargetStatus: phaseTargetStatus,
+      };
+      for (const [field, value] of [
+        ["orderId", " "],
+        ["phaseCancellationOrderId", "another-order"],
+        ["phaseCancellationPhaseOrderId", "another-order"],
+        ["phaseId", "\t"],
+        ["phaseCancellationPhaseId", "another-phase"],
+        ["phaseKind", "sample"],
+        ["phaseCancellationOrderPreviousStatus", "quoted"],
+        ["phaseCancellationOrderTargetStatus", "confirmed"],
+        ["phaseCancellationPhasePreviousStatus", "quoted"],
+        ["phaseCancellationPhaseTargetStatus", "active"],
+        ["phaseCancellationCompleted", false],
+        ["phaseCancellationAtomic", false],
+      ] as const) {
+        expect(() =>
+          transition(orderPolicy, {
+            current,
+            target: "cancelled",
+            idempotencyKey: `phase-parent-cancellation-${current}-${field}`,
+            context: { ...validContext, [field]: value },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
     },
   );
 
@@ -1107,8 +1311,8 @@ describe("v0 lifecycle policy tables", () => {
           target: "cancelled",
           idempotencyKey: "captured-cancellation",
           context: {
+            ...contextForTransition("cancelled", current),
             paymentStatus: "paid",
-            preHandoffShipmentCancellationsCompleted: true,
           },
         }),
       ).toEqual({
@@ -2674,19 +2878,21 @@ describe("v0 lifecycle policy tables", () => {
   });
 
   it.each([
-    ["pending", "captured"],
-    ["captured", "refund_pending"],
+    ["initial_checkout_capacity", "pending", "captured"],
+    ["late_capture", "pending", "captured"],
+    ["initial_checkout_capacity", "captured", "refund_pending"],
+    ["late_capture", "captured", "refund_pending"],
   ] as const)(
-    "does not route a capacity compensation Payment through ordinary %s -> %s",
-    (current, target) => {
+    "does not route a %s Payment through ordinary %s -> %s",
+    (paymentCaptureKind, current, target) => {
       expect(() =>
         transition(paymentPolicy, {
           current,
           target,
-          idempotencyKey: `capacity-compensation-ordinary-${current}-${target}`,
+          idempotencyKey: `compensation-ordinary-${paymentCaptureKind}-${current}-${target}`,
           context: {
             ...contextForTransition(target, current),
-            paymentCaptureKind: "initial_checkout_capacity",
+            paymentCaptureKind,
           },
         }),
       ).toThrow(TransitionGuardError);

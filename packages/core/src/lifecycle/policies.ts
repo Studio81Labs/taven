@@ -104,12 +104,26 @@ function requireAtomicConfirmationActivation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const paymentId = command.context?.paymentId;
+  const paymentRole = command.context?.paymentRole;
+  const providerTransactionId = command.context?.providerPaymentTransactionId;
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
   const phaseReservationSetId = command.context?.phaseReservationSetId;
   if (
+    typeof paymentId !== "string" ||
+    paymentId.trim().length === 0 ||
+    command.context?.confirmationActivationPaymentId !== paymentId ||
+    (paymentRole !== "full" && paymentRole !== "deposit") ||
+    command.context?.initialPaymentRole !== paymentRole ||
+    command.context?.initialPaymentId !== paymentId ||
+    typeof providerTransactionId !== "string" ||
+    providerTransactionId.trim().length === 0 ||
+    command.context?.confirmationActivationProviderTransactionId !==
+      providerTransactionId ||
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
+    command.context?.initialPaymentOrderId !== orderId ||
     command.context?.confirmationActivationOrderId !== orderId ||
     typeof phaseId !== "string" ||
     phaseId.trim().length === 0 ||
@@ -123,7 +137,7 @@ function requireAtomicConfirmationActivation<S extends string>(
       lifecycle,
       command.current,
       command.target,
-      "confirmation must bind the exact Order, phase, and reservation set",
+      "confirmation must bind the exact Payment, Order, phase, and reservation set",
     );
   }
   if (
@@ -152,6 +166,151 @@ function requireAtomicConfirmationActivation<S extends string>(
     "confirmationActivationAtomic",
     "Order confirmation and single-phase activation must be atomic",
   );
+}
+
+function requireInitialSettlementCaptureActivation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const paymentRole = command.context?.paymentRole;
+  if (paymentRole === "balance") {
+    if (command.context?.balancePaymentRole !== "balance") {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "balance capture requires a persisted balance Payment role",
+      );
+    }
+    return;
+  }
+  if (paymentRole !== "full" && paymentRole !== "deposit") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "settlement capture requires a persisted full, deposit, or balance role",
+    );
+  }
+  const paymentId = command.context?.paymentId;
+  const orderId = command.context?.orderId;
+  if (
+    command.context?.initialPaymentRole !== paymentRole ||
+    typeof paymentId !== "string" ||
+    paymentId.trim().length === 0 ||
+    command.context?.initialPaymentId !== paymentId ||
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.initialPaymentOrderId !== orderId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "initial capture must match the exact initial Payment and Order",
+    );
+  }
+  requireAtomicConfirmationActivation(lifecycle, command);
+  requireFlag(
+    lifecycle,
+    command,
+    "initialCaptureConfirmationAtomic",
+    "initial capture, Order confirmation, and phase activation must be atomic",
+  );
+}
+
+function expectedOrderCancellationPhaseDisposition(orderStatus: string):
+  | {
+      readonly previous:
+        | "active"
+        | "in_production"
+        | "qc_passed"
+        | "shipped"
+        | "recovery_pending";
+      readonly target: "cancelled" | "cancelled_refunded";
+    }
+  | undefined {
+  if (orderStatus === "confirmed") {
+    return { previous: "active", target: "cancelled" };
+  }
+  if (orderStatus === "in_production") {
+    return { previous: "in_production", target: "cancelled" };
+  }
+  if (
+    orderStatus === "qc_passed" ||
+    orderStatus === "awaiting_balance" ||
+    orderStatus === "ready_to_ship"
+  ) {
+    return { previous: "qc_passed", target: "cancelled" };
+  }
+  if (orderStatus === "shipped") {
+    return { previous: "shipped", target: "cancelled_refunded" };
+  }
+  if (orderStatus === "recovery_pending") {
+    return { previous: "recovery_pending", target: "cancelled_refunded" };
+  }
+  return undefined;
+}
+
+function requireAtomicOrderPhaseCancellation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const expectedPhaseDisposition = expectedOrderCancellationPhaseDisposition(
+    command.current,
+  );
+  if (expectedPhaseDisposition === undefined) {
+    return;
+  }
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  if (
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.phaseCancellationOrderId !== orderId ||
+    command.context?.phaseCancellationPhaseOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.phaseCancellationPhaseId !== phaseId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "cancellation must bind the exact Order and its single phase",
+    );
+  }
+  if (
+    command.context?.phaseKind !== "single" ||
+    command.context?.phaseCancellationOrderPreviousStatus !== command.current ||
+    command.context?.phaseCancellationOrderTargetStatus !== "cancelled" ||
+    command.context?.phaseCancellationPhasePreviousStatus !==
+      expectedPhaseDisposition.previous ||
+    command.context?.phaseCancellationPhaseTargetStatus !==
+      expectedPhaseDisposition.target
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "parent cancellation must persist the matching phase cancellation result",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "phaseCancellationCompleted",
+    "parent cancellation requires the phase cancellation result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "phaseCancellationAtomic",
+    "phase cancellation and parent Order cancellation must be atomic",
+  );
+  if (expectedPhaseDisposition.target === "cancelled_refunded") {
+    requireZeroBalances(lifecycle, command);
+  }
 }
 
 function requireAllShipmentLineageLeavesDelivered<S extends string>(
@@ -1547,6 +1706,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
         "capture must be authorized and before its immutable cutoff",
       );
       requireVerifiedMatchingProviderPaymentEvent("Payment", command);
+      requireInitialSettlementCaptureActivation("Payment", command);
     }
     if (command.current === "pending" && command.target === "refund_pending") {
       if (command.context?.initialPaymentStatus !== "refund_pending") {
@@ -1837,6 +1997,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "preHandoffShipmentCancellationsCompleted",
         "all pre-handoff shipment cancellations must complete before cancellation",
       );
+      requireAtomicOrderPhaseCancellation("Order", command);
       if (
         command.current === "shipped" ||
         command.current === "recovery_pending"
