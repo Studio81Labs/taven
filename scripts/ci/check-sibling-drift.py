@@ -247,6 +247,7 @@ TOPOLOGY_GATED = {
     ".github/workflows/flutter-pin-check.yml": "apps/mobile/.gitignore",
     ".github/workflows/mobile-ci.yml": "apps/mobile/.gitignore",
     ".github/workflows/mobile-release.yml": "apps/mobile/.gitignore",
+    ".github/workflows/packages-ci.yml": "capability:independent-packages",
     ".github/workflows/_build-openapi.yml": "apps/marketing/package.json",
     ".github/workflows/_release-version-gate.yml": "apps/mobile/.gitignore",
     ".github/workflows/admin-deploy.yml": "apps/marketing/package.json",
@@ -334,6 +335,7 @@ JOB_NAME_WORKFLOWS = [
     ".github/workflows/mobile-ci.yml",
     ".github/workflows/mobile-release.yml",
     ".github/workflows/openapi-check.yml",
+    ".github/workflows/packages-ci.yml",
     ".github/workflows/security-scan.yml",
     ".github/workflows/sibling-drift.yml",
     ".github/workflows/prune-stale-caches.yml",
@@ -406,6 +408,22 @@ EXPECTED_TOPOLOGY_OWNED_JOBS = {
         "apps/ingest/package.json",
         False,
         "admin: resolve environment",
+    ),
+    (".github/workflows/packages-ci.yml", "prepare-openapi"): (
+        "apps/ingest/package.json",
+        True,
+        "contract: openapi spec",
+    ),
+    (".github/workflows/packages-ci.yml", "build"): (
+        "capability:independent-packages",
+        True,
+        frozenset(
+            {
+                "packages: build & test",
+                "packages: build, test & typecheck",
+                "packages: lint, typecheck, test & build",
+            }
+        ),
     ),
 }
 
@@ -1179,6 +1197,9 @@ PROVENANCE = re.compile(
 )
 
 EDITORCONFIG_DART_HEADER = re.compile(r"(?m)^\[\*\.dart\][ \t]*$")
+EDITORCONFIG_TRAILING_DART_SECTION = re.compile(
+    r"(?ms)(?:^[ \t]*(?:\r\n|\n|\r))?^\[\*\.dart\][ \t]*(?:\r\n|\n|\r)(?:(?!^\[).)*\Z"
+)
 EDITORCONFIG_DART_SECTION = re.compile(
     r"(?ms)^\[\*\.dart\][ \t]*(?:\r\n|\n|\r).*?(?=^\[|\Z)"
 )
@@ -1202,6 +1223,7 @@ def strip_provenance(text: str) -> str:
 
 def strip_editorconfig_dart_section(text: str) -> str:
     """Remove only the Dart section while retaining shared editor policy."""
+    text = EDITORCONFIG_TRAILING_DART_SECTION.sub("", text)
     return EDITORCONFIG_DART_SECTION.sub("", text)
 
 
@@ -1694,6 +1716,11 @@ def compare(local_read, sibling_read) -> list[dict]:
             ):
                 owns_job = has_marker == owned_when_marked
                 actual_name = names.get(job_id)
+                expected_names = (
+                    frozenset({expected_name})
+                    if isinstance(expected_name, str)
+                    else expected_name
+                )
                 if owns_job and actual_name is None:
                     findings.append(
                         {
@@ -1702,12 +1729,15 @@ def compare(local_read, sibling_read) -> list[dict]:
                             "detail": f"topology expects job `{job_id}` {side}, but it is absent",
                         }
                     )
-                elif owns_job and actual_name != expected_name:
+                elif owns_job and actual_name not in expected_names:
+                    expected_display = " or ".join(
+                        f"`{name}`" for name in sorted(expected_names)
+                    )
                     findings.append(
                         {
                             "kind": "jobname",
                             "name": path,
-                            "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
+                            "detail": f"job `{job_id}` {side}: expected {expected_display}, found `{actual_name}`",
                         }
                     )
                 elif not owns_job and actual_name is not None:
@@ -1886,6 +1916,7 @@ def self_test() -> int:
         )
         files.update(
             {
+                "packages/core/package.json": "{}\n",
                 ".github/workflows/admin-ci.yml": (
                     "jobs:\n"
                     "  build:\n    name: \"ci: build\"\n"
@@ -1900,6 +1931,11 @@ def self_test() -> int:
                     "jobs:\n"
                     "  build:\n    name: \"ci: build\"\n"
                     "  resolve:\n    name: \"admin: resolve environment\"\n"
+                ),
+                ".github/workflows/packages-ci.yml": (
+                    "jobs:\n"
+                    "  build:\n"
+                    "    name: \"packages: lint, typecheck, test & build\"\n"
                 ),
             }
         )
@@ -1935,6 +1971,16 @@ def self_test() -> int:
         if f["name"] == ".editorconfig"
     ]
     assert found == [], f"Dart-only editor policy is stack topology: {found}"
+    trailing_flutter_editor = {
+        ".editorconfig": common_editorconfig + "\n[*.dart]\nindent_size = 2\n",
+        "apps/mobile/pubspec.yaml": "name: mobile\n",
+    }
+    found = [
+        f
+        for f in compare(repo(**trailing_flutter_editor).get, repo(**plain_editor).get)
+        if f["name"] == ".editorconfig"
+    ]
+    assert found == [], f"a trailing Dart section must not leave its separator behind: {found}"
     invalid_plain_editor = {".editorconfig": flutter_editorconfig}
     found = [
         f for f in compare(repo(**invalid_plain_editor).get, repo(**plain_editor).get)
@@ -2879,7 +2925,16 @@ def self_test() -> int:
 
     PACKAGE_WF = ".github/workflows/packages-ci.yml"
     found = [
-        f for f in compare(repo().get, repo(**{PACKAGE_WF: None}).get)
+        f
+        for f in compare(
+            repo(**{"packages/core/package.json": None}).get,
+            repo(
+                **{
+                    "packages/core/package.json": None,
+                    PACKAGE_WF: None,
+                }
+            ).get,
+        )
         if f["name"] == "packages-ci.yml"
     ]
     assert found == [], f"one-sided package workflow is capability topology: {found}"
@@ -2961,6 +3016,28 @@ def self_test() -> int:
         if f["kind"] == "jobname" and f["name"] == CAPABILITY_GATED_WF
     ]
     assert len(found) == 1, f"present gated workflows must compare job names: {found}"
+
+    valid_package = {
+        PACKAGE_WF: jobs_yaml(
+            ("build", "packages: lint, typecheck, test & build")
+        )
+    }
+    renamed_package = {
+        PACKAGE_WF: jobs_yaml(("build", "packages: stale claim"))
+    }
+    found = [
+        f
+        for f in compare(repo(**valid_package).get, repo(**renamed_package).get)
+        if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
+    ]
+    assert len(found) == 1 and "expected" in found[0]["detail"], found
+    missing_package_build = {PACKAGE_WF: "jobs: {}\n"}
+    found = [
+        f
+        for f in compare(repo(**valid_package).get, repo(**missing_package_build).get)
+        if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
+    ]
+    assert len(found) == 1 and "expects job `build` there" in found[0]["detail"], found
 
     named = {JOB_WF: jobs_yaml(("build", "backend: typecheck, test & build"))}
     renamed = {JOB_WF: jobs_yaml(("build", "backend: lint, test & build"))}
