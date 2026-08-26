@@ -271,6 +271,14 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  if (command.context?.paymentCaptureKind !== "late_capture") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late compensation retry requires a late-capture Payment",
+    );
+  }
   const paymentId = command.context?.paymentId;
   const providerTransactionId = command.context?.providerPaymentTransactionId;
   const refundTransactionId = command.context?.refundTransactionId;
@@ -369,8 +377,249 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
   requireFlag(
     lifecycle,
     command,
+    "lateCaptureExcludedFromSettlement",
+    "late capture compensation must be excluded from Order settlement",
+  );
+  requireFlag(
+    lifecycle,
+    command,
     "lateCaptureCompensationAtomic",
     "late capture, compensation, and refund setup must be persisted atomically",
+  );
+}
+
+function requireInitialCapacityCaptureCompensation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  if (command.context?.paymentCaptureKind !== "initial_checkout_capacity") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation requires a capacity-compensation Payment",
+    );
+  }
+  const paymentId = command.context?.paymentId;
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  const phaseReservationSetId = command.context?.phaseReservationSetId;
+  const providerTransactionId = command.context?.providerPaymentTransactionId;
+  const refundTransactionId = command.context?.refundTransactionId;
+  if (
+    typeof paymentId !== "string" ||
+    paymentId.length === 0 ||
+    command.context?.providerEventPaymentId !== paymentId ||
+    command.context?.initialPaymentId !== paymentId ||
+    command.context?.capacityCaptureCompensationPaymentId !== paymentId ||
+    command.context?.capacityCaptureRefundTransactionPaymentId !== paymentId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation must belong to this exact initial Payment",
+    );
+  }
+  if (
+    typeof orderId !== "string" ||
+    orderId.length === 0 ||
+    command.context?.initialPaymentOrderId !== orderId ||
+    command.context?.initialCapacityReacquisitionOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.length === 0 ||
+    command.context?.initialCapacityReacquisitionPhaseId !== phaseId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation must match the exact Order and pre-capture phase",
+    );
+  }
+  if (
+    typeof phaseReservationSetId !== "string" ||
+    phaseReservationSetId.length === 0 ||
+    command.context?.initialCapacityReacquisitionReservationSetId !==
+      phaseReservationSetId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation requires the exact expired PhaseReservationSet",
+    );
+  }
+  if (
+    typeof providerTransactionId !== "string" ||
+    providerTransactionId.length === 0 ||
+    command.context?.capacityCaptureCompensationProviderTransactionId !==
+      providerTransactionId ||
+    command.context?.capacityCaptureRefundTransactionProviderTransactionId !==
+      providerTransactionId ||
+    typeof refundTransactionId !== "string" ||
+    refundTransactionId.length === 0 ||
+    command.context?.capacityCaptureCompensationRefundTransactionId !==
+      refundTransactionId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation must match its provider and RefundTransaction identities",
+    );
+  }
+  if (
+    command.context?.initialPaymentRole !== "full" &&
+    command.context?.initialPaymentRole !== "deposit"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation is limited to an initial full or deposit Payment",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "captureAuthorized",
+    "capacity compensation requires a capture authorized before its cutoff",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "initialCaptureBeforeCutoff",
+    "capacity compensation requires proof that capture beat the immutable cutoff",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerPaymentEventAuthenticated",
+    "capacity compensation requires an authenticated provider event",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerPaymentEventVerified",
+    "capacity compensation requires a verified provider event",
+  );
+  if (command.context?.providerPaymentEventStatus !== "captured") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation requires a successful capture result",
+    );
+  }
+  for (const [flag, reason] of [
+    [
+      "initialCapacityReacquisitionAttempted",
+      "the complete reservation set must be reacquired before compensation",
+    ],
+    [
+      "initialCapacityReacquisitionWholeSet",
+      "capacity reacquisition must cover the complete phase reservation set",
+    ],
+    [
+      "initialCapacityReacquisitionFailed",
+      "capacity compensation requires a failed complete reacquisition result",
+    ],
+    [
+      "capacityCaptureCompensationCreated",
+      "capacity failure requires its full compensation operation",
+    ],
+    [
+      "scopedRefundTransactionCreated",
+      "capacity failure requires its scoped RefundTransaction",
+    ],
+    [
+      "capacityCaptureRefundIsFull",
+      "capacity failure must refund the full capture",
+    ],
+    [
+      "capacityCaptureRefundIdempotencyKeyValid",
+      "capacity refund requires a provider-transaction-scoped idempotency key",
+    ],
+    [
+      "capacityCaptureExcludedFromSettlement",
+      "capacity compensation capture must be excluded from Order settlement",
+    ],
+    [
+      "capacityCaptureActivationSuppressed",
+      "capacity failure must not activate the phase or Order",
+    ],
+    [
+      "initialCapacityCaptureWindowClosed",
+      "capacity failure must close the initial capture window",
+    ],
+    [
+      "initialCapacityCaptureCutoffSet",
+      "capacity failure must record the capture cutoff",
+    ],
+    [
+      "preCapturePhaseCancelled",
+      "capacity failure must cancel the pre-capture phase",
+    ],
+    [
+      "preCaptureFulfilmentSlotsCancelled",
+      "capacity failure must cancel the pre-capture slots",
+    ],
+    [
+      "preCaptureReservationsReleased",
+      "capacity failure must release all pre-capture reservations",
+    ],
+    [
+      "capacityCaptureCompensationAtomic",
+      "capture audit, checkout closure, compensation, and refund must be atomic",
+    ],
+  ] as const) {
+    requireFlag(lifecycle, command, flag, reason);
+  }
+  if (
+    command.context?.capacityCaptureCompensationKind !==
+      "initial_checkout_capacity" ||
+    command.context?.capacityCaptureOrderTargetStatus !== "cancelled" ||
+    command.context?.capacityCapturePhaseTargetStatus !== "cancelled" ||
+    command.context?.capacityCaptureJobsCreated !== false
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation must close the checkout without creating Jobs",
+    );
+  }
+}
+
+function requireCompensationRefundRetry<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const kind = command.context?.compensationRefundRetryKind;
+  if (kind === "initial_checkout_capacity") {
+    requireInitialCapacityCaptureCompensation(lifecycle, command);
+  } else if (kind === "late_capture") {
+    requireVerifiedLateCaptureCompensation(lifecycle, command);
+  } else {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "compensation retry requires an exact compensation kind",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "compensationRefundOutstanding",
+    "compensation retry requires an outstanding captured balance",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "compensationRefundRetryAtomic",
+    "compensation retry and refund outbox persistence must be atomic",
   );
 }
 
@@ -613,6 +862,122 @@ function requirePrintingReservationCommit<S extends string>(
     command,
     "printingReservationCommitAtomic",
     "reservation ownership and the printing transition must commit atomically",
+  );
+}
+
+function requireJobAcceptanceOwnership<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const jobId = command.context?.jobId;
+  const productionReservationId = command.context?.productionReservationId;
+  const orderItemId = command.context?.orderItemId;
+  const phaseId = command.context?.phaseId;
+  const artifactVersionId = command.context?.reproductionArtifactVersionId;
+  if (
+    typeof jobId !== "string" ||
+    jobId.length === 0 ||
+    command.context?.productionReservationJobId !== jobId ||
+    command.context?.acceptanceReservationJobId !== jobId ||
+    command.context?.reproductionArtifactVersionJobId !== jobId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "acceptance ownership must belong to this exact Job",
+    );
+  }
+  if (
+    typeof productionReservationId !== "string" ||
+    productionReservationId.length === 0 ||
+    command.context?.acceptanceProductionReservationId !==
+      productionReservationId ||
+    command.context?.reproductionArtifactVersionProductionReservationId !==
+      productionReservationId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "acceptance must commit this Job's exact ProductionReservation",
+    );
+  }
+  if (
+    command.context?.acceptanceMaterialPreviousState !== "held" ||
+    command.context?.acceptanceMaterialTargetState !== "allocated" ||
+    command.context?.acceptanceCapacityPreviousState !== "held" ||
+    command.context?.acceptanceCapacityTargetState !== "scheduled"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "acceptance must allocate material and schedule reserved capacity",
+    );
+  }
+  if (
+    typeof artifactVersionId !== "string" ||
+    artifactVersionId.length === 0 ||
+    command.context?.acceptanceArtifactVersionId !== artifactVersionId ||
+    command.context?.reproductionArtifactVersionStatus !== "draft" ||
+    typeof orderItemId !== "string" ||
+    orderItemId.length === 0 ||
+    command.context?.reproductionArtifactVersionOrderItemId !== orderItemId ||
+    typeof phaseId !== "string" ||
+    phaseId.length === 0 ||
+    command.context?.reproductionArtifactVersionPhaseId !== phaseId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "acceptance requires its exact draft ReproductionArtifactVersion",
+    );
+  }
+  for (const [reservationField, artifactField] of [
+    [
+      "productionReservationCandidateResourceEstimateId",
+      "reproductionArtifactVersionCandidateResourceEstimateId",
+    ],
+    [
+      "productionReservationMachineProfileId",
+      "reproductionArtifactVersionMachineProfileId",
+    ],
+    [
+      "productionReservationMachineCalibrationId",
+      "reproductionArtifactVersionMachineCalibrationId",
+    ],
+    [
+      "productionReservationPrintConfigRevisionId",
+      "reproductionArtifactVersionPrintConfigRevisionId",
+    ],
+  ] as const) {
+    const reservationSnapshotId: unknown = command.context?.[reservationField];
+    if (
+      typeof reservationSnapshotId !== "string" ||
+      reservationSnapshotId.length === 0 ||
+      command.context?.[artifactField] !== reservationSnapshotId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "draft reproduction artifact must copy the exact reservation snapshot",
+      );
+    }
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "acceptanceArtifactCreated",
+    "acceptance requires creation of its draft reproduction artifact",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "jobAcceptanceAtomic",
+    "reservation ownership, artifact creation, and Job acceptance must be atomic",
   );
 }
 
@@ -1045,7 +1410,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   terminal: ["failed", "refunded"],
   transitions: {
     created: ["pending"],
-    pending: ["captured", "failed", "voided"],
+    pending: ["captured", "failed", "voided", "refund_pending"],
     captured: ["refund_pending"],
     partially_refunded: ["refund_pending"],
     voided: ["refund_pending"],
@@ -1053,6 +1418,14 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   },
   guard: (command) => {
     if (command.current === "pending" && command.target === "captured") {
+      if (command.context?.paymentCaptureKind !== "settlement") {
+        throw new TransitionGuardError(
+          "Payment",
+          command.current,
+          command.target,
+          "ordinary capture requires a settlement Payment",
+        );
+      }
       requireFlag(
         "Payment",
         command,
@@ -1060,6 +1433,17 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
         "capture must be authorized and before its immutable cutoff",
       );
       requireVerifiedMatchingProviderPaymentEvent("Payment", command);
+    }
+    if (command.current === "pending" && command.target === "refund_pending") {
+      if (command.context?.initialPaymentStatus !== "refund_pending") {
+        throw new TransitionGuardError(
+          "Payment",
+          command.current,
+          command.target,
+          "capacity compensation must persist the Payment as refund pending",
+        );
+      }
+      requireInitialCapacityCaptureCompensation("Payment", command);
     }
     if (command.current === "voided" && command.target === "refund_pending") {
       requireVerifiedLateCaptureCompensation("Payment", command);
@@ -1087,11 +1471,15 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
         "voiding requires the provider void command to be persisted",
       );
     }
-    if (
-      (command.current === "captured" ||
-        command.current === "partially_refunded") &&
-      command.target === "refund_pending"
-    ) {
+    if (command.current === "captured" && command.target === "refund_pending") {
+      if (command.context?.paymentCaptureKind !== "settlement") {
+        throw new TransitionGuardError(
+          "Payment",
+          command.current,
+          command.target,
+          "ordinary refund requires a settlement Payment",
+        );
+      }
       requireFlag(
         "Payment",
         command,
@@ -1104,6 +1492,46 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
         "refundPriceAdjustmentActivated",
         "refund pending requires its price adjustment to be activated",
       );
+    }
+    if (
+      command.current === "partially_refunded" &&
+      command.target === "refund_pending"
+    ) {
+      const captureKind = command.context?.paymentCaptureKind;
+      if (
+        captureKind === "initial_checkout_capacity" ||
+        captureKind === "late_capture"
+      ) {
+        if (command.context?.compensationRefundRetryKind !== captureKind) {
+          throw new TransitionGuardError(
+            "Payment",
+            command.current,
+            command.target,
+            "compensation retry kind must match the persisted capture kind",
+          );
+        }
+        requireCompensationRefundRetry("Payment", command);
+      } else if (captureKind === "settlement") {
+        requireFlag(
+          "Payment",
+          command,
+          "scopedRefundTransactionCreated",
+          "refund pending requires its scoped refund transaction",
+        );
+        requireFlag(
+          "Payment",
+          command,
+          "refundPriceAdjustmentActivated",
+          "refund pending requires its price adjustment to be activated",
+        );
+      } else {
+        throw new TransitionGuardError(
+          "Payment",
+          command.current,
+          command.target,
+          "refund retry requires the persisted Payment capture kind",
+        );
+      }
     }
     if (
       command.current === "refund_pending" &&
@@ -1201,7 +1629,25 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       command.current === "quoted" &&
       (command.target === "expired" || command.target === "cancelled")
     ) {
-      requireInitialCaptureWindowClosed("Order", command);
+      if (
+        command.context?.initialPaymentStatus === "refund_pending" ||
+        command.context?.initialPaymentStatus === "refunded"
+      ) {
+        requireInitialCapacityCaptureCompensation("Order", command);
+        if (
+          command.target !== "cancelled" ||
+          command.context?.capacityCaptureOrderTargetStatus !== command.target
+        ) {
+          throw new TransitionGuardError(
+            "Order",
+            command.current,
+            command.target,
+            "capacity-compensated checkout must close as cancelled",
+          );
+        }
+      } else {
+        requireInitialCaptureWindowClosed("Order", command);
+      }
     }
     if (
       (command.current === "in_production" ||
@@ -1567,6 +2013,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
         "nodeAssigned",
         "acceptance requires a verified node assignment",
       );
+      requireJobAcceptanceOwnership("Job", command);
     }
     if (command.current === "accepted" && command.target === "gcode_ready") {
       requireFlag(

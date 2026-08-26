@@ -26,6 +26,7 @@ const permittedContext = {
   captureAuthorized: true,
   verifiedLateCapture: true,
   paymentId: "payment-1",
+  paymentCaptureKind: "settlement",
   providerEventPaymentId: "payment-1",
   providerPaymentTransactionId: "provider-transaction-1",
   providerPaymentEventAuthenticated: true,
@@ -53,6 +54,34 @@ const permittedContext = {
   preCaptureFulfilmentSlotsCancelled: true,
   preCaptureReservationsReleased: true,
   initialCaptureCloseAtomic: true,
+  phaseReservationSetId: "phase-reservation-set-1",
+  initialCapacityReacquisitionOrderId: "order-1",
+  initialCapacityReacquisitionPhaseId: "phase-1",
+  initialCapacityReacquisitionReservationSetId: "phase-reservation-set-1",
+  initialCaptureBeforeCutoff: true,
+  initialCapacityReacquisitionAttempted: true,
+  initialCapacityReacquisitionWholeSet: true,
+  initialCapacityReacquisitionFailed: true,
+  capacityCaptureCompensationPaymentId: "payment-1",
+  capacityCaptureRefundTransactionPaymentId: "payment-1",
+  capacityCaptureCompensationProviderTransactionId: "provider-transaction-1",
+  capacityCaptureRefundTransactionProviderTransactionId:
+    "provider-transaction-1",
+  capacityCaptureCompensationRefundTransactionId: "refund-1",
+  capacityCaptureCompensationCreated: true,
+  capacityCaptureRefundIsFull: true,
+  capacityCaptureRefundIdempotencyKeyValid: true,
+  capacityCaptureExcludedFromSettlement: true,
+  capacityCaptureActivationSuppressed: true,
+  initialCapacityCaptureWindowClosed: true,
+  initialCapacityCaptureCutoffSet: true,
+  capacityCaptureCompensationAtomic: true,
+  capacityCaptureCompensationKind: "initial_checkout_capacity",
+  capacityCaptureOrderTargetStatus: "cancelled",
+  capacityCapturePhaseTargetStatus: "cancelled",
+  capacityCaptureJobsCreated: false,
+  compensationRefundOutstanding: true,
+  compensationRefundRetryAtomic: true,
   lateCaptureCompensationPaymentId: "payment-1",
   lateCaptureCompensationProviderTransactionId: "provider-transaction-1",
   lateCaptureRefundTransactionPaymentId: "payment-1",
@@ -61,6 +90,7 @@ const permittedContext = {
   lateCaptureCompensationCreated: true,
   lateCaptureRefundIsFull: true,
   lateCaptureRefundIdempotencyKeyValid: true,
+  lateCaptureExcludedFromSettlement: true,
   lateCaptureCompensationAtomic: true,
   scopedRefundTransactionCreated: true,
   refundPriceAdjustmentActivated: true,
@@ -94,12 +124,37 @@ const permittedContext = {
   jobId: "job-1",
   phaseId: "phase-1",
   phaseKind: "single",
+  orderItemId: "order-item-1",
   nodeAssigned: true,
   cancellationReason: "order_cancelled",
   offersClosed: true,
   productionReservationReleased: true,
   productionReservationId: "production-reservation-1",
   productionReservationJobId: "job-1",
+  acceptanceReservationJobId: "job-1",
+  acceptanceProductionReservationId: "production-reservation-1",
+  acceptanceMaterialPreviousState: "held",
+  acceptanceMaterialTargetState: "allocated",
+  acceptanceCapacityPreviousState: "held",
+  acceptanceCapacityTargetState: "scheduled",
+  reproductionArtifactVersionId: "artifact-version-1",
+  acceptanceArtifactVersionId: "artifact-version-1",
+  reproductionArtifactVersionStatus: "draft",
+  reproductionArtifactVersionJobId: "job-1",
+  reproductionArtifactVersionOrderItemId: "order-item-1",
+  reproductionArtifactVersionPhaseId: "phase-1",
+  reproductionArtifactVersionProductionReservationId:
+    "production-reservation-1",
+  productionReservationCandidateResourceEstimateId: "estimate-1",
+  reproductionArtifactVersionCandidateResourceEstimateId: "estimate-1",
+  productionReservationMachineProfileId: "profile-1",
+  reproductionArtifactVersionMachineProfileId: "profile-1",
+  productionReservationMachineCalibrationId: "calibration-1",
+  reproductionArtifactVersionMachineCalibrationId: "calibration-1",
+  productionReservationPrintConfigRevisionId: "config-revision-1",
+  reproductionArtifactVersionPrintConfigRevisionId: "config-revision-1",
+  acceptanceArtifactCreated: true,
+  jobAcceptanceAtomic: true,
   jobResourceSettlementJobId: "job-1",
   jobResourceSettlementProductionReservationId: "production-reservation-1",
   jobResourceSettlementAtomic: true,
@@ -189,6 +244,10 @@ function claimSlotStatusesForTarget(target: string): readonly string[] {
 }
 
 function contextForTransition(target: string, current?: string) {
+  const capacityCaptureCompensation =
+    current === "pending" && target === "refund_pending";
+  const lateCaptureCompensation =
+    current === "voided" && target === "refund_pending";
   const remedyIncident =
     target === "recovery_pending" &&
     (current === "replacement_shipped" || current === "reship_shipped");
@@ -212,9 +271,20 @@ function contextForTransition(target: string, current?: string) {
     ...permittedContext,
     failureStage,
     materialConsumptionMode,
+    initialPaymentStatus: capacityCaptureCompensation
+      ? "refund_pending"
+      : permittedContext.initialPaymentStatus,
+    paymentCaptureKind: capacityCaptureCompensation
+      ? "initial_checkout_capacity"
+      : lateCaptureCompensation
+        ? "late_capture"
+        : permittedContext.paymentCaptureKind,
     refundWebhookProjectedTarget: target,
     providerPaymentEventStatus:
-      current === "voided" && target === "refund_pending" ? "captured" : target,
+      (current === "voided" || current === "pending") &&
+      target === "refund_pending"
+        ? "captured"
+        : target,
     initialCaptureCloseReason:
       target === "expired" ? "checkout_expired" : "checkout_cancelled",
     currentRemedyShipmentLineageLeafStatus: remedyIncident
@@ -331,6 +401,7 @@ describe("v0 lifecycle policy tables", () => {
   it.each([
     [quoteRequestPolicy, "quoted", "accepted"],
     [paymentPolicy, "pending", "captured"],
+    [paymentPolicy, "pending", "refund_pending"],
     [paymentPolicy, "voided", "refund_pending"],
     [paymentPolicy, "refund_pending", "partially_refunded"],
     [paymentPolicy, "refund_pending", "refunded"],
@@ -1568,6 +1639,12 @@ describe("v0 lifecycle policy tables", () => {
     [
       jobPolicy,
       "created",
+      "accepted",
+      ["nodeAssigned", "acceptanceArtifactCreated", "jobAcceptanceAtomic"],
+    ],
+    [
+      jobPolicy,
+      "created",
       "cancelled",
       ["offersClosed", "productionReservationReleased"],
     ],
@@ -1629,6 +1706,32 @@ describe("v0 lifecycle policy tables", () => {
     [
       paymentPolicy,
       "pending",
+      "refund_pending",
+      [
+        "captureAuthorized",
+        "initialCaptureBeforeCutoff",
+        "providerPaymentEventAuthenticated",
+        "providerPaymentEventVerified",
+        "initialCapacityReacquisitionAttempted",
+        "initialCapacityReacquisitionWholeSet",
+        "initialCapacityReacquisitionFailed",
+        "capacityCaptureCompensationCreated",
+        "scopedRefundTransactionCreated",
+        "capacityCaptureRefundIsFull",
+        "capacityCaptureRefundIdempotencyKeyValid",
+        "capacityCaptureExcludedFromSettlement",
+        "capacityCaptureActivationSuppressed",
+        "initialCapacityCaptureWindowClosed",
+        "initialCapacityCaptureCutoffSet",
+        "preCapturePhaseCancelled",
+        "preCaptureFulfilmentSlotsCancelled",
+        "preCaptureReservationsReleased",
+        "capacityCaptureCompensationAtomic",
+      ],
+    ],
+    [
+      paymentPolicy,
+      "pending",
       "captured",
       [
         "captureAuthorized",
@@ -1672,6 +1775,7 @@ describe("v0 lifecycle policy tables", () => {
         "scopedRefundTransactionCreated",
         "lateCaptureRefundIsFull",
         "lateCaptureRefundIdempotencyKeyValid",
+        "lateCaptureExcludedFromSettlement",
         "lateCaptureCompensationAtomic",
       ],
     ],
@@ -1852,6 +1956,7 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
+    [jobPolicy, "created", "accepted"],
     [jobPolicy, "created", "cancelled"],
     [jobPolicy, "accepted", "cancelled"],
     [jobPolicy, "accepted", "failed"],
@@ -1861,6 +1966,7 @@ describe("v0 lifecycle policy tables", () => {
     [jobPolicy, "photo_submitted", "qc_approved"],
     [jobPolicy, "photo_submitted", "qc_rejected"],
     [paymentPolicy, "pending", "captured"],
+    [paymentPolicy, "pending", "refund_pending"],
     [paymentPolicy, "pending", "failed"],
     [paymentPolicy, "pending", "voided"],
     [paymentPolicy, "captured", "refund_pending"],
@@ -1936,6 +2042,44 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it.each([
+    ["productionReservationJobId", "another-job"],
+    ["acceptanceReservationJobId", "another-job"],
+    ["acceptanceProductionReservationId", "another-reservation"],
+    ["acceptanceMaterialPreviousState", "released"],
+    ["acceptanceMaterialTargetState", "held"],
+    ["acceptanceCapacityPreviousState", "released"],
+    ["acceptanceCapacityTargetState", "held"],
+    ["acceptanceArtifactVersionId", "another-artifact"],
+    ["reproductionArtifactVersionStatus", "sealed"],
+    ["reproductionArtifactVersionJobId", "another-job"],
+    ["reproductionArtifactVersionOrderItemId", "another-item"],
+    ["reproductionArtifactVersionPhaseId", "another-phase"],
+    [
+      "reproductionArtifactVersionProductionReservationId",
+      "another-reservation",
+    ],
+    [
+      "reproductionArtifactVersionCandidateResourceEstimateId",
+      "another-estimate",
+    ],
+    ["reproductionArtifactVersionMachineProfileId", "another-profile"],
+    ["reproductionArtifactVersionMachineCalibrationId", "another-calibration"],
+    ["reproductionArtifactVersionPrintConfigRevisionId", "another-config"],
+  ] as const)("rejects Job acceptance with invalid %s", (field, value) => {
+    expect(() =>
+      transition(jobPolicy, {
+        current: "created",
+        target: "accepted",
+        idempotencyKey: `job-acceptance-${field}`,
+        context: {
+          ...contextForTransition("accepted", "created"),
+          [field]: value,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each([
     ["printingReservationJobId", "another-job"],
@@ -2283,6 +2427,151 @@ describe("v0 lifecycle policy tables", () => {
             postQcFailureSlotIds: ["slot-1"],
             postQcFailureSlotRecoveryBlocked: true,
             [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["initialPaymentStatus", "voided"],
+    ["providerEventPaymentId", "another-payment"],
+    ["initialPaymentId", "another-payment"],
+    ["initialPaymentOrderId", "another-order"],
+    ["initialCapacityReacquisitionOrderId", "another-order"],
+    ["initialCapacityReacquisitionPhaseId", "another-phase"],
+    ["initialCapacityReacquisitionReservationSetId", "another-reservation-set"],
+    [
+      "capacityCaptureCompensationProviderTransactionId",
+      "another-provider-transaction",
+    ],
+    ["capacityCaptureCompensationRefundTransactionId", "another-refund"],
+    ["initialPaymentRole", "balance"],
+    ["providerPaymentEventStatus", "failed"],
+    ["capacityCaptureCompensationKind", "initial_checkout_expired"],
+    ["capacityCaptureOrderTargetStatus", "confirmed"],
+    ["capacityCapturePhaseTargetStatus", "active"],
+    ["capacityCaptureJobsCreated", true],
+  ] as const)(
+    "rejects initial capacity capture compensation with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "refund_pending",
+          idempotencyKey: `initial-capacity-compensation-${field}`,
+          context: {
+            ...contextForTransition("refund_pending", "pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("atomically closes the quoted Order for a capacity-compensated capture", () => {
+    const capacityContext = contextForTransition("refund_pending", "pending");
+    expect(
+      transition(orderPolicy, {
+        current: "quoted",
+        target: "cancelled",
+        idempotencyKey: "initial-capacity-order-close",
+        context: capacityContext,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "quoted",
+      current: "cancelled",
+    });
+    expect(() =>
+      transition(orderPolicy, {
+        current: "quoted",
+        target: "expired",
+        idempotencyKey: "initial-capacity-order-wrong-target",
+        context: capacityContext,
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["initial_checkout_capacity", "pending"],
+    ["late_capture", "voided"],
+  ] as const)(
+    "retries a partial %s compensation without a price adjustment",
+    (compensationRefundRetryKind, originalState) => {
+      const compensationContext = {
+        ...contextForTransition("refund_pending", originalState),
+        compensationRefundRetryKind,
+        refundPriceAdjustmentActivated: false,
+      };
+      expect(
+        transition(paymentPolicy, {
+          current: "partially_refunded",
+          target: "refund_pending",
+          idempotencyKey: `compensation-refund-retry-${compensationRefundRetryKind}`,
+          context: compensationContext,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "partially_refunded",
+        current: "refund_pending",
+      });
+      for (const flag of [
+        "compensationRefundOutstanding",
+        "compensationRefundRetryAtomic",
+      ] as const) {
+        expect(() =>
+          transition(paymentPolicy, {
+            current: "partially_refunded",
+            target: "refund_pending",
+            idempotencyKey: `compensation-refund-retry-${compensationRefundRetryKind}-${flag}`,
+            context: { ...compensationContext, [flag]: false },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it("does not route capacity compensation retries through the ordinary refund branch", () => {
+    const capacityContext = {
+      ...contextForTransition("refund_pending", "pending"),
+      refundPriceAdjustmentActivated: true,
+    };
+    expect(() =>
+      transition(paymentPolicy, {
+        current: "partially_refunded",
+        target: "refund_pending",
+        idempotencyKey: "capacity-compensation-ordinary-retry",
+        context: capacityContext,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        current: "partially_refunded",
+        target: "refund_pending",
+        idempotencyKey: "capacity-compensation-wrong-retry-kind",
+        context: {
+          ...capacityContext,
+          compensationRefundRetryKind: "late_capture",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["pending", "captured"],
+    ["captured", "refund_pending"],
+  ] as const)(
+    "does not route a capacity compensation Payment through ordinary %s -> %s",
+    (current, target) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current,
+          target,
+          idempotencyKey: `capacity-compensation-ordinary-${current}-${target}`,
+          context: {
+            ...contextForTransition(target, current),
+            paymentCaptureKind: "initial_checkout_capacity",
           },
         }),
       ).toThrow(TransitionGuardError);

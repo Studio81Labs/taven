@@ -46,6 +46,36 @@ describe("payment projection", () => {
   });
 
   it.each([
+    ["initial capacity", "refund_pending", undefined],
+    ["initial capacity", "refunded", czk(100n)],
+    ["late capture", "refund_pending", undefined],
+    ["late capture", "refunded", czk(100n)],
+  ] as const)(
+    "keeps a %s compensation in %s outside settlement",
+    (kind, status, refunded) => {
+      expect(
+        projectPayments(czk(100n), [
+          {
+            id: `${kind}-compensation`,
+            status,
+            captured: czk(100n),
+            ...(refunded === undefined ? {} : { refunded }),
+            isCompensationCapture: true,
+            includedInSettlement: false,
+          },
+        ]),
+      ).toEqual({
+        paymentStatus: "unpaid",
+        capturedTotal: czk(0n),
+        refundedTotal: czk(0n),
+        netCaptured: czk(0n),
+        amountDue: czk(100n),
+        refundableBalance: czk(0n),
+      });
+    },
+  );
+
+  it.each([
     [[], "unpaid"],
     [[{ id: "p", status: "captured", captured: czk(50n) }], "partially_paid"],
     [[{ id: "p", status: "captured", captured: czk(100n) }], "paid"],
