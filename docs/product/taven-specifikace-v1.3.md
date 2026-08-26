@@ -324,7 +324,7 @@ rezerva_pretisk = mira_zmetku × (material + machine + handling_pretisk + amorti
 
 **Práh dopravy zdarma se počítá z `cena_tisku_pred_subvenci`**, tedy z ceny před započtením dotované dopravy, poplatku brány i expresního příplatku. Dotovaná doprava tak sama objednávku nekvalifikuje a nikdo si dopravu zdarma nekoupí připlacením za spěch.
 
-**Přepravní náklady se počítají přes všechny plánované zásilky.** Běžná objednávka má jednu; fázovaná objednávka má nejméně sample a batch. Každá zásilka má vlastní kategorii, obal, `handling_pack` a alokaci cesty. Práh dopravy zdarma nuluje součet sazeb dopravce, ne počet zásilek ani jejich náklad v CM.
+**Přepravní náklady se počítají přes všechny plánované zásilky.** Běžná v0 `single` fáze má jednu nebo více podle objemového/hmotnostního rozdělení celého množství; fázovaná objednávka má oddělené sample a batch plány a každý z nich může mít více parcel. Každá zásilka má vlastní kategorii, obal, `handling_pack` a alokaci cesty. Práh dopravy zdarma nuluje součet sazeb dopravce, ne počet zásilek ani jejich náklad v CM.
 
 **Alokace logistické cesty v závazné ceně je verzovaný očekávaný parametr, ne budoucí skutečnost.** `shipping_trip_pricing_divisor` patří do `PriceList` a v hobby/v0 je konzervativně 1; pozdější objednávky už vydanou cenu nemění. Skutečný `HandlingSession.shipping_trip` naopak eviduje jednu reálnou cestu a `actual_shipments_in_trip`; tento jmenovatel vstupuje jen do realizované CM a variance proti quote, nikdy zpět do zákaznické ceny.
 
@@ -544,7 +544,7 @@ První tři popisují **svět**, `MachineCalibration` a `Inventory` **tenhle kon
 | Entita | v0 | v1 | Poznámka |
 |---|---|---|---|
 | `Customer` | ✓ | ✓ | bez povinné registrace |
-| `Order` / `OrderItem` | ✓ | ✓ | fulfilment objednávky; platby a od v1 zásilky jsou kolekce potomků |
+| `Order` / `OrderItem` | ✓ | ✓ | fulfilment objednávky; Payment, ShipmentPlan a Shipment jsou kolekce potomků od v0 |
 | `Payment` | ✓ | ✓ | více transakcí na objednávku; role `full` / `deposit` / `balance`, capture cutoff + refundace |
 | `PaymentSchedule` | ✓ | ✓ | immutable plán všech capture a fee sazeb použitý pro gross-up cenového snapshotu |
 | `OrderSettlement` | ✓ | ✓ | earned/refund/write-off snapshot pro zrušení po vzniklých nákladech, opuštěném doplatku nebo neautorizovaném fyzickém handoffu |
@@ -581,7 +581,7 @@ První tři popisují **svět**, `MachineCalibration` a `Inventory` **tenhle kon
 | `HandlingSession` | ✓ | ✓ | aktivní práce: komponenta, začátek/konec, počty a zdroj měření |
 | `ShipmentPlan` | ✓ | ✓ | plán celého množství/fáze; kategorie, objem, hmotnost a cena |
 | `EligibilitySnapshot` | ✓ | ✓ | alternativní kompletní `PhaseResourcePlan` a jejich candidate odhady, konfigurace a barvy |
-| `Shipment` | ✓ | ✓ | jedna běžně v v0, více/fáze v v1; náhrada má `replaces_shipment_id` + `origin_claim_id`, pre-handoff storno voiduje label přes `cancellation_pending` |
+| `Shipment` | ✓ | ✓ | `Order 1:N Shipment` od v0; více parcel jedné fáze i současná original/replacement historie, náhrada má `replaces_shipment_id` + `origin_claim_id` |
 | `Claim` | ✓ | ✓ | rodičovský agregát s `origin = post_delivery_quality | shipment_incident` a stavem `opened / investigating / active / resolved_*` |
 | `ClaimSlotResolution` / `ClaimShipmentIncident` | ✓ | ✓ | exkluzivní per-slot remedy flow a incident náhradní parcely uvnitř rodiče; nikdy vnořený Claim |
 | `ReplacementFulfilmentAuthorization` | ✓ | ✓ | jednorázové oprávnění k handoff úplné množiny Jobů a slotů claimového reprint Shipmentu |
@@ -839,6 +839,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 66. `full | deposit` Payment má stejně jako `balance` explicitní capture window. Timeout nebo storno musí pod společným zámkem zavřít autorizaci, voidnout provider intent a uvolnit phase resources; provider success po cutoffu nebo bez kompletní reacquisition pouze vytvoří plnou `LateCaptureCompensation` a nesmí potvrdit Order.
 67. Neúspěšná reacquisition batch setu po revision `balance` capture musí zavřít právě tento Payment pokus, vyloučit jeho capture z `revision_amount_due` a plně jej refundovat přes `LateCaptureCompensation(kind = revision_capacity)`; revize smí zůstat retryable jen do původního confirmation deadline a až po úspěchu kompenzace.
 68. Ověřený scan běžné parcely v `cancellation_pending`, která nesplňuje jen finanční/aggregate handoff guard, musí atomicky vytvořit `HandoffReconciliation`, zaznamenat faktickou custody/Job transitions, zavřít balance captures, vytvořit `OrderSettlement(kind = unauthorized_handoff)` a teprve potom výjimečně posunout phase/Order do `shipped`; nesmí se vydávat za autorizovaný handoff ani dovolit původnímu stornu/refundu dokončit.
+69. `Order` má vztah 1:N k `ShipmentPlan` i `Shipment` už v v0: jedna `single` fáze smí vytvořit více parcel a replacement/reship lineage zachovává původní Shipment vedle aktuálního leaf; implementace nesmí použít singulární `order.shipment_id`.
 
 ### 6.5 Švy pro síť
 
