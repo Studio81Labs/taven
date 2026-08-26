@@ -28,6 +28,7 @@ not contain customer or operator product flows yet.
 
 - Node.js 24 (see `.nvmrc`)
 - Corepack with pnpm 11.22.0
+- Python 3.11 or newer with pip (for repository checks)
 - Docker with Docker Compose v2
 
 ## Getting started

@@ -272,6 +272,15 @@ STACK_TOPOLOGY_GATED = {
     ".github/workflows/mobile-release.yml": "apps/mobile/pubspec.yaml",
 }
 
+# These artifacts have stack-specific implementations, but every repository
+# with any mobile app must retain one. Across Flutter and React Native their
+# contents and job layouts are not comparable; their presence still is.
+CROSS_STACK_REQUIRED = {
+    "scripts/ci/check-release-tag.sh",
+    ".github/workflows/mobile-ci.yml",
+    ".github/workflows/mobile-release.yml",
+}
+
 # Some capabilities have equivalent markers because sibling implementations
 # use different package names. A repository owns independent package CI when it
 # has either the shared/core package used by Tarmoto or the core package used by
@@ -1426,6 +1435,26 @@ def compare(local_read, sibling_read) -> list[dict]:
         stack_marker = stack_gates.get(path)
         if stack_marker is not None:
             stack_sides = marker_sides(stack_marker)
+            if path in CROSS_STACK_REQUIRED:
+                capability_marker = gates.get(path)
+                capability_sides = (
+                    marker_sides(capability_marker)
+                    if capability_marker is not None
+                    else (False, False)
+                )
+                if all(capability_sides):
+                    # Both repositories own this mobile guard. Its absence is
+                    # drift even across stacks; when both copies exist, only
+                    # their stack-specific contents may be skipped.
+                    if ours is None or theirs is None:
+                        return False
+                    if stack_sides[0] != stack_sides[1]:
+                        return True
+                elif any(capability_sides):
+                    # Against a non-mobile repository, require the sole owner
+                    # to retain its guard without requiring a counterpart.
+                    owned = ours if capability_sides[0] else theirs
+                    return owned is not None
             if not any(stack_sides):
                 # Neither repository implements this stack. Its owned helper
                 # may legitimately be absent even when both repos have a
@@ -3278,6 +3307,7 @@ def self_test() -> int:
 
     # --- topology gating ---------------------------------------------------
     MARKER = "apps/mobile/pubspec.yaml"
+    MOBILE_MARKER = "apps/mobile/package.json"
     GATED_FILE = "scripts/lib/resolve-flutter.sh"
     both_flutter = {MARKER: "name: app\n"}
 
@@ -3298,6 +3328,43 @@ def self_test() -> int:
     marker_one_side = {GATED_FILE: "different\n"}
     found = [f for f in compare(repo(**both_flutter).get, repo(**marker_one_side).get) if f["name"] == GATED_FILE]
     assert found == [], f"different mobile stacks may carry different helpers: {found}"
+
+    # Release guards exist in both mobile stacks even though their contents
+    # differ. A React Native owner deleting its copy must not be hidden by the
+    # Flutter stack gate.
+    RELEASE_HELPER = "scripts/ci/check-release-tag.sh"
+    flutter_release = {
+        MARKER: "name: app\n",
+        MOBILE_MARKER: None,
+        RELEASE_HELPER: "flutter guard\n",
+    }
+    react_native_missing_release = {
+        MARKER: None,
+        MOBILE_MARKER: "{}\n",
+        RELEASE_HELPER: None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**flutter_release).get,
+            repo(**react_native_missing_release).get,
+        )
+        if f["name"] == RELEASE_HELPER
+    ]
+    assert found and found[0]["detail"] == "present here, absent there", found
+    react_native_release = {
+        **react_native_missing_release,
+        RELEASE_HELPER: "react native guard\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**flutter_release).get,
+            repo(**react_native_release).get,
+        )
+        if f["name"] == RELEASE_HELPER
+    ]
+    assert found == [], f"cross-stack release guard contents are topology: {found}"
     # Job names behind the gate follow the same rule: the whole workflow being
     # one-sided is silent across stacks, reported within one.
     GATED_WF = ".github/workflows/flutter-pin-check.yml"
@@ -3313,7 +3380,6 @@ def self_test() -> int:
     # Action workflows use a broader capability gate. A repo with no mobile
     # surface is not behind on mobile-release.yml; two repos that both declare
     # mobile still must report a missing workflow.
-    MOBILE_MARKER = "apps/mobile/package.json"
     MOBILE_ACTION_WF = ".github/workflows/mobile-release.yml"
     no_mobile = {MOBILE_MARKER: None, MOBILE_ACTION_WF: None}
     found = [
