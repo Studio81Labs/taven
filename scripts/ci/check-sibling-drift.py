@@ -1760,8 +1760,6 @@ def compare(local_read, sibling_read) -> list[dict]:
     ours_pins: dict[tuple[str, str], dict[str, str]] = {}
     theirs_pins: dict[tuple[str, str], dict[str, str]] = {}
     for path in ACTION_WORKFLOWS:
-        if path in invalid_topology_paths:
-            continue
         local_text, sibling_text = local_read(path), sibling_read(path)
         # Entry ownership is a repository-local invariant, so validate it
         # before a whole-workflow topology gate can skip the pair. Otherwise,
@@ -1801,6 +1799,8 @@ def compare(local_read, sibling_read) -> list[dict]:
                             "detail": f"topology expects no action anywhere {side}, but it is present",
                         }
                     )
+        if path in invalid_topology_paths:
+            continue
         if topology_skips_artifact(
             path, local_text, sibling_text, ACTION_TOPOLOGY_GATED, {}
         ):
@@ -2074,8 +2074,6 @@ def compare(local_read, sibling_read) -> list[dict]:
         )
 
     for path in JOB_NAME_WORKFLOWS:
-        if path in invalid_topology_paths:
-            continue
         local_text, sibling_text = local_read(path), sibling_read(path)
         ours = job_names(local_text, path, "here")
         theirs = job_names(sibling_text, path, "there")
@@ -2089,6 +2087,8 @@ def compare(local_read, sibling_read) -> list[dict]:
         handled_topology_jobs.update(
             validate_local_topology_jobs(path, theirs, 1, "there")
         )
+        if path in invalid_topology_paths:
+            continue
         if topology_skips_artifact(path, local_text, sibling_text):
             continue
         # A workflow the manifest names but a repo does not have is itself the
@@ -3746,7 +3746,16 @@ def self_test() -> int:
         if f["name"] == "packages-ci.yml"
     ]
     assert found == [], f"one-sided package workflow is capability topology: {found}"
-    package_owner = {PACKAGE_WF: wf("actions/x@1111111 # v1"), "packages/core/package.json": "{}\n"}
+    package_owner = {
+        PACKAGE_WF: (
+            "jobs:\n"
+            "  build:\n"
+            "    name: \"packages: build & test\"\n"
+            "    steps:\n"
+            "      - uses: actions/x@1111111 # v1\n"
+        ),
+        "packages/core/package.json": "{}\n",
+    }
     package_owner_missing = {PACKAGE_WF: None, "packages/core/package.json": "{}\n"}
     found = [
         f for f in compare(repo(**package_owner).get, repo(**package_owner_missing).get)
@@ -3884,8 +3893,12 @@ def self_test() -> int:
         "apps/ingest/package.json": "{}\n",
     }
     tarmoto_without_prepare = {
-        PACKAGE_WF: jobs_yaml(
-            ("build", "packages: build, test & typecheck"),
+        PACKAGE_WF: (
+            "jobs:\n"
+            "  build:\n"
+            "    name: \"packages: build, test & typecheck\"\n"
+            "    steps:\n"
+            "      - uses: actions/download-artifact@1111111 # v1\n"
         ),
         "apps/ingest/package.json": "{}\n",
     }
@@ -3898,6 +3911,22 @@ def self_test() -> int:
         if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
     ]
     assert len(found) == 1 and "expects job `prepare-openapi` here" in found[0]["detail"], found
+    package_stale_non_owner = {
+        PACKAGE_WF: jobs_yaml(("stale", "packages: stale placeholder")),
+        "packages/core/package.json": None,
+        "packages/shared/package.json": None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**tarmoto_without_prepare).get,
+            repo(**package_stale_non_owner).get,
+        )
+        if f["name"].endswith("packages-ci.yml")
+    ]
+    assert len(found) == 2, found
+    assert any("expects job `prepare-openapi` here" in f["detail"] for f in found), found
+    assert any("expects no artifact there" in f["detail"] for f in found), found
     tarmoto_without_build = {
         PACKAGE_WF: jobs_yaml(
             ("prepare-openapi", "contract: openapi spec"),
