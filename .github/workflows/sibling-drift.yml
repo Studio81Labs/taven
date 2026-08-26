@@ -1,6 +1,5 @@
-name: Sibling Drift
-
 # ported from Studio81Labs/tabletap@6bfbddc1
+name: Sibling Drift
 
 # Compares shared infrastructure against every sibling named in SIBLING_REPOS
 # below, and files the result as a single, continuously-updated issue in THIS
