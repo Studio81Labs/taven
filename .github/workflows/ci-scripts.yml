@@ -48,3 +48,4 @@ jobs:
           python3 scripts/ci/check-pnpm-overrides.py --self-test
           python3 scripts/ci/check-pnpm-overrides.py
           python3 scripts/ci/check-sibling-drift.py --self-test
+          python3 scripts/ci/prune-stale-caches.test.py

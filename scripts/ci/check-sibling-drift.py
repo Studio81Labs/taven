@@ -226,6 +226,10 @@ IDENTICAL = [
     # held here -- the SPM-awareness is the part worth keeping identical, since
     # a copy that predates it reports drift on a correctly-migrated tree.
     "scripts/ci/check-podfile-lock.py",
+    # Cache deletion is destructive policy. Keep its implementation and
+    # fixture suite identical wherever the shared workflow can invoke it.
+    "scripts/ci/prune-stale-caches.py",
+    "scripts/ci/prune-stale-caches.test.py",
     # The checker checks itself. Every repo runs the same file, so a fix made in
     # one and not carried to the others is precisely the drift this exists to
     # catch -- and it would otherwise be the one blind spot in the manifest.
@@ -1257,9 +1261,9 @@ def unified(ours: str, theirs: str, path: str) -> str:
 # reports its own correct marker as drift -- the exact false positive this
 # function exists to prevent, wearing the face of a real finding.
 #
-# Both alternatives are anchored to the start of a line AND to the opener, so a
-# sentence that merely mentions the phrase stays content rather than becoming a
-# header.
+# strip_provenance matches this pattern only at byte zero, or immediately after
+# a leading shebang. A provenance-shaped line later in the body is content and
+# must remain visible to the byte comparison.
 #
 # The Markdown branch consumes the WHOLE comment, through its first `-->`, even
 # when that lands on a later line. Line-based stripping was tried first and is
@@ -1276,8 +1280,8 @@ def unified(ours: str, theirs: str, path: str) -> str:
 # else.
 _PORTED_FROM = r"ported from Studio81Labs/[\w.-]+@[0-9a-fA-F]{7,40}"
 PROVENANCE = re.compile(
-    rf"^(?:#\s*{_PORTED_FROM}[^\n]*|<!--\s*{_PORTED_FROM}(?:(?!<!--).)*?-->[^\S\n]*)\n",
-    re.MULTILINE | re.DOTALL,
+    rf"(?:#\s*{_PORTED_FROM}[^\n]*|<!--\s*{_PORTED_FROM}(?:(?!<!--).)*?-->[^\S\n]*)\n",
+    re.DOTALL,
 )
 
 EDITORCONFIG_DART_HEADER = re.compile(
@@ -1304,7 +1308,16 @@ def strip_provenance(text: str) -> str:
     trail; the comparison ignores it, because a sha recording WHERE a copy came
     from is metadata about the copy, not part of the content being compared.
     """
-    return PROVENANCE.sub("", text)
+    header_start = 0
+    if text.startswith("#!"):
+        newline = text.find("\n")
+        if newline == -1:
+            return text
+        header_start = newline + 1
+    match = PROVENANCE.match(text, header_start)
+    if match is None:
+        return text
+    return text[:header_start] + text[match.end():]
 
 
 def strip_editorconfig_dart_section(text: str) -> str:
@@ -1493,6 +1506,89 @@ def compare(local_read, sibling_read) -> list[dict]:
         # compare as topology and silently removed the protection.
         owned = ours if sides[0] else theirs
         return owned is not None and (ours is None or theirs is None)
+
+    def validate_local_topology_jobs(
+        path: str,
+        names: dict[str, str] | None,
+        side_index: int,
+        side: str,
+    ) -> set[str]:
+        """Validate repository-local job ownership before pair-level skips."""
+        handled: set[str] = set()
+        if names is None or "__error__" in names:
+            return handled
+        for (owned_path, job_id), (
+            marker,
+            owned_when_marked,
+            expected_name,
+        ) in EXPECTED_TOPOLOGY_OWNED_JOBS.items():
+            if owned_path != path:
+                continue
+            owns_job = marker_sides(marker)[side_index] == owned_when_marked
+            actual_name = names.get(job_id)
+            if owns_job and actual_name is None:
+                findings.append(
+                    {
+                        "kind": "jobname",
+                        "name": path,
+                        "detail": f"topology expects job `{job_id}` {side}, but it is absent",
+                    }
+                )
+            elif owns_job and actual_name != expected_name:
+                findings.append(
+                    {
+                        "kind": "jobname",
+                        "name": path,
+                        "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
+                    }
+                )
+            elif not owns_job and actual_name is not None:
+                findings.append(
+                    {
+                        "kind": "jobname",
+                        "name": path,
+                        "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
+                    }
+                )
+            handled.add(job_id)
+        for (variant_path, job_id), variants in EXPECTED_TOPOLOGY_JOB_NAME_VARIANTS.items():
+            if variant_path != path:
+                continue
+            expected_name = next(
+                (
+                    name
+                    for marker, name in variants
+                    if marker_sides(marker)[side_index]
+                ),
+                None,
+            )
+            actual_name = names.get(job_id)
+            if expected_name is None and actual_name is not None:
+                findings.append(
+                    {
+                        "kind": "jobname",
+                        "name": path,
+                        "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
+                    }
+                )
+            elif expected_name is not None and actual_name is None:
+                findings.append(
+                    {
+                        "kind": "jobname",
+                        "name": path,
+                        "detail": f"topology expects job `{job_id}` {side}, but it is absent",
+                    }
+                )
+            elif expected_name is not None and actual_name != expected_name:
+                findings.append(
+                    {
+                        "kind": "jobname",
+                        "name": path,
+                        "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
+                    }
+                )
+            handled.add(job_id)
+        return handled
 
     for path in IDENTICAL:
         ours, theirs = local_read(path), sibling_read(path)
@@ -1878,10 +1974,20 @@ def compare(local_read, sibling_read) -> list[dict]:
 
     for path in JOB_NAME_WORKFLOWS:
         local_text, sibling_text = local_read(path), sibling_read(path)
-        if topology_skips_artifact(path, local_text, sibling_text):
-            continue
         ours = job_names(local_text, path, "here")
         theirs = job_names(sibling_text, path, "there")
+        broken = (ours or {}).get("__error__") or (theirs or {}).get("__error__")
+        if broken:
+            findings.append(
+                {"kind": "jobname", "name": path, "detail": f"could not read jobs — {broken}"}
+            )
+            continue
+        handled_topology_jobs = validate_local_topology_jobs(path, ours, 0, "here")
+        handled_topology_jobs.update(
+            validate_local_topology_jobs(path, theirs, 1, "there")
+        )
+        if topology_skips_artifact(path, local_text, sibling_text):
+            continue
         # A workflow the manifest names but a repo does not have is itself the
         # finding, for the same reason ACTION_WORKFLOWS reports it: silently
         # skipping shrinks the comparison and a smaller comparison looks like
@@ -1899,16 +2005,9 @@ def compare(local_read, sibling_read) -> list[dict]:
                 missing = "absent here, present there" if ours is None else "present here, absent there"
                 findings.append({"kind": "jobname", "name": path, "detail": missing})
             continue
-        broken = ours.get("__error__") or theirs.get("__error__")
-        if broken:
-            findings.append(
-                {"kind": "jobname", "name": path, "detail": f"could not read jobs — {broken}"}
-            )
-            continue
         poker_pair = marker_sides("apps/backend/pyproject.toml")[0] != marker_sides(
             "apps/backend/pyproject.toml"
         )[1]
-        handled_topology_jobs: set[str] = set()
         if poker_pair and path in POKER_JOB_LAYOUTS:
             python_sides = marker_sides("apps/backend/pyproject.toml")
             layouts = POKER_JOB_LAYOUTS[path]
@@ -1958,86 +2057,6 @@ def compare(local_read, sibling_read) -> list[dict]:
                             }
                         )
             handled_topology_jobs.update(controlled_jobs)
-        for (owned_path, job_id), (
-            marker,
-            owned_when_marked,
-            expected_name,
-        ) in EXPECTED_TOPOLOGY_OWNED_JOBS.items():
-            if owned_path != path:
-                continue
-            our_marker, their_marker = marker_sides(marker)
-            for names, has_marker, side in (
-                (ours, our_marker, "here"),
-                (theirs, their_marker, "there"),
-            ):
-                owns_job = has_marker == owned_when_marked
-                actual_name = names.get(job_id)
-                if owns_job and actual_name is None:
-                    findings.append(
-                        {
-                            "kind": "jobname",
-                            "name": path,
-                            "detail": f"topology expects job `{job_id}` {side}, but it is absent",
-                        }
-                    )
-                elif owns_job and actual_name != expected_name:
-                    findings.append(
-                        {
-                            "kind": "jobname",
-                            "name": path,
-                            "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
-                        }
-                    )
-                elif not owns_job and actual_name is not None:
-                    findings.append(
-                        {
-                            "kind": "jobname",
-                            "name": path,
-                            "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
-                        }
-                    )
-            handled_topology_jobs.add(job_id)
-        for (variant_path, job_id), variants in EXPECTED_TOPOLOGY_JOB_NAME_VARIANTS.items():
-            if variant_path != path:
-                continue
-            for names, side_index, side in (
-                (ours, 0, "here"),
-                (theirs, 1, "there"),
-            ):
-                expected_name = next(
-                    (
-                        name
-                        for marker, name in variants
-                        if marker_sides(marker)[side_index]
-                    ),
-                    None,
-                )
-                actual_name = names.get(job_id)
-                if expected_name is None and actual_name is not None:
-                    findings.append(
-                        {
-                            "kind": "jobname",
-                            "name": path,
-                            "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
-                        }
-                    )
-                elif expected_name is not None and actual_name is None:
-                    findings.append(
-                        {
-                            "kind": "jobname",
-                            "name": path,
-                            "detail": f"topology expects job `{job_id}` {side}, but it is absent",
-                        }
-                    )
-                elif expected_name is not None and actual_name != expected_name:
-                    findings.append(
-                        {
-                            "kind": "jobname",
-                            "name": path,
-                            "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
-                        }
-                    )
-            handled_topology_jobs.add(job_id)
         for (pair_path, marker), (marked, unmarked) in EXPECTED_TOPOLOGY_JOB_PAIRS.items():
             if pair_path != path:
                 continue
@@ -2499,6 +2518,15 @@ def self_test() -> int:
     # ...and the `#` spelling still strips, which is the one every IDENTICAL
     # entry uses today.
     assert strip_provenance("# ported from Studio81Labs/nexcue@e204d2fc\n24\n") == "24\n"
+
+    # A leading shebang is part of the executable, not an obstacle to the
+    # header. Provenance-shaped lines anywhere else are ordinary body content.
+    shebang = "#!/usr/bin/env bash\n# ported from Studio81Labs/nexcue@e204d2fc\nset -e\n"
+    assert strip_provenance(shebang) == "#!/usr/bin/env bash\nset -e\n"
+    body_marker = "first\n# ported from Studio81Labs/nexcue@e204d2fc\nlast\n"
+    assert strip_provenance(body_marker) == body_marker
+    body_html_marker = "first\n" + md_header + "last\n"
+    assert strip_provenance(body_html_marker) == body_html_marker
 
     # ...but real content differences are still reported through the header.
     changed = {".nvmrc": "# ported from Studio81Labs/tabletap@9db05645\n22\n"}
@@ -3636,6 +3664,36 @@ def self_test() -> int:
         ),
         "apps/ingest/package.json": "{}\n",
     }
+    tarmoto_without_prepare = {
+        PACKAGE_WF: jobs_yaml(
+            ("build", "packages: build, test & typecheck"),
+        ),
+        "apps/ingest/package.json": "{}\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**tarmoto_without_prepare).get,
+            repo(**package_non_owner).get,
+        )
+        if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
+    ]
+    assert len(found) == 1 and "expects job `prepare-openapi` here" in found[0]["detail"], found
+    tarmoto_without_build = {
+        PACKAGE_WF: jobs_yaml(
+            ("prepare-openapi", "contract: openapi spec"),
+        ),
+        "apps/ingest/package.json": "{}\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**tarmoto_without_build).get,
+            repo(**package_non_owner).get,
+        )
+        if f["kind"] == "jobname" and f["name"] == PACKAGE_WF
+    ]
+    assert len(found) == 1 and "expects job `build` here" in found[0]["detail"], found
     tarmoto_with_weaker_claim = {
         **tarmoto_package,
         PACKAGE_WF: jobs_yaml(

@@ -73,7 +73,7 @@ if not rules:
 # csharp, scala, clojure -- none of those exist in this tree, and their rules can
 # never fire. Re-check this set when a language is added.
 KEEP = {
-    "javascript","js","jsx","typescript","ts","tsx",
+    "javascript","js","jsx","typescript","ts","tsx","vue",
     "python","py",
     "json","yaml","generic","dockerfile","bash","sh",
 }
