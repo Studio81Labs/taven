@@ -1475,7 +1475,8 @@ def compare(local_read, sibling_read) -> list[dict]:
                     # Against a non-mobile repository, require the sole owner
                     # to retain its guard without requiring a counterpart.
                     owned = ours if capability_sides[0] else theirs
-                    return owned is not None
+                    nonowned = theirs if capability_sides[0] else ours
+                    return owned is not None and nonowned is None
             if not cross_stack_owned and not any(stack_sides):
                 # Neither repository implements this stack. Its owned helper
                 # may legitimately be absent even when both repos have a
@@ -1590,7 +1591,29 @@ def compare(local_read, sibling_read) -> list[dict]:
             handled.add(job_id)
         return handled
 
+    invalid_cross_stack_paths: set[str] = set()
+    for path in CROSS_STACK_REQUIRED:
+        ours, theirs = local_read(path), sibling_read(path)
+        capability_sides = marker_sides(TOPOLOGY_GATED[path])
+        invalid = (
+            not capability_sides[0] and ours is not None,
+            not capability_sides[1] and theirs is not None,
+        )
+        if not any(invalid):
+            continue
+        side = "here and there" if all(invalid) else "here" if invalid[0] else "there"
+        findings.append(
+            {
+                "kind": "workflow" if path.startswith(".github/") else "file",
+                "name": path,
+                "detail": f"mobile topology expects no artifact {side} without a mobile capability",
+            }
+        )
+        invalid_cross_stack_paths.add(path)
+
     for path in IDENTICAL:
+        if path in invalid_cross_stack_paths:
+            continue
         ours, theirs = local_read(path), sibling_read(path)
         if topology_skips_artifact(path, ours, theirs):
             continue
@@ -1703,6 +1726,8 @@ def compare(local_read, sibling_read) -> list[dict]:
     ours_pins: dict[tuple[str, str], dict[str, str]] = {}
     theirs_pins: dict[tuple[str, str], dict[str, str]] = {}
     for path in ACTION_WORKFLOWS:
+        if path in invalid_cross_stack_paths:
+            continue
         local_text, sibling_text = local_read(path), sibling_read(path)
         # Entry ownership is a repository-local invariant, so validate it
         # before a whole-workflow topology gate can skip the pair. Otherwise,
@@ -1973,6 +1998,8 @@ def compare(local_read, sibling_read) -> list[dict]:
         )
 
     for path in JOB_NAME_WORKFLOWS:
+        if path in invalid_cross_stack_paths:
+            continue
         local_text, sibling_text = local_read(path), sibling_read(path)
         ours = job_names(local_text, path, "here")
         theirs = job_names(sibling_text, path, "there")
@@ -3448,6 +3475,20 @@ def self_test() -> int:
         if f["name"] == RELEASE_HELPER
     ]
     assert found == [], f"cross-stack release guard contents are topology: {found}"
+    non_mobile_with_release = {
+        MARKER: None,
+        MOBILE_MARKER: None,
+        RELEASE_HELPER: "flutter guard\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**flutter_release).get,
+            repo(**non_mobile_with_release).get,
+        )
+        if f["name"] == RELEASE_HELPER
+    ]
+    assert len(found) == 1 and "without a mobile capability" in found[0]["detail"], found
     changed_react_native_release = {
         **react_native_release,
         RELEASE_HELPER: "changed react native guard\n",
@@ -3488,9 +3529,13 @@ def self_test() -> int:
         if f["name"] == "mobile-release.yml"
     ]
     assert found and found[0]["detail"] == "present here, absent there", found
-    mobile_pin_here = {MOBILE_ACTION_WF: wf("actions/x@1111111 # v1")}
+    mobile_pin_here = {
+        MARKER: "name: app\n",
+        MOBILE_ACTION_WF: wf("actions/x@1111111 # v1"),
+    }
     mobile_pin_there = {
         MOBILE_MARKER: None,
+        MARKER: "name: app\n",
         MOBILE_ACTION_WF: wf("actions/x@2222222 # v2"),
     }
     found = [
@@ -3500,10 +3545,12 @@ def self_test() -> int:
     assert len(found) == 1, f"present gated workflows must compare pins: {found}"
 
     mobile_actions_here = {
+        MARKER: "name: app\n",
         MOBILE_ACTION_WF: wf("actions/shared@1111111 # v1", "actions/extra@2222222 # v2")
     }
     mobile_actions_there = {
         MOBILE_MARKER: None,
+        MARKER: "name: app\n",
         MOBILE_ACTION_WF: wf("actions/shared@1111111 # v1"),
     }
     found = [

@@ -49,3 +49,23 @@ jobs:
           python3 scripts/ci/check-pnpm-overrides.py
           python3 scripts/ci/check-sibling-drift.py --self-test
           python3 scripts/ci/prune-stale-caches.test.py
+
+      - name: Every suite is wired
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in scripts/ci/*.test.sh scripts/ci/*.test.py; do
+            [[ -e "$f" ]] || continue
+            grep -q "$(basename "$f")" .github/workflows/ci-scripts.yml || {
+              echo "::error::${f} is not run by this workflow"
+              missing=1
+            }
+          done
+          for f in scripts/ci/*.py; do
+            grep -q -- "--self-test" "$f" || continue
+            grep -q "$(basename "$f") --self-test" .github/workflows/ci-scripts.yml || {
+              echo "::error::${f} declares --self-test but this workflow does not run it"
+              missing=1
+            }
+          done
+          exit "$missing"
