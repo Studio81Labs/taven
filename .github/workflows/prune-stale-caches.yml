@@ -214,45 +214,55 @@ jobs:
               "spm": cache_version("~/Library/Caches/org.swift.swiftpm"),
           }
 
-          def current_kind(key):
-              pnpm = current_hashes["pnpm"]
-              if bool(pnpm) and key.endswith(f"-pnpm-{pnpm}"):
-                  if key.startswith("node-cache-Linux-"):
-                      return "pnpm-linux"
-                  if key.startswith("node-cache-macOS-"):
-                      return "pnpm-macos"
-                  # No current workflow creates pnpm caches on another runner
-                  # OS. Leave an unknown family untouched instead of guessing
-                  # at an OS-specific store path or cache-version salt.
-                  return None
-              candidates = (
-                  (
-                      bool(current_hashes["gradle"])
-                      and key.startswith("gradle-")
-                      and key.endswith(f"-{current_hashes['gradle']}"),
-                      "gradle",
-                  ),
-                  (
-                      bool(current_hashes["cocoapods"])
-                      and key.startswith("cocoapods-")
-                      and key.endswith(f"-{current_hashes['cocoapods']}"),
-                      "cocoapods",
-                  ),
-                  (
-                      bool(current_hashes["spm"])
-                      and key.startswith("spm-")
-                      and key.endswith(f"-{current_hashes['spm']}"),
-                      "spm",
-                  ),
-              )
-              for matches, kind in candidates:
-                  if matches:
+          def managed_kind(key):
+              if key.startswith("node-cache-Linux-") and "-pnpm-" in key:
+                  return "pnpm-linux"
+              if key.startswith("node-cache-macOS-") and "-pnpm-" in key:
+                  return "pnpm-macos"
+              for prefix, kind in (
+                  ("gradle-", "gradle"),
+                  ("cocoapods-", "cocoapods"),
+                  ("spm-", "spm"),
+              ):
+                  if key.startswith(prefix):
                       return kind
+              # No current workflow creates pnpm caches on another runner OS.
+              # Leave unknown families untouched instead of guessing at an
+              # OS-specific store path or cache-version salt.
               return None
+
+          def source_hash(kind):
+              return current_hashes[
+                  "pnpm" if kind in {"pnpm-linux", "pnpm-macos"} else kind
+              ]
+
+          def current_kind(key):
+              kind = managed_kind(key)
+              if kind is None:
+                  return None
+              digest = source_hash(kind)
+              suffix = f"-pnpm-{digest}" if kind.startswith("pnpm-") else f"-{digest}"
+              return kind if bool(digest) and key.endswith(suffix) else None
 
           def is_current(cache):
               kind = current_kind(cache["key"])
               return bool(kind) and cache.get("version") == current_versions[kind]
+
+          def select_keep(items):
+              exact = [cache for cache in items if is_current(cache)]
+              if exact:
+                  return exact, "exact current-main key/version(s)"
+              kinds = {managed_kind(cache["key"]) for cache in items}
+              if len(kinds) != 1 or None in kinds:
+                  return [], "unmanaged or mixed family"
+              kind = next(iter(kinds))
+              if not source_hash(kind):
+                  return [], "capability has no current source input"
+              # The new source-derived cache may not have been saved yet. Keep
+              # one immutable newest fallback so quota pressure cannot preserve
+              # every obsolete entry and prevent that cache from being created.
+              newest = max(items, key=lambda cache: (cache["created_at"], cache["id"]))
+              return [newest], "newest fallback while current cache is absent"
 
           # Regression: pnpm store paths, and therefore versions, differ by
           # runner OS even when the visible lockfile-derived key suffix agrees.
@@ -270,6 +280,24 @@ jobs:
               assert not is_current(
                   {"key": sample_key, "version": "0" * 64}
               )
+
+          fallback_fixture = [
+              {
+                  "id": 1,
+                  "key": f"node-cache-Linux-x64-pnpm-{'a' * 64}",
+                  "version": "0" * 64,
+                  "created_at": "2026-01-01T00:00:00Z",
+              },
+              {
+                  "id": 2,
+                  "key": f"node-cache-Linux-x64-pnpm-{'b' * 64}",
+                  "version": "0" * 64,
+                  "created_at": "2026-02-01T00:00:00Z",
+              },
+          ]
+          fallback_keep, fallback_reason = select_keep(fallback_fixture)
+          assert [cache["id"] for cache in fallback_keep] == [2]
+          assert fallback_reason.startswith("newest fallback")
 
           groups = collections.defaultdict(list)
           for c in caches:
@@ -293,17 +321,18 @@ jobs:
           for fam, items in sorted(groups.items()):
               if len(items) < 2:
                   continue
-              keep = [c for c in items if is_current(c)]
+              keep, keep_reason = select_keep(items)
               if not keep:
                   print(
-                      f"{fam}: {len(items)} entries, no source-derived current-main "
-                      "key present; leaving this family untouched"
+                      f"{fam}: {len(items)} entries, {keep_reason}; "
+                      "leaving this family untouched"
                   )
                   continue
-              rest = [c for c in items if not is_current(c)]
+              kept_ids = {cache["id"] for cache in keep}
+              rest = [cache for cache in items if cache["id"] not in kept_ids]
               print(
-                  f"{fam}: {len(items)} entries, keeping {len(keep)} exact "
-                  "current-main key/version(s)"
+                  f"{fam}: {len(items)} entries, keeping {len(keep)} "
+                  f"{keep_reason}"
               )
               for c in rest:
                   doomed.append(c)

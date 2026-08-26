@@ -408,20 +408,26 @@ EXPECTED_JOB_DIFFS = {
 }
 
 # Poker Hero's Python backend and always-emitted contract gate use different
-# job layouts from the Node siblings. These exemptions are pair-specific:
-# they activate only when exactly one repository has the Python marker, so the
-# same IDs remain strict between any two Node repositories.
-POKER_JOB_DIFFS = {
-    (".github/workflows/backend-ci.yml", "build"),
-    (".github/workflows/backend-ci.yml", "image"),
-    (".github/workflows/backend-ci.yml", "prepare-openapi"),
-    (".github/workflows/backend-ci.yml", "schema"),
-    (".github/workflows/backend-ci.yml", "test"),
-    (".github/workflows/backend-ci.yml", "test-e2e"),
-    (".github/workflows/openapi-check.yml", "changes"),
-    (".github/workflows/openapi-check.yml", "gate"),
-    (".github/workflows/openapi-check.yml", "prepare-openapi"),
-    (".github/workflows/openapi-check.yml", "validate"),
+# job layouts from the Node siblings. Encode both sides' exact claims instead
+# of exempting their job IDs: deletion or arbitrary renaming is still drift.
+POKER_JOB_LAYOUTS = {
+    ".github/workflows/backend-ci.yml": {
+        "python": {
+            "prepare-openapi": "contract: openapi spec",
+            "test": "backend: tests and solver",
+            "image": "backend: immutable image",
+        },
+        "node": {"build": "backend: lint, typecheck, test & build"},
+    },
+    ".github/workflows/openapi-check.yml": {
+        "python": {
+            "changes": "contract: detect inputs",
+            "prepare-openapi": "contract: openapi spec",
+            "validate": "contract: generated artifacts",
+            "gate": "contract: gate",
+        },
+        "node": {"validate": "contract: emit + validate"},
+    },
 }
 
 # Every expected difference has a marker that identifies the topology forcing
@@ -1903,6 +1909,55 @@ def compare(local_read, sibling_read) -> list[dict]:
             "apps/backend/pyproject.toml"
         )[1]
         handled_topology_jobs: set[str] = set()
+        if poker_pair and path in POKER_JOB_LAYOUTS:
+            python_sides = marker_sides("apps/backend/pyproject.toml")
+            layouts = POKER_JOB_LAYOUTS[path]
+            controlled_jobs = set(layouts["python"]) | set(layouts["node"])
+            if path == ".github/workflows/backend-ci.yml":
+                database_pair = EXPECTED_TOPOLOGY_JOB_PAIRS[
+                    (path, "apps/backend/src/data-source.ts")
+                ]
+                controlled_jobs.update((database_pair[0][0], database_pair[1][0]))
+            for names, is_python, side_index, side in (
+                (ours, python_sides[0], 0, "here"),
+                (theirs, python_sides[1], 1, "there"),
+            ):
+                expected = dict(layouts["python" if is_python else "node"])
+                if path == ".github/workflows/backend-ci.yml" and not is_python:
+                    database_marker = marker_sides("apps/backend/src/data-source.ts")
+                    marked, unmarked = EXPECTED_TOPOLOGY_JOB_PAIRS[
+                        (path, "apps/backend/src/data-source.ts")
+                    ]
+                    job_id, expected_name = marked if database_marker[side_index] else unmarked
+                    expected[job_id] = expected_name
+                for job_id in sorted(controlled_jobs):
+                    actual_name = names.get(job_id)
+                    expected_name = expected.get(job_id)
+                    if expected_name is None and actual_name is not None:
+                        findings.append(
+                            {
+                                "kind": "jobname",
+                                "name": path,
+                                "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
+                            }
+                        )
+                    elif expected_name is not None and actual_name is None:
+                        findings.append(
+                            {
+                                "kind": "jobname",
+                                "name": path,
+                                "detail": f"topology expects job `{job_id}` {side}, but it is absent",
+                            }
+                        )
+                    elif expected_name is not None and actual_name != expected_name:
+                        findings.append(
+                            {
+                                "kind": "jobname",
+                                "name": path,
+                                "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
+                            }
+                        )
+            handled_topology_jobs.update(controlled_jobs)
         for (owned_path, job_id), (
             marker,
             owned_when_marked,
@@ -2026,8 +2081,6 @@ def compare(local_read, sibling_read) -> list[dict]:
         for job in sorted(set(ours) | set(theirs)):
             our_name, their_name = ours.get(job), theirs.get(job)
             if job in handled_topology_jobs:
-                continue
-            if poker_pair and (path, job) in POKER_JOB_DIFFS:
                 continue
             if our_name == their_name:
                 continue
@@ -3626,19 +3679,90 @@ def self_test() -> int:
     # same job IDs remain strict between two Node siblings.
     poker_backend = {
         JOB_WF: jobs_yaml(
-            ("build", "backend: validate artifact"),
-            ("image", "backend: runtime image"),
+            ("prepare-openapi", "contract: openapi spec"),
+            ("test", "backend: tests and solver"),
+            ("image", "backend: immutable image"),
         ),
         "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
     }
-    node_backend = {JOB_WF: jobs_yaml(("build", "backend: typecheck, test & build"))}
+    node_backend = {
+        JOB_WF: jobs_yaml(
+            ("build", "backend: lint, typecheck, test & build"),
+            ("test-e2e", "backend: e2e (real postgres)"),
+        )
+    }
     found = [
         f
         for f in compare(repo(**poker_backend).get, repo(**node_backend).get)
         if f["kind"] == "jobname" and f["name"] == JOB_WF
     ]
     assert found == [], f"Python-vs-Node job layout is pair topology: {found}"
-    other_node = {JOB_WF: jobs_yaml(("build", "backend: lint, test & build"))}
+    poker_without_image = {
+        **poker_backend,
+        JOB_WF: jobs_yaml(
+            ("prepare-openapi", "contract: openapi spec"),
+            ("test", "backend: tests and solver"),
+        ),
+    }
+    found = [
+        f
+        for f in compare(repo(**poker_without_image).get, repo(**node_backend).get)
+        if f["kind"] == "jobname" and f["name"] == JOB_WF
+    ]
+    assert len(found) == 1 and "expects job `image` here" in found[0]["detail"], found
+    poker_renamed_test = {
+        **poker_backend,
+        JOB_WF: jobs_yaml(
+            ("prepare-openapi", "contract: openapi spec"),
+            ("test", "backend: renamed tests"),
+            ("image", "backend: immutable image"),
+        ),
+    }
+    found = [
+        f
+        for f in compare(repo(**poker_renamed_test).get, repo(**node_backend).get)
+        if f["kind"] == "jobname" and f["name"] == JOB_WF
+    ]
+    assert len(found) == 1 and "expected `backend: tests and solver`" in found[0]["detail"], found
+    POKER_OPENAPI_WF = ".github/workflows/openapi-check.yml"
+    poker_openapi = {
+        POKER_OPENAPI_WF: jobs_yaml(
+            ("changes", "contract: detect inputs"),
+            ("prepare-openapi", "contract: openapi spec"),
+            ("validate", "contract: generated artifacts"),
+            ("gate", "contract: gate"),
+        ),
+        "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
+    }
+    node_openapi = {
+        POKER_OPENAPI_WF: jobs_yaml(("validate", "contract: emit + validate"))
+    }
+    found = [
+        f
+        for f in compare(repo(**poker_openapi).get, repo(**node_openapi).get)
+        if f["kind"] == "jobname" and f["name"] == POKER_OPENAPI_WF
+    ]
+    assert found == [], f"Python-vs-Node OpenAPI layout is topology: {found}"
+    poker_without_gate = {
+        **poker_openapi,
+        POKER_OPENAPI_WF: jobs_yaml(
+            ("changes", "contract: detect inputs"),
+            ("prepare-openapi", "contract: openapi spec"),
+            ("validate", "contract: generated artifacts"),
+        ),
+    }
+    found = [
+        f
+        for f in compare(repo(**poker_without_gate).get, repo(**node_openapi).get)
+        if f["kind"] == "jobname" and f["name"] == POKER_OPENAPI_WF
+    ]
+    assert len(found) == 1 and "expects job `gate` here" in found[0]["detail"], found
+    other_node = {
+        JOB_WF: jobs_yaml(
+            ("build", "backend: lint, test & build"),
+            ("test-e2e", "backend: e2e (real postgres)"),
+        )
+    }
     found = [
         f
         for f in compare(repo(**node_backend).get, repo(**other_node).get)
