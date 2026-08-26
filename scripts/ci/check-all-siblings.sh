@@ -14,9 +14,27 @@ if [[ -z "$token" ]]; then
 fi
 
 report_dir="$(mktemp -d)"
-trap 'rm -rf "$report_dir"' EXIT
+trap 'rm -r "$report_dir"' EXIT
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to run the sibling drift check." >&2
+  exit 1
+fi
+
+# Keep the command self-contained on fresh checkouts. Installing into the
+# temporary report tree avoids changing the developer's global Python while
+# the exact version and accepted wheels remain locked beside the checker.
+python_deps="$report_dir/python-deps"
+python3 -m pip install \
+  --quiet \
+  --disable-pip-version-check \
+  --no-deps \
+  --only-binary=:all: \
+  --require-hashes \
+  --target "$python_deps" \
+  --requirement scripts/ci/sibling-drift-requirements.txt
 
 for sibling in nexcue tarmoto tabletap; do
-  SIBLING_TOKEN="$token" SIBLING_REPO="Studio81Labs/$sibling" \
+  PYTHONPATH="$python_deps" SIBLING_TOKEN="$token" SIBLING_REPO="Studio81Labs/$sibling" \
     python3 scripts/ci/check-sibling-drift.py --out "$report_dir/$sibling.md"
 done

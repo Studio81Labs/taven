@@ -70,9 +70,12 @@ pnpm ci:config:check
 pnpm overrides:check
 ```
 
-With Nexcue checked out next to this repository, run `pnpm sibling:check` to
-compare the shared runtime baseline, supply-chain posture, and GitHub Action
-pins. Override its location with `NEXCUE_REPO_PATH` when necessary.
+Run `pnpm sibling:check` to compare shared infrastructure against Nexcue,
+Tarmoto, and TableTap through GitHub. It uses `SIBLING_TOKEN`, or the token from
+an authenticated `gh` CLI, and provisions its locked Python dependency in a
+temporary directory. For the narrower local Nexcue runtime baseline, check out
+Nexcue beside this repository and run `pnpm baseline:check`; override that
+checkout location with `NEXCUE_REPO_PATH` when necessary.
 
 Regenerate the OpenAPI artifact and typed client after changing backend DTOs or
 Swagger decorators:
