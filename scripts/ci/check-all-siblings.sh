@@ -37,4 +37,6 @@ python3 -m pip install \
 for sibling in nexcue tarmoto tabletap; do
   PYTHONPATH="$python_deps" SIBLING_TOKEN="$token" SIBLING_REPO="Studio81Labs/$sibling" \
     python3 scripts/ci/check-sibling-drift.py --out "$report_dir/$sibling.md"
+  printf '\n## vs %s\n\n' "$sibling"
+  cat "$report_dir/$sibling.md"
 done

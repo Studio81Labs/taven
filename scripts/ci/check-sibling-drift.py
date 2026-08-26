@@ -59,8 +59,8 @@ except ModuleNotFoundError:  # pragma: no cover
     print(
         "check-sibling-drift: PyYAML is required. Workflow pins are parsed "
         "rather than grepped, because a regex cannot tell an active step from "
-        "a commented-out one. Same dependency and same install-if-missing "
-        "guard as list-main-push-workflows.py.",
+        "a commented-out one. Install the hash-locked dependency from "
+        "scripts/ci/sibling-drift-requirements.txt.",
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -1534,6 +1534,44 @@ def compare(local_read, sibling_read) -> list[dict]:
     theirs_pins: dict[tuple[str, str], dict[str, str]] = {}
     for path in ACTION_WORKFLOWS:
         local_text, sibling_text = local_read(path), sibling_read(path)
+        # Entry ownership is a repository-local invariant, so validate it
+        # before a whole-workflow topology gate can skip the pair. Otherwise,
+        # an owner deleting its required action went quiet whenever the other
+        # repository legitimately lacked the entire workflow.
+        our_job_actions = job_actions(local_text, path) if local_text else set()
+        their_job_actions = job_actions(sibling_text, path) if sibling_text else set()
+        for (entry_path, job_id, action), (
+            marker,
+            owned_when_marked,
+        ) in ACTION_ENTRY_TOPOLOGY_GATED.items():
+            if entry_path != path:
+                continue
+            our_marker, their_marker = marker_sides(marker)
+            for actions, has_marker, side in (
+                (our_job_actions, our_marker, "here"),
+                (their_job_actions, their_marker, "there"),
+            ):
+                owns_action = has_marker == owned_when_marked
+                has_owned_action = (job_id, action) in actions
+                has_action_anywhere = any(
+                    found_action == action for _, found_action in actions
+                )
+                if owns_action and not has_owned_action:
+                    findings.append(
+                        {
+                            "kind": "action",
+                            "name": f"{action} — {path.rsplit('/', 1)[-1]}",
+                            "detail": f"topology expects the action in job `{job_id}` {side}, but it is absent",
+                        }
+                    )
+                elif not owns_action and has_action_anywhere:
+                    findings.append(
+                        {
+                            "kind": "action",
+                            "name": f"{action} — {path.rsplit('/', 1)[-1]}",
+                            "detail": f"topology expects no action anywhere {side}, but it is present",
+                        }
+                    )
         if topology_skips_artifact(
             path, local_text, sibling_text, ACTION_TOPOLOGY_GATED, {}
         ):
@@ -1548,8 +1586,6 @@ def compare(local_read, sibling_read) -> list[dict]:
         name = path.rsplit("/", 1)[-1]
         our_file_pins = parse_pins(local_text, path) if local_text else {}
         their_file_pins = parse_pins(sibling_text, path) if sibling_text else {}
-        our_job_actions = job_actions(local_text, path) if local_text else set()
-        their_job_actions = job_actions(sibling_text, path) if sibling_text else set()
         our_unparsed = unparsed_uses(local_text, path) if local_text else []
         their_unparsed = unparsed_uses(sibling_text, path) if sibling_text else []
         # PRESENCE is `is None`, never truthiness. An empty file is present,
@@ -1627,39 +1663,6 @@ def compare(local_read, sibling_read) -> list[dict]:
                     "detail": "in neither repo — stale entry in ACTION_WORKFLOWS",
                 }
             )
-        if here and there:
-            for (entry_path, job_id, action), (
-                marker,
-                owned_when_marked,
-            ) in ACTION_ENTRY_TOPOLOGY_GATED.items():
-                if entry_path != path:
-                    continue
-                our_marker, their_marker = marker_sides(marker)
-                for actions, has_marker, side in (
-                    (our_job_actions, our_marker, "here"),
-                    (their_job_actions, their_marker, "there"),
-                ):
-                    owns_action = has_marker == owned_when_marked
-                    has_owned_action = (job_id, action) in actions
-                    has_action_anywhere = any(
-                        found_action == action for _, found_action in actions
-                    )
-                    if owns_action and not has_owned_action:
-                        findings.append(
-                            {
-                                "kind": "action",
-                                "name": f"{action} — {name}",
-                                "detail": f"topology expects the action in job `{job_id}` {side}, but it is absent",
-                            }
-                        )
-                    elif not owns_action and has_action_anywhere:
-                        findings.append(
-                            {
-                                "kind": "action",
-                                "name": f"{action} — {name}",
-                                "detail": f"topology expects no action anywhere {side}, but it is present",
-                            }
-                        )
         # In a shared workflow owned by both repositories, adding or replacing
         # an action on only one side is drift too. A broad capability gate
         # excuses this only while ownership is asymmetric, and a stack gate
@@ -3125,6 +3128,30 @@ def self_test() -> int:
     ]
     assert len(found) == 1, f"a gated action in the wrong job must report: {found}"
     assert "job `build`" in found[0]["detail"], found
+    package_owner_missing_action = {
+        PACKAGE_ACTION_WF: wf("actions/checkout@1111111 # v1"),
+        "apps/ingest/package.json": "{}\n",
+    }
+    package_capability_absent = {
+        PACKAGE_ACTION_WF: None,
+        "packages/core/package.json": None,
+        "packages/shared/package.json": None,
+        "apps/ingest/package.json": None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**package_owner_missing_action).get,
+            repo(**package_capability_absent).get,
+        )
+        if f["kind"] == "action"
+        and f["name"].startswith("actions/download-artifact")
+    ]
+    assert len(found) == 1, (
+        "a whole-workflow gate must not bypass the owner's entry assertion: "
+        f"{found}"
+    )
+    assert "job `build` here" in found[0]["detail"], found
 
     mobile_plus_ours = {
         ".github/workflows/mobile-ci.yml": wf(

@@ -79,19 +79,21 @@ jobs:
       - name: Ensure PyYAML
         # Workflow pins are PARSED, not grepped -- a regex cannot tell an
         # active step from `# uses: actions/checkout@old`, and treating either
-        # as a pin invents drift. PyYAML is usually on the runner image but is
-        # not a documented guarantee, and the script hard-exits on the missing
-        # import. The fallback is exact, wheel-only and hash-checked before the
-        # later step receives the cross-repository read token.
+        # as a pin invents drift. Always load the exact, wheel-only,
+        # hash-checked dependency rather than an arbitrary copy supplied by a
+        # mutable runner image. Installation finishes before a later step
+        # receives the cross-repository read token.
         run: |
-          python3 -c "import yaml" 2>/dev/null \
-            || python3 -m pip install \
-              --quiet \
-              --disable-pip-version-check \
-              --no-deps \
-              --only-binary=:all: \
-              --require-hashes \
-              --requirement scripts/ci/sibling-drift-requirements.txt
+          python_deps="$RUNNER_TEMP/sibling-drift-python-deps"
+          python3 -m pip install \
+            --quiet \
+            --disable-pip-version-check \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --target "$python_deps" \
+            --requirement scripts/ci/sibling-drift-requirements.txt
+          echo "PYTHONPATH=$python_deps" >> "$GITHUB_ENV"
 
       - name: Verify the comparison logic
         # The self-test runs before the comparison, not after: if the comparison
