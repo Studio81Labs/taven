@@ -1,8 +1,9 @@
 import process from "node:process";
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const POSTGRES_PROTOCOLS = new Set(["postgres:", "postgresql:"]);
 const COMPOSE_DEFAULTS = Object.freeze({
+  host: "127.0.0.1",
   port: "5435",
   username: "taven",
   database: "taven",
@@ -10,23 +11,37 @@ const COMPOSE_DEFAULTS = Object.freeze({
 
 export function composeDatabaseIdentity(config) {
   const postgres = config?.services?.postgres;
-  const port = postgres?.ports?.find(
+  const binding = postgres?.ports?.find(
     (entry) => String(entry.target) === "5432" && entry.protocol === "tcp",
-  )?.published;
+  );
+  const host = normalizeHostname(binding?.host_ip);
+  const port = binding?.published;
   const username = postgres?.environment?.POSTGRES_USER;
   const database = postgres?.environment?.POSTGRES_DB;
 
-  if (port == null || username == null || database == null) {
+  if (!host || port == null || username == null || database == null) {
     throw new Error(
-      "rendered Compose config is missing the postgres port, user, or database",
+      "rendered Compose config is missing the postgres host binding, port, user, or database",
+    );
+  }
+  if (!LOOPBACK_HOSTS.has(host)) {
+    throw new Error(
+      `rendered Compose postgres must bind to a loopback host (found ${host})`,
     );
   }
 
   return {
+    host,
     port: String(port),
     username: String(username),
     database: String(database),
   };
+}
+
+function normalizeHostname(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
 }
 
 function decodeUrlComponent(value, label) {
@@ -62,8 +77,12 @@ export function validateLocalDatabaseUrl(raw, expected = COMPOSE_DEFAULTS) {
     return `DATABASE_URL must use postgres:// or postgresql:// (found ${url.protocol})`;
   }
 
-  if (!LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) {
+  const hostname = normalizeHostname(url.hostname);
+  if (!LOOPBACK_HOSTS.has(hostname)) {
     return `DATABASE_URL must target a local PostgreSQL host (found ${url.hostname || "no host"})`;
+  }
+  if (hostname !== expected.host) {
+    return `DATABASE_URL must use the Taven Compose host ${expected.host} (found ${hostname})`;
   }
 
   const port = url.port || "5432";
@@ -103,27 +122,42 @@ if (process.argv.includes("--self-test")) {
           POSTGRES_USER: "developer",
           POSTGRES_DB: "scratch",
         },
-        ports: [{ target: 5432, published: "5544", protocol: "tcp" }],
+        ports: [
+          {
+            host_ip: "127.0.0.1",
+            target: 5432,
+            published: "5544",
+            protocol: "tcp",
+          },
+        ],
       },
     },
   });
   const cases = [
-    ["postgresql://taven:taven@localhost:5435/taven", defaults, undefined],
     ["postgres://taven:taven@127.0.0.1:5435/taven", defaults, undefined],
-    ["postgresql://taven:taven@[::1]:5435/taven", defaults, undefined],
-    ["postgresql://developer:pw@localhost:5544/scratch", custom, undefined],
     [
-      "postgresql://taven:pw@localhost:5432/taven",
+      "postgresql://taven:taven@localhost:5435/taven",
+      defaults,
+      "Compose host 127.0.0.1",
+    ],
+    [
+      "postgresql://taven:taven@[::1]:5435/taven",
+      defaults,
+      "Compose host 127.0.0.1",
+    ],
+    ["postgresql://developer:pw@127.0.0.1:5544/scratch", custom, undefined],
+    [
+      "postgresql://taven:pw@127.0.0.1:5432/taven",
       defaults,
       "Compose port 5435",
     ],
     [
-      "postgresql://other:pw@localhost:5435/taven",
+      "postgresql://other:pw@127.0.0.1:5435/taven",
       defaults,
       "Compose user taven",
     ],
     [
-      "postgresql://taven:pw@localhost:5435/other",
+      "postgresql://taven:pw@127.0.0.1:5435/other",
       defaults,
       "Compose database taven",
     ],
@@ -137,7 +171,7 @@ if (process.argv.includes("--self-test")) {
       defaults,
       "local PostgreSQL host",
     ],
-    ["mysql://taven:pass@localhost:5435/taven", defaults, "must use postgres"],
+    ["mysql://taven:pass@127.0.0.1:5435/taven", defaults, "must use postgres"],
     ["not a url", defaults, "not a valid URL"],
     [undefined, defaults, "is not set"],
   ];
@@ -172,7 +206,7 @@ if (process.argv.includes("--self-test")) {
   if (error) {
     console.error(`Refusing to run bootstrap migrations: ${error}.`);
     console.error(
-      "Unset the ambient DATABASE_URL or match the local Compose port, user, and database before running pnpm bootstrap.",
+      "Unset the ambient DATABASE_URL or match the local Compose host, port, user, and database before running pnpm bootstrap.",
     );
     process.exit(1);
   }

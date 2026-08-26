@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ported from Studio81Labs/nexcue@2658bd07ff90dde85042ba66ba4bbd57ec340817
 """Assert the pnpm overrides in pnpm-workspace.yaml still mean what they say.
 
 An override wins silently. pnpm applies it, rewrites the lockfile's `specifier`

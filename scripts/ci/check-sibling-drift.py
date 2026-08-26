@@ -364,15 +364,6 @@ EXPECTED_JOB_DIFFS = {
     # now build `--no-codesign`; the flavor flag still differs and is real
     # topology, but it lives in the step rather than the job name.
     (".github/workflows/mobile-ci.yml", "mobile"): "android flavor topology",
-    # The TypeORM/React-Native sibling (tarmoto) against the Prisma/Flutter
-    # pair: its second backend job builds the schema from zero on PostGIS
-    # rather than running the full e2e suite, so `schema` and `test-e2e` are
-    # the one-sided job ids of the same split. The `build` job's NAME is
-    # deliberately NOT expected here — tarmoto's claims lint where the pair
-    # claim typecheck, and that difference is a standing reminder of its
-    # untypechecked spec files, which is debt rather than topology.
-    (".github/workflows/backend-ci.yml", "schema"): "backend test topology (schema-from-zero vs full e2e)",
-    (".github/workflows/backend-ci.yml", "test-e2e"): "backend test topology (schema-from-zero vs full e2e)",
     # tarmoto's backend-deploy.yml is a workflow_call-only reusable workflow
     # gated by its deploy.yml ORCHESTRATOR (which sequences ingest before
     # backend — a constraint the Prisma pair do not have); the gate job
@@ -392,11 +383,20 @@ EXPECTED_JOB_DIFFS = {
 # two repositories that share the same topology.
 EXPECTED_JOB_DIFF_MARKERS = {
     (".github/workflows/mobile-ci.yml", "mobile"): "apps/mobile/android/app/src/staging/google-services.json",
-    (".github/workflows/backend-ci.yml", "schema"): "apps/backend/src/data-source.ts",
-    (".github/workflows/backend-ci.yml", "test-e2e"): "apps/backend/src/data-source.ts",
     (".github/workflows/backend-deploy.yml", "version-gate"): "apps/ingest/package.json",
     (".github/workflows/admin-deploy.yml", "resolve"): "apps/ingest/package.json",
     (".github/workflows/_release-version-gate.yml", "check"): "apps/mobile/package.json",
+}
+
+# Complementary jobs whose IDs differ by backend implementation. Validate the
+# expected job and exact rendered name on EACH side before suppressing their
+# one-sided IDs; otherwise deleting one half could make the pair disappear from
+# the union and turn lost real-database coverage into false convergence.
+EXPECTED_TOPOLOGY_JOB_PAIRS = {
+    (".github/workflows/backend-ci.yml", "apps/backend/src/data-source.ts"): (
+        ("schema", "backend: schema from zero (real postgres)"),
+        ("test-e2e", "backend: e2e (real postgres)"),
+    ),
 }
 
 # These two topology differences rename a job that exists on both sides. Encode
@@ -1644,6 +1644,45 @@ def compare(local_read, sibling_read) -> list[dict]:
                 {"kind": "jobname", "name": path, "detail": f"could not read jobs — {broken}"}
             )
             continue
+        suppressed_topology_jobs: set[str] = set()
+        for (pair_path, marker), (marked, unmarked) in EXPECTED_TOPOLOGY_JOB_PAIRS.items():
+            if pair_path != path:
+                continue
+            our_marked, their_marked = marker_sides(marker)
+            if our_marked == their_marked:
+                continue
+            for names, is_marked, side in (
+                (ours, our_marked, "here"),
+                (theirs, their_marked, "there"),
+            ):
+                job_id, expected_name = marked if is_marked else unmarked
+                actual_name = names.get(job_id)
+                if actual_name is None:
+                    findings.append(
+                        {
+                            "kind": "jobname",
+                            "name": path,
+                            "detail": f"backend topology expects job `{job_id}` {side}, but it is absent",
+                        }
+                    )
+                elif actual_name != expected_name:
+                    findings.append(
+                        {
+                            "kind": "jobname",
+                            "name": path,
+                            "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
+                        }
+                    )
+            marked_id, unmarked_id = marked[0], unmarked[0]
+            for job_id, expected_here in (
+                (marked_id, our_marked),
+                (unmarked_id, not our_marked),
+            ):
+                if (
+                    (job_id in ours) == expected_here
+                    and (job_id in theirs) != expected_here
+                ):
+                    suppressed_topology_jobs.add(job_id)
         for job in sorted(set(ours) | set(theirs)):
             our_name, their_name = ours.get(job), theirs.get(job)
             marker = JOB_TOPOLOGY_GATED.get((path, job))
@@ -1654,6 +1693,8 @@ def compare(local_read, sibling_read) -> list[dict]:
             ):
                 continue
             if our_name == their_name:
+                continue
+            if job in suppressed_topology_jobs:
                 continue
             if (path, job) in EXPECTED_JOB_DIFFS:
                 marker = EXPECTED_JOB_DIFF_MARKERS.get((path, job))
@@ -3002,18 +3043,28 @@ def self_test() -> int:
     ]
     assert found == [], f"TypeORM schema vs Prisma e2e is topology: {found}"
 
-    typeorm_e2e = {
+    typeorm_without_schema = {
+        JOB_WF: jobs_yaml(("build", "backend: build")),
+        TYPEORM_MARKER: "export const dataSource = true;\n",
+    }
+    found = [
+        f for f in compare(repo(**prisma_e2e).get, repo(**typeorm_without_schema).get)
+        if f["kind"] == "jobname" and f["name"] == JOB_WF
+    ]
+    assert len(found) == 1 and "expects job `schema` there" in found[0]["detail"], found
+
+    typeorm_schema_renamed = {
         JOB_WF: jobs_yaml(
             ("build", "backend: build"),
-            ("test-e2e", "backend: renamed e2e"),
+            ("schema", "backend: renamed schema check"),
         ),
         TYPEORM_MARKER: "export const dataSource = true;\n",
     }
     found = [
-        f for f in compare(repo(**prisma_e2e).get, repo(**typeorm_e2e).get)
+        f for f in compare(repo(**prisma_e2e).get, repo(**typeorm_schema_renamed).get)
         if f["kind"] == "jobname" and f["name"] == JOB_WF
     ]
-    assert len(found) == 1 and "test-e2e" in found[0]["detail"], found
+    assert len(found) == 1 and "job `schema` there: expected" in found[0]["detail"], found
 
     print("check-sibling-drift self-test passed")
     return 0
