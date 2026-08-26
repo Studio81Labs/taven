@@ -1431,6 +1431,10 @@ def compare(local_read, sibling_read) -> list[dict]:
 
     def action_shapes_comparable(path: str) -> bool:
         """Whether one-sided actions represent drift rather than topology."""
+        if path in POKER_JOB_LAYOUTS:
+            python_sides = marker_sides("apps/backend/pyproject.toml")
+            if python_sides[0] != python_sides[1]:
+                return False
         stack_marker = STACK_TOPOLOGY_GATED.get(path)
         return stack_marker is None or len(set(marker_sides(stack_marker))) == 1
 
@@ -1595,20 +1599,33 @@ def compare(local_read, sibling_read) -> list[dict]:
     for path in CROSS_STACK_REQUIRED:
         ours, theirs = local_read(path), sibling_read(path)
         capability_sides = marker_sides(TOPOLOGY_GATED[path])
-        invalid = (
+        missing_owner = (
+            capability_sides[0] and ours is None,
+            capability_sides[1] and theirs is None,
+        )
+        unexpected_nonowner = (
             not capability_sides[0] and ours is not None,
             not capability_sides[1] and theirs is not None,
         )
-        if not any(invalid):
+        if not any(missing_owner) and not any(unexpected_nonowner):
             continue
-        side = "here and there" if all(invalid) else "here" if invalid[0] else "there"
-        findings.append(
-            {
-                "kind": "workflow" if path.startswith(".github/") else "file",
-                "name": path,
-                "detail": f"mobile topology expects no artifact {side} without a mobile capability",
-            }
-        )
+        for invalid, detail in (
+            (missing_owner, "mobile topology expects an artifact {side}, but it is absent"),
+            (
+                unexpected_nonowner,
+                "mobile topology expects no artifact {side} without a mobile capability",
+            ),
+        ):
+            if not any(invalid):
+                continue
+            side = "here and there" if all(invalid) else "here" if invalid[0] else "there"
+            findings.append(
+                {
+                    "kind": "workflow" if path.startswith(".github/") else "file",
+                    "name": path,
+                    "detail": detail.format(side=side),
+                }
+            )
         invalid_cross_stack_paths.add(path)
 
     for path in IDENTICAL:
@@ -2748,24 +2765,36 @@ def self_test() -> int:
     # A shared workflow deleted or renamed on one side. Skipping it made every
     # action in the file one-sided, so the loss produced no finding at all and
     # could even lower the count enough to close the standing issue.
-    only_here = {".github/workflows/mobile-release.yml": wf("actions/checkout@aaaaaaa # v7")}
-    found = compare(repo(**only_here).get, repo(**{k: None for k in ACTION_WORKFLOWS}).get)
-    assert any(f["kind"] == "workflow" for f in found), found
+    only_here = {".github/workflows/format-check.yml": wf("actions/checkout@aaaaaaa # v7")}
+    found = [
+        f
+        for f in compare(repo(**only_here).get, repo(**{k: None for k in ACTION_WORKFLOWS}).get)
+        if f["kind"] == "workflow" and f["name"] == "format-check.yml"
+    ]
+    assert len(found) == 1, found
     assert found[0]["detail"] == "present here, absent there", found
-    found = compare(repo(**{k: None for k in ACTION_WORKFLOWS}).get, repo(**only_here).get)
+    found = [
+        f
+        for f in compare(repo(**{k: None for k in ACTION_WORKFLOWS}).get, repo(**only_here).get)
+        if f["kind"] == "workflow" and f["name"] == "format-check.yml"
+    ]
     assert found[0]["detail"] == "absent here, present there", found
 
     # An EMPTY sibling copy is present, not absent. Truthiness conflated the
     # two and reversed the direction, sending the reader to fix the wrong repo.
+    mobile_only_here = {
+        ".github/workflows/mobile-release.yml": wf("actions/checkout@aaaaaaa # v7")
+    }
+    only_here = mobile_only_here
     empty_there = dict.fromkeys(ACTION_WORKFLOWS, "")
     empty_there[".github/workflows/mobile-release.yml"] = ""
-    found = [f for f in compare(repo(**only_here).get, repo(**empty_there).get)
+    found = [f for f in compare(repo(**mobile_only_here).get, repo(**empty_there).get)
              if f["kind"] == "workflow" and f["name"] == "mobile-release.yml"]
     assert len(found) == 1, found
     assert found[0]["detail"] == "present here, no runnable jobs there", found
 
     # ...and the reverse.
-    found = [f for f in compare(repo(**empty_there).get, repo(**only_here).get)
+    found = [f for f in compare(repo(**empty_there).get, repo(**mobile_only_here).get)
              if f["kind"] == "workflow" and f["name"] == "mobile-release.yml"]
     assert found[0]["detail"] == "no runnable jobs here, present there", found
 
@@ -3053,10 +3082,13 @@ def self_test() -> int:
     found = [
         f
         for f in compare(repo(**gone_actions).get, repo(**gone_actions).get)
-        if f["kind"] == "workflow"
+        if f["kind"] == "workflow" and "stale entry" in f["detail"]
     ]
-    assert len(found) == len(ACTION_WORKFLOWS), len(found)
-    assert "stale entry" in found[0]["detail"], found
+    # Missing owned cross-stack workflows are reported by the stronger
+    # presence contract above, so they do not also produce stale-manifest
+    # duplicates here.
+    expected_stale = set(ACTION_WORKFLOWS) - CROSS_STACK_REQUIRED
+    assert len(found) == len(expected_stale), len(found)
 
     # A commented-out step and an embedded string. Grepping the raw text read
     # both as active pins and INVENTED drift, which keeps the standing issue
@@ -3461,7 +3493,9 @@ def self_test() -> int:
         )
         if f["name"] == RELEASE_HELPER
     ]
-    assert found and found[0]["detail"] == "present here, absent there", found
+    assert found and found[0]["detail"] == (
+        "mobile topology expects an artifact there, but it is absent"
+    ), found
     react_native_release = {
         **react_native_missing_release,
         RELEASE_HELPER: "react native guard\n",
@@ -3489,6 +3523,22 @@ def self_test() -> int:
         if f["name"] == RELEASE_HELPER
     ]
     assert len(found) == 1 and "without a mobile capability" in found[0]["detail"], found
+    missing_mobile_release = {
+        MARKER: "name: app\n",
+        MOBILE_MARKER: None,
+        RELEASE_HELPER: None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**missing_mobile_release).get,
+            repo(**non_mobile_with_release).get,
+        )
+        if f["name"] == RELEASE_HELPER
+    ]
+    assert len(found) == 2, found
+    assert any("expects an artifact here" in f["detail"] for f in found), found
+    assert any("expects no artifact there" in f["detail"] for f in found), found
     changed_react_native_release = {
         **react_native_release,
         RELEASE_HELPER: "changed react native guard\n",
@@ -3518,17 +3568,25 @@ def self_test() -> int:
     # surface is not behind on mobile-release.yml; two repos that both declare
     # mobile still must report a missing workflow.
     MOBILE_ACTION_WF = ".github/workflows/mobile-release.yml"
-    no_mobile = {MOBILE_MARKER: None, MOBILE_ACTION_WF: None}
+    no_mobile = {MARKER: None, MOBILE_MARKER: None, MOBILE_ACTION_WF: None}
     found = [
-        f for f in compare(repo().get, repo(**no_mobile).get)
-        if f["name"] == "mobile-release.yml"
+        f for f in compare(repo(**no_mobile).get, repo(**no_mobile).get)
+        if f["name"].endswith("mobile-release.yml")
     ]
     assert found == [], f"a missing capability must gate its action workflow: {found}"
+    mobile_here = {MARKER: None, MOBILE_MARKER: "{}\n"}
+    mobile_missing_there = {
+        MARKER: None,
+        MOBILE_MARKER: "{}\n",
+        MOBILE_ACTION_WF: None,
+    }
     found = [
-        f for f in compare(repo().get, repo(**{MOBILE_ACTION_WF: None}).get)
-        if f["name"] == "mobile-release.yml"
+        f for f in compare(repo(**mobile_here).get, repo(**mobile_missing_there).get)
+        if f["name"].endswith("mobile-release.yml")
     ]
-    assert found and found[0]["detail"] == "present here, absent there", found
+    assert found and found[0]["detail"] == (
+        "mobile topology expects an artifact there, but it is absent"
+    ), found
     mobile_pin_here = {
         MARKER: "name: app\n",
         MOBILE_ACTION_WF: wf("actions/x@1111111 # v1"),
@@ -3779,6 +3837,47 @@ def self_test() -> int:
     base = {JOB_WF: jobs_yaml(("build", "backend: build"))}
     found = [f for f in compare(repo(**extra).get, repo(**base).get) if f["kind"] == "jobname"]
     assert len(found) == 1 and "present here, absent there" in found[0]["detail"], found
+
+    # Python and Node workflows may require different setup actions. Suppress
+    # only those one-sided shapes; an action shared by both stacks remains a
+    # pin comparison.
+    python_backend_actions = {
+        JOB_WF: wf(
+            "actions/checkout@1111111 # v1",
+            "actions/setup-python@2222222 # v2",
+        ),
+        "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
+    }
+    node_backend_actions = {
+        JOB_WF: wf(
+            "actions/checkout@1111111 # v1",
+            "actions/setup-node@3333333 # v3",
+        ),
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**python_backend_actions).get,
+            repo(**node_backend_actions).get,
+        )
+        if f["kind"] == "action" and "backend-ci.yml" in f["name"]
+    ]
+    assert found == [], f"backend setup actions are stack topology: {found}"
+    node_backend_with_stale_checkout = {
+        JOB_WF: wf(
+            "actions/checkout@4444444 # v4",
+            "actions/setup-node@3333333 # v3",
+        ),
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**python_backend_actions).get,
+            repo(**node_backend_with_stale_checkout).get,
+        )
+        if f["kind"] == "action" and f["name"].startswith("actions/checkout")
+    ]
+    assert len(found) == 1, f"shared cross-stack action pins remain strict: {found}"
 
     # Poker-only layout exemptions must activate for Python-vs-Node, but the
     # same job IDs remain strict between two Node siblings.
