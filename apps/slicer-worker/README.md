@@ -6,4 +6,5 @@ pretending OrcaSlicer is integrated.
 
 The worker is intentionally absent from `pnpm dev`. Start it explicitly with
 `pnpm slicer-worker:dev` when Redis is running. Container and pinned Orca image
-work belongs to the execution-foundation slice.
+work waits for the explicit Orca version and fixture-corpus decision recorded
+in the repository foundation plan.

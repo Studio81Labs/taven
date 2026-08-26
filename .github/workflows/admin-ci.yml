@@ -1,0 +1,46 @@
+# ported from Studio81Labs/nexcue@314cec8972589780072e641591b16eca9805d7dd
+name: Admin CI
+
+on:
+  push:
+    branches: [main]
+    paths: &admin-paths
+      - "apps/admin/**"
+      - "apps/backend/**"
+      - "packages/openapi/**"
+      - "packages/openapi-client/**"
+      - "packages/ui-web/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
+      - "eslint.config.mjs"
+      - ".nvmrc"
+      - ".github/workflows/admin-ci.yml"
+  pull_request:
+    branches: [main]
+    paths: *admin-paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: "admin: lint, typecheck, test & build"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm admin:lint
+      - run: pnpm admin:typecheck
+      - run: pnpm admin:test
+      - run: pnpm admin:build

@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Worker } from "bullmq";
 import { SLICING_QUEUE_NAME } from "@taven/slicer-contracts";
 import { runFixtureSlicingJob } from "./fixture-handler.js";

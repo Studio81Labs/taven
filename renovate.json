@@ -5,6 +5,17 @@
     "Taven inherits the Studio81Labs dependency and supply-chain policy.",
     "The one-day minimumReleaseAge is mirrored in pnpm-workspace.yaml."
   ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Keep digest-pinned scanner images in security-scan.yml current",
+      "managerFilePatterns": ["/^\\.github/workflows/security-scan\\.yml$/"],
+      "matchStrings": [
+        "(?<depName>[a-z0-9][\\w.\\-]*(?:/[\\w.\\-]+)+):(?<currentValue>[\\w.\\-]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
   "packageRules": [
     {
       "description": "Keep formatter updates isolated because they can rewrite the repository",

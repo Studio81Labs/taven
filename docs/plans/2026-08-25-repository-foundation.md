@@ -1,6 +1,6 @@
 # Taven repository foundation plan
 
-**Status:** in progress — workspace foundation implemented; execution foundation pending
+**Status:** in progress — workspace, local execution, and PR-validation foundations implemented; deployment foundation pending
 **Scope:** repository and delivery foundation only; no product features
 **Prepared:** 2026-08-25
 

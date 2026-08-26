@@ -1,9 +1,10 @@
+# ported from Studio81Labs/nexcue@314cec8972589780072e641591b16eca9805d7dd
 packages:
   - apps/*
   - packages/*
 
-# Ported from Studio81Labs/nexcue after auditing Taven's initial dependency
-# graph. New package versions must age for one day before they can resolve.
+# Re-audited against Taven's dependency graph. New package versions must age
+# for one day before they can resolve.
 minimumReleaseAge: 1440
 blockExoticSubdeps: true
 trustPolicy: no-downgrade
