@@ -19,8 +19,9 @@ name: Prune Stale Caches
 # run restores. Evicting those to store a Gradle cache is a straight loss, and
 # it presents as "the new cache didn't help" rather than as an error.
 #
-# The rule: keep the exact entry current main can request per key family, drop
-# the rest. A family is the key with its trailing content hashes stripped, so
+# The rule: keep the exact key AND internal cache version current main can
+# request per family, drop the rest. A family is the key with its trailing
+# content hashes stripped, so
 # `node-cache-Linux-x64-pnpm-<hash>` collapses to `node-cache-Linux-x64-pnpm`
 # and only the key carrying current main's lockfile hash survives. Neither
 # creation nor access time proves that: rerunning an old revision can recreate
@@ -75,6 +76,15 @@ jobs:
           ref: refs/heads/main
           persist-credentials: false
 
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Resolve current pnpm cache path
+        run: echo "CURRENT_PNPM_CACHE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
       - name: Resolve current Flutter cache inputs
         if: hashFiles('apps/mobile/pubspec.yaml') != ''
         env:
@@ -101,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 <<'PY'
-          import json, os, re, subprocess, collections
+          import collections, hashlib, json, os, re, shutil, subprocess
 
           repo = os.environ["REPO"]
           dry = os.environ.get("DRY_RUN") == "true"
@@ -152,22 +162,70 @@ jobs:
               "spm": os.environ.get("CURRENT_SPM_HASH", ""),
           }
 
-          def is_current(key):
+          # Cache identity is (key, version), not key alone. Both pinned cache
+          # implementations derive version as sha256(paths + compression +
+          # salt); this mirrors actions/cache@v6.1.0 and the cache toolkit
+          # vendored by actions/setup-node@v7.0.0. If those actions change the
+          # algorithm, update this alongside their digest pin.
+          compression = "zstd-without-long" if shutil.which("zstd") else "gzip"
+
+          def cache_version(*paths):
+              components = [*paths, compression, "1.0"]
+              return hashlib.sha256("|".join(components).encode()).hexdigest()
+
+          current_versions = {
+              "pnpm": cache_version(os.environ["CURRENT_PNPM_CACHE_PATH"]),
+              "gradle": cache_version("~/.gradle/caches", "~/.gradle/wrapper"),
+              "cocoapods": cache_version(
+                  "apps/mobile/ios/Pods",
+                  "~/Library/Caches/CocoaPods",
+                  "~/.cocoapods",
+              ),
+              "spm": cache_version("~/Library/Caches/org.swift.swiftpm"),
+          }
+
+          def current_kind(key):
               pnpm = current_hashes["pnpm"]
-              return any((
-                  bool(pnpm)
-                  and key.startswith("node-cache-")
-                  and key.endswith(f"-pnpm-{pnpm}"),
-                  bool(current_hashes["gradle"])
-                  and key.startswith("gradle-")
-                  and key.endswith(f"-{current_hashes['gradle']}"),
-                  bool(current_hashes["cocoapods"])
-                  and key.startswith("cocoapods-")
-                  and key.endswith(f"-{current_hashes['cocoapods']}"),
-                  bool(current_hashes["spm"])
-                  and key.startswith("spm-")
-                  and key.endswith(f"-{current_hashes['spm']}"),
-              ))
+              candidates = (
+                  (
+                      bool(pnpm)
+                      and key.startswith("node-cache-")
+                      and key.endswith(f"-pnpm-{pnpm}"),
+                      "pnpm",
+                  ),
+                  (
+                      bool(current_hashes["gradle"])
+                      and key.startswith("gradle-")
+                      and key.endswith(f"-{current_hashes['gradle']}"),
+                      "gradle",
+                  ),
+                  (
+                      bool(current_hashes["cocoapods"])
+                      and key.startswith("cocoapods-")
+                      and key.endswith(f"-{current_hashes['cocoapods']}"),
+                      "cocoapods",
+                  ),
+                  (
+                      bool(current_hashes["spm"])
+                      and key.startswith("spm-")
+                      and key.endswith(f"-{current_hashes['spm']}"),
+                      "spm",
+                  ),
+              )
+              for matches, kind in candidates:
+                  if matches:
+                      return kind
+              return None
+
+          def is_current(cache):
+              kind = current_kind(cache["key"])
+              return bool(kind) and cache.get("version") == current_versions[kind]
+
+          # Regression: two entries can share a visible key while only the
+          # version produced by current paths/compression is restorable.
+          sample_key = f"node-cache-Linux-x64-pnpm-{current_hashes['pnpm']}"
+          assert is_current({"key": sample_key, "version": current_versions["pnpm"]})
+          assert not is_current({"key": sample_key, "version": "0" * 64})
 
           groups = collections.defaultdict(list)
           for c in caches:
@@ -180,28 +238,28 @@ jobs:
               c
               for items in groups.values()
               for c in items
-              if is_current(c["key"])
+              if is_current(c)
           ]
           print(
               f"::notice::found {len(protected)} source-derived current-main "
-              "cache key(s)"
+              "cache key/version(s)"
           )
 
           doomed, freed = [], 0
           for fam, items in sorted(groups.items()):
               if len(items) < 2:
                   continue
-              keep = [c for c in items if is_current(c["key"])]
+              keep = [c for c in items if is_current(c)]
               if not keep:
                   print(
                       f"{fam}: {len(items)} entries, no source-derived current-main "
                       "key present; leaving this family untouched"
                   )
                   continue
-              rest = [c for c in items if not is_current(c["key"])]
+              rest = [c for c in items if not is_current(c)]
               print(
                   f"{fam}: {len(items)} entries, keeping {len(keep)} exact "
-                  "current-main key(s)"
+                  "current-main key/version(s)"
               )
               for c in rest:
                   doomed.append(c)
