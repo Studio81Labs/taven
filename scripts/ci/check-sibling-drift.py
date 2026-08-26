@@ -1215,7 +1215,9 @@ PROVENANCE = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 
-EDITORCONFIG_DART_HEADER = re.compile(r"(?m)^\[\*\.dart\][ \t]*$")
+EDITORCONFIG_DART_HEADER = re.compile(
+    r"(?m)^\[\*\.dart\][ \t]*(?=\r(?:\n|$)|\n|$)"
+)
 EDITORCONFIG_TRAILING_DART_SECTION = re.compile(
     r"(?ms)(?:^[ \t]*(?:\r\n|\n|\r))?^\[\*\.dart\][ \t]*(?:\r\n|\n|\r)(?:(?!^\[).)*\Z"
 )
@@ -2101,6 +2103,23 @@ def self_test() -> int:
     invalid_plain_editor = {".editorconfig": flutter_editorconfig}
     found = [
         f for f in compare(repo(**invalid_plain_editor).get, repo(**plain_editor).get)
+        if f["name"] == ".editorconfig"
+    ]
+    assert len(found) == 1 and "without a Flutter app" in found[0]["detail"], found
+    crlf_common_editorconfig = common_editorconfig.replace("\n", "\r\n")
+    crlf_invalid_plain_editor = {
+        ".editorconfig": (
+            "root = true\r\n[*.dart]\r\nindent_size = 2\r\n\r\n"
+            "[*.py]\r\nindent_size = 4\r\n"
+        )
+    }
+    crlf_plain_editor = {".editorconfig": crlf_common_editorconfig}
+    found = [
+        f
+        for f in compare(
+            repo(**crlf_invalid_plain_editor).get,
+            repo(**crlf_plain_editor).get,
+        )
         if f["name"] == ".editorconfig"
     ]
     assert len(found) == 1 and "without a Flutter app" in found[0]["detail"], found

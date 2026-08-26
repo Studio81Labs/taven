@@ -64,7 +64,9 @@ jobs:
     name: "ci: prune superseded caches"
     runs-on: ubuntu-latest
     permissions:
-      # The only permission this needs, scoped to this job.
+      # Scoped to this job: checkout reads current main, then the pruner writes
+      # only Actions cache state.
+      contents: read
       actions: write
     steps:
       - name: Checkout current main cache inputs
@@ -73,18 +75,29 @@ jobs:
           ref: refs/heads/main
           persist-credentials: false
 
+      - name: Resolve current Flutter cache inputs
+        if: hashFiles('apps/mobile/pubspec.yaml') != ''
+        env:
+          CURRENT_GRADLE_HASH: ${{ hashFiles('apps/mobile/android/**/*.gradle*', 'apps/mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          CURRENT_COCOAPODS_HASH: ${{ hashFiles('apps/mobile/ios/Podfile.lock') }}
+          CURRENT_SPM_HASH: ${{ hashFiles('apps/mobile/ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+        run: |
+          {
+            echo "CURRENT_GRADLE_HASH=$CURRENT_GRADLE_HASH"
+            echo "CURRENT_COCOAPODS_HASH=$CURRENT_COCOAPODS_HASH"
+            echo "CURRENT_SPM_HASH=$CURRENT_SPM_HASH"
+          } >> "$GITHUB_ENV"
+
       - name: Delete superseded main-branch caches
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
-          # Evaluated after the explicit main checkout. These are the same
-          # hashFiles inputs used by setup-node and the shared explicit mobile
-          # caches; an old rerun cannot change them.
+          # Evaluated after the explicit main checkout. This is the same
+          # hashFiles input used by setup-node; an old rerun cannot change it.
+          # Flutter-specific hashes enter through GITHUB_ENV only when the
+          # checked-out tree proves that capability exists.
           CURRENT_PNPM_HASH: ${{ hashFiles('pnpm-lock.yaml') }}
-          CURRENT_GRADLE_HASH: ${{ hashFiles('apps/mobile/android/**/*.gradle*', 'apps/mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
-          CURRENT_COCOAPODS_HASH: ${{ hashFiles('apps/mobile/ios/Podfile.lock') }}
-          CURRENT_SPM_HASH: ${{ hashFiles('apps/mobile/ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
         run: |
           set -euo pipefail
           python3 <<'PY'
