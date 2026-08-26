@@ -398,12 +398,19 @@ EXPECTED_JOB_DIFF_MARKERS = {
     (".github/workflows/_release-version-gate.yml", "check"): "apps/mobile/package.json",
 }
 
-# These two topology differences rename a job that exists on both sides. All
-# other expected entries describe one-sided jobs and stop being exempt as soon
-# as both repositories define the job.
-EXPECTED_PRESENT_JOB_NAME_DIFFS = {
-    (".github/workflows/mobile-ci.yml", "mobile"),
-    (".github/workflows/_release-version-gate.yml", "check"),
+# These two topology differences rename a job that exists on both sides. Encode
+# the exact documented pair: an arbitrary third name is drift even when the
+# repositories have different topology markers.
+EXPECTED_PRESENT_JOB_NAME_PAIRS = {
+    (".github/workflows/mobile-ci.yml", "mobile"): frozenset(
+        {
+            "mobile: format, analyze & test (+ android builds when mobile changes)",
+            "mobile: format, analyze & test (+ android release when mobile changes)",
+        }
+    ),
+    (".github/workflows/_release-version-gate.yml", "check"): frozenset(
+        {"tag matches pubspec", "tag matches the mobile version"}
+    ),
 }
 
 SHARED_PRESET = "github>Studio81Labs/.github:renovate-base"
@@ -1643,7 +1650,8 @@ def compare(local_read, sibling_read) -> list[dict]:
                     and marker_sides(marker)[0] != marker_sides(marker)[1]
                     and (
                         (our_name is None) != (their_name is None)
-                        or (path, job) in EXPECTED_PRESENT_JOB_NAME_DIFFS
+                        or frozenset((our_name, their_name))
+                        == EXPECTED_PRESENT_JOB_NAME_PAIRS.get((path, job))
                     )
                 ):
                     continue
@@ -2832,15 +2840,36 @@ def self_test() -> int:
     # pair — both sides carry the stack marker, while only one carries the
     # per-flavor source-set marker that forces the expected name difference.
     allowed = {
-        MOB: jobs_yaml(("mobile", "mobile: a"), ("other", "mobile: x")),
+        MOB: jobs_yaml(
+            (
+                "mobile",
+                "mobile: format, analyze & test (+ android builds when mobile changes)",
+            ),
+            ("other", "mobile: x"),
+        ),
         MARKER: "name: app\n",
         FLAVOR_MARKER: "{}\n",
     }
-    against = {MOB: jobs_yaml(("mobile", "mobile: b"), ("other", "mobile: y")), MARKER: "name: app\n"}
+    against = {
+        MOB: jobs_yaml(
+            (
+                "mobile",
+                "mobile: format, analyze & test (+ android release when mobile changes)",
+            ),
+            ("other", "mobile: y"),
+        ),
+        MARKER: "name: app\n",
+    }
     found = [f for f in compare(repo(**allowed).get, repo(**against).get) if f["kind"] == "jobname"]
     assert len(found) == 1 and "`other`" in found[0]["detail"], found
     same_flavor = {
-        MOB: jobs_yaml(("mobile", "mobile: a"), ("other", "mobile: x")),
+        MOB: jobs_yaml(
+            (
+                "mobile",
+                "mobile: format, analyze & test (+ android builds when mobile changes)",
+            ),
+            ("other", "mobile: x"),
+        ),
         MARKER: "name: app\n",
     }
     found = [
@@ -2889,6 +2918,15 @@ def self_test() -> int:
         if f["kind"] == "jobname" and f["name"] == RELEASE_GATE_WF
     ]
     assert found == [], f"version-source topology may rename the check: {found}"
+    unrelated_native_gate = {
+        RELEASE_GATE_WF: jobs_yaml(("check", "release: unrelated claim")),
+        "apps/mobile/package.json": "{}\n",
+    }
+    found = [
+        f for f in compare(repo(**flutter_gate).get, repo(**unrelated_native_gate).get)
+        if f["kind"] == "jobname" and f["name"] == RELEASE_GATE_WF
+    ]
+    assert len(found) == 1, f"topology cannot excuse an arbitrary name: {found}"
     renamed_flutter_gate = {
         RELEASE_GATE_WF: jobs_yaml(("check", "tag matches renamed pubspec"))
     }

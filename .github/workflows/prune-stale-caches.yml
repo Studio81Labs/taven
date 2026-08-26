@@ -142,11 +142,13 @@ jobs:
               r = api("-X", "DELETE", f"repos/{repo}/actions/caches/{c['id']}")
               if r.returncode == 0:
                   print(f"  deleted {gb:.2f} GB  {c['key'][:56]}")
+              elif "(HTTP 404)" in r.stderr:
+                  # Confirmed race: eviction or another cleanup already
+                  # achieved the desired end state after enumeration.
+                  print(f"  already gone {gb:.2f} GB  {c['key'][:56]}")
               else:
-                  # Best-effort: a cache can vanish between the list and the
-                  # delete, via eviction or a concurrent sweep. That is the
-                  # desired end state, so do not fail the job for it.
-                  print(f"::warning::could not delete {c['id']} — it may already be gone")
+                  print(f"::error::could not delete cache {c['id']}: {r.stderr.strip()}")
+                  raise SystemExit(1)
 
           verb = "would reclaim" if dry else "reclaimed"
           print(f"::notice::{verb} {freed / 2**30:.2f} GB across {len(doomed)} superseded cache(s)")

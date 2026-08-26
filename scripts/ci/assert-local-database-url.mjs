@@ -8,11 +8,24 @@ const COMPOSE_DEFAULTS = Object.freeze({
   database: "taven",
 });
 
-export function composeDatabaseIdentity(env = {}) {
+export function composeDatabaseIdentity(config) {
+  const postgres = config?.services?.postgres;
+  const port = postgres?.ports?.find(
+    (entry) => String(entry.target) === "5432" && entry.protocol === "tcp",
+  )?.published;
+  const username = postgres?.environment?.POSTGRES_USER;
+  const database = postgres?.environment?.POSTGRES_DB;
+
+  if (port == null || username == null || database == null) {
+    throw new Error(
+      "rendered Compose config is missing the postgres port, user, or database",
+    );
+  }
+
   return {
-    port: String(env.TAVEN_POSTGRES_PORT ?? COMPOSE_DEFAULTS.port),
-    username: String(env.POSTGRES_USER ?? COMPOSE_DEFAULTS.username),
-    database: String(env.POSTGRES_DB ?? COMPOSE_DEFAULTS.database),
+    port: String(port),
+    username: String(username),
+    database: String(database),
   };
 }
 
@@ -22,6 +35,15 @@ function decodeUrlComponent(value, label) {
   } catch {
     throw new Error(`DATABASE_URL has invalid escaping in its ${label}`);
   }
+}
+
+async function readStdin() {
+  process.stdin.setEncoding("utf8");
+  let input = "";
+  for await (const chunk of process.stdin) {
+    input += chunk;
+  }
+  return input;
 }
 
 export function validateLocalDatabaseUrl(raw, expected = COMPOSE_DEFAULTS) {
@@ -73,11 +95,17 @@ export function validateLocalDatabaseUrl(raw, expected = COMPOSE_DEFAULTS) {
 }
 
 if (process.argv.includes("--self-test")) {
-  const defaults = composeDatabaseIdentity();
+  const defaults = COMPOSE_DEFAULTS;
   const custom = composeDatabaseIdentity({
-    TAVEN_POSTGRES_PORT: "5544",
-    POSTGRES_USER: "developer",
-    POSTGRES_DB: "scratch",
+    services: {
+      postgres: {
+        environment: {
+          POSTGRES_USER: "developer",
+          POSTGRES_DB: "scratch",
+        },
+        ports: [{ target: 5432, published: "5544", protocol: "tcp" }],
+      },
+    },
   });
   const cases = [
     ["postgresql://taven:taven@localhost:5435/taven", defaults, undefined],
@@ -129,10 +157,18 @@ if (process.argv.includes("--self-test")) {
 
   console.log("local DATABASE_URL self-test passed");
 } else {
-  const error = validateLocalDatabaseUrl(
-    process.env.DATABASE_URL,
-    composeDatabaseIdentity(process.env),
-  );
+  let identity;
+  try {
+    if (!process.argv.includes("--compose-config-stdin")) {
+      throw new Error("rendered Compose config must be provided on stdin");
+    }
+    identity = composeDatabaseIdentity(JSON.parse(await readStdin()));
+  } catch (error) {
+    console.error(`Refusing to run bootstrap migrations: ${error.message}.`);
+    process.exit(1);
+  }
+
+  const error = validateLocalDatabaseUrl(process.env.DATABASE_URL, identity);
   if (error) {
     console.error(`Refusing to run bootstrap migrations: ${error}.`);
     console.error(
