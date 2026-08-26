@@ -1268,11 +1268,6 @@ def strip_editorconfig_dart_section(text: str) -> str:
     return EDITORCONFIG_DART_SECTION.sub("", text)
 
 
-def editorconfig_dart_sections(text: str) -> tuple[str, ...]:
-    """Return Dart sections verbatim so invalid sections cannot normalize away."""
-    return tuple(match.group(0) for match in EDITORCONFIG_DART_SECTION.finditer(text))
-
-
 def line_endings(text: str) -> list[str]:
     """The ending of each line, in order: CRLF, LF, CR, or none (last line)."""
     out = []
@@ -1478,30 +1473,19 @@ def compare(local_read, sibling_read) -> list[dict]:
                     not flutter_sides[0] and has_dart[0],
                     not flutter_sides[1] and has_dart[1],
                 )
-                dart_sections = (
-                    editorconfig_dart_sections(ours),
-                    editorconfig_dart_sections(theirs),
-                )
-                # This is a drift comparison, not a repository-local policy
-                # linter. Report the invalid section only when it differs
-                # between the two sides; two identical invalid sections still
-                # normalise to identical shared policy and must not hold the
-                # standing drift issue open twice.
-                if invalid_dart[0] != invalid_dart[1]:
-                    side = "here" if invalid_dart[0] else "there"
+                if any(invalid_dart):
+                    side = (
+                        "here and there"
+                        if all(invalid_dart)
+                        else "here"
+                        if invalid_dart[0]
+                        else "there"
+                    )
                     findings.append(
                         {
                             "kind": "file",
                             "name": path,
                             "detail": f"contains a [*.dart] section {side} without a Flutter app",
-                        }
-                    )
-                elif all(invalid_dart) and dart_sections[0] != dart_sections[1]:
-                    findings.append(
-                        {
-                            "kind": "file",
-                            "name": path,
-                            "detail": "contains differing [*.dart] sections in repositories without Flutter apps",
                         }
                     )
                 if not all(flutter_sides) or any(missing_dart):
@@ -2227,7 +2211,7 @@ def self_test() -> int:
         )
         if f["name"] == ".editorconfig"
     ]
-    assert found == [], f"identical invalid Dart policy is not cross-repo drift: {found}"
+    assert len(found) == 1 and "here and there" in found[0]["detail"], found
     differing_invalid_plain_editor = {
         ".editorconfig": flutter_editorconfig.replace("indent_size = 2", "indent_size = 4")
     }
@@ -2239,7 +2223,7 @@ def self_test() -> int:
         )
         if f["name"] == ".editorconfig"
     ]
-    assert len(found) == 1 and "differing [*.dart] sections" in found[0]["detail"], found
+    assert len(found) == 1 and "here and there" in found[0]["detail"], found
 
     # A file absent on the sibling. `None` rather than `del`: repo() seeds
     # every manifest path, so deleting the key only gets it seeded back with
