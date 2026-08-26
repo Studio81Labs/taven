@@ -19,7 +19,7 @@
 
 Do ceníku vstupuje **vážený průměr posledních nákupů**, ne aktuální cena. Skutečná spotřeba se účtuje proti konkrétní cívce (`Inventory.price_per_g`).
 
-Každá zásoba eviduje fyzicky ověřené `remaining_g`; pro nabídku se používá `available_g = remaining_g − aktivní InventoryReservation`. Závazný reference slice určuje jen zákaznickou cenu. Pro každý plánovaný Job/parcel group každého itemu počítá `CandidateResourceEstimate` z profilu, kalibrace a arrangementu kandidátního stroje vlastní `required_material_g`, podložky a intervaly včetně termínového bufferu. Capture platby smí začít až po atomickém `PhaseReservationSet`, který společnými `ProductionReservation` pokryje gramáž a nekolidující kapacitu **všech** itemů/slotů právě aktivované fáze; u fázované objednávky se stejné pravidlo čerstvě zopakuje pro celý sample plán, aktivaci batch i revizi. Přetisk jednoho selhaného Jobu získá novou per-Job `ProductionReservation`, zatímco claim zasahující více slotů smí vytvořit náhradní Joby jen přes all-or-none `ReplacementReservationSet` celé reklamované množiny.
+Každá zásoba eviduje fyzicky ověřené `remaining_g`; pro nabídku se používá `available_g = remaining_g − aktivní InventoryReservation`. Závazný reference slice určuje jen zákaznickou cenu. Pro každý plánovaný Job/parcel group každého itemu počítá `CandidateResourceEstimate` z profilu, kalibrace a arrangementu kandidátního stroje vlastní `required_material_g`, podložky a intervaly včetně termínového bufferu. Initial checkout vytvoří `OrderPhase` a její sloty už pod `Order.quoted`; capture platby smí začít až po atomickém `PhaseReservationSet`, který proti těmto stabilním ID společnými `ProductionReservation` pokryje gramáž a nekolidující kapacitu **všech** itemů/slotů právě aktivované fáze. U fázované objednávky se stejné pravidlo čerstvě zopakuje pro celý sample plán, aktivaci batch i revizi. Přetisk jednoho selhaného Jobu získá novou per-Job `ProductionReservation`, zatímco claim zasahující více slotů smí vytvořit náhradní Joby jen přes all-or-none `ReplacementReservationSet` celé reklamované množiny.
 
 **V0 nabízené materiály:** PLA, PETG.
 
@@ -215,6 +215,7 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | Lhůta na individuální nabídku | 24 h v pracovní dny |
 | Slíbená dodací lhůta | ⚠ trh: 1–2 dny jednoduché, garance 72 h |
 | **`payment_reservation_minutes`** | **⚠ 15 minut**; pozdější capture smí zdroje znovu získat jen před business cutoffem, jinak se ihned celý refunduje |
+| **`checkout_capture_window_minutes`** | **⚠ 60 minut** od vytvoření initial `full | deposit` intentu; timeout atomicky zavře capture autorizaci, voidne intent, zruší quoted phase/slot scope a pozdní success celý kompenzuje |
 | **`balance_payment_days`** | **⚠ 7 dní** od QC individuální zakázky; pak explicitní `OrderSettlement` |
 | **`abandoned_item_retention_days`** | **⚠ 30 dní** od `cancelled_settled`; pak auditovaná recyklace/zničení |
 | **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak nejdřív zavřít revision capture window, odebrat batch z `contract_total`, zrušit jej, refundovat nečerpanou část a uzavřít `partially_fulfilled`; odmítnutí revize deadline hned ruší a pozdní capture se celý kompenzuje |
