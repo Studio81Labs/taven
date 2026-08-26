@@ -49,24 +49,28 @@ concurrency:
 env:
   # THE ONLY PER-REPO LINE in this workflow — even the Compare step's secret
   # name (SIBLING_READ_TOKEN) is the same in every sibling. Everything else is
-  # identical too, which is what makes rolling this out to a third and fourth
-  # repo an edit rather than a fork. The script is compared byte-for-byte
+  # identical too, which is what makes adding another family repository an edit
+  # rather than a fork. The script is compared byte-for-byte
   # between repos by its own IDENTICAL manifest, so it must not carry the repo
   # name either.
   #
-  # SPACE-SEPARATED, and plural on purpose. With two repos a single value was
-  # right; with four, each repo watches the other three, and a single-valued
-  # variable would mean silently comparing against one of them. Fewer rows
-  # looks exactly like convergence, which is the failure this whole workflow
-  # exists to prevent.
+  # SPACE-SEPARATED, and plural on purpose. Every repository watches every other
+  # family member; a single-valued variable would silently compare only one of
+  # them. Fewer rows looks exactly like convergence, which is the failure this
+  # whole workflow exists to prevent.
   #
   # SIBLING_TOKEN must be able to read EVERY repo listed here.
-  SIBLING_REPOS: Studio81Labs/nexcue Studio81Labs/tarmoto Studio81Labs/tabletap
+  SIBLING_REPOS: Studio81Labs/nexcue Studio81Labs/tarmoto Studio81Labs/tabletap Studio81Labs/poker-hero
   ISSUE_LABEL: infra-drift
 
 jobs:
   drift:
     name: "ci: sibling drift"
+    # The read token spans selected private sibling repositories, so never pass
+    # it to code checked out from a feature branch. A manual dispatch targeting
+    # any non-default ref is intentionally skipped; validate checker changes in
+    # CI with the token-free self-test, then exercise the credential after merge.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -148,8 +152,6 @@ jobs:
           echo "count=$total" >> "$GITHUB_OUTPUT"
 
       - name: Publish the report to the run summary
-        # Always, including branch dispatches, which do not touch the issue.
-        # Without this a dispatch from a branch would appear to do nothing.
         run: |
           set -euo pipefail
           {
@@ -165,14 +167,9 @@ jobs:
           COUNT: ${{ steps.compare.outputs.count }}
 
       - name: File or update the drift issue
-        # DEFAULT BRANCH ONLY. `workflow_dispatch` accepts any ref and
-        # `actions/checkout` honours it, so a run from a feature branch
-        # compares that branch's files -- and would then edit or close the one
-        # repository-wide issue on their evidence, describing unmerged
-        # infrastructure or closing a valid issue because an experimental
-        # branch happened to match the sibling. Branch dispatches still run the
-        # comparison and print it to the summary above; they just do not
-        # rewrite shared state.
+        # Defense in depth: the job-level condition already restricts execution
+        # to the default branch, and this step independently protects the one
+        # repository-wide issue from evidence produced by any other ref.
         # The FULL ref, not `ref_name`. `ref_name` strips both `refs/heads/`
         # and `refs/tags/`, so a tag named after the default branch would
         # satisfy a short-name test and let tag evidence rewrite shared state.

@@ -34,7 +34,7 @@ python3 -m pip install \
   --target "$python_deps" \
   --requirement scripts/ci/sibling-drift-requirements.txt
 
-for sibling in nexcue tarmoto tabletap; do
+for sibling in nexcue tarmoto tabletap poker-hero; do
   PYTHONPATH="$python_deps" SIBLING_TOKEN="$token" SIBLING_REPO="Studio81Labs/$sibling" \
     python3 scripts/ci/check-sibling-drift.py --out "$report_dir/$sibling.md"
   printf '\n## vs %s\n\n' "$sibling"
