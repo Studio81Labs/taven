@@ -14,6 +14,7 @@ import {
 } from "./policies.js";
 import {
   InvalidTransitionError,
+  isTerminal,
   transition,
   TransitionGuardError,
   type TransitionPolicy,
@@ -29,6 +30,7 @@ const permittedContext = {
   handoffReconciliation: true,
   amountDueMinor: 0n,
   refundableBalanceMinor: 0n,
+  shipmentLineageLeafStatuses: ["delivered"],
   verifiedProviderScan: true,
   contextHandoffCompleted: true,
   nodeAssigned: true,
@@ -38,6 +40,8 @@ const permittedContext = {
   cleanPostDeliveryQualityClaim: true,
   remedyCancellationCompleted: true,
   verifiedShipmentIncident: true,
+  reshipmentAuthorizationConsumed: true,
+  reshipmentHandoffCompleted: true,
   completionProjected: true,
 } as const;
 
@@ -170,11 +174,16 @@ describe("v0 lifecycle policy tables", () => {
     [paymentPolicy, "voided", "refund_pending"],
     [orderPolicy, "quoted", "confirmed"],
     [orderPolicy, "ready_to_ship", "shipped"],
+    [orderPolicy, "awaiting_balance", "ready_to_ship"],
+    [orderPolicy, "shipped", "delivered"],
     [singleOrderPhasePolicy, "quoted", "active"],
+    [singleOrderPhasePolicy, "shipped", "delivered"],
     [jobPolicy, "created", "accepted"],
     [shipmentPolicy, "cancellation_pending", "handed_over"],
     [claimPolicy, "active", "withdrawn"],
+    [claimSlotResolutionPolicy, "pending", "rejected"],
     [claimSlotResolutionPolicy, "replacement_shipped", "recovery_pending"],
+    [claimSlotResolutionPolicy, "reship_pending", "reship_shipped"],
   ] as const)(
     "rejects %s exceptional edge without its command guard",
     (policy, current, target) => {
@@ -197,6 +206,127 @@ describe("v0 lifecycle policy tables", () => {
         },
       }),
     ).toThrow(TransitionGuardError);
+  });
+
+  it("blocks balance clearance while either financial balance is non-zero", () => {
+    expect(() =>
+      transition(orderPolicy, {
+        current: "awaiting_balance",
+        target: "ready_to_ship",
+        idempotencyKey: "balance-clearance",
+        context: {
+          amountDueMinor: 0n,
+          refundableBalanceMinor: 1n,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["Order", orderPolicy],
+    ["OrderPhase(single)", singleOrderPhasePolicy],
+  ] as const)(
+    "requires all current shipment lineage leaves before %s enters delivered",
+    (_lifecycle, policy) => {
+      expect(() =>
+        transition(policy, {
+          current: "shipped",
+          target: "delivered",
+          idempotencyKey: "delivery-leaves",
+          context: { shipmentLineageLeafStatuses: ["delivered", "in_transit"] },
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(
+        transition(policy, {
+          current: "shipped",
+          target: "delivered",
+          idempotencyKey: "delivery-leaves-complete",
+          context: { shipmentLineageLeafStatuses: ["delivered", "delivered"] },
+        }),
+      ).toEqual({ kind: "changed", previous: "shipped", current: "delivered" });
+    },
+  );
+
+  it.each([
+    ["Order", orderPolicy, "confirmed"],
+    ["OrderPhase(single)", singleOrderPhasePolicy, "active"],
+  ] as const)(
+    "models unpaid %s cancellation as terminal and routes captured cancellations through settlement",
+    (_lifecycle, policy, current) => {
+      expect(isTerminal(policy, "cancelled")).toBe(false);
+      expect(isTerminal(policy, "cancelled", { paymentStatus: "unpaid" })).toBe(
+        true,
+      );
+      expect(isTerminal(policy, "cancelled", { paymentStatus: "paid" })).toBe(
+        false,
+      );
+      expect(
+        transition(policy, {
+          current,
+          target: "cancelled",
+          idempotencyKey: "captured-cancellation",
+          context: { paymentStatus: "paid" },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "cancelled",
+      });
+      expect(
+        transition(policy, {
+          current: "cancelled",
+          target: policy === orderPolicy ? "refunded" : "cancelled_refunded",
+          idempotencyKey: "captured-cancellation-refund",
+          context: {
+            paymentStatus: "paid",
+            amountDueMinor: 0n,
+            refundableBalanceMinor: 0n,
+            completionProjected: true,
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "cancelled",
+        current: policy === orderPolicy ? "refunded" : "cancelled_refunded",
+      });
+    },
+  );
+
+  it.each([
+    "reshipmentAuthorizationConsumed",
+    "reshipmentHandoffCompleted",
+  ] as const)("requires %s before shipping a reship remedy", (missingFlag) => {
+    const context = {
+      reshipmentAuthorizationConsumed: true,
+      reshipmentHandoffCompleted: true,
+      [missingFlag]: false,
+    };
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "reship_pending",
+        target: "reship_shipped",
+        idempotencyKey: `reship-handoff-${missingFlag}`,
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("ships a reship remedy only after its authorization-backed handoff", () => {
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "reship_pending",
+        target: "reship_shipped",
+        idempotencyKey: "reship-handoff-complete",
+        context: {
+          reshipmentAuthorizationConsumed: true,
+          reshipmentHandoffCompleted: true,
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "reship_pending",
+      current: "reship_shipped",
+    });
   });
 
   it.each([

@@ -69,4 +69,29 @@ describe("revision references and instants", () => {
       /canonical UTC ISO-8601/,
     );
   });
+
+  it.each([-8_640_000_000_000_001, 8_640_000_000_000_001])(
+    "rejects safe integer epochs outside the Date range: %d",
+    (epoch) => {
+      expect(() => Instant.fromEpochMilliseconds(epoch)).toThrow(
+        /JavaScript Date range/,
+      );
+    },
+  );
+
+  it("accepts the inclusive Date range boundaries", () => {
+    expect(
+      Instant.fromEpochMilliseconds(-8_640_000_000_000_000).toISOString(),
+    ).toBe("-271821-04-20T00:00:00.000Z");
+    expect(
+      Instant.fromEpochMilliseconds(8_640_000_000_000_000).toISOString(),
+    ).toBe("+275760-09-13T00:00:00.000Z");
+  });
+
+  it("rejects additions that leave the Date range", () => {
+    const instant = Instant.fromEpochMilliseconds(8_640_000_000_000_000);
+    expect(() => instant.add(Duration.seconds(1))).toThrow(
+      /JavaScript Date range/,
+    );
+  });
 });

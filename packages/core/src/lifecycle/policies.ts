@@ -38,6 +38,25 @@ function requireZeroBalances<S extends string>(
   }
 }
 
+function requireAllShipmentLineageLeavesDelivered<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const leaves = command.context?.shipmentLineageLeafStatuses;
+  if (
+    !Array.isArray(leaves) ||
+    leaves.length === 0 ||
+    leaves.some((status) => status !== "delivered")
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "delivery requires every current shipment lineage leaf to be delivered",
+    );
+  }
+}
+
 export type QuoteRequestStatus =
   "new" | "in_review" | "quoted" | "accepted" | "rejected" | "expired";
 
@@ -163,6 +182,8 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     "cancelled_settled",
     "expired",
   ],
+  contextualTerminal: (state, context) =>
+    state === "cancelled" && context?.paymentStatus === "unpaid",
   transitions: {
     draft: ["quoted"],
     quoted: ["confirmed", "expired", "cancelled"],
@@ -218,6 +239,15 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       requireZeroBalances("Order", command);
     }
     if (
+      command.current === "awaiting_balance" &&
+      command.target === "ready_to_ship"
+    ) {
+      requireZeroBalances("Order", command);
+    }
+    if (command.current === "shipped" && command.target === "delivered") {
+      requireAllShipmentLineageLeavesDelivered("Order", command);
+    }
+    if (
       command.target === "completed" ||
       command.target === "partially_fulfilled" ||
       command.target === "refunded" ||
@@ -266,6 +296,8 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
       "cancelled_settled",
       "partially_fulfilled",
     ],
+    contextualTerminal: (state, context) =>
+      state === "cancelled" && context?.paymentStatus === "unpaid",
     transitions: {
       quoted: ["active", "cancelled"],
       active: ["in_production", "cancelled"],
@@ -297,6 +329,9 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           "the complete shipment handoff guard must pass",
         );
         requireZeroBalances("OrderPhase(single)", command);
+      }
+      if (command.current === "shipped" && command.target === "delivered") {
+        requireAllShipmentLineageLeavesDelivered("OrderPhase(single)", command);
       }
       if (
         command.target === "completed" ||
@@ -612,6 +647,31 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
       ],
     },
     guard: (command) => {
+      if (command.current === "pending" && command.target === "rejected") {
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "cleanPostDeliveryQualityClaim",
+          "only a clean post-delivery quality claim can be rejected",
+        );
+      }
+      if (
+        command.current === "reship_pending" &&
+        command.target === "reship_shipped"
+      ) {
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "reshipmentAuthorizationConsumed",
+          "reship handoff requires consumption of its custody-backed authorization",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "reshipmentHandoffCompleted",
+          "reship handoff requires the complete authorization-backed handoff result",
+        );
+      }
       if (
         command.target === "refund_pending" &&
         command.current !== "pending" &&

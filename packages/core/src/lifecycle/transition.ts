@@ -60,6 +60,11 @@ export interface TransitionPolicy<S extends string> {
   readonly name: string;
   readonly initial: readonly S[];
   readonly terminal: readonly S[];
+  /** States whose terminality additionally depends on adapter-provided context. */
+  readonly contextualTerminal?: (
+    state: S,
+    context: TransitionContext | undefined,
+  ) => boolean;
   readonly transitions: TransitionTable<S>;
   readonly guard?: (command: TransitionCommand<S>) => void;
 }
@@ -67,8 +72,12 @@ export interface TransitionPolicy<S extends string> {
 export function isTerminal<S extends string>(
   policy: TransitionPolicy<S>,
   state: S,
+  context?: TransitionContext,
 ): boolean {
-  return policy.terminal.includes(state);
+  return (
+    policy.terminal.includes(state) ||
+    policy.contextualTerminal?.(state, context) === true
+  );
 }
 
 /**

@@ -1,6 +1,9 @@
 import { DomainError } from "./errors.js";
 import type { Duration } from "./units.js";
 
+const MIN_DATE_EPOCH_MILLISECONDS = -8_640_000_000_000_000;
+const MAX_DATE_EPOCH_MILLISECONDS = 8_640_000_000_000_000;
+
 /** Immutable UTC instant with integral millisecond precision. */
 export class Instant {
   readonly epochMilliseconds: number;
@@ -15,6 +18,15 @@ export class Instant {
       throw new DomainError(
         "INVALID_INSTANT",
         "epoch milliseconds must be a safe integer",
+      );
+    }
+    if (
+      epochMilliseconds < MIN_DATE_EPOCH_MILLISECONDS ||
+      epochMilliseconds > MAX_DATE_EPOCH_MILLISECONDS
+    ) {
+      throw new DomainError(
+        "INVALID_INSTANT",
+        "epoch milliseconds must be within the JavaScript Date range",
       );
     }
     return new Instant(epochMilliseconds);
