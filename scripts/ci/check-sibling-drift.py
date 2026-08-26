@@ -434,6 +434,21 @@ POKER_JOB_LAYOUTS = {
     },
 }
 
+# Actions that are deliberately one-sided at the same Python/Node boundary.
+# This is an exact contract, not a workflow-wide exemption: every listed
+# action must remain on its owning stack only, while any other one-sided action
+# (including a removed shared checkout) is ordinary drift.
+POKER_ACTION_LAYOUTS = {
+    ".github/workflows/backend-ci.yml": {
+        "python": frozenset({"actions/setup-python", "actions/download-artifact"}),
+        "node": frozenset(),
+    },
+    ".github/workflows/openapi-check.yml": {
+        "python": frozenset({"actions/download-artifact"}),
+        "node": frozenset(),
+    },
+}
+
 # Every expected difference has a marker that identifies the topology forcing
 # it. An exception without a marker is global, which would hide drift between
 # two repositories that share the same topology.
@@ -1431,10 +1446,6 @@ def compare(local_read, sibling_read) -> list[dict]:
 
     def action_shapes_comparable(path: str) -> bool:
         """Whether one-sided actions represent drift rather than topology."""
-        if path in POKER_JOB_LAYOUTS:
-            python_sides = marker_sides("apps/backend/pyproject.toml")
-            if python_sides[0] != python_sides[1]:
-                return False
         stack_marker = STACK_TOPOLOGY_GATED.get(path)
         return stack_marker is None or len(set(marker_sides(stack_marker))) == 1
 
@@ -1884,6 +1895,46 @@ def compare(local_read, sibling_read) -> list[dict]:
         # empty; this closes the quieter case where both sides still share at
         # least one other action and a set intersection would discard the new
         # action.
+        poker_topology_actions: set[str] = set()
+        if (
+            here
+            and there
+            and our_file_pins
+            and their_file_pins
+            and path in POKER_ACTION_LAYOUTS
+        ):
+            python_sides = marker_sides("apps/backend/pyproject.toml")
+            if python_sides[0] != python_sides[1]:
+                layouts = POKER_ACTION_LAYOUTS[path]
+                poker_topology_actions = set(layouts["python"]) | set(layouts["node"])
+                for action in sorted(poker_topology_actions):
+                    expected = (
+                        action in layouts["python" if python_sides[0] else "node"],
+                        action in layouts["python" if python_sides[1] else "node"],
+                    )
+                    actual = (action in our_file_pins, action in their_file_pins)
+                    if actual == expected:
+                        continue
+                    expected_side = "here" if expected[0] else "there"
+                    actual_side = (
+                        "here and there"
+                        if all(actual)
+                        else "here"
+                        if actual[0]
+                        else "there"
+                        if actual[1]
+                        else "nowhere"
+                    )
+                    findings.append(
+                        {
+                            "kind": "action",
+                            "name": f"{action} — {name}",
+                            "detail": (
+                                f"topology expects the action {expected_side} only, "
+                                f"but it is present {actual_side}"
+                            ),
+                        }
+                    )
         if (
             here
             and there
@@ -1892,6 +1943,8 @@ def compare(local_read, sibling_read) -> list[dict]:
             and action_shapes_comparable(path)
         ):
             for action in sorted(set(our_file_pins) ^ set(their_file_pins)):
+                if action in poker_topology_actions:
+                    continue
                 # Capability-owned entries were asserted above, including
                 # ownership polarity and owner-side deletion. Do not add a
                 # second generic one-sided finding for the same violation.
@@ -3838,13 +3891,15 @@ def self_test() -> int:
     found = [f for f in compare(repo(**extra).get, repo(**base).get) if f["kind"] == "jobname"]
     assert len(found) == 1 and "present here, absent there" in found[0]["detail"], found
 
-    # Python and Node workflows may require different setup actions. Suppress
-    # only those one-sided shapes; an action shared by both stacks remains a
-    # pin comparison.
+    # Python and Node workflows have a small exact set of one-sided actions.
+    # Everything else remains shared policy, including presence and pin refs.
     python_backend_actions = {
         JOB_WF: wf(
             "actions/checkout@1111111 # v1",
+            "actions/setup-node@3333333 # v3",
+            "pnpm/action-setup@4444444 # v4",
             "actions/setup-python@2222222 # v2",
+            "actions/download-artifact@5555555 # v5",
         ),
         "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
     }
@@ -3852,6 +3907,7 @@ def self_test() -> int:
         JOB_WF: wf(
             "actions/checkout@1111111 # v1",
             "actions/setup-node@3333333 # v3",
+            "pnpm/action-setup@4444444 # v4",
         ),
     }
     found = [
@@ -3865,8 +3921,9 @@ def self_test() -> int:
     assert found == [], f"backend setup actions are stack topology: {found}"
     node_backend_with_stale_checkout = {
         JOB_WF: wf(
-            "actions/checkout@4444444 # v4",
+            "actions/checkout@6666666 # v6",
             "actions/setup-node@3333333 # v3",
+            "pnpm/action-setup@4444444 # v4",
         ),
     }
     found = [
@@ -3878,6 +3935,39 @@ def self_test() -> int:
         if f["kind"] == "action" and f["name"].startswith("actions/checkout")
     ]
     assert len(found) == 1, f"shared cross-stack action pins remain strict: {found}"
+    node_backend_without_checkout = {
+        JOB_WF: wf(
+            "actions/setup-node@3333333 # v3",
+            "pnpm/action-setup@4444444 # v4",
+        ),
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**python_backend_actions).get,
+            repo(**node_backend_without_checkout).get,
+        )
+        if f["kind"] == "action" and f["name"].startswith("actions/checkout")
+    ]
+    assert len(found) == 1, f"removing a shared cross-stack action must report: {found}"
+    python_backend_without_setup = {
+        **python_backend_actions,
+        JOB_WF: wf(
+            "actions/checkout@1111111 # v1",
+            "actions/setup-node@3333333 # v3",
+            "pnpm/action-setup@4444444 # v4",
+            "actions/download-artifact@5555555 # v5",
+        ),
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**python_backend_without_setup).get,
+            repo(**node_backend_actions).get,
+        )
+        if f["kind"] == "action" and f["name"].startswith("actions/setup-python")
+    ]
+    assert len(found) == 1 and "expects the action here only" in found[0]["detail"], found
 
     # Poker-only layout exemptions must activate for Python-vs-Node, but the
     # same job IDs remain strict between two Node siblings.
