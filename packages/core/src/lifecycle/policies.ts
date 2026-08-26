@@ -33,7 +33,7 @@ function requireZeroBalances<S extends string>(
       lifecycle,
       command.current,
       command.target,
-      "handoff requires zero amount due and refundable balance",
+      "transition requires zero amount due and refundable balance",
     );
   }
 }
@@ -98,6 +98,60 @@ function requireProjectedCompletionTarget<S extends string>(
       "terminal target must match the projected fulfilment completion outcome",
     );
   }
+}
+
+function requireAtomicConfirmationActivation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  const phaseReservationSetId = command.context?.phaseReservationSetId;
+  if (
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.confirmationActivationOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.confirmationActivationPhaseId !== phaseId ||
+    typeof phaseReservationSetId !== "string" ||
+    phaseReservationSetId.trim().length === 0 ||
+    command.context?.confirmationActivationPhaseReservationSetId !==
+      phaseReservationSetId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "confirmation must bind the exact Order, phase, and reservation set",
+    );
+  }
+  if (
+    command.context?.phaseKind !== "single" ||
+    command.context?.confirmationOrderPreviousStatus !== "quoted" ||
+    command.context?.confirmationOrderTargetStatus !== "confirmed" ||
+    command.context?.confirmationPhasePreviousStatus !== "quoted" ||
+    command.context?.confirmationPhaseTargetStatus !== "active"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "confirmation must activate the v0 single phase with its Order",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "completeReservationCaptured",
+    "capture and the complete phase reservation set must be valid",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "confirmationActivationAtomic",
+    "Order confirmation and single-phase activation must be atomic",
+  );
 }
 
 function requireAllShipmentLineageLeavesDelivered<S extends string>(
@@ -1339,6 +1393,65 @@ function requireVerifiedCurrentRemedyIncident<S extends string>(
   }
 }
 
+function requireAcceptedQuoteOrderCreation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const quoteRequestId = command.context?.quoteRequestId;
+  const issuedQuoteId = command.context?.issuedQuoteId;
+  const orderId = command.context?.orderId;
+  if (
+    typeof quoteRequestId !== "string" ||
+    quoteRequestId.trim().length === 0 ||
+    command.context?.issuedQuoteRequestId !== quoteRequestId ||
+    command.context?.createdOrderQuoteRequestId !== quoteRequestId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "accepted quote Order must belong to this exact QuoteRequest",
+    );
+  }
+  if (
+    typeof issuedQuoteId !== "string" ||
+    issuedQuoteId.trim().length === 0 ||
+    command.context?.createdOrderSourceQuoteId !== issuedQuoteId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "accepted quote Order must reference the exact issued Quote",
+    );
+  }
+  if (
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.acceptedOrderId !== orderId ||
+    command.context?.createdOrderStatus !== "draft"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "quote acceptance must create its exact draft Order",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "orderCreated",
+    "quote acceptance requires its Order creation result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "quoteAcceptanceOrderCreationAtomic",
+    "Order creation and QuoteRequest acceptance must be atomic",
+  );
+}
+
 export type QuoteRequestStatus =
   "new" | "in_review" | "quoted" | "accepted" | "rejected" | "expired";
 
@@ -1359,6 +1472,7 @@ export const quoteRequestPolicy: TransitionPolicy<QuoteRequestStatus> = {
         "quoteAvailable",
         "the immutable quote must still be available",
       );
+      requireAcceptedQuoteOrderCreation("QuoteRequest", command);
     }
   },
 };
@@ -1618,12 +1732,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       );
     }
     if (command.current === "quoted" && command.target === "confirmed") {
-      requireFlag(
-        "Order",
-        command,
-        "completeReservationCaptured",
-        "capture and the complete phase reservation set must be valid",
-      );
+      requireAtomicConfirmationActivation("Order", command);
     }
     if (
       command.current === "quoted" &&
@@ -1753,6 +1862,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "all phase, slot, shipment, and settlement barriers must be complete",
       );
       requireProjectedCompletionTarget("Order", command);
+      requireZeroBalances("Order", command);
     }
     if (
       command.current === "cancelled" &&
@@ -1776,12 +1886,6 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "immutableOrderSettlementCompleted",
         "balance settlement requires the immutable order settlement",
       );
-    }
-    if (
-      command.target === "refunded" ||
-      command.target === "cancelled_settled"
-    ) {
-      requireZeroBalances("Order", command);
     }
   },
 };
@@ -1831,12 +1935,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
     },
     guard: (command) => {
       if (command.current === "quoted" && command.target === "active") {
-        requireFlag(
-          "OrderPhase(single)",
-          command,
-          "completeReservationCaptured",
-          "capture and the complete phase reservation set must be valid",
-        );
+        requireAtomicConfirmationActivation("OrderPhase(single)", command);
       }
       if (
         (command.current === "in_production" ||
@@ -1906,6 +2005,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           "all required fulfilment slots must have a terminal outcome",
         );
         requireProjectedCompletionTarget("OrderPhase(single)", command);
+        requireZeroBalances("OrderPhase(single)", command);
       }
       if (
         command.current === "cancelled" &&
@@ -1913,12 +2013,6 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           command.target === "cancelled_settled")
       ) {
         requireProjectedFinancialTerminalTarget("OrderPhase(single)", command);
-      }
-      if (
-        command.target === "cancelled_refunded" ||
-        command.target === "cancelled_settled"
-      ) {
-        requireZeroBalances("OrderPhase(single)", command);
       }
     },
   };

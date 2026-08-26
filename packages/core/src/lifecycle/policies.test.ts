@@ -23,6 +23,15 @@ import { Instant } from "../primitives/time.js";
 
 const permittedContext = {
   quoteAvailable: true,
+  quoteRequestId: "quote-request-1",
+  issuedQuoteId: "quote-1",
+  issuedQuoteRequestId: "quote-request-1",
+  createdOrderQuoteRequestId: "quote-request-1",
+  createdOrderSourceQuoteId: "quote-1",
+  acceptedOrderId: "order-1",
+  createdOrderStatus: "draft",
+  orderCreated: true,
+  quoteAcceptanceOrderCreationAtomic: true,
   captureAuthorized: true,
   verifiedLateCapture: true,
   paymentId: "payment-1",
@@ -98,6 +107,14 @@ const permittedContext = {
   immutableFulfilmentSlotsCreated: true,
   setupAtomic: true,
   completeReservationCaptured: true,
+  confirmationActivationOrderId: "order-1",
+  confirmationActivationPhaseId: "phase-1",
+  confirmationActivationPhaseReservationSetId: "phase-reservation-set-1",
+  confirmationOrderPreviousStatus: "quoted",
+  confirmationOrderTargetStatus: "confirmed",
+  confirmationPhasePreviousStatus: "quoted",
+  confirmationPhaseTargetStatus: "active",
+  confirmationActivationAtomic: true,
   verifiedQcReadiness: true,
   balancePaymentRole: "balance",
   balancePaymentOrderMatches: true,
@@ -447,6 +464,104 @@ describe("v0 lifecycle policy tables", () => {
       expect(() =>
         transition(policy, { current, target, idempotencyKey: "guarded" }),
       ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["quoteAvailable", false],
+    ["quoteRequestId", ""],
+    ["quoteRequestId", " "],
+    ["issuedQuoteRequestId", "another-request"],
+    ["createdOrderQuoteRequestId", "another-request"],
+    ["issuedQuoteId", ""],
+    ["issuedQuoteId", "\t"],
+    ["createdOrderSourceQuoteId", "another-quote"],
+    ["orderId", ""],
+    ["orderId", "\n"],
+    ["acceptedOrderId", "another-order"],
+    ["createdOrderStatus", "quoted"],
+    ["orderCreated", false],
+    ["quoteAcceptanceOrderCreationAtomic", false],
+  ] as const)(
+    "rejects quote acceptance with invalid atomic Order evidence (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          current: "quoted",
+          target: "accepted",
+          idempotencyKey: `quote-acceptance-${field}`,
+          context: { ...permittedContext, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["orderId", ""],
+    ["orderId", " "],
+    ["confirmationActivationOrderId", "another-order"],
+    ["phaseId", ""],
+    ["phaseId", "\t"],
+    ["confirmationActivationPhaseId", "another-phase"],
+    ["phaseReservationSetId", ""],
+    ["phaseReservationSetId", "\n"],
+    ["confirmationActivationPhaseReservationSetId", "another-reservation-set"],
+    ["phaseKind", "sample"],
+    ["confirmationOrderPreviousStatus", "draft"],
+    ["confirmationOrderTargetStatus", "quoted"],
+    ["confirmationPhasePreviousStatus", "active"],
+    ["confirmationPhaseTargetStatus", "quoted"],
+    ["completeReservationCaptured", false],
+    ["confirmationActivationAtomic", false],
+  ] as const)(
+    "rejects partial Order/phase confirmation with invalid %s",
+    (field, value) => {
+      for (const [policy, current, target] of [
+        [orderPolicy, "quoted", "confirmed"],
+        [singleOrderPhasePolicy, "quoted", "active"],
+      ] as const) {
+        expect(() =>
+          transition(policy, {
+            current,
+            target,
+            idempotencyKey: `confirmation-activation-${target}-${field}`,
+            context: { ...permittedContext, [field]: value },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    [orderPolicy, "delivered", "completed"],
+    [orderPolicy, "in_production", "partially_fulfilled"],
+    [orderPolicy, "shipped", "partially_fulfilled"],
+    [orderPolicy, "recovery_pending", "partially_fulfilled"],
+    [singleOrderPhasePolicy, "delivered", "completed"],
+    [singleOrderPhasePolicy, "shipped", "partially_fulfilled"],
+    [singleOrderPhasePolicy, "recovery_pending", "partially_fulfilled"],
+  ] as const)(
+    "blocks terminal fulfilment for %s %s -> %s until both balances settle",
+    (policy, current, target) => {
+      for (const [amountDueMinor, refundableBalanceMinor] of [
+        [1n, 0n],
+        [0n, 1n],
+      ] as const) {
+        expect(() =>
+          transition(policy, {
+            current,
+            target,
+            idempotencyKey: `terminal-balance-${current}-${target}-${amountDueMinor}-${refundableBalanceMinor}`,
+            context: {
+              ...permittedContext,
+              completionProjected: true,
+              completionProjectedTarget: target,
+              amountDueMinor,
+              refundableBalanceMinor,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
     },
   );
 
