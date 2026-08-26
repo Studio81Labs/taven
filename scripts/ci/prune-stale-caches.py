@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ported from Studio81Labs/taven@71e82cd
 """Prune obsolete, source-derived GitHub Actions caches on main."""
 
 from __future__ import annotations

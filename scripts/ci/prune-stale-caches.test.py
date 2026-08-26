@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ported from Studio81Labs/taven@71e82cd
 """Fixture tests for prune-stale-caches.py."""
 
 from __future__ import annotations
