@@ -49,15 +49,19 @@ jobs:
           set -euo pipefail
           if [[ "$BASE_SHA" =~ ^0+$ ]]; then
             echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
+            echo "range_available=false" >> "$GITHUB_OUTPUT"
             echo "Initial push — a full-history scan will run."
           elif ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
+            echo "range_available=false" >> "$GITHUB_OUTPUT"
             echo "Previous commit is unreachable — a full-history scan will run."
           elif git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
                | grep -qx '\.github/workflows/security-scan\.yml'; then
             echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
+            echo "range_available=true" >> "$GITHUB_OUTPUT"
           else
             echo "scanner-changed=false" >> "$GITHUB_OUTPUT"
+            echo "range_available=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: TruffleHog — change range
@@ -82,11 +86,17 @@ jobs:
 
       - name: TruffleHog — full history
         if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || steps.mode.outputs.scanner-changed == 'true') }}
+        env:
+          RANGE_AVAILABLE: ${{ steps.mode.outputs.range_available }}
         run: |
           set -euo pipefail
+          results=verified
+          if [[ "$RANGE_AVAILABLE" == "false" ]]; then
+            results=verified,unknown
+          fi
           docker run --rm -v "${GITHUB_WORKSPACE}:/repo" -w /repo \
             "$TRUFFLEHOG_IMAGE" git file:///repo \
-            --results=verified --fail --no-update --github-actions
+            --results="$results" --fail --no-update --github-actions
 
   dependencies:
     name: "security: dependencies"

@@ -1312,8 +1312,6 @@ def compare(local_read, sibling_read) -> list[dict]:
 
     def action_shapes_comparable(path: str) -> bool:
         """Whether one-sided actions represent drift rather than topology."""
-        if not gate_open(path, ACTION_TOPOLOGY_GATED):
-            return False
         stack_marker = STACK_TOPOLOGY_GATED.get(path)
         return stack_marker is None or len(set(marker_sides(stack_marker))) == 1
 
@@ -2866,12 +2864,15 @@ def self_test() -> int:
     mobile_actions_here = {
         MOBILE_ACTION_WF: wf("actions/shared@1111111 # v1", "actions/extra@2222222 # v2")
     }
-    mobile_actions_there = {MOBILE_ACTION_WF: wf("actions/shared@1111111 # v1")}
+    mobile_actions_there = {
+        MOBILE_MARKER: None,
+        MOBILE_ACTION_WF: wf("actions/shared@1111111 # v1"),
+    }
     found = [
         f for f in compare(repo(**mobile_actions_here).get, repo(**mobile_actions_there).get)
         if f["kind"] == "action" and f["name"].startswith("actions/extra")
     ]
-    assert len(found) == 1, f"two capability owners must report one-sided actions: {found}"
+    assert len(found) == 1, f"present workflows must report one-sided actions: {found}"
 
     PACKAGE_WF = ".github/workflows/packages-ci.yml"
     found = [
