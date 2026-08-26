@@ -2694,7 +2694,7 @@ def self_test() -> int:
     noisy = {
         live: clean[live]
         + "      # - uses: actions/checkout@fffffff # v6.0.0\n"
-        + '      - run: "echo uses: actions/checkout@fffffff"\n' 
+        + '      - run: "echo uses: actions/checkout@fffffff"\n'
     }
     assert compare(repo(**clean).get, repo(**noisy).get) == [], (
         "a commented-out or embedded uses: must not be treated as a pin"
