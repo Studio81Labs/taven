@@ -27,6 +27,7 @@ const permittedContext = {
   verifiedLateCapture: true,
   paymentId: "payment-1",
   providerEventPaymentId: "payment-1",
+  providerPaymentTransactionId: "provider-transaction-1",
   providerPaymentEventAuthenticated: true,
   providerPaymentEventVerified: true,
   refundWebhookPaymentId: "payment-1",
@@ -52,6 +53,15 @@ const permittedContext = {
   preCaptureFulfilmentSlotsCancelled: true,
   preCaptureReservationsReleased: true,
   initialCaptureCloseAtomic: true,
+  lateCaptureCompensationPaymentId: "payment-1",
+  lateCaptureCompensationProviderTransactionId: "provider-transaction-1",
+  lateCaptureRefundTransactionPaymentId: "payment-1",
+  lateCaptureRefundTransactionProviderTransactionId: "provider-transaction-1",
+  lateCaptureCompensationRefundTransactionId: "refund-1",
+  lateCaptureCompensationCreated: true,
+  lateCaptureRefundIsFull: true,
+  lateCaptureRefundIdempotencyKeyValid: true,
+  lateCaptureCompensationAtomic: true,
   scopedRefundTransactionCreated: true,
   refundPriceAdjustmentActivated: true,
   singleOrderPhaseCreated: true,
@@ -81,10 +91,19 @@ const permittedContext = {
   verifiedProviderScan: true,
   verifiedProviderVoid: true,
   contextHandoffCompleted: true,
+  jobId: "job-1",
+  phaseId: "phase-1",
+  phaseKind: "single",
   nodeAssigned: true,
   cancellationReason: "order_cancelled",
   offersClosed: true,
   productionReservationReleased: true,
+  productionReservationId: "production-reservation-1",
+  productionReservationJobId: "job-1",
+  jobResourceSettlementJobId: "job-1",
+  jobResourceSettlementProductionReservationId: "production-reservation-1",
+  jobResourceSettlementAtomic: true,
+  materialConsumptionMode: "zero_pre_print",
   materialConsumptionSettled: true,
   inventoryReservationReleased: true,
   capacityReservationReleased: true,
@@ -93,6 +112,20 @@ const permittedContext = {
   failureReason: "machine fault",
   replacementRequestCreated: true,
   replacementDeadlineSet: true,
+  postQcFailureJobId: "job-1",
+  postQcFailurePhaseId: "phase-1",
+  postQcFailurePhaseKind: "single",
+  postQcFailureOrderId: "order-1",
+  postQcFailureResolutionAtomic: true,
+  postQcFailureResolutionKind: "pre_handoff_recovery",
+  phaseHasPriorHandoff: false,
+  postQcFailurePhasePreviousStatus: "qc_passed",
+  postQcFailurePhaseTargetStatus: "recovery_pending",
+  postQcFailureOrderPreviousStatus: "qc_passed",
+  postQcFailureOrderTargetStatus: "recovery_pending",
+  postQcFailureBalanceDeadlineResult: "not_active",
+  jobShipmentPlanId: "shipment-plan-1",
+  jobFulfilmentSlotIds: ["slot-1"],
   productionSliceFromReservationSnapshot: true,
   reproductionArtifactSealed: true,
   qcPhotoAssetStored: true,
@@ -152,11 +185,28 @@ function claimSlotStatusesForTarget(target: string): readonly string[] {
   }
 }
 
-function contextForTransition(target: string) {
+function contextForTransition(target: string, current?: string) {
+  const failureStage =
+    current === "printing"
+      ? "printing"
+      : current === "printed" || current === "photo_submitted"
+        ? "post_print"
+        : current === "qc_approved"
+          ? "post_qc"
+          : current === "packed"
+            ? "packing"
+            : "machine";
+  const materialConsumptionMode =
+    current === "accepted" || current === "gcode_ready"
+      ? "zero_pre_print"
+      : "actual_recorded";
   return {
     ...permittedContext,
+    failureStage,
+    materialConsumptionMode,
     refundWebhookProjectedTarget: target,
-    providerPaymentEventStatus: target,
+    providerPaymentEventStatus:
+      current === "voided" && target === "refund_pending" ? "captured" : target,
     initialCaptureCloseReason:
       target === "expired" ? "checkout_expired" : "checkout_cancelled",
     providerEventStatus:
@@ -201,7 +251,7 @@ function verifyEveryStatePair<S extends string>(
               current,
               target,
               idempotencyKey: "new",
-              context: contextForTransition(target),
+              context: contextForTransition(target, current),
             }),
           name,
         ).toThrow(InvalidTransitionError);
@@ -211,7 +261,7 @@ function verifyEveryStatePair<S extends string>(
             current,
             target,
             idempotencyKey: "new",
-            context: contextForTransition(target),
+            context: contextForTransition(target, current),
           }),
           name,
         ).toEqual({
@@ -1445,6 +1495,7 @@ describe("v0 lifecycle policy tables", () => {
         "materialConsumptionSettled",
         "inventoryReservationReleased",
         "capacityReservationReleased",
+        "jobResourceSettlementAtomic",
         "labelCancellationBarrierCompleted",
       ],
     ],
@@ -1475,7 +1526,15 @@ describe("v0 lifecycle policy tables", () => {
       jobPolicy,
       "accepted",
       "failed",
-      ["replacementRequestCreated", "replacementDeadlineSet"],
+      [
+        "materialConsumptionSettled",
+        "inventoryReservationReleased",
+        "capacityReservationReleased",
+        "jobResourceSettlementAtomic",
+        "labelCancellationBarrierCompleted",
+        "replacementRequestCreated",
+        "replacementDeadlineSet",
+      ],
     ],
     [
       paymentPolicy,
@@ -1510,6 +1569,21 @@ describe("v0 lifecycle policy tables", () => {
       "partially_refunded",
       "refund_pending",
       ["scopedRefundTransactionCreated", "refundPriceAdjustmentActivated"],
+    ],
+    [
+      paymentPolicy,
+      "voided",
+      "refund_pending",
+      [
+        "verifiedLateCapture",
+        "providerPaymentEventAuthenticated",
+        "providerPaymentEventVerified",
+        "lateCaptureCompensationCreated",
+        "scopedRefundTransactionCreated",
+        "lateCaptureRefundIsFull",
+        "lateCaptureRefundIdempotencyKeyValid",
+        "lateCaptureCompensationAtomic",
+      ],
     ],
     [
       orderPolicy,
@@ -1671,7 +1745,10 @@ describe("v0 lifecycle policy tables", () => {
             current,
             target,
             idempotencyKey: `missing-${current}-${target}-${flag}`,
-            context: { ...contextForTransition(target), [flag]: false },
+            context: {
+              ...contextForTransition(target, current),
+              [flag]: false,
+            },
           }),
         ).toThrow(TransitionGuardError);
       }
@@ -1681,6 +1758,7 @@ describe("v0 lifecycle policy tables", () => {
   it.each([
     [jobPolicy, "created", "cancelled"],
     [jobPolicy, "accepted", "cancelled"],
+    [jobPolicy, "accepted", "failed"],
     [jobPolicy, "accepted", "gcode_ready"],
     [jobPolicy, "printed", "photo_submitted"],
     [jobPolicy, "photo_submitted", "qc_approved"],
@@ -1690,6 +1768,7 @@ describe("v0 lifecycle policy tables", () => {
     [paymentPolicy, "pending", "voided"],
     [paymentPolicy, "captured", "refund_pending"],
     [paymentPolicy, "partially_refunded", "refund_pending"],
+    [paymentPolicy, "voided", "refund_pending"],
     [orderPolicy, "draft", "quoted"],
     [orderPolicy, "quoted", "expired"],
     [orderPolicy, "quoted", "cancelled"],
@@ -1718,7 +1797,7 @@ describe("v0 lifecycle policy tables", () => {
           current,
           target,
           idempotencyKey: `complete-${current}-${target}`,
-          context: contextForTransition(target),
+          context: contextForTransition(target, current),
         }),
       ).toEqual({ kind: "changed", previous: current, current: target });
     },
@@ -1743,7 +1822,7 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)(
     "requires valid Job cancellation/failure details for %s -> %s",
     (current, target) => {
-      const context = contextForTransition(target);
+      const context = contextForTransition(target, current);
       expect(() =>
         transition(jobPolicy, {
           current,
@@ -1775,6 +1854,7 @@ describe("v0 lifecycle policy tables", () => {
         "materialConsumptionSettled",
         "inventoryReservationReleased",
         "capacityReservationReleased",
+        "jobResourceSettlementAtomic",
         "labelCancellationBarrierCompleted",
       ] as const) {
         expect(() =>
@@ -1783,7 +1863,7 @@ describe("v0 lifecycle policy tables", () => {
             target: "cancelled",
             idempotencyKey: `job-cancellation-${current}-${flag}`,
             context: {
-              ...contextForTransition("cancelled"),
+              ...contextForTransition("cancelled", current),
               [flag]: false,
             },
           }),
@@ -1796,7 +1876,7 @@ describe("v0 lifecycle policy tables", () => {
           target: "cancelled",
           idempotencyKey: `job-cancellation-complete-${current}`,
           context: {
-            ...contextForTransition("cancelled"),
+            ...contextForTransition("cancelled", current),
             offersClosed: false,
           },
         }),
@@ -1817,8 +1897,249 @@ describe("v0 lifecycle policy tables", () => {
           target: "cancelled",
           idempotencyKey: `job-cancellation-reason-${current}`,
           context: {
-            ...contextForTransition("cancelled"),
+            ...contextForTransition("cancelled", current),
             cancellationReason,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    "accepted",
+    "gcode_ready",
+    "printing",
+    "printed",
+    "photo_submitted",
+    "qc_approved",
+    "packed",
+  ] as const)(
+    "settles the exact original reservation before %s -> failed",
+    (current) => {
+      for (const flag of [
+        "materialConsumptionSettled",
+        "inventoryReservationReleased",
+        "capacityReservationReleased",
+        "jobResourceSettlementAtomic",
+        "labelCancellationBarrierCompleted",
+      ] as const) {
+        expect(() =>
+          transition(jobPolicy, {
+            current,
+            target: "failed",
+            idempotencyKey: `job-failure-settlement-${current}-${flag}`,
+            context: {
+              ...contextForTransition("failed", current),
+              [flag]: false,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["jobResourceSettlementJobId", "another-job"],
+    ["productionReservationJobId", "another-job"],
+    ["jobResourceSettlementProductionReservationId", "another-reservation"],
+  ] as const)(
+    "rejects Job failure settlement with mismatched %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current: "printing",
+          target: "failed",
+          idempotencyKey: `job-failure-identity-${field}`,
+          context: {
+            ...contextForTransition("failed", "printing"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["accepted", "preparation"],
+    ["accepted", "gcode"],
+    ["gcode_ready", "machine"],
+    ["printing", "printing"],
+    ["printed", "post_print"],
+    ["photo_submitted", "post_print"],
+    ["qc_approved", "post_qc"],
+    ["packed", "packing"],
+  ] as const)("accepts %s -> failed with stage %s", (current, failureStage) => {
+    expect(
+      transition(jobPolicy, {
+        current,
+        target: "failed",
+        idempotencyKey: `job-failure-stage-valid-${current}-${failureStage}`,
+        context: {
+          ...contextForTransition("failed", current),
+          failureStage,
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: current, current: "failed" });
+  });
+
+  it.each([
+    ["accepted", "packing"],
+    ["gcode_ready", "printing"],
+    ["printing", "machine"],
+    ["printed", "printing"],
+    ["photo_submitted", "post_qc"],
+    ["qc_approved", "preparation"],
+    ["qc_approved", "packing"],
+    ["packed", "preparation"],
+    ["packed", "post_qc"],
+  ] as const)("rejects %s -> failed with stage %s", (current, failureStage) => {
+    expect(() =>
+      transition(jobPolicy, {
+        current,
+        target: "failed",
+        idempotencyKey: `job-failure-stage-invalid-${current}-${failureStage}`,
+        context: {
+          ...contextForTransition("failed", current),
+          failureStage,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["accepted", "actual_recorded"],
+    ["gcode_ready", "actual_recorded"],
+    ["printing", "zero_pre_print"],
+    ["packed", "zero_pre_print"],
+  ] as const)(
+    "rejects %s -> failed with material settlement mode %s",
+    (current, materialConsumptionMode) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current,
+          target: "failed",
+          idempotencyKey: `job-failure-material-mode-${current}`,
+          context: {
+            ...contextForTransition("failed", current),
+            materialConsumptionMode,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["qc_approved", "qc_passed", "not_active"],
+    ["qc_approved", "awaiting_balance", "invalidated"],
+    ["packed", "ready_to_ship", "not_active"],
+  ] as const)(
+    "applies pre-handoff aggregate recovery for %s failure from Order %s",
+    (current, postQcFailureOrderPreviousStatus, balanceDeadlineResult) => {
+      expect(
+        transition(jobPolicy, {
+          current,
+          target: "failed",
+          idempotencyKey: `post-qc-pre-handoff-${current}-${postQcFailureOrderPreviousStatus}`,
+          context: {
+            ...contextForTransition("failed", current),
+            postQcFailureOrderPreviousStatus,
+            postQcFailureBalanceDeadlineResult: balanceDeadlineResult,
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: "failed" });
+    },
+  );
+
+  it.each([
+    ["phaseHasPriorHandoff", true],
+    ["postQcFailurePhaseTargetStatus", "shipped"],
+    ["postQcFailureOrderTargetStatus", "shipped"],
+    ["postQcFailureBalanceDeadlineResult", "invalidated"],
+    ["postQcFailureJobId", "another-job"],
+    ["postQcFailurePhaseId", "another-phase"],
+    ["postQcFailurePhaseKind", "sample"],
+    ["postQcFailureOrderId", "another-order"],
+    ["postQcFailureSlotRecoveryBlocked", true],
+  ] as const)(
+    "rejects invalid pre-handoff post-QC result %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current: "qc_approved",
+          target: "failed",
+          idempotencyKey: `post-qc-pre-handoff-invalid-${field}`,
+          context: {
+            ...contextForTransition("failed", "qc_approved"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["qc_approved", "shipped"],
+    ["packed", "shipped"],
+  ] as const)(
+    "blocks exact failed slots after prior handoff for %s with Order %s",
+    (current, postQcFailureOrderTargetStatus) => {
+      expect(
+        transition(jobPolicy, {
+          current,
+          target: "failed",
+          idempotencyKey: `post-qc-post-handoff-${current}`,
+          context: {
+            ...contextForTransition("failed", current),
+            postQcFailureResolutionKind: "post_handoff_slot_block",
+            phaseHasPriorHandoff: true,
+            postQcFailurePhasePreviousStatus: "shipped",
+            postQcFailurePhaseTargetStatus: "shipped",
+            postQcFailureOrderPreviousStatus: postQcFailureOrderTargetStatus,
+            postQcFailureOrderTargetStatus,
+            postQcFailureShipmentPlanId: "shipment-plan-1",
+            postQcFailureSlotIds: ["slot-1"],
+            postQcFailureSlotRecoveryBlocked: true,
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: "failed" });
+    },
+  );
+
+  it.each([
+    ["phaseHasPriorHandoff", false],
+    ["postQcFailurePhasePreviousStatus", "qc_passed"],
+    ["postQcFailurePhaseTargetStatus", "recovery_pending"],
+    ["postQcFailureOrderPreviousStatus", "awaiting_balance"],
+    ["postQcFailureOrderTargetStatus", "recovery_pending"],
+    ["postQcFailureOrderTargetStatus", "in_production"],
+    ["postQcFailureBalanceDeadlineResult", "invalidated"],
+    ["postQcFailurePhaseKind", "sample"],
+    ["postQcFailureSlotRecoveryBlocked", false],
+    ["postQcFailureShipmentPlanId", "another-plan"],
+    ["postQcFailureSlotIds", []],
+    ["postQcFailureSlotIds", ["another-slot"]],
+    ["postQcFailureSlotIds", ["slot-1", "slot-1"]],
+    ["postQcFailureResolutionAtomic", false],
+  ] as const)(
+    "rejects invalid post-handoff post-QC result %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current: "packed",
+          target: "failed",
+          idempotencyKey: `post-qc-post-handoff-invalid-${field}`,
+          context: {
+            ...contextForTransition("failed", "packed"),
+            postQcFailureResolutionKind: "post_handoff_slot_block",
+            phaseHasPriorHandoff: true,
+            postQcFailurePhasePreviousStatus: "shipped",
+            postQcFailurePhaseTargetStatus: "shipped",
+            postQcFailureOrderPreviousStatus: "shipped",
+            postQcFailureOrderTargetStatus: "shipped",
+            postQcFailureShipmentPlanId: "shipment-plan-1",
+            postQcFailureSlotIds: ["slot-1"],
+            postQcFailureSlotRecoveryBlocked: true,
+            [field]: value,
           },
         }),
       ).toThrow(TransitionGuardError);
@@ -1839,7 +2160,7 @@ describe("v0 lifecycle policy tables", () => {
           target,
           idempotencyKey: `initial-capture-close-${target}-${initialPaymentRole}`,
           context: {
-            ...contextForTransition(target),
+            ...contextForTransition(target, "quoted"),
             initialPaymentRole,
           },
         }),
@@ -1859,7 +2180,7 @@ describe("v0 lifecycle policy tables", () => {
           target,
           idempotencyKey: `initial-capture-reason-${target}`,
           context: {
-            ...contextForTransition(target),
+            ...contextForTransition(target, "quoted"),
             initialCaptureCloseReason,
           },
         }),
@@ -1889,6 +2210,37 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
+    ["providerEventPaymentId", "another-payment"],
+    ["providerPaymentEventStatus", "failed"],
+    ["lateCaptureCompensationPaymentId", "another-payment"],
+    ["lateCaptureRefundTransactionPaymentId", "another-payment"],
+    [
+      "lateCaptureCompensationProviderTransactionId",
+      "another-provider-transaction",
+    ],
+    [
+      "lateCaptureRefundTransactionProviderTransactionId",
+      "another-provider-transaction",
+    ],
+    ["lateCaptureCompensationRefundTransactionId", "another-refund"],
+  ] as const)(
+    "rejects late capture compensation with mismatched %s",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "voided",
+          target: "refund_pending",
+          idempotencyKey: `late-capture-identity-${field}`,
+          context: {
+            ...contextForTransition("refund_pending", "voided"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
     ["captured", "providerEventPaymentId", "another-payment"],
     ["captured", "providerPaymentEventStatus", "failed"],
     ["failed", "providerEventPaymentId", "another-payment"],
@@ -1901,7 +2253,10 @@ describe("v0 lifecycle policy tables", () => {
           current: "pending",
           target,
           idempotencyKey: `payment-${target}-${field}`,
-          context: { ...contextForTransition(target), [field]: value },
+          context: {
+            ...contextForTransition(target, "pending"),
+            [field]: value,
+          },
         }),
       ).toThrow(TransitionGuardError);
     },
@@ -1916,7 +2271,10 @@ describe("v0 lifecycle policy tables", () => {
         current: "printing",
         target: "failed",
         idempotencyKey: `job-failure-${field}`,
-        context: { ...contextForTransition("failed"), [field]: value },
+        context: {
+          ...contextForTransition("failed", "printing"),
+          [field]: value,
+        },
       }),
     ).toThrow(TransitionGuardError);
   });

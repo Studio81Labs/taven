@@ -267,6 +267,113 @@ function requireVerifiedMatchingProviderPaymentEvent<S extends string>(
   }
 }
 
+function requireVerifiedLateCaptureCompensation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const paymentId = command.context?.paymentId;
+  const providerTransactionId = command.context?.providerPaymentTransactionId;
+  const refundTransactionId = command.context?.refundTransactionId;
+  if (
+    typeof paymentId !== "string" ||
+    paymentId.length === 0 ||
+    command.context?.providerEventPaymentId !== paymentId ||
+    command.context?.lateCaptureCompensationPaymentId !== paymentId ||
+    command.context?.lateCaptureRefundTransactionPaymentId !== paymentId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late capture compensation must belong to this exact Payment",
+    );
+  }
+  if (
+    typeof providerTransactionId !== "string" ||
+    providerTransactionId.length === 0 ||
+    command.context?.lateCaptureCompensationProviderTransactionId !==
+      providerTransactionId ||
+    command.context?.lateCaptureRefundTransactionProviderTransactionId !==
+      providerTransactionId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late capture compensation must match the exact provider transaction",
+    );
+  }
+  if (
+    typeof refundTransactionId !== "string" ||
+    refundTransactionId.length === 0 ||
+    command.context?.lateCaptureCompensationRefundTransactionId !==
+      refundTransactionId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late capture compensation must reference its exact RefundTransaction",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "verifiedLateCapture",
+    "a voided payment may be refunded only after verified late capture",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerPaymentEventAuthenticated",
+    "late capture requires an authenticated provider event",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerPaymentEventVerified",
+    "late capture requires a verified provider event",
+  );
+  if (command.context?.providerPaymentEventStatus !== "captured") {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late capture requires a successful provider capture result",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "lateCaptureCompensationCreated",
+    "late capture requires its full compensation operation",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "scopedRefundTransactionCreated",
+    "late capture requires its scoped RefundTransaction",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "lateCaptureRefundIsFull",
+    "late capture compensation must refund the full captured amount",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "lateCaptureRefundIdempotencyKeyValid",
+    "late capture requires its provider-transaction-scoped idempotency key",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "lateCaptureCompensationAtomic",
+    "late capture, compensation, and refund setup must be persisted atomically",
+  );
+}
+
 function requireInitialCaptureWindowClosed<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -388,45 +495,245 @@ function isPostAcceptanceJobCancellationReason(
   );
 }
 
-function requirePostAcceptanceJobCancellationSettlement<S extends string>(
+function requireJobResourceSettlement<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const jobId = command.context?.jobId;
+  const productionReservationId = command.context?.productionReservationId;
+  if (
+    typeof jobId !== "string" ||
+    jobId.length === 0 ||
+    command.context?.productionReservationJobId !== jobId ||
+    command.context?.jobResourceSettlementJobId !== jobId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "resource settlement must belong to this exact Job",
+    );
+  }
+  if (
+    typeof productionReservationId !== "string" ||
+    productionReservationId.length === 0 ||
+    command.context?.jobResourceSettlementProductionReservationId !==
+      productionReservationId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "resource settlement must use this Job's exact ProductionReservation",
+    );
+  }
+  const expectedConsumptionMode =
+    command.current === "accepted" || command.current === "gcode_ready"
+      ? "zero_pre_print"
+      : "actual_recorded";
+  if (command.context?.materialConsumptionMode !== expectedConsumptionMode) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      `resource settlement requires ${expectedConsumptionMode} material consumption`,
+    );
+  }
   requireFlag(
     lifecycle,
     command,
     "materialConsumptionSettled",
-    "cancellation requires material consumption to be recorded and settled",
+    "resource settlement requires material consumption to be recorded and settled",
   );
   requireFlag(
     lifecycle,
     command,
     "inventoryReservationReleased",
-    "cancellation requires the remaining inventory reservation to be released",
+    "resource settlement requires the remaining inventory reservation to be released",
   );
   requireFlag(
     lifecycle,
     command,
     "capacityReservationReleased",
-    "cancellation requires the remaining capacity reservation to be released",
+    "resource settlement requires the remaining capacity reservation to be released",
   );
   requireFlag(
     lifecycle,
     command,
-    "labelCancellationBarrierCompleted",
-    "cancellation requires every carrier label cancellation barrier to complete",
+    "jobResourceSettlementAtomic",
+    "resource settlement and the Job transition must be persisted atomically",
   );
 }
 
-function isJobFailureStage(value: unknown): value is JobFailureStage {
+function isJobFailureStageForCurrent(
+  current: string,
+  value: unknown,
+): value is JobFailureStage {
+  switch (current) {
+    case "accepted":
+    case "gcode_ready":
+      return (
+        value === "preparation" || value === "gcode" || value === "machine"
+      );
+    case "printing":
+      return value === "printing";
+    case "printed":
+    case "photo_submitted":
+      return value === "post_print";
+    case "qc_approved":
+      return value === "post_qc";
+    case "packed":
+      return value === "packing";
+    default:
+      return false;
+  }
+}
+
+function hasSameNonEmptyStringSet(actual: unknown, expected: unknown): boolean {
+  if (!Array.isArray(actual) || !Array.isArray(expected)) {
+    return false;
+  }
+  const normalizedActual = [...actual];
+  const normalizedExpected = [...expected];
+  if (
+    normalizedActual.length === 0 ||
+    normalizedExpected.length === 0 ||
+    normalizedActual.some(
+      (value) => typeof value !== "string" || value.length === 0,
+    ) ||
+    normalizedExpected.some(
+      (value) => typeof value !== "string" || value.length === 0,
+    )
+  ) {
+    return false;
+  }
+  const actualSet = new Set(normalizedActual);
+  const expectedSet = new Set(normalizedExpected);
   return (
-    value === "preparation" ||
-    value === "gcode" ||
-    value === "machine" ||
-    value === "printing" ||
-    value === "post_print" ||
-    value === "post_qc" ||
-    value === "packing"
+    actualSet.size === normalizedActual.length &&
+    expectedSet.size === normalizedExpected.length &&
+    actualSet.size === expectedSet.size &&
+    [...actualSet].every((value) => expectedSet.has(value))
+  );
+}
+
+function requirePostQcJobFailureResolution<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const jobId = command.context?.jobId;
+  const phaseId = command.context?.phaseId;
+  const phaseKind = command.context?.phaseKind;
+  const orderId = command.context?.orderId;
+  if (
+    typeof jobId !== "string" ||
+    jobId.length === 0 ||
+    command.context?.postQcFailureJobId !== jobId ||
+    typeof phaseId !== "string" ||
+    phaseId.length === 0 ||
+    command.context?.postQcFailurePhaseId !== phaseId ||
+    phaseKind !== "single" ||
+    command.context?.postQcFailurePhaseKind !== phaseKind ||
+    typeof orderId !== "string" ||
+    orderId.length === 0 ||
+    command.context?.postQcFailureOrderId !== orderId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "post-QC failure resolution must match the exact Job, phase, and Order",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "postQcFailureResolutionAtomic",
+    "post-QC failure and aggregate recovery must be persisted atomically",
+  );
+
+  const kind = command.context?.postQcFailureResolutionKind;
+  if (kind === "pre_handoff_recovery") {
+    if (
+      command.context?.phaseHasPriorHandoff !== false ||
+      command.context?.postQcFailurePhasePreviousStatus !== "qc_passed" ||
+      command.context?.postQcFailurePhaseTargetStatus !== "recovery_pending" ||
+      command.context?.postQcFailureOrderTargetStatus !== "recovery_pending" ||
+      command.context?.postQcFailureShipmentPlanId !== undefined ||
+      command.context?.postQcFailureSlotIds !== undefined ||
+      command.context?.postQcFailureSlotRecoveryBlocked !== undefined
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "pre-handoff failure must move the phase and Order into recovery",
+      );
+    }
+    const previousOrderStatus =
+      command.context?.postQcFailureOrderPreviousStatus;
+    if (
+      previousOrderStatus !== "qc_passed" &&
+      previousOrderStatus !== "awaiting_balance" &&
+      previousOrderStatus !== "ready_to_ship"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "pre-handoff failure requires a recoverable Order status",
+      );
+    }
+    const expectedBalanceDeadlineResult =
+      previousOrderStatus === "awaiting_balance" ? "invalidated" : "not_active";
+    if (
+      command.context?.postQcFailureBalanceDeadlineResult !==
+      expectedBalanceDeadlineResult
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "pre-handoff failure must invalidate any active balance deadline",
+      );
+    }
+    return;
+  }
+
+  if (kind === "post_handoff_slot_block") {
+    const shipmentPlanId = command.context?.jobShipmentPlanId;
+    if (
+      command.context?.phaseHasPriorHandoff !== true ||
+      command.context?.postQcFailurePhasePreviousStatus !== "shipped" ||
+      command.context?.postQcFailurePhaseTargetStatus !== "shipped" ||
+      command.context?.postQcFailureOrderTargetStatus !== "shipped" ||
+      command.context?.postQcFailureOrderPreviousStatus !==
+        command.context?.postQcFailureOrderTargetStatus ||
+      command.context?.postQcFailureBalanceDeadlineResult !== "not_active" ||
+      command.context?.postQcFailureSlotRecoveryBlocked !== true ||
+      typeof shipmentPlanId !== "string" ||
+      shipmentPlanId.length === 0 ||
+      command.context?.postQcFailureShipmentPlanId !== shipmentPlanId ||
+      !hasSameNonEmptyStringSet(
+        command.context?.postQcFailureSlotIds,
+        command.context?.jobFulfilmentSlotIds,
+      )
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "post-handoff failure must preserve aggregate state and block the exact failed slot scope",
+      );
+    }
+    return;
+  }
+
+  throw new TransitionGuardError(
+    lifecycle,
+    command.current,
+    command.target,
+    "post-QC failure requires one explicit aggregate recovery result",
   );
 }
 
@@ -660,12 +967,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       requireVerifiedMatchingProviderPaymentEvent("Payment", command);
     }
     if (command.current === "voided" && command.target === "refund_pending") {
-      requireFlag(
-        "Payment",
-        command,
-        "verifiedLateCapture",
-        "a voided payment may be refunded only after verified late capture",
-      );
+      requireVerifiedLateCaptureCompensation("Payment", command);
     }
     if (command.current === "pending" && command.target === "failed") {
       requireVerifiedMatchingProviderPaymentEvent("Payment", command);
@@ -1154,7 +1456,13 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
           "cancellation requires its production reservation to be released",
         );
       } else {
-        requirePostAcceptanceJobCancellationSettlement("Job", command);
+        requireJobResourceSettlement("Job", command);
+        requireFlag(
+          "Job",
+          command,
+          "labelCancellationBarrierCompleted",
+          "cancellation requires every carrier label cancellation barrier to complete",
+        );
       }
     }
     if (command.current === "created" && command.target === "accepted") {
@@ -1217,12 +1525,17 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
       requireJobReplacementObligation("Job", command);
     }
     if (command.target === "failed") {
-      if (!isJobFailureStage(command.context?.failureStage)) {
+      if (
+        !isJobFailureStageForCurrent(
+          command.current,
+          command.context?.failureStage,
+        )
+      ) {
         throw new TransitionGuardError(
           "Job",
           command.current,
           command.target,
-          "failure requires a valid failure stage",
+          "failure stage must match the Job's current lifecycle state",
         );
       }
       const failureReason = command.context?.failureReason;
@@ -1236,6 +1549,16 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
           command.target,
           "failure requires a non-blank failure reason",
         );
+      }
+      requireJobResourceSettlement("Job", command);
+      requireFlag(
+        "Job",
+        command,
+        "labelCancellationBarrierCompleted",
+        "failure requires every carrier label cancellation barrier to complete",
+      );
+      if (command.current === "qc_approved" || command.current === "packed") {
+        requirePostQcJobFailureResolution("Job", command);
       }
       requireJobReplacementObligation("Job", command);
     }
