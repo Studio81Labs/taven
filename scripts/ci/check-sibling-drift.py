@@ -299,12 +299,26 @@ ACTION_TOPOLOGY_GATED = {
 }
 
 # Optional jobs can introduce actions inside an otherwise shared workflow.
-# Gate only those action entries so the rest of the workflow remains strict.
+# Each entry records both its capability marker and which marker state owns the
+# action. This is an assertion, not merely an exemption: the owner must retain
+# the action and the non-owner must not acquire an inverted copy.
 ACTION_ENTRY_TOPOLOGY_GATED = {
-    (".github/workflows/admin-ci.yml", "actions/download-artifact"): "apps/marketing/package.json",
-    (".github/workflows/admin-ci.yml", "actions/upload-artifact"): "apps/marketing/package.json",
-    (".github/workflows/ci-scripts.yml", "actions/setup-node"): "scripts/ci/check-workflow-coverage.mjs",
-    (".github/workflows/packages-ci.yml", "actions/download-artifact"): "apps/ingest/package.json",
+    (".github/workflows/admin-ci.yml", "actions/download-artifact"): (
+        "apps/marketing/package.json",
+        True,
+    ),
+    (".github/workflows/admin-ci.yml", "actions/upload-artifact"): (
+        "apps/marketing/package.json",
+        True,
+    ),
+    (".github/workflows/ci-scripts.yml", "actions/setup-node"): (
+        "scripts/ci/check-workflow-coverage.mjs",
+        True,
+    ),
+    (".github/workflows/packages-ci.yml", "actions/download-artifact"): (
+        "apps/ingest/package.json",
+        True,
+    ),
 }
 
 # Workflows whose JOB NAMES are compared, keyed by job id.
@@ -1572,6 +1586,36 @@ def compare(local_read, sibling_read) -> list[dict]:
                     "detail": "in neither repo — stale entry in ACTION_WORKFLOWS",
                 }
             )
+        if here and there:
+            for (entry_path, action), (
+                marker,
+                owned_when_marked,
+            ) in ACTION_ENTRY_TOPOLOGY_GATED.items():
+                if entry_path != path:
+                    continue
+                our_marker, their_marker = marker_sides(marker)
+                for pins, has_marker, side in (
+                    (our_file_pins, our_marker, "here"),
+                    (their_file_pins, their_marker, "there"),
+                ):
+                    owns_action = has_marker == owned_when_marked
+                    has_action = action in pins
+                    if owns_action and not has_action:
+                        findings.append(
+                            {
+                                "kind": "action",
+                                "name": f"{action} — {name}",
+                                "detail": f"topology expects the action {side}, but it is absent",
+                            }
+                        )
+                    elif not owns_action and has_action:
+                        findings.append(
+                            {
+                                "kind": "action",
+                                "name": f"{action} — {name}",
+                                "detail": f"topology expects no action {side}, but it is present",
+                            }
+                        )
         # In a shared workflow owned by both repositories, adding or replacing
         # an action on only one side is drift too. A broad capability gate
         # excuses this only while ownership is asymmetric, and a stack gate
@@ -1589,8 +1633,10 @@ def compare(local_read, sibling_read) -> list[dict]:
             and action_shapes_comparable(path)
         ):
             for action in sorted(set(our_file_pins) ^ set(their_file_pins)):
-                marker = ACTION_ENTRY_TOPOLOGY_GATED.get((path, action))
-                if marker is not None and len(set(marker_sides(marker))) != 1:
+                # Capability-owned entries were asserted above, including
+                # ownership polarity and owner-side deletion. Do not add a
+                # second generic one-sided finding for the same violation.
+                if (path, action) in ACTION_ENTRY_TOPOLOGY_GATED:
                     continue
                 refs = our_file_pins.get(action) or their_file_pins[action]
                 described = " + ".join(
@@ -1986,7 +2032,11 @@ def self_test() -> int:
                 "packages/core/package.json": "{}\n",
                 ".github/workflows/admin-ci.yml": (
                     "jobs:\n"
-                    "  build:\n    name: \"ci: build\"\n"
+                    "  build:\n"
+                    "    name: \"ci: build\"\n"
+                    "    steps:\n"
+                    "      - uses: actions/download-artifact@1111111 # v1\n"
+                    "      - uses: actions/upload-artifact@1111111 # v1\n"
                     "  prepare-openapi:\n    name: \"contract: openapi spec\"\n"
                 ),
                 ".github/workflows/backend-deploy.yml": (
@@ -2837,6 +2887,7 @@ def self_test() -> int:
         ".github/workflows/admin-ci.yml": wf(
             "actions/checkout@1111111 # v1",
             "actions/download-artifact@2222222 # v2",
+            "actions/upload-artifact@3333333 # v3",
         )
     }
     admin_without_capability = {
@@ -2851,6 +2902,7 @@ def self_test() -> int:
     admin_with_preview = {
         ".github/workflows/admin-ci.yml": wf(
             "actions/checkout@1111111 # v1",
+            "actions/download-artifact@2222222 # v2",
             "actions/upload-artifact@2222222 # v2",
         )
     }
@@ -2872,15 +2924,50 @@ def self_test() -> int:
         )
         if f["kind"] == "action" and "admin-ci.yml" in f["name"]
     ]
-    assert len(found) == 1, f"entry gates require asymmetric ownership: {found}"
+    assert len(found) == 2, f"entry gates require asymmetric ownership: {found}"
     admin_owner_without_download = {
-        ".github/workflows/admin-ci.yml": wf("actions/checkout@1111111 # v1"),
+        ".github/workflows/admin-ci.yml": wf(
+            "actions/checkout@1111111 # v1",
+            "actions/upload-artifact@3333333 # v3",
+        ),
     }
     found = [
         f for f in compare(repo(**admin_with_download).get, repo(**admin_owner_without_download).get)
         if f["kind"] == "action" and "admin-ci.yml" in f["name"]
     ]
     assert len(found) == 1, f"an owner losing an optional action must report: {found}"
+    owner_without_download = admin_owner_without_download
+    non_owner_without_download = {
+        ".github/workflows/admin-ci.yml": wf("actions/checkout@1111111 # v1"),
+        "apps/marketing/package.json": None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**owner_without_download).get,
+            repo(**non_owner_without_download).get,
+        )
+        if f["kind"] == "action"
+        and f["name"].startswith("actions/download-artifact")
+    ]
+    assert len(found) == 1, f"a sole owner must retain its gated action: {found}"
+    inverted_download = {
+        ".github/workflows/admin-ci.yml": wf(
+            "actions/checkout@1111111 # v1",
+            "actions/download-artifact@2222222 # v2",
+        ),
+        "apps/marketing/package.json": None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**owner_without_download).get,
+            repo(**inverted_download).get,
+        )
+        if f["kind"] == "action"
+        and f["name"].startswith("actions/download-artifact")
+    ]
+    assert len(found) == 2, f"an inverted gated action must report both sides: {found}"
 
     PACKAGE_ACTION_WF = ".github/workflows/packages-ci.yml"
     package_with_download = {
