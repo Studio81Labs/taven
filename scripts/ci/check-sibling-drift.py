@@ -234,34 +234,38 @@ IDENTICAL = [
     "scripts/ci/check-sibling-drift.py",
 ]
 
-# Entries whose comparison only makes sense between repos that share a mobile
-# stack. Keyed by entry path; the value names the MARKER file that declares
-# the topology (the Flutter pubspec — tarmoto's mobile app is bare React
-# Native and has none). An entry is compared only when the marker exists on
-# BOTH sides; anything else is stack topology rather than drift, and the
-# entry is skipped silently — including the stale-entry finding, because
-# between two React Native repos a Flutter guard is absent by design, not
-# stale. Between two Flutter repos every current behaviour is unchanged.
-#
-# This map gates whole-file and whole-workflow job-name comparisons. A second
-# map below gates action-pin comparisons: those use broader capability markers
-# where two different implementations still share a workflow (Flutter and
-# React Native both carry apps/mobile/.gitignore, for example).
+# Capability markers may excuse an ABSENT owned artifact, but never disable the
+# comparison of two present artifacts. The markers are deliberately broad:
+# Flutter and React Native both carry apps/mobile/.gitignore, for example.
 TOPOLOGY_GATED = {
-    "scripts/lib/resolve-flutter.sh": "apps/mobile/pubspec.yaml",
-    "scripts/ci/check-podfile-lock.py": "apps/mobile/pubspec.yaml",
-    "scripts/ci/check-release-tag.sh": "apps/mobile/pubspec.yaml",
+    "scripts/lib/resolve-flutter.sh": "apps/mobile/.gitignore",
+    "scripts/ci/check-podfile-lock.py": "apps/mobile/.gitignore",
+    "scripts/ci/check-release-tag.sh": "apps/mobile/.gitignore",
     "scripts/ci/check-semgrep-fixture.py": "apps/mobile/.gitignore",
     "scripts/ci/compare-marketing-version.py": "apps/marketing/package.json",
-    ".github/workflows/flutter-pin-check.yml": "apps/mobile/pubspec.yaml",
-    ".github/workflows/mobile-ci.yml": "apps/mobile/pubspec.yaml",
-    ".github/workflows/mobile-release.yml": "apps/mobile/pubspec.yaml",
+    ".github/workflows/flutter-pin-check.yml": "apps/mobile/.gitignore",
+    ".github/workflows/mobile-ci.yml": "apps/mobile/.gitignore",
+    ".github/workflows/mobile-release.yml": "apps/mobile/.gitignore",
     ".github/workflows/_build-openapi.yml": "apps/marketing/package.json",
     ".github/workflows/_release-version-gate.yml": "apps/mobile/.gitignore",
     ".github/workflows/admin-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/backend-deploy.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-ci.yml": "apps/marketing/package.json",
     ".github/workflows/marketing-deploy.yml": "apps/marketing/package.json",
+}
+
+# A smaller set genuinely has different implementations between Flutter and
+# React Native. pubspec.yaml is the stack manifest, not an incidental marker:
+# when either side lacks it, the pair does not share the Flutter implementation.
+# Whole-file contents and job layouts may differ across that boundary, while
+# action pins remain comparable through ACTION_TOPOLOGY_GATED below.
+STACK_TOPOLOGY_GATED = {
+    "scripts/lib/resolve-flutter.sh": "apps/mobile/pubspec.yaml",
+    "scripts/ci/check-podfile-lock.py": "apps/mobile/pubspec.yaml",
+    "scripts/ci/check-release-tag.sh": "apps/mobile/pubspec.yaml",
+    ".github/workflows/flutter-pin-check.yml": "apps/mobile/pubspec.yaml",
+    ".github/workflows/mobile-ci.yml": "apps/mobile/pubspec.yaml",
+    ".github/workflows/mobile-release.yml": "apps/mobile/pubspec.yaml",
 }
 
 # A shared workflow is compared only when both repositories declare the
@@ -1238,10 +1242,32 @@ def compare(local_read, sibling_read) -> list[dict]:
             return True
         return marker_open(marker)
 
+    def topology_skips_artifact(
+        path: str,
+        ours,
+        theirs,
+        gates=TOPOLOGY_GATED,
+        stack_gates=STACK_TOPOLOGY_GATED,
+    ) -> bool:
+        """Whether topology explains why this artifact should not be compared.
+
+        Markers describe why a capability-owned artifact may be absent; they
+        do not disable comparison of an artifact that both repositories still
+        carry. Keeping that distinction here prevents an incidental marker
+        deletion from making real content, action-pin, or job-name drift quiet.
+        A missing stack manifest is different: it says at least one side does
+        not implement the Flutter-owned artifact whose whole-file contents or
+        job layout is being compared.
+        """
+        stack_marker = stack_gates.get(path)
+        if stack_marker is not None and not marker_open(stack_marker):
+            return True
+        return (ours is None or theirs is None) and not gate_open(path, gates)
+
     for path in IDENTICAL:
-        if not gate_open(path):
-            continue
         ours, theirs = local_read(path), sibling_read(path)
+        if topology_skips_artifact(path, ours, theirs):
+            continue
         # Absent from BOTH is not agreement. `None == None` used to fall
         # through the equality check below and report nothing, so a renamed or
         # deleted file left an entry here that could never fail again -- the
@@ -1304,9 +1330,11 @@ def compare(local_read, sibling_read) -> list[dict]:
     ours_pins: dict[tuple[str, str], dict[str, str]] = {}
     theirs_pins: dict[tuple[str, str], dict[str, str]] = {}
     for path in ACTION_WORKFLOWS:
-        if not gate_open(path, ACTION_TOPOLOGY_GATED):
-            continue
         local_text, sibling_text = local_read(path), sibling_read(path)
+        if topology_skips_artifact(
+            path, local_text, sibling_text, ACTION_TOPOLOGY_GATED, {}
+        ):
+            continue
         # The manifest DEFINES these as workflows both repos have, so a missing
         # one is a finding in its own right -- and silently skipping it is worse
         # than missing a pin: every action in that file becomes one-sided, the
@@ -1495,10 +1523,11 @@ def compare(local_read, sibling_read) -> list[dict]:
         )
 
     for path in JOB_NAME_WORKFLOWS:
-        if not gate_open(path):
+        local_text, sibling_text = local_read(path), sibling_read(path)
+        if topology_skips_artifact(path, local_text, sibling_text):
             continue
-        ours = job_names(local_read(path), path, "here")
-        theirs = job_names(sibling_read(path), path, "there")
+        ours = job_names(local_text, path, "here")
+        theirs = job_names(sibling_text, path, "there")
         # A workflow the manifest names but a repo does not have is itself the
         # finding, for the same reason ACTION_WORKFLOWS reports it: silently
         # skipping shrinks the comparison and a smaller comparison looks like
@@ -1523,16 +1552,23 @@ def compare(local_read, sibling_read) -> list[dict]:
             )
             continue
         for job in sorted(set(ours) | set(theirs)):
+            our_name, their_name = ours.get(job), theirs.get(job)
             marker = JOB_TOPOLOGY_GATED.get((path, job))
-            if marker is not None and not marker_open(marker):
+            if (
+                marker is not None
+                and (our_name is None or their_name is None)
+                and not marker_open(marker)
+            ):
+                continue
+            if our_name == their_name:
                 continue
             if (path, job) in EXPECTED_JOB_DIFFS:
                 marker = EXPECTED_JOB_DIFF_MARKERS.get((path, job))
-                if marker is None or marker_sides(marker)[0] != marker_sides(marker)[1]:
+                if marker is None or (
+                    (our_name is None) != (their_name is None)
+                    and marker_sides(marker)[0] != marker_sides(marker)[1]
+                ):
                     continue
-            our_name, their_name = ours.get(job), theirs.get(job)
-            if our_name == their_name:
-                continue
             if our_name is None or their_name is None:
                 side = "present here, absent there" if their_name is None else "absent here, present there"
                 detail = f"job `{job}` {side}"
@@ -2427,7 +2463,7 @@ def self_test() -> int:
     # With the marker on both sides the gate opens and a gated entry absent
     # from both repos is a stale guard again, exactly as before the gate.
     gone_flutter = dict(gone)
-    for marker in set(TOPOLOGY_GATED.values()):
+    for marker in set(TOPOLOGY_GATED.values()) | set(STACK_TOPOLOGY_GATED.values()):
         gone_flutter[marker] = "marker\n"
     found = [f for f in compare(repo(**gone_flutter).get, repo(**gone_flutter).get) if f["kind"] == "file"]
     assert len(found) == len(IDENTICAL), found
@@ -2445,15 +2481,15 @@ def self_test() -> int:
     absent_there = {MARKER: "name: app\n", GATED_FILE: None}
     found = [f for f in compare(repo(**both_flutter).get, repo(**absent_there).get) if f["name"] == GATED_FILE]
     assert found and found[0]["detail"] == "present here, absent there", found
-    # Content drift in a gated file: reported between two Flutter repos,
-    # silent when only one side has the stack — a repo without the toolchain
-    # cannot be "behind" on a guard for it.
+    # Content drift in a gated file is reported when both sides share the
+    # owning stack. A different stack is an explicit implementation boundary;
+    # the broad capability-marker cases below remain strict when files exist.
     changed = {MARKER: "name: app\n", GATED_FILE: "different\n"}
     found = [f for f in compare(repo(**both_flutter).get, repo(**changed).get) if f["name"] == GATED_FILE]
     assert len(found) == 1, found
     marker_one_side = {GATED_FILE: "different\n"}
     found = [f for f in compare(repo(**both_flutter).get, repo(**marker_one_side).get) if f["name"] == GATED_FILE]
-    assert found == [], f"gated content drift without a shared stack is topology: {found}"
+    assert found == [], f"different mobile stacks may carry different helpers: {found}"
     # Job names behind the gate follow the same rule: the whole workflow being
     # one-sided is silent across stacks, reported within one.
     GATED_WF = ".github/workflows/flutter-pin-check.yml"
@@ -2482,6 +2518,16 @@ def self_test() -> int:
         if f["name"] == "mobile-release.yml"
     ]
     assert found and found[0]["detail"] == "present here, absent there", found
+    mobile_pin_here = {MOBILE_ACTION_WF: wf("actions/x@1111111 # v1")}
+    mobile_pin_there = {
+        MOBILE_MARKER: None,
+        MOBILE_ACTION_WF: wf("actions/x@2222222 # v2"),
+    }
+    found = [
+        f for f in compare(repo(**mobile_pin_here).get, repo(**mobile_pin_there).get)
+        if f["kind"] == "action" and f["name"].startswith("actions/x")
+    ]
+    assert len(found) == 1, f"present gated workflows must compare pins: {found}"
 
     # The Semgrep fixture verifier is shared across Flutter and React Native.
     # Its gate must use the broad mobile capability, not Flutter's pubspec, or
@@ -2500,6 +2546,19 @@ def self_test() -> int:
         if f["name"] == SEMGREP_HELPER
     ]
     assert len(found) == 1, f"cross-stack Semgrep helper drift must report: {found}"
+    react_native_without_incidental_marker = {
+        **react_native_helper,
+        MOBILE_MARKER: None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**flutter_helper).get,
+            repo(**react_native_without_incidental_marker).get,
+        )
+        if f["name"] == SEMGREP_HELPER
+    ]
+    assert len(found) == 1, f"an incidental marker deletion must not hide drift: {found}"
     no_mobile_helper = {MOBILE_MARKER: None, SEMGREP_HELPER: None}
     found = [
         f for f in compare(repo().get, repo(**no_mobile_helper).get)
@@ -2519,6 +2578,20 @@ def self_test() -> int:
             out.append("    steps:")
             out.append("      - uses: actions/x@1111111 # v1")
         return "\n".join(out) + "\n"
+
+    CAPABILITY_GATED_WF = ".github/workflows/_release-version-gate.yml"
+    gated_jobs_here = {
+        CAPABILITY_GATED_WF: jobs_yaml(("build", "mobile: build")),
+    }
+    gated_jobs_there = {
+        CAPABILITY_GATED_WF: jobs_yaml(("build", "mobile: changed")),
+        MOBILE_MARKER: None,
+    }
+    found = [
+        f for f in compare(repo(**gated_jobs_here).get, repo(**gated_jobs_there).get)
+        if f["kind"] == "jobname" and f["name"] == CAPABILITY_GATED_WF
+    ]
+    assert len(found) == 1, f"present gated workflows must compare job names: {found}"
 
     named = {JOB_WF: jobs_yaml(("build", "backend: typecheck, test & build"))}
     renamed = {JOB_WF: jobs_yaml(("build", "backend: lint, test & build"))}
@@ -2599,7 +2672,7 @@ def self_test() -> int:
         f for f in compare(repo(**prisma_e2e).get, repo(**prisma_without_e2e).get)
         if f["kind"] == "jobname" and f["name"] == JOB_WF
     ]
-    assert len(found) == 1 and "`test-e2e`" in found[0]["detail"], found
+    assert len(found) == 1 and "test-e2e" in found[0]["detail"], found
 
     typeorm_schema = {
         JOB_WF: jobs_yaml(
@@ -2613,6 +2686,19 @@ def self_test() -> int:
         if f["kind"] == "jobname" and f["name"] == JOB_WF
     ]
     assert found == [], f"TypeORM schema vs Prisma e2e is topology: {found}"
+
+    typeorm_e2e = {
+        JOB_WF: jobs_yaml(
+            ("build", "backend: build"),
+            ("test-e2e", "backend: renamed e2e"),
+        ),
+        TYPEORM_MARKER: "export const dataSource = true;\n",
+    }
+    found = [
+        f for f in compare(repo(**prisma_e2e).get, repo(**typeorm_e2e).get)
+        if f["kind"] == "jobname" and f["name"] == JOB_WF
+    ]
+    assert len(found) == 1 and "test-e2e" in found[0]["detail"], found
 
     print("check-sibling-drift self-test passed")
     return 0
