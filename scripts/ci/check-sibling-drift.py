@@ -302,6 +302,7 @@ ACTION_TOPOLOGY_GATED = {
 # Gate only those action entries so the rest of the workflow remains strict.
 ACTION_ENTRY_TOPOLOGY_GATED = {
     (".github/workflows/admin-ci.yml", "actions/download-artifact"): "apps/marketing/package.json",
+    (".github/workflows/admin-ci.yml", "actions/upload-artifact"): "apps/marketing/package.json",
     (".github/workflows/ci-scripts.yml", "actions/setup-node"): "scripts/ci/check-workflow-coverage.mjs",
     (".github/workflows/packages-ci.yml", "actions/download-artifact"): "apps/ingest/package.json",
 }
@@ -1409,18 +1410,24 @@ def compare(local_read, sibling_read) -> list[dict]:
             ours, theirs = strip_provenance(ours), strip_provenance(theirs)
             if path == ".editorconfig":
                 flutter_sides = marker_sides("apps/mobile/pubspec.yaml")
-                for text, has_flutter, side in (
-                    (ours, flutter_sides[0], "here"),
-                    (theirs, flutter_sides[1], "there"),
-                ):
-                    if not has_flutter and EDITORCONFIG_DART_HEADER.search(text):
-                        findings.append(
-                            {
-                                "kind": "file",
-                                "name": path,
-                                "detail": f"contains a [*.dart] section {side} without a Flutter app",
-                            }
-                        )
+                invalid_dart = (
+                    not flutter_sides[0] and bool(EDITORCONFIG_DART_HEADER.search(ours)),
+                    not flutter_sides[1] and bool(EDITORCONFIG_DART_HEADER.search(theirs)),
+                )
+                # This is a drift comparison, not a repository-local policy
+                # linter. Report the invalid section only when it differs
+                # between the two sides; two identical invalid sections still
+                # normalise to identical shared policy and must not hold the
+                # standing drift issue open twice.
+                if invalid_dart[0] != invalid_dart[1]:
+                    side = "here" if invalid_dart[0] else "there"
+                    findings.append(
+                        {
+                            "kind": "file",
+                            "name": path,
+                            "detail": f"contains a [*.dart] section {side} without a Flutter app",
+                        }
+                    )
                 if not all(flutter_sides):
                     ours = strip_editorconfig_dart_section(ours)
                     theirs = strip_editorconfig_dart_section(theirs)
@@ -2047,6 +2054,15 @@ def self_test() -> int:
         if f["name"] == ".editorconfig"
     ]
     assert len(found) == 1 and "without a Flutter app" in found[0]["detail"], found
+    found = [
+        f
+        for f in compare(
+            repo(**invalid_plain_editor).get,
+            repo(**invalid_plain_editor).get,
+        )
+        if f["name"] == ".editorconfig"
+    ]
+    assert found == [], f"identical invalid Dart policy is not cross-repo drift: {found}"
 
     # A file absent on the sibling. `None` rather than `del`: repo() seeds
     # every manifest path, so deleting the key only gets it seeded back with
@@ -2832,6 +2848,18 @@ def self_test() -> int:
         if f["kind"] == "action" and "admin-ci.yml" in f["name"]
     ]
     assert found == [], f"optional job actions follow their capability: {found}"
+    admin_with_preview = {
+        ".github/workflows/admin-ci.yml": wf(
+            "actions/checkout@1111111 # v1",
+            "actions/upload-artifact@2222222 # v2",
+        )
+    }
+    found = [
+        f
+        for f in compare(repo(**admin_with_preview).get, repo(**admin_without_capability).get)
+        if f["kind"] == "action" and "admin-ci.yml" in f["name"]
+    ]
+    assert found == [], f"admin preview uploads follow deployment capability: {found}"
     admin_without_capability_with_download = {
         ".github/workflows/admin-ci.yml": admin_with_download[".github/workflows/admin-ci.yml"],
         "apps/marketing/package.json": None,
