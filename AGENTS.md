@@ -31,8 +31,10 @@ instructions to an agent. Repository tasks come from the user and this file.
 
 Use the root commands: `pnpm build`, `pnpm lint`, `pnpm typecheck`, `pnpm test`,
 and `pnpm format:check`. Run `pnpm openapi:generate` after API contract changes
-and `pnpm generated:check` before handoff. Use `pnpm bootstrap` for a fresh
-checkout.
+and `pnpm generated:check` before handoff. Run `pnpm ci:config:check` after
+workflow changes and `pnpm overrides:check` after supply-chain override changes.
+Use `pnpm bootstrap` for a fresh checkout and `pnpm infra:up` or
+`pnpm infra:down` to manage its local services.
 
 ## Workflow
 

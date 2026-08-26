@@ -31,5 +31,10 @@ coverage/
 # Generated Prisma client
 apps/backend/src/generated/
 
+# Local infrastructure data
+infra/docker/pgdata/
+infra/docker/redisdata/
+infra/docker/miniodata/
+
 # Local working notes
 docs/cowork/

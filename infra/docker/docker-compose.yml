@@ -1,0 +1,83 @@
+name: taven-dev
+
+services:
+  postgres:
+    container_name: taven-postgres
+    # ported from Studio81Labs/nexcue@314cec8972589780072e641591b16eca9805d7dd
+    # Postgres 18 stores versioned data below /var/lib/postgresql. Mounting the
+    # parent follows the upstream layout and keeps upgrades inside one volume.
+    image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TAVEN_POSTGRES_PORT:-5435}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-taven}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-taven}
+      POSTGRES_DB: ${POSTGRES_DB:-taven}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-taven} -d ${POSTGRES_DB:-taven}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    container_name: taven-redis
+    image: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TAVEN_REDIS_PORT:-6381}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    container_name: taven-minio
+    image: minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TAVEN_MINIO_PORT:-9010}:9000"
+      - "127.0.0.1:${TAVEN_MINIO_CONSOLE_PORT:-9011}:9001"
+    environment:
+      MINIO_ROOT_USER: ${TAVEN_S3_ACCESS_KEY_ID:-taven}
+      MINIO_ROOT_PASSWORD: ${TAVEN_S3_SECRET_ACCESS_KEY:-taven-local-only}
+    command: server /data --console-address ":9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    profiles: ["init"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${TAVEN_S3_ACCESS_KEY_ID:-taven}
+      MINIO_ROOT_PASSWORD: ${TAVEN_S3_SECRET_ACCESS_KEY:-taven-local-only}
+      TAVEN_S3_BUCKET: ${TAVEN_S3_BUCKET:-taven}
+    entrypoint: >-
+      /bin/sh -c '
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}";
+        mc mb --ignore-existing "local/$${TAVEN_S3_BUCKET}";
+      '
+    restart: "no"
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

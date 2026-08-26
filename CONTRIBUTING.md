@@ -8,9 +8,9 @@ Use Node.js 24 and run:
 pnpm bootstrap
 ```
 
-The bootstrap is intentionally limited to dependency installation and
-deterministic generation until local infrastructure lands in the next
-foundation slice.
+Bootstrap creates missing local environment files, starts PostgreSQL, Redis,
+and MinIO, applies migrations, and performs deterministic generation. Existing
+`.env` files and persistent Docker volumes are preserved.
 
 ## Branches and commits
 
@@ -32,6 +32,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm generated:check
+pnpm ci:config:check
+pnpm overrides:check
 ```
 
 If backend decorators or DTOs changed the HTTP contract, run

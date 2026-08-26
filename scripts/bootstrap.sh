@@ -9,12 +9,25 @@ source "$script_dir/lib/common.sh"
 
 require_command node
 require_command corepack
+require_command docker
 
 node_major="$(node -p 'process.versions.node.split(".")[0]')"
 [[ "$node_major" -ge 24 ]] || fail "Node.js 24 or newer is required (found $(node --version))"
 
 cd "$repo_dir"
 corepack pnpm install
+
+for app in backend web admin slicer-worker; do
+  env_file="apps/$app/.env"
+  if [[ ! -f "$env_file" ]]; then
+    cp "$env_file.example" "$env_file"
+    printf 'Created %s from its example.\n' "$env_file"
+  fi
+done
+
+docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required"
+corepack pnpm infra:up
+corepack pnpm db:migrate:deploy
 corepack pnpm openapi:generate
 
 printf 'Taven workspace is ready. Run: pnpm dev\n'

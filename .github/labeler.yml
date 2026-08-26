@@ -20,3 +20,18 @@ contract:
 docs:
   - changed-files:
       - any-glob-to-any-file: "docs/**"
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - "scripts/ci/**"
+infra:
+  - changed-files:
+      - any-glob-to-any-file: "infra/**"
+repo:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "pnpm-lock.yaml"
+          - "pnpm-workspace.yaml"
+          - "tsconfig.base.json"

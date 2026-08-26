@@ -151,6 +151,9 @@ importers:
       bullmq:
         specifier: ^5.81.3
         version: 5.81.3(supports-color@10.2.2)
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
 
   apps/web:
     dependencies:

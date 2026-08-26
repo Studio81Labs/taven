@@ -19,7 +19,7 @@ not contain customer or operator product flows yet.
 - `packages/openapi-client` — generated types and typed client factory
 - `packages/slicer-contracts` — runtime-validated queue messages and results
 - `packages/ui-web` — the visual foundation shared by both Vue applications
-- `infra` — local runtime dependencies (added in the execution-foundation slice)
+- `infra` — local PostgreSQL, Redis, and S3-compatible object storage
 - `scripts` — maintained bootstrap and repository checks
 - `tools` — developer/operator utilities, not application runtime code
 - `docs` — product sources, ADRs, plans, process, and reference material
@@ -28,9 +28,7 @@ not contain customer or operator product flows yet.
 
 - Node.js 24 (see `.nvmrc`)
 - Corepack with pnpm 11.22.0
-
-Docker is not required until the execution-foundation slice adds PostgreSQL,
-Redis, and local object storage.
+- Docker with Docker Compose v2
 
 ## Getting started
 
@@ -39,12 +37,25 @@ pnpm bootstrap
 pnpm dev
 ```
 
+Bootstrap installs dependencies, creates missing local `.env` files, starts the
+three infrastructure services, applies Prisma migrations, and regenerates the
+OpenAPI artifacts. It is safe to run again after pulling changes.
+
 `pnpm dev` starts the backend, public web app, and admin app. The slicer worker
 is deliberately excluded; start its fixture consumer explicitly with
-`pnpm slicer-worker:dev` once Redis is available.
+`pnpm slicer-worker:dev`.
 
 Default local ports are `3001` for the API, `3000` for the public web app, and
-`3002` for admin.
+`3002` for admin. PostgreSQL uses `5435`, Redis uses `6381`, and MinIO uses
+`9010` with its console on `9011`, avoiding the sibling repositories' defaults.
+
+Manage local infrastructure independently with:
+
+```bash
+pnpm infra:up
+pnpm infra:logs
+pnpm infra:down
+```
 
 ## Validation
 
@@ -55,7 +66,13 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm generated:check
+pnpm ci:config:check
+pnpm overrides:check
 ```
+
+With Nexcue checked out next to this repository, run `pnpm sibling:check` to
+compare the shared runtime baseline, supply-chain posture, and GitHub Action
+pins. Override its location with `NEXCUE_REPO_PATH` when necessary.
 
 Regenerate the OpenAPI artifact and typed client after changing backend DTOs or
 Swagger decorators:
