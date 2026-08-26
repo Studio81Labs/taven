@@ -38,6 +38,54 @@ function requireZeroBalances<S extends string>(
   }
 }
 
+function requireZeroAmountDue<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  if (command.context?.amountDueMinor !== 0n) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "handoff reconciliation requires zero amount due",
+    );
+  }
+}
+
+function requireReconciliationRefundAllocation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const refundableBalanceMinor = command.context?.refundableBalanceMinor;
+  if (
+    typeof refundableBalanceMinor !== "bigint" ||
+    refundableBalanceMinor < 0n ||
+    (refundableBalanceMinor > 0n &&
+      command.context?.reconciliationRefundAllocated !== true)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "handoff reconciliation requires a zero or explicitly allocated refundable balance",
+    );
+  }
+}
+
+function requireProjectedFinancialTerminalTarget<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  if (command.context?.financialTerminalTarget !== command.target) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "terminal target must match the adapter-projected financial outcome",
+    );
+  }
+}
+
 function requireAllShipmentLineageLeavesDelivered<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -236,7 +284,14 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "handoffReconciliation",
         "only an immutable unauthorized-handoff reconciliation may use this edge",
       );
-      requireZeroBalances("Order", command);
+      requireFlag(
+        "Order",
+        command,
+        "handoffSettlementCompleted",
+        "the handoff reconciliation's immutable settlement must be complete",
+      );
+      requireZeroAmountDue("Order", command);
+      requireReconciliationRefundAllocation("Order", command);
     }
     if (
       command.current === "awaiting_balance" &&
@@ -246,6 +301,14 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     }
     if (command.current === "shipped" && command.target === "delivered") {
       requireAllShipmentLineageLeavesDelivered("Order", command);
+    }
+    if (command.target === "cancelled") {
+      requireFlag(
+        "Order",
+        command,
+        "preHandoffShipmentCancellationsCompleted",
+        "all pre-handoff shipment cancellations must complete before cancellation",
+      );
     }
     if (
       command.target === "completed" ||
@@ -259,6 +322,12 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "completionProjected",
         "all phase, slot, shipment, and settlement barriers must be complete",
       );
+    }
+    if (
+      command.current === "cancelled" &&
+      (command.target === "refunded" || command.target === "cancelled_settled")
+    ) {
+      requireProjectedFinancialTerminalTarget("Order", command);
     }
     if (
       command.target === "refunded" ||
@@ -334,6 +403,19 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         requireAllShipmentLineageLeavesDelivered("OrderPhase(single)", command);
       }
       if (
+        command.target === "cancelled" ||
+        ((command.current === "shipped" ||
+          command.current === "recovery_pending") &&
+          command.target === "cancelled_refunded")
+      ) {
+        requireFlag(
+          "OrderPhase(single)",
+          command,
+          "preHandoffShipmentCancellationsCompleted",
+          "all pre-handoff shipment cancellations must complete before cancellation",
+        );
+      }
+      if (
         command.target === "completed" ||
         command.target === "partially_fulfilled" ||
         command.target === "cancelled_refunded" ||
@@ -345,6 +427,13 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           "completionProjected",
           "all required fulfilment slots must have a terminal outcome",
         );
+      }
+      if (
+        command.current === "cancelled" &&
+        (command.target === "cancelled_refunded" ||
+          command.target === "cancelled_settled")
+      ) {
+        requireProjectedFinancialTerminalTarget("OrderPhase(single)", command);
       }
       if (
         command.target === "cancelled_refunded" ||
@@ -437,6 +526,14 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
     lost: ["recovered"],
   },
   guard: (command) => {
+    if (command.target === "handed_over") {
+      requireFlag(
+        "Shipment",
+        command,
+        "contextHandoffCompleted",
+        "the complete context-specific handoff or reconciliation must complete",
+      );
+    }
     if (
       command.current === "cancellation_pending" &&
       command.target === "handed_over"
@@ -446,12 +543,6 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
         command,
         "verifiedProviderScan",
         "a verified provider custody scan must win the cancellation race",
-      );
-      requireFlag(
-        "Shipment",
-        command,
-        "contextHandoffCompleted",
-        "the complete context-specific handoff or reconciliation must complete",
       );
     }
   },
@@ -670,6 +761,20 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           command,
           "reshipmentHandoffCompleted",
           "reship handoff requires the complete authorization-backed handoff result",
+        );
+      }
+      if (command.target === "refund_pending") {
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "claimCreditScopeCreated",
+          "refund requires an immutable scope containing only its refund-target claim slots",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "claimSlotCreditActivated",
+          "refund requires the scoped claim credit price adjustment and refund setup",
         );
       }
       if (

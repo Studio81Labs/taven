@@ -40,6 +40,20 @@ describe("orderLockTargets", () => {
     );
   });
 
+  it("allows a phase reservation set to span node-scoped child reservations", () => {
+    const targets = [
+      { kind: "production_reservation", id: "reservation-b", nodeId: "node-2" },
+      { kind: "phase_reservation_set", id: "set-1" },
+      { kind: "production_reservation", id: "reservation-a", nodeId: "node-1" },
+    ] as const satisfies readonly LockTarget[];
+
+    expect(orderLockTargets(targets)).toEqual([
+      { kind: "phase_reservation_set", id: "set-1" },
+      { kind: "production_reservation", id: "reservation-a", nodeId: "node-1" },
+      { kind: "production_reservation", id: "reservation-b", nodeId: "node-2" },
+    ]);
+  });
+
   it("rejects duplicate targets", () => {
     const target = { kind: "payment", id: "payment-1" } as const;
     expect(() => orderLockTargets([target, target])).toThrow(

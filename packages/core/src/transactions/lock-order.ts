@@ -39,7 +39,6 @@ const nodeScopedKinds = new Set<LockTargetKind>([
   "candidate_resource_estimate",
   "inventory",
   "machine",
-  "phase_reservation_set",
   "inventory_reservation",
   "capacity_reservation",
   "production_reservation",
