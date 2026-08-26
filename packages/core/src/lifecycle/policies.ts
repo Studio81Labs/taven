@@ -86,6 +86,20 @@ function requireProjectedFinancialTerminalTarget<S extends string>(
   }
 }
 
+function requireProjectedCompletionTarget<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  if (command.context?.completionProjectedTarget !== command.target) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "terminal target must match the projected fulfilment completion outcome",
+    );
+  }
+}
+
 function requireAllShipmentLineageLeavesDelivered<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -265,6 +279,18 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "capture and the complete phase reservation set must be valid",
       );
     }
+    if (
+      (command.current === "in_production" ||
+        command.current === "recovery_pending") &&
+      command.target === "qc_passed"
+    ) {
+      requireFlag(
+        "Order",
+        command,
+        "verifiedQcReadiness",
+        "quality control requires a complete projected slot readiness result",
+      );
+    }
     if (command.current === "ready_to_ship" && command.target === "shipped") {
       requireFlag(
         "Order",
@@ -299,6 +325,9 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     ) {
       requireZeroBalances("Order", command);
     }
+    if (command.current === "qc_passed" && command.target === "ready_to_ship") {
+      requireZeroBalances("Order", command);
+    }
     if (command.current === "shipped" && command.target === "delivered") {
       requireAllShipmentLineageLeavesDelivered("Order", command);
     }
@@ -322,6 +351,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         "completionProjected",
         "all phase, slot, shipment, and settlement barriers must be complete",
       );
+      requireProjectedCompletionTarget("Order", command);
     }
     if (
       command.current === "cancelled" &&
@@ -390,6 +420,18 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           "capture and the complete phase reservation set must be valid",
         );
       }
+      if (
+        (command.current === "in_production" ||
+          command.current === "recovery_pending") &&
+        command.target === "qc_passed"
+      ) {
+        requireFlag(
+          "OrderPhase(single)",
+          command,
+          "verifiedQcReadiness",
+          "quality control requires a complete projected slot readiness result",
+        );
+      }
       if (command.current === "qc_passed" && command.target === "shipped") {
         requireFlag(
           "OrderPhase(single)",
@@ -427,6 +469,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           "completionProjected",
           "all required fulfilment slots must have a terminal outcome",
         );
+        requireProjectedCompletionTarget("OrderPhase(single)", command);
       }
       if (
         command.current === "cancelled" &&
@@ -543,6 +586,17 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
         command,
         "verifiedProviderScan",
         "a verified provider custody scan must win the cancellation race",
+      );
+    }
+    if (
+      command.current === "cancellation_pending" &&
+      command.target === "cancelled"
+    ) {
+      requireFlag(
+        "Shipment",
+        command,
+        "verifiedProviderVoid",
+        "cancellation requires the provider to verify its void result",
       );
     }
   },
@@ -763,6 +817,58 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           "reship handoff requires the complete authorization-backed handoff result",
         );
       }
+      if (
+        command.current === "reprint_pending" &&
+        command.target === "replacement_in_production"
+      ) {
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "replacementSetProjected",
+          "replacement production requires the complete all-or-none replacement slot set",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "replacementResourcePlanProjected",
+          "replacement production requires the complete replacement resource plan",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "replacementReservationsCreated",
+          "replacement production requires every replacement reservation",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "replacementShipmentsCreated",
+          "replacement production requires every replacement shipment",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "replacementJobLineageCreated",
+          "replacement production requires every replacement job lineage leaf",
+        );
+      }
+      if (
+        command.current === "replacement_in_production" &&
+        command.target === "replacement_shipped"
+      ) {
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "replacementFulfilmentAuthorizationConsumed",
+          "replacement handoff requires one-shot consumption of its fulfilment authorization",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "replacementFulfilmentHandoffCompleted",
+          "replacement handoff requires the complete authorization-backed handoff result",
+        );
+      }
       if (command.target === "refund_pending") {
         requireFlag(
           "ClaimSlotResolution",
@@ -787,6 +893,23 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           command,
           "remedyCancellationCompleted",
           "all pre-handoff remedy shipments and jobs must be cancelled first",
+        );
+      }
+      if (
+        command.current === "refund_pending" &&
+        command.target === "refunded"
+      ) {
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "scopedRefundTransactionSucceeded",
+          "refund completion requires a successful scoped RefundTransaction",
+        );
+        requireFlag(
+          "ClaimSlotResolution",
+          command,
+          "refundPaymentWebhookVerified",
+          "refund completion requires the matching verified payment webhook result",
         );
       }
       if (
