@@ -45,11 +45,9 @@ jobs:
       - name: Check formatting
         run: |
           set -euo pipefail
-          # Resolve the version from package.json rather than hardcoding it here:
-          # a second copy of the number is a thing that goes stale, and the whole
-          # point of this job is that the repo formats the way it declares it
-          # does. `npx` fetches just this package -- a full `pnpm install` would
-          # cost minutes to run a check that needs one binary.
+          # Resolve the exact, lockfile-aligned version from package.json rather
+          # than hardcoding a second copy here. `npx` fetches just this package
+          # instead of installing the workspace.
           VERSION="$(node -p "require('./package.json').devDependencies.prettier")"
           # Fail loudly on an empty read. `npx prettier@ --check` is valid
           # syntax that silently installs the LATEST prettier, so a renamed or
@@ -58,6 +56,13 @@ jobs:
           # reproduce locally.
           if [ -z "$VERSION" ] || [ "$VERSION" = "undefined" ]; then
             echo "::error::Could not read devDependencies.prettier from package.json"
+            exit 1
+          fi
+          # A range such as ^3.9.6 makes npx resolve the newest matching release,
+          # bypassing the lockfile and formatting differently from local pnpm.
+          # Keep the manifest exact; Renovate updates it and the lock together.
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::devDependencies.prettier must be an exact version, found ${VERSION}"
             exit 1
           fi
           echo "Using prettier ${VERSION} (from package.json)"

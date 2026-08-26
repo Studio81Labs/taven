@@ -360,6 +360,15 @@ EXPECTED_JOB_DIFFS = {
     (".github/workflows/_release-version-gate.yml", "check"): "version-source topology (pubspec vs package.json)",
 }
 
+# Most expected differences are already constrained by a workflow capability
+# gate. These two live in a workflow every backend has, so their exception is
+# valid only when exactly one side declares Tarmoto's TypeORM data source. A
+# global exemption hid a missing Taven e2e job as soon as Taven joined the loop.
+EXPECTED_JOB_DIFF_MARKERS = {
+    (".github/workflows/backend-ci.yml", "schema"): "apps/backend/src/data-source.ts",
+    (".github/workflows/backend-ci.yml", "test-e2e"): "apps/backend/src/data-source.ts",
+}
+
 SHARED_PRESET = "github>Studio81Labs/.github:renovate-base"
 
 
@@ -1210,14 +1219,18 @@ def compare(local_read, sibling_read) -> list[dict]:
 
     # Memoised per marker, not per entry: one marker gates several entries and
     # sibling reads go over the network.
-    marker_state: dict[str, bool] = {}
+    marker_state: dict[str, tuple[bool, bool]] = {}
 
-    def marker_open(marker: str) -> bool:
+    def marker_sides(marker: str) -> tuple[bool, bool]:
         if marker not in marker_state:
             marker_state[marker] = (
-                local_read(marker) is not None and sibling_read(marker) is not None
+                local_read(marker) is not None,
+                sibling_read(marker) is not None,
             )
         return marker_state[marker]
+
+    def marker_open(marker: str) -> bool:
+        return all(marker_sides(marker))
 
     def gate_open(path: str, gates=TOPOLOGY_GATED) -> bool:
         marker = gates.get(path)
@@ -1514,7 +1527,9 @@ def compare(local_read, sibling_read) -> list[dict]:
             if marker is not None and not marker_open(marker):
                 continue
             if (path, job) in EXPECTED_JOB_DIFFS:
-                continue
+                marker = EXPECTED_JOB_DIFF_MARKERS.get((path, job))
+                if marker is None or marker_sides(marker)[0] != marker_sides(marker)[1]:
+                    continue
             our_name, their_name = ours.get(job), theirs.get(job)
             if our_name == their_name:
                 continue
@@ -1544,8 +1559,9 @@ def render(findings: list[dict]) -> str:
         f"[`{SIBLING}`](https://github.com/{SIBLING}) (`{SIBLING_REF}`).",
         "",
         "**This reports that two things differ, not that either repo is wrong.**",
-        "Infrastructure moves between the sibling repositories in both directions.",
-        "Read each row and decide which implementation should travel.",
+        "Nexcue is the default baseline for shared infrastructure. The valid",
+        "exceptions are capability topology or a linked back-port; infrastructure",
+        "can still move in either direction. Read each row before choosing.",
         "",
         f"{len(findings)} difference(s).",
         "",
@@ -2567,6 +2583,36 @@ def self_test() -> int:
     against = {MOB: jobs_yaml(("mobile", "mobile: b"), ("other", "mobile: y")), MARKER: "name: app\n"}
     found = [f for f in compare(repo(**allowed).get, repo(**against).get) if f["kind"] == "jobname"]
     assert len(found) == 1 and "`other`" in found[0]["detail"], found
+
+    # Backend schema/e2e exceptions are Tarmoto-specific, not global. Two
+    # Prisma repositories must report a missing e2e job; a TypeORM-to-Prisma
+    # comparison suppresses the one-sided schema/e2e pair as topology.
+    TYPEORM_MARKER = "apps/backend/src/data-source.ts"
+    prisma_e2e = {
+        JOB_WF: jobs_yaml(
+            ("build", "backend: build"),
+            ("test-e2e", "backend: e2e (real postgres)"),
+        )
+    }
+    prisma_without_e2e = {JOB_WF: jobs_yaml(("build", "backend: build"))}
+    found = [
+        f for f in compare(repo(**prisma_e2e).get, repo(**prisma_without_e2e).get)
+        if f["kind"] == "jobname" and f["name"] == JOB_WF
+    ]
+    assert len(found) == 1 and "`test-e2e`" in found[0]["detail"], found
+
+    typeorm_schema = {
+        JOB_WF: jobs_yaml(
+            ("build", "backend: build"),
+            ("schema", "backend: schema from zero (real postgres)"),
+        ),
+        TYPEORM_MARKER: "export const dataSource = true;\n",
+    }
+    found = [
+        f for f in compare(repo(**prisma_e2e).get, repo(**typeorm_schema).get)
+        if f["kind"] == "jobname" and f["name"] == JOB_WF
+    ]
+    assert found == [], f"TypeORM schema vs Prisma e2e is topology: {found}"
 
     print("check-sibling-drift self-test passed")
     return 0
