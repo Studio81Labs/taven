@@ -662,7 +662,7 @@ reship_pending | reprint_pending | replacement_in_production → refund_pending 
 replacement_in_production → recovery_pending (až po `ClaimRemedyCancellation(target = recovery)` barrier)
 replacement_shipped | reship_shipped → recovery_pending (jen s ověřeným `lost | returned` incidentem)
 recovery_pending → reship_pending | reprint_pending | refund_pending
-pending | reship_pending | reprint_pending | replacement_in_production → withdrawn (jen čistý post_delivery_quality)
+pending | reship_pending | reprint_pending | replacement_in_production | recovery_pending → withdrawn (jen čistý post_delivery_quality)
 ```
 Quality Claim lze otevřít proti doručené položce/fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`; jen rodič bez jediného incident-backed slotu smí po vyšetření skončit `resolved_rejected` nebo se před handoff stáhnout. `reject_claim` pod zámkem vyžaduje, aby rodič byl stále `investigating`, neměl žádný Job, autorizaci, refund ani incident a všechny jeho child resolution byly `pending`; v jedné transakci je přepne na `rejected`, rodiče na `resolved_rejected`, uvolní všechna `active_claim_id` a přepočítá retenční deadline. Automatický shipment incident patří Shipmentu ve stavu `lost | returned | recovered`, i když je agregát teprve `in_production` nebo `shipped`; dokud jeho sloty nejsou doručené náhradou/reshipem nebo finančně vypořádané, rodič nesmí přejít do `resolved_rejected | withdrawn`.
 
@@ -840,6 +840,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 67. Neúspěšná reacquisition batch setu po revision `balance` capture musí zavřít právě tento Payment pokus, vyloučit jeho capture z `revision_amount_due` a plně jej refundovat přes `LateCaptureCompensation(kind = revision_capacity)`; revize smí zůstat retryable jen do původního confirmation deadline a až po úspěchu kompenzace.
 68. Ověřený scan běžné parcely v `cancellation_pending`, která nesplňuje jen finanční/aggregate handoff guard, musí atomicky vytvořit `HandoffReconciliation`, zaznamenat faktickou custody/Job transitions, zavřít balance captures, vytvořit `OrderSettlement(kind = unauthorized_handoff)` a teprve potom výjimečně posunout phase/Order do `shipped`; nesmí se vydávat za autorizovaný handoff ani dovolit původnímu stornu/refundu dokončit.
 69. `Order` má vztah 1:N k `ShipmentPlan` i `Shipment` už v v0: jedna `single` fáze smí vytvořit více parcel a replacement/reship lineage zachovává původní Shipment vedle aktuálního leaf; implementace nesmí použít singulární `order.shipment_id`.
+70. `ClaimSlotResolution.recovery_pending` smí přejít do `withdrawn` jen u čistého `post_delivery_quality` rodiče bez incident-backed child a po dokončení všech pre-handoff cancellation barriers; recovery vzniklou z `lost | returned` incidentu stáhnout nelze.
 
 ### 6.5 Švy pro síť
 
