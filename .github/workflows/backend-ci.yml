@@ -70,5 +70,6 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm -C apps/backend db:generate
       - run: pnpm db:migrate:deploy
       - run: pnpm backend:test:e2e
