@@ -1640,8 +1640,11 @@ def compare(local_read, sibling_read) -> list[dict]:
                     (their_job_actions, their_marker, "there"),
                 ):
                     owns_action = has_marker == owned_when_marked
-                    has_action = (job_id, action) in actions
-                    if owns_action and not has_action:
+                    has_owned_action = (job_id, action) in actions
+                    has_action_anywhere = any(
+                        found_action == action for _, found_action in actions
+                    )
+                    if owns_action and not has_owned_action:
                         findings.append(
                             {
                                 "kind": "action",
@@ -1649,12 +1652,12 @@ def compare(local_read, sibling_read) -> list[dict]:
                                 "detail": f"topology expects the action in job `{job_id}` {side}, but it is absent",
                             }
                         )
-                    elif not owns_action and has_action:
+                    elif not owns_action and has_action_anywhere:
                         findings.append(
                             {
                                 "kind": "action",
                                 "name": f"{action} — {name}",
-                                "detail": f"topology expects no action in job `{job_id}` {side}, but it is present",
+                                "detail": f"topology expects no action anywhere {side}, but it is present",
                             }
                         )
         # In a shared workflow owned by both repositories, adding or replacing
@@ -3041,6 +3044,27 @@ def self_test() -> int:
         and f["name"].startswith("actions/download-artifact")
     ]
     assert len(found) == 2, f"an inverted gated action must report both sides: {found}"
+    non_owner_download_in_other_job = {
+        ".github/workflows/admin-ci.yml": (
+            "jobs:\n"
+            "  other:\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@1111111 # v1\n"
+            "      - uses: actions/download-artifact@2222222 # v2\n"
+        ),
+        "apps/marketing/package.json": None,
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**admin_with_download).get,
+            repo(**non_owner_download_in_other_job).get,
+        )
+        if f["kind"] == "action"
+        and f["name"].startswith("actions/download-artifact")
+    ]
+    assert len(found) == 1, f"a non-owner action in any job must report: {found}"
+    assert "no action anywhere there" in found[0]["detail"], found
 
     PACKAGE_ACTION_WF = ".github/workflows/packages-ci.yml"
     package_with_download = {
