@@ -2,14 +2,14 @@
 import { onMounted, ref } from "vue";
 import { TavenStatusPanel } from "@taven/ui-web";
 import { apiClient } from "./api";
+import { resolveApiHealthStatus } from "./health-status";
 
 const apiStatus = ref("Checking API health…");
 
 onMounted(async () => {
-  const { data, error } = await apiClient.GET("/health");
-  apiStatus.value = error
-    ? "API unavailable"
-    : `API ${data?.status ?? "unknown"}`;
+  apiStatus.value = await resolveApiHealthStatus(() =>
+    apiClient.GET("/health"),
+  );
 });
 </script>
 
