@@ -29,6 +29,68 @@ const parseKey = (key) => {
   };
 };
 
+const crossMajorErrors = ({
+  key,
+  name,
+  value,
+  selectorMajor,
+  valueMajor,
+  comments,
+}) => {
+  const upperBound = value.match(/<\s*(\d+)/)?.[1];
+  const crossesMajor =
+    valueMajor !== selectorMajor ||
+    (upperBound !== undefined && Number(upperBound) !== selectorMajor + 1);
+
+  if (!crossesMajor) return [];
+
+  if (!/^\d+\.\d+\.\d+$/.test(value)) {
+    return [
+      `${file}: override '${key}' has a non-exact range outside ${name}'s selected major; cross-major targets must pin one exact release`,
+    ];
+  }
+
+  const reason = comments.join(" ");
+  if (!/\b(?:GHSA-[a-z0-9-]+|CVE-\d{4}-\d+)\b/i.test(reason)) {
+    return [
+      `${file}: cross-major override '${key}: ${value}' must name its advisory directly above the entry`,
+    ];
+  }
+
+  return [];
+};
+
+if (process.argv.includes("--self-test")) {
+  const cases = [
+    ["same-major caret", "^7.1.0", 7, [], 0],
+    ["same-major bounded", ">=7.1.0 <8", 7, [], 0],
+    ["cross-major caret", "^8.0.0", 7, [], 1],
+    ["cross-major bounded", ">=8.0.0 <9", 7, [], 1],
+    ["cross-major exact without advisory", "8.0.0", 7, [], 1],
+    ["cross-major exact with advisory", "8.0.0", 7, ["# CVE-2026-1"], 0],
+  ];
+
+  for (const [label, value, selectorMajor, comments, expected] of cases) {
+    const actual = crossMajorErrors({
+      key: `fixture@${selectorMajor}`,
+      name: "fixture",
+      value,
+      selectorMajor,
+      valueMajor: parseMajor(value),
+      comments,
+    }).length;
+    if (actual !== expected) {
+      console.error(
+        `self-test '${label}' expected ${expected}, received ${actual}`,
+      );
+      process.exit(1);
+    }
+  }
+
+  console.log("pnpm override self-tests passed.");
+  process.exit(0);
+}
+
 const errors = [];
 let comments = [];
 
@@ -70,26 +132,16 @@ for (const line of lines.slice(overridesStart + 1)) {
     continue;
   }
 
-  const upperBound = value.match(/<\s*(\d+)/)?.[1];
-  const rangeCrossesMajor =
-    upperBound !== undefined && Number(upperBound) !== selectorMajor + 1;
-  const exactCrossesMajor =
-    /^\d+\.\d+\.\d+$/.test(value) && valueMajor !== selectorMajor;
-
-  if (rangeCrossesMajor) {
-    errors.push(
-      `${file}: override '${key}' has a range outside ${name}'s selected major`,
-    );
-  }
-
-  if (exactCrossesMajor) {
-    const reason = comments.join(" ");
-    if (!/\b(?:GHSA-[a-z0-9-]+|CVE-\d{4}-\d+)\b/i.test(reason)) {
-      errors.push(
-        `${file}: cross-major override '${key}: ${value}' must name its advisory directly above the entry`,
-      );
-    }
-  }
+  errors.push(
+    ...crossMajorErrors({
+      key,
+      name,
+      value,
+      selectorMajor,
+      valueMajor,
+      comments,
+    }),
+  );
 
   comments = [];
 }

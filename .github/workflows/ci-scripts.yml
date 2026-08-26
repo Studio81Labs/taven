@@ -30,4 +30,5 @@ jobs:
           node-version-file: .nvmrc
       - run: node scripts/ci/check-workflow-coverage.mjs
       - run: node scripts/ci/check-boundaries.mjs
+      - run: node scripts/ci/check-pnpm-overrides.mjs --self-test
       - run: node scripts/ci/check-pnpm-overrides.mjs
