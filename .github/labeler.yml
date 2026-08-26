@@ -1,0 +1,22 @@
+backend:
+  - changed-files:
+      - any-glob-to-any-file: "apps/backend/**"
+web:
+  - changed-files:
+      - any-glob-to-any-file: "apps/web/**"
+admin:
+  - changed-files:
+      - any-glob-to-any-file: "apps/admin/**"
+worker:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/slicer-worker/**"
+          - "packages/slicer-contracts/**"
+contract:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "packages/openapi/**"
+          - "packages/openapi-client/**"
+docs:
+  - changed-files:
+      - any-glob-to-any-file: "docs/**"

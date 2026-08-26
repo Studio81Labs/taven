@@ -1,0 +1,62 @@
+{
+  "components": {
+    "schemas": {
+      "HealthResponseDto": {
+        "properties": {
+          "service": {
+            "enum": [
+              "taven-backend"
+            ],
+            "example": "taven-backend",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok"
+            ],
+            "example": "ok",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "service"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "contact": {},
+    "description": "Canonical HTTP contract for Taven clients",
+    "title": "Taven API",
+    "version": "0.0.0"
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "HealthController_getHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponseDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Report API process health",
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  },
+  "servers": [],
+  "tags": []
+}

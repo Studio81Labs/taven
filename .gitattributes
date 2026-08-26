@@ -1,0 +1,3 @@
+* text=auto eol=lf
+packages/openapi/openapi.json linguist-generated=true
+packages/openapi-client/generated/** linguist-generated=true

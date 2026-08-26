@@ -1,0 +1,21 @@
+{
+  "name": "@taven/slicer-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Taven opt-in BullMQ slicer worker",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/main.ts",
+    "start": "node dist/main.js",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm --filter @taven/slicer-contracts build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@taven/slicer-contracts": "workspace:*",
+    "bullmq": "^5.81.3"
+  }
+}

@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.nuxt/
+.output/
+*.js.map
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE and operating system
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs and coverage
+*.log
+pnpm-debug.log*
+coverage/
+
+# Generated Prisma client
+apps/backend/src/generated/
+
+# Local working notes
+docs/cowork/
