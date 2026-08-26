@@ -1,7 +1,12 @@
 import process from "node:process";
+import { readFile, writeFile } from "node:fs/promises";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const POSTGRES_PROTOCOLS = new Set(["postgres:", "postgresql:"]);
+const LEGACY_LOCAL_DATABASE_URL =
+  "postgresql://taven:taven@localhost:5435/taven";
+const CURRENT_LOCAL_DATABASE_URL =
+  "postgresql://taven:taven@127.0.0.1:5435/taven";
 const COMPOSE_DEFAULTS = Object.freeze({
   host: "127.0.0.1",
   port: "5435",
@@ -42,6 +47,29 @@ function normalizeHostname(value) {
   return String(value ?? "")
     .toLowerCase()
     .replace(/^\[|\]$/g, "");
+}
+
+export function migrateLegacyLocalDatabaseUrl(raw) {
+  const legacyLine = `DATABASE_URL=${LEGACY_LOCAL_DATABASE_URL}`;
+  const currentLine = `DATABASE_URL=${CURRENT_LOCAL_DATABASE_URL}`;
+  const lines = raw.split(/(?<=\n)/);
+  let changed = false;
+  const contents = lines
+    .map((line) => {
+      const ending = line.endsWith("\r\n")
+        ? "\r\n"
+        : line.endsWith("\n")
+          ? "\n"
+          : "";
+      const body = ending ? line.slice(0, -ending.length) : line;
+      if (body !== legacyLine) {
+        return line;
+      }
+      changed = true;
+      return `${currentLine}${ending}`;
+    })
+    .join("");
+  return { changed, contents };
 }
 
 function decodeUrlComponent(value, label) {
@@ -221,7 +249,58 @@ if (process.argv.includes("--self-test")) {
     }
   }
 
+  const migratedLf = migrateLegacyLocalDatabaseUrl(
+    `PORT=3001\nDATABASE_URL=${LEGACY_LOCAL_DATABASE_URL}\n`,
+  );
+  if (
+    !migratedLf.changed ||
+    migratedLf.contents !==
+      `PORT=3001\nDATABASE_URL=${CURRENT_LOCAL_DATABASE_URL}\n`
+  ) {
+    throw new Error("legacy LF DATABASE_URL was not migrated exactly");
+  }
+  const migratedCrlf = migrateLegacyLocalDatabaseUrl(
+    `DATABASE_URL=${LEGACY_LOCAL_DATABASE_URL}\r\nPORT=3001\r\n`,
+  );
+  if (
+    !migratedCrlf.changed ||
+    migratedCrlf.contents !==
+      `DATABASE_URL=${CURRENT_LOCAL_DATABASE_URL}\r\nPORT=3001\r\n`
+  ) {
+    throw new Error("legacy CRLF DATABASE_URL migration changed line endings");
+  }
+  const customEnv =
+    "DATABASE_URL=postgresql://developer:pw@localhost:5544/custom\n";
+  const untouched = migrateLegacyLocalDatabaseUrl(customEnv);
+  if (untouched.changed || untouched.contents !== customEnv) {
+    throw new Error("a custom DATABASE_URL must never be migrated");
+  }
+
   console.log("local DATABASE_URL self-test passed");
+} else if (
+  process.argv.some((argument) => argument.startsWith("--migrate-env-file="))
+) {
+  const argument = process.argv.find((value) =>
+    value.startsWith("--migrate-env-file="),
+  );
+  const path = argument.slice("--migrate-env-file=".length);
+  if (!path) {
+    console.error("--migrate-env-file requires a path");
+    process.exit(1);
+  }
+  try {
+    const original = await readFile(path, "utf8");
+    const migrated = migrateLegacyLocalDatabaseUrl(original);
+    if (migrated.changed) {
+      await writeFile(path, migrated.contents, "utf8");
+      console.log(`Migrated the legacy local DATABASE_URL in ${path}.`);
+    }
+  } catch (error) {
+    console.error(
+      `Could not migrate the legacy local DATABASE_URL in ${path}: ${error.message}`,
+    );
+    process.exit(1);
+  }
 } else {
   let identity;
   try {

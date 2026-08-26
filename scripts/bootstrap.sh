@@ -25,6 +25,12 @@ for app in backend web admin slicer-worker; do
   fi
 done
 
+# Existing checkouts may retain the localhost spelling copied from the old
+# example. Migrate only that exact generated default; custom URLs remain
+# untouched and still pass through the strict rendered-Compose identity check.
+node scripts/ci/assert-local-database-url.mjs \
+  --migrate-env-file=apps/backend/.env
+
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required"
 
 # Prisma gives an ambient DATABASE_URL precedence over apps/backend/.env.
