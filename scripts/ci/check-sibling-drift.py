@@ -1435,6 +1435,7 @@ def compare(local_read, sibling_read) -> list[dict]:
         stack_marker = stack_gates.get(path)
         if stack_marker is not None:
             stack_sides = marker_sides(stack_marker)
+            cross_stack_owned = False
             if path in CROSS_STACK_REQUIRED:
                 capability_marker = gates.get(path)
                 capability_sides = (
@@ -1450,12 +1451,13 @@ def compare(local_read, sibling_read) -> list[dict]:
                         return False
                     if stack_sides[0] != stack_sides[1]:
                         return True
+                    cross_stack_owned = True
                 elif any(capability_sides):
                     # Against a non-mobile repository, require the sole owner
                     # to retain its guard without requiring a counterpart.
                     owned = ours if capability_sides[0] else theirs
                     return owned is not None
-            if not any(stack_sides):
+            if not cross_stack_owned and not any(stack_sides):
                 # Neither repository implements this stack. Its owned helper
                 # may legitimately be absent even when both repos have a
                 # broader mobile surface (for example, two React Native apps).
@@ -3365,6 +3367,19 @@ def self_test() -> int:
         if f["name"] == RELEASE_HELPER
     ]
     assert found == [], f"cross-stack release guard contents are topology: {found}"
+    changed_react_native_release = {
+        **react_native_release,
+        RELEASE_HELPER: "changed react native guard\n",
+    }
+    found = [
+        f
+        for f in compare(
+            repo(**react_native_release).get,
+            repo(**changed_react_native_release).get,
+        )
+        if f["name"] == RELEASE_HELPER
+    ]
+    assert len(found) == 1, f"same-stack release guard drift must report: {found}"
     # Job names behind the gate follow the same rule: the whole workflow being
     # one-sided is silent across stacks, reported within one.
     GATED_WF = ".github/workflows/flutter-pin-check.yml"
