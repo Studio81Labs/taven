@@ -16,6 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "pnpm contracts:build",
     "test": "vitest run",
+    "pretest:watch": "pnpm contracts:build",
     "test:watch": "vitest"
   },
   "dependencies": {
