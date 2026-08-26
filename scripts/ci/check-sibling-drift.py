@@ -1615,11 +1615,6 @@ def compare(local_read, sibling_read) -> list[dict]:
             else capability_marker
         )
         capability_sides = marker_sides(owner_marker)
-        # Preserve the established no-capability topology gate for optional
-        # artifacts. Once either repository owns the capability, however,
-        # validate each repository locally before any pair-level skip.
-        if not any(capability_sides) and path not in CROSS_STACK_REQUIRED:
-            continue
         missing_owner = (
             capability_sides[0] and ours is None,
             capability_sides[1] and theirs is None,
@@ -2358,6 +2353,14 @@ def self_test() -> int:
             }
         )
         files.update(overrides)
+        # Keep the default fixture internally valid: a repository without the
+        # Flutter stack marker does not carry Flutter-only artifacts. Explicit
+        # overrides are preserved so tests can still model a stale non-owner
+        # copy deliberately.
+        if files.get("apps/mobile/pubspec.yaml") is None:
+            for path in set(STACK_TOPOLOGY_GATED) - CROSS_STACK_REQUIRED:
+                if path not in overrides:
+                    files[path] = None
         return {k: v for k, v in files.items() if v is not None}
 
     ours = {
@@ -2925,6 +2928,7 @@ def self_test() -> int:
     # A workflow that uses no actions in BOTH repos is agreement, not drift --
     # this is the noise case that would fire every week if got wrong.
     neither = dict.fromkeys(ACTION_WORKFLOWS, "jobs:\n  a:\n    steps:\n      - run: make\n")
+    neither["apps/mobile/pubspec.yaml"] = "name: app\n"
     found = [f for f in compare(repo(**neither).get, repo(**neither).get) if f["kind"] == "workflow"]
     assert found == [], found
 
@@ -2941,6 +2945,7 @@ def self_test() -> int:
     # direction. The earlier condition reported "empty here, has content
     # there" for two identical empty files.
     blank = dict.fromkeys(ACTION_WORKFLOWS, "   \n")
+    blank["apps/mobile/pubspec.yaml"] = "name: app\n"
     found = [f for f in compare(repo(**blank).get, repo(**blank).get) if f["kind"] == "workflow"]
     assert found == [], f"two blank files agree: {found}"
 
@@ -3036,6 +3041,7 @@ def self_test() -> int:
         "jobs:\n  a:\n    if: false\n    steps:\n      - run: make\n"
         "  b:\n    steps:\n      - run: make\n",
     )
+    one_on["apps/mobile/pubspec.yaml"] = "name: app\n"
     found = [f for f in compare(repo(**one_on).get, repo(**one_on).get) if f["kind"] == "workflow"]
     assert found == [], found
 
@@ -3043,6 +3049,7 @@ def self_test() -> int:
     mixed_jobs = dict.fromkeys(
         ACTION_WORKFLOWS, "jobs:\n  empty:\n  real:\n    steps:\n      - run: make\n"
     )
+    mixed_jobs["apps/mobile/pubspec.yaml"] = "name: app\n"
     found = [f for f in compare(repo(**mixed_jobs).get, repo(**mixed_jobs).get)
              if f["kind"] == "workflow"]
     assert found == [], found
@@ -3050,6 +3057,7 @@ def self_test() -> int:
     # ...but a workflow whose jobs only `run:` things still RUNS. It pins
     # nothing, and reporting that would be noise.
     runs_only = dict.fromkeys(ACTION_WORKFLOWS, "jobs:\n  build:\n    steps:\n      - run: make\n")
+    runs_only["apps/mobile/pubspec.yaml"] = "name: app\n"
     found = [f for f in compare(repo(**runs_only).get, repo(**runs_only).get) if f["kind"] == "workflow"]
     assert found == [], found
 
@@ -3622,6 +3630,15 @@ def self_test() -> int:
         if f["name"].endswith("marketing-ci.yml")
     ]
     assert len(found) == 1 and "expects no artifact there" in found[0]["detail"], found
+    found = [
+        f
+        for f in compare(
+            repo(**marketing_nonowner_stale).get,
+            repo(**marketing_nonowner_stale).get,
+        )
+        if f["name"].endswith("marketing-ci.yml")
+    ]
+    assert len(found) == 1 and "here and there" in found[0]["detail"], found
     marketing_owner_missing = {MARKETING_MARKER: "{}\n", MARKETING_WF: None}
     found = [
         f
