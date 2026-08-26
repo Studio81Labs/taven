@@ -525,6 +525,62 @@ function requireAtomicOrderPhaseProductionStart<S extends string>(
   );
 }
 
+function requireAtomicOrderPhaseQcCompletion<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  if (
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.qcCompletionOrderId !== orderId ||
+    command.context?.qcCompletionPhaseOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.qcCompletionPhaseId !== phaseId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "QC completion must bind the exact Order and its single phase",
+    );
+  }
+  if (
+    command.context?.phaseKind !== "single" ||
+    command.context?.qcCompletionOrderPreviousStatus !== "in_production" ||
+    command.context?.qcCompletionOrderTargetStatus !== "qc_passed" ||
+    command.context?.qcCompletionPhasePreviousStatus !== "in_production" ||
+    command.context?.qcCompletionPhaseTargetStatus !== "qc_passed"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "QC completion must persist the matching Order and phase status pair",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "verifiedQcReadiness",
+    "QC completion requires the complete projected slot readiness result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "qcCompletionCompleted",
+    "QC completion requires both aggregate results",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "qcCompletionAtomic",
+    "Order and phase QC completion must be atomic",
+  );
+}
+
 type OrderTerminalPhaseDisposition = Readonly<{
   phasePrevious: "shipped" | "recovery_pending" | "qc_passed" | "cancelled";
   phaseIntermediate?: "cancelled";
@@ -658,20 +714,83 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  const leaves = command.context?.shipmentLineageLeafStatuses;
-  const normalizedLeaves = Array.isArray(leaves) ? [...leaves] : undefined;
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  const expectedIdsValue = command.context?.expectedShipmentLineageLeafIds;
+  const leavesValue = command.context?.shipmentLineageLeaves;
+  const expectedIds = Array.isArray(expectedIdsValue)
+    ? [...expectedIdsValue]
+    : undefined;
+  const leaves = Array.isArray(leavesValue) ? [...leavesValue] : undefined;
   if (
-    normalizedLeaves === undefined ||
-    normalizedLeaves.length === 0 ||
-    normalizedLeaves.some((status) => status !== "delivered")
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.shipmentLineageSetOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.shipmentLineageSetPhaseId !== phaseId ||
+    command.context?.phaseKind !== "single" ||
+    expectedIds === undefined ||
+    expectedIds.length === 0 ||
+    expectedIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(expectedIds).size !== expectedIds.length ||
+    leaves === undefined ||
+    leaves.length !== expectedIds.length
   ) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
       command.target,
-      "delivery requires every current shipment lineage leaf to be delivered",
+      "delivery requires the authoritative complete shipment lineage leaf set",
     );
   }
+  const authoritativeIds = expectedIds as string[];
+  const projectedIds = new Set<string>();
+  for (const value of leaves) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "delivery projection requires exact shipment lineage leaf records",
+      );
+    }
+    const leaf = value as Readonly<Record<string, unknown>>;
+    const id = leaf.id;
+    if (
+      typeof id !== "string" ||
+      id.trim().length === 0 ||
+      projectedIds.has(id) ||
+      !authoritativeIds.includes(id) ||
+      leaf.orderId !== orderId ||
+      leaf.phaseId !== phaseId ||
+      leaf.status !== "delivered"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "every exact current shipment lineage leaf must be delivered once",
+      );
+    }
+    projectedIds.add(id);
+  }
+  if (authoritativeIds.some((id) => !projectedIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "delivery projection cannot omit a current shipment lineage leaf",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "shipmentLineageLeafSetComplete",
+    "delivery requires the complete locked shipment lineage leaf set",
+  );
 }
 
 function requireVerifiedMatchingRefundWebhook<S extends string>(
@@ -2047,6 +2166,219 @@ export function canAcceptQuote(
   return isQuoteAvailable(quote, quoteRequestStatus, now);
 }
 
+function requireRoleSpecificPaymentVoidClosure<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const paymentId = command.context?.paymentId;
+  const paymentRole = command.context?.paymentRole;
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  const providerTransactionId = command.context?.providerPaymentTransactionId;
+  if (
+    typeof paymentId !== "string" ||
+    paymentId.trim().length === 0 ||
+    command.context?.paymentVoidPaymentId !== paymentId ||
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    typeof providerTransactionId !== "string" ||
+    providerTransactionId.trim().length === 0 ||
+    command.context?.paymentVoidProviderTransactionId !==
+      providerTransactionId ||
+    command.context?.providerVoidOutboxPaymentId !== paymentId ||
+    command.context?.providerVoidOutboxProviderTransactionId !==
+      providerTransactionId ||
+    command.context?.paymentVoidPreviousStatus !== "pending" ||
+    command.context?.paymentVoidTargetStatus !== "voided"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "voiding must bind the exact Payment, provider intent, Order, and phase",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "captureAuthorizationDisabled",
+    "voiding requires capture authorization to be disabled",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "captureWindowClosed",
+    "voiding requires the capture window to be closed",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "captureCutoffSet",
+    "voiding requires the capture cutoff to be recorded",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerVoidOutboxCreated",
+    "voiding requires the exact provider void command to be persisted",
+  );
+
+  if (paymentRole === "full" || paymentRole === "deposit") {
+    const phaseReservationSetId = command.context?.phaseReservationSetId;
+    const orderTarget = command.context?.initialCaptureCloseOrderTargetStatus;
+    const expectedReason =
+      orderTarget === "expired" ? "checkout_expired" : "checkout_cancelled";
+    if (
+      command.context?.initialPaymentRole !== paymentRole ||
+      command.context?.initialPaymentId !== paymentId ||
+      command.context?.initialPaymentOrderId !== orderId ||
+      command.context?.initialCaptureClosePaymentId !== paymentId ||
+      command.context?.initialCaptureCloseOrderId !== orderId ||
+      command.context?.initialCaptureClosePhaseId !== phaseId ||
+      command.context?.initialCaptureClosePhaseOrderId !== orderId ||
+      command.context?.phaseKind !== "single" ||
+      typeof phaseReservationSetId !== "string" ||
+      phaseReservationSetId.trim().length === 0 ||
+      command.context?.initialCaptureCloseReservationSetId !==
+        phaseReservationSetId ||
+      command.context?.initialCaptureCloseReservationSetOrderId !== orderId ||
+      command.context?.initialCaptureCloseReservationSetPhaseId !== phaseId ||
+      command.context?.initialPaymentStatus !== "voided" ||
+      command.context?.initialCaptureCloseOrderPreviousStatus !== "quoted" ||
+      (orderTarget !== "expired" && orderTarget !== "cancelled") ||
+      command.context?.initialCaptureClosePhasePreviousStatus !== "quoted" ||
+      command.context?.initialCaptureClosePhaseTargetStatus !== "cancelled" ||
+      command.context?.initialCaptureCloseReason !== expectedReason
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "initial Payment voiding requires its exact checkout closure result",
+      );
+    }
+    for (const [flag, reason] of [
+      [
+        "initialCaptureWindowClosed",
+        "initial Payment voiding requires its capture window closure",
+      ],
+      [
+        "initialCaptureCutoffSet",
+        "initial Payment voiding requires its immutable cutoff",
+      ],
+      [
+        "initialPaymentVoidOutboxCreated",
+        "initial Payment voiding requires its provider void outbox",
+      ],
+      [
+        "preCapturePhaseCancelled",
+        "initial Payment voiding requires its phase cancellation",
+      ],
+      [
+        "preCaptureFulfilmentSlotsCancelled",
+        "initial Payment voiding requires its slot cancellation",
+      ],
+      [
+        "preCaptureReservationsReleased",
+        "initial Payment voiding requires its reservation release",
+      ],
+      [
+        "initialCaptureCloseAtomic",
+        "initial Payment voiding and checkout closure must be atomic",
+      ],
+    ] as const) {
+      requireFlag(lifecycle, command, flag, reason);
+    }
+    return;
+  }
+
+  if (paymentRole === "balance") {
+    const orderSettlementId = command.context?.orderSettlementId;
+    if (
+      command.context?.balancePaymentRole !== "balance" ||
+      command.context?.balancePaymentId !== paymentId ||
+      command.context?.balancePaymentOrderId !== orderId ||
+      command.context?.balancePaymentPhaseId !== phaseId ||
+      command.context?.balancePaymentPhaseOrderId !== orderId ||
+      command.context?.phaseKind !== "single" ||
+      command.context?.balancePaymentVoidOrderPreviousStatus !==
+        "awaiting_balance" ||
+      command.context?.balancePaymentVoidOrderTargetStatus !==
+        "cancelled_settled" ||
+      command.context?.balancePaymentVoidPhasePreviousStatus !== "qc_passed" ||
+      command.context?.balancePaymentVoidPhaseIntermediateStatus !==
+        "cancelled" ||
+      command.context?.balancePaymentVoidPhaseTargetStatus !==
+        "cancelled_settled" ||
+      command.context?.balancePaymentSettlementPaymentId !== paymentId ||
+      command.context?.balancePaymentSettlementOrderId !== orderId ||
+      typeof orderSettlementId !== "string" ||
+      orderSettlementId.trim().length === 0 ||
+      command.context?.balancePaymentSettlementId !== orderSettlementId ||
+      command.context?.balancePaymentSettlementKind !== "balance_timeout"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "balance Payment voiding requires its exact Order settlement result",
+      );
+    }
+    requireFlag(
+      lifecycle,
+      command,
+      "balancePaymentSettlementCreated",
+      "balance Payment voiding requires an immutable Order settlement",
+    );
+    requireFlag(
+      lifecycle,
+      command,
+      "balancePaymentSettlementImmutable",
+      "balance Payment voiding requires an immutable settlement result",
+    );
+    requireFlag(
+      lifecycle,
+      command,
+      "preHandoffShipmentCancellationsCompleted",
+      "balance Payment voiding requires pre-handoff shipment cancellation",
+    );
+    requireFlag(
+      lifecycle,
+      command,
+      "balancePaymentVoidPhaseCancellationCompleted",
+      "balance Payment voiding requires phase cancellation before settlement",
+    );
+    requireFlag(
+      lifecycle,
+      command,
+      "balancePaymentVoidTerminalPhaseCompleted",
+      "balance Payment voiding requires the terminal phase settlement result",
+    );
+    requireFlag(
+      lifecycle,
+      command,
+      "balancePaymentVoidTerminalPhaseAtomic",
+      "Payment voiding and terminal phase settlement must be atomic",
+    );
+    requireFlag(
+      lifecycle,
+      command,
+      "balancePaymentVoidAtomic",
+      "balance Payment voiding and Order settlement must be atomic",
+    );
+    return;
+  }
+
+  throw new TransitionGuardError(
+    lifecycle,
+    command.current,
+    command.target,
+    "voiding requires a persisted full, deposit, or balance Payment role",
+  );
+}
+
 export type PaymentStatus =
   | "created"
   | "pending"
@@ -2108,24 +2440,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       requireVerifiedMatchingProviderPaymentEvent("Payment", command);
     }
     if (command.current === "pending" && command.target === "voided") {
-      requireFlag(
-        "Payment",
-        command,
-        "captureWindowClosed",
-        "voiding requires the capture window to be closed",
-      );
-      requireFlag(
-        "Payment",
-        command,
-        "captureCutoffSet",
-        "voiding requires the capture cutoff to be recorded",
-      );
-      requireFlag(
-        "Payment",
-        command,
-        "providerVoidOutboxCreated",
-        "voiding requires the provider void command to be persisted",
-      );
+      requireRoleSpecificPaymentVoidClosure("Payment", command);
     }
     if (command.current === "captured" && command.target === "refund_pending") {
       if (command.context?.paymentCaptureKind !== "settlement") {
@@ -2303,9 +2618,11 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         requireInitialCaptureWindowClosed("Order", command);
       }
     }
+    if (command.current === "in_production" && command.target === "qc_passed") {
+      requireAtomicOrderPhaseQcCompletion("Order", command);
+    }
     if (
-      (command.current === "in_production" ||
-        command.current === "recovery_pending") &&
+      command.current === "recovery_pending" &&
       command.target === "qc_passed"
     ) {
       requireFlag(
@@ -2491,8 +2808,13 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         requireAtomicOrderPhaseProductionStart("OrderPhase(single)", command);
       }
       if (
-        (command.current === "in_production" ||
-          command.current === "recovery_pending") &&
+        command.current === "in_production" &&
+        command.target === "qc_passed"
+      ) {
+        requireAtomicOrderPhaseQcCompletion("OrderPhase(single)", command);
+      }
+      if (
+        command.current === "recovery_pending" &&
         command.target === "qc_passed"
       ) {
         requireFlag(

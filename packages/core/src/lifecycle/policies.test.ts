@@ -45,6 +45,13 @@ const permittedContext = {
   providerPaymentTransactionId: "provider-transaction-1",
   providerPaymentEventAuthenticated: true,
   providerPaymentEventVerified: true,
+  paymentVoidPaymentId: "payment-1",
+  paymentVoidProviderTransactionId: "provider-transaction-1",
+  providerVoidOutboxPaymentId: "payment-1",
+  providerVoidOutboxProviderTransactionId: "provider-transaction-1",
+  paymentVoidPreviousStatus: "pending",
+  paymentVoidTargetStatus: "voided",
+  captureAuthorizationDisabled: true,
   refundWebhookPaymentId: "payment-1",
   refundTransactionId: "refund-1",
   refundWebhookRefundTransactionId: "refund-1",
@@ -59,6 +66,15 @@ const permittedContext = {
   initialPaymentOrderId: "order-1",
   initialCaptureCloseOrderId: "order-1",
   initialCaptureClosePaymentId: "payment-1",
+  initialCaptureClosePhaseId: "phase-1",
+  initialCaptureClosePhaseOrderId: "order-1",
+  initialCaptureCloseReservationSetId: "phase-reservation-set-1",
+  initialCaptureCloseReservationSetOrderId: "order-1",
+  initialCaptureCloseReservationSetPhaseId: "phase-1",
+  initialCaptureCloseOrderPreviousStatus: "quoted",
+  initialCaptureCloseOrderTargetStatus: "cancelled",
+  initialCaptureClosePhasePreviousStatus: "quoted",
+  initialCaptureClosePhaseTargetStatus: "cancelled",
   initialPaymentRole: "full",
   initialPaymentStatus: "voided",
   initialCaptureWindowClosed: true,
@@ -160,6 +176,26 @@ const permittedContext = {
   confirmationJobCreationAtomic: true,
   verifiedQcReadiness: true,
   balancePaymentRole: "balance",
+  balancePaymentId: "payment-1",
+  balancePaymentOrderId: "order-1",
+  balancePaymentPhaseId: "phase-1",
+  balancePaymentPhaseOrderId: "order-1",
+  balancePaymentVoidOrderPreviousStatus: "awaiting_balance",
+  balancePaymentVoidOrderTargetStatus: "cancelled_settled",
+  balancePaymentVoidPhasePreviousStatus: "qc_passed",
+  balancePaymentVoidPhaseIntermediateStatus: "cancelled",
+  balancePaymentVoidPhaseTargetStatus: "cancelled_settled",
+  balancePaymentSettlementPaymentId: "payment-1",
+  balancePaymentSettlementOrderId: "order-1",
+  orderSettlementId: "order-settlement-1",
+  balancePaymentSettlementId: "order-settlement-1",
+  balancePaymentSettlementKind: "balance_timeout",
+  balancePaymentSettlementCreated: true,
+  balancePaymentSettlementImmutable: true,
+  balancePaymentVoidPhaseCancellationCompleted: true,
+  balancePaymentVoidTerminalPhaseCompleted: true,
+  balancePaymentVoidTerminalPhaseAtomic: true,
+  balancePaymentVoidAtomic: true,
   balancePaymentOrderMatches: true,
   balancePaymentCreated: true,
   balancePaymentScheduleComplete: true,
@@ -177,7 +213,18 @@ const permittedContext = {
   amountDueMinor: 0n,
   refundableBalanceMinor: 0n,
   reconciliationRefundAllocated: true,
-  shipmentLineageLeafStatuses: ["delivered"],
+  shipmentLineageSetOrderId: "order-1",
+  shipmentLineageSetPhaseId: "phase-1",
+  expectedShipmentLineageLeafIds: ["shipment-lineage-leaf-1"],
+  shipmentLineageLeaves: [
+    {
+      id: "shipment-lineage-leaf-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      status: "delivered",
+    },
+  ],
+  shipmentLineageLeafSetComplete: true,
   verifiedProviderScan: true,
   verifiedProviderVoid: true,
   contextHandoffCompleted: true,
@@ -211,6 +258,15 @@ const permittedContext = {
   productionStartPhaseTargetStatus: "in_production",
   productionStartCompleted: true,
   productionStartAtomic: true,
+  qcCompletionOrderId: "order-1",
+  qcCompletionPhaseOrderId: "order-1",
+  qcCompletionPhaseId: "phase-1",
+  qcCompletionOrderPreviousStatus: "in_production",
+  qcCompletionOrderTargetStatus: "qc_passed",
+  qcCompletionPhasePreviousStatus: "in_production",
+  qcCompletionPhaseTargetStatus: "qc_passed",
+  qcCompletionCompleted: true,
+  qcCompletionAtomic: true,
   orderTerminalPhaseOrderId: "order-1",
   orderTerminalPhaseOwnerOrderId: "order-1",
   orderTerminalPhaseId: "phase-1",
@@ -745,6 +801,39 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
+    ["orderId", " "],
+    ["qcCompletionOrderId", "another-order"],
+    ["qcCompletionPhaseOrderId", "another-order"],
+    ["phaseId", "\t"],
+    ["qcCompletionPhaseId", "another-phase"],
+    ["phaseKind", "sample"],
+    ["qcCompletionOrderPreviousStatus", "confirmed"],
+    ["qcCompletionOrderTargetStatus", "in_production"],
+    ["qcCompletionPhasePreviousStatus", "active"],
+    ["qcCompletionPhaseTargetStatus", "in_production"],
+    ["verifiedQcReadiness", false],
+    ["qcCompletionCompleted", false],
+    ["qcCompletionAtomic", false],
+  ] as const)(
+    "rejects atomic QC completion with invalid %s",
+    (field, value) => {
+      for (const policy of [orderPolicy, singleOrderPhasePolicy] as const) {
+        expect(() =>
+          transition(policy, {
+            current: "in_production",
+            target: "qc_passed",
+            idempotencyKey: `qc-completion-${policy.name}-${field}`,
+            context: {
+              ...contextForTransition("qc_passed", "in_production"),
+              [field]: value,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
     ["quoteAvailable", false],
     ["quoteRequestId", ""],
     ["quoteRequestId", " "],
@@ -909,6 +998,135 @@ describe("v0 lifecycle policy tables", () => {
       current: "captured",
     });
   });
+
+  it.each(["full", "deposit"] as const)(
+    "atomically voids an initial %s Payment with its checkout closure",
+    (paymentRole) => {
+      expect(
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "voided",
+          idempotencyKey: `initial-payment-void-${paymentRole}`,
+          context: {
+            ...contextForTransition("voided", "pending"),
+            paymentRole,
+            initialPaymentRole: paymentRole,
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "pending", current: "voided" });
+    },
+  );
+
+  it("atomically voids a balance Payment with its Order settlement", () => {
+    expect(
+      transition(paymentPolicy, {
+        current: "pending",
+        target: "voided",
+        idempotencyKey: "balance-payment-void",
+        context: {
+          ...contextForTransition("voided", "pending"),
+          paymentRole: "balance",
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "pending", current: "voided" });
+  });
+
+  it.each([
+    ["paymentId", " "],
+    ["paymentRole", "adjustment"],
+    ["paymentVoidPaymentId", "another-payment"],
+    ["providerPaymentTransactionId", " "],
+    ["paymentVoidProviderTransactionId", "another-transaction"],
+    ["providerVoidOutboxPaymentId", "another-payment"],
+    ["providerVoidOutboxProviderTransactionId", "another-transaction"],
+    ["paymentVoidPreviousStatus", "created"],
+    ["paymentVoidTargetStatus", "failed"],
+    ["captureAuthorizationDisabled", false],
+    ["captureWindowClosed", false],
+    ["captureCutoffSet", false],
+    ["providerVoidOutboxCreated", false],
+    ["initialPaymentRole", "balance"],
+    ["initialPaymentId", "another-payment"],
+    ["initialPaymentOrderId", "another-order"],
+    ["initialCaptureClosePaymentId", "another-payment"],
+    ["initialCaptureCloseOrderId", "another-order"],
+    ["initialCaptureClosePhaseId", "another-phase"],
+    ["initialCaptureClosePhaseOrderId", "another-order"],
+    ["phaseKind", "sample"],
+    ["initialCaptureCloseReservationSetId", "another-set"],
+    ["initialCaptureCloseReservationSetOrderId", "another-order"],
+    ["initialCaptureCloseReservationSetPhaseId", "another-phase"],
+    ["initialPaymentStatus", "pending"],
+    ["initialCaptureCloseOrderPreviousStatus", "draft"],
+    ["initialCaptureCloseOrderTargetStatus", "confirmed"],
+    ["initialCaptureClosePhasePreviousStatus", "active"],
+    ["initialCaptureClosePhaseTargetStatus", "active"],
+    ["initialCaptureCloseReason", "checkout_expired"],
+    ["initialCaptureWindowClosed", false],
+    ["initialCaptureCutoffSet", false],
+    ["initialPaymentVoidOutboxCreated", false],
+    ["preCapturePhaseCancelled", false],
+    ["preCaptureFulfilmentSlotsCancelled", false],
+    ["preCaptureReservationsReleased", false],
+    ["initialCaptureCloseAtomic", false],
+  ] as const)(
+    "rejects initial Payment void closure with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "voided",
+          idempotencyKey: `initial-payment-void-${field}`,
+          context: {
+            ...contextForTransition("voided", "pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["balancePaymentRole", "deposit"],
+    ["balancePaymentId", "another-payment"],
+    ["balancePaymentOrderId", "another-order"],
+    ["balancePaymentPhaseId", "another-phase"],
+    ["balancePaymentPhaseOrderId", "another-order"],
+    ["phaseKind", "sample"],
+    ["balancePaymentVoidOrderPreviousStatus", "qc_passed"],
+    ["balancePaymentVoidOrderTargetStatus", "awaiting_balance"],
+    ["balancePaymentVoidPhasePreviousStatus", "in_production"],
+    ["balancePaymentVoidPhaseIntermediateStatus", undefined],
+    ["balancePaymentVoidPhaseTargetStatus", "cancelled"],
+    ["balancePaymentSettlementPaymentId", "another-payment"],
+    ["balancePaymentSettlementOrderId", "another-order"],
+    ["orderSettlementId", " "],
+    ["balancePaymentSettlementId", "another-settlement"],
+    ["balancePaymentSettlementKind", "handoff_reconciliation"],
+    ["balancePaymentSettlementCreated", false],
+    ["balancePaymentSettlementImmutable", false],
+    ["preHandoffShipmentCancellationsCompleted", false],
+    ["balancePaymentVoidPhaseCancellationCompleted", false],
+    ["balancePaymentVoidTerminalPhaseCompleted", false],
+    ["balancePaymentVoidTerminalPhaseAtomic", false],
+    ["balancePaymentVoidAtomic", false],
+  ] as const)(
+    "rejects balance Payment void closure with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "voided",
+          idempotencyKey: `balance-payment-void-${field}`,
+          context: {
+            ...contextForTransition("voided", "pending"),
+            paymentRole: "balance",
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each([undefined, "deposit"] as const)(
     "rejects a balance capture with persisted balance role %s",
@@ -1591,15 +1809,20 @@ describe("v0 lifecycle policy tables", () => {
         }),
       ).toThrow(TransitionGuardError);
 
-      const sparseShipmentStatuses = ["delivered"] as string[];
-      sparseShipmentStatuses.length = 2;
+      const sparseShipmentLeaves = [permittedContext.shipmentLineageLeaves[0]];
+      sparseShipmentLeaves.length = 2;
       expect(() =>
         transition(policy, {
           current: "shipped",
           target: "delivered",
           idempotencyKey: "delivery-leaves-sparse",
           context: {
-            shipmentLineageLeafStatuses: sparseShipmentStatuses,
+            ...permittedContext,
+            expectedShipmentLineageLeafIds: [
+              "shipment-lineage-leaf-1",
+              "shipment-lineage-leaf-2",
+            ],
+            shipmentLineageLeaves: sparseShipmentLeaves,
           },
         }),
       ).toThrow(TransitionGuardError);
@@ -1832,7 +2055,22 @@ describe("v0 lifecycle policy tables", () => {
           current: "shipped",
           target: "delivered",
           idempotencyKey: "delivery-leaves",
-          context: { shipmentLineageLeafStatuses: ["delivered", "in_transit"] },
+          context: {
+            ...permittedContext,
+            expectedShipmentLineageLeafIds: [
+              "shipment-lineage-leaf-1",
+              "shipment-lineage-leaf-2",
+            ],
+            shipmentLineageLeaves: [
+              permittedContext.shipmentLineageLeaves[0],
+              {
+                id: "shipment-lineage-leaf-2",
+                orderId: "order-1",
+                phaseId: "phase-1",
+                status: "in_transit",
+              },
+            ],
+          },
         }),
       ).toThrow(TransitionGuardError);
       expect(
@@ -1840,11 +2078,168 @@ describe("v0 lifecycle policy tables", () => {
           current: "shipped",
           target: "delivered",
           idempotencyKey: "delivery-leaves-complete",
-          context: { shipmentLineageLeafStatuses: ["delivered", "delivered"] },
+          context: {
+            ...permittedContext,
+            expectedShipmentLineageLeafIds: [
+              "shipment-lineage-leaf-1",
+              "shipment-lineage-leaf-2",
+            ],
+            shipmentLineageLeaves: [
+              permittedContext.shipmentLineageLeaves[0],
+              {
+                id: "shipment-lineage-leaf-2",
+                orderId: "order-1",
+                phaseId: "phase-1",
+                status: "delivered",
+              },
+            ],
+          },
         }),
       ).toEqual({ kind: "changed", previous: "shipped", current: "delivered" });
     },
   );
+
+  it.each([
+    ["blank Order identity", { orderId: " " }],
+    ["foreign set Order", { shipmentLineageSetOrderId: "another-order" }],
+    ["foreign set phase", { shipmentLineageSetPhaseId: "another-phase" }],
+    ["wrong phase kind", { phaseKind: "sample" }],
+    [
+      "duplicate expected leaf",
+      {
+        expectedShipmentLineageLeafIds: [
+          "shipment-lineage-leaf-1",
+          "shipment-lineage-leaf-1",
+        ],
+      },
+    ],
+    [
+      "omitted projected leaf",
+      { shipmentLineageLeaves: [permittedContext.shipmentLineageLeaves[0]] },
+    ],
+    [
+      "foreign projected leaf",
+      {
+        shipmentLineageLeaves: [
+          permittedContext.shipmentLineageLeaves[0],
+          {
+            id: "foreign-leaf",
+            orderId: "order-1",
+            phaseId: "phase-1",
+            status: "delivered",
+          },
+        ],
+      },
+    ],
+    [
+      "duplicate projected leaf",
+      {
+        shipmentLineageLeaves: [
+          permittedContext.shipmentLineageLeaves[0],
+          permittedContext.shipmentLineageLeaves[0],
+        ],
+      },
+    ],
+    [
+      "foreign leaf Order",
+      {
+        shipmentLineageLeaves: [
+          permittedContext.shipmentLineageLeaves[0],
+          {
+            id: "shipment-lineage-leaf-2",
+            orderId: "another-order",
+            phaseId: "phase-1",
+            status: "delivered",
+          },
+        ],
+      },
+    ],
+    [
+      "foreign leaf phase",
+      {
+        shipmentLineageLeaves: [
+          permittedContext.shipmentLineageLeaves[0],
+          {
+            id: "shipment-lineage-leaf-2",
+            orderId: "order-1",
+            phaseId: "another-phase",
+            status: "delivered",
+          },
+        ],
+      },
+    ],
+    [
+      "non-delivered leaf",
+      {
+        shipmentLineageLeaves: [
+          permittedContext.shipmentLineageLeaves[0],
+          {
+            id: "shipment-lineage-leaf-2",
+            orderId: "order-1",
+            phaseId: "phase-1",
+            status: "lost",
+          },
+        ],
+      },
+    ],
+    ["incomplete-set flag", { shipmentLineageLeafSetComplete: false }],
+  ] as const)("rejects delivery with %s", (_case, mutation) => {
+    const completeContext = {
+      ...contextForTransition("delivered", "shipped"),
+      expectedShipmentLineageLeafIds: [
+        "shipment-lineage-leaf-1",
+        "shipment-lineage-leaf-2",
+      ],
+      shipmentLineageLeaves: [
+        permittedContext.shipmentLineageLeaves[0],
+        {
+          id: "shipment-lineage-leaf-2",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          status: "delivered",
+        },
+      ],
+    };
+    for (const policy of [orderPolicy, singleOrderPhasePolicy] as const) {
+      expect(() =>
+        transition(policy, {
+          current: "shipped",
+          target: "delivered",
+          idempotencyKey: `delivery-complete-set-${policy.name}-${_case}`,
+          context: { ...completeContext, ...mutation },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+  });
+
+  it("accepts a reordered complete shipment lineage leaf set", () => {
+    const context = {
+      ...contextForTransition("delivered", "shipped"),
+      expectedShipmentLineageLeafIds: [
+        "shipment-lineage-leaf-1",
+        "shipment-lineage-leaf-2",
+      ],
+      shipmentLineageLeaves: [
+        {
+          id: "shipment-lineage-leaf-2",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          status: "delivered",
+        },
+        permittedContext.shipmentLineageLeaves[0],
+      ],
+    };
+    for (const policy of [orderPolicy, singleOrderPhasePolicy] as const) {
+      expect(
+        transition(policy, {
+          current: "shipped",
+          target: "delivered",
+          idempotencyKey: `delivery-reordered-${policy.name}`,
+          context,
+        }),
+      ).toEqual({ kind: "changed", previous: "shipped", current: "delivered" });
+    }
+  });
 
   it.each([
     ["Order", orderPolicy, "confirmed"],
@@ -1959,7 +2354,7 @@ describe("v0 lifecycle policy tables", () => {
           current: "in_production",
           target: "qc_passed",
           idempotencyKey: "qc-readiness-complete",
-          context: { verifiedQcReadiness: true },
+          context: contextForTransition("qc_passed", "in_production"),
         }),
       ).toEqual({
         kind: "changed",
