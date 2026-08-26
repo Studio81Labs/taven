@@ -1,3 +1,4 @@
+# ported from Studio81Labs/nexcue@22c40d357b8934b3df499b024b2c390444e02c2f
 # PyYAML is the only non-stdlib dependency of check-sibling-drift.py.
 # Hashes cover CPython 3.10-3.14 wheels on x86_64/arm64 Linux and macOS,
 # plus x86_64 Windows. --only-binary makes unsupported platforms fail closed.

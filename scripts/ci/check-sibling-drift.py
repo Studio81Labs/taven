@@ -1168,6 +1168,11 @@ PROVENANCE = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 
+EDITORCONFIG_DART_HEADER = re.compile(r"(?m)^\[\*\.dart\][ \t]*$")
+EDITORCONFIG_DART_SECTION = re.compile(
+    r"(?ms)^\[\*\.dart\][ \t]*(?:\r\n|\n|\r).*?(?=^\[|\Z)"
+)
+
 
 def strip_provenance(text: str) -> str:
     """Remove provenance headers before comparing two copies of a file.
@@ -1183,6 +1188,11 @@ def strip_provenance(text: str) -> str:
     from is metadata about the copy, not part of the content being compared.
     """
     return PROVENANCE.sub("", text)
+
+
+def strip_editorconfig_dart_section(text: str) -> str:
+    """Remove only the Dart section while retaining shared editor policy."""
+    return EDITORCONFIG_DART_SECTION.sub("", text)
 
 
 def line_endings(text: str) -> list[str]:
@@ -1340,6 +1350,23 @@ def compare(local_read, sibling_read) -> list[dict]:
             continue
         if ours is not None and theirs is not None:
             ours, theirs = strip_provenance(ours), strip_provenance(theirs)
+            if path == ".editorconfig":
+                flutter_sides = marker_sides("apps/mobile/pubspec.yaml")
+                for text, has_flutter, side in (
+                    (ours, flutter_sides[0], "here"),
+                    (theirs, flutter_sides[1], "there"),
+                ):
+                    if not has_flutter and EDITORCONFIG_DART_HEADER.search(text):
+                        findings.append(
+                            {
+                                "kind": "file",
+                                "name": path,
+                                "detail": f"contains a [*.dart] section {side} without a Flutter app",
+                            }
+                        )
+                if not all(flutter_sides):
+                    ours = strip_editorconfig_dart_section(ours)
+                    theirs = strip_editorconfig_dart_section(theirs)
         if ours == theirs:
             continue
         if ours is None or theirs is None:
@@ -1823,7 +1850,7 @@ def self_test() -> int:
 
     ours = {
         ".nvmrc": "22\n",
-        ".editorconfig": "root = true\n[*.dart]\n",
+        ".editorconfig": "root = true\n[*.py]\nindent_size = 4\n",
         "pnpm-workspace.yaml": "minimumReleaseAge: 1440\ntrustPolicy: no-downgrade\n",
         "tsconfig.base.json": '{ "strict": true, "noImplicitOverride": true }',
         ".github/workflows/labeler.yml": wf("actions/labeler@aaaaaaa # v7.0.0"),
@@ -1837,6 +1864,25 @@ def self_test() -> int:
     theirs[".editorconfig"] = "root = true\n"
     found = compare(repo(**ours).get, repo(**theirs).get)
     assert [f["name"] for f in found] == [".editorconfig"], found
+
+    common_editorconfig = "root = true\n[*.py]\nindent_size = 4\n"
+    flutter_editorconfig = "root = true\n[*.dart]\nindent_size = 2\n\n[*.py]\nindent_size = 4\n"
+    flutter_editor = {
+        ".editorconfig": flutter_editorconfig,
+        "apps/mobile/pubspec.yaml": "name: mobile\n",
+    }
+    plain_editor = {".editorconfig": common_editorconfig}
+    found = [
+        f for f in compare(repo(**flutter_editor).get, repo(**plain_editor).get)
+        if f["name"] == ".editorconfig"
+    ]
+    assert found == [], f"Dart-only editor policy is stack topology: {found}"
+    invalid_plain_editor = {".editorconfig": flutter_editorconfig}
+    found = [
+        f for f in compare(repo(**invalid_plain_editor).get, repo(**plain_editor).get)
+        if f["name"] == ".editorconfig"
+    ]
+    assert len(found) == 1 and "without a Flutter app" in found[0]["detail"], found
 
     # A file absent on the sibling. `None` rather than `del`: repo() seeds
     # every manifest path, so deleting the key only gets it seeded back with

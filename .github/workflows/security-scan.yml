@@ -50,6 +50,9 @@ jobs:
           if [[ "$BASE_SHA" =~ ^0+$ ]]; then
             echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
             echo "Initial push — a full-history scan will run."
+          elif ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
+            echo "Previous commit is unreachable — a full-history scan will run."
           elif git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
                | grep -qx '\.github/workflows/security-scan\.yml'; then
             echo "scanner-changed=true" >> "$GITHUB_OUTPUT"
@@ -66,6 +69,10 @@ jobs:
           set -euo pipefail
           if [[ "$BASE_SHA" =~ ^0+$ ]]; then
             echo "Initial push is covered by the full-history scan."
+            exit 0
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Unreachable previous commit is covered by the full-history scan."
             exit 0
           fi
           docker run --rm -v "${GITHUB_WORKSPACE}:/repo" -w /repo \
