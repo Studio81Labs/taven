@@ -103,6 +103,10 @@ const permittedContext = {
   jobResourceSettlementJobId: "job-1",
   jobResourceSettlementProductionReservationId: "production-reservation-1",
   jobResourceSettlementAtomic: true,
+  printingReservationJobId: "job-1",
+  printingReservationProductionReservationId: "production-reservation-1",
+  printingReservationState: "printing",
+  printingReservationCommitAtomic: true,
   materialConsumptionMode: "zero_pre_print",
   materialConsumptionSettled: true,
   inventoryReservationReleased: true,
@@ -137,7 +141,6 @@ const permittedContext = {
   freshQcPassed: true,
   cleanPostDeliveryQualityClaim: true,
   remedyCancellationCompleted: true,
-  verifiedShipmentIncident: true,
   reshipmentAuthorizationConsumed: true,
   reshipmentHandoffCompleted: true,
   reshipmentAuthorizationCreated: true,
@@ -186,6 +189,9 @@ function claimSlotStatusesForTarget(target: string): readonly string[] {
 }
 
 function contextForTransition(target: string, current?: string) {
+  const remedyIncident =
+    target === "recovery_pending" &&
+    (current === "replacement_shipped" || current === "reship_shipped");
   const failureStage =
     current === "printing"
       ? "printing"
@@ -197,9 +203,11 @@ function contextForTransition(target: string, current?: string) {
             ? "packing"
             : "machine";
   const materialConsumptionMode =
-    current === "accepted" || current === "gcode_ready"
-      ? "zero_pre_print"
-      : "actual_recorded";
+    current === "gcode_ready" && target === "printing"
+      ? "actual_recorded"
+      : current === "accepted" || current === "gcode_ready"
+        ? "zero_pre_print"
+        : "actual_recorded";
   return {
     ...permittedContext,
     failureStage,
@@ -209,8 +217,12 @@ function contextForTransition(target: string, current?: string) {
       current === "voided" && target === "refund_pending" ? "captured" : target,
     initialCaptureCloseReason:
       target === "expired" ? "checkout_expired" : "checkout_cancelled",
-    providerEventStatus:
-      target === "delivered_reship" || target === "delivered_reprint"
+    currentRemedyShipmentLineageLeafStatus: remedyIncident
+      ? "lost"
+      : permittedContext.currentRemedyShipmentLineageLeafStatus,
+    providerEventStatus: remedyIncident
+      ? "lost"
+      : target === "delivered_reship" || target === "delivered_reprint"
         ? "delivered"
         : target,
     claimSlotResolutionStatuses: claimSlotStatusesForTarget(target),
@@ -336,6 +348,7 @@ describe("v0 lifecycle policy tables", () => {
     [singleOrderPhasePolicy, "recovery_pending", "qc_passed"],
     [singleOrderPhasePolicy, "shipped", "delivered"],
     [jobPolicy, "created", "accepted"],
+    [jobPolicy, "gcode_ready", "printing"],
     [jobPolicy, "packed", "handed_over"],
     [shipmentPolicy, "label_created", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "handed_over"],
@@ -1429,6 +1442,77 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
+    ["currentRemedyShipmentLineageLeafId", ""],
+    ["providerEventShipmentId", "sibling-remedy-shipment"],
+    ["providerEventAuthenticated", false],
+    ["providerEventVerified", false],
+    ["providerEventStatus", "delivered"],
+    ["currentRemedyShipmentLineageLeafStatus", "in_transit"],
+    ["currentRemedyShipmentLineageLeafStatus", "returned"],
+  ] as const)(
+    "rejects a remedy incident without exact current lineage proof (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "replacement_shipped",
+          target: "recovery_pending",
+          idempotencyKey: `remedy-incident-${field}`,
+          context: {
+            currentRemedyShipmentLineageLeafId: "remedy-shipment-1",
+            currentRemedyShipmentLineageLeafStatus: "lost",
+            providerEventShipmentId: "remedy-shipment-1",
+            providerEventAuthenticated: true,
+            providerEventVerified: true,
+            providerEventStatus: "lost",
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["replacement_shipped", "lost"],
+    ["replacement_shipped", "returned"],
+    ["reship_shipped", "lost"],
+    ["reship_shipped", "returned"],
+  ] as const)(
+    "records %s -> recovery_pending only for its matching %s remedy event",
+    (current, providerEventStatus) => {
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          current,
+          target: "recovery_pending",
+          idempotencyKey: `remedy-incident-${current}-${providerEventStatus}`,
+          context: {
+            currentRemedyShipmentLineageLeafId: "remedy-shipment-1",
+            currentRemedyShipmentLineageLeafStatus: providerEventStatus,
+            providerEventShipmentId: "remedy-shipment-1",
+            providerEventAuthenticated: true,
+            providerEventVerified: true,
+            providerEventStatus,
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "recovery_pending",
+      });
+    },
+  );
+
+  it("does not accept the legacy remedy incident boolean without provider evidence", () => {
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "reship_shipped",
+        target: "recovery_pending",
+        idempotencyKey: "remedy-incident-legacy-boolean",
+        context: { verifiedShipmentIncident: true },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
     ["currentRemedyShipmentLineageLeafStatus", "in_transit"],
     ["providerEventShipmentId", "superseded-remedy-shipment"],
     ["providerEventAuthenticated", false],
@@ -1505,6 +1589,7 @@ describe("v0 lifecycle policy tables", () => {
       "gcode_ready",
       ["productionSliceFromReservationSnapshot", "reproductionArtifactSealed"],
     ],
+    [jobPolicy, "gcode_ready", "printing", ["printingReservationCommitAtomic"]],
     [
       jobPolicy,
       "printed",
@@ -1518,6 +1603,11 @@ describe("v0 lifecycle policy tables", () => {
       "qc_rejected",
       [
         "qcRejectionVerified",
+        "materialConsumptionSettled",
+        "inventoryReservationReleased",
+        "capacityReservationReleased",
+        "jobResourceSettlementAtomic",
+        "labelCancellationBarrierCompleted",
         "replacementRequestCreated",
         "replacementDeadlineSet",
       ],
@@ -1736,6 +1826,12 @@ describe("v0 lifecycle policy tables", () => {
       "reship_pending",
       ["reshipmentAuthorizationCreated", "reshipmentAuthorizationSetupAtomic"],
     ],
+    [
+      claimSlotResolutionPolicy,
+      "replacement_shipped",
+      "recovery_pending",
+      ["providerEventAuthenticated", "providerEventVerified"],
+    ],
   ] as const)(
     "rejects %s -> %s when %s is missing",
     (policy, current, target, flags) => {
@@ -1760,6 +1856,7 @@ describe("v0 lifecycle policy tables", () => {
     [jobPolicy, "accepted", "cancelled"],
     [jobPolicy, "accepted", "failed"],
     [jobPolicy, "accepted", "gcode_ready"],
+    [jobPolicy, "gcode_ready", "printing"],
     [jobPolicy, "printed", "photo_submitted"],
     [jobPolicy, "photo_submitted", "qc_approved"],
     [jobPolicy, "photo_submitted", "qc_rejected"],
@@ -1789,6 +1886,7 @@ describe("v0 lifecycle policy tables", () => {
     [shipmentPolicy, "lost", "recovered"],
     [claimSlotResolutionPolicy, "pending", "reship_pending"],
     [claimSlotResolutionPolicy, "recovery_pending", "reship_pending"],
+    [claimSlotResolutionPolicy, "replacement_shipped", "recovery_pending"],
   ] as const)(
     "accepts %s -> %s with complete command evidence",
     (policy, current, target) => {
@@ -1833,6 +1931,51 @@ describe("v0 lifecycle policy tables", () => {
             ...(target === "cancelled"
               ? { cancellationReason: "not-a-reason" }
               : { failureStage: "not-a-stage", failureReason: " " }),
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["printingReservationJobId", "another-job"],
+    ["productionReservationJobId", "another-job"],
+    ["printingReservationProductionReservationId", "another-reservation"],
+    ["printingReservationState", "allocated"],
+    ["materialConsumptionMode", "zero_pre_print"],
+  ] as const)(
+    "rejects gcode_ready -> printing with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current: "gcode_ready",
+          target: "printing",
+          idempotencyKey: `printing-reservation-${field}`,
+          context: {
+            ...contextForTransition("printing", "gcode_ready"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["jobResourceSettlementJobId", "another-job"],
+    ["productionReservationJobId", "another-job"],
+    ["jobResourceSettlementProductionReservationId", "another-reservation"],
+    ["materialConsumptionMode", "zero_pre_print"],
+  ] as const)(
+    "rejects photo_submitted -> qc_rejected with invalid settlement %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current: "photo_submitted",
+          target: "qc_rejected",
+          idempotencyKey: `qc-rejection-settlement-${field}`,
+          context: {
+            ...contextForTransition("qc_rejected", "photo_submitted"),
+            [field]: value,
           },
         }),
       ).toThrow(TransitionGuardError);

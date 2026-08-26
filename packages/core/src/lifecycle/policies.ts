@@ -565,6 +565,57 @@ function requireJobResourceSettlement<S extends string>(
   );
 }
 
+function requirePrintingReservationCommit<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const jobId = command.context?.jobId;
+  const productionReservationId = command.context?.productionReservationId;
+  if (
+    typeof jobId !== "string" ||
+    jobId.length === 0 ||
+    command.context?.productionReservationJobId !== jobId ||
+    command.context?.printingReservationJobId !== jobId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "printing reservation commit must belong to this exact Job",
+    );
+  }
+  if (
+    typeof productionReservationId !== "string" ||
+    productionReservationId.length === 0 ||
+    command.context?.printingReservationProductionReservationId !==
+      productionReservationId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "printing must commit this Job's exact ProductionReservation",
+    );
+  }
+  if (
+    command.context?.printingReservationState !== "printing" ||
+    command.context?.materialConsumptionMode !== "actual_recorded"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "printing must commit the reservation into material consumption",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "printingReservationCommitAtomic",
+    "reservation ownership and the printing transition must commit atomically",
+  );
+}
+
 function isJobFailureStageForCurrent(
   current: string,
   value: unknown,
@@ -875,6 +926,50 @@ function requireVerifiedCurrentRemedyDelivery<S extends string>(
       command.current,
       command.target,
       "remedy delivery requires a matching delivered provider event",
+    );
+  }
+}
+
+function requireVerifiedCurrentRemedyIncident<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const currentLeafId = command.context?.currentRemedyShipmentLineageLeafId;
+  const eventShipmentId = command.context?.providerEventShipmentId;
+  if (
+    typeof currentLeafId !== "string" ||
+    currentLeafId.length === 0 ||
+    eventShipmentId !== currentLeafId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "remedy incident must match the exact current shipment lineage leaf",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "providerEventAuthenticated",
+    "remedy incident requires an authenticated provider event",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerEventVerified",
+    "remedy incident requires a verified provider event",
+  );
+  const eventStatus = command.context?.providerEventStatus;
+  if (
+    (eventStatus !== "lost" && eventStatus !== "returned") ||
+    command.context?.currentRemedyShipmentLineageLeafStatus !== eventStatus
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "remedy recovery requires a matching lost or returned provider outcome",
     );
   }
 }
@@ -1487,6 +1582,9 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
         "G-code requires its reproduction artifact to be sealed",
       );
     }
+    if (command.current === "gcode_ready" && command.target === "printing") {
+      requirePrintingReservationCommit("Job", command);
+    }
     if (command.current === "printed" && command.target === "photo_submitted") {
       requireFlag(
         "Job",
@@ -1521,6 +1619,13 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
         command,
         "qcRejectionVerified",
         "QC rejection requires a verified QC decision",
+      );
+      requireJobResourceSettlement("Job", command);
+      requireFlag(
+        "Job",
+        command,
+        "labelCancellationBarrierCompleted",
+        "QC rejection requires every carrier label cancellation barrier to complete",
       );
       requireJobReplacementObligation("Job", command);
     }
@@ -2006,12 +2111,7 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           command.current === "reship_shipped") &&
         command.target === "recovery_pending"
       ) {
-        requireFlag(
-          "ClaimSlotResolution",
-          command,
-          "verifiedShipmentIncident",
-          "a shipped remedy can recover only after a verified lost or returned incident",
-        );
+        requireVerifiedCurrentRemedyIncident("ClaimSlotResolution", command);
       }
       if (
         (command.current === "reship_shipped" &&
