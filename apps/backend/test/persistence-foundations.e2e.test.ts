@@ -3949,7 +3949,7 @@ describe("persistence foundations", () => {
     );
   });
 
-  it("rejects active children added after a reservation set is terminal", async () => {
+  it("rejects production children added after a reservation set is terminal", async () => {
     const client = await pool.connect();
     const fixtures = factory(client, "terminal-set-late-children");
     try {
@@ -3970,39 +3970,11 @@ describe("persistence foundations", () => {
       await client.query("COMMIT");
 
       await client.query("BEGIN");
-      await fixtures.createProductionReservation(foundation, production);
-      await client.query(
-        'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [
-          production.inventoryReservationId,
-          foundation.nodeId,
-          production.productionReservationId,
-          foundation.inventoryId,
-          60,
-          testTimes.expiresAt,
-          testTimes.createdAt,
-          testTimes.createdAt,
-        ],
-      );
-      await client.query(
-        'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-        [
-          fixtures.id("late-capacity"),
-          foundation.nodeId,
-          production.productionReservationId,
-          production.candidateCapacityIntervalId,
-          foundation.machineId,
-          testTimes.capacityStart,
-          testTimes.capacityEnd,
-          testTimes.expiresAt,
-          testTimes.createdAt,
-          testTimes.createdAt,
-        ],
-      );
-
-      await expect(client.query("COMMIT")).rejects.toMatchObject({
+      await expect(
+        fixtures.createProductionReservation(foundation, production),
+      ).rejects.toMatchObject({
         code: "23514",
-        constraint: "phase_reservation_set_terminal_children_check",
+        constraint: "phase_reservation_set_child_insert_state_check",
       });
       await client.query("ROLLBACK");
 
@@ -4015,5 +3987,90 @@ describe("persistence foundations", () => {
       await client.query("ROLLBACK").catch(() => undefined);
       client.release();
     }
+  });
+
+  it("rejects resource children added after a reservation set is terminal", async () => {
+    await inRollbackTransaction(
+      "terminal-set-late-resources",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "terminal-set-late-resources",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+          );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.inventoryReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RELEASED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+
+        await client.query("SAVEPOINT late_inventory");
+        await expect(
+          client.query(
+            'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+            [
+              fixtures.id("late-inventory"),
+              foundation.nodeId,
+              production.productionReservationId,
+              foundation.inventoryId,
+              60,
+              testTimes.expiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_reservation_set_child_insert_state_check",
+        });
+        await client.query("ROLLBACK TO SAVEPOINT late_inventory");
+
+        await client.query("SAVEPOINT late_capacity");
+        await expect(
+          client.query(
+            'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+            [
+              fixtures.id("late-capacity"),
+              foundation.nodeId,
+              production.productionReservationId,
+              production.candidateCapacityIntervalId,
+              foundation.machineId,
+              testTimes.capacityStart,
+              testTimes.capacityEnd,
+              testTimes.expiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_reservation_set_child_insert_state_check",
+        });
+        await client.query("ROLLBACK TO SAVEPOINT late_capacity");
+
+        const inventory = await client.query<{ reserved_milligrams: string }>(
+          'SELECT "reserved_milligrams" FROM "inventories" WHERE "id" = $1',
+          [foundation.inventoryId],
+        );
+        expect(inventory.rows[0]?.reserved_milligrams).toBe("0");
+      },
+    );
   });
 });

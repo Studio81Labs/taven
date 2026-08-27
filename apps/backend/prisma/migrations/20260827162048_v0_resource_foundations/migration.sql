@@ -2073,6 +2073,53 @@ CREATE TRIGGER "production_reservations_job_binding"
     BEFORE INSERT OR UPDATE ON "production_reservations"
     FOR EACH ROW EXECUTE FUNCTION taven_validate_production_job_binding();
 
+CREATE FUNCTION taven_require_building_reservation_parent()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    parent_status "phase_reservation_set_status";
+BEGIN
+    IF TG_TABLE_NAME = 'production_reservations' THEN
+        SELECT reservation_set."status" INTO parent_status
+        FROM "phase_reservation_sets" reservation_set
+        WHERE reservation_set."id" = NEW."phase_reservation_set_id"
+          AND reservation_set."node_id" = NEW."node_id"
+        FOR UPDATE;
+    ELSE
+        SELECT reservation_set."status" INTO parent_status
+        FROM "production_reservations" production
+        JOIN "phase_reservation_sets" reservation_set
+          ON reservation_set."id" = production."phase_reservation_set_id"
+         AND reservation_set."node_id" = production."node_id"
+        WHERE production."id" = NEW."production_reservation_id"
+          AND production."node_id" = NEW."node_id"
+        FOR UPDATE OF reservation_set;
+    END IF;
+
+    IF NOT FOUND THEN
+        RETURN NEW;
+    END IF;
+
+    IF parent_status <> 'BUILDING' THEN
+        RAISE EXCEPTION 'reservation children can only be created while their parent set is building'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_child_insert_state_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "production_reservations_00_parent_building_guard"
+    BEFORE INSERT ON "production_reservations"
+    FOR EACH ROW EXECUTE FUNCTION taven_require_building_reservation_parent();
+CREATE TRIGGER "inventory_reservations_00_parent_building_guard"
+    BEFORE INSERT ON "inventory_reservations"
+    FOR EACH ROW EXECUTE FUNCTION taven_require_building_reservation_parent();
+CREATE TRIGGER "capacity_reservations_00_parent_building_guard"
+    BEFORE INSERT ON "capacity_reservations"
+    FOR EACH ROW EXECUTE FUNCTION taven_require_building_reservation_parent();
+
 CREATE FUNCTION taven_validate_production_set_expiry()
 RETURNS trigger
 LANGUAGE plpgsql
