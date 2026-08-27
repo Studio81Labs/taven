@@ -125,6 +125,43 @@ const permittedContext = {
   providerPaymentTransactionId: "provider-transaction-1",
   providerPaymentEventAuthenticated: true,
   providerPaymentEventVerified: true,
+  paymentFailureProviderEventId: "payment-failure-event-1",
+  paymentFailurePreviousPaymentResultId: "payment-pending-result-1",
+  paymentFailureResultId: "payment-failure-result-1",
+  paymentFailureCurrentStateCommandKey: "payment-pending-command-1",
+  paymentFailureExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "pending",
+    resultId: "payment-pending-result-1",
+    currentStateCommandKey: "payment-pending-command-1",
+    immutable: true,
+  },
+  paymentFailureProviderEvent: {
+    id: "payment-failure-event-1",
+    paymentId: "payment-1",
+    transactionId: "provider-transaction-1",
+    status: "failed",
+    authenticated: true,
+    verified: true,
+    resultId: "payment-failure-result-1",
+    immutable: true,
+  },
+  paymentFailureProviderTransaction: {
+    id: "provider-transaction-1",
+    paymentId: "payment-1",
+    eventId: "payment-failure-event-1",
+    status: "failed",
+    resultId: "payment-failure-result-1",
+    immutable: true,
+  },
+  paymentFailurePaymentResultId: "payment-failure-result-1",
+  paymentFailureProviderEventResultId: "payment-failure-result-1",
+  paymentFailureProviderTransactionResultId: "payment-failure-result-1",
+  paymentFailureCompleted: true,
+  paymentFailureAtomic: true,
   paymentVoidPaymentId: "payment-1",
   paymentVoidProviderTransactionId: "provider-transaction-1",
   providerVoidOutboxPaymentId: "payment-1",
@@ -1817,6 +1854,7 @@ const permittedContext = {
     resolutionId: null,
     replacementSetId: null,
     status: "packed",
+    currentStateCommandKey: "job-packed-command-1",
     currentLineageLeaf: true,
     immutable: true,
   },
@@ -1828,6 +1866,7 @@ const permittedContext = {
   jobHandoffJobResultId: "handoff-result-1",
   jobHandoffPreviousStatus: "packed",
   jobHandoffTargetStatus: "handed_over",
+  jobHandoffCurrentStateCommandKey: "job-packed-command-1",
   jobHandoffCompleted: true,
   jobHandoffAtomic: true,
   labelledHandoffKind: "ordinary",
@@ -1938,6 +1977,49 @@ const permittedContext = {
   providerEventKind: "acceptance_scan",
   providerEventAuthenticated: true,
   providerEventVerified: true,
+  shipmentProviderOutcomePreviousResultId: "shipment-handed_over-result-1",
+  shipmentProviderOutcomeResultId: "shipment-in_transit-provider-result-1",
+  shipmentProviderOutcomeCurrentStateCommandKey:
+    "shipment-handed_over-command-1",
+  shipmentProviderOutcomeExpectedShipment: {
+    id: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    carrierLabelId: "label-1",
+    status: "handed_over",
+    resultId: "shipment-handed_over-result-1",
+    currentStateCommandKey: "shipment-handed_over-command-1",
+    immutable: true,
+  },
+  shipmentProviderOutcomeEvent: {
+    id: "shipment-provider-event-1",
+    shipmentId: "shipment-1",
+    carrierLabelId: "label-1",
+    transactionId: "shipment-provider-transaction-1",
+    previousStatus: "handed_over",
+    targetStatus: "in_transit",
+    status: "in_transit",
+    authenticated: true,
+    verified: true,
+    resultId: "shipment-in_transit-provider-result-1",
+    immutable: true,
+  },
+  shipmentProviderOutcomeTransaction: {
+    id: "shipment-provider-transaction-1",
+    shipmentId: "shipment-1",
+    carrierLabelId: "label-1",
+    eventId: "shipment-provider-event-1",
+    status: "succeeded",
+    resultId: "shipment-in_transit-provider-result-1",
+    immutable: true,
+  },
+  shipmentProviderOutcomeShipmentResultId:
+    "shipment-in_transit-provider-result-1",
+  shipmentProviderOutcomeEventResultId: "shipment-in_transit-provider-result-1",
+  shipmentProviderOutcomeTransactionResultId:
+    "shipment-in_transit-provider-result-1",
+  shipmentProviderOutcomeCompleted: true,
+  shipmentProviderOutcomeAtomic: true,
   currentRemedyShipmentLineageLeafId: "shipment-1",
   currentRemedyShipmentLineageLeafStatus: "delivered",
   remedyIncidentResultId: "remedy-incident-result-1",
@@ -2329,8 +2411,38 @@ function contextForTransition(target: string, current?: string) {
       : "printing";
   const jobCancellationReservationTarget =
     jobCancellationReservationState === "scheduled" ? "released" : "settled";
+  const shipmentProviderOutcomeSource = current ?? "handed_over";
+  const shipmentProviderOutcomeTarget = target;
+  const shipmentProviderOutcomeResultId = `shipment-${shipmentProviderOutcomeTarget}-provider-result-1`;
   return {
     ...permittedContext,
+    paymentFailureExpectedPayment: {
+      ...permittedContext.paymentFailureExpectedPayment,
+      role: permittedContext.paymentRole,
+    },
+    shipmentProviderOutcomePreviousResultId: `shipment-${shipmentProviderOutcomeSource}-result-1`,
+    shipmentProviderOutcomeResultId,
+    shipmentProviderOutcomeCurrentStateCommandKey: `shipment-${shipmentProviderOutcomeSource}-command-1`,
+    shipmentProviderOutcomeExpectedShipment: {
+      ...permittedContext.shipmentProviderOutcomeExpectedShipment,
+      status: shipmentProviderOutcomeSource,
+      resultId: `shipment-${shipmentProviderOutcomeSource}-result-1`,
+      currentStateCommandKey: `shipment-${shipmentProviderOutcomeSource}-command-1`,
+    },
+    shipmentProviderOutcomeEvent: {
+      ...permittedContext.shipmentProviderOutcomeEvent,
+      previousStatus: shipmentProviderOutcomeSource,
+      targetStatus: shipmentProviderOutcomeTarget,
+      status: shipmentProviderOutcomeTarget,
+      resultId: shipmentProviderOutcomeResultId,
+    },
+    shipmentProviderOutcomeTransaction: {
+      ...permittedContext.shipmentProviderOutcomeTransaction,
+      resultId: shipmentProviderOutcomeResultId,
+    },
+    shipmentProviderOutcomeShipmentResultId: shipmentProviderOutcomeResultId,
+    shipmentProviderOutcomeEventResultId: shipmentProviderOutcomeResultId,
+    shipmentProviderOutcomeTransactionResultId: shipmentProviderOutcomeResultId,
     jobCancellationPreviousJobResultId: `job-${jobCancellationState}-result-1`,
     jobCancellationPreviousReservationResultId: `reservation-${jobCancellationReservationState}-result-1`,
     jobCancellationCurrentStateCommandKey: `job-${jobCancellationState}-command-1`,
@@ -2480,7 +2592,9 @@ function contextForTransition(target: string, current?: string) {
       : permittedContext.handoffOrderPreviousStatus,
     cancellationRaceHandoffKind: unauthorizedHandoffReconciliation
       ? "unauthorized_reconciliation"
-      : permittedContext.cancellationRaceHandoffKind,
+      : current === "packed" && target === "handed_over"
+        ? undefined
+        : permittedContext.cancellationRaceHandoffKind,
     cancellationRaceResultKind: unauthorizedHandoffReconciliation
       ? "unauthorized_reconciliation"
       : permittedContext.cancellationRaceResultKind,
@@ -2555,6 +2669,27 @@ function commandAnchors(
   current: string,
   target: string,
 ): Readonly<{ aggregateId?: string; currentStateCommandKey?: string }> {
+  if (
+    policy.name === "Payment" &&
+    current === "pending" &&
+    target === "failed"
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: "payment-pending-command-1",
+    };
+  }
+  if (
+    policy.name === "Shipment" &&
+    ((current === "handed_over" && target === "in_transit") ||
+      (current === "in_transit" &&
+        (target === "delivered" || target === "lost" || target === "returned")))
+  ) {
+    return {
+      aggregateId: "shipment-1",
+      currentStateCommandKey: `shipment-${current}-command-1`,
+    };
+  }
   if (
     policy.name === "Job" &&
     current === "accepted" &&
@@ -11095,6 +11230,7 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "in_transit", "delivered"),
           current: "in_transit",
           target: "delivered",
           idempotencyKey: `shipment-delivery-${field}`,
@@ -11116,6 +11252,7 @@ describe("v0 lifecycle policy tables", () => {
     (target) => {
       expect(
         transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "in_transit", target),
           current: "in_transit",
           target,
           idempotencyKey: `shipment-event-${target}`,
@@ -11327,6 +11464,7 @@ describe("v0 lifecycle policy tables", () => {
             };
       expect(
         transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "in_transit", "lost"),
           current: "in_transit",
           target: "lost",
           idempotencyKey: `shipment-incident-${ownership}`,
@@ -14263,6 +14401,328 @@ describe("v0 lifecycle policy tables", () => {
       current: "resolved_mixed",
     });
   });
+  it.each(["full", "deposit", "balance"] as const)(
+    "fails a %s Payment only from its exact authenticated provider result",
+    (paymentRole) => {
+      const context = contextForTransition("failed", "pending");
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "failed"),
+          current: "pending",
+          target: "failed",
+          idempotencyKey: `payment-failure-${paymentRole}`,
+          context: {
+            ...context,
+            paymentRole,
+            paymentFailureExpectedPayment: {
+              ...context.paymentFailureExpectedPayment,
+              role: paymentRole,
+            },
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "pending", current: "failed" });
+    },
+  );
+
+  it.each([
+    ["paymentFailureProviderEventId", "another-event"],
+    ["providerPaymentTransactionId", "another-transaction"],
+    ["paymentFailurePreviousPaymentResultId", "another-result"],
+    ["paymentFailurePaymentResultId", "another-result"],
+    ["paymentFailureProviderEventResultId", "another-result"],
+    ["paymentFailureProviderTransactionResultId", "another-result"],
+    ["paymentFailureCompleted", false],
+    ["paymentFailureAtomic", false],
+  ] as const)(
+    "rejects Payment failure with mismatched root proof (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "failed"),
+          current: "pending",
+          target: "failed",
+          idempotencyKey: `payment-failure-root-${field}`,
+          context: {
+            ...contextForTransition("failed", "pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["paymentFailureExpectedPayment", "id", "payment-2"],
+    ["paymentFailureExpectedPayment", "status", "captured"],
+    ["paymentFailureExpectedPayment", "immutable", false],
+    ["paymentFailureProviderEvent", "paymentId", "payment-2"],
+    ["paymentFailureProviderEvent", "transactionId", "transaction-2"],
+    ["paymentFailureProviderEvent", "authenticated", false],
+    ["paymentFailureProviderEvent", "resultId", "another-result"],
+    ["paymentFailureProviderTransaction", "paymentId", "payment-2"],
+    ["paymentFailureProviderTransaction", "eventId", "another-event"],
+    ["paymentFailureProviderTransaction", "resultId", "another-result"],
+  ] as const)(
+    "rejects Payment failure with mismatched %s.%s",
+    (recordField, field, value) => {
+      const context = contextForTransition("failed", "pending");
+      const record = context[recordField] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "failed"),
+          current: "pending",
+          target: "failed",
+          idempotencyKey: `payment-failure-${recordField}-${field}`,
+          context: {
+            ...context,
+            [recordField]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign Payment failure substitution", () => {
+    const context = contextForTransition("failed", "pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "failed"),
+        current: "pending",
+        target: "failed",
+        idempotencyKey: "payment-failure-coordinated-substitution",
+        context: {
+          ...context,
+          paymentId: "payment-2",
+          providerEventPaymentId: "payment-2",
+          paymentFailureExpectedPayment: {
+            ...context.paymentFailureExpectedPayment,
+            id: "payment-2",
+          },
+          paymentFailureProviderEvent: {
+            ...context.paymentFailureProviderEvent,
+            paymentId: "payment-2",
+          },
+          paymentFailureProviderTransaction: {
+            ...context.paymentFailureProviderTransaction,
+            paymentId: "payment-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["handed_over", "in_transit"],
+    ["in_transit", "delivered"],
+    ["in_transit", "lost"],
+    ["in_transit", "returned"],
+  ] as const)(
+    "binds Shipment %s -> %s to its exact provider event and transaction",
+    (current, target) => {
+      expect(
+        transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, current, target),
+          current,
+          target,
+          idempotencyKey: `shipment-provider-outcome-${current}-${target}`,
+          context: contextForTransition(target, current),
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: target });
+    },
+  );
+
+  it.each([
+    ["providerEventId", "another-event"],
+    ["shipmentProviderTransactionId", "another-transaction"],
+    ["shipmentProviderOutcomePreviousResultId", "another-result"],
+    ["shipmentProviderOutcomeShipmentResultId", "another-result"],
+    ["shipmentProviderOutcomeEventResultId", "another-result"],
+    ["shipmentProviderOutcomeTransactionResultId", "another-result"],
+    ["shipmentProviderOutcomeCompleted", false],
+    ["shipmentProviderOutcomeAtomic", false],
+  ] as const)(
+    "rejects Shipment provider outcome with mismatched root proof (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "in_transit", "delivered"),
+          current: "in_transit",
+          target: "delivered",
+          idempotencyKey: `shipment-provider-outcome-root-${field}`,
+          context: {
+            ...contextForTransition("delivered", "in_transit"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["shipmentProviderOutcomeExpectedShipment", "id", "shipment-2"],
+    ["shipmentProviderOutcomeExpectedShipment", "status", "handed_over"],
+    ["shipmentProviderOutcomeExpectedShipment", "immutable", false],
+    ["shipmentProviderOutcomeEvent", "shipmentId", "shipment-2"],
+    ["shipmentProviderOutcomeEvent", "transactionId", "transaction-2"],
+    ["shipmentProviderOutcomeEvent", "authenticated", false],
+    ["shipmentProviderOutcomeEvent", "resultId", "another-result"],
+    ["shipmentProviderOutcomeTransaction", "shipmentId", "shipment-2"],
+    ["shipmentProviderOutcomeTransaction", "eventId", "another-event"],
+    ["shipmentProviderOutcomeTransaction", "resultId", "another-result"],
+  ] as const)(
+    "rejects Shipment provider outcome with mismatched %s.%s",
+    (recordField, field, value) => {
+      const context = contextForTransition("delivered", "in_transit");
+      const record = context[recordField] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "in_transit", "delivered"),
+          current: "in_transit",
+          target: "delivered",
+          idempotencyKey: `shipment-provider-outcome-${recordField}-${field}`,
+          context: {
+            ...context,
+            [recordField]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign Shipment provider substitution", () => {
+    const context = contextForTransition("delivered", "in_transit");
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "in_transit", "delivered"),
+        current: "in_transit",
+        target: "delivered",
+        idempotencyKey: "shipment-provider-outcome-coordinated-substitution",
+        context: {
+          ...context,
+          shipmentId: "shipment-2",
+          providerEventShipmentId: "shipment-2",
+          shipmentProviderOutcomeExpectedShipment: {
+            ...context.shipmentProviderOutcomeExpectedShipment,
+            id: "shipment-2",
+          },
+          shipmentProviderOutcomeEvent: {
+            ...context.shipmentProviderOutcomeEvent,
+            shipmentId: "shipment-2",
+          },
+          shipmentProviderOutcomeTransaction: {
+            ...context.shipmentProviderOutcomeTransaction,
+            shipmentId: "shipment-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each(["job-1", "job-2"] as const)(
+    "dispatches cancellation-race handoff through the exact result for %s",
+    (jobId) => {
+      const context = contextForTransition("handed_over", "packed");
+      const raceResultId = context.cancellationRaceHandoffResultId;
+      expect(
+        transition(jobPolicy, {
+          aggregateId: jobId,
+          currentStateCommandKey: "job-packed-command-1",
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `job-cancellation-race-${jobId}`,
+          context: {
+            ...context,
+            jobId,
+            jobHandoffJobId: jobId,
+            jobHandoffExpectedJob: {
+              ...context.jobHandoffExpectedJob,
+              id: jobId,
+            },
+            cancellationRaceHandoffKind: "ordinary",
+            handoffShipmentPreviousStatus: "cancellation_pending",
+            jobHandoffResultId: raceResultId,
+            jobHandoffJobResultId: raceResultId,
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "packed",
+        current: "handed_over",
+      });
+    },
+  );
+
+  it.each([
+    ["cancellationRaceHandoffKind", "replacement"],
+    ["handoffShipmentPreviousStatus", "label_created"],
+    ["jobHandoffShipmentId", "shipment-2"],
+    ["jobHandoffClaimId", "claim-1"],
+    ["jobHandoffResolutionId", "resolution-1"],
+    ["jobHandoffReplacementSetId", "replacement-set-1"],
+    ["jobHandoffResultId", "handoff-result-1"],
+    ["jobHandoffJobResultId", "handoff-result-1"],
+    ["providerEventId", "another-event"],
+    ["providerEventAuthenticated", false],
+    ["cancellationRaceResultJobIds", ["job-2"]],
+    ["cancellationRaceJobResultId", "another-result"],
+    ["cancellationRaceResultAtomic", false],
+  ] as const)(
+    "rejects cancellation-race Job handoff with invalid %s",
+    (field, value) => {
+      const context = contextForTransition("handed_over", "packed");
+      const raceResultId = context.cancellationRaceHandoffResultId;
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-packed-command-1",
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `job-cancellation-race-${field}`,
+          context: {
+            ...context,
+            cancellationRaceHandoffKind: "ordinary",
+            handoffShipmentPreviousStatus: "cancellation_pending",
+            jobHandoffResultId: raceResultId,
+            jobHandoffJobResultId: raceResultId,
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["shipmentId", "shipment-2"],
+    ["claimId", "claim-1"],
+    ["resolutionId", "resolution-1"],
+    ["replacementSetId", "replacement-set-1"],
+  ] as const)(
+    "rejects cancellation-race Job handoff with invalid expected Job %s",
+    (field, value) => {
+      const context = contextForTransition("handed_over", "packed");
+      const raceResultId = context.cancellationRaceHandoffResultId;
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-packed-command-1",
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `job-cancellation-race-expected-${field}`,
+          context: {
+            ...context,
+            cancellationRaceHandoffKind: "ordinary",
+            handoffShipmentPreviousStatus: "cancellation_pending",
+            jobHandoffResultId: raceResultId,
+            jobHandoffJobResultId: raceResultId,
+            jobHandoffExpectedJob: {
+              ...context.jobHandoffExpectedJob,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 });
 
 describe("Quote ownership", () => {

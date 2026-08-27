@@ -1478,6 +1478,96 @@ function requireVerifiedMatchingProviderPaymentEvent<S extends string>(
   }
 }
 
+function requireExactPendingPaymentFailure<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const providerEventId = context?.paymentFailureProviderEventId;
+  const providerTransactionId = context?.providerPaymentTransactionId;
+  const previousResultId = context?.paymentFailurePreviousPaymentResultId;
+  const resultId = context?.paymentFailureResultId;
+  const stateKey = context?.paymentFailureCurrentStateCommandKey;
+  const expectedValue = context?.paymentFailureExpectedPayment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const eventValue = context?.paymentFailureProviderEvent;
+  const event =
+    typeof eventValue === "object" &&
+    eventValue !== null &&
+    !Array.isArray(eventValue)
+      ? (eventValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const transactionValue = context?.paymentFailureProviderTransaction;
+  const transaction =
+    typeof transactionValue === "object" &&
+    transactionValue !== null &&
+    !Array.isArray(transactionValue)
+      ? (transactionValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateCommandKey !== stateKey ||
+    context?.providerEventPaymentId !== paymentId ||
+    context?.providerPaymentEventStatus !== "failed" ||
+    context?.providerPaymentEventAuthenticated !== true ||
+    context?.providerPaymentEventVerified !== true ||
+    expected?.id !== paymentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.role !== role ||
+    expected.status !== "pending" ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true ||
+    event?.id !== providerEventId ||
+    event.paymentId !== paymentId ||
+    event.transactionId !== providerTransactionId ||
+    event.status !== "failed" ||
+    event.authenticated !== true ||
+    event.verified !== true ||
+    event.resultId !== resultId ||
+    event.immutable !== true ||
+    transaction?.id !== providerTransactionId ||
+    transaction.paymentId !== paymentId ||
+    transaction.eventId !== providerEventId ||
+    transaction.status !== "failed" ||
+    transaction.resultId !== resultId ||
+    transaction.immutable !== true ||
+    context?.paymentFailurePaymentResultId !== resultId ||
+    context?.paymentFailureProviderEventResultId !== resultId ||
+    context?.paymentFailureProviderTransactionResultId !== resultId ||
+    context?.paymentFailureCompleted !== true ||
+    context?.paymentFailureAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "payment failure requires the exact pending Payment, authenticated provider event, transaction, and atomic result",
+    );
+  }
+}
+
 function requireExactPendingCaptureWindow<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -3703,6 +3793,101 @@ function requireVerifiedMatchingProviderShipmentEvent<S extends string>(
   }
 }
 
+function requireExactShipmentProviderOutcome<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const shipmentId = context?.shipmentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const labelId = context?.carrierLabelId;
+  const providerEventId = context?.providerEventId;
+  const providerTransactionId = context?.shipmentProviderTransactionId;
+  const previousResultId = context?.shipmentProviderOutcomePreviousResultId;
+  const resultId = context?.shipmentProviderOutcomeResultId;
+  const stateKey = context?.shipmentProviderOutcomeCurrentStateCommandKey;
+  const expectedValue = context?.shipmentProviderOutcomeExpectedShipment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const eventValue = context?.shipmentProviderOutcomeEvent;
+  const event =
+    typeof eventValue === "object" &&
+    eventValue !== null &&
+    !Array.isArray(eventValue)
+      ? (eventValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const transactionValue = context?.shipmentProviderOutcomeTransaction;
+  const transaction =
+    typeof transactionValue === "object" &&
+    transactionValue !== null &&
+    !Array.isArray(transactionValue)
+      ? (transactionValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    !nonBlank(shipmentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(labelId) ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== shipmentId ||
+    command.currentStateCommandKey !== stateKey ||
+    context?.providerEventShipmentId !== shipmentId ||
+    context?.providerEventTransactionId !== providerTransactionId ||
+    context?.providerEventStatus !== command.target ||
+    context?.providerEventAuthenticated !== true ||
+    context?.providerEventVerified !== true ||
+    expected?.id !== shipmentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.carrierLabelId !== labelId ||
+    expected.status !== command.current ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true ||
+    event?.id !== providerEventId ||
+    event.shipmentId !== shipmentId ||
+    event.carrierLabelId !== labelId ||
+    event.transactionId !== providerTransactionId ||
+    event.previousStatus !== command.current ||
+    event.targetStatus !== command.target ||
+    event.status !== command.target ||
+    event.authenticated !== true ||
+    event.verified !== true ||
+    event.resultId !== resultId ||
+    event.immutable !== true ||
+    transaction?.id !== providerTransactionId ||
+    transaction.shipmentId !== shipmentId ||
+    transaction.carrierLabelId !== labelId ||
+    transaction.eventId !== providerEventId ||
+    transaction.status !== "succeeded" ||
+    transaction.resultId !== resultId ||
+    transaction.immutable !== true ||
+    context?.shipmentProviderOutcomeShipmentResultId !== resultId ||
+    context?.shipmentProviderOutcomeEventResultId !== resultId ||
+    context?.shipmentProviderOutcomeTransactionResultId !== resultId ||
+    context?.shipmentProviderOutcomeCompleted !== true ||
+    context?.shipmentProviderOutcomeAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "shipment outcome requires the exact Shipment, authenticated provider event, transaction, and atomic result",
+    );
+  }
+}
+
 function requireVerifiedCurrentRemedyDelivery<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -4547,6 +4732,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
     }
     if (command.current === "pending" && command.target === "failed") {
       requireVerifiedMatchingProviderPaymentEvent("Payment", command);
+      requireExactPendingPaymentFailure("Payment", command);
     }
     if (command.current === "pending" && command.target === "voided") {
       requireRoleSpecificPaymentVoidClosure("Payment", command);
@@ -5155,6 +5341,39 @@ function requireExactJobHandoff<S extends string>(
     );
   }
   if (kind === "ordinary") {
+    const raceKind = context?.cancellationRaceHandoffKind;
+    if (raceKind !== undefined) {
+      const raceResultId = context?.cancellationRaceHandoffResultId;
+      const stateKey = context?.jobHandoffCurrentStateCommandKey;
+      if (
+        raceKind !== "ordinary" ||
+        !nonBlank(raceResultId) ||
+        !nonBlank(stateKey) ||
+        command.aggregateId !== jobId ||
+        command.currentStateCommandKey !== stateKey ||
+        expected.currentStateCommandKey !== stateKey ||
+        expected.shipmentId !== context?.shipmentId ||
+        expected.claimId !== null ||
+        expected.resolutionId !== null ||
+        expected.replacementSetId !== null ||
+        context?.jobHandoffShipmentId !== context?.shipmentId ||
+        context?.jobHandoffClaimId !== null ||
+        context?.jobHandoffResolutionId !== null ||
+        context?.jobHandoffReplacementSetId !== null ||
+        context?.jobHandoffResultId !== raceResultId ||
+        context?.jobHandoffJobResultId !== raceResultId
+      ) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          "ordinary Job cancellation-race handoff must bind the command-selected packed Job to the exact race result",
+        );
+      }
+      requireVerifiedMatchingCancellationRaceScan(lifecycle, command);
+      requireExactCancellationRaceHandoffResult(lifecycle, command);
+      return;
+    }
     if (
       expected.shipmentId !== context?.shipmentId ||
       expected.claimId !== null ||
@@ -6683,6 +6902,7 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
     }
     if (command.current === "handed_over" && command.target === "in_transit") {
       requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
+      requireExactShipmentProviderOutcome("Shipment", command);
     }
     if (
       command.current === "in_transit" &&
@@ -6691,6 +6911,7 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
         command.target === "returned")
     ) {
       requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
+      requireExactShipmentProviderOutcome("Shipment", command);
       if (command.target === "lost" || command.target === "returned") {
         requireAtomicShipmentIncidentRouting("Shipment", command);
       }
