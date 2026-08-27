@@ -771,12 +771,25 @@ function exactRequireExpression(tokens, start, end, requireIndex) {
   let previous;
   do {
     previous = expression;
+    expression = stripLeadingTypeAssertions(
+      tokens,
+      expression.start,
+      expression.end,
+    );
     expression = stripTrailingCallModifiers(
       tokens,
       expression.start,
       expression.end,
     );
     expression = finalSequenceOperand(tokens, expression.start, expression.end);
+    const assertion = topLevelTypeAssertion(
+      tokens,
+      expression.start,
+      expression.end,
+    );
+    if (assertion !== undefined) {
+      expression = { ...expression, end: assertion };
+    }
   } while (
     expression.start !== previous.start ||
     expression.end !== previous.end
@@ -784,6 +797,45 @@ function exactRequireExpression(tokens, start, end, requireIndex) {
   return (
     expression.start === requireIndex && expression.end === requireIndex + 1
   );
+}
+
+function stripLeadingTypeAssertions(tokens, start, end) {
+  let previousStart;
+  do {
+    previousStart = start;
+    const next = skipTypeArguments(tokens, start);
+    if (next > start && next < end) start = next;
+  } while (start !== previousStart);
+  return { end, start };
+}
+
+function topLevelTypeAssertion(tokens, start, end) {
+  let angleDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenthesisDepth = 0;
+  for (let index = start; index < end; index += 1) {
+    const token = tokens[index];
+    if (
+      angleDepth === 0 &&
+      braceDepth === 0 &&
+      bracketDepth === 0 &&
+      parenthesisDepth === 0 &&
+      ["as", "satisfies"].some((value) => rawIdentifier(token, value))
+    ) {
+      return index;
+    }
+    if (token.kind !== "punctuation") continue;
+    if (token.value === "<") angleDepth += 1;
+    if (token.value === ">" && angleDepth > 0) angleDepth -= 1;
+    if (token.value === "{") braceDepth += 1;
+    if (token.value === "}" && braceDepth > 0) braceDepth -= 1;
+    if (token.value === "[") bracketDepth += 1;
+    if (token.value === "]" && bracketDepth > 0) bracketDepth -= 1;
+    if (token.value === "(") parenthesisDepth += 1;
+    if (token.value === ")" && parenthesisDepth > 0) parenthesisDepth -= 1;
+  }
+  return undefined;
 }
 
 function matchingOpenTypeArgument(tokens, start, closeIndex) {
@@ -839,16 +891,6 @@ function skipTypeArguments(tokens, index) {
   return index;
 }
 
-function skipTypeAndNonNullAssertions(tokens, index) {
-  let previous;
-  do {
-    previous = index;
-    index = skipNonNullAssertions(tokens, index);
-    index = skipTypeArguments(tokens, index);
-  } while (index !== previous);
-  return index;
-}
-
 function callOpening(tokens, index) {
   let previous;
   do {
@@ -863,24 +905,25 @@ function callOpening(tokens, index) {
 function requireCallOpening(tokens, requireIndex) {
   const direct = callOpening(tokens, requireIndex + 1);
   if (direct !== undefined) return direct;
-  let cursor = skipTypeAndNonNullAssertions(tokens, requireIndex + 1);
-  let closeIndex;
-  while (tokens[cursor]?.value === ")") {
-    closeIndex = cursor;
-    cursor = skipTypeAndNonNullAssertions(tokens, cursor + 1);
-  }
-  if (closeIndex === undefined) return undefined;
-  const call = callOpening(tokens, cursor);
-  if (call === undefined) return undefined;
-  const openIndex = matchingOpenParenthesis(tokens, closeIndex);
-  if (
-    openIndex === undefined ||
-    !groupingParenthesis(tokens, openIndex) ||
-    !exactRequireExpression(tokens, openIndex + 1, closeIndex, requireIndex)
+  for (
+    let closeIndex = requireIndex + 1;
+    closeIndex < tokens.length;
+    closeIndex += 1
   ) {
-    return undefined;
+    if (tokens[closeIndex]?.value === ";") return undefined;
+    if (tokens[closeIndex]?.value !== ")") continue;
+    const call = callOpening(tokens, closeIndex + 1);
+    if (call === undefined) continue;
+    const openIndex = matchingOpenParenthesis(tokens, closeIndex);
+    if (
+      openIndex !== undefined &&
+      groupingParenthesis(tokens, openIndex) &&
+      exactRequireExpression(tokens, openIndex + 1, closeIndex, requireIndex)
+    ) {
+      return call;
+    }
   }
-  return call;
+  return undefined;
 }
 
 function staticSpecifier(tokens, start) {
