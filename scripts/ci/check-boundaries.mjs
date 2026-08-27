@@ -576,10 +576,179 @@ function literalSpecifier(token) {
     : undefined;
 }
 
+function matchingOpenParenthesis(tokens, closeIndex) {
+  let depth = 0;
+  for (let index = closeIndex; index >= 0; index -= 1) {
+    if (tokens[index].value === ")") depth += 1;
+    if (tokens[index].value === "(") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+function matchingCloseParenthesis(tokens, openIndex, end = tokens.length) {
+  let depth = 0;
+  for (let index = openIndex; index < end; index += 1) {
+    if (tokens[index].value === "(") depth += 1;
+    if (tokens[index].value === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+function stripCompleteParentheses(tokens, start, end) {
+  while (tokens[start]?.value === "(") {
+    const close = matchingCloseParenthesis(tokens, start, end);
+    if (close !== end - 1) break;
+    start += 1;
+    end -= 1;
+  }
+  return { end, start };
+}
+
+function finalSequenceOperand(tokens, start, end) {
+  while (start < end) {
+    const expression = stripCompleteParentheses(tokens, start, end);
+    start = expression.start;
+    end = expression.end;
+    let parenthesisDepth = 0;
+    let bracketDepth = 0;
+    let braceDepth = 0;
+    let finalComma = -1;
+    for (let index = start; index < end; index += 1) {
+      const value = tokens[index].value;
+      if (value === "(") parenthesisDepth += 1;
+      if (value === ")") parenthesisDepth -= 1;
+      if (value === "[") bracketDepth += 1;
+      if (value === "]") bracketDepth -= 1;
+      if (value === "{") braceDepth += 1;
+      if (value === "}") braceDepth -= 1;
+      if (
+        value === "," &&
+        parenthesisDepth === 0 &&
+        bracketDepth === 0 &&
+        braceDepth === 0
+      ) {
+        finalComma = index;
+      }
+    }
+    if (finalComma === -1) break;
+    start = finalComma + 1;
+  }
+  return stripCompleteParentheses(tokens, start, end);
+}
+
+function exactLiteralSpecifier(tokens, start, end) {
+  const expression = finalSequenceOperand(tokens, start, end);
+  return expression.end - expression.start === 1
+    ? literalSpecifier(tokens[expression.start])
+    : undefined;
+}
+
 function wrappedLiteralSpecifier(tokens, start) {
-  let index = start;
-  while (tokens[index]?.value === "(") index += 1;
-  return literalSpecifier(tokens[index]);
+  let parenthesisDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let end = start;
+  for (; end < tokens.length; end += 1) {
+    const value = tokens[end].value;
+    if (
+      (value === ")" &&
+        parenthesisDepth === 0 &&
+        bracketDepth === 0 &&
+        braceDepth === 0) ||
+      (value === "," &&
+        parenthesisDepth === 0 &&
+        bracketDepth === 0 &&
+        braceDepth === 0)
+    ) {
+      break;
+    }
+    if (value === "(") parenthesisDepth += 1;
+    if (value === ")") parenthesisDepth -= 1;
+    if (value === "[") bracketDepth += 1;
+    if (value === "]") bracketDepth -= 1;
+    if (value === "{") braceDepth += 1;
+    if (value === "}") braceDepth -= 1;
+  }
+  return exactLiteralSpecifier(tokens, start, end);
+}
+
+function groupingParenthesis(tokens, openIndex) {
+  const previous = tokens[openIndex - 1];
+  if (previous === undefined) return true;
+  if (previous.kind === "identifier") {
+    return new Set([
+      "await",
+      "case",
+      "default",
+      "delete",
+      "do",
+      "else",
+      "extends",
+      "in",
+      "instanceof",
+      "new",
+      "of",
+      "return",
+      "throw",
+      "typeof",
+      "void",
+      "yield",
+    ]).has(previous.value);
+  }
+  if (
+    previous.kind === "literal" ||
+    previous.kind === "template" ||
+    previous.kind === "number" ||
+    previous.kind === "regex"
+  ) {
+    return false;
+  }
+  if (previous.value === ")") {
+    return closesControlCondition(tokens.slice(0, openIndex));
+  }
+  return !new Set(["#", ")", ".", "?.", "]", "}", "++", "--"]).has(
+    previous.value,
+  );
+}
+
+function exactRequireExpression(tokens, start, end, requireIndex) {
+  const expression = finalSequenceOperand(tokens, start, end);
+  return (
+    expression.start === requireIndex && expression.end === requireIndex + 1
+  );
+}
+
+function callOpening(tokens, index) {
+  if (tokens[index]?.value === "(") return index;
+  return tokens[index]?.value === "?." && tokens[index + 1]?.value === "("
+    ? index + 1
+    : undefined;
+}
+
+function requireCallOpening(tokens, requireIndex) {
+  const direct = callOpening(tokens, requireIndex + 1);
+  if (direct !== undefined) return direct;
+  let cursor = requireIndex + 1;
+  if (tokens[cursor]?.value !== ")") return undefined;
+  while (tokens[cursor]?.value === ")") cursor += 1;
+  const call = callOpening(tokens, cursor);
+  if (call === undefined) return undefined;
+  const closeIndex = cursor - 1;
+  const openIndex = matchingOpenParenthesis(tokens, closeIndex);
+  if (
+    openIndex === undefined ||
+    !groupingParenthesis(tokens, openIndex) ||
+    !exactRequireExpression(tokens, openIndex + 1, closeIndex, requireIndex)
+  ) {
+    return undefined;
+  }
+  return call;
 }
 
 function staticSpecifier(tokens, start) {
@@ -613,6 +782,7 @@ function importSpecifiers(source, file) {
         token.escaped !== true &&
         token.value === "import" &&
         previous?.value !== "." &&
+        previous?.value !== "?." &&
         previous?.value !== "#" &&
         next?.value !== "."
       ) {
@@ -636,12 +806,7 @@ function importSpecifiers(source, file) {
         previous?.value !== "?." &&
         previous?.value !== "#"
       ) {
-        const callIndex =
-          next?.value === "("
-            ? index + 1
-            : next?.value === "?." && tokens[index + 2]?.value === "("
-              ? index + 2
-              : undefined;
+        const callIndex = requireCallOpening(tokens, index);
         const specifier =
           callIndex === undefined
             ? undefined
