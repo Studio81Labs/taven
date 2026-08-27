@@ -482,7 +482,7 @@ V v0 i v1 obě fáze splynou (jeden stroj), ale **šev tam musí být**.
 
 **STEP není blocker v0.** Produktově je to silný diferenciátor — zákazník s CADem a bez vyexportovaného meshe je přesně ta lepší cílovka — ale implementačně přináší tesselaci s deterministickou tolerancí, jednotky, sestavy, náhled a novou plochu na selhání. Úkolem v0 je ověřit instant quote, ne pokrýt formáty. Když by STEP brzdil vydání, pusť **STL + 3MF** a STEP přidej hned poté.
 
-**STEP může obsahovat sestavu.** Když soubor obsahuje víc těles, ukaž je jako seznam a nech zákazníka vybrat, které se tisknou; každé naceň jako samostatný `OrderItem`. Nad práh → individuální nabídka. U STL tenhle případ neexistuje.
+**STEP může obsahovat sestavu.** Když STEP nebo podporovaný 3MF obsahuje víc těles, ukaž je jako seznam a nech zákazníka vybrat, která se tisknou. Vybraná tělesa se shodnou úplnou výrobní konfigurací — materiálem, barvou, kvalitou, `PrintConfigRevision` a množstvím celé vybrané sady — smí tvořit jeden `OrderItem`; odlišná konfigurace vždy vytváří samostatnou položku. Každý `OrderItem` odkazuje na immutable `ModelGeometry` přesně svého tělesa nebo podmnožiny těl a naceňuje se samostatně. Nad práh → individuální nabídka. U STL s jediným tělesem tenhle grouping nevzniká.
 
 Cache nikdy neidentifikuje vstup jen hashem celého uploadu. Každý `OrderItem` odkazuje na immutable `ModelGeometry`: u STL/3MF je to kanonická tisknutelná geometrie, u STEP deterministicky extrahované vybrané těleso nebo podmnožina těl po tesselaci s verzovanou tolerancí. `geometry_hash = sha256(canonical_geometry_bytes)`; dvě tělesa jednoho STEP souboru tak mají rozdílný klíč, geometricky totožné výstupy mohou cache bezpečně sdílet.
 
@@ -872,7 +872,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 69. `Order` má vztah 1:N k `ShipmentPlan` i `Shipment` už v v0: jedna `single` fáze smí vytvořit více parcel a replacement/reship lineage zachovává původní Shipment vedle aktuálního leaf; implementace nesmí použít singulární `order.shipment_id`.
 70. `ClaimSlotResolution.recovery_pending` smí přejít do `withdrawn` jen u čistého `post_delivery_quality` rodiče bez incident-backed child a po dokončení všech pre-handoff cancellation barriers; recovery vzniklou z `lost | returned` incidentu stáhnout nelze.
 71. `ModelFile` a `OrderItem` jsou nezávislé koncepty: jeden upload může být zdrojem více položek s odlišným výběrem těles, materiálem, barvou, kvalitou nebo množstvím; hranice uploadu nesmí vynutit hranici výrobní konfigurace.
-72. `Objednat znovu` vždy vytvoří nový draft a smí převzít jen znovu použitelnou konfiguraci. Musí použít aktuální `PriceList`, aktuální způsobilý `ReferenceProfile`, nový slice/quote a novou závaznou cenu; historický Quote, PriceListVersion, sleva, item price ani order total se nekopírují.
+72. `Objednat znovu` vždy vytvoří nový draft a smí převzít jen znovu použitelnou konfiguraci včetně výběru těles a přijaté `PrintConfigRevision` (výplň a další zákaznické toolpath volby), pokud jsou stále podporované. Musí použít aktuální `PriceList`, aktuální způsobilý `ReferenceProfile`, nový slice/quote a novou závaznou cenu; historický Quote, PriceListVersion, sleva, item price ani order total se nekopírují.
 73. Zákaznický účet neprodlužuje 90denní zdrojovou retenci. Po smazání potřebného zdroje je automatické opakování zakázané, reklamační `ReproductionArtifact` se k němu nesmí znovu použít a nový draft smí pokračovat až po novém uploadu.
 74. `min_print_price` a `small_order_surcharge` se vyhodnocují jednou nad celým Orderem, zatímco množstevní sleva a plate arrangement se vyhodnocují samostatně pro každý `OrderItem`; počty různých položek se pro item-level slevu nesčítají.
 75. Shipment planning, přepravní kategorie a express eligibility pokrývají všechny `OrderItem` objednávky. Každý jednotlivý díl musí splnit limit kategorie, každá zásilka současně rozměrový i hmotnostní limit a express musí splnit celý order bez kombinace standardních a expresních položek.
@@ -972,6 +972,7 @@ Volitelný účet v1 zobrazuje dlouhodobou historii obchodních dat objednávky.
 - materiál,
 - barvu, pokud je stále dostupná,
 - kvalitu,
+- přijatou `PrintConfigRevision` včetně pojmenované výplně a dalších znovu použitelných toolpath voleb, pokud jsou stále podporované,
 - množství.
 
 Nový draft vždy projde aktuálním pricing flow:
