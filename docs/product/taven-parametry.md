@@ -76,9 +76,9 @@ Vzorec: `cena stroje / požadovaná doba návratnosti v hodinách`
 | `handling_pack` | zásilka | ne | ⚠ balení, štítek |
 | `shipping_trip` | **cesta**, ne zásilka | **ano** | ⚠ cesta k Z-BOXu |
 | **`shipping_trip_pricing_divisor`** | závazná cena | — | **1 v v0/hobby**; verzovaný očekávaný počet zásilek na cestu |
-| `postprocessing` | zakázka | ne | ⚠ nad rámec začištění; jinak 0 |
+| `postprocessing_i` | `OrderItem` / fáze | ne | ⚠ celkový čas nad rámec začištění pro naceněné množství itemu; jinak 0 |
 
-`handling_order_fix` se účtuje jednou na `Order`. `handling_plate`, `handling_piece` a post-processing vznikají z konkrétního `OrderItem` a jeho arrangementu; `handling_pack` vzniká jednou pro každou skutečně plánovanou zásilku a `shipping_trip` se do závazné ceny alokuje podle order-level shipment plánu. Více `OrderItem` samo o sobě nesmí násobit order-level fixní práci.
+`handling_order_fix` se účtuje jednou na `Order`. `handling_plate`, `handling_piece` a `postprocessing_i` vznikají z konkrétního `OrderItem` a jeho arrangementu; post-processing je už celkový itemový čas pro jeho naceněné množství a fázi, takže se dál nenásobí počtem kusů. `handling_pack` vzniká jednou pro každou skutečně plánovanou zásilku a `shipping_trip` se do závazné ceny alokuje podle order-level shipment plánu. Více `OrderItem` samo o sobě nesmí násobit order-level fixní práci.
 
 **Pozor na `shipping_trip` při nízkém objemu.** Do závazné ceny vstupuje jen verzovaný `shipping_trip_pricing_divisor`; při 1–2 objednávkách měsíčně je 1, tedy **plný náklad, nikoli domnělá budoucí alokace**. Skutečný počet zásilek sdílejících cestu se zapisuje až do `HandlingSession` pro realizovanou CM. Divisor ceníku lze zvýšit teprve podle naměřených cest od několika zásilek týdně a nikdy se zpětně nepřepočítává do přijatých nabídek.
 
@@ -97,9 +97,9 @@ Stavový automat měří průchod zakázky a SLA, **ne aktivní práci** — int
 
 ```
 handling_pretisk = sazba_prace_h × (
-                    handling_plate × podložek
-                  + handling_piece × qty       (degresivní)
-                  + postprocessing )
+                    Σ_i(handling_plate × podložek_i
+                      + handling_piece × qty_i (degresivní)
+                      + postprocessing_i) )
 rezerva_pretisk = mira_zmetku × (
                     material + machine + handling_pretisk + amortizace )
 ```
@@ -116,21 +116,23 @@ rezerva_pretisk = mira_zmetku × (
 | Obalový materiál | ⚠ 15 Kč |
 | Poplatek brány | ⚠ ~9 Kč (1,5 % + 3 Kč) |
 | Obalová rezerva k bboxu | +4 cm na stranu |
-| Koeficient plnění krabice | 0,55–0,65 |
+| **`packing_fill_coefficient`** | **0,55 ve v0**; verzovaný v `PriceList`, naměřeně lze později zvýšit nejvýše na 0,65 |
 | Hmotnost obalu | 150–250 g |
 | **`shipping_category_priority`** | **Z-BOX → výdejní místo → nadrozměrná**; verzované v `PriceList`, první způsobilá kategorie při založení nového balíku |
 
 U fázované objednávky se doprava, obal a `handling_pack` počítají pro každou plánovanou zásilku zvlášť; sample a batch se neposílají současně a nelze je sloučit do jedné sazby. Práh dopravy zdarma se vyhodnotí jednou nad `cena_tisku_pred_subvenci` a případně nuluje zákaznický součet dopravy, nikoli skutečné náklady v CM. Neúčtovaná část skutečného nákladu dopravce vstupuje do nákladové báze před marží a checkout se hrubuje o součet poplatků všech capture v `PaymentSchedule`; individuální `deposit` + `balance` proto nesou fixní složku dvakrát.
 
-`ShipmentPlan` počítá celé množství všech `OrderItem`, ne jen největší díl nebo jednu položku. Každý kus dostane nepřekrývající se ochranný bbox rozšířený o obalovou rezervu na každé straně a musí se v některé osové rotaci vejít do rozměrů kategorie. Deterministický dimension-aware first-fit podle specifikace §4.6 skládá realizovatelný výsledný bbox těchto ochranných obálek; objemová proxy `Σ(bbox_volume × qty) / koeficient_plnění_krabice` a hmotnost všech kusů + obalu jsou další společné limity, nikoli náhrada rozměrové kontroly. Překročení kteréhokoli limitu vytvoří další plánovanou zásilku a tím další sazbu dopravy, obal i balicí handling; split shipment nikdy nepřebírá cenu jediné zásilky.
+`ShipmentPlan` počítá celé množství všech `OrderItem`, ne jen největší díl nebo jednu položku. Každý kus dostane nepřekrývající se ochranný bbox rozšířený o obalovou rezervu na každé straně a musí se v některé osové rotaci vejít do rozměrů kategorie. Deterministický dimension-aware first-fit podle specifikace §4.6 skládá realizovatelný výsledný bbox těchto ochranných obálek; `volume_proxy = Σ(packing_part_bbox_volume) / packing_fill_coefficient` se porovnává s `max_parcel_volume_cm3` kategorie a hmotnost všech kusů + obalu s jejím hmotnostním limitem. Jsou to další společné limity, nikoli náhrada rozměrové kontroly. Překročení kteréhokoli limitu vytvoří další plánovanou zásilku a tím další sazbu dopravy, obal i balicí handling; split shipment nikdy nepřebírá cenu jediné zásilky.
 
 **Limity přepravních kategorií**
 
-| Kategorie | Limity |
-|---|---|
-| Z-BOX | max 60 × 43 × 35 cm, do 15 kg |
-| Výdejní místo | nejdelší strana ≤ 60 cm, součet ≤ 120 cm, do 5 kg |
-| Nadrozměrná | součet ≤ 150 cm, nejdelší ≤ 120 cm; do Z-BOXu nelze |
+| Kategorie | Rozměrové a hmotnostní limity | `max_parcel_volume_cm3` v0 |
+|---|---|---:|
+| Z-BOX | max 60 × 43 × 35 cm, do 15 kg | 90 300 |
+| Výdejní místo | nejdelší strana ≤ 60 cm, součet ≤ 120 cm, do 5 kg | 64 000 |
+| Nadrozměrná | součet ≤ 150 cm, nejdelší ≤ 120 cm; do Z-BOXu nelze | 125 000 |
+
+Objemové stropy jsou verzované atributy přepravních kategorií v `PriceList`; v0 odpovídají největšímu kvádru povolenému uvedenými rozměrovými pravidly. Změna limitu nebo `packing_fill_coefficient` vytváří novou verzi ceníku a nikdy zpětně nemění přijatý quote.
 
 **Kompatibilita endpointu je order-level guard.** Zvolený Z-BOX připouští jen kategorii `Z-BOX`; obsluhované výdejní místo připouští `výdejní místo` a pouze tehdy `nadrozměrná`, když ji podporuje snapshot konkrétního provider endpointu. Každá parcela jednoho Orderu používá stejné `delivery_destination_id`. Bez výběru endpointu je doprava jen provizorní a změna výběru před platbou vyžaduje nový `ShipmentPlan` i závazný quote.
 

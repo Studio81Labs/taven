@@ -280,15 +280,15 @@ material    = gramáž_g × sazba_materiálu
 machine     = čas_h × sazba_stroj_h          ← čas ze slice zvoleného ReferenceProfile
 handling    = sazba_prace_h × (
                 handling_order_fix
-              + handling_plate × podložek
-              + handling_piece × qty          (degresivní)
+              + Σ_i(handling_plate × podložek_i
+                  + handling_piece × qty_i     (degresivní)
+                  + postprocessing_i)
               + handling_pack × počet_plánovaných_zásilek
-              + Σ(shipping_trip / shipping_trip_pricing_divisor)
-              + postprocessing )
-handling_pretisk = sazba_prace_h × (
-                    handling_plate × podložek
-                  + handling_piece × qty       (degresivní)
-                  + postprocessing )
+              + Σ(shipping_trip / shipping_trip_pricing_divisor) )
+handling_pretisk = sazba_prace_h × Σ_i(
+                    handling_plate × podložek_i
+                  + handling_piece × qty_i     (degresivní)
+                  + postprocessing_i )
 amortizace  = cena_stroje / návratnost_h × čas_h
 obal        = Σ obalový_materiál(zásilka_i)
 dopravni_naklad = Σ skutečný_náklad_dopravce(zásilka_i)
@@ -326,6 +326,8 @@ cena_tisku_order = max(min_print_price, agregovaný výrobní pricing položek)
 `small_order_surcharge` se rovněž aplikuje **jednou na objednávku**. Spouštěčem ve v0 je `sum(print_weight všech OrderItem) < 100 g`; hranice zůstává dočasnou obchodní proxy sledovanou podle parametrů §7.
 
 Množstevní sleva se naproti tomu vyhodnocuje **na úrovni `OrderItem`**, protože výrobní efekt vzniká opakováním stejného dílu se stejnou konfigurací a jeho rozložením na podložce. Množství různých položek se pro tuto slevu nesčítá.
+
+`postprocessing_i` je celkový nadstandardní post-processing požadovaný konkrétním `OrderItem` pro naceněné množství a fázi; bez něj je 0. Ve vzorci se proto sčítá jednou přes itemy, ne jednou za celý Order ani znovu za každý kus mimo itemový odhad. Stejný item-level rozsah používá `handling_pretisk` pro očekávané opakování výroby.
 
 **Žádný `koef_kvality`.** Kvalita mění výšku vrstvy, tedy čas — a ten dává slicer přímo. Násobit přesně spočítaných 6 h 12 min ručním koeficientem znamená zahodit přesně tu výhodu, kvůli které se slicuje. Pokud má u jemné kvality existovat obchodní přirážka, ať se jmenuje přirážka a stojí vedle, ne v čase.
 
@@ -403,7 +405,7 @@ Bounding box počítá preflight, ale kategorie se nesmí určit jen z jednoho d
 2. podporované kategorie mají ve `PriceList` verzované `shipping_category_priority`; v v0 je pořadí `Z-BOX → výdejní místo → nadrozměrná`, ale před packingem se seznam omezí jen na kategorie podporované zvoleným `delivery_destination` a jeho snapshotovanými provider limity
 3. kusy se seřadí sestupně podle nejdelší hrany, pak bbox objemu a nakonec stabilního `FulfilmentSlot.id`
 4. dimension-aware first-fit zkouší existující zásilky v pořadí jejich vzniku a pro každou drží skutečně realizovatelný `packing_bbox`: další ochrannou obálku zkusí ve všech osových rotacích přiložit vedle dosavadního bboxu podél každé ze tří os, přičemž na zvolené ose se rozměry sečtou a na zbývajících vezme maximum
-5. kandidát smí zůstat v právě zkoušené zásilce jen tehdy, když nepřekročí limity její kategorie, konzervativní objemovou proxy `Σ(bbox_volume) / koeficient_plnění_krabice` ani agregovanou hmotnost dílů + obalu; z platných umístění v první způsobilé existující zásilce se deterministicky vybere nejmenší výsledný bbox objem, potom lexikograficky rozměry, rotace a osa
+5. kandidát smí zůstat v právě zkoušené zásilce jen tehdy, když nepřekročí rozměrové limity její kategorie, agregovanou hmotnost dílů + obalu ani `volume_proxy = Σ(packing_part_bbox_volume) / packing_fill_coefficient`; proxy se porovnává výhradně s verzovaným `shipping_category.max_parcel_volume_cm3`, nikoli s objemem právě realizovaného `packing_bbox`, a v0 používá `packing_fill_coefficient = 0,55` i category ceilings z parametrů §6
 6. pokud nevyhoví žádná existující zásilka, zkusí se prázdný `packing_bbox` ve filtrovaném pořadí `shipping_category_priority` a nový balík vznikne v první způsobilé kategorii; jeho snapshot uloží stejný `delivery_destination_id`, kategorii, výsledný bbox ochranných obálek, objemovou proxy a hmotnost
 7. pokud některý kus neprojde žádnou kategorií kompatibilní se zvoleným endpointem, závazný plán nevznikne: UI nabídne jiný společný endpoint/service a po změně vytvoří nový quote; co se nevejde ani potom, jde do individuální nabídky
 8. na hraně se zaokrouhluje nahoru
@@ -750,7 +752,7 @@ quote → sample (1 ks každého OrderItem) → zákazník potvrdí fit celé sa
       → dávka (zbývající množství každého OrderItem)
 ```
 
-Fázování je ve v1 vlastnost **celé objednávky**, ne přepínač jednotlivé položky. Při přechodu do `quoted` se pro každý `OrderItem i` s objednaným množstvím `ordered_quantity_i > 0` immutable odvodí `sample_quantity_i = 1` a `batch_quantity_i = ordered_quantity_i − 1`. Sample fáze proto obsahuje právě jeden `FulfilmentSlot` každé samostatné výrobní konfigurace; u `OrderItem` seskupujícího více těles znamená jeden kus celou vybranou sadu těles. Batch fáze obsahuje zbývající sloty každé položky a položku s `batch_quantity_i = 0` v sobě nemá. Pokud jsou nulová všechna batch množství, použije se `single`, nikoli prázdný sample/batch flow.
+Fázování je ve v1 vlastnost **celé objednávky**, ne přepínač jednotlivé položky, a má precondition `ordered_quantity_i ≥ 2` pro každý zahrnutý `OrderItem`. Při přechodu do `quoted` se proto pro každý item immutable odvodí `sample_quantity_i = 1` a kladné `batch_quantity_i = ordered_quantity_i − 1`. Sample fáze obsahuje právě jeden `FulfilmentSlot` každé samostatné výrobní konfigurace; u `OrderItem` seskupujícího více těles znamená jeden kus celou vybranou sadu těles. Batch fáze obsahuje zbývající sloty každé položky. Položka s množstvím 1 patří do samostatného `single` Orderu nebo zákazník množství zvýší; API ani UI ji nesmí přijmout do sample/batch Orderu, takže každou nevyhovující sample konfiguraci lze opravit jejími existujícími batch sloty.
 
 Zákazník potvrzuje nebo odmítá fit dodané sample sady atomicky za celou objednávku. Částečné potvrzení jen některých položek ani kombinace `single` a `sample/batch` položek v jednom Orderu se ve v1 nepodporuje; chce-li zákazník vzorek jen pro podmnožinu košíku, vytvoří pro ni samostatný Order. Toto členství a počty se po quote nemění a každý sample i batch slot odkazuje původní `order_item_id`, takže pricing, rezervace, výroba, zásilky i settlement používají stejnou množinu.
 
@@ -889,7 +891,9 @@ new → in_review → quoted → accepted → (vytvoří Order)
 74. `min_print_price` a `small_order_surcharge` se vyhodnocují jednou nad celým Orderem, zatímco množstevní sleva a plate arrangement se vyhodnocují samostatně pro každý `OrderItem`; počty různých položek se pro item-level slevu nesčítají.
 75. Shipment planning, přepravní kategorie a express eligibility pokrývají všechny `OrderItem` objednávky. Každý jednotlivý díl musí splnit limit kategorie, každá zásilka současně rozměrový i hmotnostní limit a express musí splnit celý order bez kombinace standardních a expresních položek.
 76. Závazný `ShipmentPlan` smí vzniknout až po výběru jediného order-level `delivery_destination`; každá jeho parcela musí snapshotovat tentýž endpoint a kategorii kompatibilní s jeho provider capabilities. Background slice před touto volbou dává jen nezávazný mezisoučet a nesmí vytvořit `quoted` Order. Změna endpointu před platbou invaliduje plán i cenu a per-parcel destinace se v v0 nepodporuje.
-77. Fázovaná v1 objednávka musí pro každý `OrderItem` immutable alokovat jeden sample slot a `ordered_quantity − 1` batch slotů; fit se potvrzuje za celou sample sadu. `OrderRevision` smí nahradit jen batch sloty explicitních `affected_order_item_ids`; order-level policies přepočítá jednou z frozen sample allocations a celého revidovaného batch, zatímco zásilky a resource plan znovu vytvoří jen pro celý zbývající batch.
+77. Fázovaná v1 objednávka smí obsahovat jen `OrderItem` s `ordered_quantity ≥ 2` a pro každý musí immutable alokovat jeden sample slot a `ordered_quantity − 1` kladných batch slotů; fit se potvrzuje za celou sample sadu. `OrderRevision` smí nahradit jen batch sloty explicitních `affected_order_item_ids`; order-level policies přepočítá jednou z frozen sample allocations a celého revidovaného batch, zatímco zásilky a resource plan znovu vytvoří jen pro celý zbývající batch.
+78. Parcel `volume_proxy` musí dělit součet ochranných `packing_part_bbox` objemů verzovaným `packing_fill_coefficient` a porovnat výsledek s verzovaným `shipping_category.max_parcel_volume_cm3`; realizovaný `packing_bbox` slouží samostatné rozměrové kontrole a nesmí být implicitním objemovým stropem.
+79. Nadstandardní `postprocessing_i` je item-level čas pro celé množství daného `OrderItem` a fázi. Hlavní handling i `handling_pretisk` jej sčítají přes itemy právě jednou; globální order-level `postprocessing` ani další násobení počtem kusů mimo itemový odhad neexistuje.
 
 ### 6.5 Švy pro síť
 
