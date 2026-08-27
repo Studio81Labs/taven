@@ -188,6 +188,9 @@ function requireAtomicQuotedOrderTopology<S extends string>(
   const orderId = context?.orderId;
   const phaseId = context?.phaseId;
   const resultId = context?.quotedTopologyResultId;
+  const orderPreviousResultId = context?.quotedTopologyOrderPreviousResultId;
+  const orderStateKey = context?.quotedTopologyOrderCurrentStateCommandKey;
+  const expectedOrderValue = context?.quotedTopologyExpectedOrder;
   const phaseIdsValue = context?.quotedTopologyPhaseIds;
   const phasesValue = context?.quotedTopologyPhases;
   const slotIdsValue = context?.quotedTopologyExpectedSlotIds;
@@ -206,6 +209,12 @@ function requireAtomicQuotedOrderTopology<S extends string>(
     !Array.isArray(authoritativeSlotSetValue)
       ? (authoritativeSlotSetValue as Readonly<Record<string, unknown>>)
       : undefined;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const authoritativeSlotIdsValue = authoritativeSlotSet?.slotIds;
   const authoritativeSlotIds = Array.isArray(authoritativeSlotIdsValue)
     ? [...authoritativeSlotIdsValue]
@@ -215,6 +224,15 @@ function requireAtomicQuotedOrderTopology<S extends string>(
     !nonBlank(orderId) ||
     !nonBlank(phaseId) ||
     !nonBlank(resultId) ||
+    !nonBlank(orderPreviousResultId) ||
+    !nonBlank(orderStateKey) ||
+    command.aggregateId !== orderId ||
+    command.currentStateCommandKey !== orderStateKey ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.status !== "draft" ||
+    expectedOrder.resultId !== orderPreviousResultId ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    expectedOrder.immutable !== true ||
     context?.quotedTopologyOrderId !== orderId ||
     context?.quotedTopologyOrderPreviousStatus !== "draft" ||
     context?.quotedTopologyOrderTargetStatus !== "quoted" ||
@@ -4581,11 +4599,23 @@ function requireAtomicIssuedQuoteCreation<S extends string>(
   command: TransitionCommand<S>,
 ): void {
   const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const quoteRequestId = context?.quoteRequestId;
   const issuedQuoteId = context?.issuedQuoteId;
   const issuedAt = context?.issuedQuoteIssuedAt;
   const expiresAt = context?.issuedQuoteExpiresAt;
   const resultId = context?.quoteIssuanceResultId;
+  const requestPreviousResultId =
+    context?.quoteIssuancePreviousQuoteRequestResultId;
+  const requestStateKey = context?.quoteIssuanceCurrentStateCommandKey;
+  const expectedRequestValue = context?.quoteIssuanceExpectedQuoteRequest;
+  const expectedRequest =
+    typeof expectedRequestValue === "object" &&
+    expectedRequestValue !== null &&
+    !Array.isArray(expectedRequestValue)
+      ? (expectedRequestValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const issuedQuoteValue = context?.quoteIssuanceIssuedQuote;
   const issuedQuote =
     typeof issuedQuoteValue === "object" &&
@@ -4609,6 +4639,17 @@ function requireAtomicIssuedQuoteCreation<S extends string>(
     context?.quoteIssuanceQuoteRequestId !== quoteRequestId ||
     context?.quoteIssuanceQuoteRequestPreviousStatus !== "in_review" ||
     context?.quoteIssuanceQuoteRequestTargetStatus !== "quoted" ||
+    (command.current === "in_review" &&
+      command.target === "quoted" &&
+      (!nonBlank(requestPreviousResultId) ||
+        !nonBlank(requestStateKey) ||
+        command.aggregateId !== quoteRequestId ||
+        command.currentStateCommandKey !== requestStateKey ||
+        expectedRequest?.id !== quoteRequestId ||
+        expectedRequest.status !== "in_review" ||
+        expectedRequest.resultId !== requestPreviousResultId ||
+        expectedRequest.currentStateCommandKey !== requestStateKey ||
+        expectedRequest.immutable !== true)) ||
     context?.quoteIssuanceIssuedQuoteId !== issuedQuoteId ||
     context?.quoteIssuanceIssuedQuoteRequestId !== quoteRequestId ||
     context?.quoteIssuanceRequestResultId !== resultId ||
@@ -6426,6 +6467,9 @@ function requireAtomicShipmentLabelCreation<S extends string>(
   const planId = context?.shipmentPlanId;
   const labelId = context?.carrierLabelId;
   const resultId = context?.shipmentLabelCreationResultId;
+  const shipmentPreviousResultId =
+    context?.shipmentLabelCreationPreviousShipmentResultId;
+  const shipmentStateKey = context?.shipmentLabelCreationCurrentStateCommandKey;
   const providerEventId = context?.shipmentLabelCreationProviderEventId;
   const providerTransactionId =
     context?.shipmentLabelCreationProviderTransactionId;
@@ -6468,13 +6512,19 @@ function requireAtomicShipmentLabelCreation<S extends string>(
     !nonBlank(planId) ||
     !nonBlank(labelId) ||
     !nonBlank(resultId) ||
+    !nonBlank(shipmentPreviousResultId) ||
+    !nonBlank(shipmentStateKey) ||
     !nonBlank(providerEventId) ||
     !nonBlank(providerTransactionId) ||
+    command.aggregateId !== shipmentId ||
+    command.currentStateCommandKey !== shipmentStateKey ||
     expected?.id !== shipmentId ||
     expected.orderId !== orderId ||
     expected.phaseId !== phaseId ||
     expected.planId !== planId ||
     expected.status !== "planned" ||
+    expected.resultId !== shipmentPreviousResultId ||
+    expected.currentStateCommandKey !== shipmentStateKey ||
     expected.immutable !== true ||
     context?.shipmentLabelCreationShipmentId !== shipmentId ||
     context?.shipmentLabelCreationOrderId !== orderId ||
@@ -7950,10 +8000,22 @@ function requireAtomicWholeClaimRejection<S extends string>(
   command: TransitionCommand<S>,
 ): void {
   const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const claimId = context?.claimId;
   const resolutionId = context?.claimSlotResolutionId;
   const slotId = context?.claimSlotId;
   const resultId = context?.claimRejectionResultId;
+  const resolutionPreviousResultId =
+    context?.claimRejectionPreviousResolutionResultId;
+  const resolutionStateKey = context?.claimRejectionCurrentStateCommandKey;
+  const expectedResolutionValue = context?.claimRejectionExpectedResolution;
+  const expectedResolution =
+    typeof expectedResolutionValue === "object" &&
+    expectedResolutionValue !== null &&
+    !Array.isArray(expectedResolutionValue)
+      ? (expectedResolutionValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const resolutions = Array.isArray(context?.claimSlotResolutions)
     ? context.claimSlotResolutions
     : undefined;
@@ -7989,6 +8051,19 @@ function requireAtomicWholeClaimRejection<S extends string>(
     slotId.trim().length === 0 ||
     typeof resultId !== "string" ||
     resultId.trim().length === 0 ||
+    (lifecycle === "ClaimSlotResolution" &&
+      (!nonBlank(resolutionPreviousResultId) ||
+        !nonBlank(resolutionStateKey) ||
+        command.aggregateId !== resolutionId ||
+        command.currentStateCommandKey !== resolutionStateKey ||
+        expectedResolution?.id !== resolutionId ||
+        expectedResolution.claimId !== claimId ||
+        expectedResolution.slotId !== slotId ||
+        expectedResolution.status !== "pending" ||
+        expectedResolution.activeClaimId !== claimId ||
+        expectedResolution.resultId !== resolutionPreviousResultId ||
+        expectedResolution.currentStateCommandKey !== resolutionStateKey ||
+        expectedResolution.immutable !== true)) ||
     context?.claimRejectionResultClaimId !== claimId ||
     context?.claimRejectionParentResultId !== resultId ||
     context?.claimRejectionChildSetResultId !== resultId ||
