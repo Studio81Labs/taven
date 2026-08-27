@@ -5854,7 +5854,7 @@ describe("v0 lifecycle policy tables", () => {
     });
   });
 
-  it("accepts exact cancellation for a failed current replacement Job leaf", () => {
+  it("keeps a terminally failed current replacement Job leaf unchanged", () => {
     const base = contextForTransition(
       "recovery_pending",
       "replacement_in_production",
@@ -5886,6 +5886,49 @@ describe("v0 lifecycle policy tables", () => {
               },
             ],
           },
+          replacementRecoveryCancellationJobIds: [],
+          replacementRecoveryCancellationJobs: [],
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "replacement_in_production",
+      current: "recovery_pending",
+    });
+  });
+
+  it("rejects an impossible failed-to-cancelled replacement Job transition", () => {
+    const base = contextForTransition(
+      "recovery_pending",
+      "replacement_in_production",
+    );
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "replacement_in_production",
+          "recovery_pending",
+        ),
+        current: "replacement_in_production",
+        target: "recovery_pending",
+        idempotencyKey: "replacement-recovery-failed-job-cancellation",
+        context: {
+          ...base,
+          replacementRequiredResourceGroups: [
+            {
+              ...base.replacementRequiredResourceGroups[0],
+              currentReplacementJobStatus: "failed",
+            },
+          ],
+          replacementRecoveryCancellationExpectedSnapshot: {
+            ...base.replacementRecoveryCancellationExpectedSnapshot,
+            jobs: [
+              {
+                ...base.replacementRecoveryCancellationExpectedSnapshot.jobs[0],
+                status: "failed",
+              },
+            ],
+          },
           replacementRecoveryCancellationJobs: [
             {
               ...base.replacementRecoveryCancellationJobs[0],
@@ -5894,11 +5937,7 @@ describe("v0 lifecycle policy tables", () => {
           ],
         },
       }),
-    ).toEqual({
-      kind: "changed",
-      previous: "replacement_in_production",
-      current: "recovery_pending",
-    });
+    ).toThrow(TransitionGuardError);
   });
 
   it("rejects replacement recovery when the expected Job status differs from the persisted current leaf", () => {

@@ -11569,6 +11569,7 @@ function requireExactReplacementRecoveryCancellation<S extends string>(
     targetStatus: string,
     label: string,
     requireCurrentLeaf = false,
+    unchangedStatuses: readonly string[] = [],
   ): Readonly<Record<string, unknown>>[] => {
     const setupById = new Map<string, Readonly<Record<string, unknown>>>();
     for (const value of setup) {
@@ -11595,10 +11596,7 @@ function requireExactReplacementRecoveryCancellation<S extends string>(
     if (
       ids.length === 0 ||
       !Array.isArray(expectedSnapshot) ||
-      expectedSnapshot.length !== ids.length ||
-      !exact(ids, expectedIds) ||
-      !Array.isArray(cancellations) ||
-      cancellations.length !== ids.length
+      expectedSnapshot.length !== ids.length
     ) {
       throw new TransitionGuardError(
         lifecycle,
@@ -11644,6 +11642,23 @@ function requireExactReplacementRecoveryCancellation<S extends string>(
       }
       snapshotById.set(record.id, record);
     }
+    const transitionIds = ids.filter(
+      (id) =>
+        !unchangedStatuses.includes(snapshotById.get(id)?.status as string),
+    );
+    if (
+      !exact(transitionIds, expectedIds) ||
+      !Array.isArray(cancellations) ||
+      cancellations.length !== transitionIds.length
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        `replacement recovery must account for the complete exact ${label} set`,
+      );
+    }
+    const transitionIdSet = new Set(transitionIds);
     const seen = new Set<string>();
     const verified: Readonly<Record<string, unknown>>[] = [];
     for (const value of cancellations) {
@@ -11661,6 +11676,7 @@ function requireExactReplacementRecoveryCancellation<S extends string>(
       if (
         !nonBlank(id) ||
         seen.has(id) ||
+        !transitionIdSet.has(id) ||
         persisted === undefined ||
         !Array.isArray(persisted.slotIds) ||
         !exact(persisted.slotIds as string[], record.slotIds) ||
@@ -11732,6 +11748,7 @@ function requireExactReplacementRecoveryCancellation<S extends string>(
     "cancelled",
     "Job",
     true,
+    ["failed"],
   );
 
   const snapshotAuthorizations = snapshot.authorizations;
