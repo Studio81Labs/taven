@@ -177,6 +177,18 @@ const permittedContext = {
   paymentFailureAtomic: true,
   paymentVoidPaymentId: "payment-1",
   paymentVoidProviderTransactionId: "provider-transaction-1",
+  paymentVoidPreviousPaymentResultId: "payment-pending-result-1",
+  paymentVoidCurrentStateCommandKey: "payment-pending-command-1",
+  paymentVoidExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "pending",
+    resultId: "payment-pending-result-1",
+    currentStateCommandKey: "payment-pending-command-1",
+    immutable: true,
+  },
   providerVoidOutboxPaymentId: "payment-1",
   providerVoidOutboxProviderTransactionId: "provider-transaction-1",
   paymentVoidPreviousStatus: "pending",
@@ -187,6 +199,18 @@ const permittedContext = {
   priceAdjustmentId: "price-adjustment-1",
   ordinaryRefundPaymentId: "payment-1",
   ordinaryRefundOrderId: "order-1",
+  ordinaryRefundPreviousPaymentResultId: "payment-captured-result-1",
+  ordinaryRefundCurrentStateCommandKey: "payment-captured-command-1",
+  ordinaryRefundExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "captured",
+    resultId: "payment-captured-result-1",
+    currentStateCommandKey: "payment-captured-command-1",
+    immutable: true,
+  },
   ordinaryRefundCaptureTransactionId: "provider-transaction-1",
   ordinaryRefundPriceAdjustmentId: "price-adjustment-1",
   priceAdjustmentOrderId: "order-1",
@@ -972,6 +996,18 @@ const permittedContext = {
   productionReservationReleased: true,
   productionReservationId: "production-reservation-1",
   productionReservationJobId: "job-1",
+  acceptancePreviousJobResultId: "job-created-result-1",
+  acceptanceCurrentStateCommandKey: "job-created-command-1",
+  acceptanceExpectedJob: {
+    id: "job-1",
+    productionReservationId: "production-reservation-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    status: "created",
+    resultId: "job-created-result-1",
+    currentStateCommandKey: "job-created-command-1",
+    immutable: true,
+  },
   acceptanceReservationJobId: "job-1",
   acceptanceProductionReservationId: "production-reservation-1",
   acceptanceMaterialPreviousState: "held",
@@ -1516,6 +1552,59 @@ const permittedContext = {
   claimRefundTransactionId: "refund-1",
   claimRefundProviderEventId: "refund-provider-event-1",
   claimRefundExpectedAmountMinor: 1_000n,
+  claimRefundPreviousResolutionResultId:
+    "claim-resolution-refund-pending-result-1",
+  claimRefundCompletionResultId: "claim-refund-completion-result-1",
+  claimRefundCurrentStateCommandKey:
+    "claim-resolution-refund-pending-command-1",
+  claimRefundExpectedResolution: {
+    id: "claim-resolution-1",
+    claimId: "claim-1",
+    slotId: "claim-slot-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "refund_pending",
+    activeClaimId: "claim-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    amountMinor: 1_000n,
+    resultId: "claim-resolution-refund-pending-result-1",
+    currentStateCommandKey: "claim-resolution-refund-pending-command-1",
+    immutable: true,
+  },
+  claimRefundCompletionTransaction: {
+    id: "refund-1",
+    resolutionId: "claim-resolution-1",
+    claimId: "claim-1",
+    slotId: "claim-slot-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    paymentId: "payment-1",
+    amountMinor: 1_000n,
+    status: "succeeded",
+    providerEventId: "refund-provider-event-1",
+    resultId: "claim-refund-completion-result-1",
+    immutable: true,
+  },
+  claimRefundCompletionProviderEvent: {
+    id: "refund-provider-event-1",
+    resolutionId: "claim-resolution-1",
+    refundTransactionId: "refund-1",
+    paymentId: "payment-1",
+    amountMinor: 1_000n,
+    status: "succeeded",
+    projectedTarget: "refunded",
+    authenticated: true,
+    verified: true,
+    resultId: "claim-refund-completion-result-1",
+    immutable: true,
+  },
+  claimRefundCompletionResolutionResultId: "claim-refund-completion-result-1",
+  claimRefundCompletionTransactionResultId: "claim-refund-completion-result-1",
+  claimRefundCompletionProviderEventResultId:
+    "claim-refund-completion-result-1",
+  claimRefundCompletionPaymentResultId: "claim-refund-completion-result-1",
+  claimRefundCompletionCompleted: true,
   claimRefundCompletionAtomic: true,
   claimResolutionSetClaimId: "claim-1",
   expectedClaimSlotResolutionIds: ["claim-resolution-1"],
@@ -2623,6 +2712,8 @@ function contextForTransition(target: string, current?: string) {
   const shipmentProviderOutcomeResultId = `shipment-${shipmentProviderOutcomeTarget}-provider-result-1`;
   const reprintSelectionState =
     current === "recovery_pending" ? "recovery_pending" : "pending";
+  const ordinaryRefundState =
+    current === "partially_refunded" ? "partially_refunded" : "captured";
   return {
     ...permittedContext,
     reprintSelectionPreviousResolutionResultId: `resolution-${reprintSelectionState}-result-1`,
@@ -2633,6 +2724,14 @@ function contextForTransition(target: string, current?: string) {
       status: reprintSelectionState,
       resultId: `resolution-${reprintSelectionState}-result-1`,
       currentStateCommandKey: `resolution-${reprintSelectionState}-command-1`,
+    },
+    ordinaryRefundPreviousPaymentResultId: `payment-${ordinaryRefundState}-result-1`,
+    ordinaryRefundCurrentStateCommandKey: `payment-${ordinaryRefundState}-command-1`,
+    ordinaryRefundExpectedPayment: {
+      ...permittedContext.ordinaryRefundExpectedPayment,
+      status: ordinaryRefundState,
+      resultId: `payment-${ordinaryRefundState}-result-1`,
+      currentStateCommandKey: `payment-${ordinaryRefundState}-command-1`,
     },
     paymentFailureExpectedPayment: {
       ...permittedContext.paymentFailureExpectedPayment,
@@ -2959,6 +3058,26 @@ function commandAnchors(
   if (
     policy.name === "Payment" &&
     current === "pending" &&
+    target === "voided"
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: "payment-pending-command-1",
+    };
+  }
+  if (
+    policy.name === "Payment" &&
+    (current === "captured" || current === "partially_refunded") &&
+    target === "refund_pending"
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: `payment-${current}-command-1`,
+    };
+  }
+  if (
+    policy.name === "Payment" &&
+    current === "pending" &&
     target === "failed"
   ) {
     return {
@@ -2988,6 +3107,12 @@ function commandAnchors(
     return {
       aggregateId: "shipment-1",
       currentStateCommandKey: `shipment-${current}-command-1`,
+    };
+  }
+  if (policy.name === "Job" && current === "created" && target === "accepted") {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-created-command-1",
     };
   }
   if (
@@ -3025,6 +3150,16 @@ function commandAnchors(
     (target.startsWith("resolved_") || target === "withdrawn")
   ) {
     return { aggregateId: "claim-1" };
+  }
+  if (
+    policy.name === "ClaimSlotResolution" &&
+    current === "refund_pending" &&
+    target === "refunded"
+  ) {
+    return {
+      aggregateId: "claim-resolution-1",
+      currentStateCommandKey: "claim-resolution-refund-pending-command-1",
+    };
   }
   if (
     policy.name === "ClaimSlotResolution" &&
@@ -4929,6 +5064,7 @@ describe("v0 lifecycle policy tables", () => {
     (paymentRole) => {
       expect(
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "voided"),
           current: "pending",
           target: "voided",
           idempotencyKey: `initial-payment-void-${paymentRole}`,
@@ -4936,6 +5072,10 @@ describe("v0 lifecycle policy tables", () => {
             ...contextForTransition("voided", "pending"),
             paymentRole,
             initialPaymentRole: paymentRole,
+            paymentVoidExpectedPayment: {
+              ...permittedContext.paymentVoidExpectedPayment,
+              role: paymentRole,
+            },
           },
         }),
       ).toEqual({ kind: "changed", previous: "pending", current: "voided" });
@@ -4945,12 +5085,17 @@ describe("v0 lifecycle policy tables", () => {
   it("atomically voids a balance Payment with its Order settlement", () => {
     expect(
       transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "voided"),
         current: "pending",
         target: "voided",
         idempotencyKey: "balance-payment-void",
         context: {
           ...contextForTransition("voided", "pending"),
           paymentRole: "balance",
+          paymentVoidExpectedPayment: {
+            ...permittedContext.paymentVoidExpectedPayment,
+            role: "balance",
+          },
         },
       }),
     ).toEqual({ kind: "changed", previous: "pending", current: "voided" });
@@ -4960,6 +5105,8 @@ describe("v0 lifecycle policy tables", () => {
     ["paymentId", " "],
     ["paymentRole", "adjustment"],
     ["paymentVoidPaymentId", "another-payment"],
+    ["paymentVoidPreviousPaymentResultId", "another-result"],
+    ["paymentVoidCurrentStateCommandKey", "another-command"],
     ["providerPaymentTransactionId", " "],
     ["paymentVoidProviderTransactionId", "another-transaction"],
     ["providerVoidOutboxPaymentId", "another-payment"],
@@ -4999,6 +5146,7 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "voided"),
           current: "pending",
           target: "voided",
           idempotencyKey: `initial-payment-void-${field}`,
@@ -5040,12 +5188,17 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "voided"),
           current: "pending",
           target: "voided",
           idempotencyKey: `balance-payment-void-${field}`,
           context: {
             ...contextForTransition("voided", "pending"),
             paymentRole: "balance",
+            paymentVoidExpectedPayment: {
+              ...permittedContext.paymentVoidExpectedPayment,
+              role: "balance",
+            },
             [field]: value,
           },
         }),
@@ -5056,6 +5209,8 @@ describe("v0 lifecycle policy tables", () => {
   it.each([
     ["paymentId", " "],
     ["ordinaryRefundPaymentId", "another-payment"],
+    ["ordinaryRefundPreviousPaymentResultId", "another-result"],
+    ["ordinaryRefundCurrentStateCommandKey", "another-command"],
     ["orderId", " "],
     ["ordinaryRefundOrderId", "another-order"],
     ["providerPaymentTransactionId", " "],
@@ -5083,6 +5238,7 @@ describe("v0 lifecycle policy tables", () => {
       for (const current of ["captured", "partially_refunded"] as const) {
         expect(() =>
           transition(paymentPolicy, {
+            ...commandAnchors(paymentPolicy, current, "refund_pending"),
             current,
             target: "refund_pending",
             idempotencyKey: `ordinary-refund-${current}-${field}`,
@@ -8818,6 +8974,442 @@ describe("v0 lifecycle policy tables", () => {
     });
   });
 
+  it("binds Job acceptance to the selected immutable created Job", () => {
+    const context = contextForTransition("accepted", "created");
+    const command = {
+      current: "created" as const,
+      target: "accepted" as const,
+      idempotencyKey: "job-acceptance-selected",
+      context,
+    };
+    expect(() =>
+      transition(jobPolicy, {
+        ...command,
+        aggregateId: " ",
+        currentStateCommandKey: "job-created-command-1",
+        idempotencyKey: "job-acceptance-coordinated-blank-identities",
+        context: {
+          ...context,
+          jobId: " ",
+          productionReservationId: " ",
+          orderItemId: " ",
+          phaseId: " ",
+          reproductionArtifactVersionId: " ",
+          productionReservationJobId: " ",
+          acceptanceReservationJobId: " ",
+          reproductionArtifactVersionJobId: " ",
+          acceptanceProductionReservationId: " ",
+          reproductionArtifactVersionProductionReservationId: " ",
+          acceptanceArtifactVersionId: " ",
+          reproductionArtifactVersionOrderItemId: " ",
+          reproductionArtifactVersionPhaseId: " ",
+          acceptanceExpectedJob: {
+            ...context.acceptanceExpectedJob,
+            id: " ",
+            productionReservationId: " ",
+            orderItemId: " ",
+            phaseId: " ",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+
+    expect(() =>
+      transition(jobPolicy, {
+        ...command,
+        currentStateCommandKey: "job-created-command-1",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(jobPolicy, {
+        ...command,
+        aggregateId: "job-2",
+        currentStateCommandKey: "job-created-command-1",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(jobPolicy, {
+        ...command,
+        aggregateId: "job-1",
+        currentStateCommandKey: "foreign-command",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(
+      transition(jobPolicy, {
+        ...command,
+        ...commandAnchors(jobPolicy, "created", "accepted"),
+      }),
+    ).toEqual({ kind: "changed", previous: "created", current: "accepted" });
+
+    for (const [field, value] of [
+      ["id", "job-2"],
+      ["productionReservationId", "reservation-2"],
+      ["orderItemId", "order-item-2"],
+      ["phaseId", "phase-2"],
+      ["status", "accepted"],
+      ["resultId", "foreign-result"],
+      ["currentStateCommandKey", "foreign-command"],
+      ["immutable", false],
+    ] as const) {
+      expect(() =>
+        transition(jobPolicy, {
+          ...command,
+          ...commandAnchors(jobPolicy, "created", "accepted"),
+          idempotencyKey: `job-acceptance-snapshot-${field}`,
+          context: {
+            ...context,
+            acceptanceExpectedJob: {
+              ...context.acceptanceExpectedJob,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(jobPolicy, {
+        ...command,
+        ...commandAnchors(jobPolicy, "created", "accepted"),
+        idempotencyKey: "job-acceptance-coordinated-foreign-job",
+        context: {
+          ...context,
+          jobId: "job-2",
+          productionReservationJobId: "job-2",
+          acceptanceReservationJobId: "job-2",
+          reproductionArtifactVersionJobId: "job-2",
+          acceptanceExpectedJob: {
+            ...context.acceptanceExpectedJob,
+            id: "job-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("binds both Payment void branches to the selected immutable pending Payment", () => {
+    for (const paymentRole of ["full", "balance"] as const) {
+      const base = contextForTransition("voided", "pending");
+      const context = {
+        ...base,
+        paymentRole,
+        ...(paymentRole === "full" ? { initialPaymentRole: "full" } : {}),
+        paymentVoidExpectedPayment: {
+          ...base.paymentVoidExpectedPayment,
+          role: paymentRole,
+        },
+      };
+      const command = {
+        current: "pending" as const,
+        target: "voided" as const,
+        idempotencyKey: `payment-void-selected-${paymentRole}`,
+        context,
+      };
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          currentStateCommandKey: "payment-pending-command-1",
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          aggregateId: "payment-2",
+          currentStateCommandKey: "payment-pending-command-1",
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          aggregateId: "payment-1",
+          currentStateCommandKey: "foreign-command",
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(
+        transition(paymentPolicy, {
+          ...command,
+          ...commandAnchors(paymentPolicy, "pending", "voided"),
+        }),
+      ).toEqual({ kind: "changed", previous: "pending", current: "voided" });
+
+      const foreignContext = {
+        ...context,
+        paymentId: "payment-2",
+        paymentVoidPaymentId: "payment-2",
+        providerVoidOutboxPaymentId: "payment-2",
+        paymentVoidExpectedPayment: {
+          ...context.paymentVoidExpectedPayment,
+          id: "payment-2",
+        },
+        ...(paymentRole === "full"
+          ? {
+              initialPaymentId: "payment-2",
+              initialCaptureClosePaymentId: "payment-2",
+            }
+          : {
+              balancePaymentId: "payment-2",
+              balancePaymentSettlementPaymentId: "payment-2",
+            }),
+      };
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          ...commandAnchors(paymentPolicy, "pending", "voided"),
+          idempotencyKey: `payment-void-coordinated-${paymentRole}`,
+          context: foreignContext,
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    const context = contextForTransition("voided", "pending");
+    for (const [field, value] of [
+      ["id", "payment-2"],
+      ["orderId", "order-2"],
+      ["phaseId", "phase-2"],
+      ["role", "deposit"],
+      ["status", "voided"],
+      ["resultId", "foreign-result"],
+      ["currentStateCommandKey", "foreign-command"],
+      ["immutable", false],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "voided"),
+          current: "pending",
+          target: "voided",
+          idempotencyKey: `payment-void-snapshot-${field}`,
+          context: {
+            ...context,
+            paymentVoidExpectedPayment: {
+              ...context.paymentVoidExpectedPayment,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+  });
+
+  it("binds ordinary refund setup to the selected immutable Payment state", () => {
+    for (const current of ["captured", "partially_refunded"] as const) {
+      const context = contextForTransition("refund_pending", current);
+      const command = {
+        current,
+        target: "refund_pending" as const,
+        idempotencyKey: `ordinary-refund-selected-${current}`,
+        context,
+      };
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          currentStateCommandKey: `payment-${current}-command-1`,
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          aggregateId: "payment-2",
+          currentStateCommandKey: `payment-${current}-command-1`,
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(
+        transition(paymentPolicy, {
+          ...command,
+          ...commandAnchors(paymentPolicy, current, "refund_pending"),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "refund_pending",
+      });
+
+      for (const [field, value] of [
+        ["id", "payment-2"],
+        ["orderId", "order-2"],
+        ["phaseId", "phase-2"],
+        ["role", "deposit"],
+        ["status", "pending"],
+        ["resultId", "foreign-result"],
+        ["currentStateCommandKey", "foreign-command"],
+        ["immutable", false],
+      ] as const) {
+        expect(() =>
+          transition(paymentPolicy, {
+            ...command,
+            ...commandAnchors(paymentPolicy, current, "refund_pending"),
+            idempotencyKey: `ordinary-refund-snapshot-${current}-${field}`,
+            context: {
+              ...context,
+              ordinaryRefundExpectedPayment: {
+                ...context.ordinaryRefundExpectedPayment,
+                [field]: value,
+              },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          ...commandAnchors(paymentPolicy, current, "refund_pending"),
+          idempotencyKey: `ordinary-refund-coordinated-${current}`,
+          context: {
+            ...context,
+            paymentId: "payment-2",
+            ordinaryRefundPaymentId: "payment-2",
+            priceAdjustmentPaymentId: "payment-2",
+            refundTransactionPaymentId: "payment-2",
+            ordinaryRefundExpectedPayment: {
+              ...context.ordinaryRefundExpectedPayment,
+              id: "payment-2",
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+  });
+
+  it("binds claim-refund completion to the selected immutable child", () => {
+    const context = contextForTransition("refunded", "refund_pending");
+    const command = {
+      current: "refund_pending" as const,
+      target: "refunded" as const,
+      idempotencyKey: "claim-refund-selected-child",
+      context,
+    };
+    for (const [recordField, field, value] of [
+      [
+        "claimRefundCompletionTransaction",
+        "resolutionId",
+        "claim-resolution-2",
+      ],
+      ["claimRefundCompletionTransaction", "paymentId", "payment-2"],
+      ["claimRefundCompletionTransaction", "status", "pending"],
+      ["claimRefundCompletionTransaction", "resultId", "foreign-result"],
+      ["claimRefundCompletionTransaction", "immutable", false],
+      [
+        "claimRefundCompletionProviderEvent",
+        "resolutionId",
+        "claim-resolution-2",
+      ],
+      ["claimRefundCompletionProviderEvent", "refundTransactionId", "refund-2"],
+      ["claimRefundCompletionProviderEvent", "status", "failed"],
+      ["claimRefundCompletionProviderEvent", "verified", false],
+      ["claimRefundCompletionProviderEvent", "resultId", "foreign-result"],
+      ["claimRefundCompletionProviderEvent", "immutable", false],
+    ] as const) {
+      const record = context[recordField] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          ...command,
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            "refund_pending",
+            "refunded",
+          ),
+          idempotencyKey: `claim-refund-${recordField}-${field}`,
+          context: {
+            ...context,
+            [recordField]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        ...command,
+        currentStateCommandKey: "claim-resolution-refund-pending-command-1",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        ...command,
+        aggregateId: "claim-resolution-2",
+        currentStateCommandKey: "claim-resolution-refund-pending-command-1",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        ...command,
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "refund_pending",
+          "refunded",
+        ),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "refund_pending",
+      current: "refunded",
+    });
+
+    for (const [field, value] of [
+      ["id", "claim-resolution-2"],
+      ["claimId", "claim-2"],
+      ["slotId", "claim-slot-2"],
+      ["orderId", "order-2"],
+      ["phaseId", "phase-2"],
+      ["status", "refunded"],
+      ["activeClaimId", "claim-2"],
+      ["paymentId", "payment-2"],
+      ["refundTransactionId", "refund-2"],
+      ["amountMinor", 999n],
+      ["resultId", "foreign-result"],
+      ["currentStateCommandKey", "foreign-command"],
+      ["immutable", false],
+    ] as const) {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          ...command,
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            "refund_pending",
+            "refunded",
+          ),
+          idempotencyKey: `claim-refund-snapshot-${field}`,
+          context: {
+            ...context,
+            claimRefundExpectedResolution: {
+              ...context.claimRefundExpectedResolution,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        ...command,
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "refund_pending",
+          "refunded",
+        ),
+        idempotencyKey: "claim-refund-coordinated-foreign-child",
+        context: {
+          ...context,
+          claimSlotResolutionId: "claim-resolution-2",
+          claimRefundResolutionId: "claim-resolution-2",
+          claimRefundExpectedResolution: {
+            ...context.claimRefundExpectedResolution,
+            id: "claim-resolution-2",
+          },
+          claimRefundCompletionTransaction: {
+            ...context.claimRefundCompletionTransaction,
+            resolutionId: "claim-resolution-2",
+          },
+          claimRefundCompletionProviderEvent: {
+            ...context.claimRefundCompletionProviderEvent,
+            resolutionId: "claim-resolution-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it.each(["pending", "recovery_pending"] as const)(
     "allows direct claim refund from %s once its scoped credit is active",
     (current) => {
@@ -10868,6 +11460,11 @@ describe("v0 lifecycle policy tables", () => {
         current: "refund_pending",
         target: "refunded",
         idempotencyKey: `claim-refund-completion-${missingFlag}`,
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "refund_pending",
+          "refunded",
+        ),
         context,
       }),
     ).toThrow(TransitionGuardError);
@@ -10879,6 +11476,11 @@ describe("v0 lifecycle policy tables", () => {
         current: "refund_pending",
         target: "refunded",
         idempotencyKey: "claim-refund-completion",
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "refund_pending",
+          "refunded",
+        ),
         context: contextForTransition("refunded", "refund_pending"),
       }),
     ).toEqual({
@@ -10905,6 +11507,14 @@ describe("v0 lifecycle policy tables", () => {
     ["claimRefundProviderEventId", "another-event"],
     ["refundWebhookAmountMinor", 0n],
     ["claimRefundExpectedAmountMinor", 999n],
+    ["claimRefundPreviousResolutionResultId", "another-result"],
+    ["claimRefundCompletionResultId", "another-result"],
+    ["claimRefundCurrentStateCommandKey", "another-command"],
+    ["claimRefundCompletionResolutionResultId", "another-result"],
+    ["claimRefundCompletionTransactionResultId", "another-result"],
+    ["claimRefundCompletionProviderEventResultId", "another-result"],
+    ["claimRefundCompletionPaymentResultId", "another-result"],
+    ["claimRefundCompletionCompleted", false],
     ["refundWebhookAuthenticated", false],
     ["refundWebhookVerified", false],
     ["refundWebhookStatus", "failed"],
@@ -10920,6 +11530,11 @@ describe("v0 lifecycle policy tables", () => {
           current: "refund_pending",
           target: "refunded",
           idempotencyKey: `claim-refund-exact-${field}`,
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            "refund_pending",
+            "refunded",
+          ),
           context: {
             ...contextForTransition("refunded", "refund_pending"),
             [field]: value,
@@ -12998,6 +13613,8 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     ["productionReservationJobId", "another-job"],
+    ["acceptancePreviousJobResultId", "another-result"],
+    ["acceptanceCurrentStateCommandKey", "another-command"],
     ["acceptanceReservationJobId", "another-job"],
     ["acceptanceProductionReservationId", "another-reservation"],
     ["acceptanceMaterialPreviousState", "released"],
@@ -13023,6 +13640,7 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)("rejects Job acceptance with invalid %s", (field, value) => {
     expect(() =>
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "created", "accepted"),
         current: "created",
         target: "accepted",
         idempotencyKey: `job-acceptance-${field}`,

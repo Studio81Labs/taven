@@ -3030,17 +3030,39 @@ function requireJobAcceptanceOwnership<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const jobId = command.context?.jobId;
   const productionReservationId = command.context?.productionReservationId;
   const orderItemId = command.context?.orderItemId;
   const phaseId = command.context?.phaseId;
   const artifactVersionId = command.context?.reproductionArtifactVersionId;
+  const previousResultId = command.context?.acceptancePreviousJobResultId;
+  const stateKey = command.context?.acceptanceCurrentStateCommandKey;
+  const expectedValue = command.context?.acceptanceExpectedJob;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
   if (
-    typeof jobId !== "string" ||
-    jobId.length === 0 ||
+    !nonBlank(jobId) ||
+    command.aggregateId !== jobId ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    command.currentStateCommandKey !== stateKey ||
     command.context?.productionReservationJobId !== jobId ||
     command.context?.acceptanceReservationJobId !== jobId ||
-    command.context?.reproductionArtifactVersionJobId !== jobId
+    command.context?.reproductionArtifactVersionJobId !== jobId ||
+    expected?.id !== jobId ||
+    expected.productionReservationId !== productionReservationId ||
+    expected.orderItemId !== orderItemId ||
+    expected.phaseId !== phaseId ||
+    expected.status !== "created" ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -3050,8 +3072,7 @@ function requireJobAcceptanceOwnership<S extends string>(
     );
   }
   if (
-    typeof productionReservationId !== "string" ||
-    productionReservationId.length === 0 ||
+    !nonBlank(productionReservationId) ||
     command.context?.acceptanceProductionReservationId !==
       productionReservationId ||
     command.context?.reproductionArtifactVersionProductionReservationId !==
@@ -3078,15 +3099,12 @@ function requireJobAcceptanceOwnership<S extends string>(
     );
   }
   if (
-    typeof artifactVersionId !== "string" ||
-    artifactVersionId.length === 0 ||
+    !nonBlank(artifactVersionId) ||
     command.context?.acceptanceArtifactVersionId !== artifactVersionId ||
     command.context?.reproductionArtifactVersionStatus !== "draft" ||
-    typeof orderItemId !== "string" ||
-    orderItemId.length === 0 ||
+    !nonBlank(orderItemId) ||
     command.context?.reproductionArtifactVersionOrderItemId !== orderItemId ||
-    typeof phaseId !== "string" ||
-    phaseId.length === 0 ||
+    !nonBlank(phaseId) ||
     command.context?.reproductionArtifactVersionPhaseId !== phaseId
   ) {
     throw new TransitionGuardError(
@@ -3116,8 +3134,7 @@ function requireJobAcceptanceOwnership<S extends string>(
   ] as const) {
     const reservationSnapshotId: unknown = command.context?.[reservationField];
     if (
-      typeof reservationSnapshotId !== "string" ||
-      reservationSnapshotId.length === 0 ||
+      !nonBlank(reservationSnapshotId) ||
       command.context?.[artifactField] !== reservationSnapshotId
     ) {
       throw new TransitionGuardError(
@@ -4661,9 +4678,24 @@ function requireRoleSpecificPaymentVoidClosure<S extends string>(
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
   const providerTransactionId = command.context?.providerPaymentTransactionId;
+  const previousResultId = command.context?.paymentVoidPreviousPaymentResultId;
+  const stateKey = command.context?.paymentVoidCurrentStateCommandKey;
+  const expectedValue = command.context?.paymentVoidExpectedPayment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
   if (
     typeof paymentId !== "string" ||
     paymentId.trim().length === 0 ||
+    command.aggregateId !== paymentId ||
+    typeof previousResultId !== "string" ||
+    previousResultId.trim().length === 0 ||
+    typeof stateKey !== "string" ||
+    stateKey.trim().length === 0 ||
+    command.currentStateCommandKey !== stateKey ||
     command.context?.paymentVoidPaymentId !== paymentId ||
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
@@ -4677,7 +4709,15 @@ function requireRoleSpecificPaymentVoidClosure<S extends string>(
     command.context?.providerVoidOutboxProviderTransactionId !==
       providerTransactionId ||
     command.context?.paymentVoidPreviousStatus !== "pending" ||
-    command.context?.paymentVoidTargetStatus !== "voided"
+    command.context?.paymentVoidTargetStatus !== "voided" ||
+    expected?.id !== paymentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.role !== paymentRole ||
+    expected.status !== "pending" ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -4871,17 +4911,50 @@ function requireExactOrdinaryRefundSetup<S extends string>(
 ): void {
   const paymentId = command.context?.paymentId;
   const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  const paymentRole = command.context?.paymentRole;
   const providerTransactionId = command.context?.providerPaymentTransactionId;
   const priceAdjustmentId = command.context?.priceAdjustmentId;
   const refundTransactionId = command.context?.refundTransactionId;
   const amountMinor = command.context?.ordinaryRefundAmountMinor;
+  const previousResultId =
+    command.context?.ordinaryRefundPreviousPaymentResultId;
+  const stateKey = command.context?.ordinaryRefundCurrentStateCommandKey;
+  const expectedValue = command.context?.ordinaryRefundExpectedPayment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
   if (
     typeof paymentId !== "string" ||
     paymentId.trim().length === 0 ||
+    command.aggregateId !== paymentId ||
+    typeof previousResultId !== "string" ||
+    previousResultId.trim().length === 0 ||
+    typeof stateKey !== "string" ||
+    stateKey.trim().length === 0 ||
+    command.currentStateCommandKey !== stateKey ||
     command.context?.ordinaryRefundPaymentId !== paymentId ||
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
     command.context?.ordinaryRefundOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    (paymentRole !== "full" &&
+      paymentRole !== "deposit" &&
+      paymentRole !== "balance") ||
+    (command.current !== "captured" &&
+      command.current !== "partially_refunded") ||
+    expected?.id !== paymentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.role !== paymentRole ||
+    expected.status !== command.current ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true ||
     typeof providerTransactionId !== "string" ||
     providerTransactionId.trim().length === 0 ||
     command.context?.ordinaryRefundCaptureTransactionId !==
@@ -10507,37 +10580,108 @@ function requireExactClaimRefundCompletion<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  const resolutionId = command.context?.claimSlotResolutionId;
-  const claimId = command.context?.claimId;
-  const slotId = command.context?.claimSlotId;
-  const paymentId = command.context?.paymentId;
-  const refundTransactionId = command.context?.refundTransactionId;
-  const providerEventId = command.context?.refundProviderEventId;
-  const refundAmountMinor = command.context?.refundWebhookAmountMinor;
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const resolutionId = context?.claimSlotResolutionId;
+  const claimId = context?.claimId;
+  const slotId = context?.claimSlotId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const paymentId = context?.paymentId;
+  const refundTransactionId = context?.refundTransactionId;
+  const providerEventId = context?.refundProviderEventId;
+  const refundAmountMinor = context?.refundWebhookAmountMinor;
+  const previousResultId = context?.claimRefundPreviousResolutionResultId;
+  const resultId = context?.claimRefundCompletionResultId;
+  const stateKey = context?.claimRefundCurrentStateCommandKey;
+  const expectedValue = context?.claimRefundExpectedResolution;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const transactionValue = context?.claimRefundCompletionTransaction;
+  const transaction =
+    typeof transactionValue === "object" &&
+    transactionValue !== null &&
+    !Array.isArray(transactionValue)
+      ? (transactionValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const eventValue = context?.claimRefundCompletionProviderEvent;
+  const event =
+    typeof eventValue === "object" &&
+    eventValue !== null &&
+    !Array.isArray(eventValue)
+      ? (eventValue as Readonly<Record<string, unknown>>)
+      : undefined;
   if (
-    typeof resolutionId !== "string" ||
-    resolutionId.trim().length === 0 ||
-    command.context?.claimRefundResolutionId !== resolutionId ||
-    typeof claimId !== "string" ||
-    claimId.trim().length === 0 ||
-    command.context?.claimRefundClaimId !== claimId ||
-    typeof slotId !== "string" ||
-    slotId.trim().length === 0 ||
-    command.context?.claimRefundSlotId !== slotId ||
-    typeof paymentId !== "string" ||
-    paymentId.trim().length === 0 ||
-    command.context?.claimRefundPaymentId !== paymentId ||
-    command.context?.refundWebhookPaymentId !== paymentId ||
-    typeof refundTransactionId !== "string" ||
-    refundTransactionId.trim().length === 0 ||
-    command.context?.claimRefundTransactionId !== refundTransactionId ||
-    command.context?.refundWebhookRefundTransactionId !== refundTransactionId ||
-    typeof providerEventId !== "string" ||
-    providerEventId.trim().length === 0 ||
-    command.context?.claimRefundProviderEventId !== providerEventId ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(claimId) ||
+    !nonBlank(slotId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(paymentId) ||
+    !nonBlank(refundTransactionId) ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== resolutionId ||
+    command.currentStateCommandKey !== stateKey ||
+    context?.claimRefundResolutionId !== resolutionId ||
+    context?.claimRefundClaimId !== claimId ||
+    context?.claimRefundSlotId !== slotId ||
+    context?.claimRefundPaymentId !== paymentId ||
+    context?.refundWebhookPaymentId !== paymentId ||
+    context?.claimRefundTransactionId !== refundTransactionId ||
+    context?.refundWebhookRefundTransactionId !== refundTransactionId ||
+    context?.claimRefundProviderEventId !== providerEventId ||
     typeof refundAmountMinor !== "bigint" ||
     refundAmountMinor <= 0n ||
-    command.context?.claimRefundExpectedAmountMinor !== refundAmountMinor
+    context?.claimRefundExpectedAmountMinor !== refundAmountMinor ||
+    expected?.id !== resolutionId ||
+    expected.claimId !== claimId ||
+    expected.slotId !== slotId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.status !== "refund_pending" ||
+    expected.activeClaimId !== claimId ||
+    expected.paymentId !== paymentId ||
+    expected.refundTransactionId !== refundTransactionId ||
+    expected.amountMinor !== refundAmountMinor ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true ||
+    transaction?.id !== refundTransactionId ||
+    transaction.resolutionId !== resolutionId ||
+    transaction.claimId !== claimId ||
+    transaction.slotId !== slotId ||
+    transaction.orderId !== orderId ||
+    transaction.phaseId !== phaseId ||
+    transaction.paymentId !== paymentId ||
+    transaction.amountMinor !== refundAmountMinor ||
+    transaction.status !== "succeeded" ||
+    transaction.providerEventId !== providerEventId ||
+    transaction.resultId !== resultId ||
+    transaction.immutable !== true ||
+    event?.id !== providerEventId ||
+    event.resolutionId !== resolutionId ||
+    event.refundTransactionId !== refundTransactionId ||
+    event.paymentId !== paymentId ||
+    event.amountMinor !== refundAmountMinor ||
+    event.status !== "succeeded" ||
+    event.projectedTarget !== command.target ||
+    event.authenticated !== true ||
+    event.verified !== true ||
+    event.resultId !== resultId ||
+    event.immutable !== true ||
+    context?.claimRefundCompletionResolutionResultId !== resultId ||
+    context?.claimRefundCompletionTransactionResultId !== resultId ||
+    context?.claimRefundCompletionProviderEventResultId !== resultId ||
+    context?.claimRefundCompletionPaymentResultId !== resultId ||
+    context?.claimRefundCompletionCompleted !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
