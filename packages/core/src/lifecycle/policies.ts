@@ -7237,6 +7237,8 @@ function requireExactJobHandoff<S extends string>(
   const replacementSetId = context?.replacementSetId;
   const shipmentId = context?.jobHandoffShipmentId;
   const resultId = context?.replacementHandoffResultId;
+  const stateKey = context?.jobHandoffCurrentStateCommandKey;
+  const previousResultId = context?.jobHandoffPreviousResultId;
   if (
     kind !== "replacement" ||
     !nonBlank(claimId) ||
@@ -7244,6 +7246,15 @@ function requireExactJobHandoff<S extends string>(
     !nonBlank(replacementSetId) ||
     !nonBlank(shipmentId) ||
     !nonBlank(resultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(previousResultId) ||
+    command.aggregateId !== jobId ||
+    command.currentStateCommandKey !== stateKey ||
+    command.currentStateResultId !== previousResultId ||
+    expected.orderId !== context?.orderId ||
+    expected.phaseId !== context?.phaseId ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
     context?.jobHandoffClaimId !== claimId ||
     context?.jobHandoffResolutionId !== resolutionId ||
     context?.jobHandoffReplacementSetId !== replacementSetId ||

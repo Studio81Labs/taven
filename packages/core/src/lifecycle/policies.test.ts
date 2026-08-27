@@ -18457,36 +18457,51 @@ describe("v0 lifecycle policy tables", () => {
     ).toThrow(TransitionGuardError);
   });
 
-  it("dispatches a replacement Job through its exact Claim-scoped handoff", () => {
+  const replacementJobHandoffCommandAnchors = {
+    aggregateId: "replacement-job-1",
+    currentStateCommandKey: "job-packed-command-1",
+    currentStateResultId: "job-packed-result-1",
+  } as const;
+
+  const replacementJobHandoffContext = () => {
     const base = contextForTransition("handed_over", "packed");
+    return {
+      ...base,
+      jobId: "replacement-job-1",
+      jobHandoffKind: "replacement",
+      jobHandoffJobId: "replacement-job-1",
+      jobHandoffExpectedJob: {
+        id: "replacement-job-1",
+        kind: "replacement",
+        shipmentId: "replacement-shipment-1",
+        orderId: base.orderId,
+        phaseId: base.phaseId,
+        claimId: "claim-1",
+        resolutionId: "claim-resolution-1",
+        replacementSetId: "replacement-set-1",
+        status: "packed",
+        resultId: "job-packed-result-1",
+        currentStateCommandKey: "job-packed-command-1",
+        currentLineageLeaf: true,
+        immutable: true,
+      },
+      jobHandoffShipmentId: "replacement-shipment-1",
+      jobHandoffClaimId: "claim-1",
+      jobHandoffResolutionId: "claim-resolution-1",
+      jobHandoffReplacementSetId: "replacement-set-1",
+      jobHandoffResultId: "replacement-handoff-result-1",
+      jobHandoffJobResultId: "replacement-handoff-result-1",
+    };
+  };
+
+  it("dispatches a replacement Job through its exact Claim-scoped handoff", () => {
     expect(
       transition(jobPolicy, {
+        ...replacementJobHandoffCommandAnchors,
         current: "packed",
         target: "handed_over",
         idempotencyKey: "replacement-job-handoff",
-        context: {
-          ...base,
-          jobId: "replacement-job-1",
-          jobHandoffKind: "replacement",
-          jobHandoffJobId: "replacement-job-1",
-          jobHandoffExpectedJob: {
-            id: "replacement-job-1",
-            kind: "replacement",
-            shipmentId: "replacement-shipment-1",
-            claimId: "claim-1",
-            resolutionId: "claim-resolution-1",
-            replacementSetId: "replacement-set-1",
-            status: "packed",
-            currentLineageLeaf: true,
-            immutable: true,
-          },
-          jobHandoffShipmentId: "replacement-shipment-1",
-          jobHandoffClaimId: "claim-1",
-          jobHandoffResolutionId: "claim-resolution-1",
-          jobHandoffReplacementSetId: "replacement-set-1",
-          jobHandoffResultId: "replacement-handoff-result-1",
-          jobHandoffJobResultId: "replacement-handoff-result-1",
-        },
+        context: replacementJobHandoffContext(),
       }),
     ).toEqual({ kind: "changed", previous: "packed", current: "handed_over" });
   });
@@ -18510,10 +18525,14 @@ describe("v0 lifecycle policy tables", () => {
         id: "job-1",
         kind: "replacement",
         shipmentId: "shipment-1",
+        orderId: setup.orderId,
+        phaseId: setup.phaseId,
         claimId: setup.claimId,
         resolutionId: setup.claimSlotResolutionId,
         replacementSetId: setup.replacementSetId,
         status: "packed",
+        resultId: "job-packed-result-1",
+        currentStateCommandKey: "job-packed-command-1",
         currentLineageLeaf: true,
         immutable: true,
       },
@@ -18552,6 +18571,7 @@ describe("v0 lifecycle policy tables", () => {
   it("dispatches an independent-topology replacement Job through its exact set", () => {
     expect(
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "packed", "handed_over"),
         current: "packed",
         target: "handed_over",
         idempotencyKey: "independent-replacement-job-handoff",
@@ -18560,10 +18580,67 @@ describe("v0 lifecycle policy tables", () => {
     ).toEqual({ kind: "changed", previous: "packed", current: "handed_over" });
   });
 
+  it.each([
+    ["missing aggregate", "aggregateId", undefined],
+    ["blank aggregate", "aggregateId", "  "],
+    ["foreign aggregate", "aggregateId", "replacement-job-2"],
+    ["missing state key", "currentStateCommandKey", undefined],
+    ["blank state key", "currentStateCommandKey", "  "],
+    ["foreign state key", "currentStateCommandKey", "job-packed-command-2"],
+    ["missing state result", "currentStateResultId", undefined],
+    ["blank state result", "currentStateResultId", "  "],
+    ["foreign state result", "currentStateResultId", "job-packed-result-2"],
+  ] as const)(
+    "rejects replacement Job handoff with %s command anchor",
+    (_label, field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          ...replacementJobHandoffCommandAnchors,
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `replacement-job-handoff-anchor-${field}-${String(value)}`,
+          [field]: value,
+          context: replacementJobHandoffContext(),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated replacement Job B proof behind Job A command anchors", () => {
+    const context = replacementJobHandoffContext();
+    expect(() =>
+      transition(jobPolicy, {
+        ...replacementJobHandoffCommandAnchors,
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "replacement-job-handoff-coordinated-job-b",
+        context: {
+          ...context,
+          jobId: "replacement-job-2",
+          jobHandoffJobId: "replacement-job-2",
+          jobHandoffCurrentStateCommandKey: "job-packed-command-2",
+          jobHandoffPreviousResultId: "job-packed-result-2",
+          jobHandoffExpectedJob: {
+            ...context.jobHandoffExpectedJob,
+            id: "replacement-job-2",
+            resultId: "job-packed-result-2",
+            currentStateCommandKey: "job-packed-command-2",
+          },
+          replacementHandoffResourceGroups:
+            context.replacementHandoffResourceGroups.map((group) => ({
+              ...group,
+              currentReplacementJobId: "replacement-job-2",
+            })),
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it("rejects an unanchored grouped Job mixed into independent replacement proof", () => {
     const context = independentJobHandoffContext();
     expect(() =>
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "packed", "handed_over"),
         current: "packed",
         target: "handed_over",
         idempotencyKey: "mixed-topology-replacement-job-handoff",
@@ -18597,6 +18674,12 @@ describe("v0 lifecycle policy tables", () => {
     ["jobHandoffReplacementSetId", "another-set"],
     ["jobHandoffResultId", "another-result"],
     ["jobHandoffJobResultId", "another-result"],
+    ["jobHandoffCurrentStateCommandKey", undefined],
+    ["jobHandoffCurrentStateCommandKey", "  "],
+    ["jobHandoffCurrentStateCommandKey", "job-packed-command-2"],
+    ["jobHandoffPreviousResultId", undefined],
+    ["jobHandoffPreviousResultId", "  "],
+    ["jobHandoffPreviousResultId", "job-packed-result-2"],
     ["jobHandoffPreviousStatus", "printing"],
     ["jobHandoffTargetStatus", "packed"],
     ["jobHandoffCompleted", false],
@@ -18604,35 +18687,15 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)(
     "rejects replacement Job handoff with invalid %s",
     (field, value) => {
-      const base = contextForTransition("handed_over", "packed");
+      const context = replacementJobHandoffContext();
       expect(() =>
         transition(jobPolicy, {
-          ...commandAnchors(jobPolicy, "packed", "handed_over"),
+          ...replacementJobHandoffCommandAnchors,
           current: "packed",
           target: "handed_over",
           idempotencyKey: `replacement-job-handoff-${field}`,
           context: {
-            ...base,
-            jobId: "replacement-job-1",
-            jobHandoffKind: "replacement",
-            jobHandoffJobId: "replacement-job-1",
-            jobHandoffExpectedJob: {
-              id: "replacement-job-1",
-              kind: "replacement",
-              shipmentId: "replacement-shipment-1",
-              claimId: "claim-1",
-              resolutionId: "claim-resolution-1",
-              replacementSetId: "replacement-set-1",
-              status: "packed",
-              currentLineageLeaf: true,
-              immutable: true,
-            },
-            jobHandoffShipmentId: "replacement-shipment-1",
-            jobHandoffClaimId: "claim-1",
-            jobHandoffResolutionId: "claim-resolution-1",
-            jobHandoffReplacementSetId: "replacement-set-1",
-            jobHandoffResultId: "replacement-handoff-result-1",
-            jobHandoffJobResultId: "replacement-handoff-result-1",
+            ...context,
             [field]: value,
           },
         }),
@@ -18882,44 +18945,32 @@ describe("v0 lifecycle policy tables", () => {
     ["id", "another-job"],
     ["kind", "ordinary"],
     ["shipmentId", "another-shipment"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
     ["claimId", "sibling-claim"],
     ["resolutionId", "sibling-resolution"],
     ["replacementSetId", "another-set"],
     ["status", "printing"],
+    ["resultId", "job-packed-result-2"],
+    ["currentStateCommandKey", "job-packed-command-2"],
     ["currentLineageLeaf", false],
     ["immutable", false],
   ] as const)(
     "rejects replacement Job handoff with invalid expected origin %s",
     (field, value) => {
-      const base = contextForTransition("handed_over", "packed");
+      const context = replacementJobHandoffContext();
       expect(() =>
         transition(jobPolicy, {
+          ...replacementJobHandoffCommandAnchors,
           current: "packed",
           target: "handed_over",
           idempotencyKey: `replacement-job-origin-${field}`,
           context: {
-            ...base,
-            jobId: "replacement-job-1",
-            jobHandoffKind: "replacement",
-            jobHandoffJobId: "replacement-job-1",
+            ...context,
             jobHandoffExpectedJob: {
-              id: "replacement-job-1",
-              kind: "replacement",
-              shipmentId: "replacement-shipment-1",
-              claimId: "claim-1",
-              resolutionId: "claim-resolution-1",
-              replacementSetId: "replacement-set-1",
-              status: "packed",
-              currentLineageLeaf: true,
-              immutable: true,
+              ...context.jobHandoffExpectedJob,
               [field]: value,
             },
-            jobHandoffShipmentId: "replacement-shipment-1",
-            jobHandoffClaimId: "claim-1",
-            jobHandoffResolutionId: "claim-resolution-1",
-            jobHandoffReplacementSetId: "replacement-set-1",
-            jobHandoffResultId: "replacement-handoff-result-1",
-            jobHandoffJobResultId: "replacement-handoff-result-1",
           },
         }),
       ).toThrow(TransitionGuardError);
