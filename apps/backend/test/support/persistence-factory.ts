@@ -477,6 +477,7 @@ export class PersistenceFactory {
     planned: ProductionReservationFixture,
     status = "RESERVED",
     resourceSnapshot: unknown = {},
+    jobId: string | null = null,
   ): Promise<void> {
     await this.sql.query(
       'INSERT INTO "production_reservations" ("id", "node_id", "phase_reservation_set_id", "phase_resource_plan_job_id", "planned_job_key", "job_id", "machine_id", "inventory_id", "slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "status", "expires_at", "created_at", "updated_at", "phase_resource_plan_id") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19, $20)',
@@ -486,7 +487,7 @@ export class PersistenceFactory {
         foundation.phaseReservationSetId,
         planned.phaseResourcePlanJobId,
         planned.plannedJobKey,
-        planned.jobId,
+        jobId,
         foundation.machineId,
         foundation.inventoryId,
         foundation.sliceResultId,

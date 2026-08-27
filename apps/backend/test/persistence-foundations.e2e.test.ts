@@ -2304,8 +2304,8 @@ describe("persistence foundations", () => {
         [production.productionReservationId, "HELD"],
       );
       await confirming.query(
-        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [production.productionReservationId, "HELD"],
+        'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+        [production.productionReservationId, "HELD", production.jobId],
       );
       await confirming.query(
         'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
@@ -2488,8 +2488,8 @@ describe("persistence foundations", () => {
         ],
       );
       await client.query(
-        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [production.productionReservationId, "HELD"],
+        'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+        [production.productionReservationId, "HELD", production.jobId],
       );
       await client.query(
         'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -2684,8 +2684,8 @@ describe("persistence foundations", () => {
       await client.query("SET CONSTRAINTS ALL IMMEDIATE");
       await client.query("SET CONSTRAINTS ALL DEFERRED");
       await client.query(
-        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [production.productionReservationId, "HELD"],
+        'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+        [production.productionReservationId, "HELD", production.jobId],
       );
       await client.query(
         'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -2770,8 +2770,8 @@ describe("persistence foundations", () => {
       await client.query("SET CONSTRAINTS ALL IMMEDIATE");
       await client.query("SET CONSTRAINTS ALL DEFERRED");
       await client.query(
-        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [production.productionReservationId, "HELD"],
+        'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+        [production.productionReservationId, "HELD", production.jobId],
       );
       await client.query(
         'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -2907,8 +2907,8 @@ describe("persistence foundations", () => {
       await client.query("SET CONSTRAINTS ALL DEFERRED");
       for (const [index, production] of graph.productions.entries()) {
         await client.query(
-          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-          [production.productionReservationId, "HELD"],
+          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+          [production.productionReservationId, "HELD", production.jobId],
         );
         await client.query(
           'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -3093,8 +3093,8 @@ describe("persistence foundations", () => {
         [liveProduction, liveCapacityId],
       ] as const) {
         await client.query(
-          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-          [production.productionReservationId, "HELD"],
+          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+          [production.productionReservationId, "HELD", production.jobId],
         );
         await client.query(
           'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -3294,6 +3294,195 @@ describe("persistence foundations", () => {
         ).rejects.toMatchObject({
           code: "23514",
           constraint: "reservation_lifecycle_initial_state_check",
+        });
+      },
+    );
+  });
+
+  it("binds production jobs only during successful capture", async () => {
+    await inRollbackTransaction(
+      "initial-production-job-binding",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "initial-production-job-binding",
+        );
+        const production = await fixtures.planProduction(
+          foundation,
+          "production",
+        );
+        await fixtures.createResourcePlan(foundation, [production]);
+        await fixtures.createPhaseReservationSet(foundation);
+
+        await expect(
+          fixtures.createProductionReservation(
+            foundation,
+            production,
+            "RESERVED",
+            {},
+            production.jobId,
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "production_reservation_job_binding_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "reserved-production-job-binding",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "reserved-production-job-binding",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+          );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+
+        await expect(
+          client.query(
+            'UPDATE "production_reservations" SET "job_id" = $2 WHERE "id" = $1',
+            [production.productionReservationId, production.jobId],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "production_reservation_job_binding_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "unbound-held-production",
+      async (client, fixtures) => {
+        const { production } = await createCompleteSingleReservationGraph(
+          client,
+          fixtures,
+          "unbound-held-production",
+          {
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
+          },
+        );
+
+        await expect(
+          client.query(
+            'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+            [production.productionReservationId, "HELD"],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "production_reservation_job_binding_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "terminal-production-job-binding",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "terminal-production-job-binding",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+          );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RELEASED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+
+        await expect(
+          client.query(
+            'UPDATE "production_reservations" SET "job_id" = $2 WHERE "id" = $1',
+            [production.productionReservationId, production.jobId],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "production_reservation_job_binding_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "captured-production-job-binding",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "captured-production-job-binding",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+          );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+          [production.productionReservationId, "HELD", production.jobId],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "HELD"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+
+        expect(
+          await client.query<{ job_id: string; status: string }>(
+            'SELECT "job_id", "status" FROM "production_reservations" WHERE "id" = $1',
+            [production.productionReservationId],
+          ),
+        ).toMatchObject({
+          rows: [{ job_id: production.jobId, status: "HELD" }],
+        });
+        await expect(
+          client.query(
+            'UPDATE "production_reservations" SET "job_id" = $2 WHERE "id" = $1',
+            [
+              production.productionReservationId,
+              fixtures.id("replacement-job"),
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "production_reservation_job_binding_check",
         });
       },
     );

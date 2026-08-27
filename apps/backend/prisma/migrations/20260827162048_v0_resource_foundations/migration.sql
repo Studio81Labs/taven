@@ -2038,8 +2038,30 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."job_id" IS NOT NULL THEN
+            RAISE EXCEPTION 'production reservation cannot bind a job before capture'
+                USING ERRCODE = '23514', CONSTRAINT = 'production_reservation_job_binding_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
     IF OLD."job_id" IS NOT NULL AND NEW."job_id" IS DISTINCT FROM OLD."job_id" THEN
         RAISE EXCEPTION 'production reservation job binding is immutable once assigned'
+            USING ERRCODE = '23514', CONSTRAINT = 'production_reservation_job_binding_check';
+    END IF;
+
+    IF OLD."job_id" IS NULL AND NEW."job_id" IS NOT NULL AND NOT (
+        OLD."status" = 'RESERVED' AND NEW."status" = 'HELD'
+    ) THEN
+        RAISE EXCEPTION 'production reservation job must be bound during capture'
+            USING ERRCODE = '23514', CONSTRAINT = 'production_reservation_job_binding_check';
+    END IF;
+
+    IF NEW."status" IN ('HELD', 'SCHEDULED', 'PRINTING', 'CONSUMED')
+       AND NEW."job_id" IS NULL THEN
+        RAISE EXCEPTION 'captured production reservation requires a job binding'
             USING ERRCODE = '23514', CONSTRAINT = 'production_reservation_job_binding_check';
     END IF;
 
@@ -2048,7 +2070,7 @@ END;
 $$;
 
 CREATE TRIGGER "production_reservations_job_binding"
-    BEFORE UPDATE ON "production_reservations"
+    BEFORE INSERT OR UPDATE ON "production_reservations"
     FOR EACH ROW EXECUTE FUNCTION taven_validate_production_job_binding();
 
 CREATE FUNCTION taven_validate_production_set_expiry()
