@@ -132,6 +132,8 @@ U fázované objednávky se doprava, obal a `handling_pack` počítají pro kaž
 | Výdejní místo | nejdelší strana ≤ 60 cm, součet ≤ 120 cm, do 5 kg |
 | Nadrozměrná | součet ≤ 150 cm, nejdelší ≤ 120 cm; do Z-BOXu nelze |
 
+**Kompatibilita endpointu je order-level guard.** Zvolený Z-BOX připouští jen kategorii `Z-BOX`; obsluhované výdejní místo připouští `výdejní místo` a pouze tehdy `nadrozměrná`, když ji podporuje snapshot konkrétního provider endpointu. Každá parcela jednoho Orderu používá stejné `delivery_destination_id`. Bez výběru endpointu je doprava jen provizorní a změna výběru před platbou vyžaduje nový `ShipmentPlan` i závazný quote.
+
 ---
 
 ## 7. Ceník a prahy

@@ -397,17 +397,18 @@ Arrangement i množstevní efekt se počítají samostatně pro každý `OrderIt
 
 ### 4.6 Přepravní kategorie
 
-Bounding box počítá preflight, ale kategorie se nesmí určit jen z jednoho dílu ani z jednoho `OrderItem`. Před závaznou cenou vznikne deterministický `ShipmentPlan` nad **všemi výrobními položkami a celým množstvím každé fáze**:
+Bounding box počítá preflight, ale kategorie se nesmí určit jen z jednoho dílu ani z jednoho `OrderItem`. Před závaznou cenou musí mít Order vybraný jeden `delivery_destination` včetně provider capability snapshotu; deterministický `ShipmentPlan` pak vznikne nad **všemi výrobními položkami a celým množstvím každé fáze** a všechny jeho parcely míří do tohoto jediného endpointu:
 
 1. pro každý kus vznikne ochranný `packing_part_bbox`, který ke každé straně zdrojového bboxu přidá obalovou rezervu; tyto obálky se při skládání nesmějí překrývat a každý kus se musí do vnějších rozměrů kategorie vejít alespoň v jedné ze šesti osových rotací
-2. podporované kategorie mají ve `PriceList` verzované `shipping_category_priority`; v v0 je pořadí `Z-BOX → výdejní místo → nadrozměrná` a zvolená kategorie každé zásilky se uloží do immutable cenového snapshotu
+2. podporované kategorie mají ve `PriceList` verzované `shipping_category_priority`; v v0 je pořadí `Z-BOX → výdejní místo → nadrozměrná`, ale před packingem se seznam omezí jen na kategorie podporované zvoleným `delivery_destination` a jeho snapshotovanými provider limity
 3. kusy se seřadí sestupně podle nejdelší hrany, pak bbox objemu a nakonec stabilního `FulfilmentSlot.id`
 4. dimension-aware first-fit zkouší existující zásilky v pořadí jejich vzniku a pro každou drží skutečně realizovatelný `packing_bbox`: další ochrannou obálku zkusí ve všech osových rotacích přiložit vedle dosavadního bboxu podél každé ze tří os, přičemž na zvolené ose se rozměry sečtou a na zbývajících vezme maximum
 5. kandidát smí zůstat v právě zkoušené zásilce jen tehdy, když nepřekročí limity její kategorie, konzervativní objemovou proxy `Σ(bbox_volume) / koeficient_plnění_krabice` ani agregovanou hmotnost dílů + obalu; z platných umístění v první způsobilé existující zásilce se deterministicky vybere nejmenší výsledný bbox objem, potom lexikograficky rozměry, rotace a osa
-6. pokud nevyhoví žádná existující zásilka, zkusí se prázdný `packing_bbox` v pořadí `shipping_category_priority` a nový balík vznikne v první způsobilé kategorii; jeho snapshot uloží kategorii, výsledný bbox ochranných obálek, objemovou proxy a hmotnost
-7. na hraně se zaokrouhluje nahoru; co se nevejde do žádné podporované kategorie, jde do individuální nabídky
+6. pokud nevyhoví žádná existující zásilka, zkusí se prázdný `packing_bbox` ve filtrovaném pořadí `shipping_category_priority` a nový balík vznikne v první způsobilé kategorii; jeho snapshot uloží stejný `delivery_destination_id`, kategorii, výsledný bbox ochranných obálek, objemovou proxy a hmotnost
+7. pokud některý kus neprojde žádnou kategorií kompatibilní se zvoleným endpointem, závazný plán nevznikne: UI nabídne jiný společný endpoint/service a po změně vytvoří nový quote; co se nevejde ani potom, jde do individuální nabídky
+8. na hraně se zaokrouhluje nahoru
 
-Vlastní přesný 3D bin packing **nestav**. Popsaný axis-aligned first-fit může vytvořit více zásilek než optimální packing, ale každý přijatý krok reprezentuje platné nepřekrývající se umístění, takže samotný součet objemů nikdy nesmí podcenit počet balíků. Změna priority kategorií vytváří novou `PriceList` a nikdy nepřecení přijatý snapshot. `ShipmentPlan` je součást cenového snapshotu; fázovaná objednávka plánuje sample a batch odděleně a revize modelu přepočítá jen zbývající zásilky.
+Vlastní přesný 3D bin packing **nestav**. Popsaný axis-aligned first-fit může vytvořit více zásilek než optimální packing, ale každý přijatý krok reprezentuje platné nepřekrývající se umístění, takže samotný součet objemů nikdy nesmí podcenit počet balíků. Změna priority kategorií vytváří novou `PriceList`; změna endpointu nebo jeho capability snapshotu před platbou invaliduje dosavadní `ShipmentPlan` a vyžádá nový závazný quote. Přijatý cenový snapshot se nikdy zpětně nepřecení. `ShipmentPlan` je součást cenového snapshotu; fázovaná objednávka plánuje sample a batch odděleně a revize modelu přepočítá jen zbývající zásilky se stejným endpointem, dokud zákazník výslovně nepřijme jeho změnu a novou cenu.
 
 Každý plán zároveň deterministicky rozdělí `FulfilmentSlot` všech naceněných kusů právě do jedné plánované zásilky; skutečný `Shipment` tuto množinu snapshotuje. Cenový snapshot každému slotu přiřadí `settlement_amount` a každé zásilce vlastní účtovanou dopravu/handling tak, aby jejich součet přesně odpovídal ceně fáze; refund ztracené parcely proto má předem danou částku bez zpětného přepočtu doručených kusů. Jednotlivé složky včetně expresního příplatku mají deterministickou alokaci ke slotům a každý `PriceAdjustment` ukládá, kterou dosud nekreditovanou alokaci spotřeboval. `remaining_contract_value` slotu proto nikdy neklesne pod nulu a claim, SLA credit ani jejich opačné pořadí nemohou stejnou hodnotu odečíst dvakrát. Fáze je `delivered` až tehdy, když je doručený každý aktuální list všech povinných shipment lineage. Pokud je alespoň jeden slot doručený a všechny ostatní jsou buď doručené, nebo po incidentu finančně vypořádané jako `cancelled_refunded`, fáze i objednávka skončí `partially_fulfilled`. První z více balíků tedy nikdy nedokončí celou fázi a ztráta druhého nikdy nevynutí refund už doručených kusů.
 
@@ -877,6 +878,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 73. Zákaznický účet neprodlužuje 90denní zdrojovou retenci. Po smazání potřebného zdroje je automatické opakování zakázané, reklamační `ReproductionArtifact` se k němu nesmí znovu použít a nový draft smí pokračovat až po novém uploadu.
 74. `min_print_price` a `small_order_surcharge` se vyhodnocují jednou nad celým Orderem, zatímco množstevní sleva a plate arrangement se vyhodnocují samostatně pro každý `OrderItem`; počty různých položek se pro item-level slevu nesčítají.
 75. Shipment planning, přepravní kategorie a express eligibility pokrývají všechny `OrderItem` objednávky. Každý jednotlivý díl musí splnit limit kategorie, každá zásilka současně rozměrový i hmotnostní limit a express musí splnit celý order bez kombinace standardních a expresních položek.
+76. Závazný `ShipmentPlan` smí vzniknout až po výběru jediného order-level `delivery_destination`; každá jeho parcela musí snapshotovat tentýž endpoint a kategorii kompatibilní s jeho provider capabilities. Změna endpointu před platbou invaliduje plán i cenu a per-parcel destinace se v v0 nepodporuje.
 
 ### 6.5 Švy pro síť
 
@@ -914,7 +916,7 @@ Plus jeden příznak: **„díl musí do něčeho zapadnout / má lícované roz
 
 **Krok 3 — nálezy preflightu.** Risk checkboxy (§7.5).
 
-**Krok 4 — cena.** Transparentní rozpad: cena tisku, množstevní sleva, doprava, expres. **Celková částka vizuálně dominantní, rozpad pod ní jako detail** — vedle konkurenta s „dopravou zdarma" vypadá rozpad opticky dráž.
+**Krok 4 — cena.** Transparentní rozpad: cena tisku, množstevní sleva, doprava, expres. Dokud zákazník nevybere společný delivery endpoint v prvním kroku checkoutu, doprava i celková částka jsou výslovně provizorní; teprve kompatibilní `ShipmentPlan` nad vybraným endpointem vydá závazný total. **Celková závazná částka je vizuálně dominantní, rozpad pod ní jako detail** — vedle konkurenta s „dopravou zdarma" vypadá rozpad opticky dráž.
 
 **Tichá úniková cesta** k individuální nabídce jako odkaz, ne rovnocenné tlačítko. Kdyby byly stejně velké, značná část lidí zvolí konzultaci i bez potřeby. Cestu **povyšuje systém**, když preflight něco najde.
 
@@ -952,7 +954,9 @@ Pole: popis, účel dílu, fotky (u překreslení ze tří stran s referenčním
 
 ### 7.7 Checkout
 
-Rekapitulace s rozpadem ceny; widget Zásilkovny pro **výběr výdejního místa** (v checkoutu, ne u makera); fakturační údaje **bez povinné registrace**; souhlas s podmínkami a **výslovné potvrzení výjimky z odstoupení**; checkbox souhlasu se zveřejněním fotek; platba kartou i **bankovním tlačítkem**. V0 ani síť zatím nenabízí osobní odběr — vyžadoval by samostatný anonymizovaný předávací workflow, který není součástí scope.
+První krok checkoutu je widget Zásilkovny pro **výběr jednoho výdejního místa / Z-BOXu pro celý Order** (nikdy u makera). Teprve jeho provider ID, typ endpointu a capability snapshot omezí kompatibilní přepravní kategorie, vytvoří finální `ShipmentPlan` a zobrazí rekapitulaci s novou závaznou cenou. Změna endpointu před platbou starý plan/quote invaliduje; payment intent nesmí vzniknout, dokud zákazník znovu nepotvrdí aktuální total. Jeden Order v v0 nevybírá různé endpointy per parcel.
+
+Následují fakturační údaje **bez povinné registrace**; souhlas s podmínkami a **výslovné potvrzení výjimky z odstoupení**; checkbox souhlasu se zveřejněním fotek; platba kartou i **bankovním tlačítkem**. V0 ani síť zatím nenabízí osobní odběr — vyžadoval by samostatný anonymizovaný předávací workflow, který není součástí scope.
 
 ### 7.8 Sledování
 
