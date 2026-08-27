@@ -1917,6 +1917,22 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_candidate_capacity_coverage_check';
     END IF;
 
+    IF EXISTS (
+        SELECT 1
+        FROM "candidate_capacity_intervals" earlier
+        JOIN "candidate_capacity_intervals" later
+          ON later."candidate_resource_estimate_id" = earlier."candidate_resource_estimate_id"
+         AND later."node_id" = earlier."node_id"
+         AND later."interval_index" > earlier."interval_index"
+         AND tstzrange(later."starts_at", later."ends_at", '[)')
+             && tstzrange(earlier."starts_at", earlier."ends_at", '[)')
+        WHERE earlier."candidate_resource_estimate_id" = NEW."candidate_resource_estimate_id"
+          AND earlier."node_id" = NEW."node_id"
+    ) THEN
+        RAISE EXCEPTION 'planned candidate capacity intervals must not overlap'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_candidate_capacity_overlap_check';
+    END IF;
+
     RETURN NEW;
 END;
 $$;

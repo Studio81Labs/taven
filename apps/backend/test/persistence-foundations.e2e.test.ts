@@ -652,7 +652,7 @@ describe("persistence foundations", () => {
     );
   });
 
-  it("requires normalized capacity to cover declared machine time", async () => {
+  it("requires sufficient non-overlapping candidate capacity", async () => {
     await inRollbackTransaction(
       "candidate-capacity-short",
       async (_client, fixtures) => {
@@ -694,14 +694,13 @@ describe("persistence foundations", () => {
               endsAt: new Date(startsAt.getTime() + 60_000),
             },
           ],
-          70,
         );
 
         await expect(
           fixtures.createResourcePlan(foundation, [production]),
         ).rejects.toMatchObject({
           code: "23514",
-          constraint: "phase_resource_plan_candidate_capacity_coverage_check",
+          constraint: "phase_resource_plan_candidate_capacity_overlap_check",
         });
       },
     );

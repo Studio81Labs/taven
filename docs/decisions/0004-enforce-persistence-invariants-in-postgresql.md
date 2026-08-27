@@ -118,7 +118,8 @@ only once within its scope, and a partial unique index allows only one active
 reservation set per plan. Candidate creation requires the immutable print
 configuration and machine profile to select the same quality. Before planning,
 the union of a candidate's capacity intervals must cover its declared machine
-seconds, so overlapping intervals cannot double-count capacity.
+seconds, and the intervals themselves must not overlap. This keeps every
+accepted plan representable by the active-capacity exclusion constraint.
 
 A deferred constraint trigger compares the reservation children with the
 authoritative plan. Every required planned key must have exactly one complete
