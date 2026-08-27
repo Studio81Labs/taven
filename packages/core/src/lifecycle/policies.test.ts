@@ -28,12 +28,53 @@ const permittedContext = {
   issuedQuoteRequestId: "quote-request-1",
   quoteExpirationQuoteRequestId: "quote-request-1",
   quoteExpirationIssuedQuoteId: "quote-1",
+  issuedQuoteIssuedAt: Instant.parse("2026-01-01T00:00:00.000Z"),
   issuedQuoteExpiresAt: Instant.parse("2026-01-02T00:00:00.000Z"),
   quoteExpirationEvaluatedAt: Instant.parse("2026-01-02T00:00:00.000Z"),
+  quoteIssuanceResultId: "quote-issuance-result-1",
+  quoteIssuanceQuoteRequestId: "quote-request-1",
+  quoteIssuanceQuoteRequestPreviousStatus: "in_review",
+  quoteIssuanceQuoteRequestTargetStatus: "quoted",
+  quoteIssuanceIssuedQuoteId: "quote-1",
+  quoteIssuanceIssuedQuoteRequestId: "quote-request-1",
+  quoteIssuanceRequestResultId: "quote-issuance-result-1",
+  quoteIssuanceQuoteResultId: "quote-issuance-result-1",
+  quoteIssuanceIssuedQuote: {
+    id: "quote-1",
+    quoteRequestId: "quote-request-1",
+    issuedAt: Instant.parse("2026-01-01T00:00:00.000Z"),
+    expiresAt: Instant.parse("2026-01-02T00:00:00.000Z"),
+    immutable: true,
+    resultId: "quote-issuance-result-1",
+  },
+  quoteIssuanceCompleted: true,
+  quoteIssuanceAtomic: true,
+  quoteAcceptanceResultId: "quote-acceptance-result-1",
+  quoteAcceptanceQuoteRequestId: "quote-request-1",
+  quoteAcceptanceIssuedQuoteId: "quote-1",
+  quoteAcceptanceIssuedQuoteRequestId: "quote-request-1",
+  quoteAcceptanceIssuedQuoteCreationResultId: "quote-issuance-result-1",
+  quoteAcceptanceIssuedQuote: {
+    id: "quote-1",
+    quoteRequestId: "quote-request-1",
+    issuedAt: Instant.parse("2026-01-01T00:00:00.000Z"),
+    expiresAt: Instant.parse("2026-01-02T00:00:00.000Z"),
+    immutable: true,
+    resultId: "quote-issuance-result-1",
+  },
+  quoteAcceptanceIssuedAt: Instant.parse("2026-01-01T00:00:00.000Z"),
+  quoteAcceptanceExpiresAt: Instant.parse("2026-01-02T00:00:00.000Z"),
+  quoteAcceptanceEvaluatedAt: Instant.parse("2026-01-01T12:00:00.000Z"),
+  quoteAcceptanceAvailabilityResultId: "quote-acceptance-result-1",
+  quoteAcceptanceOrderResultId: "quote-acceptance-result-1",
+  quoteAcceptanceRequestResultId: "quote-acceptance-result-1",
+  quoteAcceptanceQuoteRequestPreviousStatus: "quoted",
+  quoteAcceptanceQuoteRequestTargetStatus: "accepted",
   createdOrderQuoteRequestId: "quote-request-1",
   createdOrderSourceQuoteId: "quote-1",
   acceptedOrderId: "order-1",
   createdOrderStatus: "draft",
+  createdOrderResultId: "quote-acceptance-result-1",
   orderCreated: true,
   quoteAcceptanceOrderCreationAtomic: true,
   captureAuthorized: true,
@@ -2228,15 +2269,159 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("persists the exact immutable IssuedQuote atomically with the quoted transition", () => {
+    expect(
+      transition(quoteRequestPolicy, {
+        current: "in_review",
+        target: "quoted",
+        idempotencyKey: "quote-issuance-complete",
+        context: contextForTransition("quoted", "in_review"),
+      }),
+    ).toEqual({ kind: "changed", previous: "in_review", current: "quoted" });
+  });
+
   it.each([
-    ["quoteAvailable", false],
+    ["blank request", { quoteRequestId: " " }],
+    ["foreign issued-quote owner", { issuedQuoteRequestId: "another-request" }],
+    ["blank Quote", { issuedQuoteId: " " }],
+    [
+      "non-Instant issue time",
+      { issuedQuoteIssuedAt: "2026-01-01T00:00:00.000Z" },
+    ],
+    [
+      "non-Instant expiry",
+      { issuedQuoteExpiresAt: "2026-01-02T00:00:00.000Z" },
+    ],
+    ["blank result", { quoteIssuanceResultId: " " }],
+    [
+      "foreign request result",
+      { quoteIssuanceRequestResultId: "another-result" },
+    ],
+    ["foreign Quote result", { quoteIssuanceQuoteResultId: "another-result" }],
+    [
+      "foreign issuance request",
+      { quoteIssuanceQuoteRequestId: "another-request" },
+    ],
+    [
+      "wrong request source",
+      { quoteIssuanceQuoteRequestPreviousStatus: "new" },
+    ],
+    [
+      "wrong request target",
+      { quoteIssuanceQuoteRequestTargetStatus: "accepted" },
+    ],
+    ["foreign issued Quote", { quoteIssuanceIssuedQuoteId: "another-quote" }],
+    [
+      "Quote record owned by another request",
+      {
+        quoteIssuanceIssuedQuote: {
+          ...permittedContext.quoteIssuanceIssuedQuote,
+          quoteRequestId: "another-request",
+        },
+      },
+    ],
+    [
+      "mutable Quote record",
+      {
+        quoteIssuanceIssuedQuote: {
+          ...permittedContext.quoteIssuanceIssuedQuote,
+          immutable: false,
+        },
+      },
+    ],
+    [
+      "Quote record from another result",
+      {
+        quoteIssuanceIssuedQuote: {
+          ...permittedContext.quoteIssuanceIssuedQuote,
+          resultId: "another-result",
+        },
+      },
+    ],
+    [
+      "Quote record with another issue time",
+      {
+        quoteIssuanceIssuedQuote: {
+          ...permittedContext.quoteIssuanceIssuedQuote,
+          issuedAt: Instant.parse("2026-01-01T00:00:00.001Z"),
+        },
+      },
+    ],
+    [
+      "zero-length Quote window",
+      {
+        issuedQuoteExpiresAt: permittedContext.issuedQuoteIssuedAt,
+        quoteIssuanceIssuedQuote: {
+          ...permittedContext.quoteIssuanceIssuedQuote,
+          expiresAt: permittedContext.issuedQuoteIssuedAt,
+        },
+      },
+    ],
+    ["incomplete issuance", { quoteIssuanceCompleted: false }],
+    ["non-atomic issuance", { quoteIssuanceAtomic: false }],
+  ] as const)("rejects quote issuance with %s evidence", (_case, invalid) => {
+    expect(() =>
+      transition(quoteRequestPolicy, {
+        current: "in_review",
+        target: "quoted",
+        idempotencyKey: `quote-issuance-${_case}`,
+        context: { ...contextForTransition("quoted", "in_review"), ...invalid },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
     ["quoteRequestId", ""],
     ["quoteRequestId", " "],
     ["issuedQuoteRequestId", "another-request"],
+    ["quoteAcceptanceQuoteRequestId", "another-request"],
+    ["quoteAcceptanceIssuedQuoteRequestId", "another-request"],
     ["createdOrderQuoteRequestId", "another-request"],
     ["issuedQuoteId", ""],
     ["issuedQuoteId", "\t"],
+    ["quoteAcceptanceIssuedQuoteId", "another-quote"],
+    ["quoteAcceptanceIssuedQuoteCreationResultId", "another-result"],
+    [
+      "quoteAcceptanceIssuedQuote",
+      {
+        ...permittedContext.quoteAcceptanceIssuedQuote,
+        id: "another-quote",
+      },
+    ],
+    [
+      "quoteAcceptanceIssuedQuote",
+      {
+        ...permittedContext.quoteAcceptanceIssuedQuote,
+        issuedAt: Instant.parse("2026-01-01T00:00:00.001Z"),
+      },
+    ],
+    [
+      "quoteAcceptanceIssuedQuote",
+      {
+        ...permittedContext.quoteAcceptanceIssuedQuote,
+        immutable: false,
+      },
+    ],
+    [
+      "quoteAcceptanceIssuedQuote",
+      {
+        ...permittedContext.quoteAcceptanceIssuedQuote,
+        resultId: "another-result",
+      },
+    ],
     ["createdOrderSourceQuoteId", "another-quote"],
+    ["createdOrderResultId", "another-result"],
+    ["issuedQuoteIssuedAt", "2026-01-01T00:00:00.000Z"],
+    ["issuedQuoteExpiresAt", "2026-01-02T00:00:00.000Z"],
+    ["quoteAcceptanceIssuedAt", Instant.parse("2026-01-01T00:00:00.001Z")],
+    ["quoteAcceptanceExpiresAt", Instant.parse("2026-01-01T23:59:59.999Z")],
+    ["quoteAcceptanceEvaluatedAt", "2026-01-01T12:00:00.000Z"],
+    ["quoteAcceptanceResultId", " "],
+    ["quoteAcceptanceAvailabilityResultId", "another-result"],
+    ["quoteAcceptanceOrderResultId", "another-result"],
+    ["quoteAcceptanceRequestResultId", "another-result"],
+    ["quoteAcceptanceQuoteRequestPreviousStatus", "in_review"],
+    ["quoteAcceptanceQuoteRequestTargetStatus", "quoted"],
     ["orderId", ""],
     ["orderId", "\n"],
     ["acceptedOrderId", "another-order"],
@@ -2256,6 +2441,105 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("derives acceptance from the exact Quote window rather than the legacy boolean", () => {
+    for (const [label, evaluatedAt] of [
+      ["at-issue", permittedContext.issuedQuoteIssuedAt],
+      ["within-window", permittedContext.quoteAcceptanceEvaluatedAt],
+      ["just-before-expiry", Instant.parse("2026-01-01T23:59:59.999Z")],
+    ] as const) {
+      expect(
+        transition(quoteRequestPolicy, {
+          current: "quoted",
+          target: "accepted",
+          idempotencyKey: `quote-acceptance-exact-window-${label}`,
+          context: {
+            ...permittedContext,
+            quoteAvailable: false,
+            quoteAcceptanceEvaluatedAt: evaluatedAt,
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "quoted", current: "accepted" });
+    }
+
+    for (const [label, evaluatedAt] of [
+      ["before-issue", Instant.parse("2025-12-31T23:59:59.999Z")],
+      ["at-expiry", permittedContext.issuedQuoteExpiresAt],
+      ["after-expiry", Instant.parse("2026-01-02T00:00:00.001Z")],
+    ] as const) {
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          current: "quoted",
+          target: "accepted",
+          idempotencyKey: `quote-acceptance-${label}`,
+          context: {
+            ...permittedContext,
+            quoteAvailable: true,
+            quoteAcceptanceEvaluatedAt: evaluatedAt,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+  });
+
+  it("rejects coordinated quote scalar substitution against the immutable record", () => {
+    expect(() =>
+      transition(quoteRequestPolicy, {
+        current: "quoted",
+        target: "accepted",
+        idempotencyKey: "quote-acceptance-coordinated-quote-substitution",
+        context: {
+          ...permittedContext,
+          issuedQuoteId: "quote-2",
+          quoteAcceptanceIssuedQuoteId: "quote-2",
+          createdOrderSourceQuoteId: "quote-2",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects coordinated acceptance substitution against the authoritative issuance record", () => {
+    expect(() =>
+      transition(quoteRequestPolicy, {
+        current: "quoted",
+        target: "accepted",
+        idempotencyKey: "quote-acceptance-coordinated-issuance-substitution",
+        context: {
+          ...permittedContext,
+          quoteRequestId: "quote-request-2",
+          issuedQuoteId: "quote-2",
+          issuedQuoteRequestId: "quote-request-2",
+          quoteAcceptanceQuoteRequestId: "quote-request-2",
+          quoteAcceptanceIssuedQuoteId: "quote-2",
+          quoteAcceptanceIssuedQuoteRequestId: "quote-request-2",
+          quoteAcceptanceIssuedQuote: {
+            ...permittedContext.quoteAcceptanceIssuedQuote,
+            id: "quote-2",
+            quoteRequestId: "quote-request-2",
+          },
+          createdOrderQuoteRequestId: "quote-request-2",
+          createdOrderSourceQuoteId: "quote-2",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a consistently supplied but invalid immutable Quote window", () => {
+    const instant = permittedContext.issuedQuoteIssuedAt;
+    expect(() =>
+      transition(quoteRequestPolicy, {
+        current: "quoted",
+        target: "accepted",
+        idempotencyKey: "quote-acceptance-zero-window",
+        context: {
+          ...permittedContext,
+          issuedQuoteExpiresAt: instant,
+          quoteAcceptanceExpiresAt: instant,
+          quoteAcceptanceEvaluatedAt: instant,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each([
     ["quoteRequestId", " "],

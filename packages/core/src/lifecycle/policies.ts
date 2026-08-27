@@ -2430,6 +2430,141 @@ function requireVerifiedCurrentRemedyIncident<S extends string>(
   }
 }
 
+function requireAtomicIssuedQuoteCreation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const quoteRequestId = context?.quoteRequestId;
+  const issuedQuoteId = context?.issuedQuoteId;
+  const issuedAt = context?.issuedQuoteIssuedAt;
+  const expiresAt = context?.issuedQuoteExpiresAt;
+  const resultId = context?.quoteIssuanceResultId;
+  const issuedQuoteValue = context?.quoteIssuanceIssuedQuote;
+  const issuedQuote =
+    typeof issuedQuoteValue === "object" &&
+    issuedQuoteValue !== null &&
+    !Array.isArray(issuedQuoteValue)
+      ? (issuedQuoteValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const recordIssuedAt = issuedQuote?.issuedAt;
+  const recordExpiresAt = issuedQuote?.expiresAt;
+  if (
+    typeof quoteRequestId !== "string" ||
+    quoteRequestId.trim().length === 0 ||
+    typeof issuedQuoteId !== "string" ||
+    issuedQuoteId.trim().length === 0 ||
+    context?.issuedQuoteRequestId !== quoteRequestId ||
+    !(issuedAt instanceof Instant) ||
+    !(expiresAt instanceof Instant) ||
+    issuedAt.compare(expiresAt) >= 0 ||
+    typeof resultId !== "string" ||
+    resultId.trim().length === 0 ||
+    context?.quoteIssuanceQuoteRequestId !== quoteRequestId ||
+    context?.quoteIssuanceQuoteRequestPreviousStatus !== "in_review" ||
+    context?.quoteIssuanceQuoteRequestTargetStatus !== "quoted" ||
+    context?.quoteIssuanceIssuedQuoteId !== issuedQuoteId ||
+    context?.quoteIssuanceIssuedQuoteRequestId !== quoteRequestId ||
+    context?.quoteIssuanceRequestResultId !== resultId ||
+    context?.quoteIssuanceQuoteResultId !== resultId ||
+    issuedQuote?.id !== issuedQuoteId ||
+    issuedQuote.quoteRequestId !== quoteRequestId ||
+    issuedQuote.immutable !== true ||
+    issuedQuote.resultId !== resultId ||
+    !(recordIssuedAt instanceof Instant) ||
+    !recordIssuedAt.equals(issuedAt) ||
+    !(recordExpiresAt instanceof Instant) ||
+    !recordExpiresAt.equals(expiresAt) ||
+    context?.quoteIssuanceCompleted !== true ||
+    context?.quoteIssuanceAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "quote issuance requires the exact immutable IssuedQuote and QuoteRequest transition to commit atomically",
+    );
+  }
+}
+
+function requireQuoteAcceptanceAvailability<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  requireAtomicIssuedQuoteCreation(lifecycle, command);
+  const context = command.context;
+  const quoteRequestId = context?.quoteRequestId;
+  const issuedQuoteId = context?.issuedQuoteId;
+  const issuedAt = context?.issuedQuoteIssuedAt;
+  const expiresAt = context?.issuedQuoteExpiresAt;
+  const evaluatedAt = context?.quoteAcceptanceEvaluatedAt;
+  const resultId = context?.quoteAcceptanceResultId;
+  const issuedQuoteValue = context?.quoteAcceptanceIssuedQuote;
+  const issuedQuote =
+    typeof issuedQuoteValue === "object" &&
+    issuedQuoteValue !== null &&
+    !Array.isArray(issuedQuoteValue)
+      ? (issuedQuoteValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const recordIssuedAt = issuedQuote?.issuedAt;
+  const recordExpiresAt = issuedQuote?.expiresAt;
+  if (
+    typeof quoteRequestId !== "string" ||
+    quoteRequestId.trim().length === 0 ||
+    typeof issuedQuoteId !== "string" ||
+    issuedQuoteId.trim().length === 0 ||
+    context?.issuedQuoteRequestId !== quoteRequestId ||
+    context?.quoteAcceptanceQuoteRequestId !== quoteRequestId ||
+    context?.quoteAcceptanceIssuedQuoteId !== issuedQuoteId ||
+    context?.quoteAcceptanceIssuedQuoteRequestId !== quoteRequestId ||
+    issuedQuote?.id !== issuedQuoteId ||
+    issuedQuote.quoteRequestId !== quoteRequestId ||
+    issuedQuote.immutable !== true ||
+    typeof context?.quoteAcceptanceIssuedQuoteCreationResultId !== "string" ||
+    context.quoteAcceptanceIssuedQuoteCreationResultId.trim().length === 0 ||
+    context.quoteAcceptanceIssuedQuoteCreationResultId !==
+      context?.quoteIssuanceResultId ||
+    issuedQuote.resultId !==
+      context.quoteAcceptanceIssuedQuoteCreationResultId ||
+    !(issuedAt instanceof Instant) ||
+    !(expiresAt instanceof Instant) ||
+    issuedAt.compare(expiresAt) >= 0 ||
+    !(recordIssuedAt instanceof Instant) ||
+    !recordIssuedAt.equals(issuedAt) ||
+    !(recordExpiresAt instanceof Instant) ||
+    !recordExpiresAt.equals(expiresAt) ||
+    !(context?.quoteAcceptanceIssuedAt instanceof Instant) ||
+    !context.quoteAcceptanceIssuedAt.equals(issuedAt) ||
+    !(context?.quoteAcceptanceExpiresAt instanceof Instant) ||
+    !context.quoteAcceptanceExpiresAt.equals(expiresAt) ||
+    !(evaluatedAt instanceof Instant) ||
+    typeof resultId !== "string" ||
+    resultId.trim().length === 0 ||
+    context?.quoteAcceptanceAvailabilityResultId !== resultId ||
+    context?.quoteAcceptanceOrderResultId !== resultId ||
+    context?.quoteAcceptanceRequestResultId !== resultId ||
+    context?.quoteAcceptanceQuoteRequestPreviousStatus !== "quoted" ||
+    context?.quoteAcceptanceQuoteRequestTargetStatus !== "accepted" ||
+    !canAcceptQuote(
+      {
+        id: issuedQuoteId,
+        quoteRequestId,
+        issuedAt,
+        expiresAt,
+      },
+      "quoted",
+      evaluatedAt,
+    )
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "quote acceptance requires an injected time within the exact immutable IssuedQuote window",
+    );
+  }
+}
+
 function requireAcceptedQuoteOrderCreation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2437,6 +2572,7 @@ function requireAcceptedQuoteOrderCreation<S extends string>(
   const quoteRequestId = command.context?.quoteRequestId;
   const issuedQuoteId = command.context?.issuedQuoteId;
   const orderId = command.context?.orderId;
+  const acceptanceResultId = command.context?.quoteAcceptanceResultId;
   if (
     typeof quoteRequestId !== "string" ||
     quoteRequestId.trim().length === 0 ||
@@ -2473,6 +2609,19 @@ function requireAcceptedQuoteOrderCreation<S extends string>(
       command.current,
       command.target,
       "quote acceptance must create its exact draft Order",
+    );
+  }
+  if (
+    typeof acceptanceResultId !== "string" ||
+    acceptanceResultId.trim().length === 0 ||
+    command.context?.quoteAcceptanceOrderResultId !== acceptanceResultId ||
+    command.context?.createdOrderResultId !== acceptanceResultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "accepted quote Order must belong to the exact atomic acceptance result",
     );
   }
   requireFlag(
@@ -2540,13 +2689,11 @@ export const quoteRequestPolicy: TransitionPolicy<QuoteRequestStatus> = {
     quoted: ["accepted", "rejected", "expired"],
   },
   guard: (command) => {
+    if (command.current === "in_review" && command.target === "quoted") {
+      requireAtomicIssuedQuoteCreation("QuoteRequest", command);
+    }
     if (command.current === "quoted" && command.target === "accepted") {
-      requireFlag(
-        "QuoteRequest",
-        command,
-        "quoteAvailable",
-        "the immutable quote must still be available",
-      );
+      requireQuoteAcceptanceAvailability("QuoteRequest", command);
       requireAcceptedQuoteOrderCreation("QuoteRequest", command);
     }
     if (command.current === "quoted" && command.target === "expired") {
