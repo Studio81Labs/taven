@@ -144,10 +144,14 @@ describe("component credits", () => {
     const first = consumeComponentCredits(
       czk(20n),
       [{ id: "express", remaining: czk(15n) }],
-      { currency: "CZK", consumedAllocationIds: [] },
+      { currency: "CZK", consumedAllocationIds: [], creditedTotal: czk(0n) },
     );
     expect(first).toEqual({
-      ledger: { currency: "CZK", consumedAllocationIds: ["express"] },
+      ledger: {
+        currency: "CZK",
+        consumedAllocationIds: ["express"],
+        creditedTotal: czk(15n),
+      },
       credited: czk(15n),
       remainingContractValue: czk(5n),
     });
@@ -162,13 +166,56 @@ describe("component credits", () => {
     ).toBe("DUPLICATE_COMPONENT_CREDIT");
   });
 
+  it("accumulates credits consumed in separate operations", () => {
+    const first = consumeComponentCredits(
+      czk(100n),
+      [{ id: "first", remaining: czk(30n) }],
+      { currency: "CZK", consumedAllocationIds: [], creditedTotal: czk(0n) },
+    );
+    const second = consumeComponentCredits(
+      czk(100n),
+      [{ id: "second", remaining: czk(20n) }],
+      first.ledger,
+    );
+
+    expect(second).toEqual({
+      ledger: {
+        currency: "CZK",
+        consumedAllocationIds: ["first", "second"],
+        creditedTotal: czk(50n),
+      },
+      credited: czk(20n),
+      remainingContractValue: czk(50n),
+    });
+  });
+
   it("rejects credits that would make contract value negative", () => {
     expect(
       errorCode(() =>
         consumeComponentCredits(
           czk(10n),
           [{ id: "claim", remaining: czk(11n) }],
-          { currency: "CZK", consumedAllocationIds: [] },
+          {
+            currency: "CZK",
+            consumedAllocationIds: [],
+            creditedTotal: czk(0n),
+          },
+        ),
+      ),
+    ).toBe("NEGATIVE_RESULT");
+  });
+
+  it("rejects a later credit that exceeds the prior remainder", () => {
+    expect(
+      errorCode(() =>
+        consumeComponentCredits(
+          czk(100n),
+          [{ id: "second", remaining: czk(71n) }],
+          {
+            currency: "CZK",
+            consumedAllocationIds: ["first"],
+            creditedTotal: czk(30n),
+          },
         ),
       ),
     ).toBe("NEGATIVE_RESULT");

@@ -307,6 +307,48 @@ const permittedContext = {
   balanceDueAtSet: true,
   balancePaymentDeadlineSetupAtomic: true,
   completeShipmentReadiness: true,
+  shipmentReadinessResultId: "shipment-readiness-result-1",
+  shipmentReadinessOrderId: "order-1",
+  shipmentReadinessPhaseId: "phase-1",
+  shipmentReadinessOrderResultId: "shipment-readiness-result-1",
+  shipmentReadinessOrderPreviousStatus: "qc_passed",
+  shipmentReadinessOrderTargetStatus: "ready_to_ship",
+  shipmentReadinessAuthoritativeShipmentSetId: "shipment-set-1",
+  shipmentReadinessExpectedShipmentSetId: "shipment-set-1",
+  shipmentReadinessAuthoritativeShipmentSet: {
+    id: "shipment-set-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    immutable: true,
+    shipmentIds: ["shipment-1", "shipment-2"],
+    resultId: "shipment-readiness-result-1",
+  },
+  shipmentReadinessShipments: [
+    {
+      id: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      currentLineageLeaf: true,
+      status: "label_created",
+      readyForHandoff: true,
+      allJobsPacked: true,
+      labelUsable: true,
+      resultId: "shipment-readiness-result-1",
+    },
+    {
+      id: "shipment-2",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      currentLineageLeaf: true,
+      status: "label_created",
+      readyForHandoff: true,
+      allJobsPacked: true,
+      labelUsable: true,
+      resultId: "shipment-readiness-result-1",
+    },
+  ],
+  shipmentReadinessCompleted: true,
+  shipmentReadinessAtomic: true,
   verifiedPostQcFailure: true,
   replacementObligationCreated: true,
   balanceCaptureClosed: true,
@@ -349,6 +391,85 @@ const permittedContext = {
   verifiedProviderScan: true,
   verifiedProviderVoid: true,
   shipmentId: "shipment-1",
+  plannedShipmentCancellationResultId: "planned-cancellation-result-1",
+  plannedShipmentCancellationExpectedShipmentId: "shipment-1",
+  plannedShipmentCancellationExpectedOrderId: "order-1",
+  plannedShipmentCancellationExpectedPhaseId: "phase-1",
+  plannedShipmentCancellationShipment: {
+    id: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    previousStatus: "planned",
+    targetStatus: "cancelled",
+    resultId: "planned-cancellation-result-1",
+  },
+  plannedShipmentCancellationAuthoritativeResourceSetId:
+    "planned-resource-set-1",
+  plannedShipmentCancellationExpectedResourceSetId: "planned-resource-set-1",
+  plannedShipmentCancellationAuthoritativeResourceSet: {
+    id: "planned-resource-set-1",
+    shipmentId: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    immutable: true,
+    jobIds: ["planned-job-1", "planned-job-2"],
+    reservationIds: ["planned-reservation-1", "planned-reservation-2"],
+    resultId: "planned-cancellation-result-1",
+  },
+  plannedShipmentCancellationJobs: [
+    {
+      id: "planned-job-1",
+      reservationId: "planned-reservation-1",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      previousStatus: "created",
+      targetStatus: "cancelled",
+      resultId: "planned-cancellation-result-1",
+    },
+    {
+      id: "planned-job-2",
+      reservationId: "planned-reservation-2",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      previousStatus: "accepted",
+      targetStatus: "cancelled",
+      resultId: "planned-cancellation-result-1",
+    },
+  ],
+  plannedShipmentCancellationReservations: [
+    {
+      id: "planned-reservation-1",
+      jobId: "planned-job-1",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      previousStatus: "held",
+      targetStatus: "released",
+      resultId: "planned-cancellation-result-1",
+    },
+    {
+      id: "planned-reservation-2",
+      jobId: "planned-job-2",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      previousStatus: "scheduled",
+      targetStatus: "settled",
+      resultId: "planned-cancellation-result-1",
+    },
+  ],
+  plannedShipmentCancellationParentBarrier: {
+    shipmentId: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    previousStatus: "open",
+    targetStatus: "released",
+    resultId: "planned-cancellation-result-1",
+  },
+  plannedShipmentCancellationCompleted: true,
+  plannedShipmentCancellationAtomic: true,
   carrierLabelId: "label-1",
   shipmentCancellationExpectedShipmentId: "shipment-1",
   shipmentCancellationExpectedCarrierLabelId: "label-1",
@@ -547,6 +668,17 @@ const permittedContext = {
   replacementRequestCreated: true,
   replacementDeadlineSet: true,
   postQcFailureJobId: "job-1",
+  postQcFailureResultId: "post-qc-failure-result-1",
+  postQcFailureJobResultId: "post-qc-failure-result-1",
+  postQcFailurePhaseResultId: "post-qc-failure-result-1",
+  postQcFailureOrderResultId: "post-qc-failure-result-1",
+  postQcFailureVerificationResultId: "post-qc-failure-result-1",
+  postQcFailureReplacementResultId: "post-qc-failure-result-1",
+  postQcFailureJobPreviousStatus: "qc_approved",
+  postQcFailureJobTargetStatus: "failed",
+  postQcFailureFailureStage: "post_qc",
+  postQcFailureFailureReason: "machine fault",
+  postQcFailureResolutionCompleted: true,
   postQcFailurePhaseId: "phase-1",
   postQcFailurePhaseKind: "single",
   postQcFailureOrderId: "order-1",
@@ -1422,6 +1554,25 @@ function contextForTransition(target: string, current?: string) {
             },
           ],
     failureStage,
+    postQcFailureJobPreviousStatus:
+      (current === "qc_approved" || current === "packed") && target === "failed"
+        ? current
+        : permittedContext.postQcFailureJobPreviousStatus,
+    postQcFailureFailureStage:
+      (current === "qc_approved" || current === "packed") && target === "failed"
+        ? failureStage
+        : permittedContext.postQcFailureFailureStage,
+    postQcFailureOrderPreviousStatus:
+      target === "recovery_pending" &&
+      (current === "qc_passed" ||
+        current === "awaiting_balance" ||
+        current === "ready_to_ship")
+        ? current
+        : permittedContext.postQcFailureOrderPreviousStatus,
+    postQcFailureBalanceDeadlineResult:
+      target === "recovery_pending" && current === "awaiting_balance"
+        ? "invalidated"
+        : permittedContext.postQcFailureBalanceDeadlineResult,
     materialConsumptionMode,
     initialPaymentStatus: capacityCaptureCompensation
       ? "refund_pending"
@@ -1480,6 +1631,10 @@ function contextForTransition(target: string, current?: string) {
     claimRefundScopeChildren,
     financialTerminalTarget: target,
     completionProjectedTarget: target,
+    shipmentReadinessOrderPreviousStatus:
+      target === "ready_to_ship"
+        ? current
+        : permittedContext.shipmentReadinessOrderPreviousStatus,
     qcCompletionOrderPreviousStatus:
       target === "qc_passed"
         ? current
@@ -3661,6 +3816,145 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("cancels a planned Shipment with its exact reordered resource set", () => {
+    const context = contextForTransition("cancelled", "planned");
+    expect(
+      transition(shipmentPolicy, {
+        current: "planned",
+        target: "cancelled",
+        idempotencyKey: "planned-shipment-cancellation-complete",
+        context: {
+          ...context,
+          plannedShipmentCancellationJobs: [
+            ...context.plannedShipmentCancellationJobs,
+          ].reverse(),
+          plannedShipmentCancellationReservations: [
+            ...context.plannedShipmentCancellationReservations,
+          ].reverse(),
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "planned", current: "cancelled" });
+  });
+
+  it.each([
+    [
+      "foreign selected Shipment",
+      { plannedShipmentCancellationExpectedShipmentId: "shipment-2" },
+    ],
+    [
+      "Shipment record for another Order",
+      {
+        plannedShipmentCancellationShipment: {
+          ...permittedContext.plannedShipmentCancellationShipment,
+          orderId: "order-2",
+        },
+      },
+    ],
+    [
+      "foreign resource set",
+      { plannedShipmentCancellationExpectedResourceSetId: "resource-set-2" },
+    ],
+    [
+      "coordinated projected Job subset",
+      {
+        plannedShipmentCancellationJobs: [
+          permittedContext.plannedShipmentCancellationJobs[0],
+        ],
+      },
+    ],
+    [
+      "duplicate Job",
+      {
+        plannedShipmentCancellationJobs: [
+          permittedContext.plannedShipmentCancellationJobs[0],
+          permittedContext.plannedShipmentCancellationJobs[0],
+        ],
+      },
+    ],
+    [
+      "Job from another Shipment",
+      {
+        plannedShipmentCancellationJobs: [
+          permittedContext.plannedShipmentCancellationJobs[0],
+          {
+            ...permittedContext.plannedShipmentCancellationJobs[1],
+            shipmentId: "shipment-2",
+          },
+        ],
+      },
+    ],
+    [
+      "Job from another result",
+      {
+        plannedShipmentCancellationJobs: [
+          permittedContext.plannedShipmentCancellationJobs[0],
+          {
+            ...permittedContext.plannedShipmentCancellationJobs[1],
+            resultId: "another-result",
+          },
+        ],
+      },
+    ],
+    [
+      "coordinated projected reservation subset",
+      {
+        plannedShipmentCancellationReservations: [
+          permittedContext.plannedShipmentCancellationReservations[0],
+        ],
+      },
+    ],
+    [
+      "swapped Job reservation",
+      {
+        plannedShipmentCancellationReservations: [
+          permittedContext.plannedShipmentCancellationReservations[0],
+          {
+            ...permittedContext.plannedShipmentCancellationReservations[1],
+            jobId: "planned-job-1",
+          },
+        ],
+      },
+    ],
+    [
+      "reservation from another phase",
+      {
+        plannedShipmentCancellationReservations: [
+          permittedContext.plannedShipmentCancellationReservations[0],
+          {
+            ...permittedContext.plannedShipmentCancellationReservations[1],
+            phaseId: "phase-2",
+          },
+        ],
+      },
+    ],
+    [
+      "foreign parent barrier",
+      {
+        plannedShipmentCancellationParentBarrier: {
+          ...permittedContext.plannedShipmentCancellationParentBarrier,
+          shipmentId: "shipment-2",
+        },
+      },
+    ],
+    ["incomplete result", { plannedShipmentCancellationCompleted: false }],
+    ["non-atomic result", { plannedShipmentCancellationAtomic: false }],
+  ] as const)(
+    "rejects planned Shipment cancellation with %s evidence",
+    (_case, invalid) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          current: "planned",
+          target: "cancelled",
+          idempotencyKey: `planned-shipment-cancellation-invalid-${_case}`,
+          context: {
+            ...contextForTransition("cancelled", "planned"),
+            ...invalid,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
   it("requires a complete result before a labelled shipment is handed over", () => {
     expect(() =>
       transition(shipmentPolicy, {
@@ -4413,9 +4707,9 @@ describe("v0 lifecycle policy tables", () => {
         target: "ready_to_ship",
         idempotencyKey: "qc-ready-cleared",
         context: {
+          ...contextForTransition("ready_to_ship", "qc_passed"),
           amountDueMinor: 0n,
           refundableBalanceMinor: 0n,
-          completeShipmentReadiness: true,
         },
       }),
     ).toEqual({
@@ -4424,6 +4718,146 @@ describe("v0 lifecycle policy tables", () => {
       current: "ready_to_ship",
     });
   });
+
+  it.each(["qc_passed", "awaiting_balance"] as const)(
+    "requires the complete reordered Shipment readiness set from %s",
+    (current) => {
+      const context = contextForTransition("ready_to_ship", current);
+      expect(
+        transition(orderPolicy, {
+          current,
+          target: "ready_to_ship",
+          idempotencyKey: `shipment-readiness-complete-${current}`,
+          context: {
+            ...context,
+            shipmentReadinessShipments: [
+              ...context.shipmentReadinessShipments,
+            ].reverse(),
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "ready_to_ship",
+      });
+    },
+  );
+
+  it.each([
+    [
+      "foreign set",
+      { shipmentReadinessExpectedShipmentSetId: "shipment-set-2" },
+    ],
+    [
+      "foreign Order result",
+      { shipmentReadinessOrderResultId: "another-result" },
+    ],
+    [
+      "set owned by another Order",
+      {
+        shipmentReadinessAuthoritativeShipmentSet: {
+          ...permittedContext.shipmentReadinessAuthoritativeShipmentSet,
+          orderId: "order-2",
+        },
+      },
+    ],
+    [
+      "coordinated projected subset",
+      {
+        shipmentReadinessShipments: [
+          permittedContext.shipmentReadinessShipments[0],
+        ],
+      },
+    ],
+    [
+      "duplicate Shipment",
+      {
+        shipmentReadinessShipments: [
+          permittedContext.shipmentReadinessShipments[0],
+          permittedContext.shipmentReadinessShipments[0],
+        ],
+      },
+    ],
+    [
+      "foreign Shipment",
+      {
+        shipmentReadinessShipments: [
+          permittedContext.shipmentReadinessShipments[0],
+          {
+            ...permittedContext.shipmentReadinessShipments[1],
+            id: "shipment-3",
+          },
+        ],
+      },
+    ],
+    [
+      "blocked Shipment",
+      {
+        shipmentReadinessShipments: [
+          permittedContext.shipmentReadinessShipments[0],
+          {
+            ...permittedContext.shipmentReadinessShipments[1],
+            readyForHandoff: false,
+          },
+        ],
+      },
+    ],
+    [
+      "unpacked Shipment Jobs",
+      {
+        shipmentReadinessShipments: [
+          permittedContext.shipmentReadinessShipments[0],
+          {
+            ...permittedContext.shipmentReadinessShipments[1],
+            allJobsPacked: false,
+          },
+        ],
+      },
+    ],
+    [
+      "unusable label",
+      {
+        shipmentReadinessShipments: [
+          permittedContext.shipmentReadinessShipments[0],
+          {
+            ...permittedContext.shipmentReadinessShipments[1],
+            labelUsable: false,
+          },
+        ],
+      },
+    ],
+    [
+      "foreign result",
+      {
+        shipmentReadinessShipments: [
+          permittedContext.shipmentReadinessShipments[0],
+          {
+            ...permittedContext.shipmentReadinessShipments[1],
+            resultId: "another-result",
+          },
+        ],
+      },
+    ],
+    ["incomplete result", { shipmentReadinessCompleted: false }],
+    ["non-atomic result", { shipmentReadinessAtomic: false }],
+  ] as const)(
+    "rejects Shipment readiness with %s evidence",
+    (_case, invalid) => {
+      for (const current of ["qc_passed", "awaiting_balance"] as const) {
+        expect(() =>
+          transition(orderPolicy, {
+            current,
+            target: "ready_to_ship",
+            idempotencyKey: `shipment-readiness-invalid-${current}-${_case}`,
+            context: {
+              ...contextForTransition("ready_to_ship", current),
+              ...invalid,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
 
   it.each([
     ["Order", orderPolicy, "delivered", "completed"],
@@ -8673,30 +9107,59 @@ describe("v0 lifecycle policy tables", () => {
         "initialCaptureCloseReason",
       ],
     ],
-    [orderPolicy, "qc_passed", "ready_to_ship", ["completeShipmentReadiness"]],
+    [
+      orderPolicy,
+      "qc_passed",
+      "ready_to_ship",
+      ["shipmentReadinessCompleted", "shipmentReadinessAtomic"],
+    ],
     [
       orderPolicy,
       "qc_passed",
       "recovery_pending",
-      ["verifiedPostQcFailure", "replacementObligationCreated"],
+      [
+        "verifiedPostQcFailure",
+        "replacementRequestCreated",
+        "replacementDeadlineSet",
+        "postQcFailureResolutionCompleted",
+        "postQcFailureResolutionAtomic",
+      ],
     ],
     [
       orderPolicy,
       "awaiting_balance",
       "recovery_pending",
-      ["verifiedPostQcFailure", "replacementObligationCreated"],
+      [
+        "verifiedPostQcFailure",
+        "replacementRequestCreated",
+        "replacementDeadlineSet",
+        "postQcFailureResolutionCompleted",
+        "postQcFailureResolutionAtomic",
+      ],
     ],
     [
       orderPolicy,
       "ready_to_ship",
       "recovery_pending",
-      ["verifiedPostQcFailure", "replacementObligationCreated"],
+      [
+        "verifiedPostQcFailure",
+        "replacementRequestCreated",
+        "replacementDeadlineSet",
+        "postQcFailureResolutionCompleted",
+        "postQcFailureResolutionAtomic",
+      ],
     ],
     [
       singleOrderPhasePolicy,
       "qc_passed",
       "recovery_pending",
-      ["verifiedPostQcFailure", "replacementObligationCreated"],
+      [
+        "verifiedPostQcFailure",
+        "replacementRequestCreated",
+        "replacementDeadlineSet",
+        "postQcFailureResolutionCompleted",
+        "postQcFailureResolutionAtomic",
+      ],
     ],
     [
       orderPolicy,
@@ -8733,8 +9196,8 @@ describe("v0 lifecycle policy tables", () => {
       "planned",
       "cancelled",
       [
-        "shipmentJobsAndReservationsReleased",
-        "parentCancellationBarrierReleased",
+        "plannedShipmentCancellationCompleted",
+        "plannedShipmentCancellationAtomic",
       ],
     ],
     [
@@ -9216,10 +9679,23 @@ describe("v0 lifecycle policy tables", () => {
     ["postQcFailureOrderTargetStatus", "shipped"],
     ["postQcFailureBalanceDeadlineResult", "invalidated"],
     ["postQcFailureJobId", "another-job"],
+    ["postQcFailureResultId", " "],
+    ["postQcFailureJobResultId", "another-result"],
+    ["postQcFailurePhaseResultId", "another-result"],
+    ["postQcFailureOrderResultId", "another-result"],
+    ["postQcFailureVerificationResultId", "another-result"],
+    ["postQcFailureReplacementResultId", "another-result"],
+    ["postQcFailureJobPreviousStatus", "accepted"],
+    ["postQcFailureJobTargetStatus", "packed"],
+    ["postQcFailureFailureStage", "packing"],
+    ["postQcFailureFailureReason", " "],
+    ["failureReason", "different reason"],
     ["postQcFailurePhaseId", "another-phase"],
     ["postQcFailurePhaseKind", "sample"],
     ["postQcFailureOrderId", "another-order"],
     ["postQcFailureSlotRecoveryBlocked", true],
+    ["postQcFailureResolutionCompleted", false],
+    ["postQcFailureResolutionAtomic", false],
   ] as const)(
     "rejects invalid pre-handoff post-QC result %s",
     (field, value) => {
@@ -9232,6 +9708,91 @@ describe("v0 lifecycle policy tables", () => {
             ...contextForTransition("failed", "qc_approved"),
             [field]: value,
           },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["qc_passed", "not_active"],
+    ["awaiting_balance", "invalidated"],
+    ["ready_to_ship", "not_active"],
+  ] as const)(
+    "atomically enters Order recovery from %s with the exact failed Job and phase",
+    (current, balanceDeadlineResult) => {
+      const context = {
+        ...contextForTransition("recovery_pending", current),
+        postQcFailureBalanceDeadlineResult: balanceDeadlineResult,
+      };
+      expect(
+        transition(orderPolicy, {
+          current,
+          target: "recovery_pending",
+          idempotencyKey: `aggregate-recovery-order-${current}`,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "recovery_pending",
+      });
+      expect(
+        transition(singleOrderPhasePolicy, {
+          current: "qc_passed",
+          target: "recovery_pending",
+          idempotencyKey: `aggregate-recovery-phase-${current}`,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "qc_passed",
+        current: "recovery_pending",
+      });
+    },
+  );
+
+  it.each([
+    ["foreign Job", { postQcFailureJobId: "job-2" }],
+    ["blank result", { postQcFailureResultId: " " }],
+    ["substituted Job result", { postQcFailureJobResultId: "another-result" }],
+    ["wrong Job source", { postQcFailureJobPreviousStatus: "accepted" }],
+    ["wrong Job target", { postQcFailureJobTargetStatus: "packed" }],
+    ["wrong failure stage", { postQcFailureFailureStage: "packing" }],
+    ["foreign phase", { postQcFailurePhaseId: "phase-2" }],
+    ["wrong phase source", { postQcFailurePhasePreviousStatus: "shipped" }],
+    ["foreign Order", { postQcFailureOrderId: "order-2" }],
+    [
+      "wrong Order source",
+      { postQcFailureOrderPreviousStatus: "awaiting_balance" },
+    ],
+    ["prior handoff", { phaseHasPriorHandoff: true }],
+    [
+      "wrong deadline result",
+      { postQcFailureBalanceDeadlineResult: "invalidated" },
+    ],
+    ["incomplete result", { postQcFailureResolutionCompleted: false }],
+    ["non-atomic result", { postQcFailureResolutionAtomic: false }],
+  ] as const)(
+    "rejects aggregate recovery with %s evidence",
+    (_case, invalid) => {
+      const context = {
+        ...contextForTransition("recovery_pending", "qc_passed"),
+        ...invalid,
+      };
+      expect(() =>
+        transition(orderPolicy, {
+          current: "qc_passed",
+          target: "recovery_pending",
+          idempotencyKey: `aggregate-recovery-order-invalid-${_case}`,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(singleOrderPhasePolicy, {
+          current: "qc_passed",
+          target: "recovery_pending",
+          idempotencyKey: `aggregate-recovery-phase-invalid-${_case}`,
+          context,
         }),
       ).toThrow(TransitionGuardError);
     },

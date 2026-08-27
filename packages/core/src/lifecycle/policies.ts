@@ -52,6 +52,111 @@ function requireZeroAmountDue<S extends string>(
   }
 }
 
+function requireCompleteShipmentReadiness<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const resultId = context?.shipmentReadinessResultId;
+  const authoritativeSetId =
+    context?.shipmentReadinessAuthoritativeShipmentSetId;
+  const authoritativeSetValue =
+    context?.shipmentReadinessAuthoritativeShipmentSet;
+  const authoritativeSet =
+    typeof authoritativeSetValue === "object" &&
+    authoritativeSetValue !== null &&
+    !Array.isArray(authoritativeSetValue)
+      ? (authoritativeSetValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const shipmentIdsValue = authoritativeSet?.shipmentIds;
+  const shipmentIds = Array.isArray(shipmentIdsValue)
+    ? [...shipmentIdsValue]
+    : undefined;
+  const shipmentsValue = context?.shipmentReadinessShipments;
+  const shipments = Array.isArray(shipmentsValue)
+    ? [...shipmentsValue]
+    : undefined;
+  if (
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(resultId) ||
+    context?.shipmentReadinessOrderId !== orderId ||
+    context?.shipmentReadinessPhaseId !== phaseId ||
+    context?.shipmentReadinessOrderResultId !== resultId ||
+    context?.shipmentReadinessOrderPreviousStatus !== command.current ||
+    context?.shipmentReadinessOrderTargetStatus !== "ready_to_ship" ||
+    !nonBlank(authoritativeSetId) ||
+    context?.shipmentReadinessExpectedShipmentSetId !== authoritativeSetId ||
+    authoritativeSet?.id !== authoritativeSetId ||
+    authoritativeSet.orderId !== orderId ||
+    authoritativeSet.phaseId !== phaseId ||
+    authoritativeSet.immutable !== true ||
+    authoritativeSet.resultId !== resultId ||
+    shipmentIds === undefined ||
+    shipmentIds.length === 0 ||
+    !shipmentIds.every(nonBlank) ||
+    new Set(shipmentIds).size !== shipmentIds.length ||
+    shipments === undefined ||
+    shipments.length !== shipmentIds.length ||
+    context?.shipmentReadinessCompleted !== true ||
+    context?.shipmentReadinessAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "ready to ship requires the exact authoritative current Shipment set",
+    );
+  }
+
+  const projectedIds = new Set<string>();
+  for (const value of shipments) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Shipment readiness requires complete identity records",
+      );
+    }
+    const shipment = value as Readonly<Record<string, unknown>>;
+    const id = shipment.id;
+    if (
+      !nonBlank(id) ||
+      projectedIds.has(id) ||
+      !shipmentIds.includes(id) ||
+      shipment.orderId !== orderId ||
+      shipment.phaseId !== phaseId ||
+      shipment.currentLineageLeaf !== true ||
+      shipment.status !== "label_created" ||
+      shipment.readyForHandoff !== true ||
+      shipment.allJobsPacked !== true ||
+      shipment.labelUsable !== true ||
+      shipment.resultId !== resultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "every exact current Shipment must be ready for handoff",
+      );
+    }
+    projectedIds.add(id);
+  }
+  if (shipmentIds.some((id) => !projectedIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Shipment readiness cannot omit a required parcel",
+    );
+  }
+}
+
 function requireReconciliationRefundAllocation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2062,6 +2167,14 @@ function requirePostQcJobFailureResolution<S extends string>(
   const phaseId = command.context?.phaseId;
   const phaseKind = command.context?.phaseKind;
   const orderId = command.context?.orderId;
+  const resultId = command.context?.postQcFailureResultId;
+  const jobPreviousStatus = command.context?.postQcFailureJobPreviousStatus;
+  const expectedFailureStage =
+    jobPreviousStatus === "qc_approved"
+      ? "post_qc"
+      : jobPreviousStatus === "packed"
+        ? "packing"
+        : undefined;
   if (
     typeof jobId !== "string" ||
     jobId.length === 0 ||
@@ -2073,7 +2186,34 @@ function requirePostQcJobFailureResolution<S extends string>(
     command.context?.postQcFailurePhaseKind !== phaseKind ||
     typeof orderId !== "string" ||
     orderId.length === 0 ||
-    command.context?.postQcFailureOrderId !== orderId
+    command.context?.postQcFailureOrderId !== orderId ||
+    typeof resultId !== "string" ||
+    resultId.trim().length === 0 ||
+    expectedFailureStage === undefined ||
+    command.context?.postQcFailureJobTargetStatus !== "failed" ||
+    command.context?.postQcFailureFailureStage !== expectedFailureStage ||
+    typeof command.context?.postQcFailureFailureReason !== "string" ||
+    command.context.postQcFailureFailureReason.trim().length === 0 ||
+    command.context?.postQcFailureJobResultId !== resultId ||
+    command.context?.postQcFailurePhaseResultId !== resultId ||
+    command.context?.postQcFailureOrderResultId !== resultId ||
+    command.context?.postQcFailureVerificationResultId !== resultId ||
+    command.context?.postQcFailureReplacementResultId !== resultId ||
+    command.context?.verifiedPostQcFailure !== true ||
+    command.context?.replacementRequestCreated !== true ||
+    command.context?.replacementDeadlineSet !== true ||
+    command.context?.postQcFailureResolutionCompleted !== true ||
+    (lifecycle === "Job" &&
+      (command.current !== jobPreviousStatus ||
+        command.target !== "failed" ||
+        command.context?.failureReason !==
+          command.context?.postQcFailureFailureReason)) ||
+    (lifecycle === "Order" &&
+      (command.context?.postQcFailureOrderPreviousStatus !== command.current ||
+        command.target !== "recovery_pending")) ||
+    (lifecycle === "OrderPhase(single)" &&
+      (command.context?.postQcFailurePhasePreviousStatus !== command.current ||
+        command.target !== "recovery_pending"))
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -2192,22 +2332,212 @@ function requireJobReplacementObligation<S extends string>(
   );
 }
 
-function requireRecoveryObligation<S extends string>(
+function requireAtomicPlannedShipmentCancellation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  requireFlag(
-    lifecycle,
-    command,
-    "verifiedPostQcFailure",
-    "recovery requires a verified post-QC failure",
-  );
-  requireFlag(
-    lifecycle,
-    command,
-    "replacementObligationCreated",
-    "recovery requires its replacement obligation",
-  );
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const shipmentId = context?.shipmentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const resultId = context?.plannedShipmentCancellationResultId;
+  const shipmentValue = context?.plannedShipmentCancellationShipment;
+  const shipment =
+    typeof shipmentValue === "object" &&
+    shipmentValue !== null &&
+    !Array.isArray(shipmentValue)
+      ? (shipmentValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const resourceSetId =
+    context?.plannedShipmentCancellationAuthoritativeResourceSetId;
+  const resourceSetValue =
+    context?.plannedShipmentCancellationAuthoritativeResourceSet;
+  const resourceSet =
+    typeof resourceSetValue === "object" &&
+    resourceSetValue !== null &&
+    !Array.isArray(resourceSetValue)
+      ? (resourceSetValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobIdsValue = resourceSet?.jobIds;
+  const reservationIdsValue = resourceSet?.reservationIds;
+  const jobIds = Array.isArray(jobIdsValue) ? [...jobIdsValue] : undefined;
+  const reservationIds = Array.isArray(reservationIdsValue)
+    ? [...reservationIdsValue]
+    : undefined;
+  const jobsValue = context?.plannedShipmentCancellationJobs;
+  const reservationsValue = context?.plannedShipmentCancellationReservations;
+  const jobs = Array.isArray(jobsValue) ? [...jobsValue] : undefined;
+  const reservations = Array.isArray(reservationsValue)
+    ? [...reservationsValue]
+    : undefined;
+  const barrierValue = context?.plannedShipmentCancellationParentBarrier;
+  const barrier =
+    typeof barrierValue === "object" &&
+    barrierValue !== null &&
+    !Array.isArray(barrierValue)
+      ? (barrierValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    !nonBlank(shipmentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(resultId) ||
+    context?.plannedShipmentCancellationExpectedShipmentId !== shipmentId ||
+    context?.plannedShipmentCancellationExpectedOrderId !== orderId ||
+    context?.plannedShipmentCancellationExpectedPhaseId !== phaseId ||
+    shipment?.id !== shipmentId ||
+    shipment.orderId !== orderId ||
+    shipment.phaseId !== phaseId ||
+    shipment.previousStatus !== "planned" ||
+    shipment.targetStatus !== "cancelled" ||
+    shipment.resultId !== resultId ||
+    !nonBlank(resourceSetId) ||
+    context?.plannedShipmentCancellationExpectedResourceSetId !==
+      resourceSetId ||
+    resourceSet?.id !== resourceSetId ||
+    resourceSet.shipmentId !== shipmentId ||
+    resourceSet.orderId !== orderId ||
+    resourceSet.phaseId !== phaseId ||
+    resourceSet.immutable !== true ||
+    resourceSet.resultId !== resultId ||
+    jobIds === undefined ||
+    jobIds.length === 0 ||
+    !jobIds.every(nonBlank) ||
+    new Set(jobIds).size !== jobIds.length ||
+    reservationIds === undefined ||
+    reservationIds.length !== jobIds.length ||
+    !reservationIds.every(nonBlank) ||
+    new Set(reservationIds).size !== reservationIds.length ||
+    jobs === undefined ||
+    jobs.length !== jobIds.length ||
+    reservations === undefined ||
+    reservations.length !== reservationIds.length ||
+    barrier?.shipmentId !== shipmentId ||
+    barrier.orderId !== orderId ||
+    barrier.phaseId !== phaseId ||
+    barrier.previousStatus !== "open" ||
+    barrier.targetStatus !== "released" ||
+    barrier.resultId !== resultId ||
+    context?.plannedShipmentCancellationCompleted !== true ||
+    context?.plannedShipmentCancellationAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "planned Shipment cancellation requires its exact parent and complete resource set",
+    );
+  }
+
+  const cancellableJobStatuses = new Set([
+    "created",
+    "accepted",
+    "gcode_ready",
+    "printing",
+    "printed",
+    "photo_submitted",
+    "qc_approved",
+    "packed",
+  ]);
+  const releasableReservationStatuses = new Set([
+    "held",
+    "allocated",
+    "scheduled",
+    "printing",
+  ]);
+  const jobByReservationId = new Map<string, string>();
+  const projectedJobIds = new Set<string>();
+  for (const value of jobs) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "planned cancellation Jobs must be complete identity records",
+      );
+    }
+    const job = value as Readonly<Record<string, unknown>>;
+    const id = job.id;
+    const reservationId = job.reservationId;
+    if (
+      !nonBlank(id) ||
+      projectedJobIds.has(id) ||
+      !jobIds.includes(id) ||
+      !nonBlank(reservationId) ||
+      !reservationIds.includes(reservationId) ||
+      jobByReservationId.has(reservationId) ||
+      job.shipmentId !== shipmentId ||
+      job.orderId !== orderId ||
+      job.phaseId !== phaseId ||
+      !cancellableJobStatuses.has(job.previousStatus as string) ||
+      job.targetStatus !== "cancelled" ||
+      job.resultId !== resultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "planned cancellation must cancel every exact Shipment Job",
+      );
+    }
+    projectedJobIds.add(id);
+    jobByReservationId.set(reservationId, id);
+  }
+  if (jobIds.some((id) => !projectedJobIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "planned cancellation cannot omit a Shipment Job",
+    );
+  }
+
+  const projectedReservationIds = new Set<string>();
+  for (const value of reservations) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "planned cancellation reservations must be complete identity records",
+      );
+    }
+    const reservation = value as Readonly<Record<string, unknown>>;
+    const id = reservation.id;
+    if (
+      !nonBlank(id) ||
+      projectedReservationIds.has(id) ||
+      !reservationIds.includes(id) ||
+      reservation.jobId !== jobByReservationId.get(id) ||
+      reservation.shipmentId !== shipmentId ||
+      reservation.orderId !== orderId ||
+      reservation.phaseId !== phaseId ||
+      !releasableReservationStatuses.has(
+        reservation.previousStatus as string,
+      ) ||
+      (reservation.targetStatus !== "released" &&
+        reservation.targetStatus !== "settled") ||
+      reservation.resultId !== resultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "planned cancellation must release every exact Job reservation",
+      );
+    }
+    projectedReservationIds.add(id);
+  }
+  if (reservationIds.some((id) => !projectedReservationIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "planned cancellation cannot omit a Job reservation",
+    );
+  }
 }
 
 function requireShipmentCancellationReleased<S extends string>(
@@ -3228,7 +3558,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         command.current === "ready_to_ship") &&
       command.target === "recovery_pending"
     ) {
-      requireRecoveryObligation("Order", command);
+      requirePostQcJobFailureResolution("Order", command);
     }
     if (command.current === "ready_to_ship" && command.target === "shipped") {
       requireAtomicOrdinaryHandoff("Order", command);
@@ -3257,15 +3587,11 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       command.target === "ready_to_ship"
     ) {
       requireZeroBalances("Order", command);
+      requireCompleteShipmentReadiness("Order", command);
     }
     if (command.current === "qc_passed" && command.target === "ready_to_ship") {
       requireZeroBalances("Order", command);
-      requireFlag(
-        "Order",
-        command,
-        "completeShipmentReadiness",
-        "ready to ship requires every shipment to be ready for handoff",
-      );
+      requireCompleteShipmentReadiness("Order", command);
     }
     if (command.current === "shipped" && command.target === "delivered") {
       requireAllShipmentLineageLeavesDelivered("Order", command);
@@ -3396,7 +3722,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         command.current === "qc_passed" &&
         command.target === "recovery_pending"
       ) {
-        requireRecoveryObligation("OrderPhase(single)", command);
+        requirePostQcJobFailureResolution("OrderPhase(single)", command);
       }
       if (command.current === "qc_passed" && command.target === "shipped") {
         requireAtomicOrdinaryHandoff("OrderPhase(single)", command);
@@ -4794,7 +5120,7 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
   },
   guard: (command) => {
     if (command.current === "planned" && command.target === "cancelled") {
-      requireShipmentCancellationReleased("Shipment", command);
+      requireAtomicPlannedShipmentCancellation("Shipment", command);
     }
     if (
       command.current === "label_created" &&

@@ -142,6 +142,8 @@ export interface ComponentAllocation {
 export interface ComponentCreditLedger {
   readonly currency: string;
   readonly consumedAllocationIds: readonly string[];
+  /** Cumulative immutable credit amount represented by the consumed IDs. */
+  readonly creditedTotal: Money;
 }
 
 export interface ComponentCreditResult {
@@ -165,6 +167,7 @@ export function consumeComponentCredits(
       "The component-credit ledger and contract must use one currency.",
     );
   }
+  assertCurrency(ledger.creditedTotal, contractTotal.currency);
   const seen = new Set<string>();
   for (const id of ledger.consumedAllocationIds) {
     if (seen.has(id)) {
@@ -195,9 +198,10 @@ export function consumeComponentCredits(
     credited = credited.add(allocation.remaining);
   }
 
+  const cumulativeCredited = ledger.creditedTotal.add(credited);
   let remainingContractValue: Money;
   try {
-    remainingContractValue = contractTotal.subtract(credited);
+    remainingContractValue = contractTotal.subtract(cumulativeCredited);
   } catch (error) {
     if (error instanceof DomainError && error.code === "NEGATIVE_RESULT") {
       throw new FinancialProjectionError(
@@ -212,6 +216,7 @@ export function consumeComponentCredits(
     ledger: {
       currency: ledger.currency,
       consumedAllocationIds: [...seen],
+      creditedTotal: cumulativeCredited,
     },
     credited,
     remainingContractValue,
