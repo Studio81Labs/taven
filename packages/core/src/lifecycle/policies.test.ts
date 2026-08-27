@@ -28,6 +28,15 @@ const permittedContext = {
   issuedQuoteRequestId: "quote-request-1",
   quoteExpirationQuoteRequestId: "quote-request-1",
   quoteExpirationIssuedQuoteId: "quote-1",
+  quoteExpirationPreviousQuoteRequestResultId: "quote-request-quoted-result-1",
+  quoteExpirationCurrentStateCommandKey: "quote-request-quoted-command-1",
+  quoteExpirationExpectedQuoteRequest: {
+    id: "quote-request-1",
+    status: "quoted",
+    resultId: "quote-request-quoted-result-1",
+    currentStateCommandKey: "quote-request-quoted-command-1",
+    immutable: true,
+  },
   issuedQuoteIssuedAt: Instant.parse("2026-01-01T00:00:00.000Z"),
   issuedQuoteExpiresAt: Instant.parse("2026-01-02T00:00:00.000Z"),
   quoteExpirationEvaluatedAt: Instant.parse("2026-01-02T00:00:00.000Z"),
@@ -430,6 +439,26 @@ const permittedContext = {
     currentStateCommandKey: "order-quoted-command-1",
     immutable: true,
   },
+  capacityCapturePreviousPaymentResultId: "payment-pending-result-1",
+  capacityCapturePaymentCurrentStateCommandKey: "payment-pending-command-1",
+  capacityCaptureExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "pending",
+    providerTransactionId: "provider-transaction-1",
+    captureWindowId: "capture-window-1",
+    captureWindowResultId: "capture-window-result-1",
+    captureKind: "initial_checkout_capacity",
+    resultId: "payment-pending-result-1",
+    currentStateCommandKey: "payment-pending-command-1",
+    immutable: true,
+  },
+  capacityCaptureResultId: "capacity-capture-result-1",
+  capacityCapturePaymentResultId: "capacity-capture-result-1",
+  capacityCaptureCompensationResultId: "capacity-capture-result-1",
+  capacityCaptureRefundTransactionResultId: "capacity-capture-result-1",
   initialCaptureBeforeCutoff: true,
   initialCapacityReacquisitionAttempted: true,
   initialCapacityReacquisitionWholeSet: true,
@@ -454,6 +483,24 @@ const permittedContext = {
   capacityCaptureJobsCreated: false,
   compensationRefundOutstanding: true,
   compensationRefundRetryAtomic: true,
+  compensationRefundRetryPaymentId: "payment-1",
+  compensationRefundRetryPreviousStatus: "partially_refunded",
+  compensationRefundRetryTargetStatus: "refund_pending",
+  compensationRefundRetryPreviousPaymentResultId:
+    "payment-partially_refunded-result-1",
+  compensationRefundRetryCurrentStateCommandKey:
+    "payment-partially_refunded-command-1",
+  compensationRefundRetryExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "partially_refunded",
+    captureKind: "initial_checkout_capacity",
+    resultId: "payment-partially_refunded-result-1",
+    currentStateCommandKey: "payment-partially_refunded-command-1",
+    immutable: true,
+  },
   lateCaptureCompensationPaymentId: "payment-1",
   lateCaptureCompensationProviderTransactionId: "provider-transaction-1",
   lateCaptureRefundTransactionPaymentId: "payment-1",
@@ -3329,6 +3376,13 @@ function contextForTransition(target: string, current?: string) {
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
     current === "voided" && target === "refund_pending";
+  const compensationRetryKind = capacityCaptureCompensation
+    ? "initial_checkout_capacity"
+    : lateCaptureCompensation
+      ? "late_capture"
+      : undefined;
+  const lateCapturePreviousPaymentResultId = "payment-voided-result-1";
+  const lateCaptureCurrentStateCommandKey = "payment-voided-command-1";
   const unauthorizedHandoffReconciliation =
     current === "awaiting_balance" && target === "shipped";
   const completionTopologyStatus =
@@ -3920,6 +3974,37 @@ function contextForTransition(target: string, current?: string) {
       : lateCaptureCompensation
         ? "late_capture"
         : permittedContext.paymentCaptureKind,
+    ...(compensationRetryKind
+      ? {
+          compensationRefundRetryKind: compensationRetryKind,
+          compensationRefundRetryPreviousPaymentResultId:
+            "payment-partially_refunded-result-1",
+          compensationRefundRetryCurrentStateCommandKey:
+            "payment-partially_refunded-command-1",
+          compensationRefundRetryExpectedPayment: {
+            ...permittedContext.compensationRefundRetryExpectedPayment,
+            captureKind: compensationRetryKind,
+          },
+        }
+      : {}),
+    ...(lateCaptureCompensation
+      ? {
+          lateCaptureCompensationPreviousPaymentResultId:
+            lateCapturePreviousPaymentResultId,
+          lateCaptureCompensationCurrentStateCommandKey:
+            lateCaptureCurrentStateCommandKey,
+          lateCaptureCompensationExpectedPayment: {
+            id: "payment-1",
+            orderId: "order-1",
+            phaseId: "phase-1",
+            role: permittedContext.paymentRole,
+            status: "voided",
+            resultId: lateCapturePreviousPaymentResultId,
+            currentStateCommandKey: lateCaptureCurrentStateCommandKey,
+            immutable: true,
+          },
+        }
+      : {}),
     refundWebhookProjectedTarget: target,
     providerPaymentEventStatus:
       (current === "voided" || current === "pending") &&
@@ -4215,12 +4300,24 @@ function commandAnchors(
     return {
       aggregateId: "quote-request-1",
       currentStateCommandKey: "quote-request-in-review-command-1",
+      currentStateResultId: "quote-request-in-review-result-1",
     };
   }
   if (
     policy.name === "QuoteRequest" &&
     current === "quoted" &&
     target === "accepted"
+  ) {
+    return {
+      aggregateId: "quote-request-1",
+      currentStateCommandKey: "quote-request-quoted-command-1",
+      currentStateResultId: "quote-request-quoted-result-1",
+    };
+  }
+  if (
+    policy.name === "QuoteRequest" &&
+    current === "quoted" &&
+    target === "expired"
   ) {
     return {
       aggregateId: "quote-request-1",
@@ -4457,6 +4554,18 @@ function commandAnchors(
     return {
       aggregateId: "payment-1",
       currentStateCommandKey: "payment-created-command-1",
+      currentStateResultId: "payment-created-result-1",
+    };
+  }
+  if (
+    policy.name === "Payment" &&
+    current === "pending" &&
+    target === "refund_pending"
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: "payment-pending-command-1",
+      currentStateResultId: "payment-pending-result-1",
     };
   }
   if (
@@ -4467,6 +4576,18 @@ function commandAnchors(
     return {
       aggregateId: "payment-1",
       currentStateCommandKey: "payment-pending-command-1",
+      currentStateResultId: "payment-pending-result-1",
+    };
+  }
+  if (
+    policy.name === "Payment" &&
+    current === "pending" &&
+    target === "failed"
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: "payment-pending-command-1",
+      currentStateResultId: "payment-pending-result-1",
     };
   }
   if (
@@ -4477,6 +4598,7 @@ function commandAnchors(
     return {
       aggregateId: "payment-1",
       currentStateCommandKey: "payment-pending-command-1",
+      currentStateResultId: "payment-pending-result-1",
     };
   }
   if (
@@ -4487,6 +4609,18 @@ function commandAnchors(
     return {
       aggregateId: "payment-1",
       currentStateCommandKey: `payment-${current}-command-1`,
+      currentStateResultId: `payment-${current}-result-1`,
+    };
+  }
+  if (
+    policy.name === "Payment" &&
+    current === "voided" &&
+    target === "refund_pending"
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: "payment-voided-command-1",
+      currentStateResultId: "payment-voided-result-1",
     };
   }
   if (
@@ -4507,6 +4641,7 @@ function commandAnchors(
     return {
       aggregateId: "payment-1",
       currentStateCommandKey: "payment-refund-pending-command-1",
+      currentStateResultId: "refund-pending-result-1",
     };
   }
   if (
@@ -6964,6 +7099,12 @@ describe("v0 lifecycle policy tables", () => {
     ["missing state key", { currentStateCommandKey: undefined }],
     ["blank state key", { currentStateCommandKey: " " }],
     ["foreign state key", { currentStateCommandKey: "request-command-2" }],
+    ["missing state result", { currentStateResultId: undefined }],
+    ["blank state result", { currentStateResultId: " " }],
+    [
+      "foreign state result",
+      { currentStateResultId: "quote-request-in-review-result-2" },
+    ],
   ] as const)("rejects quote issuance with a %s", (_case, invalid) => {
     expect(() =>
       transition(quoteRequestPolicy, {
@@ -7326,6 +7467,18 @@ describe("v0 lifecycle policy tables", () => {
     ).toThrow(TransitionGuardError);
   });
 
+  it("expires a quoted request with its exact immutable source", () => {
+    expect(
+      transition(quoteRequestPolicy, {
+        ...commandAnchors(quoteRequestPolicy, "quoted", "expired"),
+        current: "quoted",
+        target: "expired",
+        idempotencyKey: "quote-expiration-complete",
+        context: contextForTransition("expired", "quoted"),
+      }),
+    ).toEqual({ kind: "changed", previous: "quoted", current: "expired" });
+  });
+
   it.each([
     ["quoteRequestId", " "],
     ["issuedQuoteRequestId", "another-request"],
@@ -7352,6 +7505,7 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)("rejects quote expiration with invalid %s", (field, value) => {
     expect(() =>
       transition(quoteRequestPolicy, {
+        ...commandAnchors(quoteRequestPolicy, "quoted", "expired"),
         current: "quoted",
         target: "expired",
         idempotencyKey: `quote-expiration-${field}`,
@@ -7364,6 +7518,7 @@ describe("v0 lifecycle policy tables", () => {
     const staleExpiry = Instant.parse("2026-01-01T23:00:00.000Z");
     expect(() =>
       transition(quoteRequestPolicy, {
+        ...commandAnchors(quoteRequestPolicy, "quoted", "expired"),
         current: "quoted",
         target: "expired",
         idempotencyKey: "quote-expiration-stale-scalar",
@@ -7371,6 +7526,84 @@ describe("v0 lifecycle policy tables", () => {
           ...permittedContext,
           issuedQuoteExpiresAt: staleExpiry,
           quoteExpirationEvaluatedAt: staleExpiry,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["missing aggregate", { aggregateId: undefined }],
+    ["blank aggregate", { aggregateId: " " }],
+    ["foreign aggregate", { aggregateId: "quote-request-2" }],
+    ["missing state key", { currentStateCommandKey: undefined }],
+    ["blank state key", { currentStateCommandKey: " " }],
+    ["foreign state key", { currentStateCommandKey: "foreign-command" }],
+    ["missing state result", { currentStateResultId: undefined }],
+    ["blank state result", { currentStateResultId: " " }],
+    ["foreign state result", { currentStateResultId: "foreign-result" }],
+  ] as const)(
+    "rejects quote expiration with a %s command anchor",
+    (_case, invalid) => {
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          ...commandAnchors(quoteRequestPolicy, "quoted", "expired"),
+          ...invalid,
+          current: "quoted",
+          target: "expired",
+          idempotencyKey: `quote-expiration-command-${_case}`,
+          context: contextForTransition("expired", "quoted"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["foreign request", { id: "quote-request-2" }],
+    ["wrong source status", { status: "in_review" }],
+    ["stale source result", { resultId: "foreign-result" }],
+    ["stale source key", { currentStateCommandKey: "foreign-command" }],
+    ["mutable source", { immutable: false }],
+  ] as const)(
+    "rejects quote expiration with a stale source snapshot (%s)",
+    (_case, mutation) => {
+      const context = contextForTransition("expired", "quoted");
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          ...commandAnchors(quoteRequestPolicy, "quoted", "expired"),
+          current: "quoted",
+          target: "expired",
+          idempotencyKey: `quote-expiration-source-${_case}`,
+          context: {
+            ...context,
+            quoteExpirationExpectedQuoteRequest: {
+              ...context.quoteExpirationExpectedQuoteRequest,
+              ...mutation,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects coordinated QuoteRequest-B expiration evidence behind Request-A anchors", () => {
+    const context = contextForTransition("expired", "quoted");
+    expect(() =>
+      transition(quoteRequestPolicy, {
+        ...commandAnchors(quoteRequestPolicy, "quoted", "expired"),
+        current: "quoted",
+        target: "expired",
+        idempotencyKey: "quote-expiration-coordinated-request-b",
+        context: {
+          ...context,
+          quoteRequestId: "quote-request-2",
+          issuedQuoteId: "quote-2",
+          issuedQuoteRequestId: "quote-request-2",
+          quoteExpirationQuoteRequestId: "quote-request-2",
+          quoteExpirationIssuedQuoteId: "quote-2",
+          quoteExpirationExpectedQuoteRequest: {
+            ...context.quoteExpirationExpectedQuoteRequest,
+            id: "quote-request-2",
+          },
         },
       }),
     ).toThrow(TransitionGuardError);
@@ -7653,8 +7886,7 @@ describe("v0 lifecycle policy tables", () => {
     const evaluatedAt = permittedContext.checkoutCaptureExpiresAt;
     expect(
       transition(paymentPolicy, {
-        aggregateId: "payment-1",
-        currentStateCommandKey: "payment-pending-command-1",
+        ...commandAnchors(paymentPolicy, "pending", "refund_pending"),
         current: "pending",
         target: "refund_pending",
         idempotencyKey: "pending-late-capture-compensation",
@@ -13207,6 +13439,92 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it.each(["captured", "refund_pending"] as const)(
+    "rejects pending Payment capture with a missing, blank, or foreign command source result (%s)",
+    (target) => {
+      const base =
+        target === "captured"
+          ? contextForTransition("captured", "pending")
+          : contextForTransition("refund_pending", "voided");
+      const context =
+        target === "captured"
+          ? base
+          : {
+              ...base,
+              captureEvaluatedAt: permittedContext.checkoutCaptureExpiresAt,
+              captureEvaluationOutcome: "expired",
+              captureProviderEvent: {
+                ...base.captureProviderEvent,
+                occurredAt: permittedContext.checkoutCaptureExpiresAt,
+              },
+            };
+      for (const [label, value] of [
+        ["missing", undefined],
+        ["blank", "  "],
+        ["foreign", "payment-pending-result-2"],
+      ] as const) {
+        expect(() =>
+          transition(paymentPolicy, {
+            ...commandAnchors(paymentPolicy, "pending", target),
+            current: "pending",
+            target,
+            currentStateResultId: value,
+            idempotencyKey: `capture-source-result-${target}-${label}`,
+            context,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each(["captured", "refund_pending"] as const)(
+    "rejects coordinated pending Payment-B capture evidence behind Payment-A anchors (%s)",
+    (target) => {
+      const base =
+        target === "captured"
+          ? contextForTransition("captured", "pending")
+          : contextForTransition("refund_pending", "voided");
+      const context =
+        target === "captured"
+          ? base
+          : {
+              ...base,
+              captureEvaluatedAt: permittedContext.checkoutCaptureExpiresAt,
+              captureEvaluationOutcome: "expired",
+              captureProviderEvent: {
+                ...base.captureProviderEvent,
+                occurredAt: permittedContext.checkoutCaptureExpiresAt,
+              },
+            };
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", target),
+          current: "pending",
+          target,
+          idempotencyKey: `capture-coordinated-payment-b-${target}`,
+          context: {
+            ...context,
+            paymentId: "payment-2",
+            captureEvaluationPaymentId: "payment-2",
+            providerEventPaymentId: "payment-2",
+            captureEvaluationExpectedPayment: {
+              ...context.captureEvaluationExpectedPayment,
+              id: "payment-2",
+            },
+            paymentCaptureWindow: {
+              ...context.paymentCaptureWindow,
+              paymentId: "payment-2",
+            },
+            captureProviderEvent: {
+              ...context.captureProviderEvent,
+              paymentId: "payment-2",
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
   it("rejects coordinated foreign initial-Payment capture evidence", () => {
     const context = contextForTransition("captured", "pending");
     expect(() =>
@@ -13318,6 +13636,7 @@ describe("v0 lifecycle policy tables", () => {
       transition(paymentPolicy, {
         ...command,
         currentStateCommandKey: "payment-pending-command-1",
+        currentStateResultId: "payment-pending-result-1",
       }),
     ).toThrow(TransitionGuardError);
     expect(() =>
@@ -13325,6 +13644,7 @@ describe("v0 lifecycle policy tables", () => {
         ...command,
         aggregateId: "payment-2",
         currentStateCommandKey: "payment-pending-command-1",
+        currentStateResultId: "payment-pending-result-1",
       }),
     ).toThrow(TransitionGuardError);
     expect(
@@ -13332,6 +13652,7 @@ describe("v0 lifecycle policy tables", () => {
         ...command,
         aggregateId: "payment-1",
         currentStateCommandKey: "payment-pending-command-1",
+        currentStateResultId: "payment-pending-result-1",
       }),
     ).toEqual({
       kind: "changed",
@@ -13909,6 +14230,21 @@ describe("v0 lifecycle policy tables", () => {
         previous: current,
         current: "refund_pending",
       });
+
+      for (const [label, value] of [
+        ["missing", undefined],
+        ["blank", "  "],
+        ["foreign", `payment-${current}-result-2`],
+      ] as const) {
+        expect(() =>
+          transition(paymentPolicy, {
+            ...command,
+            ...commandAnchors(paymentPolicy, current, "refund_pending"),
+            currentStateResultId: value,
+            idempotencyKey: `ordinary-refund-source-result-${current}-${label}`,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
 
       for (const [field, value] of [
         ["id", "payment-2"],
@@ -21563,6 +21899,98 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("binds pending capacity compensation to the selected immutable Payment source", () => {
+    expect(
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "refund_pending"),
+        current: "pending",
+        target: "refund_pending",
+        idempotencyKey: "initial-capacity-compensation-selected-payment",
+        context: contextForTransition("refund_pending", "pending"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "pending",
+      current: "refund_pending",
+    });
+  });
+
+  it.each([
+    ["missing aggregate", { aggregateId: undefined }, {}],
+    ["blank aggregate", { aggregateId: " " }, {}],
+    ["foreign aggregate", { aggregateId: "payment-2" }, {}],
+    ["missing result", { currentStateResultId: undefined }, {}],
+    ["blank result", { currentStateResultId: " " }, {}],
+    [
+      "foreign result",
+      { currentStateResultId: "payment-pending-result-2" },
+      {},
+    ],
+    ["missing key", { currentStateCommandKey: undefined }, {}],
+    ["blank key", { currentStateCommandKey: " " }, {}],
+    [
+      "foreign key",
+      { currentStateCommandKey: "payment-pending-command-2" },
+      {},
+    ],
+    [
+      "stale snapshot",
+      {},
+      {
+        capacityCaptureExpectedPayment: {
+          ...permittedContext.capacityCaptureExpectedPayment,
+          captureWindowId: "capture-window-2",
+        },
+      },
+    ],
+  ] as const)(
+    "rejects pending capacity compensation with a %s selected Payment source",
+    (_case, commandMutation, contextMutation) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "refund_pending"),
+          ...commandMutation,
+          current: "pending",
+          target: "refund_pending",
+          idempotencyKey: `initial-capacity-compensation-source-${_case}`,
+          context: {
+            ...contextForTransition("refund_pending", "pending"),
+            ...contextMutation,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects coordinated pending Payment-B capacity compensation behind Payment-A anchors", () => {
+    const context = contextForTransition("refund_pending", "pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "refund_pending"),
+        current: "pending",
+        target: "refund_pending",
+        idempotencyKey: "initial-capacity-compensation-coordinated-payment-b",
+        context: {
+          ...context,
+          paymentId: "payment-2",
+          initialPaymentId: "payment-2",
+          providerEventPaymentId: "payment-2",
+          capacityCaptureCompensationPaymentId: "payment-2",
+          capacityCaptureRefundTransactionPaymentId: "payment-2",
+          capacityCapturePreviousPaymentResultId: "payment-pending-result-2",
+          capacityCapturePaymentCurrentStateCommandKey:
+            "payment-pending-command-2",
+          capacityCaptureExpectedPayment: {
+            ...context.capacityCaptureExpectedPayment,
+            id: "payment-2",
+            resultId: "payment-pending-result-2",
+            currentStateCommandKey: "payment-pending-command-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it("atomically closes the quoted Order for a capacity-compensated capture", () => {
     const capacityContext = {
       ...contextForTransition("refund_pending", "pending"),
@@ -21704,6 +22132,11 @@ describe("v0 lifecycle policy tables", () => {
       };
       expect(
         transition(paymentPolicy, {
+          ...commandAnchors(
+            paymentPolicy,
+            "partially_refunded",
+            "refund_pending",
+          ),
           current: "partially_refunded",
           target: "refund_pending",
           idempotencyKey: `compensation-refund-retry-${compensationRefundRetryKind}`,
@@ -21720,6 +22153,11 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(paymentPolicy, {
+            ...commandAnchors(
+              paymentPolicy,
+              "partially_refunded",
+              "refund_pending",
+            ),
             current: "partially_refunded",
             target: "refund_pending",
             idempotencyKey: `compensation-refund-retry-${compensationRefundRetryKind}-${flag}`,
@@ -21727,6 +22165,120 @@ describe("v0 lifecycle policy tables", () => {
           }),
         ).toThrow(TransitionGuardError);
       }
+    },
+  );
+
+  it.each([
+    ["initial_checkout_capacity", "pending"],
+    ["late_capture", "voided"],
+  ] as const)(
+    "rejects partial %s compensation with an invalid selected Payment source",
+    (compensationRefundRetryKind, originalState) => {
+      const context = {
+        ...contextForTransition("refund_pending", originalState),
+        compensationRefundRetryKind,
+        refundPriceAdjustmentActivated: false,
+      };
+      for (const [label, mutation] of [
+        ["missing aggregate", { aggregateId: undefined }],
+        ["blank aggregate", { aggregateId: " " }],
+        ["foreign aggregate", { aggregateId: "payment-2" }],
+        ["missing result", { currentStateResultId: undefined }],
+        ["blank result", { currentStateResultId: " " }],
+        [
+          "foreign result",
+          { currentStateResultId: "payment-partially_refunded-result-2" },
+        ],
+        ["missing key", { currentStateCommandKey: undefined }],
+        ["blank key", { currentStateCommandKey: " " }],
+        ["foreign key", { currentStateCommandKey: "payment-partial-2" }],
+      ] as const) {
+        expect(() =>
+          transition(paymentPolicy, {
+            ...commandAnchors(
+              paymentPolicy,
+              "partially_refunded",
+              "refund_pending",
+            ),
+            ...mutation,
+            current: "partially_refunded",
+            target: "refund_pending",
+            idempotencyKey: `compensation-refund-source-${compensationRefundRetryKind}-${label}`,
+            context,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+      for (const [field, value] of [
+        ["id", "payment-2"],
+        ["orderId", "order-2"],
+        ["phaseId", "phase-2"],
+        ["role", "deposit"],
+        ["status", "captured"],
+        ["resultId", "payment-partially_refunded-result-2"],
+        ["currentStateCommandKey", "payment-partial-2"],
+        ["immutable", false],
+      ] as const) {
+        expect(() =>
+          transition(paymentPolicy, {
+            ...commandAnchors(
+              paymentPolicy,
+              "partially_refunded",
+              "refund_pending",
+            ),
+            current: "partially_refunded",
+            target: "refund_pending",
+            idempotencyKey: `compensation-refund-snapshot-${compensationRefundRetryKind}-${field}`,
+            context: {
+              ...context,
+              compensationRefundRetryExpectedPayment: {
+                ...context.compensationRefundRetryExpectedPayment,
+                [field]: value,
+              },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each(["initial_checkout_capacity", "late_capture"] as const)(
+    "rejects coordinated Payment-B partial compensation behind Payment-A anchors (%s)",
+    (compensationRefundRetryKind) => {
+      const context = {
+        ...contextForTransition(
+          "refund_pending",
+          compensationRefundRetryKind === "initial_checkout_capacity"
+            ? "pending"
+            : "voided",
+        ),
+        compensationRefundRetryKind,
+        refundPriceAdjustmentActivated: false,
+        paymentId: "payment-2",
+        compensationRefundRetryPaymentId: "payment-2",
+        compensationRefundRetryPreviousPaymentResultId:
+          "payment-partially_refunded-result-2",
+        compensationRefundRetryCurrentStateCommandKey:
+          "payment-partially_refunded-command-2",
+        compensationRefundRetryExpectedPayment: {
+          ...permittedContext.compensationRefundRetryExpectedPayment,
+          id: "payment-2",
+          resultId: "payment-partially_refunded-result-2",
+          currentStateCommandKey: "payment-partially_refunded-command-2",
+        },
+      };
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(
+            paymentPolicy,
+            "partially_refunded",
+            "refund_pending",
+          ),
+          current: "partially_refunded",
+          target: "refund_pending",
+          idempotencyKey: `compensation-refund-coordinated-${compensationRefundRetryKind}`,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
     },
   );
 
@@ -21961,6 +22513,103 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("binds late capture compensation to the selected voided Payment", () => {
+    expect(
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "voided", "refund_pending"),
+        current: "voided",
+        target: "refund_pending",
+        idempotencyKey: "late-capture-voided-selected-payment",
+        context: contextForTransition("refund_pending", "voided"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "voided",
+      current: "refund_pending",
+    });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["blank", "  "],
+    ["foreign", "payment-voided-result-2"],
+  ] as const)(
+    "rejects late capture compensation with a %s command source result",
+    (_case, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "voided", "refund_pending"),
+          currentStateResultId: value,
+          current: "voided",
+          target: "refund_pending",
+          idempotencyKey: `late-capture-command-result-${_case}`,
+          context: contextForTransition("refund_pending", "voided"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["status", "pending"],
+    ["resultId", "payment-voided-result-2"],
+    ["currentStateCommandKey", "payment-voided-command-2"],
+    ["immutable", false],
+  ] as const)(
+    "rejects late capture compensation with a stale immutable Payment snapshot (%s)",
+    (field, value) => {
+      const context = contextForTransition("refund_pending", "voided");
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "voided", "refund_pending"),
+          current: "voided",
+          target: "refund_pending",
+          idempotencyKey: `late-capture-stale-payment-${field}`,
+          context: {
+            ...context,
+            lateCaptureCompensationExpectedPayment: {
+              ...context.lateCaptureCompensationExpectedPayment,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects coordinated foreign Payment-B late capture evidence behind Payment-A anchors", () => {
+    const context = contextForTransition("refund_pending", "voided");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "voided", "refund_pending"),
+        current: "voided",
+        target: "refund_pending",
+        idempotencyKey: "late-capture-coordinated-payment-b",
+        context: {
+          ...context,
+          paymentId: "payment-2",
+          orderId: "order-2",
+          phaseId: "phase-2",
+          providerPaymentTransactionId: "provider-transaction-2",
+          providerEventPaymentId: "payment-2",
+          lateCaptureCompensationPaymentId: "payment-2",
+          lateCaptureCompensationProviderTransactionId:
+            "provider-transaction-2",
+          lateCaptureRefundTransactionPaymentId: "payment-2",
+          lateCaptureRefundTransactionProviderTransactionId:
+            "provider-transaction-2",
+          refundTransactionId: "refund-2",
+          lateCaptureCompensationRefundTransactionId: "refund-2",
+          lateCaptureCompensationExpectedPayment: {
+            ...context.lateCaptureCompensationExpectedPayment,
+            id: "payment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each([
     ["captured", "providerEventPaymentId", "another-payment"],
@@ -22365,6 +23014,32 @@ describe("v0 lifecycle policy tables", () => {
           },
         }),
       ).toEqual({ kind: "changed", previous: "pending", current: "failed" });
+    },
+  );
+
+  it.each([
+    ["created", "pending"],
+    ["pending", "voided"],
+    ["pending", "failed"],
+  ] as const)(
+    "requires an exact current-state result for Payment %s -> %s",
+    (current, target) => {
+      for (const currentStateResultId of [
+        undefined,
+        " ",
+        `payment-${current}-result-2`,
+      ]) {
+        expect(() =>
+          transition(paymentPolicy, {
+            ...commandAnchors(paymentPolicy, current, target),
+            currentStateResultId,
+            current,
+            target,
+            idempotencyKey: `payment-source-result-${current}-${target}-${String(currentStateResultId)}`,
+            context: contextForTransition(target, current),
+          }),
+        ).toThrow(TransitionGuardError);
+      }
     },
   );
 

@@ -1863,6 +1863,8 @@ function requireExactPaymentRefundCompletion<S extends string>(
     !nonBlank(resultId) ||
     !nonBlank(stateKey) ||
     command.aggregateId !== paymentId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     context?.refundWebhookPaymentId !== paymentId ||
     context?.refundWebhookRefundTransactionId !== refundTransactionId ||
@@ -2153,6 +2155,8 @@ function requireExactPendingPaymentFailure<S extends string>(
     !nonBlank(resultId) ||
     !nonBlank(stateKey) ||
     command.aggregateId !== paymentId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     context?.providerEventPaymentId !== paymentId ||
     context?.providerPaymentEventStatus !== "failed" ||
@@ -2273,6 +2277,8 @@ function requireExactPendingCaptureWindow<S extends string>(
     opensAt.compare(cutoffAt) >= 0 ||
     !cutoffAt.equals(persistedCutoff) ||
     command.aggregateId !== paymentId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousPaymentResultId ||
     command.currentStateCommandKey !== stateKey ||
     expectedPayment?.id !== paymentId ||
     expectedPayment.orderId !== orderId ||
@@ -2340,14 +2346,42 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
     );
   }
   const paymentId = command.context?.paymentId;
+  const previousResultId =
+    command.context?.lateCaptureCompensationPreviousPaymentResultId;
+  const stateKey =
+    command.context?.lateCaptureCompensationCurrentStateCommandKey;
+  const expectedValue = command.context?.lateCaptureCompensationExpectedPayment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const providerTransactionId = command.context?.providerPaymentTransactionId;
   const refundTransactionId = command.context?.refundTransactionId;
   if (
-    typeof paymentId !== "string" ||
-    paymentId.length === 0 ||
-    command.context?.providerEventPaymentId !== paymentId ||
-    command.context?.lateCaptureCompensationPaymentId !== paymentId ||
-    command.context?.lateCaptureRefundTransactionPaymentId !== paymentId
+    command.current === "voided" &&
+    command.target === "refund_pending" &&
+    (typeof paymentId !== "string" ||
+      paymentId.trim().length === 0 ||
+      typeof previousResultId !== "string" ||
+      previousResultId.trim().length === 0 ||
+      typeof stateKey !== "string" ||
+      stateKey.trim().length === 0 ||
+      command.aggregateId !== paymentId ||
+      command.currentStateCommandKey !== stateKey ||
+      command.currentStateResultId !== previousResultId ||
+      expected?.id !== paymentId ||
+      expected.orderId !== command.context?.orderId ||
+      expected.phaseId !== command.context?.phaseId ||
+      expected.role !== command.context?.paymentRole ||
+      expected.status !== "voided" ||
+      expected.resultId !== previousResultId ||
+      expected.currentStateCommandKey !== stateKey ||
+      expected.immutable !== true ||
+      command.context?.providerEventPaymentId !== paymentId ||
+      command.context?.lateCaptureCompensationPaymentId !== paymentId ||
+      command.context?.lateCaptureRefundTransactionPaymentId !== paymentId)
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -2489,6 +2523,76 @@ function requireExactQuotedCheckoutOrderSource<S extends string>(
   }
 }
 
+function requireExactPendingCapacityCapturePaymentSource<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  if (
+    lifecycle !== "Payment" ||
+    command.current !== "pending" ||
+    command.target !== "refund_pending"
+  ) {
+    return;
+  }
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.initialPaymentRole;
+  const providerTransactionId = context?.providerPaymentTransactionId;
+  const captureWindowId = context?.paymentCaptureWindowId;
+  const captureWindowResultId = context?.paymentCaptureWindowResultId;
+  const previousResultId = context?.capacityCapturePreviousPaymentResultId;
+  const stateKey = context?.capacityCapturePaymentCurrentStateCommandKey;
+  const expectedValue = context?.capacityCaptureExpectedPayment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const resultId = context?.capacityCaptureResultId;
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit") ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(captureWindowId) ||
+    !nonBlank(captureWindowResultId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(resultId) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expected?.id !== paymentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.role !== role ||
+    expected.status !== "pending" ||
+    expected.providerTransactionId !== providerTransactionId ||
+    expected.captureWindowId !== captureWindowId ||
+    expected.captureWindowResultId !== captureWindowResultId ||
+    expected.captureKind !== "initial_checkout_capacity" ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true ||
+    context?.capacityCaptureCompensationResultId !== resultId ||
+    context?.capacityCaptureRefundTransactionResultId !== resultId ||
+    context?.capacityCapturePaymentResultId !== resultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "capacity compensation must bind the command-selected immutable pending Payment and its refund result",
+    );
+  }
+}
+
 function requireInitialCapacityCaptureCompensation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2507,6 +2611,7 @@ function requireInitialCapacityCaptureCompensation<S extends string>(
   const phaseReservationSetId = command.context?.phaseReservationSetId;
   const providerTransactionId = command.context?.providerPaymentTransactionId;
   const refundTransactionId = command.context?.refundTransactionId;
+  requireExactPendingCapacityCapturePaymentSource(lifecycle, command);
   requireExactQuotedCheckoutOrderSource(lifecycle, command, {
     previousResultId: command.context?.capacityCapturePreviousOrderResultId,
     currentStateCommandKey:
@@ -2699,10 +2804,74 @@ function requireInitialCapacityCaptureCompensation<S extends string>(
   }
 }
 
+function requireExactPartiallyRefundedPaymentSource<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  if (
+    lifecycle !== "Payment" ||
+    command.current !== "partially_refunded" ||
+    command.target !== "refund_pending"
+  ) {
+    return;
+  }
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const kind = context?.compensationRefundRetryKind;
+  const previousResultId =
+    context?.compensationRefundRetryPreviousPaymentResultId;
+  const stateKey = context?.compensationRefundRetryCurrentStateCommandKey;
+  const expectedValue = context?.compensationRefundRetryExpectedPayment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    (kind !== "initial_checkout_capacity" && kind !== "late_capture") ||
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(command.aggregateId) ||
+    command.aggregateId !== paymentId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    context?.compensationRefundRetryPaymentId !== paymentId ||
+    context?.compensationRefundRetryPreviousStatus !== "partially_refunded" ||
+    context?.compensationRefundRetryTargetStatus !== "refund_pending" ||
+    expected?.id !== paymentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.role !== role ||
+    expected.status !== "partially_refunded" ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "compensation retry must bind the exact immutable partially refunded Payment source",
+    );
+  }
+}
+
 function requireCompensationRefundRetry<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  requireExactPartiallyRefundedPaymentSource(lifecycle, command);
   const kind = command.context?.compensationRefundRetryKind;
   if (kind === "initial_checkout_capacity") {
     requireInitialCapacityCaptureCompensation(lifecycle, command);
@@ -5324,6 +5493,8 @@ function requireAtomicIssuedQuoteCreation<S extends string>(
       (!nonBlank(requestPreviousResultId) ||
         !nonBlank(requestStateKey) ||
         command.aggregateId !== quoteRequestId ||
+        !nonBlank(command.currentStateResultId) ||
+        command.currentStateResultId !== requestPreviousResultId ||
         command.currentStateCommandKey !== requestStateKey ||
         expectedRequest?.id !== quoteRequestId ||
         expectedRequest.status !== "in_review" ||
@@ -5536,6 +5707,17 @@ function requireQuoteExpirationReached<S extends string>(
   const issuedQuoteId = command.context?.issuedQuoteId;
   const expiresAt = command.context?.issuedQuoteExpiresAt;
   const evaluatedAt = command.context?.quoteExpirationEvaluatedAt;
+  const previousResultId =
+    command.context?.quoteExpirationPreviousQuoteRequestResultId;
+  const stateKey = command.context?.quoteExpirationCurrentStateCommandKey;
+  const expectedRequestValue =
+    command.context?.quoteExpirationExpectedQuoteRequest;
+  const expectedRequest =
+    typeof expectedRequestValue === "object" &&
+    expectedRequestValue !== null &&
+    !Array.isArray(expectedRequestValue)
+      ? (expectedRequestValue as Readonly<Record<string, unknown>>)
+      : undefined;
   if (
     typeof quoteRequestId !== "string" ||
     quoteRequestId.trim().length === 0 ||
@@ -5543,7 +5725,19 @@ function requireQuoteExpirationReached<S extends string>(
     command.context?.quoteExpirationQuoteRequestId !== quoteRequestId ||
     typeof issuedQuoteId !== "string" ||
     issuedQuoteId.trim().length === 0 ||
-    command.context?.quoteExpirationIssuedQuoteId !== issuedQuoteId
+    command.context?.quoteExpirationIssuedQuoteId !== issuedQuoteId ||
+    typeof previousResultId !== "string" ||
+    previousResultId.trim().length === 0 ||
+    typeof stateKey !== "string" ||
+    stateKey.trim().length === 0 ||
+    command.aggregateId !== quoteRequestId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedRequest?.id !== quoteRequestId ||
+    expectedRequest.status !== "quoted" ||
+    expectedRequest.resultId !== previousResultId ||
+    expectedRequest.currentStateCommandKey !== stateKey ||
+    expectedRequest.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -5681,6 +5875,8 @@ function requireExactPaymentIntentSetup<S extends string>(
     !(persistedCaptureExpiresAt instanceof Instant) ||
     !captureExpiresAt.equals(persistedCaptureExpiresAt) ||
     command.aggregateId !== paymentId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousPaymentResultId ||
     command.currentStateCommandKey !== stateKey ||
     expectedPayment?.id !== paymentId ||
     expectedPayment.orderId !== orderId ||
@@ -5809,6 +6005,9 @@ function requireRoleSpecificPaymentVoidClosure<S extends string>(
     previousResultId.trim().length === 0 ||
     typeof stateKey !== "string" ||
     stateKey.trim().length === 0 ||
+    typeof command.currentStateResultId !== "string" ||
+    command.currentStateResultId.trim().length === 0 ||
+    command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     command.context?.paymentVoidPaymentId !== paymentId ||
     typeof orderId !== "string" ||
@@ -6023,6 +6222,8 @@ function requireExactOrdinaryRefundSetup<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const paymentId = command.context?.paymentId;
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
@@ -6061,6 +6262,8 @@ function requireExactOrdinaryRefundSetup<S extends string>(
       paymentRole !== "balance") ||
     (command.current !== "captured" &&
       command.current !== "partially_refunded") ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
     expected?.id !== paymentId ||
     expected.orderId !== orderId ||
     expected.phaseId !== phaseId ||
