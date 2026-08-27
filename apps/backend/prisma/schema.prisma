@@ -1,9 +1,785 @@
-// Prisma is the persistence seam. Product models land with their reviewed SQL
-// migrations; the foundation intentionally declares no speculative tables.
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+enum RevisionKind {
+  PRINT_CONFIG
+  REFERENCE_PROFILE
+  MACHINE_PROFILE
+  MACHINE_CALIBRATION
+
+  @@map("revision_kind")
+}
+
+enum RevisionState {
+  DRAFT
+  ACTIVE
+  RETIRED
+
+  @@map("revision_state")
+}
+
+enum Material {
+  PLA
+  PETG
+
+  @@map("material")
+}
+
+enum PrintQuality {
+  DRAFT
+  STANDARD
+  FINE
+
+  @@map("print_quality")
+}
+
+enum ModelFileFormat {
+  STL
+  THREE_MF @map("3MF")
+  STEP
+
+  @@map("model_file_format")
+}
+
+enum RetentionHold {
+  NONE
+  ACTIVE_ORDER
+  ACTIVE_CLAIM
+  LEGAL
+
+  @@map("retention_hold")
+}
+
+enum PhotoAssetKind {
+  QUOTE_REFERENCE
+  QC
+
+  @@map("photo_asset_kind")
+}
+
+enum PhotoScopeKind {
+  QUOTE_REQUEST
+  JOB
+
+  @@map("photo_scope_kind")
+}
+
+enum PreflightSeverity {
+  INFO
+  WARNING
+  BLOCKING
+
+  @@map("preflight_severity")
+}
+
+enum MachineStatus {
+  ACTIVE
+  MAINTENANCE
+  DISABLED
+
+  @@map("machine_status")
+}
+
+enum InventoryStatus {
+  AVAILABLE
+  DEPLETED
+  RETIRED
+
+  @@map("inventory_status")
+}
+
+enum SliceKind {
+  REFERENCE
+  PRODUCTION
+
+  @@map("slice_kind")
+}
+
+enum PhaseReservationSetStatus {
+  BUILDING
+  RESERVED
+  HELD
+  SETTLED
+  RELEASED
+  EXPIRED
+
+  @@map("phase_reservation_set_status")
+}
+
+enum ProductionReservationStatus {
+  RESERVED
+  HELD
+  SCHEDULED
+  PRINTING
+  CONSUMED
+  RELEASED
+  EXPIRED
+
+  @@map("production_reservation_status")
+}
+
+enum InventoryReservationStatus {
+  RESERVED
+  HELD
+  ALLOCATED
+  CONSUMED
+  RELEASED
+  EXPIRED
+
+  @@map("inventory_reservation_status")
+}
+
+enum CapacityReservationStatus {
+  RESERVED
+  HELD
+  SCHEDULED
+  PRINTING
+  COMPLETED
+  RELEASED
+  EXPIRED
+
+  @@map("capacity_reservation_status")
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+  FAILED
+
+  @@map("outbox_status")
+}
+
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+
+  @@map("idempotency_status")
+}
+
+model RevisionIdentity {
+  id        String       @id @db.Uuid
+  kind      RevisionKind
+  digest    String       @unique @db.VarChar(64)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  printConfig        PrintConfigRevision?
+  referenceProfile   ReferenceProfile?
+  machineProfile     MachineProfile?
+  machineCalibration MachineCalibration?
+
+  @@map("revision_identities")
+}
+
+model ModelFile {
+  id                String          @id @default(uuid()) @db.Uuid
+  format            ModelFileFormat
+  originalFilename  String          @map("original_filename") @db.VarChar(255)
+  storageObjectKey  String          @unique @map("storage_object_key") @db.Text
+  contentHash       String          @map("content_hash") @db.VarChar(64)
+  sizeBytes         BigInt          @map("size_bytes")
+  uploadedAt        DateTime        @map("uploaded_at") @db.Timestamptz(3)
+  sourceDeleteAfter DateTime        @map("source_delete_after") @db.Timestamptz(3)
+  retentionHold     RetentionHold   @default(NONE) @map("retention_hold")
+  deletedAt         DateTime?       @map("deleted_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  geometries        ModelGeometry[]
+  preflightFindings PreflightFinding[]
+
+  @@index([contentHash])
+  @@index([sourceDeleteAfter, retentionHold, deletedAt])
+  @@map("model_files")
+}
+
+model ModelGeometry {
+  id                     String    @id @default(uuid()) @db.Uuid
+  sourceModelFileId      String    @map("source_model_file_id") @db.Uuid
+  sourceSelector         String?   @map("source_selector") @db.Text
+  canonicalObjectKey     String    @unique @map("canonical_object_key") @db.Text
+  geometryHash           String    @map("geometry_hash") @db.VarChar(64)
+  canonicalizerRevision  String    @map("canonicalizer_revision") @db.VarChar(64)
+  volumeCubicMicrometers BigInt    @map("volume_cubic_micrometers")
+  boundsXMicrometers     BigInt    @map("bounds_x_micrometers")
+  boundsYMicrometers     BigInt    @map("bounds_y_micrometers")
+  boundsZMicrometers     BigInt    @map("bounds_z_micrometers")
+  triangleCount          Int       @map("triangle_count")
+  deletedAt              DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  sourceModelFile    ModelFile                   @relation(fields: [sourceModelFileId], references: [id], onDelete: Restrict)
+  preflightFindings  PreflightFinding[]
+  sliceResults       SliceResult[]
+  candidateEstimates CandidateResourceEstimate[]
+
+  @@unique([id, sourceModelFileId])
+  @@index([sourceModelFileId])
+  @@index([geometryHash])
+  @@map("model_geometries")
+}
+
+model PreflightFinding {
+  id                 String            @id @default(uuid()) @db.Uuid
+  modelFileId        String            @map("model_file_id") @db.Uuid
+  modelGeometryId    String?           @map("model_geometry_id") @db.Uuid
+  inspectionRevision String            @map("inspection_revision") @db.VarChar(64)
+  code               String            @db.VarChar(100)
+  severity           PreflightSeverity
+  message            String            @db.Text
+  evidence           Json?             @db.JsonB
+  acknowledgedAt     DateTime?         @map("acknowledged_at") @db.Timestamptz(3)
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  modelFile     ModelFile      @relation(fields: [modelFileId], references: [id], onDelete: Restrict)
+  modelGeometry ModelGeometry? @relation(fields: [modelGeometryId, modelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+
+  @@unique([modelGeometryId, inspectionRevision, code], map: "preflight_findings_geometry_scope_key")
+  @@index([modelGeometryId])
+  @@index([severity, acknowledgedAt])
+  @@map("preflight_findings")
+}
+
+model PhotoAsset {
+  id               String         @id @default(uuid()) @db.Uuid
+  kind             PhotoAssetKind
+  scopeKind        PhotoScopeKind @map("scope_kind")
+  scopeId          String         @map("scope_id") @db.Uuid
+  storageObjectKey String         @unique @map("storage_object_key") @db.Text
+  contentHash      String         @map("content_hash") @db.VarChar(64)
+  mediaType        String         @map("media_type") @db.VarChar(100)
+  sizeBytes        BigInt         @map("size_bytes")
+  uploadedAt       DateTime       @map("uploaded_at") @db.Timestamptz(3)
+  photoDeleteAfter DateTime       @map("photo_delete_after") @db.Timestamptz(3)
+  retentionHold    RetentionHold  @default(NONE) @map("retention_hold")
+  deletedAt        DateTime?      @map("deleted_at") @db.Timestamptz(3)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([contentHash])
+  @@index([scopeKind, scopeId])
+  @@index([photoDeleteAfter, retentionHold, deletedAt])
+  @@map("photo_assets")
+}
+
+model PrintConfigRevision {
+  id                     String       @id @db.Uuid
+  quality                PrintQuality
+  infillPercent          Int          @map("infill_percent")
+  layerHeightMicrometers Int          @map("layer_height_micrometers")
+  supportsEnabled        Boolean      @default(false) @map("supports_enabled")
+  brimEnabled            Boolean      @default(false) @map("brim_enabled")
+  settings               Json         @db.JsonB
+  createdAt              DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  revision               RevisionIdentity            @relation(fields: [id], references: [id], onDelete: Restrict)
+  sliceResults           SliceResult[]
+  candidateEstimates     CandidateResourceEstimate[]
+  productionReservations ProductionReservation[]
+
+  @@index([quality, infillPercent])
+  @@map("print_config_revisions")
+}
+
+model ReferenceProfile {
+  id            String        @id @db.Uuid
+  material      Material
+  quality       PrintQuality
+  slicerEngine  String        @map("slicer_engine") @db.VarChar(100)
+  slicerVersion String        @map("slicer_version") @db.VarChar(100)
+  settings      Json          @db.JsonB
+  state         RevisionState @default(DRAFT)
+  activatedAt   DateTime?     @map("activated_at") @db.Timestamptz(3)
+  retiredAt     DateTime?     @map("retired_at") @db.Timestamptz(3)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  revision        RevisionIdentity @relation(fields: [id], references: [id], onDelete: Restrict)
+  sliceResults    SliceResult[]
+  machineProfiles MachineProfile[]
+
+  @@index([material, quality, state])
+  @@map("reference_profiles")
+}
+
+model MachineCapability {
+  id                         String     @id @default(uuid()) @db.Uuid
+  capabilityKey              String     @unique @map("capability_key") @db.VarChar(100)
+  manufacturer               String     @db.VarChar(100)
+  model                      String     @db.VarChar(100)
+  buildVolumeXMicrometers    BigInt     @map("build_volume_x_micrometers")
+  buildVolumeYMicrometers    BigInt     @map("build_volume_y_micrometers")
+  buildVolumeZMicrometers    BigInt     @map("build_volume_z_micrometers")
+  supportedNozzleMicrometers Int[]      @map("supported_nozzle_micrometers")
+  supportedMaterials         Material[] @map("supported_materials")
+  createdAt                  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  machines        Machine[]
+  machineProfiles MachineProfile[]
+
+  @@map("machine_capabilities")
+}
+
+model MachineProfile {
+  id                        String        @id @db.Uuid
+  machineCapabilityId       String        @map("machine_capability_id") @db.Uuid
+  referenceProfileId        String        @map("reference_profile_id") @db.Uuid
+  material                  Material
+  quality                   PrintQuality
+  nozzleDiameterMicrometers Int           @map("nozzle_diameter_micrometers")
+  slicerEngine              String        @map("slicer_engine") @db.VarChar(100)
+  slicerVersion             String        @map("slicer_version") @db.VarChar(100)
+  settings                  Json          @db.JsonB
+  state                     RevisionState @default(DRAFT)
+  activatedAt               DateTime?     @map("activated_at") @db.Timestamptz(3)
+  retiredAt                 DateTime?     @map("retired_at") @db.Timestamptz(3)
+  createdAt                 DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  revision               RevisionIdentity            @relation(fields: [id], references: [id], onDelete: Restrict)
+  machineCapability      MachineCapability           @relation(fields: [machineCapabilityId], references: [id], onDelete: Restrict)
+  referenceProfile       ReferenceProfile            @relation(fields: [referenceProfileId], references: [id], onDelete: Restrict)
+  sliceResults           SliceResult[]
+  candidateEstimates     CandidateResourceEstimate[]
+  productionReservations ProductionReservation[]
+
+  @@index([machineCapabilityId, material, quality, nozzleDiameterMicrometers, state])
+  @@index([referenceProfileId])
+  @@map("machine_profiles")
+}
+
+model Node {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique @db.VarChar(50)
+  name      String   @db.VarChar(200)
+  timeZone  String   @map("time_zone") @db.VarChar(100)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  machines                   Machine[]
+  machineCalibrations        MachineCalibration[]
+  inventories                Inventory[]
+  candidateEstimates         CandidateResourceEstimate[]
+  candidateCapacityIntervals CandidateCapacityInterval[]
+  eligibilitySnapshots       EligibilitySnapshot[]
+  phaseResourcePlans         PhaseResourcePlan[]
+  phaseResourcePlanJobs      PhaseResourcePlanJob[]
+  phaseResourcePlanSlots     PhaseResourcePlanSlot[]
+  phaseReservationSets       PhaseReservationSet[]
+  productionReservations     ProductionReservation[]
+  inventoryReservations      InventoryReservation[]
+  capacityReservations       CapacityReservation[]
+
+  @@map("nodes")
+}
+
+model Machine {
+  id                         String        @id @default(uuid()) @db.Uuid
+  nodeId                     String        @map("node_id") @db.Uuid
+  machineCapabilityId        String        @map("machine_capability_id") @db.Uuid
+  code                       String        @db.VarChar(50)
+  displayName                String        @map("display_name") @db.VarChar(200)
+  status                     MachineStatus @default(ACTIVE)
+  installedNozzleMicrometers Int           @map("installed_nozzle_micrometers")
+  createdAt                  DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  node                   Node                        @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  machineCapability      MachineCapability           @relation(fields: [machineCapabilityId], references: [id], onDelete: Restrict)
+  calibrations           MachineCalibration[]
+  inventories            Inventory[]
+  candidateEstimates     CandidateResourceEstimate[]
+  productionReservations ProductionReservation[]
+  capacityReservations   CapacityReservation[]
+
+  @@unique([nodeId, code])
+  @@unique([id, nodeId])
+  @@index([machineCapabilityId])
+  @@index([nodeId, status])
+  @@map("machines")
+}
+
+model MachineCalibration {
+  id                                  String        @id @db.Uuid
+  nodeId                              String        @map("node_id") @db.Uuid
+  machineId                           String        @map("machine_id") @db.Uuid
+  flowRatioPartsPerMillion            Int           @map("flow_ratio_parts_per_million")
+  xyCompensationMicrometers           Int           @map("xy_compensation_micrometers")
+  elephantFootCompensationMicrometers Int           @map("elephant_foot_compensation_micrometers")
+  settings                            Json          @db.JsonB
+  state                               RevisionState @default(DRAFT)
+  activatedAt                         DateTime?     @map("activated_at") @db.Timestamptz(3)
+  retiredAt                           DateTime?     @map("retired_at") @db.Timestamptz(3)
+  createdAt                           DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  revision               RevisionIdentity            @relation(fields: [id], references: [id], onDelete: Restrict)
+  node                   Node                        @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  machine                Machine                     @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  sliceResults           SliceResult[]
+  candidateEstimates     CandidateResourceEstimate[]
+  productionReservations ProductionReservation[]
+
+  @@unique([id, nodeId, machineId])
+  @@index([machineId, state])
+  @@index([nodeId, state])
+  @@map("machine_calibrations")
+}
+
+model Inventory {
+  id                         String          @id @default(uuid()) @db.Uuid
+  nodeId                     String          @map("node_id") @db.Uuid
+  machineId                  String          @map("machine_id") @db.Uuid
+  sku                        String          @db.VarChar(100)
+  material                   Material
+  vendor                     String          @db.VarChar(200)
+  color                      String?         @db.VarChar(100)
+  lotCode                    String?         @map("lot_code") @db.VarChar(100)
+  priceMinorUnitsNumerator   BigInt          @map("price_minor_units_numerator")
+  priceMinorUnitsDenominator BigInt          @map("price_minor_units_denominator")
+  currency                   String          @db.Char(3)
+  remainingMilligrams        BigInt          @map("remaining_milligrams")
+  reservedMilligrams         BigInt          @default(0) @map("reserved_milligrams")
+  status                     InventoryStatus @default(AVAILABLE)
+  createdAt                  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  node                   Node                        @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  machine                Machine                     @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  candidateEstimates     CandidateResourceEstimate[]
+  productionReservations ProductionReservation[]
+  inventoryReservations  InventoryReservation[]
+
+  @@unique([nodeId, machineId, sku])
+  @@unique([id, nodeId])
+  @@unique([id, nodeId, machineId])
+  @@index([nodeId, machineId, material, status])
+  @@map("inventories")
+}
+
+model SliceResult {
+  id                          String    @id @default(uuid()) @db.Uuid
+  kind                        SliceKind
+  cacheKey                    String    @unique @map("cache_key") @db.VarChar(255)
+  modelGeometryId             String    @map("model_geometry_id") @db.Uuid
+  printConfigRevisionId       String    @map("print_config_revision_id") @db.Uuid
+  referenceProfileId          String?   @map("reference_profile_id") @db.Uuid
+  machineProfileId            String?   @map("machine_profile_id") @db.Uuid
+  machineCalibrationId        String?   @map("machine_calibration_id") @db.Uuid
+  partsPerPlate               Int       @map("parts_per_plate")
+  artifactObjectKey           String    @unique @map("artifact_object_key") @db.Text
+  artifactHash                String    @map("artifact_hash") @db.VarChar(64)
+  estimatedPrintSeconds       BigInt    @map("estimated_print_seconds")
+  estimatedMaterialMilligrams BigInt    @map("estimated_material_milligrams")
+  slicerEngine                String    @map("slicer_engine") @db.VarChar(100)
+  slicerVersion               String    @map("slicer_version") @db.VarChar(100)
+  createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  modelGeometry          ModelGeometry               @relation(fields: [modelGeometryId], references: [id], onDelete: Restrict)
+  printConfigRevision    PrintConfigRevision         @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  referenceProfile       ReferenceProfile?           @relation(fields: [referenceProfileId], references: [id], onDelete: Restrict)
+  machineProfile         MachineProfile?             @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
+  machineCalibration     MachineCalibration?         @relation(fields: [machineCalibrationId], references: [id], onDelete: Restrict)
+  candidateEstimates     CandidateResourceEstimate[]
+  productionReservations ProductionReservation[]
+
+  @@unique([id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId])
+  @@index([modelGeometryId])
+  @@index([referenceProfileId])
+  @@index([machineProfileId, machineCalibrationId])
+  @@map("slice_results")
+}
+
+model CandidateResourceEstimate {
+  id                         String   @id @default(uuid()) @db.Uuid
+  nodeId                     String   @map("node_id") @db.Uuid
+  estimateKey                String   @unique @map("estimate_key") @db.VarChar(255)
+  modelGeometryId            String   @map("model_geometry_id") @db.Uuid
+  sliceResultId              String   @map("slice_result_id") @db.Uuid
+  printConfigRevisionId      String   @map("print_config_revision_id") @db.Uuid
+  machineProfileId           String   @map("machine_profile_id") @db.Uuid
+  machineCalibrationId       String   @map("machine_calibration_id") @db.Uuid
+  machineId                  String   @map("machine_id") @db.Uuid
+  inventoryId                String   @map("inventory_id") @db.Uuid
+  shipmentPlanId             String   @map("shipment_plan_id") @db.Uuid
+  arrangementRevisionId      String   @map("arrangement_revision_id") @db.Uuid
+  quantity                   Int
+  requiredMaterialMilligrams BigInt   @map("required_material_milligrams")
+  requiredMachineSeconds     BigInt   @map("required_machine_seconds")
+  resourceSnapshot           Json     @map("resource_snapshot") @db.JsonB
+  calculatedAt               DateTime @map("calculated_at") @db.Timestamptz(3)
+  expiresAt                  DateTime @map("expires_at") @db.Timestamptz(3)
+
+  node                  Node                        @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  modelGeometry         ModelGeometry               @relation(fields: [modelGeometryId], references: [id], onDelete: Restrict)
+  sliceResult           SliceResult                 @relation(fields: [sliceResultId, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], references: [id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], onDelete: Restrict)
+  printConfigRevision   PrintConfigRevision         @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  machineProfile        MachineProfile              @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
+  machineCalibration    MachineCalibration          @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  machine               Machine                     @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  inventory             Inventory                   @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  capacityIntervals     CandidateCapacityInterval[]
+  phaseResourcePlanJobs PhaseResourcePlanJob[]
+
+  @@unique([id, nodeId])
+  @@index([nodeId, expiresAt])
+  @@index([modelGeometryId])
+  @@index([sliceResultId])
+  @@index([machineId, inventoryId])
+  @@map("candidate_resource_estimates")
+}
+
+model CandidateCapacityInterval {
+  id                          String   @id @default(uuid()) @db.Uuid
+  nodeId                      String   @map("node_id") @db.Uuid
+  candidateResourceEstimateId String   @map("candidate_resource_estimate_id") @db.Uuid
+  intervalIndex               Int      @map("interval_index")
+  startsAt                    DateTime @map("starts_at") @db.Timestamptz(3)
+  endsAt                      DateTime @map("ends_at") @db.Timestamptz(3)
+  createdAt                   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  node                      Node                      @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  candidateResourceEstimate CandidateResourceEstimate @relation(fields: [candidateResourceEstimateId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  capacityReservations      CapacityReservation[]
+
+  @@unique([candidateResourceEstimateId, intervalIndex])
+  @@unique([id, nodeId])
+  @@unique([id, nodeId, candidateResourceEstimateId])
+  @@index([nodeId, startsAt, endsAt])
+  @@map("candidate_capacity_intervals")
+}
+
+model EligibilitySnapshot {
+  id                           String   @id @default(uuid()) @db.Uuid
+  nodeId                       String   @map("node_id") @db.Uuid
+  orderPhaseId                 String   @map("order_phase_id") @db.Uuid
+  requiredFulfilmentSlotIds    Json     @map("required_fulfilment_slot_ids") @db.JsonB
+  eligibleCandidateEstimateIds Json     @map("eligible_candidate_estimate_ids") @db.JsonB
+  snapshotHash                 String   @unique @map("snapshot_hash") @db.VarChar(64)
+  calculatedAt                 DateTime @map("calculated_at") @db.Timestamptz(3)
+  expiresAt                    DateTime @map("expires_at") @db.Timestamptz(3)
+
+  node               Node                @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  phaseResourcePlans PhaseResourcePlan[]
+
+  @@unique([id, nodeId])
+  @@unique([id, nodeId, orderPhaseId])
+  @@index([nodeId, orderPhaseId, expiresAt])
+  @@map("eligibility_snapshots")
+}
+
+model PhaseResourcePlan {
+  id                    String   @id @default(uuid()) @db.Uuid
+  nodeId                String   @map("node_id") @db.Uuid
+  orderPhaseId          String   @map("order_phase_id") @db.Uuid
+  eligibilitySnapshotId String   @map("eligibility_snapshot_id") @db.Uuid
+  planKey               String   @unique @map("plan_key") @db.VarChar(255)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt             DateTime @map("expires_at") @db.Timestamptz(3)
+
+  node                   Node                    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  eligibilitySnapshot    EligibilitySnapshot     @relation(fields: [eligibilitySnapshotId, nodeId, orderPhaseId], references: [id, nodeId, orderPhaseId], onDelete: Restrict)
+  jobs                   PhaseResourcePlanJob[]
+  slots                  PhaseResourcePlanSlot[]
+  reservationSets        PhaseReservationSet[]
+  productionReservations ProductionReservation[]
+
+  @@unique([id, nodeId])
+  @@index([nodeId, orderPhaseId, expiresAt])
+  @@map("phase_resource_plans")
+}
+
+model PhaseResourcePlanJob {
+  id                          String   @id @default(uuid()) @db.Uuid
+  nodeId                      String   @map("node_id") @db.Uuid
+  phaseResourcePlanId         String   @map("phase_resource_plan_id") @db.Uuid
+  candidateResourceEstimateId String   @map("candidate_resource_estimate_id") @db.Uuid
+  plannedJobKey               String   @map("planned_job_key") @db.VarChar(255)
+  createdAt                   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  node                      Node                      @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  phaseResourcePlan         PhaseResourcePlan         @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  candidateResourceEstimate CandidateResourceEstimate @relation(fields: [candidateResourceEstimateId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  slots                     PhaseResourcePlanSlot[]
+  productionReservations    ProductionReservation[]
+
+  @@unique([phaseResourcePlanId, plannedJobKey])
+  @@unique([id, nodeId])
+  @@unique([id, nodeId, phaseResourcePlanId])
+  @@index([nodeId, candidateResourceEstimateId])
+  @@map("phase_resource_plan_jobs")
+}
+
+model PhaseResourcePlanSlot {
+  id                     String   @id @default(uuid()) @db.Uuid
+  nodeId                 String   @map("node_id") @db.Uuid
+  phaseResourcePlanId    String   @map("phase_resource_plan_id") @db.Uuid
+  phaseResourcePlanJobId String   @map("phase_resource_plan_job_id") @db.Uuid
+  fulfilmentSlotId       String   @map("fulfilment_slot_id") @db.Uuid
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  node                 Node                 @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  phaseResourcePlan    PhaseResourcePlan    @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  phaseResourcePlanJob PhaseResourcePlanJob @relation(fields: [phaseResourcePlanJobId, nodeId, phaseResourcePlanId], references: [id, nodeId, phaseResourcePlanId], onDelete: Restrict)
+
+  @@unique([phaseResourcePlanId, fulfilmentSlotId])
+  @@index([nodeId, phaseResourcePlanJobId])
+  @@map("phase_resource_plan_slots")
+}
+
+model PhaseReservationSet {
+  id                  String                    @id @default(uuid()) @db.Uuid
+  nodeId              String                    @map("node_id") @db.Uuid
+  phaseResourcePlanId String                    @map("phase_resource_plan_id") @db.Uuid
+  reservationKey      String                    @unique @map("reservation_key") @db.VarChar(255)
+  status              PhaseReservationSetStatus @default(BUILDING)
+  expiresAt           DateTime                  @map("expires_at") @db.Timestamptz(3)
+  createdAt           DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  node                   Node                    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  phaseResourcePlan      PhaseResourcePlan       @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  productionReservations ProductionReservation[]
+
+  @@unique([id, nodeId])
+  @@unique([id, nodeId, phaseResourcePlanId])
+  @@index([nodeId, expiresAt, status])
+  @@index([phaseResourcePlanId])
+  @@map("phase_reservation_sets")
+}
+
+model ProductionReservation {
+  id                         String                      @id @default(uuid()) @db.Uuid
+  nodeId                     String                      @map("node_id") @db.Uuid
+  phaseReservationSetId      String                      @map("phase_reservation_set_id") @db.Uuid
+  phaseResourcePlanId        String                      @map("phase_resource_plan_id") @db.Uuid
+  phaseResourcePlanJobId     String                      @map("phase_resource_plan_job_id") @db.Uuid
+  plannedJobKey              String                      @map("planned_job_key") @db.VarChar(255)
+  jobId                      String?                     @unique @map("job_id") @db.Uuid
+  machineId                  String                      @map("machine_id") @db.Uuid
+  inventoryId                String                      @map("inventory_id") @db.Uuid
+  sliceResultId              String                      @map("slice_result_id") @db.Uuid
+  printConfigRevisionId      String                      @map("print_config_revision_id") @db.Uuid
+  machineProfileId           String                      @map("machine_profile_id") @db.Uuid
+  machineCalibrationId       String                      @map("machine_calibration_id") @db.Uuid
+  requiredMaterialMilligrams BigInt                      @map("required_material_milligrams")
+  requiredMachineSeconds     BigInt                      @map("required_machine_seconds")
+  resourceSnapshot           Json                        @map("resource_snapshot") @db.JsonB
+  status                     ProductionReservationStatus @default(RESERVED)
+  expiresAt                  DateTime                    @map("expires_at") @db.Timestamptz(3)
+  createdAt                  DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  node                 Node                  @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  phaseReservationSet  PhaseReservationSet   @relation(fields: [phaseReservationSetId, nodeId, phaseResourcePlanId], references: [id, nodeId, phaseResourcePlanId], onDelete: Restrict)
+  phaseResourcePlan    PhaseResourcePlan     @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  phaseResourcePlanJob PhaseResourcePlanJob  @relation(fields: [phaseResourcePlanJobId, nodeId, phaseResourcePlanId], references: [id, nodeId, phaseResourcePlanId], onDelete: Restrict)
+  machine              Machine               @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  inventory            Inventory             @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  sliceResult          SliceResult           @relation(fields: [sliceResultId], references: [id], onDelete: Restrict)
+  printConfigRevision  PrintConfigRevision   @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  machineProfile       MachineProfile        @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
+  machineCalibration   MachineCalibration    @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  inventoryReservation InventoryReservation?
+  capacityReservations CapacityReservation[]
+
+  @@unique([id, nodeId])
+  @@unique([id, nodeId, machineId])
+  @@unique([phaseReservationSetId, phaseResourcePlanJobId])
+  @@unique([phaseReservationSetId, plannedJobKey])
+  @@index([nodeId, status, expiresAt])
+  @@index([machineId])
+  @@index([inventoryId])
+  @@index([sliceResultId])
+  @@index([machineCalibrationId])
+  @@map("production_reservations")
+}
+
+model InventoryReservation {
+  id                      String                     @id @default(uuid()) @db.Uuid
+  nodeId                  String                     @map("node_id") @db.Uuid
+  productionReservationId String                     @map("production_reservation_id") @db.Uuid
+  inventoryId             String                     @map("inventory_id") @db.Uuid
+  reservedMilligrams      BigInt                     @map("reserved_milligrams")
+  consumedMilligrams      BigInt?                    @map("consumed_milligrams")
+  status                  InventoryReservationStatus @default(RESERVED)
+  expiresAt               DateTime                   @map("expires_at") @db.Timestamptz(3)
+  createdAt               DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  node                  Node                  @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  productionReservation ProductionReservation @relation(fields: [productionReservationId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  inventory             Inventory             @relation(fields: [inventoryId, nodeId], references: [id, nodeId], onDelete: Restrict)
+
+  @@unique([id, nodeId])
+  @@unique([productionReservationId, nodeId])
+  @@index([nodeId, inventoryId, status, expiresAt])
+  @@map("inventory_reservations")
+}
+
+model CapacityReservation {
+  id                          String                    @id @default(uuid()) @db.Uuid
+  nodeId                      String                    @map("node_id") @db.Uuid
+  productionReservationId     String                    @map("production_reservation_id") @db.Uuid
+  candidateCapacityIntervalId String                    @map("candidate_capacity_interval_id") @db.Uuid
+  machineId                   String                    @map("machine_id") @db.Uuid
+  startsAt                    DateTime                  @map("starts_at") @db.Timestamptz(3)
+  endsAt                      DateTime                  @map("ends_at") @db.Timestamptz(3)
+  status                      CapacityReservationStatus @default(RESERVED)
+  expiresAt                   DateTime                  @map("expires_at") @db.Timestamptz(3)
+  createdAt                   DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                   DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  node                      Node                      @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  productionReservation     ProductionReservation     @relation(fields: [productionReservationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  candidateCapacityInterval CandidateCapacityInterval @relation(fields: [candidateCapacityIntervalId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  machine                   Machine                   @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+
+  @@unique([id, nodeId])
+  @@unique([productionReservationId, candidateCapacityIntervalId])
+  @@index([nodeId, machineId, status, startsAt, endsAt])
+  @@index([nodeId, candidateCapacityIntervalId])
+  @@index([expiresAt, status])
+  @@map("capacity_reservations")
+}
+
+model OutboxMessage {
+  id               String       @id @default(uuid()) @db.Uuid
+  deduplicationKey String       @unique @map("deduplication_key") @db.VarChar(255)
+  aggregateType    String       @map("aggregate_type") @db.VarChar(100)
+  aggregateId      String       @map("aggregate_id") @db.Uuid
+  messageType      String       @map("message_type") @db.VarChar(150)
+  schemaVersion    Int          @map("schema_version")
+  payload          Json         @db.JsonB
+  status           OutboxStatus @default(PENDING)
+  attempts         Int          @default(0)
+  availableAt      DateTime     @default(now()) @map("available_at") @db.Timestamptz(3)
+  lockedAt         DateTime?    @map("locked_at") @db.Timestamptz(3)
+  deliveredAt      DateTime?    @map("delivered_at") @db.Timestamptz(3)
+  lastError        String?      @map("last_error") @db.Text
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+  @@map("outbox_messages")
+}
+
+model IdempotencyRecord {
+  id                 String            @id @default(uuid()) @db.Uuid
+  namespace          String            @db.VarChar(100)
+  idempotencyKey     String            @map("idempotency_key") @db.VarChar(255)
+  requestFingerprint String            @map("request_fingerprint") @db.VarChar(64)
+  status             IdempotencyStatus @default(PROCESSING)
+  responseStatusCode Int?              @map("response_status_code")
+  responseBody       Json?             @map("response_body") @db.JsonB
+  expiresAt          DateTime          @map("expires_at") @db.Timestamptz(3)
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([namespace, idempotencyKey])
+  @@index([expiresAt])
+  @@map("idempotency_records")
 }

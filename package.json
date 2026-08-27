@@ -58,6 +58,7 @@
     "openapi:generate": "pnpm -C apps/backend db:generate && pnpm -C apps/backend openapi:export && pnpm -C packages/openapi generate",
     "db:migrate": "pnpm -C apps/backend db:migrate",
     "db:migrate:deploy": "pnpm -C apps/backend db:migrate:deploy",
+    "db:seed": "pnpm -C apps/backend db:seed",
     "db:studio": "pnpm -C apps/backend db:studio"
   },
   "devDependencies": {
