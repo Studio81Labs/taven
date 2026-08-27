@@ -239,7 +239,7 @@ model PreflightFinding {
   modelFile     ModelFile      @relation(fields: [modelFileId], references: [id], onDelete: Restrict)
   modelGeometry ModelGeometry? @relation(fields: [modelGeometryId, modelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
 
-  @@unique([modelFileId, inspectionRevision, code])
+  @@unique([modelGeometryId, inspectionRevision, code], map: "preflight_findings_geometry_scope_key")
   @@index([modelGeometryId])
   @@index([severity, acknowledgedAt])
   @@map("preflight_findings")

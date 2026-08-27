@@ -488,6 +488,183 @@ describe("persistence foundations", () => {
     );
   });
 
+  it("deduplicates preflight findings at their file or geometry scope", async () => {
+    const insertFinding = (
+      client: PoolClient,
+      fixtures: PersistenceFactory,
+      foundation: PersistenceFoundation,
+      name: string,
+      geometryId: string | null,
+    ) =>
+      client.query(
+        'INSERT INTO "preflight_findings" ("id", "model_file_id", "model_geometry_id", "inspection_revision", "code", "severity", "message") VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [
+          fixtures.id(`${name}:finding`),
+          foundation.modelFileId,
+          geometryId,
+          "inspection-v1",
+          "thin-wall",
+          "WARNING",
+          "Thin wall detected",
+        ],
+      );
+
+    await inRollbackTransaction(
+      "preflight-geometry-scope",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const secondGeometryId = fixtures.id("second-geometry");
+        await client.query(
+          'INSERT INTO "model_geometries" ("id", "source_model_file_id", "canonical_object_key", "geometry_hash", "canonicalizer_revision", "volume_cubic_micrometers", "bounds_x_micrometers", "bounds_y_micrometers", "bounds_z_micrometers", "triangle_count") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+          [
+            secondGeometryId,
+            foundation.modelFileId,
+            `canonical/${secondGeometryId}`,
+            "5".repeat(64),
+            "test",
+            1,
+            1,
+            1,
+            1,
+            1,
+          ],
+        );
+
+        await insertFinding(
+          client,
+          fixtures,
+          foundation,
+          "first-geometry",
+          foundation.modelGeometryId,
+        );
+        await expect(
+          insertFinding(
+            client,
+            fixtures,
+            foundation,
+            "second-geometry",
+            secondGeometryId,
+          ),
+        ).resolves.toBeDefined();
+        await expect(
+          insertFinding(
+            client,
+            fixtures,
+            foundation,
+            "duplicate-first-geometry",
+            foundation.modelGeometryId,
+          ),
+        ).rejects.toMatchObject({
+          code: "23505",
+          constraint: "preflight_findings_geometry_scope_key",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "preflight-file-scope",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        await insertFinding(client, fixtures, foundation, "file", null);
+        await expect(
+          insertFinding(
+            client,
+            fixtures,
+            foundation,
+            "geometry",
+            foundation.modelGeometryId,
+          ),
+        ).resolves.toBeDefined();
+        await expect(
+          insertFinding(client, fixtures, foundation, "duplicate-file", null),
+        ).rejects.toMatchObject({
+          code: "23505",
+          constraint: "preflight_findings_file_scope_key",
+        });
+      },
+    );
+  });
+
+  it("keeps delivered outbox messages terminal", async () => {
+    const createDeliveredMessage = async (
+      client: PoolClient,
+      fixtures: PersistenceFactory,
+      name: string,
+    ) => {
+      const messageId = fixtures.id(`${name}:message`);
+      const deliveredAt = new Date(testTimes.createdAt.getTime() + 1_000);
+      await client.query(
+        'INSERT INTO "outbox_messages" ("id", "deduplication_key", "aggregate_type", "aggregate_id", "message_type", "schema_version", "payload", "available_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)',
+        [
+          messageId,
+          `outbox-${messageId}`,
+          "Order",
+          fixtures.id(`${name}:aggregate`),
+          "order.accepted",
+          1,
+          JSON.stringify({}),
+          testTimes.createdAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
+        ],
+      );
+      await client.query(
+        'UPDATE "outbox_messages" SET "status" = $2, "delivered_at" = $3, "updated_at" = $3 WHERE "id" = $1',
+        [messageId, "DELIVERED", deliveredAt],
+      );
+      return { messageId, deliveredAt };
+    };
+
+    await inRollbackTransaction(
+      "outbox-delivered-requeue",
+      async (client, fixtures) => {
+        const { messageId } = await createDeliveredMessage(
+          client,
+          fixtures,
+          "requeue",
+        );
+
+        await expect(
+          client.query(
+            'UPDATE "outbox_messages" SET "attempts" = "attempts" + 1, "updated_at" = $2 WHERE "id" = $1',
+            [messageId, testTimes.expiresAt],
+          ),
+        ).resolves.toBeDefined();
+
+        await expect(
+          client.query(
+            'UPDATE "outbox_messages" SET "status" = $2, "delivered_at" = NULL, "updated_at" = $3 WHERE "id" = $1',
+            [messageId, "PENDING", testTimes.expiresAt],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "outbox_messages_delivered_terminal_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "outbox-delivery-marker",
+      async (client, fixtures) => {
+        const { messageId } = await createDeliveredMessage(
+          client,
+          fixtures,
+          "marker",
+        );
+
+        await expect(
+          client.query(
+            'UPDATE "outbox_messages" SET "delivered_at" = $2, "updated_at" = $2 WHERE "id" = $1',
+            [messageId, testTimes.expiresAt],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "outbox_messages_delivered_terminal_check",
+        });
+      },
+    );
+  });
+
   it("allows identical canonical geometry under distinct source files", async () => {
     await inRollbackTransaction(
       "duplicate-geometry-hash",

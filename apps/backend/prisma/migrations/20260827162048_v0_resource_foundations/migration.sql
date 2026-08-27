@@ -516,7 +516,12 @@ CREATE INDEX "preflight_findings_model_geometry_id_idx" ON "preflight_findings"(
 CREATE INDEX "preflight_findings_severity_acknowledged_at_idx" ON "preflight_findings"("severity", "acknowledged_at");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "preflight_findings_model_file_id_inspection_revision_code_key" ON "preflight_findings"("model_file_id", "inspection_revision", "code");
+CREATE UNIQUE INDEX "preflight_findings_geometry_scope_key"
+    ON "preflight_findings"("model_geometry_id", "inspection_revision", "code");
+
+CREATE UNIQUE INDEX "preflight_findings_file_scope_key"
+    ON "preflight_findings"("model_file_id", "inspection_revision", "code")
+    WHERE "model_geometry_id" IS NULL;
 
 -- CreateIndex
 CREATE UNIQUE INDEX "photo_assets_storage_object_key_key" ON "photo_assets"("storage_object_key");
@@ -1721,6 +1726,27 @@ CREATE TRIGGER "outbox_messages_payload_immutable"
 CREATE TRIGGER "idempotency_records_request_immutable"
     BEFORE UPDATE OR DELETE ON "idempotency_records"
     FOR EACH ROW EXECUTE FUNCTION taven_protect_row_payload('status,response_status_code,response_body,expires_at,updated_at');
+
+CREATE FUNCTION taven_protect_delivered_outbox_message()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD."status" = 'DELIVERED' AND (
+        NEW."status" IS DISTINCT FROM OLD."status" OR
+        NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+    ) THEN
+        RAISE EXCEPTION 'delivered outbox message % cannot be requeued or redelivered', OLD."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'outbox_messages_delivered_terminal_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "outbox_messages_delivered_terminal"
+    BEFORE UPDATE ON "outbox_messages"
+    FOR EACH ROW EXECUTE FUNCTION taven_protect_delivered_outbox_message();
 
 CREATE FUNCTION taven_validate_reservation_lifecycle()
 RETURNS trigger

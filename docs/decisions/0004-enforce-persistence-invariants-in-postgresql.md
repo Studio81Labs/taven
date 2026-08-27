@@ -51,11 +51,14 @@ required and cannot be replaced by a hash-only association. Source-derived
 records carry the source-file identity needed to enforce the same lineage.
 Geometry hashes are indexed for cache lookup but are not globally unique,
 because identical bodies uploaded as distinct source files retain distinct
-lineage and retention records. A geometry can be created or used by a new
-slice/estimate only while its source deadline is in the future or an explicit
-retention hold is active. Source cleanup propagates the source deletion
-timestamp to an immutable geometry deletion marker, retaining hashes and
-lineage for audit while preventing further reconstructed use.
+lineage and retention records. File-level preflight findings deduplicate by
+file, inspection revision, and code; geometry-level findings add the geometry
+identity so the same finding code can be retained for multiple bodies in one
+STEP or 3MF upload. A geometry can be created or used by a new slice/estimate
+only while its source deadline is in the future or an explicit retention hold
+is active. Source cleanup propagates the source deletion timestamp to an
+immutable geometry deletion marker, retaining hashes and lineage for audit
+while preventing further reconstructed use.
 Row checks require an upload timestamp and a deletion deadline, with the
 deadline no earlier than the upload/creation instant. An upload cannot become
 persisted without its initial deadline.
@@ -65,7 +68,9 @@ hold or legal hold may extend the deadline, but a write cannot shorten it,
 clear required source lineage, or remove the deadline. Cleanup is an
 outbox-driven backend side effect; the database remains authoritative for the
 deadline and hold state. Object deletion therefore cannot be justified by a
-stale deadline copied by a worker.
+stale deadline copied by a worker. Once an outbox message is delivered, its
+status and delivery timestamp are terminal so a retry or administrative write
+cannot requeue the same side effect.
 
 ### Node scope and declarative constraints
 
