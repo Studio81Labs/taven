@@ -128,10 +128,13 @@ within a resource plan that is still current at insertion and confirmation
 time, and all production, inventory, and capacity children share the set
 expiry. Terminal parent states cannot retain or later acquire active children.
 Reservation rows must start at their lifecycle entry states before following
-the allowed transition graph. A held set remains valid after its checkout TTL
-because it is then governed by the active phase's operational deadline.
-Deferral permits one confirming transaction to insert the set and all children
-together; it does not make a partial set valid across transactions.
+the allowed transition graph. `BUILDING` is transaction-local and cannot
+survive commit. A reserved set requires every child to remain reserved; a held
+set may mix fully live and fully terminal job-resource groups while at least
+one group remains live. A held set remains valid after its checkout TTL because
+it is then governed by the active phase's operational deadline. Deferral permits
+one confirming transaction to insert the set and all children together; it does
+not make a partial set valid across transactions.
 
 ### Immutable inputs and snapshots
 

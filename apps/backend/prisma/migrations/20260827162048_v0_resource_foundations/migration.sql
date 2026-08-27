@@ -1952,6 +1952,11 @@ BEGIN
         RETURN;
     END IF;
 
+    IF target_set."status" = 'BUILDING' THEN
+        RAISE EXCEPTION 'building phase reservation set % cannot survive the transaction', target_set."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_building_commit_check';
+    END IF;
+
     IF target_set."status" IN ('SETTLED', 'RELEASED', 'EXPIRED') THEN
         IF EXISTS (
             SELECT 1
@@ -1982,6 +1987,111 @@ BEGIN
 
     IF target_set."status" NOT IN ('RESERVED', 'HELD') THEN
         RETURN;
+    END IF;
+
+    IF (
+        target_set."status" = 'RESERVED' AND (
+            EXISTS (
+                SELECT 1
+                FROM "production_reservations"
+                WHERE "phase_reservation_set_id" = target_set."id"
+                  AND "status" <> 'RESERVED'
+            ) OR EXISTS (
+                SELECT 1
+                FROM "production_reservations" production
+                JOIN "inventory_reservations" inventory_reservation
+                  ON inventory_reservation."production_reservation_id" = production."id"
+                WHERE production."phase_reservation_set_id" = target_set."id"
+                  AND inventory_reservation."status" <> 'RESERVED'
+            ) OR EXISTS (
+                SELECT 1
+                FROM "production_reservations" production
+                JOIN "capacity_reservations" capacity_reservation
+                  ON capacity_reservation."production_reservation_id" = production."id"
+                WHERE production."phase_reservation_set_id" = target_set."id"
+                  AND capacity_reservation."status" <> 'RESERVED'
+            )
+        )
+    ) OR (
+        target_set."status" = 'HELD' AND (
+            EXISTS (
+                SELECT 1
+                FROM "production_reservations" production
+                WHERE production."phase_reservation_set_id" = target_set."id"
+                  AND NOT (
+                      (
+                          production."status" IN ('HELD', 'SCHEDULED', 'PRINTING')
+                          AND EXISTS (
+                              SELECT 1
+                              FROM "inventory_reservations" inventory_reservation
+                              WHERE inventory_reservation."production_reservation_id" = production."id"
+                                AND inventory_reservation."status" IN ('HELD', 'ALLOCATED')
+                          )
+                          AND EXISTS (
+                              SELECT 1
+                              FROM "capacity_reservations" capacity_reservation
+                              WHERE capacity_reservation."production_reservation_id" = production."id"
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM "capacity_reservations" capacity_reservation
+                              WHERE capacity_reservation."production_reservation_id" = production."id"
+                                AND capacity_reservation."status" NOT IN ('HELD', 'SCHEDULED', 'PRINTING')
+                          )
+                      ) OR (
+                          production."status" IN ('CONSUMED', 'RELEASED', 'EXPIRED')
+                          AND EXISTS (
+                              SELECT 1
+                              FROM "inventory_reservations" inventory_reservation
+                              WHERE inventory_reservation."production_reservation_id" = production."id"
+                                AND inventory_reservation."status" IN ('CONSUMED', 'RELEASED', 'EXPIRED')
+                          )
+                          AND EXISTS (
+                              SELECT 1
+                              FROM "capacity_reservations" capacity_reservation
+                              WHERE capacity_reservation."production_reservation_id" = production."id"
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM "capacity_reservations" capacity_reservation
+                              WHERE capacity_reservation."production_reservation_id" = production."id"
+                                AND capacity_reservation."status" NOT IN ('COMPLETED', 'RELEASED', 'EXPIRED')
+                          )
+                      )
+                  )
+            ) OR (
+                EXISTS (
+                    SELECT 1
+                    FROM "production_reservations"
+                    WHERE "phase_reservation_set_id" = target_set."id"
+                ) AND NOT EXISTS (
+                    SELECT 1
+                    FROM "production_reservations" production
+                    WHERE production."phase_reservation_set_id" = target_set."id"
+                      AND production."status" IN ('HELD', 'SCHEDULED', 'PRINTING')
+                      AND EXISTS (
+                          SELECT 1
+                          FROM "inventory_reservations" inventory_reservation
+                          WHERE inventory_reservation."production_reservation_id" = production."id"
+                            AND inventory_reservation."status" IN ('HELD', 'ALLOCATED')
+                      )
+                      AND EXISTS (
+                          SELECT 1
+                          FROM "capacity_reservations" capacity_reservation
+                          WHERE capacity_reservation."production_reservation_id" = production."id"
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM "capacity_reservations" capacity_reservation
+                          WHERE capacity_reservation."production_reservation_id" = production."id"
+                            AND capacity_reservation."status" NOT IN ('HELD', 'SCHEDULED', 'PRINTING')
+                      )
+                )
+            )
+        )
+    ) THEN
+        RAISE EXCEPTION 'phase reservation set % has child states outside its lifecycle phase', target_set."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_child_status_check';
     END IF;
 
     IF target_set."status" = 'RESERVED' AND (
@@ -2036,7 +2146,6 @@ BEGIN
      AND production."required_material_milligrams" = candidate."required_material_milligrams"
      AND production."required_machine_seconds" = candidate."required_machine_seconds"
      AND production."expires_at" = target_set."expires_at"
-     AND production."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
     JOIN "slice_results" slice_result
       ON slice_result."id" = production."slice_result_id"
      AND slice_result."kind" = 'PRODUCTION'
@@ -2049,7 +2158,6 @@ BEGIN
      AND inventory_reservation."inventory_id" = production."inventory_id"
      AND inventory_reservation."reserved_milligrams" = production."required_material_milligrams"
      AND inventory_reservation."expires_at" = production."expires_at"
-     AND inventory_reservation."status" IN ('RESERVED', 'HELD', 'ALLOCATED')
     WHERE plan_job."phase_resource_plan_id" = target_set."phase_resource_plan_id"
       AND plan_job."node_id" = target_set."node_id"
       AND EXISTS (
@@ -2069,7 +2177,6 @@ BEGIN
            AND capacity_reservation."starts_at" = candidate_interval."starts_at"
            AND capacity_reservation."ends_at" = candidate_interval."ends_at"
            AND capacity_reservation."expires_at" = production."expires_at"
-           AND capacity_reservation."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
           WHERE candidate_interval."candidate_resource_estimate_id" = candidate."id"
             AND candidate_interval."node_id" = candidate."node_id"
             AND capacity_reservation."id" IS NULL
@@ -2082,7 +2189,6 @@ BEGIN
            AND candidate_interval."candidate_resource_estimate_id" = candidate."id"
            AND candidate_interval."node_id" = candidate."node_id"
           WHERE capacity_reservation."production_reservation_id" = production."id"
-            AND capacity_reservation."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
             AND candidate_interval."id" IS NULL
       );
 
