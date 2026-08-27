@@ -1978,6 +1978,76 @@ function requireShipmentCancellationReleased<S extends string>(
   );
 }
 
+function requireExactVerifiedProviderVoid<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const shipmentId = context?.shipmentId;
+  const labelId = context?.carrierLabelId;
+  const expectedShipmentId = context?.shipmentCancellationExpectedShipmentId;
+  const expectedLabelId = context?.shipmentCancellationExpectedCarrierLabelId;
+  const outboxId = context?.providerVoidOutboxId;
+  const eventId = context?.providerVoidEventId;
+  const transactionId = context?.providerVoidTransactionId;
+  const cancellationResultId = context?.shipmentCancellationResultId;
+  const payload = context?.providerVoidOutboxPayload;
+  const payloadRecord =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as Readonly<Record<string, unknown>>)
+      : undefined;
+  const expectedIdempotencyKey =
+    nonBlank(expectedShipmentId) && nonBlank(expectedLabelId)
+      ? `void_carrier_label:${expectedShipmentId}:${expectedLabelId}`
+      : undefined;
+  if (
+    !nonBlank(shipmentId) ||
+    !nonBlank(labelId) ||
+    !nonBlank(expectedShipmentId) ||
+    !nonBlank(expectedLabelId) ||
+    shipmentId !== expectedShipmentId ||
+    labelId !== expectedLabelId ||
+    !nonBlank(outboxId) ||
+    !nonBlank(eventId) ||
+    !nonBlank(transactionId) ||
+    !nonBlank(cancellationResultId) ||
+    context?.providerVoidOutboxResultId !== cancellationResultId ||
+    context?.providerVoidOutboxIdempotencyKey !== expectedIdempotencyKey ||
+    context?.providerVoidOutboxLabelId !== expectedLabelId ||
+    context?.providerVoidOutboxPayloadShipmentId !== expectedShipmentId ||
+    context?.providerVoidOutboxPayloadCarrierLabelId !== expectedLabelId ||
+    context?.providerVoidOutboxPayloadAction !== "void_carrier_label" ||
+    payloadRecord?.shipmentId !== expectedShipmentId ||
+    payloadRecord?.carrierLabelId !== expectedLabelId ||
+    payloadRecord?.action !== "void_carrier_label" ||
+    context?.providerVoidOutboxShipmentId !== shipmentId ||
+    context?.providerVoidOutboxCarrierLabelId !== labelId ||
+    context?.providerVoidOutboxLabelId !== labelId ||
+    context?.providerVoidEventShipmentId !== shipmentId ||
+    context?.providerVoidEventLabelId !== labelId ||
+    context?.providerVoidEventOutboxId !== outboxId ||
+    context?.providerVoidTransactionShipmentId !== shipmentId ||
+    context?.providerVoidTransactionLabelId !== labelId ||
+    context?.providerVoidTransactionOutboxId !== outboxId ||
+    context?.providerVoidEventTransactionId !== transactionId ||
+    context?.providerVoidOutboxPreviousStatus !== "pending" ||
+    context?.providerVoidOutboxTargetStatus !== "succeeded" ||
+    context?.providerVoidEventStatus !== "succeeded" ||
+    context?.providerVoidTransactionStatus !== "succeeded" ||
+    context?.providerVoidEventAuthenticated !== true ||
+    context?.providerVoidResultVerified !== true ||
+    context?.shipmentCancellationReleaseAtomic !== true
+  )
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "cancellation requires the exact authenticated successful provider void and outbox chain",
+    );
+}
+
 function requireVerifiedMatchingProviderShipmentEvent<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -3706,6 +3776,73 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
   );
 }
 
+function requireExactShipmentCancellationRequest<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const shipmentId = context?.shipmentId;
+  const carrierLabelId = context?.carrierLabelId;
+  const expectedShipmentId = context?.shipmentCancellationExpectedShipmentId;
+  const expectedCarrierLabelId =
+    context?.shipmentCancellationExpectedCarrierLabelId;
+  const expectedIdempotencyKey =
+    typeof shipmentId === "string" && typeof carrierLabelId === "string"
+      ? `void_carrier_label:${shipmentId}:${carrierLabelId}`
+      : undefined;
+  const payload = context?.providerVoidOutboxPayload;
+  const payloadRecord =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as Readonly<Record<string, unknown>>)
+      : undefined;
+  const cancellationResultId = context?.shipmentCancellationResultId;
+  if (
+    typeof shipmentId !== "string" ||
+    shipmentId.trim().length === 0 ||
+    typeof expectedShipmentId !== "string" ||
+    expectedShipmentId.trim().length === 0 ||
+    shipmentId !== expectedShipmentId ||
+    context?.shipmentCancellationShipmentId !== shipmentId ||
+    typeof carrierLabelId !== "string" ||
+    carrierLabelId.trim().length === 0 ||
+    typeof expectedCarrierLabelId !== "string" ||
+    expectedCarrierLabelId.trim().length === 0 ||
+    carrierLabelId !== expectedCarrierLabelId ||
+    !nonBlank(cancellationResultId) ||
+    context?.shipmentCarrierLabelId !== carrierLabelId ||
+    context?.carrierLabelInvalidationShipmentId !== shipmentId ||
+    context?.carrierLabelInvalidationLabelId !== carrierLabelId ||
+    context?.carrierLabelInvalidationStatusBefore !== "usable" ||
+    context?.carrierLabelInvalidationStatusAfter !== "invalidated" ||
+    context?.carrierLabelInvalidationResultId !== cancellationResultId ||
+    context?.providerVoidOutboxId === undefined ||
+    typeof context?.providerVoidOutboxId !== "string" ||
+    context?.providerVoidOutboxId.trim().length === 0 ||
+    context?.providerVoidOutboxShipmentId !== shipmentId ||
+    context?.providerVoidOutboxCarrierLabelId !== carrierLabelId ||
+    context?.providerVoidOutboxLabelId !== carrierLabelId ||
+    context?.providerVoidOutboxIdempotencyKey !== expectedIdempotencyKey ||
+    context?.providerVoidOutboxStatus !== "pending" ||
+    context?.providerVoidOutboxPayloadShipmentId !== shipmentId ||
+    context?.providerVoidOutboxPayloadCarrierLabelId !== carrierLabelId ||
+    context?.providerVoidOutboxPayloadAction !== "void_carrier_label" ||
+    payloadRecord?.shipmentId !== shipmentId ||
+    payloadRecord?.carrierLabelId !== carrierLabelId ||
+    payloadRecord?.action !== "void_carrier_label" ||
+    context?.providerVoidOutboxResultId !== cancellationResultId ||
+    context?.shipmentCancellationAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Shipment cancellation requires exact carrier-label invalidation and durable provider-void outbox evidence",
+    );
+  }
+}
+
 function requireAtomicOrdinaryHandoff<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -4166,18 +4303,7 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
       command.current === "label_created" &&
       command.target === "cancellation_pending"
     ) {
-      requireFlag(
-        "Shipment",
-        command,
-        "labelInvalidated",
-        "cancellation requires the carrier label to be invalidated",
-      );
-      requireFlag(
-        "Shipment",
-        command,
-        "providerVoidOutboxCreated",
-        "cancellation requires the provider void command to be persisted",
-      );
+      requireExactShipmentCancellationRequest("Shipment", command);
     }
     if (
       command.current === "label_created" &&
@@ -4196,12 +4322,7 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
       command.current === "cancellation_pending" &&
       command.target === "cancelled"
     ) {
-      requireFlag(
-        "Shipment",
-        command,
-        "verifiedProviderVoid",
-        "cancellation requires the provider to verify its void result",
-      );
+      requireExactVerifiedProviderVoid("Shipment", command);
       requireShipmentCancellationReleased("Shipment", command);
     }
     if (command.current === "handed_over" && command.target === "in_transit") {

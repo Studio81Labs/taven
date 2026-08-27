@@ -245,6 +245,50 @@ const permittedContext = {
   shipmentLineageLeafSetComplete: true,
   verifiedProviderScan: true,
   verifiedProviderVoid: true,
+  shipmentId: "shipment-1",
+  carrierLabelId: "label-1",
+  shipmentCancellationExpectedShipmentId: "shipment-1",
+  shipmentCancellationExpectedCarrierLabelId: "label-1",
+  shipmentCancellationShipmentId: "shipment-1",
+  shipmentCarrierLabelId: "label-1",
+  shipmentCancellationResultId: "shipment-cancellation-1",
+  carrierLabelInvalidationShipmentId: "shipment-1",
+  carrierLabelInvalidationLabelId: "label-1",
+  carrierLabelInvalidationStatusBefore: "usable",
+  carrierLabelInvalidationStatusAfter: "invalidated",
+  carrierLabelInvalidationResultId: "shipment-cancellation-1",
+  providerVoidOutboxId: "void-outbox-1",
+  providerVoidOutboxShipmentId: "shipment-1",
+  providerVoidOutboxCarrierLabelId: "label-1",
+  providerVoidOutboxIdempotencyKey: "void_carrier_label:shipment-1:label-1",
+  providerVoidOutboxStatus: "pending",
+  providerVoidOutboxPayloadShipmentId: "shipment-1",
+  providerVoidOutboxPayloadCarrierLabelId: "label-1",
+  providerVoidOutboxPayloadAction: "void_carrier_label",
+  providerVoidOutboxPayload: {
+    action: "void_carrier_label",
+    shipmentId: "shipment-1",
+    carrierLabelId: "label-1",
+  },
+  providerVoidOutboxResultId: "shipment-cancellation-1",
+  providerVoidOutboxLabelId: "label-1",
+  providerVoidOutboxPreviousStatus: "pending",
+  providerVoidOutboxTargetStatus: "succeeded",
+  providerVoidEventId: "void-event-1",
+  providerVoidEventShipmentId: "shipment-1",
+  providerVoidEventLabelId: "label-1",
+  providerVoidEventOutboxId: "void-outbox-1",
+  providerVoidEventTransactionId: "void-transaction-1",
+  providerVoidEventStatus: "succeeded",
+  providerVoidEventAuthenticated: true,
+  providerVoidTransactionId: "void-transaction-1",
+  providerVoidTransactionShipmentId: "shipment-1",
+  providerVoidTransactionLabelId: "label-1",
+  providerVoidTransactionOutboxId: "void-outbox-1",
+  providerVoidTransactionStatus: "succeeded",
+  providerVoidResultVerified: true,
+  shipmentCancellationReleaseAtomic: true,
+  shipmentCancellationAtomic: true,
   contextHandoffCompleted: true,
   jobId: "job-1",
   jobSettlementJobId: "job-1",
@@ -693,7 +737,6 @@ const permittedContext = {
   replacementHandoffSlotSetComplete: true,
   replacementHandoffAtomic: true,
   preHandoffShipmentCancellationsCompleted: true,
-  shipmentId: "shipment-1",
   handoffShipmentId: "shipment-1",
   handoffOrderId: "order-1",
   handoffPhaseOrderId: "order-1",
@@ -2759,6 +2802,142 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it.each([
+    ["missing outbox ID", { providerVoidOutboxId: undefined }],
+    ["missing outbox payload", { providerVoidOutboxPayload: undefined }],
+    ["foreign Shipment", { shipmentCancellationShipmentId: "shipment-2" }],
+    ["foreign carrier label", { shipmentCarrierLabelId: "carrier-label-2" }],
+    [
+      "foreign invalidation Shipment",
+      { carrierLabelInvalidationShipmentId: "shipment-2" },
+    ],
+    [
+      "foreign invalidation label",
+      { carrierLabelInvalidationLabelId: "carrier-label-2" },
+    ],
+    [
+      "wrong invalidation source status",
+      { carrierLabelInvalidationStatusBefore: "invalidated" },
+    ],
+    [
+      "wrong invalidation target status",
+      { carrierLabelInvalidationStatusAfter: "usable" },
+    ],
+    [
+      "wrong outbox key",
+      { providerVoidOutboxIdempotencyKey: "void_carrier_label:other" },
+    ],
+    ["foreign outbox Shipment", { providerVoidOutboxShipmentId: "shipment-2" }],
+    [
+      "foreign outbox label",
+      { providerVoidOutboxCarrierLabelId: "carrier-label-2" },
+    ],
+    ["wrong outbox status", { providerVoidOutboxStatus: "sent" }],
+    [
+      "foreign payload Shipment",
+      { providerVoidOutboxPayloadShipmentId: "shipment-2" },
+    ],
+    [
+      "foreign payload label",
+      { providerVoidOutboxPayloadCarrierLabelId: "carrier-label-2" },
+    ],
+    [
+      "wrong payload",
+      {
+        providerVoidOutboxPayload: {
+          shipmentId: "shipment-2",
+          carrierLabelId: "carrier-label-2",
+        },
+      },
+    ],
+    [
+      "wrong result",
+      { providerVoidOutboxResultId: "another-cancellation-result" },
+    ],
+    ["non-atomic persistence", { shipmentCancellationAtomic: false }],
+  ] as const)("rejects label cancellation with %s", (_case, invalid) => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        current: "label_created",
+        target: "cancellation_pending",
+        idempotencyKey: `shipment-cancellation-invalid-${_case}`,
+        context: {
+          ...contextForTransition("cancellation_pending", "label_created"),
+          ...invalid,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("replays label cancellation with the same durable outbox evidence", () => {
+    const command = {
+      current: "label_created" as const,
+      target: "cancellation_pending" as const,
+      idempotencyKey: "shipment-cancellation-replay",
+      context: contextForTransition("cancellation_pending", "label_created"),
+    };
+    expect(transition(shipmentPolicy, command)).toEqual({
+      kind: "changed",
+      previous: "label_created",
+      current: "cancellation_pending",
+    });
+    expect(transition(shipmentPolicy, command)).toEqual({
+      kind: "changed",
+      previous: "label_created",
+      current: "cancellation_pending",
+    });
+  });
+
+  it("does not reuse label cancellation evidence for another parcel", () => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        current: "label_created",
+        target: "cancellation_pending",
+        idempotencyKey: "shipment-cancellation-foreign-parcel",
+        context: {
+          ...contextForTransition("cancellation_pending", "label_created"),
+          shipmentId: "shipment-2",
+          carrierLabelId: "carrier-label-2",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects coordinated cancellation evidence for a foreign Shipment and label", () => {
+    const base = contextForTransition("cancellation_pending", "label_created");
+    expect(() =>
+      transition(shipmentPolicy, {
+        current: "label_created",
+        target: "cancellation_pending",
+        idempotencyKey: "shipment-cancellation-coordinated-foreign",
+        context: {
+          ...base,
+          shipmentId: "shipment-2",
+          carrierLabelId: "label-2",
+          shipmentCancellationShipmentId: "shipment-2",
+          shipmentCarrierLabelId: "label-2",
+          carrierLabelInvalidationShipmentId: "shipment-2",
+          carrierLabelInvalidationLabelId: "label-2",
+          carrierLabelInvalidationResultId: "shipment-cancellation-2",
+          shipmentCancellationResultId: "shipment-cancellation-2",
+          providerVoidOutboxId: "void-outbox-2",
+          providerVoidOutboxShipmentId: "shipment-2",
+          providerVoidOutboxCarrierLabelId: "label-2",
+          providerVoidOutboxIdempotencyKey:
+            "void_carrier_label:shipment-2:label-2",
+          providerVoidOutboxPayloadShipmentId: "shipment-2",
+          providerVoidOutboxPayloadCarrierLabelId: "label-2",
+          providerVoidOutboxPayload: {
+            action: "void_carrier_label",
+            shipmentId: "shipment-2",
+            carrierLabelId: "label-2",
+          },
+          providerVoidOutboxResultId: "shipment-cancellation-2",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it("does not reuse one Shipment scan to win another cancellation race", () => {
     expect(() =>
       transition(shipmentPolicy, {
@@ -3004,12 +3183,95 @@ describe("v0 lifecycle policy tables", () => {
         target: "cancelled",
         idempotencyKey: "provider-void-verified",
         context: {
+          ...permittedContext,
           verifiedProviderVoid: true,
           shipmentJobsAndReservationsReleased: true,
           parentCancellationBarrierReleased: true,
         },
       }),
     ).toEqual({
+      kind: "changed",
+      previous: "cancellation_pending",
+      current: "cancelled",
+    });
+  });
+
+  it.each([
+    [
+      "missing shared cancellation result",
+      { shipmentCancellationResultId: undefined },
+    ],
+    [
+      "mismatched shared cancellation result",
+      { shipmentCancellationResultId: "another-cancellation-result" },
+    ],
+    [
+      "mismatched outbox result",
+      { providerVoidOutboxResultId: "another-cancellation-result" },
+    ],
+    [
+      "wrong persisted outbox key",
+      {
+        providerVoidOutboxIdempotencyKey:
+          "void_carrier_label:shipment-2:label-2",
+      },
+    ],
+    [
+      "wrong persisted outbox payload",
+      {
+        providerVoidOutboxPayload: {
+          action: "void_carrier_label",
+          shipmentId: "shipment-2",
+          carrierLabelId: "label-2",
+        },
+      },
+    ],
+    ["foreign label", { providerVoidEventLabelId: "label-2" }],
+    ["foreign outbox shipment", { providerVoidOutboxShipmentId: "shipment-2" }],
+    ["blank event", { providerVoidEventId: " " }],
+    ["unauthenticated event", { providerVoidEventAuthenticated: false }],
+    ["pending transaction", { providerVoidTransactionStatus: "pending" }],
+    ["failed outbox", { providerVoidOutboxTargetStatus: "failed" }],
+    [
+      "foreign transaction",
+      { providerVoidEventTransactionId: "void-transaction-2" },
+    ],
+  ] as const)(
+    "rejects provider-void cancellation evidence with %s",
+    (_case, invalid) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          current: "cancellation_pending",
+          target: "cancelled",
+          idempotencyKey: `provider-void-invalid-${_case}`,
+          context: {
+            ...permittedContext,
+            ...invalid,
+            shipmentJobsAndReservationsReleased: true,
+            parentCancellationBarrierReleased: true,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("replays provider-void completion with the same exact outbox result", () => {
+    const command = {
+      current: "cancellation_pending" as const,
+      target: "cancelled" as const,
+      idempotencyKey: "provider-void-completion-replay",
+      context: {
+        ...permittedContext,
+        shipmentJobsAndReservationsReleased: true,
+        parentCancellationBarrierReleased: true,
+      },
+    };
+    expect(transition(shipmentPolicy, command)).toEqual({
+      kind: "changed",
+      previous: "cancellation_pending",
+      current: "cancelled",
+    });
+    expect(transition(shipmentPolicy, command)).toEqual({
       kind: "changed",
       previous: "cancellation_pending",
       current: "cancelled",
@@ -7207,7 +7469,30 @@ describe("v0 lifecycle policy tables", () => {
       shipmentPolicy,
       "label_created",
       "cancellation_pending",
-      ["labelInvalidated", "providerVoidOutboxCreated"],
+      [
+        "shipmentCancellationShipmentId",
+        "shipmentCancellationExpectedShipmentId",
+        "shipmentCancellationExpectedCarrierLabelId",
+        "carrierLabelId",
+        "carrierLabelInvalidationShipmentId",
+        "carrierLabelInvalidationLabelId",
+        "carrierLabelInvalidationStatusBefore",
+        "carrierLabelInvalidationStatusAfter",
+        "shipmentCancellationResultId",
+        "carrierLabelInvalidationResultId",
+        "providerVoidOutboxId",
+        "providerVoidOutboxShipmentId",
+        "providerVoidOutboxCarrierLabelId",
+        "providerVoidOutboxLabelId",
+        "providerVoidOutboxIdempotencyKey",
+        "providerVoidOutboxStatus",
+        "providerVoidOutboxPayloadShipmentId",
+        "providerVoidOutboxPayloadCarrierLabelId",
+        "providerVoidOutboxPayloadAction",
+        "providerVoidOutboxPayload",
+        "providerVoidOutboxResultId",
+        "shipmentCancellationAtomic",
+      ],
     ],
     [
       shipmentPolicy,
