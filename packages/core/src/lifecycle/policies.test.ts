@@ -536,6 +536,67 @@ const permittedContext = {
   reshipmentHandoffCompleted: true,
   reshipmentAuthorizationCreated: true,
   reshipmentAuthorizationSetupAtomic: true,
+  reshipmentResolutionClaimId: "claim-1",
+  reshipmentResolutionId: "claim-resolution-1",
+  reshipmentResolutionSlotId: "claim-slot-1",
+  reshipmentResolutionOrderId: "order-1",
+  reshipmentResolutionPhaseId: "phase-1",
+  reshipmentResolutionPreviousStatus: "reship_pending",
+  reshipmentResolutionTargetStatus: "reship_shipped",
+  reshipmentOriginalShipmentId: "shipment-1",
+  reshipmentOriginalShipmentClaimId: "claim-1",
+  reshipmentOriginalShipmentResolutionId: "claim-resolution-1",
+  reshipmentOriginalShipmentSlotId: "claim-slot-1",
+  reshipmentOriginalShipmentOrderId: "order-1",
+  reshipmentOriginalShipmentPhaseId: "phase-1",
+  reshipmentShipmentId: "reship-shipment-1",
+  reshipmentNewShipmentId: "reship-shipment-1",
+  reshipmentNewShipmentClaimId: "claim-1",
+  reshipmentNewShipmentResolutionId: "claim-resolution-1",
+  reshipmentNewShipmentSlotId: "claim-slot-1",
+  reshipmentNewShipmentOrderId: "order-1",
+  reshipmentNewShipmentPhaseId: "phase-1",
+  reshipmentAuthorizationId: "reship-authorization-1",
+  reshipmentCustodyAuthorizationId: "reship-authorization-1",
+  reshipmentAuthorizationClaimId: "claim-1",
+  reshipmentAuthorizationResolutionId: "claim-resolution-1",
+  reshipmentAuthorizationSlotId: "claim-slot-1",
+  reshipmentAuthorizationOrderId: "order-1",
+  reshipmentAuthorizationPhaseId: "phase-1",
+  reshipmentAuthorizationOriginalShipmentId: "shipment-1",
+  reshipmentAuthorizationNewShipmentId: "reship-shipment-1",
+  reshipmentAuthorizationStatusBefore: "issued",
+  reshipmentAuthorizationStatusAfter: "consumed",
+  reshipmentConsumedAuthorizationId: "reship-authorization-1",
+  reshipmentConsumedAuthorizationClaimId: "claim-1",
+  reshipmentConsumedAuthorizationResolutionId: "claim-resolution-1",
+  reshipmentConsumedAuthorizationSlotId: "claim-slot-1",
+  reshipmentConsumedAuthorizationOriginalShipmentId: "shipment-1",
+  reshipmentConsumedAuthorizationNewShipmentId: "reship-shipment-1",
+  reshipmentHandoffClaimId: "claim-1",
+  reshipmentHandoffResolutionId: "claim-resolution-1",
+  reshipmentHandoffSlotId: "claim-slot-1",
+  reshipmentHandoffOrderId: "order-1",
+  reshipmentHandoffPhaseId: "phase-1",
+  reshipmentHandoffOriginalShipmentId: "shipment-1",
+  reshipmentHandoffNewShipmentId: "reship-shipment-1",
+  reshipmentHandoffAuthorizationId: "reship-authorization-1",
+  reshipmentHandoffShipmentId: "reship-shipment-1",
+  reshipmentHandoffShipmentPreviousStatus: "label_created",
+  reshipmentHandoffShipmentTargetStatus: "handed_over",
+  reshipmentOriginalJobId: "job-1",
+  reshipmentHandoffOriginalJobId: "job-1",
+  reshipmentHandoffOriginalJobShipmentId: "shipment-1",
+  reshipmentHandoffOriginalJobClaimId: "claim-1",
+  reshipmentHandoffOriginalJobResolutionId: "claim-resolution-1",
+  reshipmentHandoffOriginalJobSlotId: "claim-slot-1",
+  reshipmentHandoffOriginalJobOrderId: "order-1",
+  reshipmentHandoffOriginalJobPhaseId: "phase-1",
+  reshipmentHandoffOriginalJobPreviousStatus: "handed_over",
+  reshipmentHandoffOriginalJobTargetStatus: "handed_over",
+  reshipmentHandoffOriginalJobTransitioned: false,
+  reshipmentHandoffShipmentOnly: true,
+  reshipmentHandoffAtomic: true,
   replacementSetProjected: true,
   replacementResourcePlanProjected: true,
   replacementReservationsCreated: true,
@@ -576,12 +637,56 @@ const permittedContext = {
   replacementSetupAtomic: true,
   replacementFulfilmentAuthorizationConsumed: true,
   replacementFulfilmentHandoffCompleted: true,
+  replacementFulfilmentAuthorizationId: "replacement-authorization-1",
+  replacementConsumedAuthorizationId: "replacement-authorization-1",
+  replacementConsumedAuthorizationClaimId: "claim-1",
+  replacementConsumedAuthorizationResolutionId: "claim-resolution-1",
+  replacementConsumedAuthorizationSetId: "replacement-set-1",
+  replacementAuthorizationStatusBefore: "issued",
+  replacementAuthorizationStatusAfter: "consumed",
+  replacementHandoffAuthorizationId: "replacement-authorization-1",
+  replacementAuthorizationClaimId: "claim-1",
+  replacementAuthorizationResolutionId: "claim-resolution-1",
+  replacementAuthorizationSetId: "replacement-set-1",
+  replacementAuthorizationSlotIds: ["claim-slot-1"],
+  replacementAuthorizationShipmentIds: ["replacement-shipment-1"],
+  replacementHandoffSlotIds: ["claim-slot-1"],
+  replacementHandoffSlotBindings: [
+    {
+      slotId: "claim-slot-1",
+      claimId: "claim-1",
+      resolutionId: "claim-resolution-1",
+      replacementSetId: "replacement-set-1",
+      replacementShipmentId: "replacement-shipment-1",
+      replacementShipmentClaimId: "claim-1",
+      replacementShipmentResolutionId: "claim-resolution-1",
+      replacementShipmentSetId: "replacement-set-1",
+      replacementShipmentSlotId: "claim-slot-1",
+      replacementShipmentPreviousStatus: "label_created",
+      replacementShipmentTargetStatus: "handed_over",
+      currentReplacementJobId: "replacement-job-1",
+      currentReplacementJobClaimId: "claim-1",
+      currentReplacementJobResolutionId: "claim-resolution-1",
+      currentReplacementJobSetId: "replacement-set-1",
+      currentReplacementJobShipmentId: "replacement-shipment-1",
+      currentReplacementJobSlotId: "claim-slot-1",
+      currentReplacementJobLineageLeaf: true,
+      currentReplacementJobPreviousStatus: "packed",
+      currentReplacementJobTargetStatus: "handed_over",
+    },
+  ],
+  replacementHandoffSlotSetComplete: true,
+  replacementHandoffAtomic: true,
   preHandoffShipmentCancellationsCompleted: true,
   shipmentId: "shipment-1",
   handoffShipmentId: "shipment-1",
   handoffOrderId: "order-1",
   handoffPhaseOrderId: "order-1",
   handoffPhaseId: "phase-1",
+  handoffOrderPreviousStatus: "ready_to_ship",
+  handoffOrderTargetStatus: "shipped",
+  handoffPhasePreviousStatus: "qc_passed",
+  handoffPhaseTargetStatus: "shipped",
   handoffShipmentPreviousStatus: "label_created",
   handoffShipmentTargetStatus: "handed_over",
   handoffJobPreviousStatus: "packed",
@@ -624,6 +729,33 @@ const permittedContext = {
   ],
   handoffCompleted: true,
   handoffAtomic: true,
+  cancellationRaceHandoffKind: "ordinary",
+  cancellationRaceHandoffResultId: "cancellation-race-result-1",
+  cancellationRaceResultKind: "ordinary",
+  cancellationRaceResultShipmentId: "shipment-1",
+  cancellationRaceResultOrderId: "order-1",
+  cancellationRaceResultPhaseId: "phase-1",
+  cancellationRaceResultProviderEventId: "shipment-provider-event-1",
+  cancellationRaceResultProviderTransactionId:
+    "shipment-provider-transaction-1",
+  cancellationRaceResultShipmentPreviousStatus: "cancellation_pending",
+  cancellationRaceResultShipmentTargetStatus: "handed_over",
+  cancellationRaceAggregateResultId: "cancellation-race-result-1",
+  cancellationRaceFinancialResultId: "cancellation-race-result-1",
+  cancellationRaceAuthorizationResultId: "cancellation-race-result-1",
+  cancellationRaceJobResultId: "cancellation-race-result-1",
+  cancellationRaceBarrierResultId: "cancellation-race-result-1",
+  cancellationRaceBarrierResultStatus: "scan_won_reconciled",
+  cancellationRaceAggregateResultStatus: "order_phase_shipped",
+  cancellationRaceFinancialResultStatus: "balances_zero",
+  cancellationRaceAuthorizationResultStatus: "ordinary_handoff_authorized",
+  cancellationRaceJobResultStatus: "complete_job_set_handed_over",
+  cancellationRaceAggregateCompleted: true,
+  cancellationRaceFinancialCompleted: true,
+  cancellationRaceAuthorizationCompleted: true,
+  cancellationRaceJobCompleted: true,
+  cancellationRaceResultCompleted: true,
+  cancellationRaceResultAtomic: true,
   incidentShipmentId: "shipment-1",
   incidentOrderId: "order-1",
   incidentPhaseId: "phase-1",
@@ -879,6 +1011,10 @@ function contextForTransition(target: string, current?: string) {
       : target === "delivered_reship" || target === "delivered_reprint"
         ? "delivered"
         : target,
+    handoffShipmentPreviousStatus:
+      current === "cancellation_pending" && target === "handed_over"
+        ? "cancellation_pending"
+        : permittedContext.handoffShipmentPreviousStatus,
     claimSlotResolutionStatuses,
     ...resolutionEvidence,
     claimRefundScopeChildren,
@@ -2211,9 +2347,21 @@ describe("v0 lifecycle policy tables", () => {
     ["foreign Shipment identity", { handoffShipmentId: "another-shipment" }],
     ["blank Order identity", { orderId: " " }],
     ["foreign Order identity", { handoffOrderId: "another-order" }],
+    ["missing Order identity", { handoffOrderId: undefined }],
     ["foreign phase owner", { handoffPhaseOrderId: "another-order" }],
+    ["missing phase owner", { handoffPhaseOrderId: undefined }],
     ["blank phase identity", { phaseId: " " }],
     ["foreign phase identity", { handoffPhaseId: "another-phase" }],
+    ["missing phase identity", { handoffPhaseId: undefined }],
+    ["wrong Order source", { handoffOrderPreviousStatus: "qc_passed" }],
+    ["wrong Order target", { handoffOrderTargetStatus: "ready_to_ship" }],
+    ["wrong phase source", { handoffPhasePreviousStatus: "active" }],
+    ["wrong phase target", { handoffPhaseTargetStatus: "qc_passed" }],
+    ["wrong phase kind", { phaseKind: "sample" }],
+    ["missing Order source", { handoffOrderPreviousStatus: undefined }],
+    ["missing Order target", { handoffOrderTargetStatus: undefined }],
+    ["missing phase source", { handoffPhasePreviousStatus: undefined }],
+    ["missing phase target", { handoffPhaseTargetStatus: undefined }],
     ["foreign Shipment slot set", { shipmentFulfilmentSlotIds: ["slot-1"] }],
     ["wrong Shipment status", { handoffShipmentPreviousStatus: "handed_over" }],
     ["wrong Job status", { handoffJobPreviousStatus: "accepted" }],
@@ -2314,7 +2462,32 @@ describe("v0 lifecycle policy tables", () => {
     ["providerEventAuthenticated", false],
     ["providerEventVerified", false],
     ["verifiedProviderScan", false],
-    ["contextHandoffCompleted", false],
+    ["cancellationRaceHandoffKind", "different_handler"],
+    ["cancellationRaceHandoffResultId", " "],
+    ["cancellationRaceResultKind", "replacement"],
+    ["cancellationRaceResultShipmentId", "another-shipment"],
+    ["cancellationRaceResultOrderId", "another-order"],
+    ["cancellationRaceResultPhaseId", "another-phase"],
+    ["cancellationRaceResultProviderEventId", "another-event"],
+    ["cancellationRaceResultProviderTransactionId", "another-transaction"],
+    ["cancellationRaceResultShipmentPreviousStatus", "label_created"],
+    ["cancellationRaceResultShipmentTargetStatus", "cancelled"],
+    ["cancellationRaceAggregateResultId", "another-result"],
+    ["cancellationRaceFinancialResultId", "another-result"],
+    ["cancellationRaceAuthorizationResultId", "another-result"],
+    ["cancellationRaceJobResultId", "another-result"],
+    ["cancellationRaceBarrierResultId", "another-result"],
+    ["cancellationRaceBarrierResultStatus", "pending"],
+    ["cancellationRaceAggregateResultStatus", "incomplete"],
+    ["cancellationRaceFinancialResultStatus", "incomplete"],
+    ["cancellationRaceAuthorizationResultStatus", "incomplete"],
+    ["cancellationRaceJobResultStatus", "incomplete"],
+    ["cancellationRaceAggregateCompleted", false],
+    ["cancellationRaceFinancialCompleted", false],
+    ["cancellationRaceAuthorizationCompleted", false],
+    ["cancellationRaceJobCompleted", false],
+    ["cancellationRaceResultCompleted", false],
+    ["cancellationRaceResultAtomic", false],
   ] as const)(
     "rejects cancellation-race handoff with invalid %s",
     (field, value) => {
@@ -2345,6 +2518,143 @@ describe("v0 lifecycle policy tables", () => {
         },
       }),
     ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    "ordinary",
+    "unauthorized_reconciliation",
+    "replacement",
+    "reship",
+  ] as const)(
+    "dispatches a cancellation-race scan through the exact %s handler",
+    (kind) => {
+      const base = contextForTransition("handed_over", "cancellation_pending");
+      const context =
+        kind === "ordinary"
+          ? base
+          : kind === "unauthorized_reconciliation"
+            ? {
+                ...base,
+                cancellationRaceHandoffKind: kind,
+                cancellationRaceResultKind: kind,
+                cancellationRaceFinancialResultStatus:
+                  "unauthorized_handoff_settled",
+                cancellationRaceAuthorizationResultStatus:
+                  "unauthorized_reconciliation",
+                handoffOrderPreviousStatus: "awaiting_balance",
+              }
+            : kind === "replacement"
+              ? {
+                  ...base,
+                  shipmentId: "replacement-shipment-1",
+                  providerEventShipmentId: "replacement-shipment-1",
+                  cancellationRaceResultShipmentId: "replacement-shipment-1",
+                  cancellationRaceHandoffKind: kind,
+                  cancellationRaceResultKind: kind,
+                  cancellationRaceAggregateResultStatus:
+                    "replacement_child_shipped",
+                  cancellationRaceFinancialResultStatus:
+                    "claim_remedy_no_charge",
+                  cancellationRaceAuthorizationResultStatus:
+                    "replacement_authorization_consumed",
+                  cancellationRaceJobResultStatus:
+                    "complete_replacement_job_set_handed_over",
+                  replacementHandoffSlotBindings:
+                    base.replacementHandoffSlotBindings.map((binding) => ({
+                      ...binding,
+                      replacementShipmentPreviousStatus: "cancellation_pending",
+                    })),
+                }
+              : {
+                  ...base,
+                  shipmentId: "reship-shipment-1",
+                  providerEventShipmentId: "reship-shipment-1",
+                  cancellationRaceResultShipmentId: "reship-shipment-1",
+                  cancellationRaceHandoffKind: kind,
+                  cancellationRaceResultKind: kind,
+                  cancellationRaceAggregateResultStatus: "reship_child_shipped",
+                  cancellationRaceFinancialResultStatus:
+                    "claim_remedy_no_charge",
+                  cancellationRaceAuthorizationResultStatus:
+                    "reship_authorization_consumed",
+                  cancellationRaceJobResultStatus: "original_job_unchanged",
+                  reshipmentHandoffShipmentPreviousStatus:
+                    "cancellation_pending",
+                };
+      expect(
+        transition(shipmentPolicy, {
+          current: "cancellation_pending",
+          target: "handed_over",
+          idempotencyKey: `cancellation-race-handler-${kind}`,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "cancellation_pending",
+        current: "handed_over",
+      });
+    },
+  );
+
+  it.each(["packed", "created", "failed"] as const)(
+    "rejects a reship cancellation-race result with an unchanged original Job in %s",
+    (status) => {
+      const base = contextForTransition("handed_over", "cancellation_pending");
+      expect(() =>
+        transition(shipmentPolicy, {
+          current: "cancellation_pending",
+          target: "handed_over",
+          idempotencyKey: `cancellation-race-reship-original-job-${status}`,
+          context: {
+            ...base,
+            shipmentId: "reship-shipment-1",
+            providerEventShipmentId: "reship-shipment-1",
+            cancellationRaceResultShipmentId: "reship-shipment-1",
+            cancellationRaceHandoffKind: "reship",
+            cancellationRaceResultKind: "reship",
+            cancellationRaceAggregateResultStatus: "reship_child_shipped",
+            cancellationRaceFinancialResultStatus: "claim_remedy_no_charge",
+            cancellationRaceAuthorizationResultStatus:
+              "reship_authorization_consumed",
+            cancellationRaceJobResultStatus: "original_job_unchanged",
+            reshipmentHandoffShipmentPreviousStatus: "cancellation_pending",
+            reshipmentHandoffOriginalJobPreviousStatus: status,
+            reshipmentHandoffOriginalJobTargetStatus: status,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("accepts a reship cancellation-race result with a settled original Job", () => {
+    const base = contextForTransition("handed_over", "cancellation_pending");
+    expect(
+      transition(shipmentPolicy, {
+        current: "cancellation_pending",
+        target: "handed_over",
+        idempotencyKey: "cancellation-race-reship-original-job-settled",
+        context: {
+          ...base,
+          shipmentId: "reship-shipment-1",
+          providerEventShipmentId: "reship-shipment-1",
+          cancellationRaceResultShipmentId: "reship-shipment-1",
+          cancellationRaceHandoffKind: "reship",
+          cancellationRaceResultKind: "reship",
+          cancellationRaceAggregateResultStatus: "reship_child_shipped",
+          cancellationRaceFinancialResultStatus: "claim_remedy_no_charge",
+          cancellationRaceAuthorizationResultStatus:
+            "reship_authorization_consumed",
+          cancellationRaceJobResultStatus: "original_job_unchanged",
+          reshipmentHandoffShipmentPreviousStatus: "cancellation_pending",
+          reshipmentHandoffOriginalJobPreviousStatus: "settled",
+          reshipmentHandoffOriginalJobTargetStatus: "settled",
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancellation_pending",
+      current: "handed_over",
+    });
   });
 
   it("requires a verified provider void before cancelling a pending shipment", () => {
@@ -3268,6 +3578,7 @@ describe("v0 lifecycle policy tables", () => {
     "reshipmentHandoffCompleted",
   ] as const)("requires %s before shipping a reship remedy", (missingFlag) => {
     const context = {
+      ...permittedContext,
       reshipmentAuthorizationConsumed: true,
       reshipmentHandoffCompleted: true,
       reshipmentAuthorizationCreated: true,
@@ -3291,6 +3602,7 @@ describe("v0 lifecycle policy tables", () => {
         target: "reship_shipped",
         idempotencyKey: "reship-handoff-complete",
         context: {
+          ...permittedContext,
           reshipmentAuthorizationConsumed: true,
           reshipmentHandoffCompleted: true,
         },
@@ -3301,6 +3613,134 @@ describe("v0 lifecycle policy tables", () => {
       current: "reship_shipped",
     });
   });
+
+  it.each([
+    [
+      "Claim identity",
+      (context: Record<string, unknown>) => (context.claimId = "claim-2"),
+    ],
+    [
+      "resolution identity",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentResolutionId = "claim-resolution-2"),
+    ],
+    [
+      "slot identity",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentHandoffSlotId = "claim-slot-2"),
+    ],
+    [
+      "original Shipment identity",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentOriginalShipmentId = "shipment-2"),
+    ],
+    [
+      "new Shipment identity",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentHandoffNewShipmentId = "reship-shipment-2"),
+    ],
+    [
+      "authorization identity",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentAuthorizationId = "reship-authorization-2"),
+    ],
+    [
+      "consumed authorization identity",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentConsumedAuthorizationId = "reship-authorization-2"),
+    ],
+    [
+      "authorization status",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentAuthorizationStatusAfter = "issued"),
+    ],
+    [
+      "new Shipment status",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentHandoffShipmentTargetStatus = "label_created"),
+    ],
+    [
+      "resolution status",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentResolutionTargetStatus = "reship_pending"),
+    ],
+    [
+      "original Job identity",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentHandoffOriginalJobShipmentId = "shipment-2"),
+    ],
+    [
+      "original Job transition",
+      (context: Record<string, unknown>) => {
+        context.reshipmentHandoffOriginalJobTargetStatus = "cancelled";
+        context.reshipmentHandoffOriginalJobTransitioned = true;
+      },
+    ],
+    [
+      "Shipment-only side effect",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentHandoffShipmentOnly = false),
+    ],
+    [
+      "handoff atomicity",
+      (context: Record<string, unknown>) =>
+        (context.reshipmentHandoffAtomic = false),
+    ],
+  ] as const)("rejects reship handoff with mismatched %s", (_field, mutate) => {
+    const context: Record<string, unknown> = { ...permittedContext };
+    mutate(context);
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "reship_pending",
+        target: "reship_shipped",
+        idempotencyKey: `reship-handoff-invalid-${_field}`,
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each(["packed", "created", "failed"] as const)(
+    "rejects reship handoff with an unchanged original Job in %s",
+    (status) => {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "reship_pending",
+          target: "reship_shipped",
+          idempotencyKey: `reship-handoff-original-job-${status}`,
+          context: {
+            ...permittedContext,
+            reshipmentHandoffOriginalJobPreviousStatus: status,
+            reshipmentHandoffOriginalJobTargetStatus: status,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each(["handed_over", "settled"] as const)(
+    "preserves the original Job in %s while handing off a reship Shipment",
+    (status) => {
+      const context: Record<string, unknown> = {
+        ...permittedContext,
+        reshipmentHandoffOriginalJobPreviousStatus: status,
+        reshipmentHandoffOriginalJobTargetStatus: status,
+        reshipmentHandoffOriginalJobTransitioned: false,
+        reshipmentHandoffShipmentOnly: true,
+      };
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          current: "reship_pending",
+          target: "reship_shipped",
+          idempotencyKey: "reship-handoff-original-job-unchanged",
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "reship_pending",
+        current: "reship_shipped",
+      });
+    },
+  );
 
   it.each([
     ["Order", orderPolicy],
@@ -3519,6 +3959,7 @@ describe("v0 lifecycle policy tables", () => {
     "requires %s before shipping a replacement remedy",
     (missingFlag) => {
       const context = {
+        ...permittedContext,
         replacementFulfilmentAuthorizationConsumed: true,
         replacementFulfilmentHandoffCompleted: true,
         [missingFlag]: false,
@@ -3541,8 +3982,133 @@ describe("v0 lifecycle policy tables", () => {
         target: "replacement_shipped",
         idempotencyKey: "replacement-handoff-complete",
         context: {
+          ...permittedContext,
           replacementFulfilmentAuthorizationConsumed: true,
           replacementFulfilmentHandoffCompleted: true,
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "replacement_in_production",
+      current: "replacement_shipped",
+    });
+  });
+
+  it("requires an exact complete replacement set handoff before shipping", () => {
+    const firstSetupBinding =
+      permittedContext.replacementRequiredSlotBindings[0]!;
+    const secondSetupBinding = {
+      ...firstSetupBinding,
+      slotId: "claim-slot-2",
+      replacementRequestId: "replacement-request-2",
+      replacementRequestSlotId: "claim-slot-2",
+      replacementReservationId: "replacement-reservation-2",
+      replacementReservationRequestId: "replacement-request-2",
+      replacementReservationSlotId: "claim-slot-2",
+      replacementShipmentId: "replacement-shipment-2",
+      replacementShipmentRequestId: "replacement-request-2",
+      replacementShipmentReservationId: "replacement-reservation-2",
+      replacementShipmentSlotId: "claim-slot-2",
+      currentReplacementJobId: "replacement-job-2",
+      currentReplacementJobRequestId: "replacement-request-2",
+      currentReplacementJobReservationId: "replacement-reservation-2",
+      currentReplacementJobShipmentId: "replacement-shipment-2",
+      currentReplacementJobSlotId: "claim-slot-2",
+    };
+    const firstBinding = permittedContext.replacementHandoffSlotBindings[0]!;
+    const secondBinding = {
+      ...firstBinding,
+      slotId: "claim-slot-2",
+      replacementShipmentId: "replacement-shipment-2",
+      replacementShipmentSlotId: "claim-slot-2",
+      currentReplacementJobId: "replacement-job-2",
+      currentReplacementJobShipmentId: "replacement-shipment-2",
+      currentReplacementJobSlotId: "claim-slot-2",
+    };
+    const completeContext = {
+      ...permittedContext,
+      expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementRequiredSlotBindings: [firstSetupBinding, secondSetupBinding],
+      replacementHandoffSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementAuthorizationSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementAuthorizationShipmentIds: [
+        "replacement-shipment-1",
+        "replacement-shipment-2",
+      ],
+      replacementHandoffSlotBindings: [firstBinding, secondBinding],
+    };
+    const invalidContexts = [
+      { replacementHandoffSlotBindings: [firstBinding] },
+      { replacementHandoffSlotBindings: [firstBinding, firstBinding] },
+      {
+        replacementHandoffSlotBindings: [
+          firstBinding,
+          { ...secondBinding, slotId: "foreign-slot" },
+        ],
+      },
+      {
+        replacementHandoffSlotBindings: [
+          firstBinding,
+          { ...secondBinding, currentReplacementJobLineageLeaf: false },
+        ],
+      },
+      {
+        replacementHandoffSlotBindings: [
+          firstBinding,
+          { ...secondBinding, currentReplacementJobPreviousStatus: "created" },
+        ],
+      },
+      {
+        replacementHandoffSlotBindings: [
+          firstBinding,
+          { ...secondBinding, resolutionId: "another-resolution" },
+        ],
+      },
+      {
+        replacementAuthorizationShipmentIds: [
+          "replacement-shipment-1",
+          "another-replacement-shipment",
+        ],
+        replacementHandoffSlotBindings: [
+          firstBinding,
+          {
+            ...secondBinding,
+            replacementShipmentId: "another-replacement-shipment",
+            currentReplacementJobShipmentId: "another-replacement-shipment",
+          },
+        ],
+      },
+      {
+        replacementHandoffSlotBindings: [
+          firstBinding,
+          { ...secondBinding, currentReplacementJobId: "another-job" },
+        ],
+      },
+      { replacementAuthorizationClaimId: "another-claim" },
+      { replacementConsumedAuthorizationId: "another-authorization" },
+      { replacementAuthorizationStatusAfter: "issued" },
+      { replacementHandoffAuthorizationId: "another-authorization" },
+      { replacementHandoffSlotSetComplete: false },
+      { replacementHandoffAtomic: false },
+    ];
+    for (const [index, invalidContext] of invalidContexts.entries()) {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "replacement_in_production",
+          target: "replacement_shipped",
+          idempotencyKey: `replacement-handoff-set-invalid-${index}`,
+          context: { ...completeContext, ...invalidContext },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "replacement_shipped",
+        idempotencyKey: "replacement-handoff-set-reordered",
+        context: {
+          ...completeContext,
+          replacementHandoffSlotBindings: [secondBinding, firstBinding],
         },
       }),
     ).toEqual({
@@ -3899,9 +4465,21 @@ describe("v0 lifecycle policy tables", () => {
     ["foreign Shipment identity", { handoffShipmentId: "another-shipment" }],
     ["blank Order identity", { orderId: " " }],
     ["foreign Order identity", { handoffOrderId: "another-order" }],
+    ["missing Order identity", { handoffOrderId: undefined }],
     ["foreign phase owner", { handoffPhaseOrderId: "another-order" }],
+    ["missing phase owner", { handoffPhaseOrderId: undefined }],
     ["blank phase identity", { phaseId: " " }],
     ["foreign phase identity", { handoffPhaseId: "another-phase" }],
+    ["missing phase identity", { handoffPhaseId: undefined }],
+    ["wrong Order source", { handoffOrderPreviousStatus: "qc_passed" }],
+    ["wrong Order target", { handoffOrderTargetStatus: "ready_to_ship" }],
+    ["wrong phase source", { handoffPhasePreviousStatus: "active" }],
+    ["wrong phase target", { handoffPhaseTargetStatus: "qc_passed" }],
+    ["wrong phase kind", { phaseKind: "sample" }],
+    ["missing Order source", { handoffOrderPreviousStatus: undefined }],
+    ["missing Order target", { handoffOrderTargetStatus: undefined }],
+    ["missing phase source", { handoffPhasePreviousStatus: undefined }],
+    ["missing phase target", { handoffPhaseTargetStatus: undefined }],
     ["foreign Shipment slot set", { shipmentFulfilmentSlotIds: ["slot-1"] }],
     ["wrong Shipment status", { handoffShipmentPreviousStatus: "handed_over" }],
     ["wrong Shipment target", { handoffShipmentTargetStatus: "in_transit" }],

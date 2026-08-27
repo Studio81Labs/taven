@@ -3709,6 +3709,13 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
 function requireAtomicOrdinaryHandoff<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
+  expectedStatuses: Readonly<{
+    shipmentPrevious: "label_created" | "cancellation_pending";
+    orderPrevious: "ready_to_ship" | "awaiting_balance";
+  }> = {
+    shipmentPrevious: "label_created",
+    orderPrevious: "ready_to_ship",
+  },
 ): void {
   const shipmentId = command.context?.shipmentId;
   const orderId = command.context?.orderId;
@@ -3736,7 +3743,14 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     typeof phaseId !== "string" ||
     phaseId.trim().length === 0 ||
     command.context?.handoffPhaseId !== phaseId ||
-    command.context?.handoffShipmentPreviousStatus !== "label_created" ||
+    command.context?.phaseKind !== "single" ||
+    command.context?.handoffOrderPreviousStatus !==
+      expectedStatuses.orderPrevious ||
+    command.context?.handoffOrderTargetStatus !== "shipped" ||
+    command.context?.handoffPhasePreviousStatus !== "qc_passed" ||
+    command.context?.handoffPhaseTargetStatus !== "shipped" ||
+    command.context?.handoffShipmentPreviousStatus !==
+      expectedStatuses.shipmentPrevious ||
     command.context?.handoffShipmentTargetStatus !== "handed_over" ||
     command.context?.handoffJobPreviousStatus !== "packed" ||
     command.context?.handoffJobTargetStatus !== "handed_over" ||
@@ -3903,6 +3917,235 @@ function requireAtomicOrdinaryHandoff<S extends string>(
   );
 }
 
+const cancellationRaceHandoffKinds = new Set([
+  "ordinary",
+  "replacement",
+  "reship",
+  "unauthorized_reconciliation",
+]);
+
+function requireExactCancellationRaceHandoffResult<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const kind = context?.cancellationRaceHandoffKind;
+  const resultId = context?.cancellationRaceHandoffResultId;
+  const shipmentId = context?.shipmentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const providerEventId = context?.providerEventId;
+  const providerTransactionId = context?.shipmentProviderTransactionId;
+  if (
+    typeof kind !== "string" ||
+    !cancellationRaceHandoffKinds.has(kind) ||
+    typeof resultId !== "string" ||
+    resultId.trim().length === 0 ||
+    typeof shipmentId !== "string" ||
+    shipmentId.trim().length === 0 ||
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    typeof providerEventId !== "string" ||
+    providerEventId.trim().length === 0 ||
+    typeof providerTransactionId !== "string" ||
+    providerTransactionId.trim().length === 0 ||
+    context?.cancellationRaceResultKind !== kind ||
+    context?.cancellationRaceResultShipmentId !== shipmentId ||
+    context?.cancellationRaceResultOrderId !== orderId ||
+    context?.cancellationRaceResultPhaseId !== phaseId ||
+    context?.cancellationRaceResultProviderEventId !== providerEventId ||
+    context?.cancellationRaceResultProviderTransactionId !==
+      providerTransactionId ||
+    context?.cancellationRaceResultShipmentPreviousStatus !==
+      "cancellation_pending" ||
+    context?.cancellationRaceResultShipmentTargetStatus !== "handed_over" ||
+    context?.cancellationRaceAggregateResultId !== resultId ||
+    context?.cancellationRaceFinancialResultId !== resultId ||
+    context?.cancellationRaceAuthorizationResultId !== resultId ||
+    context?.cancellationRaceJobResultId !== resultId ||
+    context?.cancellationRaceBarrierResultId !== resultId ||
+    context?.cancellationRaceBarrierResultStatus !== "scan_won_reconciled"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "cancellation-race handoff must bind the selected handler result to the exact scan and Shipment",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "cancellationRaceAggregateCompleted",
+    "cancellation-race handoff requires its scoped aggregate result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "cancellationRaceFinancialCompleted",
+    "cancellation-race handoff requires its scoped financial result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "cancellationRaceAuthorizationCompleted",
+    "cancellation-race handoff requires its scoped authorization result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "cancellationRaceJobCompleted",
+    "cancellation-race handoff requires its scoped Job result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "cancellationRaceResultCompleted",
+    "cancellation-race handoff requires the selected handler to complete",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "cancellationRaceResultAtomic",
+    "cancellation-race scan, barrier, and selected handler result must be atomic",
+  );
+
+  if (kind === "ordinary") {
+    if (
+      context?.cancellationRaceAggregateResultStatus !==
+        "order_phase_shipped" ||
+      context?.cancellationRaceFinancialResultStatus !== "balances_zero" ||
+      context?.cancellationRaceAuthorizationResultStatus !==
+        "ordinary_handoff_authorized" ||
+      context?.cancellationRaceJobResultStatus !==
+        "complete_job_set_handed_over"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "ordinary cancellation-race handoff requires its exact aggregate, balance, authorization, and Job results",
+      );
+    }
+    requireFlag(
+      lifecycle,
+      command,
+      "shipmentHandoffAuthorized",
+      "ordinary cancellation-race handoff must remain authorized",
+    );
+    requireZeroBalances(lifecycle, command);
+    requireAtomicOrdinaryHandoff(lifecycle, command, {
+      shipmentPrevious: "cancellation_pending",
+      orderPrevious: "ready_to_ship",
+    });
+    return;
+  }
+
+  if (kind === "unauthorized_reconciliation") {
+    if (
+      context?.cancellationRaceAggregateResultStatus !==
+        "order_phase_shipped" ||
+      context?.cancellationRaceFinancialResultStatus !==
+        "unauthorized_handoff_settled" ||
+      context?.cancellationRaceAuthorizationResultStatus !==
+        "unauthorized_reconciliation" ||
+      context?.cancellationRaceJobResultStatus !==
+        "complete_job_set_handed_over"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "unauthorized cancellation-race handoff requires exact reconciliation and aggregate results",
+      );
+    }
+    requireFlag(
+      lifecycle,
+      command,
+      "handoffReconciliation",
+      "unauthorized cancellation-race handoff requires reconciliation",
+    );
+    requireFlag(
+      lifecycle,
+      command,
+      "handoffSettlementCompleted",
+      "unauthorized cancellation-race handoff requires its settlement",
+    );
+    requireZeroAmountDue(lifecycle, command);
+    requireReconciliationRefundAllocation(lifecycle, command);
+    requireAtomicOrdinaryHandoff(lifecycle, command, {
+      shipmentPrevious: "cancellation_pending",
+      orderPrevious: "awaiting_balance",
+    });
+    return;
+  }
+
+  if (kind === "replacement") {
+    if (
+      context?.cancellationRaceAggregateResultStatus !==
+        "replacement_child_shipped" ||
+      context?.cancellationRaceFinancialResultStatus !==
+        "claim_remedy_no_charge" ||
+      context?.cancellationRaceAuthorizationResultStatus !==
+        "replacement_authorization_consumed" ||
+      context?.cancellationRaceJobResultStatus !==
+        "complete_replacement_job_set_handed_over"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement cancellation-race handoff requires its exact Claim, authorization, and complete Job-set result",
+      );
+    }
+    requireFlag(
+      lifecycle,
+      command,
+      "replacementFulfilmentAuthorizationConsumed",
+      "replacement cancellation-race handoff must consume its authorization",
+    );
+    requireFlag(
+      lifecycle,
+      command,
+      "replacementFulfilmentHandoffCompleted",
+      "replacement cancellation-race handoff must complete its exact result",
+    );
+    requireAtomicCompleteReplacementHandoff(lifecycle, command, shipmentId);
+    return;
+  }
+
+  if (
+    context?.cancellationRaceAggregateResultStatus !== "reship_child_shipped" ||
+    context?.cancellationRaceFinancialResultStatus !==
+      "claim_remedy_no_charge" ||
+    context?.cancellationRaceAuthorizationResultStatus !==
+      "reship_authorization_consumed" ||
+    context?.cancellationRaceJobResultStatus !== "original_job_unchanged"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "reship cancellation-race handoff requires its exact Claim, authorization, Shipment-only, and unchanged-Job result",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "reshipmentAuthorizationConsumed",
+    "reship cancellation-race handoff must consume its authorization",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "reshipmentHandoffCompleted",
+    "reship cancellation-race handoff must complete its exact result",
+  );
+  requireExactReshipmentHandoff(lifecycle, command, true);
+}
+
 export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
   name: "Shipment",
   initial: ["planned"],
@@ -3943,21 +4186,11 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
       requireAtomicOrdinaryHandoff("Shipment", command);
     }
     if (
-      command.target === "handed_over" &&
-      command.current !== "label_created"
-    ) {
-      requireFlag(
-        "Shipment",
-        command,
-        "contextHandoffCompleted",
-        "the complete context-specific handoff or reconciliation must complete",
-      );
-    }
-    if (
       command.current === "cancellation_pending" &&
       command.target === "handed_over"
     ) {
       requireVerifiedMatchingCancellationRaceScan("Shipment", command);
+      requireExactCancellationRaceHandoffResult("Shipment", command);
     }
     if (
       command.current === "cancellation_pending" &&
@@ -4473,6 +4706,343 @@ function requireCompleteReplacementRequiredSlotSet<S extends string>(
     "replacementSetupAtomic",
     "replacement production must persist the complete replacement setup atomically",
   );
+}
+
+function requireAtomicCompleteReplacementHandoff<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  cancellationRaceShipmentId?: string,
+): void {
+  requireCompleteReplacementRequiredSlotSet(lifecycle, command);
+  const resolutionId = command.context?.claimSlotResolutionId;
+  const claimId = command.context?.claimId;
+  const resolutionSlotId = command.context?.claimSlotId;
+  const replacementSetId = command.context?.replacementSetId;
+  const authorizationId = command.context?.replacementFulfilmentAuthorizationId;
+  const requiredSlotIdsValue =
+    command.context?.expectedReplacementRequiredSlotIds;
+  const handoffSlotIdsValue = command.context?.replacementHandoffSlotIds;
+  const authorizationSlotIdsValue =
+    command.context?.replacementAuthorizationSlotIds;
+  const authorizationShipmentIdsValue =
+    command.context?.replacementAuthorizationShipmentIds;
+  const bindingsValue = command.context?.replacementHandoffSlotBindings;
+  const setupBindingsValue = command.context?.replacementRequiredSlotBindings;
+  const requiredSlotIds = Array.isArray(requiredSlotIdsValue)
+    ? [...requiredSlotIdsValue]
+    : undefined;
+  const handoffSlotIds = Array.isArray(handoffSlotIdsValue)
+    ? [...handoffSlotIdsValue]
+    : undefined;
+  const authorizationSlotIds = Array.isArray(authorizationSlotIdsValue)
+    ? [...authorizationSlotIdsValue]
+    : undefined;
+  const authorizationShipmentIds = Array.isArray(authorizationShipmentIdsValue)
+    ? [...authorizationShipmentIdsValue]
+    : undefined;
+  const bindings = Array.isArray(bindingsValue)
+    ? [...bindingsValue]
+    : undefined;
+  const setupBindings = Array.isArray(setupBindingsValue)
+    ? [...setupBindingsValue]
+    : undefined;
+  const isExactIdSet = (
+    expected: readonly unknown[] | undefined,
+    actual: readonly unknown[] | undefined,
+  ): actual is string[] =>
+    expected !== undefined &&
+    expected.length > 0 &&
+    actual !== undefined &&
+    actual.length === expected.length &&
+    expected.every((id) => typeof id === "string" && id.trim().length > 0) &&
+    new Set(expected).size === expected.length &&
+    actual.every(
+      (id) =>
+        typeof id === "string" && id.trim().length > 0 && expected.includes(id),
+    ) &&
+    new Set(actual).size === actual.length;
+
+  if (
+    typeof resolutionId !== "string" ||
+    resolutionId.trim().length === 0 ||
+    typeof claimId !== "string" ||
+    claimId.trim().length === 0 ||
+    typeof resolutionSlotId !== "string" ||
+    resolutionSlotId.trim().length === 0 ||
+    typeof replacementSetId !== "string" ||
+    replacementSetId.trim().length === 0 ||
+    command.context?.replacementRequiredSetId !== replacementSetId ||
+    command.context?.replacementRequiredSetClaimId !== claimId ||
+    command.context?.replacementRequiredSetResolutionId !== resolutionId ||
+    !isExactIdSet(requiredSlotIds, handoffSlotIds) ||
+    !isExactIdSet(requiredSlotIds, authorizationSlotIds) ||
+    requiredSlotIds === undefined ||
+    !requiredSlotIds.includes(resolutionSlotId) ||
+    typeof authorizationId !== "string" ||
+    authorizationId.trim().length === 0 ||
+    command.context?.replacementAuthorizationClaimId !== claimId ||
+    command.context?.replacementAuthorizationResolutionId !== resolutionId ||
+    command.context?.replacementAuthorizationSetId !== replacementSetId ||
+    authorizationShipmentIds === undefined ||
+    requiredSlotIds === undefined ||
+    authorizationShipmentIds.length !== requiredSlotIds.length ||
+    authorizationShipmentIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(authorizationShipmentIds).size !==
+      authorizationShipmentIds.length ||
+    bindings === undefined ||
+    requiredSlotIds === undefined ||
+    bindings.length !== requiredSlotIds.length ||
+    setupBindings === undefined ||
+    setupBindings.length !== requiredSlotIds.length ||
+    command.context?.replacementConsumedAuthorizationId !== authorizationId ||
+    command.context?.replacementConsumedAuthorizationClaimId !== claimId ||
+    command.context?.replacementConsumedAuthorizationResolutionId !==
+      resolutionId ||
+    command.context?.replacementConsumedAuthorizationSetId !==
+      replacementSetId ||
+    command.context?.replacementAuthorizationStatusBefore !== "issued" ||
+    command.context?.replacementAuthorizationStatusAfter !== "consumed" ||
+    command.context?.replacementHandoffAuthorizationId !== authorizationId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement handoff requires the exact Claim child authorization and complete setup slot set",
+    );
+  }
+
+  const expectedSlots = requiredSlotIds as string[];
+  const expectedShipments = authorizationShipmentIds as string[];
+  const setupBySlotId = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const value of setupBindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement handoff requires the exact persisted setup bindings",
+      );
+    }
+    const setup = value as Readonly<Record<string, unknown>>;
+    const setupSlotId = setup.slotId;
+    if (
+      typeof setupSlotId !== "string" ||
+      !expectedSlots.includes(setupSlotId) ||
+      setupBySlotId.has(setupSlotId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement handoff setup slots must form one exact set",
+      );
+    }
+    setupBySlotId.set(setupSlotId, setup);
+  }
+  const boundSlotIds = new Set<string>();
+  const boundShipmentIds = new Set<string>();
+  const boundJobIds = new Set<string>();
+  for (const value of bindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement handoff requires exact per-slot Shipment and Job records",
+      );
+    }
+    const binding = value as Readonly<Record<string, unknown>>;
+    const slotId = binding.slotId;
+    const shipmentId = binding.replacementShipmentId;
+    const jobId = binding.currentReplacementJobId;
+    const setup =
+      typeof slotId === "string" ? setupBySlotId.get(slotId) : undefined;
+    const expectedShipmentPreviousStatus =
+      cancellationRaceShipmentId === shipmentId
+        ? "cancellation_pending"
+        : "label_created";
+    if (
+      typeof slotId !== "string" ||
+      slotId.trim().length === 0 ||
+      boundSlotIds.has(slotId) ||
+      !expectedSlots.includes(slotId) ||
+      binding.claimId !== claimId ||
+      binding.resolutionId !== resolutionId ||
+      binding.replacementSetId !== replacementSetId ||
+      setup === undefined ||
+      typeof shipmentId !== "string" ||
+      shipmentId.trim().length === 0 ||
+      boundShipmentIds.has(shipmentId) ||
+      !expectedShipments.includes(shipmentId) ||
+      binding.replacementShipmentClaimId !== claimId ||
+      binding.replacementShipmentResolutionId !== resolutionId ||
+      binding.replacementShipmentSetId !== replacementSetId ||
+      binding.replacementShipmentSlotId !== slotId ||
+      binding.replacementShipmentPreviousStatus !==
+        expectedShipmentPreviousStatus ||
+      binding.replacementShipmentTargetStatus !== "handed_over" ||
+      setup.replacementShipmentId !== shipmentId ||
+      typeof jobId !== "string" ||
+      jobId.trim().length === 0 ||
+      boundJobIds.has(jobId) ||
+      binding.currentReplacementJobClaimId !== claimId ||
+      binding.currentReplacementJobResolutionId !== resolutionId ||
+      binding.currentReplacementJobSetId !== replacementSetId ||
+      binding.currentReplacementJobShipmentId !== shipmentId ||
+      binding.currentReplacementJobSlotId !== slotId ||
+      binding.currentReplacementJobLineageLeaf !== true ||
+      binding.currentReplacementJobPreviousStatus !== "packed" ||
+      binding.currentReplacementJobTargetStatus !== "handed_over" ||
+      setup.currentReplacementJobId !== jobId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "every replacement slot must hand over its exact Shipment and current packed Job leaf",
+      );
+    }
+    boundSlotIds.add(slotId);
+    boundShipmentIds.add(shipmentId);
+    boundJobIds.add(jobId);
+  }
+  if (
+    expectedSlots.some((slotId) => !boundSlotIds.has(slotId)) ||
+    expectedShipments.some((shipmentId) => !boundShipmentIds.has(shipmentId)) ||
+    (cancellationRaceShipmentId !== undefined &&
+      !boundShipmentIds.has(cancellationRaceShipmentId))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement handoff cannot omit an authorized replacement slot or Shipment",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementHandoffSlotSetComplete",
+    "replacement handoff requires the authoritative complete setup slot set",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementHandoffAtomic",
+    "replacement authorization consumption, Shipment handoff, and Job transitions must be atomic",
+  );
+}
+
+function requireExactReshipmentHandoff<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  cancellationRace = false,
+): void {
+  const context = command.context;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const slotId = context?.claimSlotId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const currentShipmentId = context?.shipmentId;
+  const originalShipmentId = context?.reshipmentOriginalShipmentId;
+  const newShipmentId = context?.reshipmentShipmentId;
+  const authorizationId = context?.reshipmentAuthorizationId;
+  const consumedAuthorizationId = context?.reshipmentConsumedAuthorizationId;
+  const originalJobId = context?.reshipmentOriginalJobId;
+  const originalJobStatus = context?.reshipmentHandoffOriginalJobPreviousStatus;
+
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+
+  if (
+    !nonBlank(claimId) ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(slotId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(currentShipmentId) ||
+    !nonBlank(originalShipmentId) ||
+    !nonBlank(newShipmentId) ||
+    originalShipmentId === newShipmentId ||
+    !nonBlank(authorizationId) ||
+    !nonBlank(consumedAuthorizationId) ||
+    authorizationId !== consumedAuthorizationId ||
+    !nonBlank(originalJobId) ||
+    (cancellationRace
+      ? currentShipmentId !== newShipmentId
+      : currentShipmentId !== originalShipmentId) ||
+    context?.reshipmentResolutionClaimId !== claimId ||
+    context?.reshipmentResolutionId !== resolutionId ||
+    context?.reshipmentResolutionSlotId !== slotId ||
+    context?.reshipmentResolutionOrderId !== orderId ||
+    context?.reshipmentResolutionPhaseId !== phaseId ||
+    context?.reshipmentResolutionPreviousStatus !== "reship_pending" ||
+    context?.reshipmentResolutionTargetStatus !== "reship_shipped" ||
+    context?.reshipmentOriginalShipmentId !== originalShipmentId ||
+    context?.reshipmentOriginalShipmentClaimId !== claimId ||
+    context?.reshipmentOriginalShipmentResolutionId !== resolutionId ||
+    context?.reshipmentOriginalShipmentSlotId !== slotId ||
+    context?.reshipmentOriginalShipmentOrderId !== orderId ||
+    context?.reshipmentOriginalShipmentPhaseId !== phaseId ||
+    context?.reshipmentNewShipmentId !== newShipmentId ||
+    context?.reshipmentNewShipmentClaimId !== claimId ||
+    context?.reshipmentNewShipmentResolutionId !== resolutionId ||
+    context?.reshipmentNewShipmentSlotId !== slotId ||
+    context?.reshipmentNewShipmentOrderId !== orderId ||
+    context?.reshipmentNewShipmentPhaseId !== phaseId ||
+    context?.reshipmentAuthorizationClaimId !== claimId ||
+    context?.reshipmentAuthorizationResolutionId !== resolutionId ||
+    context?.reshipmentAuthorizationSlotId !== slotId ||
+    context?.reshipmentAuthorizationOrderId !== orderId ||
+    context?.reshipmentAuthorizationPhaseId !== phaseId ||
+    context?.reshipmentAuthorizationOriginalShipmentId !== originalShipmentId ||
+    context?.reshipmentAuthorizationNewShipmentId !== newShipmentId ||
+    context?.reshipmentCustodyAuthorizationId !== authorizationId ||
+    context?.reshipmentConsumedAuthorizationClaimId !== claimId ||
+    context?.reshipmentConsumedAuthorizationResolutionId !== resolutionId ||
+    context?.reshipmentConsumedAuthorizationSlotId !== slotId ||
+    context?.reshipmentConsumedAuthorizationOriginalShipmentId !==
+      originalShipmentId ||
+    context?.reshipmentConsumedAuthorizationNewShipmentId !== newShipmentId ||
+    context?.reshipmentConsumedAuthorizationId !== authorizationId ||
+    context?.reshipmentAuthorizationStatusBefore !== "issued" ||
+    context?.reshipmentAuthorizationStatusAfter !== "consumed" ||
+    context?.reshipmentHandoffClaimId !== claimId ||
+    context?.reshipmentHandoffResolutionId !== resolutionId ||
+    context?.reshipmentHandoffSlotId !== slotId ||
+    context?.reshipmentHandoffOrderId !== orderId ||
+    context?.reshipmentHandoffPhaseId !== phaseId ||
+    context?.reshipmentHandoffOriginalShipmentId !== originalShipmentId ||
+    context?.reshipmentHandoffNewShipmentId !== newShipmentId ||
+    context?.reshipmentHandoffAuthorizationId !== authorizationId ||
+    context?.reshipmentHandoffShipmentId !== newShipmentId ||
+    context?.reshipmentHandoffShipmentPreviousStatus !==
+      (cancellationRace ? "cancellation_pending" : "label_created") ||
+    context?.reshipmentHandoffShipmentTargetStatus !== "handed_over" ||
+    context?.reshipmentHandoffOriginalJobId !== originalJobId ||
+    context?.reshipmentHandoffOriginalJobShipmentId !== originalShipmentId ||
+    context?.reshipmentHandoffOriginalJobClaimId !== claimId ||
+    context?.reshipmentHandoffOriginalJobResolutionId !== resolutionId ||
+    context?.reshipmentHandoffOriginalJobSlotId !== slotId ||
+    context?.reshipmentHandoffOriginalJobOrderId !== orderId ||
+    context?.reshipmentHandoffOriginalJobPhaseId !== phaseId ||
+    (originalJobStatus !== "handed_over" && originalJobStatus !== "settled") ||
+    context?.reshipmentHandoffOriginalJobTargetStatus !== originalJobStatus ||
+    context?.reshipmentHandoffOriginalJobTransitioned !== false ||
+    context?.reshipmentHandoffShipmentOnly !== true ||
+    context?.reshipmentHandoffAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "reship handoff requires the exact Claim child, custody authorization, new Shipment result, and unchanged original Job",
+    );
+  }
 }
 
 function requireExactClaimRefundScope<S extends string>(
@@ -5030,6 +5600,7 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
         command.current === "reship_pending" &&
         command.target === "reship_shipped"
       ) {
+        requireExactReshipmentHandoff("ClaimSlotResolution", command);
         requireFlag(
           "ClaimSlotResolution",
           command,
@@ -5098,6 +5669,7 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           "replacementFulfilmentHandoffCompleted",
           "replacement handoff requires the complete authorization-backed handoff result",
         );
+        requireAtomicCompleteReplacementHandoff("ClaimSlotResolution", command);
       }
       if (command.target === "refund_pending") {
         requireExactClaimRefundScope("ClaimSlotResolution", command);
