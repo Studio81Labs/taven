@@ -360,7 +360,92 @@ function isRegexStart(tokens, lineTerminatorBefore) {
   ) {
     return false;
   }
+  if (
+    (previous.value === "!" || previous.value === ">") &&
+    tokenEndsExpression(tokens, tokens.length - 1)
+  ) {
+    return false;
+  }
   return !new Set([")", "]", "}", "++", "--"]).has(previous.value);
+}
+
+function tokenEndsExpression(tokens, index) {
+  const token = tokens[index];
+  if (token === undefined) return false;
+  if (token.kind === "identifier") {
+    return !new Set([
+      "await",
+      "case",
+      "delete",
+      "do",
+      "else",
+      "in",
+      "instanceof",
+      "new",
+      "of",
+      "return",
+      "throw",
+      "typeof",
+      "void",
+      "yield",
+    ]).has(token.value);
+  }
+  if (
+    token.kind === "literal" ||
+    token.kind === "template" ||
+    token.kind === "number" ||
+    token.kind === "regex"
+  ) {
+    return true;
+  }
+  if (token.value === ")") {
+    return !closesControlCondition(tokens.slice(0, index + 1));
+  }
+  if (new Set(["]", "++", "--"]).has(token.value)) return true;
+  if (token.value === "}") return token.expressionEnding !== false;
+  if (token.value === "!") return tokenEndsExpression(tokens, index - 1);
+  if (token.value !== ">") return false;
+
+  const open = matchingOpenTypeArgument(tokens, 0, index);
+  return (
+    open !== undefined &&
+    open + 1 < index &&
+    balancedTypeArgumentDelimiters(tokens, open, index) &&
+    tokenEndsExpression(tokens, open - 1)
+  );
+}
+
+function balancedTypeArgumentDelimiters(tokens, open, close) {
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenthesisDepth = 0;
+  for (let index = open + 1; index < close; index += 1) {
+    const value = tokens[index].value;
+    if (value === "(") parenthesisDepth += 1;
+    if (value === ")") {
+      if (parenthesisDepth === 0) return false;
+      parenthesisDepth -= 1;
+    }
+    if (value === "[") bracketDepth += 1;
+    if (value === "]") {
+      if (bracketDepth === 0) return false;
+      bracketDepth -= 1;
+    }
+    if (value === "{") braceDepth += 1;
+    if (value === "}") {
+      if (braceDepth === 0) return false;
+      braceDepth -= 1;
+    }
+    if (
+      value === ";" &&
+      parenthesisDepth === 0 &&
+      bracketDepth === 0 &&
+      braceDepth === 0
+    ) {
+      return false;
+    }
+  }
+  return parenthesisDepth === 0 && bracketDepth === 0 && braceDepth === 0;
 }
 
 function isStatementStart(tokens, index) {
