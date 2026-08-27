@@ -118,12 +118,14 @@ only once within its scope, and a partial unique index allows only one active
 reservation set per plan. Terminal sets retain their immutable history without
 preventing a later set from retrying the same planned jobs. Reference slices
 lock and require an active reference profile whose quality matches their
-immutable print configuration; candidate creation enforces the equivalent
-production-profile match, requires an active service node, and verifies that
-the geometry fits the selected machine capability in at least one axis
-orientation. This is the hard dimension prefilter; exact orientation and
-printer-specific clearance remain sealed in the machine-specific slice and
-candidate snapshot. Before planning,
+immutable print configuration. Reference and production slices must also pin
+the slicer engine and version declared by their selected profile, and
+production slices require the machine profile's quality to match the print
+configuration. Candidate creation enforces the equivalent production-profile
+match, requires an active service node, and verifies that the geometry fits the
+selected machine capability in at least one axis orientation. This is the hard
+dimension prefilter; exact orientation and printer-specific clearance remain
+sealed in the machine-specific slice and candidate snapshot. Before planning,
 the union of a candidate's capacity intervals must cover its declared machine
 seconds, and intervals must not overlap within a candidate or across candidates
 assigned to the same machine in one plan. This keeps every accepted plan
@@ -158,7 +160,9 @@ it is then governed by the active phase's operational deadline. Confirmation
 locks and revalidates the selected geometry source, node, machine, profile,
 calibration, and inventory, requires every live capacity interval to remain in
 the future, and compares each copied resource snapshot with its candidate
-estimate. Deferral permits one
+estimate. Later validation applies mutable resource eligibility only to live
+job groups; terminal groups remain part of completeness and history but cannot
+wedge unrelated live work after their resources retire. Deferral permits one
 confirming transaction to insert the set and all children together; it does not
 make a partial set valid across transactions.
 

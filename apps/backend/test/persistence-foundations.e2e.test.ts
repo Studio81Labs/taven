@@ -89,6 +89,10 @@ async function createReferenceSlice(
   foundation: PersistenceFoundation,
   referenceProfileId: string,
   name: string,
+  slicerIdentity: { engine: string; version: string } = {
+    engine: "orca",
+    version: "test",
+  },
 ): Promise<void> {
   await client.query(
     'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "reference_profile_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
@@ -104,10 +108,135 @@ async function createReferenceSlice(
       "9".repeat(64),
       60,
       60,
+      slicerIdentity.engine,
+      slicerIdentity.version,
+    ],
+  );
+}
+
+async function createProductionSlice(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  foundation: PersistenceFoundation,
+  name: string,
+  options: {
+    slicerEngine?: string;
+    slicerVersion?: string;
+    printConfigRevisionId?: string;
+  } = {},
+): Promise<void> {
+  await client.query(
+    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+    [
+      fixtures.id(`${name}:slice`),
+      "PRODUCTION",
+      `production-${fixtures.id(`${name}:cache-key`)}`,
+      foundation.modelGeometryId,
+      options.printConfigRevisionId ?? foundation.printConfigRevisionId,
+      foundation.machineProfileId,
+      foundation.machineCalibrationId,
+      1,
+      `slices/${fixtures.id(`${name}:artifact-key`)}`,
+      "8".repeat(64),
+      60,
+      60,
+      options.slicerEngine ?? "orca",
+      options.slicerVersion ?? "test",
+    ],
+  );
+}
+
+async function createSiblingMachineFoundation(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  foundation: PersistenceFoundation,
+  name: string,
+): Promise<PersistenceFoundation> {
+  const machineId = fixtures.id(`${name}:machine`);
+  const inventoryId = fixtures.id(`${name}:inventory`);
+  const calibrationId = fixtures.id(`${name}:calibration`);
+  const sliceResultId = fixtures.id(`${name}:slice-result`);
+  const capability = await client.query<{ machine_capability_id: string }>(
+    'SELECT "machine_capability_id" FROM "machines" WHERE "id" = $1',
+    [foundation.machineId],
+  );
+  const capabilityId = capability.rows[0]?.machine_capability_id;
+  if (!capabilityId) {
+    throw new Error("foundation machine capability is missing");
+  }
+
+  await client.query(
+    'INSERT INTO "machines" ("id", "node_id", "machine_capability_id", "code", "display_name", "installed_nozzle_micrometers", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+    [
+      machineId,
+      foundation.nodeId,
+      capabilityId,
+      `sibling-${machineId.slice(0, 24)}`,
+      "Sibling test machine",
+      400,
+      testTimes.createdAt,
+      testTimes.createdAt,
+    ],
+  );
+  await client.query(
+    'INSERT INTO "inventories" ("id", "node_id", "machine_id", "sku", "material", "vendor", "price_minor_units_numerator", "price_minor_units_denominator", "currency", "remaining_milligrams", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
+    [
+      inventoryId,
+      foundation.nodeId,
+      machineId,
+      `sibling-${inventoryId.slice(0, 24)}`,
+      "PLA",
+      "Test vendor",
+      1,
+      1,
+      "EUR",
+      100,
+      testTimes.createdAt,
+      testTimes.createdAt,
+    ],
+  );
+  await fixtures.createRevisionIdentity(calibrationId, "MACHINE_CALIBRATION");
+  await client.query(
+    'INSERT INTO "machine_calibrations" ("id", "node_id", "machine_id", "flow_ratio_parts_per_million", "xy_compensation_micrometers", "elephant_foot_compensation_micrometers", "settings", "state", "activated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)',
+    [
+      calibrationId,
+      foundation.nodeId,
+      machineId,
+      1_000_000,
+      0,
+      0,
+      JSON.stringify({}),
+      "ACTIVE",
+      testTimes.createdAt,
+    ],
+  );
+  await client.query(
+    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+    [
+      sliceResultId,
+      "PRODUCTION",
+      `sibling-${fixtures.id(`${name}:cache-key`)}`,
+      foundation.modelGeometryId,
+      foundation.printConfigRevisionId,
+      foundation.machineProfileId,
+      calibrationId,
+      1,
+      `slices/${fixtures.id(`${name}:artifact-key`)}`,
+      "6".repeat(64),
+      60,
+      60,
       "orca",
       "test",
     ],
   );
+
+  return {
+    ...foundation,
+    machineId,
+    inventoryId,
+    machineCalibrationId: calibrationId,
+    sliceResultId,
+  };
 }
 
 describe("persistence foundations", () => {
@@ -623,12 +752,16 @@ describe("persistence foundations", () => {
       "reference-slice-active",
       async (client, fixtures) => {
         const foundation = await fixtures.createFoundation();
-        const referenceProfile = await client.query<{ id: string }>(
-          'SELECT "id" FROM "reference_profiles" WHERE "material" = $1 AND "quality" = $2 AND "state" = $3 ORDER BY "id" LIMIT 1',
+        const referenceProfile = await client.query<{
+          id: string;
+          slicer_engine: string;
+          slicer_version: string;
+        }>(
+          'SELECT "id", "slicer_engine", "slicer_version" FROM "reference_profiles" WHERE "material" = $1 AND "quality" = $2 AND "state" = $3 ORDER BY "id" LIMIT 1',
           ["PLA", "STANDARD", "ACTIVE"],
         );
-        const referenceProfileId = referenceProfile.rows[0]?.id;
-        if (!referenceProfileId) {
+        const selectedProfile = referenceProfile.rows[0];
+        if (!selectedProfile) {
           throw new Error(
             "foundation machine profile has no reference profile",
           );
@@ -639,10 +772,129 @@ describe("persistence foundations", () => {
             client,
             fixtures,
             foundation,
-            referenceProfileId,
+            selectedProfile.id,
             "active",
+            {
+              engine: selectedProfile.slicer_engine,
+              version: selectedProfile.slicer_version,
+            },
           ),
         ).resolves.toBeUndefined();
+      },
+    );
+  });
+
+  it("binds slice runtimes and quality to their selected profiles", async () => {
+    for (const field of ["engine", "version"] as const) {
+      const name = `reference-${field}`;
+      await inRollbackTransaction(name, async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const profile = await client.query<{
+          id: string;
+          slicer_engine: string;
+          slicer_version: string;
+        }>(
+          'SELECT "id", "slicer_engine", "slicer_version" FROM "reference_profiles" WHERE "material" = $1 AND "quality" = $2 AND "state" = $3 ORDER BY "id" LIMIT 1',
+          ["PLA", "STANDARD", "ACTIVE"],
+        );
+        const selectedProfile = profile.rows[0];
+        if (!selectedProfile) {
+          throw new Error("active reference profile is missing");
+        }
+        const slicerIdentity = {
+          engine: selectedProfile.slicer_engine,
+          version: selectedProfile.slicer_version,
+        };
+        slicerIdentity[field] = `${slicerIdentity[field]}-mismatch`;
+
+        await expect(
+          createReferenceSlice(
+            client,
+            fixtures,
+            foundation,
+            selectedProfile.id,
+            name,
+            slicerIdentity,
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "slice_results_reference_slicer_check",
+        });
+      });
+    }
+
+    for (const [name, slicerIdentity] of [
+      ["production-engine", { slicerEngine: "prusa" }],
+      ["production-version", { slicerVersion: "other" }],
+    ] as const) {
+      await inRollbackTransaction(name, async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+
+        await expect(
+          createProductionSlice(
+            client,
+            fixtures,
+            foundation,
+            name,
+            slicerIdentity,
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "slice_results_production_slicer_check",
+        });
+      });
+    }
+
+    await inRollbackTransaction(
+      "production-quality",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const printConfigRevisionId = fixtures.id("fine-print-config");
+        await fixtures.createRevisionIdentity(
+          printConfigRevisionId,
+          "PRINT_CONFIG",
+        );
+        await client.query(
+          'INSERT INTO "print_config_revisions" ("id", "quality", "infill_percent", "layer_height_micrometers", "settings") VALUES ($1, $2, $3, $4, $5::jsonb)',
+          [printConfigRevisionId, "FINE", 20, 200, JSON.stringify({})],
+        );
+
+        await expect(
+          createProductionSlice(client, fixtures, foundation, "quality", {
+            printConfigRevisionId,
+          }),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "slice_results_production_quality_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "blank-slicer-identities",
+      async (client, fixtures) => {
+        const referenceProfileId = fixtures.id("blank-reference-profile");
+        await fixtures.createRevisionIdentity(
+          referenceProfileId,
+          "REFERENCE_PROFILE",
+        );
+
+        await expect(
+          client.query(
+            'INSERT INTO "reference_profiles" ("id", "material", "quality", "slicer_engine", "slicer_version", "settings") VALUES ($1, $2, $3, $4, $5, $6::jsonb)',
+            [
+              referenceProfileId,
+              "PLA",
+              "STANDARD",
+              "   ",
+              "test",
+              JSON.stringify({}),
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "reference_profiles_slicer_identity_check",
+        });
       },
     );
   });
@@ -815,38 +1067,29 @@ describe("persistence foundations", () => {
           'INSERT INTO "print_config_revisions" ("id", "quality", "infill_percent", "layer_height_micrometers", "settings") VALUES ($1, $2, $3, $4, $5::jsonb)',
           [printConfigRevisionId, "FINE", 20, 200, JSON.stringify({})],
         );
-        await client.query(
-          'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
-          [
-            sliceResultId,
-            "PRODUCTION",
-            `fine-${sliceResultId}`,
-            foundation.modelGeometryId,
-            printConfigRevisionId,
-            foundation.machineProfileId,
-            foundation.machineCalibrationId,
-            1,
-            `slices/${sliceResultId}`,
-            "8".repeat(64),
-            60,
-            60,
-            "orca",
-            "test",
-          ],
-        );
-
         await expect(
-          fixtures.planProduction(
-            {
-              ...foundation,
-              printConfigRevisionId,
+          client.query(
+            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+            [
               sliceResultId,
-            },
-            "wrong-quality",
+              "PRODUCTION",
+              `fine-${sliceResultId}`,
+              foundation.modelGeometryId,
+              printConfigRevisionId,
+              foundation.machineProfileId,
+              foundation.machineCalibrationId,
+              1,
+              `slices/${sliceResultId}`,
+              "8".repeat(64),
+              60,
+              60,
+              "orca",
+              "test",
+            ],
           ),
         ).rejects.toMatchObject({
           code: "23514",
-          constraint: "candidate_resource_compatibility_check",
+          constraint: "slice_results_production_quality_check",
         });
       },
     );
@@ -2435,6 +2678,193 @@ describe("persistence foundations", () => {
         await client.query(
           'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
           [capacityReservationIds[1], "RELEASED"],
+        );
+        await client.query("COMMIT");
+      }
+      client.release();
+    }
+  });
+
+  it("revalidates mutable resources only for live jobs in a HELD set", async () => {
+    const client = await pool.connect();
+    const fixtures = factory(client, "held-live-resource-eligibility");
+    let foundation: PersistenceFoundation | null = null;
+    let liveFoundation: PersistenceFoundation | null = null;
+    let terminalProduction: ProductionReservationFixture;
+    let liveProduction: ProductionReservationFixture | null = null;
+    let heldCommitted = false;
+    const terminalCapacityId = fixtures.id("terminal-capacity");
+    const liveCapacityId = fixtures.id("live-capacity");
+    try {
+      await client.query("BEGIN");
+      foundation = await fixtures.createFoundation("terminal-machine");
+      liveFoundation = await createSiblingMachineFoundation(
+        client,
+        fixtures,
+        foundation,
+        "live-machine",
+      );
+      terminalProduction = await fixtures.planProduction(
+        foundation,
+        "terminal-production",
+        {
+          startsAt: testTimes.capacityStart,
+          endsAt: testTimes.capacityEnd,
+        },
+      );
+      liveProduction = await fixtures.planProduction(
+        liveFoundation,
+        "live-production",
+        {
+          startsAt: testTimes.capacityStart,
+          endsAt: testTimes.capacityEnd,
+        },
+      );
+      await fixtures.createResourcePlan(foundation, [
+        terminalProduction,
+        liveProduction,
+      ]);
+      await fixtures.createPhaseReservationSet(foundation);
+      await fixtures.createProductionReservation(
+        foundation,
+        terminalProduction,
+      );
+      await fixtures.createProductionReservation(
+        liveFoundation,
+        liveProduction,
+      );
+
+      for (const [resource, production, capacityId] of [
+        [foundation, terminalProduction, terminalCapacityId],
+        [liveFoundation, liveProduction, liveCapacityId],
+      ] as const) {
+        await client.query(
+          'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+          [
+            production.inventoryReservationId,
+            resource.nodeId,
+            production.productionReservationId,
+            resource.inventoryId,
+            60,
+            testTimes.expiresAt,
+            testTimes.createdAt,
+            testTimes.createdAt,
+          ],
+        );
+        await client.query(
+          'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+          [
+            capacityId,
+            resource.nodeId,
+            production.productionReservationId,
+            production.candidateCapacityIntervalId,
+            resource.machineId,
+            testTimes.capacityStart,
+            testTimes.capacityEnd,
+            testTimes.expiresAt,
+            testTimes.createdAt,
+            testTimes.createdAt,
+          ],
+        );
+      }
+      await client.query(
+        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+        [foundation.phaseReservationSetId, "RESERVED"],
+      );
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await client.query("SET CONSTRAINTS ALL DEFERRED");
+      for (const [production, capacityId] of [
+        [terminalProduction, terminalCapacityId],
+        [liveProduction, liveCapacityId],
+      ] as const) {
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.inventoryReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+          [capacityId, "HELD"],
+        );
+      }
+      await client.query(
+        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+        [foundation.phaseReservationSetId, "HELD"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.productionReservationId, "RELEASED"],
+      );
+      await client.query(
+        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.inventoryReservationId, "RELEASED"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalCapacityId, "RELEASED"],
+      );
+      await client.query("COMMIT");
+      heldCommitted = true;
+
+      await client.query("BEGIN");
+      await client.query(
+        'UPDATE "machines" SET "status" = $2 WHERE "id" = $1',
+        [foundation.machineId, "DISABLED"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveProduction.productionReservationId, "SCHEDULED"],
+      );
+      await client.query(
+        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveProduction.inventoryReservationId, "ALLOCATED"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveCapacityId, "SCHEDULED"],
+      );
+      await expect(client.query("COMMIT")).resolves.toBeDefined();
+
+      await client.query("BEGIN");
+      await client.query(
+        'UPDATE "machines" SET "status" = $2 WHERE "id" = $1',
+        [liveFoundation.machineId, "DISABLED"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveProduction.productionReservationId, "PRINTING"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveCapacityId, "PRINTING"],
+      );
+      await expect(client.query("COMMIT")).rejects.toMatchObject({
+        code: "23514",
+        constraint: "phase_reservation_set_resource_compatibility_check",
+      });
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      if (heldCommitted && foundation && liveProduction && liveFoundation) {
+        await client.query("BEGIN");
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [liveProduction.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+          [liveProduction.inventoryReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+          [liveCapacityId, "RELEASED"],
         );
         await client.query("COMMIT");
       }

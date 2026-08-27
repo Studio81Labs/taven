@@ -971,6 +971,10 @@ ALTER TABLE "print_config_revisions"
     );
 
 ALTER TABLE "reference_profiles"
+    ADD CONSTRAINT "reference_profiles_slicer_identity_check" CHECK (
+        btrim("slicer_engine") <> '' AND
+        btrim("slicer_version") <> ''
+    ),
     ADD CONSTRAINT "reference_profiles_lifecycle_check" CHECK (
         ("state" = 'DRAFT' AND "activated_at" IS NULL AND "retired_at" IS NULL) OR
         ("state" = 'ACTIVE' AND "activated_at" IS NOT NULL AND "retired_at" IS NULL) OR
@@ -990,6 +994,10 @@ ALTER TABLE "machine_capabilities"
 
 ALTER TABLE "machine_profiles"
     ADD CONSTRAINT "machine_profiles_values_check" CHECK ("nozzle_diameter_micrometers" > 0),
+    ADD CONSTRAINT "machine_profiles_slicer_identity_check" CHECK (
+        btrim("slicer_engine") <> '' AND
+        btrim("slicer_version") <> ''
+    ),
     ADD CONSTRAINT "machine_profiles_lifecycle_check" CHECK (
         ("state" = 'DRAFT' AND "activated_at" IS NULL AND "retired_at" IS NULL) OR
         ("state" = 'ACTIVE' AND "activated_at" IS NOT NULL AND "retired_at" IS NULL) OR
@@ -1021,6 +1029,10 @@ ALTER TABLE "inventories"
 
 ALTER TABLE "slice_results"
     ADD CONSTRAINT "slice_results_artifact_hash_check" CHECK ("artifact_hash" ~ '^[0-9a-f]{64}$'),
+    ADD CONSTRAINT "slice_results_slicer_identity_check" CHECK (
+        btrim("slicer_engine") <> '' AND
+        btrim("slicer_version") <> ''
+    ),
     ADD CONSTRAINT "slice_results_values_check" CHECK (
         "parts_per_plate" > 0 AND
         "estimated_print_seconds" > 0 AND
@@ -1129,7 +1141,7 @@ ALTER TABLE "idempotency_records"
         ("status" <> 'COMPLETED' AND "response_status_code" IS NULL AND "response_body" IS NULL)
     );
 
-CREATE FUNCTION taven_validate_reference_slice_quality()
+CREATE FUNCTION taven_validate_slice_profile_compatibility()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
@@ -1137,11 +1149,9 @@ DECLARE
     requested_quality "print_quality";
     selected_quality "print_quality";
     selected_state "revision_state";
+    selected_slicer_engine varchar(100);
+    selected_slicer_version varchar(100);
 BEGIN
-    IF NEW."kind" <> 'REFERENCE' THEN
-        RETURN NEW;
-    END IF;
-
     SELECT print_config."quality"
     INTO requested_quality
     FROM "print_config_revisions" print_config
@@ -1151,33 +1161,76 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    SELECT reference_profile."quality", reference_profile."state"
-    INTO selected_quality, selected_state
-    FROM "reference_profiles" reference_profile
-    WHERE reference_profile."id" = NEW."reference_profile_id"
-    FOR SHARE;
+    IF NEW."kind" = 'REFERENCE' THEN
+        SELECT
+            reference_profile."quality",
+            reference_profile."state",
+            reference_profile."slicer_engine",
+            reference_profile."slicer_version"
+        INTO
+            selected_quality,
+            selected_state,
+            selected_slicer_engine,
+            selected_slicer_version
+        FROM "reference_profiles" reference_profile
+        WHERE reference_profile."id" = NEW."reference_profile_id"
+        FOR SHARE;
 
-    IF NOT FOUND THEN
-        RETURN NEW;
-    END IF;
+        IF NOT FOUND THEN
+            RETURN NEW;
+        END IF;
 
-    IF selected_state <> 'ACTIVE' THEN
-        RAISE EXCEPTION 'reference slice must use an active reference profile'
-            USING ERRCODE = '23514', CONSTRAINT = 'slice_results_reference_profile_active_check';
-    END IF;
+        IF selected_state <> 'ACTIVE' THEN
+            RAISE EXCEPTION 'reference slice must use an active reference profile'
+                USING ERRCODE = '23514', CONSTRAINT = 'slice_results_reference_profile_active_check';
+        END IF;
 
-    IF selected_quality IS DISTINCT FROM requested_quality THEN
-        RAISE EXCEPTION 'reference slice print configuration and reference profile quality must match'
-            USING ERRCODE = '23514', CONSTRAINT = 'slice_results_reference_quality_check';
+        IF selected_quality IS DISTINCT FROM requested_quality THEN
+            RAISE EXCEPTION 'reference slice print configuration and reference profile quality must match'
+                USING ERRCODE = '23514', CONSTRAINT = 'slice_results_reference_quality_check';
+        END IF;
+
+        IF selected_slicer_engine IS DISTINCT FROM NEW."slicer_engine"
+           OR selected_slicer_version IS DISTINCT FROM NEW."slicer_version" THEN
+            RAISE EXCEPTION 'reference slice slicer identity must match its reference profile'
+                USING ERRCODE = '23514', CONSTRAINT = 'slice_results_reference_slicer_check';
+        END IF;
+    ELSE
+        SELECT
+            machine_profile."quality",
+            machine_profile."slicer_engine",
+            machine_profile."slicer_version"
+        INTO
+            selected_quality,
+            selected_slicer_engine,
+            selected_slicer_version
+        FROM "machine_profiles" machine_profile
+        WHERE machine_profile."id" = NEW."machine_profile_id"
+        FOR SHARE;
+
+        IF NOT FOUND THEN
+            RETURN NEW;
+        END IF;
+
+        IF selected_quality IS DISTINCT FROM requested_quality THEN
+            RAISE EXCEPTION 'production slice print configuration and machine profile quality must match'
+                USING ERRCODE = '23514', CONSTRAINT = 'slice_results_production_quality_check';
+        END IF;
+
+        IF selected_slicer_engine IS DISTINCT FROM NEW."slicer_engine"
+           OR selected_slicer_version IS DISTINCT FROM NEW."slicer_version" THEN
+            RAISE EXCEPTION 'production slice slicer identity must match its machine profile'
+                USING ERRCODE = '23514', CONSTRAINT = 'slice_results_production_slicer_check';
+        END IF;
     END IF;
 
     RETURN NEW;
 END;
 $$;
 
-CREATE TRIGGER "slice_results_reference_quality"
+CREATE TRIGGER "slice_results_profile_compatibility"
     BEFORE INSERT ON "slice_results"
-    FOR EACH ROW EXECUTE FUNCTION taven_validate_reference_slice_quality();
+    FOR EACH ROW EXECUTE FUNCTION taven_validate_slice_profile_compatibility();
 
 CREATE UNIQUE INDEX "reference_profiles_active_material_quality_key"
     ON "reference_profiles" ("material", "quality")
@@ -2623,6 +2676,7 @@ BEGIN
         SELECT 1
         FROM "production_reservations" production
         WHERE production."phase_reservation_set_id" = target_set."id"
+          AND production."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
           AND NOT EXISTS (
               SELECT 1
               FROM "nodes" node
