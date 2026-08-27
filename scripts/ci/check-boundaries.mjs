@@ -13,12 +13,61 @@ function vueScripts(source) {
   );
 }
 
+const identifierStartPattern = /^[$_\p{ID_Start}]$/u;
+const identifierPartPattern = /^[$_\u200c\u200d\p{ID_Continue}]$/u;
+
 function isIdentifierStart(character) {
-  return /[A-Za-z_$]/.test(character);
+  return identifierStartPattern.test(character);
 }
 
 function isIdentifierPart(character) {
-  return /[A-Za-z0-9_$]/.test(character);
+  return identifierPartPattern.test(character);
+}
+
+function readIdentifierEscape(source, start) {
+  if (source[start] !== "\\" || source[start + 1] !== "u") return undefined;
+  if (source[start + 2] === "{") {
+    const close = source.indexOf("}", start + 3);
+    if (close === -1) return undefined;
+    const digits = source.slice(start + 3, close);
+    if (!/^[0-9A-Fa-f]{1,6}$/.test(digits)) return undefined;
+    const codePoint = Number.parseInt(digits, 16);
+    if (codePoint > 0x10ffff) return undefined;
+    return { end: close + 1, value: String.fromCodePoint(codePoint) };
+  }
+  const digits = source.slice(start + 2, start + 6);
+  if (!/^[0-9A-Fa-f]{4}$/.test(digits)) return undefined;
+  return {
+    end: start + 6,
+    value: String.fromCodePoint(Number.parseInt(digits, 16)),
+  };
+}
+
+function readIdentifier(source, start) {
+  let index = start;
+  let value = "";
+  let escaped = false;
+  while (index < source.length) {
+    const escape = readIdentifierEscape(source, index);
+    const codePoint = source.codePointAt(index);
+    const character =
+      escape?.value ??
+      (codePoint === undefined ? undefined : String.fromCodePoint(codePoint));
+    if (character === undefined) break;
+    const valid =
+      value.length === 0
+        ? isIdentifierStart(character)
+        : isIdentifierPart(character);
+    if (!valid) break;
+    value += character;
+    if (escape !== undefined) {
+      escaped = true;
+      index = escape.end;
+    } else {
+      index += character.length;
+    }
+  }
+  return index === start ? undefined : { end: index, escaped, value };
 }
 
 function decodeEscape(source, start) {
@@ -93,6 +142,7 @@ function findTemplateExpressionEnd(source, start) {
   const braces = [];
   for (let index = start; index < source.length;) {
     const character = source[index];
+    const identifier = readIdentifier(source, index);
     if (/\s/.test(character)) {
       index += 1;
     } else if (character === "/" && source[index + 1] === "/") {
@@ -110,11 +160,13 @@ function findTemplateExpressionEnd(source, start) {
     } else if (character === "/" && isRegexStart(tokens)) {
       index = skipRegexLiteral(source, index);
       tokens.push({ kind: "regex", value: "" });
-    } else if (isIdentifierStart(character)) {
-      let end = index + 1;
-      while (isIdentifierPart(source[end] ?? "")) end += 1;
-      tokens.push({ kind: "identifier", value: source.slice(index, end) });
-      index = end;
+    } else if (identifier !== undefined) {
+      tokens.push({
+        kind: "identifier",
+        value: identifier.value,
+        escaped: identifier.escaped,
+      });
+      index = identifier.end;
     } else if (/[0-9]/.test(character)) {
       let end = index + 1;
       while (/[A-Za-z0-9._]/.test(source[end] ?? "")) end += 1;
@@ -337,6 +389,7 @@ function lexicalTokens(source) {
   const braces = [];
   for (let index = 0; index < source.length;) {
     const character = source[index];
+    const identifier = readIdentifier(source, index);
     if (/\s/.test(character)) {
       index += 1;
     } else if (character === "/" && source[index + 1] === "/") {
@@ -363,11 +416,13 @@ function lexicalTokens(source) {
     } else if (character === "/" && isRegexStart(tokens)) {
       index = skipRegexLiteral(source, index);
       tokens.push({ kind: "regex", value: "" });
-    } else if (isIdentifierStart(character)) {
-      let end = index + 1;
-      while (isIdentifierPart(source[end] ?? "")) end += 1;
-      tokens.push({ kind: "identifier", value: source.slice(index, end) });
-      index = end;
+    } else if (identifier !== undefined) {
+      tokens.push({
+        kind: "identifier",
+        value: identifier.value,
+        escaped: identifier.escaped,
+      });
+      index = identifier.end;
     } else if (/[0-9]/.test(character)) {
       let end = index + 1;
       while (/[A-Za-z0-9._]/.test(source[end] ?? "")) end += 1;
@@ -413,7 +468,11 @@ function staticSpecifier(tokens, start) {
   if (first !== undefined) return first;
   for (let index = start + 1; index < tokens.length; index += 1) {
     if (tokens[index].value === ";") break;
-    if (tokens[index].kind === "identifier" && tokens[index].value === "from") {
+    if (
+      tokens[index].kind === "identifier" &&
+      tokens[index].escaped !== true &&
+      tokens[index].value === "from"
+    ) {
       const specifier = literalSpecifier(tokens[index + 1]);
       if (specifier !== undefined) return specifier;
     }
@@ -432,6 +491,7 @@ function importSpecifiers(source, file) {
       const next = tokens[index + 1];
       if (
         token.kind === "identifier" &&
+        token.escaped !== true &&
         token.value === "import" &&
         previous?.value !== "." &&
         next?.value !== "."
@@ -442,7 +502,11 @@ function importSpecifiers(source, file) {
             : undefined;
         const specifier = dynamic ?? staticSpecifier(tokens, index);
         if (specifier !== undefined) specifiers.push(specifier);
-      } else if (token.kind === "identifier" && token.value === "export") {
+      } else if (
+        token.kind === "identifier" &&
+        token.escaped !== true &&
+        token.value === "export"
+      ) {
         const specifier = staticSpecifier(tokens, index);
         if (specifier !== undefined) specifiers.push(specifier);
       } else if (
