@@ -1387,10 +1387,27 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    old_status text := OLD."status"::text;
+    old_status text;
     new_status text := NEW."status"::text;
+    required_initial_status text;
     allowed boolean := false;
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        required_initial_status := CASE TG_TABLE_NAME
+            WHEN 'phase_reservation_sets' THEN 'BUILDING'
+            WHEN 'production_reservations' THEN 'RESERVED'
+            WHEN 'capacity_reservations' THEN 'RESERVED'
+        END;
+
+        IF new_status <> required_initial_status THEN
+            RAISE EXCEPTION '% must be created in % status', TG_TABLE_NAME, required_initial_status
+                USING ERRCODE = '23514', CONSTRAINT = 'reservation_lifecycle_initial_state_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
+    old_status := OLD."status"::text;
     IF old_status = new_status THEN
         RETURN NEW;
     END IF;
@@ -1423,14 +1440,36 @@ END;
 $$;
 
 CREATE TRIGGER "phase_reservation_sets_lifecycle_transition"
-    BEFORE UPDATE ON "phase_reservation_sets"
+    BEFORE INSERT OR UPDATE ON "phase_reservation_sets"
     FOR EACH ROW EXECUTE FUNCTION taven_validate_reservation_lifecycle();
 CREATE TRIGGER "production_reservations_lifecycle_transition"
-    BEFORE UPDATE ON "production_reservations"
+    BEFORE INSERT OR UPDATE ON "production_reservations"
     FOR EACH ROW EXECUTE FUNCTION taven_validate_reservation_lifecycle();
 CREATE TRIGGER "capacity_reservations_lifecycle_transition"
-    BEFORE UPDATE ON "capacity_reservations"
+    BEFORE INSERT OR UPDATE ON "capacity_reservations"
     FOR EACH ROW EXECUTE FUNCTION taven_validate_reservation_lifecycle();
+
+CREATE FUNCTION taven_protect_completed_idempotency_result()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD."status" = 'COMPLETED' AND (
+        NEW."status" <> OLD."status" OR
+        NEW."response_status_code" IS DISTINCT FROM OLD."response_status_code" OR
+        NEW."response_body" IS DISTINCT FROM OLD."response_body"
+    ) THEN
+        RAISE EXCEPTION 'completed idempotency result cannot be changed'
+            USING ERRCODE = '23514', CONSTRAINT = 'idempotency_records_completed_result_immutable_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "idempotency_records_completed_result_immutable"
+    BEFORE UPDATE ON "idempotency_records"
+    FOR EACH ROW EXECUTE FUNCTION taven_protect_completed_idempotency_result();
 
 CREATE TRIGGER "reference_profiles_payload_immutable"
     BEFORE UPDATE OR DELETE ON "reference_profiles"
@@ -1531,10 +1570,18 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     PERFORM 1
-    FROM "phase_resource_plans"
-    WHERE "id" = NEW."phase_resource_plan_id"
-      AND "node_id" = NEW."node_id"
+    FROM "phase_resource_plans" plan
+    WHERE plan."id" = NEW."phase_resource_plan_id"
+      AND plan."node_id" = NEW."node_id"
+      AND plan."expires_at" > clock_timestamp()
+      AND NEW."expires_at" > clock_timestamp()
+      AND NEW."expires_at" <= plan."expires_at"
     FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'reservation set must fit within a current phase resource plan'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_plan_expiry_check';
+    END IF;
 
     RETURN NEW;
 END;
@@ -1728,8 +1775,9 @@ BEGIN
             WHERE production."id" = NEW."production_reservation_id"
               AND production."node_id" = NEW."node_id"
               AND production."inventory_id" = NEW."inventory_id"
+              AND production."expires_at" = NEW."expires_at"
         ) THEN
-            RAISE EXCEPTION 'inventory reservation must use the production reservation inventory'
+            RAISE EXCEPTION 'inventory reservation must use the production inventory and expiry'
                 USING ERRCODE = '23514', CONSTRAINT = 'inventory_reservation_production_inventory_check';
         END IF;
 
@@ -1850,6 +1898,41 @@ CREATE CONSTRAINT TRIGGER "inventories_reserved_counter_matches_reservations"
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION taven_validate_inventory_reserved_counter();
 
+CREATE FUNCTION taven_validate_capacity_reservation_binding()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "production_reservations" production
+        JOIN "phase_resource_plan_jobs" plan_job
+          ON plan_job."id" = production."phase_resource_plan_job_id"
+         AND plan_job."phase_resource_plan_id" = production."phase_resource_plan_id"
+         AND plan_job."node_id" = production."node_id"
+        JOIN "candidate_capacity_intervals" candidate_interval
+          ON candidate_interval."id" = NEW."candidate_capacity_interval_id"
+         AND candidate_interval."candidate_resource_estimate_id" = plan_job."candidate_resource_estimate_id"
+         AND candidate_interval."node_id" = production."node_id"
+        WHERE production."id" = NEW."production_reservation_id"
+          AND production."node_id" = NEW."node_id"
+          AND production."machine_id" = NEW."machine_id"
+          AND production."expires_at" = NEW."expires_at"
+          AND candidate_interval."starts_at" = NEW."starts_at"
+          AND candidate_interval."ends_at" = NEW."ends_at"
+    ) THEN
+        RAISE EXCEPTION 'capacity reservation must match the production candidate interval, machine, and expiry'
+            USING ERRCODE = '23514', CONSTRAINT = 'capacity_reservation_production_binding_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "capacity_reservations_production_binding"
+    BEFORE INSERT ON "capacity_reservations"
+    FOR EACH ROW EXECUTE FUNCTION taven_validate_capacity_reservation_binding();
+
 CREATE FUNCTION taven_validate_phase_reservation_set(set_id uuid)
 RETURNS void
 LANGUAGE plpgsql
@@ -1865,8 +1948,54 @@ BEGIN
     FROM "phase_reservation_sets"
     WHERE "id" = set_id;
 
-    IF NOT FOUND OR target_set."status" NOT IN ('RESERVED', 'HELD') THEN
+    IF NOT FOUND THEN
         RETURN;
+    END IF;
+
+    IF target_set."status" IN ('SETTLED', 'RELEASED', 'EXPIRED') THEN
+        IF EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            WHERE production."phase_reservation_set_id" = target_set."id"
+              AND production."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+        ) OR EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            JOIN "inventory_reservations" inventory_reservation
+              ON inventory_reservation."production_reservation_id" = production."id"
+            WHERE production."phase_reservation_set_id" = target_set."id"
+              AND taven_inventory_reservation_is_active(inventory_reservation."status")
+        ) OR EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            JOIN "capacity_reservations" capacity_reservation
+              ON capacity_reservation."production_reservation_id" = production."id"
+            WHERE production."phase_reservation_set_id" = target_set."id"
+              AND capacity_reservation."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+        ) THEN
+            RAISE EXCEPTION 'terminal phase reservation set % still owns active children', target_set."id"
+                USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_terminal_children_check';
+        END IF;
+
+        RETURN;
+    END IF;
+
+    IF target_set."status" NOT IN ('RESERVED', 'HELD') THEN
+        RETURN;
+    END IF;
+
+    IF target_set."status" = 'RESERVED' AND (
+        target_set."expires_at" <= clock_timestamp() OR NOT EXISTS (
+            SELECT 1
+            FROM "phase_resource_plans" plan
+            WHERE plan."id" = target_set."phase_resource_plan_id"
+              AND plan."node_id" = target_set."node_id"
+              AND plan."expires_at" > clock_timestamp()
+              AND target_set."expires_at" <= plan."expires_at"
+        )
+    ) THEN
+        RAISE EXCEPTION 'active phase reservation set % must fit within a current resource plan', target_set."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_plan_expiry_check';
     END IF;
 
     SELECT count(*) INTO expected_jobs
@@ -1919,6 +2048,7 @@ BEGIN
      AND inventory_reservation."node_id" = production."node_id"
      AND inventory_reservation."inventory_id" = production."inventory_id"
      AND inventory_reservation."reserved_milligrams" = production."required_material_milligrams"
+     AND inventory_reservation."expires_at" = production."expires_at"
      AND inventory_reservation."status" IN ('RESERVED', 'HELD', 'ALLOCATED')
     WHERE plan_job."phase_resource_plan_id" = target_set."phase_resource_plan_id"
       AND plan_job."node_id" = target_set."node_id"
@@ -1938,6 +2068,7 @@ BEGIN
            AND capacity_reservation."machine_id" = production."machine_id"
            AND capacity_reservation."starts_at" = candidate_interval."starts_at"
            AND capacity_reservation."ends_at" = candidate_interval."ends_at"
+           AND capacity_reservation."expires_at" = production."expires_at"
            AND capacity_reservation."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
           WHERE candidate_interval."candidate_resource_estimate_id" = candidate."id"
             AND candidate_interval."node_id" = candidate."node_id"
@@ -2008,6 +2139,23 @@ BEGIN
     IF TG_OP = 'DELETE' THEN
         PERFORM taven_validate_phase_reservation_set(OLD."id");
     ELSE
+        IF TG_OP = 'UPDATE'
+           AND OLD."status" IS DISTINCT FROM NEW."status"
+           AND NEW."status" IN ('RESERVED', 'HELD')
+           AND (
+               NEW."expires_at" <= clock_timestamp() OR NOT EXISTS (
+                   SELECT 1
+                   FROM "phase_resource_plans" plan
+                   WHERE plan."id" = NEW."phase_resource_plan_id"
+                     AND plan."node_id" = NEW."node_id"
+                     AND plan."expires_at" > clock_timestamp()
+                     AND NEW."expires_at" <= plan."expires_at"
+               )
+           ) THEN
+            RAISE EXCEPTION 'active phase reservation set % must fit within a current resource plan', NEW."id"
+                USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_plan_expiry_check';
+        END IF;
+
         PERFORM taven_validate_phase_reservation_set(NEW."id");
     END IF;
     RETURN NULL;
@@ -2027,10 +2175,7 @@ BEGIN
         set_id := NEW."phase_reservation_set_id";
     END IF;
 
-    IF EXISTS (
-        SELECT 1 FROM "phase_reservation_sets"
-        WHERE "id" = set_id AND "status" IN ('RESERVED', 'HELD')
-    ) THEN
+    IF set_id IS NOT NULL THEN
         PERFORM taven_validate_phase_reservation_set(set_id);
     END IF;
     RETURN NULL;
@@ -2054,10 +2199,7 @@ BEGIN
     SELECT "phase_reservation_set_id" INTO set_id
     FROM "production_reservations"
     WHERE "id" = production_id;
-    IF EXISTS (
-        SELECT 1 FROM "phase_reservation_sets"
-        WHERE "id" = set_id AND "status" IN ('RESERVED', 'HELD')
-    ) THEN
+    IF set_id IS NOT NULL THEN
         PERFORM taven_validate_phase_reservation_set(set_id);
     END IF;
     RETURN NULL;

@@ -322,17 +322,21 @@ export class PersistenceFactory {
 
   async createPhaseReservationSet(
     foundation: PersistenceFoundation,
+    reservationExpiresAt = expiresAt,
+    status = "BUILDING",
+    reservationCreatedAt = createdAt,
   ): Promise<void> {
     await this.sql.query(
-      'INSERT INTO "phase_reservation_sets" ("id", "node_id", "phase_resource_plan_id", "reservation_key", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      'INSERT INTO "phase_reservation_sets" ("id", "node_id", "phase_resource_plan_id", "reservation_key", "status", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
       [
         foundation.phaseReservationSetId,
         foundation.nodeId,
         foundation.phaseResourcePlanId,
         `reservation-${this.scope}`,
-        expiresAt,
-        createdAt,
-        createdAt,
+        status,
+        reservationExpiresAt,
+        reservationCreatedAt,
+        reservationCreatedAt,
       ],
     );
   }
@@ -340,6 +344,8 @@ export class PersistenceFactory {
   async createResourcePlan(
     foundation: PersistenceFoundation,
     productions: ProductionReservationFixture[],
+    planExpiresAt = expiresAt,
+    planCreatedAt = createdAt,
   ): Promise<void> {
     const requiredFulfilmentSlotIds = productions.map(
       (production) => production.fulfilmentSlotId,
@@ -356,8 +362,8 @@ export class PersistenceFactory {
         JSON.stringify(requiredFulfilmentSlotIds),
         JSON.stringify(candidateIds),
         this.hash("snapshot"),
-        createdAt,
-        expiresAt,
+        planCreatedAt,
+        planExpiresAt,
       ],
     );
     await this.sql.query(
@@ -368,8 +374,8 @@ export class PersistenceFactory {
         this.id("future-order-phase"),
         foundation.eligibilitySnapshotId,
         `plan-${this.scope}`,
-        createdAt,
-        expiresAt,
+        planCreatedAt,
+        planExpiresAt,
       ],
     );
     for (const production of productions) {
@@ -399,9 +405,10 @@ export class PersistenceFactory {
   async createProductionReservation(
     foundation: PersistenceFoundation,
     planned: ProductionReservationFixture,
+    status = "RESERVED",
   ): Promise<void> {
     await this.sql.query(
-      'INSERT INTO "production_reservations" ("id", "node_id", "phase_reservation_set_id", "phase_resource_plan_job_id", "planned_job_key", "job_id", "machine_id", "inventory_id", "slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "expires_at", "created_at", "updated_at", "phase_resource_plan_id") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19)',
+      'INSERT INTO "production_reservations" ("id", "node_id", "phase_reservation_set_id", "phase_resource_plan_job_id", "planned_job_key", "job_id", "machine_id", "inventory_id", "slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "status", "expires_at", "created_at", "updated_at", "phase_resource_plan_id") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19, $20)',
       [
         planned.productionReservationId,
         foundation.nodeId,
@@ -418,6 +425,7 @@ export class PersistenceFactory {
         60,
         60,
         JSON.stringify({}),
+        status,
         expiresAt,
         createdAt,
         createdAt,

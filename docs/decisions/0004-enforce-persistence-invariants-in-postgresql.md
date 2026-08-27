@@ -123,9 +123,15 @@ lock the shared plan or candidate row before either side of each membership
 boundary changes, serializing reservation creation against concurrent plan
 members and planning against concurrent candidate intervals. The set cannot
 become held or active while the completeness comparison fails, and later child
-changes revalidate both reserved and held sets. Deferral permits one confirming
-transaction to insert the set and all children together; it does not make a
-partial set valid across transactions.
+changes revalidate both reserved and held sets. A reservation set must remain
+within a resource plan that is still current at insertion and confirmation
+time, and all production, inventory, and capacity children share the set
+expiry. Terminal parent states cannot retain or later acquire active children.
+Reservation rows must start at their lifecycle entry states before following
+the allowed transition graph. A held set remains valid after its checkout TTL
+because it is then governed by the active phase's operational deadline.
+Deferral permits one confirming transaction to insert the set and all children
+together; it does not make a partial set valid across transactions.
 
 ### Immutable inputs and snapshots
 
@@ -136,7 +142,9 @@ protected by immutable-row triggers. Corrections create a new revision,
 estimate, or plan and preserve the old row for auditability. Retention
 deadlines/holds, profile lifecycle state, reservation status, and other
 explicitly operational fields remain mutable only where the model defines
-them as such; immutability is not an application convention.
+them as such. Completed idempotency results are terminal so a replay cannot
+replace the stored command response; immutability is not an application
+convention.
 
 Triggers are kept narrow. Checks, foreign keys, partial unique indexes, and
 the GiST exclusion constraint remain preferred for facts they can express

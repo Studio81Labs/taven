@@ -765,6 +765,129 @@ describe("persistence foundations", () => {
     }
   });
 
+  it("rejects reservation sets outside their plan validity window", async () => {
+    await inRollbackTransaction(
+      "expired-reservation-plan",
+      async (_client, fixtures) => {
+        const planCreatedAt = new Date(Date.now() - 120_000);
+        const planExpiresAt = new Date(Date.now() - 60_000);
+        const foundation = await fixtures.createFoundation("expired-plan");
+        const production = await fixtures.planProduction(
+          foundation,
+          "expired-plan-production",
+        );
+        await fixtures.createResourcePlan(
+          foundation,
+          [production],
+          planExpiresAt,
+          planCreatedAt,
+        );
+
+        await expect(
+          fixtures.createPhaseReservationSet(
+            foundation,
+            planExpiresAt,
+            "BUILDING",
+            planCreatedAt,
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_reservation_set_plan_expiry_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "reservation-beyond-plan",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation("future-plan");
+        const production = await fixtures.planProduction(
+          foundation,
+          "future-plan-production",
+        );
+        await fixtures.createResourcePlan(foundation, [production]);
+
+        await expect(
+          fixtures.createPhaseReservationSet(
+            foundation,
+            new Date("2030-08-27T12:00:01.000Z"),
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_reservation_set_plan_expiry_check",
+        });
+      },
+    );
+  });
+
+  it("requires resource children to share the production expiry", async () => {
+    await inRollbackTransaction(
+      "inventory-expiry-mismatch",
+      async (client, fixtures) => {
+        const { foundation, productions } =
+          await fixtures.createReservationGraph("inventory-expiry-mismatch");
+        const production = productions[0];
+        if (!production) {
+          throw new Error(
+            "reservation graph did not create a production fixture",
+          );
+        }
+
+        await expect(
+          client.query(
+            'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+            [
+              production.inventoryReservationId,
+              foundation.nodeId,
+              production.productionReservationId,
+              foundation.inventoryId,
+              60,
+              new Date("2030-08-27T11:00:00.000Z"),
+              new Date("2026-08-27T12:00:00.000Z"),
+              new Date("2026-08-27T12:00:00.000Z"),
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "inventory_reservation_production_inventory_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "capacity-expiry-mismatch",
+      async (client, fixtures) => {
+        const { foundation, productions } =
+          await fixtures.createReservationGraph("capacity-expiry-mismatch");
+        const production = productions[0];
+        if (!production) {
+          throw new Error(
+            "reservation graph did not create a production fixture",
+          );
+        }
+
+        await expect(
+          client.query(
+            'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+            [
+              fixtures.id("mismatched-expiry-capacity"),
+              foundation.nodeId,
+              production.productionReservationId,
+              production.candidateCapacityIntervalId,
+              foundation.machineId,
+              new Date("2027-01-01T10:00:00.000Z"),
+              new Date("2027-01-01T11:00:00.000Z"),
+              new Date("2030-08-27T11:00:00.000Z"),
+              new Date("2026-08-27T12:00:00.000Z"),
+              new Date("2026-08-27T12:00:00.000Z"),
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "capacity_reservation_production_binding_check",
+        });
+      },
+    );
+  });
+
   it("cannot commit an incomplete RESERVED phase reservation set", async () => {
     const client = await pool.connect();
     try {
@@ -950,6 +1073,17 @@ describe("persistence foundations", () => {
         code: "23514",
         constraint: "phase_reservation_set_complete_check",
       });
+      await client.query("ROLLBACK");
+
+      await client.query("BEGIN");
+      await client.query(
+        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+        [foundation.phaseReservationSetId, "RELEASED"],
+      );
+      await expect(client.query("COMMIT")).rejects.toMatchObject({
+        code: "23514",
+        constraint: "phase_reservation_set_terminal_children_check",
+      });
     } finally {
       await client.query("ROLLBACK").catch(() => undefined);
       if (heldCommitted && foundation && production) {
@@ -972,6 +1106,220 @@ describe("persistence foundations", () => {
         );
         await client.query("COMMIT");
       }
+      client.release();
+    }
+  });
+
+  it("requires reservation rows to start at their lifecycle entry states", async () => {
+    await inRollbackTransaction(
+      "initial-phase-set-status",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "initial-phase-set-status",
+        );
+        const production = await fixtures.planProduction(
+          foundation,
+          "production",
+        );
+        await fixtures.createResourcePlan(foundation, [production]);
+
+        await expect(
+          fixtures.createPhaseReservationSet(
+            foundation,
+            new Date("2030-08-27T12:00:00.000Z"),
+            "HELD",
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "reservation_lifecycle_initial_state_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "initial-production-status",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "initial-production-status",
+        );
+        const production = await fixtures.planProduction(
+          foundation,
+          "production",
+        );
+        await fixtures.createResourcePlan(foundation, [production]);
+        await fixtures.createPhaseReservationSet(foundation);
+
+        await expect(
+          fixtures.createProductionReservation(
+            foundation,
+            production,
+            "SCHEDULED",
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "reservation_lifecycle_initial_state_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "initial-capacity-status",
+      async (client, fixtures) => {
+        const { foundation, productions } =
+          await fixtures.createReservationGraph("initial-capacity-status");
+        const production = productions[0];
+        if (!production) {
+          throw new Error(
+            "reservation graph did not create a production fixture",
+          );
+        }
+
+        await expect(
+          client.query(
+            'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "status", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+            [
+              fixtures.id("initial-capacity"),
+              foundation.nodeId,
+              production.productionReservationId,
+              production.candidateCapacityIntervalId,
+              foundation.machineId,
+              new Date("2027-01-01T10:00:00.000Z"),
+              new Date("2027-01-01T11:00:00.000Z"),
+              "PRINTING",
+              new Date("2030-08-27T12:00:00.000Z"),
+              new Date("2026-08-27T12:00:00.000Z"),
+              new Date("2026-08-27T12:00:00.000Z"),
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "reservation_lifecycle_initial_state_check",
+        });
+      },
+    );
+  });
+
+  it("keeps a completed idempotency result immutable", async () => {
+    const insertCompletedRecord = async (
+      client: PoolClient,
+      fixtures: PersistenceFactory,
+    ): Promise<string> => {
+      const id = fixtures.id("completed-idempotency-record");
+      await client.query(
+        'INSERT INTO "idempotency_records" ("id", "namespace", "idempotency_key", "request_fingerprint", "status", "response_status_code", "response_body", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)',
+        [
+          id,
+          "test-command",
+          `idempotency-${fixtures.id("key")}`,
+          "b".repeat(64),
+          "COMPLETED",
+          201,
+          JSON.stringify({ result: "original" }),
+          new Date("2030-08-27T12:00:00.000Z"),
+          new Date("2026-08-27T12:00:00.000Z"),
+          new Date("2026-08-27T12:00:00.000Z"),
+        ],
+      );
+      return id;
+    };
+
+    await inRollbackTransaction(
+      "rewind-completed-idempotency",
+      async (client, fixtures) => {
+        const id = await insertCompletedRecord(client, fixtures);
+        await expect(
+          client.query(
+            'UPDATE "idempotency_records" SET "status" = $2, "response_status_code" = NULL, "response_body" = NULL WHERE "id" = $1',
+            [id, "PROCESSING"],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "idempotency_records_completed_result_immutable_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "replace-completed-idempotency",
+      async (client, fixtures) => {
+        const id = await insertCompletedRecord(client, fixtures);
+        await expect(
+          client.query(
+            'UPDATE "idempotency_records" SET "response_body" = $2::jsonb WHERE "id" = $1',
+            [id, JSON.stringify({ result: "replacement" })],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "idempotency_records_completed_result_immutable_check",
+        });
+      },
+    );
+  });
+
+  it("rejects active children added after a reservation set is terminal", async () => {
+    const client = await pool.connect();
+    const fixtures = factory(client, "terminal-set-late-children");
+    try {
+      await client.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "terminal-set-late-children",
+      );
+      const production = await fixtures.planProduction(
+        foundation,
+        "production",
+      );
+      await fixtures.createResourcePlan(foundation, [production]);
+      await fixtures.createPhaseReservationSet(foundation);
+      await client.query(
+        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+        [foundation.phaseReservationSetId, "RELEASED"],
+      );
+      await client.query("COMMIT");
+
+      await client.query("BEGIN");
+      await fixtures.createProductionReservation(foundation, production);
+      await client.query(
+        'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [
+          production.inventoryReservationId,
+          foundation.nodeId,
+          production.productionReservationId,
+          foundation.inventoryId,
+          60,
+          new Date("2030-08-27T12:00:00.000Z"),
+          new Date("2026-08-27T12:00:00.000Z"),
+          new Date("2026-08-27T12:00:00.000Z"),
+        ],
+      );
+      await client.query(
+        'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+        [
+          fixtures.id("late-capacity"),
+          foundation.nodeId,
+          production.productionReservationId,
+          production.candidateCapacityIntervalId,
+          foundation.machineId,
+          new Date("2027-01-01T10:00:00.000Z"),
+          new Date("2027-01-01T11:00:00.000Z"),
+          new Date("2030-08-27T12:00:00.000Z"),
+          new Date("2026-08-27T12:00:00.000Z"),
+          new Date("2026-08-27T12:00:00.000Z"),
+        ],
+      );
+
+      await expect(client.query("COMMIT")).rejects.toMatchObject({
+        code: "23514",
+        constraint: "phase_reservation_set_terminal_children_check",
+      });
+      await client.query("ROLLBACK");
+
+      const inventory = await client.query<{ reserved_milligrams: string }>(
+        'SELECT "reserved_milligrams" FROM "inventories" WHERE "id" = $1',
+        [foundation.inventoryId],
+      );
+      expect(inventory.rows[0]?.reserved_milligrams).toBe("0");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
       client.release();
     }
   });
