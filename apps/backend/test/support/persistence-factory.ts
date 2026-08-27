@@ -406,6 +406,7 @@ export class PersistenceFactory {
     foundation: PersistenceFoundation,
     planned: ProductionReservationFixture,
     status = "RESERVED",
+    resourceSnapshot: unknown = {},
   ): Promise<void> {
     await this.sql.query(
       'INSERT INTO "production_reservations" ("id", "node_id", "phase_reservation_set_id", "phase_resource_plan_job_id", "planned_job_key", "job_id", "machine_id", "inventory_id", "slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "status", "expires_at", "created_at", "updated_at", "phase_resource_plan_id") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19, $20)',
@@ -424,7 +425,7 @@ export class PersistenceFactory {
         foundation.machineCalibrationId,
         60,
         60,
-        JSON.stringify({}),
+        JSON.stringify(resourceSnapshot),
         status,
         expiresAt,
         createdAt,
@@ -442,6 +443,7 @@ export class PersistenceFactory {
         endsAt: new Date("2027-01-01T11:00:00.000Z"),
       },
     ],
+    resourceSnapshot: unknown = {},
   ): Promise<{
     foundation: PersistenceFoundation;
     productions: ProductionReservationFixture[];
@@ -456,7 +458,12 @@ export class PersistenceFactory {
     await this.createResourcePlan(foundation, productions);
     await this.createPhaseReservationSet(foundation);
     for (const production of productions) {
-      await this.createProductionReservation(foundation, production);
+      await this.createProductionReservation(
+        foundation,
+        production,
+        "RESERVED",
+        resourceSnapshot,
+      );
     }
     return { foundation, productions };
   }

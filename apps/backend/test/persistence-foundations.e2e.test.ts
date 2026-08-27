@@ -29,6 +29,56 @@ async function inRollbackTransaction<T>(
   }
 }
 
+async function createCompleteSingleReservationGraph(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  name: string,
+  interval: { startsAt: Date; endsAt: Date },
+  resourceSnapshot: unknown = {},
+): Promise<{
+  foundation: PersistenceFoundation;
+  production: ProductionReservationFixture;
+}> {
+  const { foundation, productions } = await fixtures.createReservationGraph(
+    name,
+    [interval],
+    resourceSnapshot,
+  );
+  const production = productions[0];
+  if (!production) {
+    throw new Error("reservation graph did not create a production fixture");
+  }
+  await client.query(
+    'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+    [
+      production.inventoryReservationId,
+      foundation.nodeId,
+      production.productionReservationId,
+      foundation.inventoryId,
+      60,
+      new Date("2030-08-27T12:00:00.000Z"),
+      new Date("2026-08-27T12:00:00.000Z"),
+      new Date("2026-08-27T12:00:00.000Z"),
+    ],
+  );
+  await client.query(
+    'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+    [
+      fixtures.id(`${name}:capacity-reservation`),
+      foundation.nodeId,
+      production.productionReservationId,
+      production.candidateCapacityIntervalId,
+      foundation.machineId,
+      interval.startsAt,
+      interval.endsAt,
+      new Date("2030-08-27T12:00:00.000Z"),
+      new Date("2026-08-27T12:00:00.000Z"),
+      new Date("2026-08-27T12:00:00.000Z"),
+    ],
+  );
+  return { foundation, production };
+}
+
 describe("persistence foundations", () => {
   beforeAll(() => {
     if (!databaseUrl) {
@@ -889,6 +939,91 @@ describe("persistence foundations", () => {
         ).rejects.toMatchObject({
           code: "23514",
           constraint: "phase_reservation_set_plan_expiry_check",
+        });
+      },
+    );
+  });
+
+  it("revalidates capacity, mutable resources, and snapshots at confirmation", async () => {
+    await inRollbackTransaction(
+      "past-capacity-confirmation",
+      async (client, fixtures) => {
+        const { foundation } = await createCompleteSingleReservationGraph(
+          client,
+          fixtures,
+          "past-capacity-confirmation",
+          {
+            startsAt: new Date(Date.now() - 120_000),
+            endsAt: new Date(Date.now() - 60_000),
+          },
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+
+        await expect(
+          client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_reservation_set_capacity_window_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "mutable-resource-confirmation",
+      async (client, fixtures) => {
+        const { foundation } = await createCompleteSingleReservationGraph(
+          client,
+          fixtures,
+          "mutable-resource-confirmation",
+          {
+            startsAt: new Date("2027-01-01T10:00:00.000Z"),
+            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+          },
+        );
+        await client.query(
+          'UPDATE "machines" SET "status" = $2 WHERE "id" = $1',
+          [foundation.machineId, "DISABLED"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+
+        await expect(
+          client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_reservation_set_resource_compatibility_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "resource-snapshot-confirmation",
+      async (client, fixtures) => {
+        const { foundation } = await createCompleteSingleReservationGraph(
+          client,
+          fixtures,
+          "resource-snapshot-confirmation",
+          {
+            startsAt: new Date("2027-01-01T10:00:00.000Z"),
+            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+          },
+          { inventoryRemainingMilligrams: 99 },
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+
+        await expect(
+          client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_reservation_set_complete_check",
         });
       },
     );

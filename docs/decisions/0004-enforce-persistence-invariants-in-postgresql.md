@@ -132,9 +132,12 @@ the allowed transition graph. `BUILDING` is transaction-local and cannot
 survive commit. A reserved set requires every child to remain reserved; a held
 set may mix fully live and fully terminal job-resource groups while at least
 one group remains live. A held set remains valid after its checkout TTL because
-it is then governed by the active phase's operational deadline. Deferral permits
-one confirming transaction to insert the set and all children together; it does
-not make a partial set valid across transactions.
+it is then governed by the active phase's operational deadline. Confirmation
+locks and revalidates the selected machine, profile, calibration, and inventory,
+requires every live capacity interval to remain in the future, and compares
+each copied resource snapshot with its candidate estimate. Deferral permits one
+confirming transaction to insert the set and all children together; it does not
+make a partial set valid across transactions.
 
 ### Immutable inputs and snapshots
 

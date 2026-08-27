@@ -1449,6 +1449,99 @@ CREATE TRIGGER "capacity_reservations_lifecycle_transition"
     BEFORE INSERT OR UPDATE ON "capacity_reservations"
     FOR EACH ROW EXECUTE FUNCTION taven_validate_reservation_lifecycle();
 
+CREATE FUNCTION taven_lock_production_reservation_resources()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "machine_profiles"
+    WHERE "id" = NEW."machine_profile_id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "machines"
+    WHERE "node_id" = NEW."node_id"
+      AND "id" = NEW."machine_id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "machine_calibrations"
+    WHERE "id" = NEW."machine_calibration_id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "inventories"
+    WHERE "node_id" = NEW."node_id"
+      AND "id" = NEW."inventory_id"
+    FOR UPDATE;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "production_reservations_lock_resources"
+    BEFORE INSERT ON "production_reservations"
+    FOR EACH ROW EXECUTE FUNCTION taven_lock_production_reservation_resources();
+
+CREATE FUNCTION taven_lock_phase_reservation_resources()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD."status" IS NOT DISTINCT FROM NEW."status"
+       OR NEW."status" NOT IN ('RESERVED', 'HELD') THEN
+        RETURN NEW;
+    END IF;
+
+    PERFORM 1
+    FROM "machine_profiles"
+    WHERE "id" IN (
+        SELECT "machine_profile_id"
+        FROM "production_reservations"
+        WHERE "phase_reservation_set_id" = NEW."id"
+    )
+    ORDER BY "id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "machines"
+    WHERE ("node_id", "id") IN (
+        SELECT "node_id", "machine_id"
+        FROM "production_reservations"
+        WHERE "phase_reservation_set_id" = NEW."id"
+    )
+    ORDER BY "node_id", "id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "machine_calibrations"
+    WHERE "id" IN (
+        SELECT "machine_calibration_id"
+        FROM "production_reservations"
+        WHERE "phase_reservation_set_id" = NEW."id"
+    )
+    ORDER BY "id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "inventories"
+    WHERE ("node_id", "id") IN (
+        SELECT "node_id", "inventory_id"
+        FROM "production_reservations"
+        WHERE "phase_reservation_set_id" = NEW."id"
+    )
+    ORDER BY "node_id", "id"
+    FOR UPDATE;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "phase_reservation_sets_lock_resources"
+    BEFORE UPDATE ON "phase_reservation_sets"
+    FOR EACH ROW EXECUTE FUNCTION taven_lock_phase_reservation_resources();
+
 CREATE FUNCTION taven_protect_completed_idempotency_result()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2108,6 +2201,50 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_plan_expiry_check';
     END IF;
 
+    IF target_set."status" = 'RESERVED' AND EXISTS (
+        SELECT 1
+        FROM "production_reservations" production
+        JOIN "capacity_reservations" capacity_reservation
+          ON capacity_reservation."production_reservation_id" = production."id"
+        WHERE production."phase_reservation_set_id" = target_set."id"
+          AND capacity_reservation."starts_at" <= clock_timestamp()
+    ) THEN
+        RAISE EXCEPTION 'reserved phase reservation set % contains capacity that has already started', target_set."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_capacity_window_check';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "production_reservations" production
+        WHERE production."phase_reservation_set_id" = target_set."id"
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "machine_profiles" machine_profile
+              JOIN "machines" machine
+                ON machine."id" = production."machine_id"
+               AND machine."node_id" = production."node_id"
+              JOIN "inventories" inventory
+                ON inventory."id" = production."inventory_id"
+               AND inventory."node_id" = production."node_id"
+               AND inventory."machine_id" = production."machine_id"
+              JOIN "machine_calibrations" calibration
+                ON calibration."id" = production."machine_calibration_id"
+               AND calibration."node_id" = production."node_id"
+               AND calibration."machine_id" = production."machine_id"
+              WHERE machine_profile."id" = production."machine_profile_id"
+                AND machine_profile."machine_capability_id" = machine."machine_capability_id"
+                AND machine_profile."nozzle_diameter_micrometers" = machine."installed_nozzle_micrometers"
+                AND machine_profile."material" = inventory."material"
+                AND machine_profile."state" = 'ACTIVE'
+                AND calibration."state" = 'ACTIVE'
+                AND machine."status" = 'ACTIVE'
+                AND inventory."status" = 'AVAILABLE'
+          )
+    ) THEN
+        RAISE EXCEPTION 'phase reservation set % uses a resource that is no longer compatible or active', target_set."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_resource_compatibility_check';
+    END IF;
+
     SELECT count(*) INTO expected_jobs
     FROM "phase_resource_plan_jobs"
     WHERE "phase_resource_plan_id" = target_set."phase_resource_plan_id"
@@ -2145,6 +2282,7 @@ BEGIN
      AND production."machine_calibration_id" = candidate."machine_calibration_id"
      AND production."required_material_milligrams" = candidate."required_material_milligrams"
      AND production."required_machine_seconds" = candidate."required_machine_seconds"
+     AND production."resource_snapshot" = candidate."resource_snapshot"
      AND production."expires_at" = target_set."expires_at"
     JOIN "slice_results" slice_result
       ON slice_result."id" = production."slice_result_id"
@@ -2260,6 +2398,22 @@ BEGIN
            ) THEN
             RAISE EXCEPTION 'active phase reservation set % must fit within a current resource plan', NEW."id"
                 USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_plan_expiry_check';
+        END IF;
+
+        IF TG_OP = 'UPDATE'
+           AND OLD."status" IS DISTINCT FROM NEW."status"
+           AND NEW."status" IN ('RESERVED', 'HELD')
+           AND EXISTS (
+               SELECT 1
+               FROM "production_reservations" production
+               JOIN "capacity_reservations" capacity_reservation
+                 ON capacity_reservation."production_reservation_id" = production."id"
+               WHERE production."phase_reservation_set_id" = NEW."id"
+                 AND capacity_reservation."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+                 AND capacity_reservation."starts_at" <= clock_timestamp()
+           ) THEN
+            RAISE EXCEPTION 'phase reservation set % contains capacity that has already started', NEW."id"
+                USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_capacity_window_check';
         END IF;
 
         PERFORM taven_validate_phase_reservation_set(NEW."id");
