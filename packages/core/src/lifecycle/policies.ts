@@ -3363,12 +3363,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
       requireJobReplacementObligation("Job", command);
     }
     if (command.current === "packed" && command.target === "handed_over") {
-      requireFlag(
-        "Job",
-        command,
-        "contextHandoffCompleted",
-        "handoff requires its complete context-specific transaction",
-      );
+      requireAtomicOrdinaryHandoff("Job", command);
     }
     if (command.current === "handed_over" && command.target === "settled") {
       requireDeliveredJobSettlement("Job", command);
@@ -3711,6 +3706,203 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
   );
 }
 
+function requireAtomicOrdinaryHandoff<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const shipmentId = command.context?.shipmentId;
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  const expectedSlotIdsValue = command.context?.handoffSlotIds;
+  const slotsValue = command.context?.handoffSlots;
+  const expectedJobIdsValue = command.context?.handoffJobIds;
+  const jobsValue = command.context?.handoffJobs;
+  const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
+    ? [...expectedSlotIdsValue]
+    : undefined;
+  const slots = Array.isArray(slotsValue) ? [...slotsValue] : undefined;
+  const expectedJobIds = Array.isArray(expectedJobIdsValue)
+    ? [...expectedJobIdsValue]
+    : undefined;
+  const jobs = Array.isArray(jobsValue) ? [...jobsValue] : undefined;
+  if (
+    typeof shipmentId !== "string" ||
+    shipmentId.trim().length === 0 ||
+    command.context?.handoffShipmentId !== shipmentId ||
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.handoffOrderId !== orderId ||
+    command.context?.handoffPhaseOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.handoffPhaseId !== phaseId ||
+    command.context?.handoffShipmentPreviousStatus !== "label_created" ||
+    command.context?.handoffShipmentTargetStatus !== "handed_over" ||
+    command.context?.handoffJobPreviousStatus !== "packed" ||
+    command.context?.handoffJobTargetStatus !== "handed_over" ||
+    expectedSlotIds === undefined ||
+    expectedSlotIds.length === 0 ||
+    expectedSlotIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(expectedSlotIds).size !== expectedSlotIds.length ||
+    slots === undefined ||
+    slots.length !== expectedSlotIds.length ||
+    expectedJobIds === undefined ||
+    expectedJobIds.length === 0 ||
+    expectedJobIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(expectedJobIds).size !== expectedJobIds.length ||
+    jobs === undefined ||
+    jobs.length !== expectedJobIds.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "ordinary handoff requires the exact Shipment, Order, phase, slot, and Job sets",
+    );
+  }
+  if (
+    !hasSameNonEmptyStringSet(
+      command.context?.shipmentFulfilmentSlotIds,
+      expectedSlotIds,
+    )
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "ordinary handoff slots must exactly match the Shipment slot set",
+    );
+  }
+
+  const authoritativeSlotIds = expectedSlotIds as string[];
+  const authoritativeJobIds = expectedJobIds as string[];
+  const projectedSlotIds = new Set<string>();
+  const contributingJobIds = new Set<string>();
+  for (const value of slots) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "ordinary handoff slots must be complete identity records",
+      );
+    }
+    const slot = value as Readonly<Record<string, unknown>>;
+    const id = slot.id;
+    const slotJobId = slot.jobId;
+    if (
+      typeof id !== "string" ||
+      id.trim().length === 0 ||
+      projectedSlotIds.has(id) ||
+      !authoritativeSlotIds.includes(id) ||
+      slot.shipmentId !== shipmentId ||
+      slot.orderId !== orderId ||
+      slot.phaseId !== phaseId ||
+      typeof slotJobId !== "string" ||
+      slotJobId.trim().length === 0 ||
+      !authoritativeJobIds.includes(slotJobId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "ordinary handoff must cover each exact slot once",
+      );
+    }
+    projectedSlotIds.add(id);
+    contributingJobIds.add(slotJobId);
+  }
+  if (authoritativeSlotIds.some((id) => !projectedSlotIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "ordinary handoff cannot omit a Shipment slot",
+    );
+  }
+  if (
+    contributingJobIds.size !== authoritativeJobIds.length ||
+    authoritativeJobIds.some((id) => !contributingJobIds.has(id))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "ordinary handoff Jobs must exactly match the slot contributors",
+    );
+  }
+
+  const projectedJobIds = new Set<string>();
+  for (const value of jobs) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "ordinary handoff Jobs must be complete identity records",
+      );
+    }
+    const job = value as Readonly<Record<string, unknown>>;
+    const id = job.id;
+    if (
+      typeof id !== "string" ||
+      id.trim().length === 0 ||
+      projectedJobIds.has(id) ||
+      !authoritativeJobIds.includes(id) ||
+      job.shipmentId !== shipmentId ||
+      job.orderId !== orderId ||
+      job.phaseId !== phaseId ||
+      job.previousStatus !== "packed" ||
+      job.targetStatus !== "handed_over"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "ordinary handoff must transition every exact contributing Job",
+      );
+    }
+    projectedJobIds.add(id);
+  }
+  if (authoritativeJobIds.some((id) => !projectedJobIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "ordinary handoff cannot omit a contributing Job",
+    );
+  }
+  if (
+    lifecycle === "Job" &&
+    (typeof command.context?.jobId !== "string" ||
+      command.context.jobId.trim().length === 0 ||
+      !authoritativeJobIds.includes(command.context.jobId))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "ordinary handoff Job evidence must include the exact current Job",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "handoffCompleted",
+    "ordinary Shipment handoff requires the complete result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "handoffAtomic",
+    "ordinary Shipment and Job handoff must be atomic",
+  );
+}
+
 export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
   name: "Shipment",
   initial: ["planned"],
@@ -3744,7 +3936,16 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
         "cancellation requires the provider void command to be persisted",
       );
     }
-    if (command.target === "handed_over") {
+    if (
+      command.current === "label_created" &&
+      command.target === "handed_over"
+    ) {
+      requireAtomicOrdinaryHandoff("Shipment", command);
+    }
+    if (
+      command.target === "handed_over" &&
+      command.current !== "label_created"
+    ) {
       requireFlag(
         "Shipment",
         command,
@@ -4136,6 +4337,559 @@ export type ClaimSlotResolutionStatus =
   | "recovery_pending"
   | "withdrawn";
 
+function requireCompleteReplacementRequiredSlotSet<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const resolutionId = command.context?.claimSlotResolutionId;
+  const claimId = command.context?.claimId;
+  const resolutionSlotId = command.context?.claimSlotId;
+  const replacementSetId = command.context?.replacementSetId;
+  const expectedSlotIdsValue =
+    command.context?.expectedReplacementRequiredSlotIds;
+  const bindingsValue = command.context?.replacementRequiredSlotBindings;
+  const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
+    ? [...expectedSlotIdsValue]
+    : undefined;
+  const bindings = Array.isArray(bindingsValue)
+    ? [...bindingsValue]
+    : undefined;
+  if (
+    typeof resolutionId !== "string" ||
+    resolutionId.trim().length === 0 ||
+    typeof claimId !== "string" ||
+    claimId.trim().length === 0 ||
+    typeof resolutionSlotId !== "string" ||
+    resolutionSlotId.trim().length === 0 ||
+    typeof replacementSetId !== "string" ||
+    replacementSetId.trim().length === 0 ||
+    command.context?.replacementRequiredSetClaimId !== claimId ||
+    command.context?.replacementRequiredSetResolutionId !== resolutionId ||
+    command.context?.replacementRequiredSetId !== replacementSetId ||
+    expectedSlotIds === undefined ||
+    expectedSlotIds.length === 0 ||
+    !expectedSlotIds.includes(resolutionSlotId) ||
+    expectedSlotIds.some(
+      (slotId) => typeof slotId !== "string" || slotId.trim().length === 0,
+    ) ||
+    new Set(expectedSlotIds).size !== expectedSlotIds.length ||
+    bindings === undefined ||
+    bindings.length !== expectedSlotIds.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement production requires its complete exact required-slot set",
+    );
+  }
+
+  const expectedSlots = expectedSlotIds as string[];
+  const boundSlotIds = new Set<string>();
+  const requestIds = new Set<string>();
+  const reservationIds = new Set<string>();
+  const shipmentIds = new Set<string>();
+  const jobIds = new Set<string>();
+  for (const value of bindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement production requires slot-to-resource identity records",
+      );
+    }
+    const binding = value as Readonly<Record<string, unknown>>;
+    const slotId = binding.slotId;
+    const requestId = binding.replacementRequestId;
+    const reservationId = binding.replacementReservationId;
+    const shipmentId = binding.replacementShipmentId;
+    const jobId = binding.currentReplacementJobId;
+    if (
+      typeof slotId !== "string" ||
+      slotId.trim().length === 0 ||
+      boundSlotIds.has(slotId) ||
+      !expectedSlots.includes(slotId) ||
+      binding.claimId !== claimId ||
+      binding.resolutionId !== resolutionId ||
+      binding.replacementSetId !== replacementSetId ||
+      typeof requestId !== "string" ||
+      requestId.trim().length === 0 ||
+      requestIds.has(requestId) ||
+      binding.replacementRequestClaimId !== claimId ||
+      binding.replacementRequestResolutionId !== resolutionId ||
+      binding.replacementRequestSlotId !== slotId ||
+      typeof reservationId !== "string" ||
+      reservationId.trim().length === 0 ||
+      reservationIds.has(reservationId) ||
+      binding.replacementReservationRequestId !== requestId ||
+      binding.replacementReservationSlotId !== slotId ||
+      typeof shipmentId !== "string" ||
+      shipmentId.trim().length === 0 ||
+      shipmentIds.has(shipmentId) ||
+      binding.replacementShipmentRequestId !== requestId ||
+      binding.replacementShipmentReservationId !== reservationId ||
+      binding.replacementShipmentSlotId !== slotId ||
+      typeof jobId !== "string" ||
+      jobId.trim().length === 0 ||
+      jobIds.has(jobId) ||
+      binding.currentReplacementJobRequestId !== requestId ||
+      binding.currentReplacementJobReservationId !== reservationId ||
+      binding.currentReplacementJobShipmentId !== shipmentId ||
+      binding.currentReplacementJobSlotId !== slotId ||
+      binding.currentReplacementJobLineageLeaf !== true ||
+      binding.currentReplacementJobStatus !== "created"
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "each replacement-required slot must bind this Claim child to its exact request, reservation, Shipment, and current Job leaf",
+      );
+    }
+    boundSlotIds.add(slotId);
+    requestIds.add(requestId);
+    reservationIds.add(reservationId);
+    shipmentIds.add(shipmentId);
+    jobIds.add(jobId);
+  }
+  if (expectedSlots.some((slotId) => !boundSlotIds.has(slotId))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement production cannot omit a required slot binding",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementRequiredSlotSetComplete",
+    "replacement production requires the authoritative complete required-slot set",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementSetupAtomic",
+    "replacement production must persist the complete replacement setup atomically",
+  );
+}
+
+function requireExactClaimRefundScope<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const slotId = context?.claimSlotId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const paymentId = context?.paymentId;
+  const priceAdjustmentId = context?.priceAdjustmentId;
+  const refundTransactionId = context?.refundTransactionId;
+  const allocationId = context?.claimRefundAllocationId;
+  const amountMinor = context?.claimRefundAmountMinor;
+  const scopeId = context?.claimRefundScopeId;
+  const expectedResolutionIdsValue = context?.claimRefundScopeResolutionIds;
+  const expectedSlotIdsValue = context?.claimRefundScopeSlotIds;
+  const expectedBindingsValue = context?.claimRefundScopeResolutionSlots;
+  const allResolutionIdsValue = context?.claimRefundScopeAllResolutionIds;
+  const allSlotIdsValue = context?.claimRefundScopeAllSlotIds;
+  const allBindingsValue = context?.claimRefundScopeAllResolutionSlots;
+  const operationsValue = context?.claimRefundScopeChildOperations;
+  const childrenValue = context?.claimRefundScopeChildren;
+  const expectedResolutionIds = Array.isArray(expectedResolutionIdsValue)
+    ? [...expectedResolutionIdsValue]
+    : undefined;
+  const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
+    ? [...expectedSlotIdsValue]
+    : undefined;
+  const expectedBindings = Array.isArray(expectedBindingsValue)
+    ? [...expectedBindingsValue]
+    : undefined;
+  const allResolutionIds = Array.isArray(allResolutionIdsValue)
+    ? [...allResolutionIdsValue]
+    : undefined;
+  const allSlotIds = Array.isArray(allSlotIdsValue)
+    ? [...allSlotIdsValue]
+    : undefined;
+  const allBindings = Array.isArray(allBindingsValue)
+    ? [...allBindingsValue]
+    : undefined;
+  const operations = Array.isArray(operationsValue)
+    ? [...operationsValue]
+    : undefined;
+  const children = Array.isArray(childrenValue)
+    ? [...childrenValue]
+    : undefined;
+  const validIdSet = (value: unknown[] | undefined): value is string[] =>
+    value !== undefined &&
+    value.length > 0 &&
+    value.every((id) => typeof id === "string" && id.trim().length > 0) &&
+    new Set(value).size === value.length;
+
+  if (
+    typeof claimId !== "string" ||
+    claimId.trim().length === 0 ||
+    typeof resolutionId !== "string" ||
+    resolutionId.trim().length === 0 ||
+    typeof slotId !== "string" ||
+    slotId.trim().length === 0 ||
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    typeof paymentId !== "string" ||
+    paymentId.trim().length === 0 ||
+    typeof priceAdjustmentId !== "string" ||
+    priceAdjustmentId.trim().length === 0 ||
+    typeof refundTransactionId !== "string" ||
+    refundTransactionId.trim().length === 0 ||
+    typeof allocationId !== "string" ||
+    allocationId.trim().length === 0 ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    typeof scopeId !== "string" ||
+    scopeId.trim().length === 0 ||
+    context?.claimRefundScopeClaimId !== claimId ||
+    context?.claimRefundScopeOrderId !== orderId ||
+    context?.claimRefundScopePhaseId !== phaseId ||
+    context?.claimRefundScopePriceAdjustmentId !== priceAdjustmentId ||
+    context?.claimRefundResolutionId !== resolutionId ||
+    context?.claimRefundSlotId !== slotId ||
+    context?.claimRefundPaymentId !== paymentId ||
+    context?.claimRefundPriceAdjustmentId !== priceAdjustmentId ||
+    context?.claimRefundTransactionId !== refundTransactionId ||
+    context?.claimRefundExpectedAmountMinor !== amountMinor ||
+    context?.claimRefundPriceAdjustmentScopeId !== scopeId ||
+    context?.claimRefundPriceAdjustmentOrderId !== orderId ||
+    context?.claimRefundPriceAdjustmentStatus !== "active" ||
+    context?.claimRefundTransactionPaymentId !== paymentId ||
+    context?.claimRefundTransactionOrderId !== orderId ||
+    context?.claimRefundTransactionPriceAdjustmentId !== priceAdjustmentId ||
+    context?.claimRefundTransactionAmountMinor !== amountMinor ||
+    !validIdSet(expectedResolutionIds) ||
+    !validIdSet(expectedSlotIds) ||
+    expectedBindings === undefined ||
+    expectedBindings.length !== expectedResolutionIds.length ||
+    !validIdSet(allResolutionIds) ||
+    !validIdSet(allSlotIds) ||
+    allBindings === undefined ||
+    allBindings.length !== allResolutionIds.length ||
+    operations === undefined ||
+    operations.length !== expectedResolutionIds.length ||
+    expectedResolutionIds.length !== expectedSlotIds.length ||
+    allResolutionIds.length !== allSlotIds.length ||
+    allResolutionIds.length !== children?.length ||
+    !allResolutionIds.includes(resolutionId) ||
+    !expectedResolutionIds.includes(resolutionId) ||
+    context?.claimRefundScopeComplete !== true ||
+    context?.claimRefundScopeAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "claim refund requires its exact complete authoritative child scope",
+    );
+  }
+
+  const targetResolutionIds = new Set(expectedResolutionIds);
+  const targetSlotIds = new Set(expectedSlotIds);
+  const expectedSlotByResolution = new Map<string, string>();
+  const expectedBoundSlotIds = new Set<string>();
+  for (const value of expectedBindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund scope requires exact resolution-to-slot allocation bindings",
+      );
+    }
+    const binding = value as Readonly<Record<string, unknown>>;
+    const bindingResolutionId = binding.resolutionId;
+    const bindingSlotId = binding.slotId;
+    if (
+      typeof bindingResolutionId !== "string" ||
+      !targetResolutionIds.has(bindingResolutionId) ||
+      expectedSlotByResolution.has(bindingResolutionId) ||
+      typeof bindingSlotId !== "string" ||
+      !targetSlotIds.has(bindingSlotId) ||
+      expectedBoundSlotIds.has(bindingSlotId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund scope allocations must bind each target child and slot once",
+      );
+    }
+    expectedSlotByResolution.set(bindingResolutionId, bindingSlotId);
+    expectedBoundSlotIds.add(bindingSlotId);
+  }
+  if (
+    expectedResolutionIds.some((id) => !expectedSlotByResolution.has(id)) ||
+    expectedSlotIds.some((id) => !expectedBoundSlotIds.has(id))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "claim refund scope allocations cannot omit a target child or slot",
+    );
+  }
+
+  const authoritativeSlotByResolution = new Map<string, string>();
+  const authoritativeBoundSlotIds = new Set<string>();
+  for (const value of allBindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund scope requires exact authoritative child-to-slot bindings",
+      );
+    }
+    const binding = value as Readonly<Record<string, unknown>>;
+    const bindingResolutionId = binding.resolutionId;
+    const bindingSlotId = binding.slotId;
+    if (
+      typeof bindingResolutionId !== "string" ||
+      !allResolutionIds.includes(bindingResolutionId) ||
+      authoritativeSlotByResolution.has(bindingResolutionId) ||
+      typeof bindingSlotId !== "string" ||
+      !allSlotIds.includes(bindingSlotId) ||
+      authoritativeBoundSlotIds.has(bindingSlotId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund authoritative child slots must form a complete bijection",
+      );
+    }
+    authoritativeSlotByResolution.set(bindingResolutionId, bindingSlotId);
+    authoritativeBoundSlotIds.add(bindingSlotId);
+  }
+  if (
+    allResolutionIds.some((id) => !authoritativeSlotByResolution.has(id)) ||
+    allSlotIds.some((id) => !authoritativeBoundSlotIds.has(id)) ||
+    expectedResolutionIds.some(
+      (id) =>
+        authoritativeSlotByResolution.get(id) !==
+        expectedSlotByResolution.get(id),
+    )
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "claim refund authoritative child slots cannot omit or remap a child",
+    );
+  }
+
+  const operationByResolution = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  const operationSlotIds = new Set<string>();
+  const operationAllocationIds = new Set<string>();
+  const operationRefundTransactionIds = new Set<string>();
+  for (const value of operations) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund scope requires exact per-child financial operations",
+      );
+    }
+    const operation = value as Readonly<Record<string, unknown>>;
+    const operationResolutionId = operation.resolutionId;
+    const operationSlotId = operation.slotId;
+    const operationPaymentId = operation.paymentId;
+    const operationAllocationId = operation.allocationId;
+    const operationRefundTransactionId = operation.refundTransactionId;
+    const operationAmountMinor = operation.amountMinor;
+    if (
+      typeof operationResolutionId !== "string" ||
+      !targetResolutionIds.has(operationResolutionId) ||
+      operationByResolution.has(operationResolutionId) ||
+      typeof operationSlotId !== "string" ||
+      expectedSlotByResolution.get(operationResolutionId) !== operationSlotId ||
+      operationSlotIds.has(operationSlotId) ||
+      typeof operationPaymentId !== "string" ||
+      operationPaymentId.trim().length === 0 ||
+      operation.priceAdjustmentId !== priceAdjustmentId ||
+      typeof operationAllocationId !== "string" ||
+      operationAllocationId.trim().length === 0 ||
+      operationAllocationIds.has(operationAllocationId) ||
+      typeof operationRefundTransactionId !== "string" ||
+      operationRefundTransactionId.trim().length === 0 ||
+      operationRefundTransactionIds.has(operationRefundTransactionId) ||
+      typeof operationAmountMinor !== "bigint" ||
+      operationAmountMinor <= 0n
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund child operations must form an exact financial-operation bijection",
+      );
+    }
+    operationByResolution.set(operationResolutionId, operation);
+    operationSlotIds.add(operationSlotId);
+    operationAllocationIds.add(operationAllocationId);
+    operationRefundTransactionIds.add(operationRefundTransactionId);
+  }
+  if (
+    expectedResolutionIds.some((id) => !operationByResolution.has(id)) ||
+    expectedSlotIds.some((id) => !operationSlotIds.has(id))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "claim refund child operations cannot omit a target child or slot",
+    );
+  }
+
+  const projectedResolutionIds = new Set<string>();
+  const projectedSlotIds = new Set<string>();
+  const projectedRefundTransactionIds = new Set<string>();
+  let scopeAmountMinor = 0n;
+  let includedCount = 0;
+  for (const value of children) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund scope requires exact child records",
+      );
+    }
+    const child = value as Readonly<Record<string, unknown>>;
+    const childResolutionId = child.resolutionId;
+    const childSlotId = child.slotId;
+    const includedInRefund = child.includedInRefund;
+    const statusBefore = child.statusBefore;
+    const statusAfter = child.statusAfter;
+    if (
+      typeof childResolutionId !== "string" ||
+      childResolutionId.trim().length === 0 ||
+      projectedResolutionIds.has(childResolutionId) ||
+      !allResolutionIds.includes(childResolutionId) ||
+      typeof childSlotId !== "string" ||
+      childSlotId.trim().length === 0 ||
+      projectedSlotIds.has(childSlotId) ||
+      !allSlotIds.includes(childSlotId) ||
+      child.claimId !== claimId ||
+      child.orderId !== orderId ||
+      child.phaseId !== phaseId ||
+      authoritativeSlotByResolution.get(childResolutionId as string) !==
+        childSlotId ||
+      (includedInRefund &&
+        expectedSlotByResolution.get(childResolutionId) !== childSlotId) ||
+      typeof includedInRefund !== "boolean" ||
+      typeof statusBefore !== "string" ||
+      typeof statusAfter !== "string" ||
+      (includedInRefund
+        ? !targetResolutionIds.has(childResolutionId) ||
+          !targetSlotIds.has(childSlotId) ||
+          statusAfter !== "refund_pending" ||
+          ![
+            "pending",
+            "reship_pending",
+            "reprint_pending",
+            "replacement_in_production",
+            "recovery_pending",
+          ].includes(statusBefore)
+        : statusAfter !== statusBefore ||
+          targetResolutionIds.has(childResolutionId))
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund scope must exclude non-refund siblings and match each child",
+      );
+    }
+    projectedResolutionIds.add(childResolutionId);
+    projectedSlotIds.add(childSlotId);
+    if (!includedInRefund) continue;
+
+    const childPaymentId = child.paymentId;
+    const childPriceAdjustmentId = child.priceAdjustmentId;
+    const childAllocationId = child.allocationId;
+    const childRefundTransactionId = child.refundTransactionId;
+    const childAmountMinor = child.amountMinor;
+    const operation = operationByResolution.get(childResolutionId as string);
+    if (
+      operation === undefined ||
+      typeof childPaymentId !== "string" ||
+      childPaymentId.trim().length === 0 ||
+      childPriceAdjustmentId !== priceAdjustmentId ||
+      typeof childAllocationId !== "string" ||
+      childAllocationId.trim().length === 0 ||
+      typeof childRefundTransactionId !== "string" ||
+      childRefundTransactionId.trim().length === 0 ||
+      projectedRefundTransactionIds.has(childRefundTransactionId) ||
+      typeof childAmountMinor !== "bigint" ||
+      childAmountMinor <= 0n ||
+      operation.slotId !== childSlotId ||
+      operation.paymentId !== childPaymentId ||
+      operation.priceAdjustmentId !== childPriceAdjustmentId ||
+      operation.allocationId !== childAllocationId ||
+      operation.refundTransactionId !== childRefundTransactionId ||
+      operation.amountMinor !== childAmountMinor
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund scope must bind each exact Payment, adjustment, transaction, and amount",
+      );
+    }
+    projectedRefundTransactionIds.add(childRefundTransactionId);
+    scopeAmountMinor += childAmountMinor;
+    includedCount += 1;
+    if (
+      childResolutionId === resolutionId &&
+      (childSlotId !== slotId ||
+        childPaymentId !== paymentId ||
+        childAllocationId !== allocationId ||
+        childRefundTransactionId !== refundTransactionId ||
+        childAmountMinor !== amountMinor ||
+        statusBefore !== command.current)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "claim refund scope must bind this exact resolution's operation",
+      );
+    }
+  }
+  if (
+    projectedResolutionIds.size !== allResolutionIds.length ||
+    projectedSlotIds.size !== allSlotIds.length ||
+    includedCount !== expectedResolutionIds.length ||
+    expectedResolutionIds.some((id) => !projectedResolutionIds.has(id)) ||
+    expectedSlotIds.some((id) => !projectedSlotIds.has(id)) ||
+    scopeAmountMinor !== context.claimRefundScopeAmountMinor ||
+    context.claimRefundPriceAdjustmentAmountMinor !== scopeAmountMinor
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "claim refund scope must be complete, exact, and amount-balanced",
+    );
+  }
+}
+
 function requireExactClaimRefundCompletion<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -4323,6 +5077,10 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           "replacementJobLineageCreated",
           "replacement production requires every replacement job lineage leaf",
         );
+        requireCompleteReplacementRequiredSlotSet(
+          "ClaimSlotResolution",
+          command,
+        );
       }
       if (
         command.current === "replacement_in_production" &&
@@ -4342,6 +5100,7 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
         );
       }
       if (command.target === "refund_pending") {
+        requireExactClaimRefundScope("ClaimSlotResolution", command);
         requireFlag(
           "ClaimSlotResolution",
           command,

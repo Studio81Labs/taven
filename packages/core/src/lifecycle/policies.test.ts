@@ -426,6 +426,77 @@ const permittedContext = {
   claimId: "claim-1",
   claimSlotResolutionId: "claim-resolution-1",
   claimSlotId: "claim-slot-1",
+  claimRefundScopeId: "claim-refund-scope-1",
+  claimRefundScopeClaimId: "claim-1",
+  claimRefundScopeOrderId: "order-1",
+  claimRefundScopePhaseId: "phase-1",
+  claimRefundScopeResolutionIds: ["claim-resolution-1"],
+  claimRefundScopeSlotIds: ["claim-slot-1"],
+  claimRefundScopeResolutionSlots: [
+    { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+  ],
+  claimRefundScopeAllResolutionIds: [
+    "claim-resolution-1",
+    "claim-resolution-2",
+  ],
+  claimRefundScopeAllSlotIds: ["claim-slot-1", "claim-slot-2"],
+  claimRefundScopeAllResolutionSlots: [
+    { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+    { resolutionId: "claim-resolution-2", slotId: "claim-slot-2" },
+  ],
+  claimRefundScopeChildOperations: [
+    {
+      resolutionId: "claim-resolution-1",
+      slotId: "claim-slot-1",
+      paymentId: "payment-1",
+      priceAdjustmentId: "price-adjustment-1",
+      allocationId: "claim-refund-allocation-1",
+      refundTransactionId: "refund-1",
+      amountMinor: 1_000n,
+    },
+  ],
+  claimRefundScopeChildren: [
+    {
+      resolutionId: "claim-resolution-1",
+      claimId: "claim-1",
+      slotId: "claim-slot-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      includedInRefund: true,
+      statusBefore: "pending",
+      statusAfter: "refund_pending",
+      paymentId: "payment-1",
+      priceAdjustmentId: "price-adjustment-1",
+      allocationId: "claim-refund-allocation-1",
+      refundTransactionId: "refund-1",
+      amountMinor: 1_000n,
+    },
+    {
+      resolutionId: "claim-resolution-2",
+      claimId: "claim-1",
+      slotId: "claim-slot-2",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      includedInRefund: false,
+      statusBefore: "reprint_pending",
+      statusAfter: "reprint_pending",
+    },
+  ],
+  claimRefundScopeComplete: true,
+  claimRefundScopeAtomic: true,
+  claimRefundScopeAmountMinor: 1_000n,
+  claimRefundScopePriceAdjustmentId: "price-adjustment-1",
+  claimRefundPriceAdjustmentId: "price-adjustment-1",
+  claimRefundPriceAdjustmentScopeId: "claim-refund-scope-1",
+  claimRefundPriceAdjustmentOrderId: "order-1",
+  claimRefundPriceAdjustmentStatus: "active",
+  claimRefundPriceAdjustmentAmountMinor: 1_000n,
+  claimRefundTransactionPaymentId: "payment-1",
+  claimRefundTransactionOrderId: "order-1",
+  claimRefundTransactionPriceAdjustmentId: "price-adjustment-1",
+  claimRefundTransactionAmountMinor: 1_000n,
+  claimRefundAllocationId: "claim-refund-allocation-1",
+  claimRefundAmountMinor: 1_000n,
   claimRefundResolutionId: "claim-resolution-1",
   claimRefundClaimId: "claim-1",
   claimRefundSlotId: "claim-slot-1",
@@ -470,10 +541,89 @@ const permittedContext = {
   replacementReservationsCreated: true,
   replacementShipmentsCreated: true,
   replacementJobLineageCreated: true,
+  replacementSetId: "replacement-set-1",
+  replacementRequiredSetId: "replacement-set-1",
+  replacementRequiredSetClaimId: "claim-1",
+  replacementRequiredSetResolutionId: "claim-resolution-1",
+  expectedReplacementRequiredSlotIds: ["claim-slot-1"],
+  replacementRequiredSlotBindings: [
+    {
+      slotId: "claim-slot-1",
+      claimId: "claim-1",
+      resolutionId: "claim-resolution-1",
+      replacementSetId: "replacement-set-1",
+      replacementRequestId: "replacement-request-1",
+      replacementRequestClaimId: "claim-1",
+      replacementRequestResolutionId: "claim-resolution-1",
+      replacementRequestSlotId: "claim-slot-1",
+      replacementReservationId: "replacement-reservation-1",
+      replacementReservationRequestId: "replacement-request-1",
+      replacementReservationSlotId: "claim-slot-1",
+      replacementShipmentId: "replacement-shipment-1",
+      replacementShipmentRequestId: "replacement-request-1",
+      replacementShipmentReservationId: "replacement-reservation-1",
+      replacementShipmentSlotId: "claim-slot-1",
+      currentReplacementJobId: "replacement-job-1",
+      currentReplacementJobRequestId: "replacement-request-1",
+      currentReplacementJobReservationId: "replacement-reservation-1",
+      currentReplacementJobShipmentId: "replacement-shipment-1",
+      currentReplacementJobSlotId: "claim-slot-1",
+      currentReplacementJobLineageLeaf: true,
+      currentReplacementJobStatus: "created",
+    },
+  ],
+  replacementRequiredSlotSetComplete: true,
+  replacementSetupAtomic: true,
   replacementFulfilmentAuthorizationConsumed: true,
   replacementFulfilmentHandoffCompleted: true,
   preHandoffShipmentCancellationsCompleted: true,
   shipmentId: "shipment-1",
+  handoffShipmentId: "shipment-1",
+  handoffOrderId: "order-1",
+  handoffPhaseOrderId: "order-1",
+  handoffPhaseId: "phase-1",
+  handoffShipmentPreviousStatus: "label_created",
+  handoffShipmentTargetStatus: "handed_over",
+  handoffJobPreviousStatus: "packed",
+  handoffJobTargetStatus: "handed_over",
+  handoffSlotIds: ["slot-1", "slot-2"],
+  handoffSlots: [
+    {
+      id: "slot-1",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      jobId: "job-1",
+    },
+    {
+      id: "slot-2",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      jobId: "job-2",
+    },
+  ],
+  handoffJobIds: ["job-1", "job-2"],
+  handoffJobs: [
+    {
+      id: "job-1",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      previousStatus: "packed",
+      targetStatus: "handed_over",
+    },
+    {
+      id: "job-2",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      previousStatus: "packed",
+      targetStatus: "handed_over",
+    },
+  ],
+  handoffCompleted: true,
+  handoffAtomic: true,
   incidentShipmentId: "shipment-1",
   incidentOrderId: "order-1",
   incidentPhaseId: "phase-1",
@@ -674,6 +824,14 @@ function contextForTransition(target: string, current?: string) {
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
     current === "voided" && target === "refund_pending";
+  const claimRefundScopeChildren =
+    target === "refund_pending"
+      ? permittedContext.claimRefundScopeChildren.map((child, index) =>
+          index === 0
+            ? { ...child, statusBefore: current ?? child.statusBefore }
+            : child,
+        )
+      : permittedContext.claimRefundScopeChildren;
   const remedyIncident =
     target === "recovery_pending" &&
     (current === "replacement_shipped" || current === "reship_shipped");
@@ -723,6 +881,7 @@ function contextForTransition(target: string, current?: string) {
         : target,
     claimSlotResolutionStatuses,
     ...resolutionEvidence,
+    claimRefundScopeChildren,
     financialTerminalTarget: target,
     completionProjectedTarget: target,
     qcCompletionOrderPreviousStatus:
@@ -2018,7 +2177,7 @@ describe("v0 lifecycle policy tables", () => {
         current: "label_created",
         target: "handed_over",
         idempotencyKey: "label-handoff-complete",
-        context: { contextHandoffCompleted: true },
+        context: contextForTransition("handed_over", "label_created"),
       }),
     ).toEqual({
       kind: "changed",
@@ -2026,6 +2185,122 @@ describe("v0 lifecycle policy tables", () => {
       current: "handed_over",
     });
   });
+
+  it("accepts a complete reordered ordinary handoff for the Shipment", () => {
+    const context = contextForTransition("handed_over", "label_created");
+    expect(
+      transition(shipmentPolicy, {
+        current: "label_created",
+        target: "handed_over",
+        idempotencyKey: "ordinary-handoff-shipment-reordered",
+        context: {
+          ...context,
+          handoffSlots: [...context.handoffSlots].reverse(),
+          handoffJobs: [...context.handoffJobs].reverse(),
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "label_created",
+      current: "handed_over",
+    });
+  });
+
+  it.each([
+    ["blank Shipment identity", { shipmentId: " " }],
+    ["foreign Shipment identity", { handoffShipmentId: "another-shipment" }],
+    ["blank Order identity", { orderId: " " }],
+    ["foreign Order identity", { handoffOrderId: "another-order" }],
+    ["foreign phase owner", { handoffPhaseOrderId: "another-order" }],
+    ["blank phase identity", { phaseId: " " }],
+    ["foreign phase identity", { handoffPhaseId: "another-phase" }],
+    ["foreign Shipment slot set", { shipmentFulfilmentSlotIds: ["slot-1"] }],
+    ["wrong Shipment status", { handoffShipmentPreviousStatus: "handed_over" }],
+    ["wrong Job status", { handoffJobPreviousStatus: "accepted" }],
+    ["missing completion", { handoffCompleted: false }],
+    ["missing atomicity", { handoffAtomic: false }],
+    ["incomplete slots", { handoffSlots: [permittedContext.handoffSlots[0]] }],
+    [
+      "duplicate slot",
+      {
+        handoffSlots: [
+          permittedContext.handoffSlots[0],
+          { ...permittedContext.handoffSlots[1], id: "slot-1" },
+        ],
+      },
+    ],
+    [
+      "foreign slot",
+      {
+        handoffSlots: [
+          permittedContext.handoffSlots[0],
+          { ...permittedContext.handoffSlots[1], id: "foreign-slot" },
+        ],
+      },
+    ],
+    [
+      "slot from another Order",
+      {
+        handoffSlots: [
+          permittedContext.handoffSlots[0],
+          { ...permittedContext.handoffSlots[1], orderId: "another-order" },
+        ],
+      },
+    ],
+    ["incomplete Jobs", { handoffJobs: [permittedContext.handoffJobs[0]] }],
+    [
+      "unmapped Job",
+      {
+        handoffJobIds: ["job-1", "job-2", "job-3"],
+        handoffJobs: [
+          ...permittedContext.handoffJobs,
+          { ...permittedContext.handoffJobs[1], id: "job-3" },
+        ],
+      },
+    ],
+    [
+      "duplicate Job",
+      {
+        handoffJobs: [
+          permittedContext.handoffJobs[0],
+          { ...permittedContext.handoffJobs[1], id: "job-1" },
+        ],
+      },
+    ],
+    [
+      "foreign Job",
+      {
+        handoffJobs: [
+          permittedContext.handoffJobs[0],
+          { ...permittedContext.handoffJobs[1], id: "foreign-job" },
+        ],
+      },
+    ],
+    [
+      "Job from another phase",
+      {
+        handoffJobs: [
+          permittedContext.handoffJobs[0],
+          { ...permittedContext.handoffJobs[1], phaseId: "another-phase" },
+        ],
+      },
+    ],
+  ] as const)(
+    "rejects ordinary Shipment handoff with %s evidence",
+    (_case, mutation) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          current: "label_created",
+          target: "handed_over",
+          idempotencyKey: `ordinary-handoff-shipment-${_case}`,
+          context: {
+            ...contextForTransition("handed_over", "label_created"),
+            ...mutation,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each([
     ["shipmentId", " "],
@@ -2295,6 +2570,7 @@ describe("v0 lifecycle policy tables", () => {
           target: "refund_pending",
           idempotencyKey: `claim-refund-${current}-${missingFlag}`,
           context: {
+            ...contextForTransition("refund_pending", current),
             claimCreditScopeCreated: true,
             claimSlotCreditActivated: true,
             ...(isDirectRefund ? {} : { remedyCancellationCompleted: true }),
@@ -2314,6 +2590,7 @@ describe("v0 lifecycle policy tables", () => {
           target: "refund_pending",
           idempotencyKey: `direct-claim-refund-${current}`,
           context: {
+            ...contextForTransition("refund_pending", current),
             claimCreditScopeCreated: true,
             claimSlotCreditActivated: true,
           },
@@ -2339,13 +2616,399 @@ describe("v0 lifecycle policy tables", () => {
           target: "refund_pending",
           idempotencyKey: `claim-remedy-cancellation-${current}`,
           context: {
+            ...contextForTransition("refund_pending", current),
             claimCreditScopeCreated: true,
             claimSlotCreditActivated: true,
+            remedyCancellationCompleted: false,
           },
         }),
       ).toThrow(TransitionGuardError);
     },
   );
+
+  const completeClaimRefundScope = (current: string) => ({
+    ...contextForTransition("refund_pending", current),
+    claimRefundScopeResolutionIds: ["claim-resolution-1", "claim-resolution-2"],
+    claimRefundScopeSlotIds: ["claim-slot-1", "claim-slot-2"],
+    claimRefundScopeResolutionSlots: [
+      { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+      { resolutionId: "claim-resolution-2", slotId: "claim-slot-2" },
+    ],
+    claimRefundScopeChildOperations: [
+      {
+        resolutionId: "claim-resolution-1",
+        slotId: "claim-slot-1",
+        paymentId: "payment-1",
+        priceAdjustmentId: "price-adjustment-1",
+        allocationId: "claim-refund-allocation-1",
+        refundTransactionId: "refund-1",
+        amountMinor: 1_000n,
+      },
+      {
+        resolutionId: "claim-resolution-2",
+        slotId: "claim-slot-2",
+        paymentId: "payment-2",
+        priceAdjustmentId: "price-adjustment-1",
+        allocationId: "claim-refund-allocation-2",
+        refundTransactionId: "refund-2",
+        amountMinor: 1_500n,
+      },
+    ],
+    claimRefundScopeAmountMinor: 2_500n,
+    claimRefundPriceAdjustmentAmountMinor: 2_500n,
+    claimRefundScopeChildren: [
+      {
+        resolutionId: "claim-resolution-1",
+        claimId: "claim-1",
+        slotId: "claim-slot-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        includedInRefund: true,
+        statusBefore: current,
+        statusAfter: "refund_pending",
+        paymentId: "payment-1",
+        priceAdjustmentId: "price-adjustment-1",
+        allocationId: "claim-refund-allocation-1",
+        refundTransactionId: "refund-1",
+        amountMinor: 1_000n,
+      },
+      {
+        resolutionId: "claim-resolution-2",
+        claimId: "claim-1",
+        slotId: "claim-slot-2",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        includedInRefund: true,
+        statusBefore: "recovery_pending",
+        statusAfter: "refund_pending",
+        paymentId: "payment-2",
+        priceAdjustmentId: "price-adjustment-1",
+        allocationId: "claim-refund-allocation-2",
+        refundTransactionId: "refund-2",
+        amountMinor: 1_500n,
+      },
+    ],
+  });
+
+  it.each([
+    "pending",
+    "reship_pending",
+    "reprint_pending",
+    "replacement_in_production",
+    "recovery_pending",
+  ] as const)(
+    "accepts a complete reordered refund scope from %s",
+    (current) => {
+      const context = completeClaimRefundScope(current);
+      if (current !== "pending" && current !== "recovery_pending") {
+        context.remedyCancellationCompleted = true;
+      }
+      context.claimRefundScopeChildren.reverse();
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          current,
+          target: "refund_pending",
+          idempotencyKey: `claim-refund-scope-complete-${current}`,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "refund_pending",
+      });
+    },
+  );
+
+  it.each([
+    [
+      "omitted target",
+      { claimRefundScopeResolutionIds: ["claim-resolution-1"] },
+    ],
+    [
+      "duplicate target",
+      {
+        claimRefundScopeResolutionIds: [
+          "claim-resolution-1",
+          "claim-resolution-1",
+        ],
+      },
+    ],
+    [
+      "foreign child",
+      {
+        claimRefundScopeChildren: [
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+          },
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[1],
+            claimId: "another-claim",
+          },
+        ],
+      },
+    ],
+    [
+      "non-refund sibling included",
+      {
+        claimRefundScopeChildren: [
+          ...completeClaimRefundScope("pending").claimRefundScopeChildren.slice(
+            0,
+            1,
+          ),
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[1],
+            includedInRefund: false,
+            statusBefore: "reprint_pending",
+            statusAfter: "reprint_pending",
+          },
+        ],
+        claimRefundScopeResolutionIds: [
+          "claim-resolution-1",
+          "claim-resolution-2",
+        ],
+      },
+    ],
+    [
+      "wrong allocation",
+      {
+        claimRefundScopeChildren: [
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+            slotId: "claim-slot-2",
+          },
+          ...completeClaimRefundScope("pending").claimRefundScopeChildren.slice(
+            1,
+          ),
+        ],
+      },
+    ],
+    [
+      "swapped allocation",
+      {
+        claimRefundScopeChildren: [
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+            slotId: "claim-slot-2",
+          },
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[1],
+            slotId: "claim-slot-1",
+          },
+        ],
+      },
+    ],
+    [
+      "wrong Payment",
+      {
+        claimRefundScopeChildren: [
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+            paymentId: "another-payment",
+          },
+          ...completeClaimRefundScope("pending").claimRefundScopeChildren.slice(
+            1,
+          ),
+        ],
+      },
+    ],
+    [
+      "wrong transaction",
+      {
+        claimRefundScopeChildren: [
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+            refundTransactionId: "another-refund",
+          },
+          ...completeClaimRefundScope("pending").claimRefundScopeChildren.slice(
+            1,
+          ),
+        ],
+      },
+    ],
+    [
+      "wrong amount",
+      {
+        claimRefundScopeChildren: [
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+            amountMinor: 999n,
+          },
+          ...completeClaimRefundScope("pending").claimRefundScopeChildren.slice(
+            1,
+          ),
+        ],
+      },
+    ],
+    [
+      "sibling wrong Payment",
+      {
+        claimRefundScopeChildren: [
+          completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[1],
+            paymentId: "another-payment",
+          },
+        ],
+      },
+    ],
+    [
+      "sibling wrong transaction",
+      {
+        claimRefundScopeChildren: [
+          completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[1],
+            refundTransactionId: "another-refund",
+          },
+        ],
+      },
+    ],
+    [
+      "sibling wrong adjustment",
+      {
+        claimRefundScopeChildren: [
+          completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[1],
+            priceAdjustmentId: "another-adjustment",
+          },
+        ],
+      },
+    ],
+    [
+      "sibling wrong allocation",
+      {
+        claimRefundScopeChildren: [
+          completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[1],
+            allocationId: "another-allocation",
+          },
+        ],
+      },
+    ],
+    [
+      "sibling wrong amount",
+      {
+        claimRefundScopeChildren: [
+          completeClaimRefundScope("pending").claimRefundScopeChildren[0],
+          {
+            ...completeClaimRefundScope("pending").claimRefundScopeChildren[1],
+            amountMinor: 500n,
+          },
+        ],
+      },
+    ],
+    [
+      "missing child operation",
+      {
+        claimRefundScopeChildOperations: [
+          completeClaimRefundScope("pending")
+            .claimRefundScopeChildOperations[0],
+        ],
+      },
+    ],
+    [
+      "duplicate child operation",
+      {
+        claimRefundScopeChildOperations: [
+          completeClaimRefundScope("pending")
+            .claimRefundScopeChildOperations[0],
+          completeClaimRefundScope("pending")
+            .claimRefundScopeChildOperations[0],
+        ],
+      },
+    ],
+    [
+      "foreign child operation",
+      {
+        claimRefundScopeChildOperations: [
+          completeClaimRefundScope("pending")
+            .claimRefundScopeChildOperations[0],
+          {
+            ...completeClaimRefundScope("pending")
+              .claimRefundScopeChildOperations[1],
+            resolutionId: "another-resolution",
+          },
+        ],
+      },
+    ],
+    ["non-atomic", { claimRefundScopeAtomic: false }],
+  ] as const)("rejects an invalid refund scope: %s", (_case, mutation) => {
+    const context = {
+      ...completeClaimRefundScope("pending"),
+      ...mutation,
+    };
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "pending",
+        target: "refund_pending",
+        idempotencyKey: `claim-refund-scope-invalid-${_case}`,
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects swapped non-refund sibling slot identities", () => {
+    const context = contextForTransition("refund_pending", "pending");
+    const thirdChild = {
+      ...context.claimRefundScopeChildren[1],
+      resolutionId: "claim-resolution-3",
+      slotId: "claim-slot-3",
+      statusBefore: "reship_pending",
+      statusAfter: "reship_pending",
+    };
+    const completeContext = {
+      ...context,
+      claimRefundScopeAllResolutionIds: [
+        "claim-resolution-1",
+        "claim-resolution-2",
+        "claim-resolution-3",
+      ],
+      claimRefundScopeAllSlotIds: [
+        "claim-slot-1",
+        "claim-slot-2",
+        "claim-slot-3",
+      ],
+      claimRefundScopeAllResolutionSlots: [
+        { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+        { resolutionId: "claim-resolution-2", slotId: "claim-slot-2" },
+        { resolutionId: "claim-resolution-3", slotId: "claim-slot-3" },
+      ],
+      claimRefundScopeChildren: [
+        context.claimRefundScopeChildren[0],
+        context.claimRefundScopeChildren[1],
+        thirdChild,
+      ],
+    };
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "pending",
+        target: "refund_pending",
+        idempotencyKey: "claim-refund-non-target-slots-complete",
+        context: completeContext,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "pending",
+      current: "refund_pending",
+    });
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "pending",
+        target: "refund_pending",
+        idempotencyKey: "claim-refund-non-target-slots-swapped",
+        context: {
+          ...completeContext,
+          claimRefundScopeChildren: [
+            context.claimRefundScopeChildren[0],
+            { ...context.claimRefundScopeChildren[1], slotId: "claim-slot-3" },
+            { ...thirdChild, slotId: "claim-slot-2" },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each([
     ["Order", orderPolicy],
@@ -2677,6 +3340,7 @@ describe("v0 lifecycle policy tables", () => {
     "requires %s before starting all-or-none replacement production",
     (missingFlag) => {
       const context = {
+        ...permittedContext,
         replacementSetProjected: true,
         replacementResourcePlanProjected: true,
         replacementReservationsCreated: true,
@@ -2702,11 +3366,143 @@ describe("v0 lifecycle policy tables", () => {
         target: "replacement_in_production",
         idempotencyKey: "replacement-production-complete",
         context: {
+          ...permittedContext,
           replacementSetProjected: true,
           replacementResourcePlanProjected: true,
           replacementReservationsCreated: true,
           replacementShipmentsCreated: true,
           replacementJobLineageCreated: true,
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "reprint_pending",
+      current: "replacement_in_production",
+    });
+  });
+
+  it("requires an exact complete replacement-required slot setup before production", () => {
+    const firstBinding = permittedContext.replacementRequiredSlotBindings[0]!;
+    const secondBinding = {
+      ...firstBinding,
+      slotId: "claim-slot-2",
+      replacementRequestId: "replacement-request-2",
+      replacementRequestSlotId: "claim-slot-2",
+      replacementReservationId: "replacement-reservation-2",
+      replacementReservationRequestId: "replacement-request-2",
+      replacementReservationSlotId: "claim-slot-2",
+      replacementShipmentId: "replacement-shipment-2",
+      replacementShipmentRequestId: "replacement-request-2",
+      replacementShipmentReservationId: "replacement-reservation-2",
+      replacementShipmentSlotId: "claim-slot-2",
+      currentReplacementJobId: "replacement-job-2",
+      currentReplacementJobRequestId: "replacement-request-2",
+      currentReplacementJobReservationId: "replacement-reservation-2",
+      currentReplacementJobShipmentId: "replacement-shipment-2",
+      currentReplacementJobSlotId: "claim-slot-2",
+    };
+    const completeContext = {
+      ...permittedContext,
+      expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementRequiredSlotBindings: [firstBinding, secondBinding],
+    };
+    const invalidContexts = [
+      {
+        replacementRequiredSlotBindings: [firstBinding],
+      },
+      {
+        replacementRequiredSlotBindings: [firstBinding, firstBinding],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          {
+            ...secondBinding,
+            replacementRequestId: "replacement-request-1",
+            replacementReservationRequestId: "replacement-request-1",
+            replacementShipmentRequestId: "replacement-request-1",
+            currentReplacementJobRequestId: "replacement-request-1",
+          },
+        ],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          {
+            ...secondBinding,
+            replacementReservationId: "replacement-reservation-1",
+            replacementShipmentReservationId: "replacement-reservation-1",
+            currentReplacementJobReservationId: "replacement-reservation-1",
+          },
+        ],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          {
+            ...secondBinding,
+            replacementShipmentId: "replacement-shipment-1",
+            currentReplacementJobShipmentId: "replacement-shipment-1",
+          },
+        ],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          { ...secondBinding, currentReplacementJobId: "replacement-job-1" },
+        ],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          { ...secondBinding, slotId: "foreign-slot" },
+        ],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          { ...secondBinding, currentReplacementJobLineageLeaf: false },
+        ],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          { ...secondBinding, currentReplacementJobStatus: "accepted" },
+        ],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          { ...secondBinding, resolutionId: "another-resolution" },
+        ],
+      },
+      {
+        replacementRequiredSlotBindings: [
+          firstBinding,
+          { ...secondBinding, replacementRequestClaimId: "another-claim" },
+        ],
+      },
+      { replacementRequiredSlotSetComplete: false },
+      { replacementSetupAtomic: false },
+    ];
+    for (const [index, invalidContext] of invalidContexts.entries()) {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "reprint_pending",
+          target: "replacement_in_production",
+          idempotencyKey: `replacement-required-set-invalid-${index}`,
+          context: { ...completeContext, ...invalidContext },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "reprint_pending",
+        target: "replacement_in_production",
+        idempotencyKey: "replacement-required-set-reordered",
+        context: {
+          ...completeContext,
+          replacementRequiredSlotBindings: [secondBinding, firstBinding],
         },
       }),
     ).toEqual({
@@ -3073,10 +3869,110 @@ describe("v0 lifecycle policy tables", () => {
         current: "packed",
         target: "handed_over",
         idempotencyKey: "job-handoff-complete",
-        context: { contextHandoffCompleted: true },
+        context: contextForTransition("handed_over", "packed"),
       }),
     ).toEqual({ kind: "changed", previous: "packed", current: "handed_over" });
   });
+
+  it("accepts a complete reordered ordinary handoff for a contributing Job", () => {
+    const context = contextForTransition("handed_over", "packed");
+    expect(
+      transition(jobPolicy, {
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "ordinary-handoff-job-reordered",
+        context: {
+          ...context,
+          handoffSlots: [...context.handoffSlots].reverse(),
+          handoffJobs: [...context.handoffJobs].reverse(),
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "packed",
+      current: "handed_over",
+    });
+  });
+
+  it.each([
+    ["blank Shipment identity", { shipmentId: " " }],
+    ["foreign Shipment identity", { handoffShipmentId: "another-shipment" }],
+    ["blank Order identity", { orderId: " " }],
+    ["foreign Order identity", { handoffOrderId: "another-order" }],
+    ["foreign phase owner", { handoffPhaseOrderId: "another-order" }],
+    ["blank phase identity", { phaseId: " " }],
+    ["foreign phase identity", { handoffPhaseId: "another-phase" }],
+    ["foreign Shipment slot set", { shipmentFulfilmentSlotIds: ["slot-1"] }],
+    ["wrong Shipment status", { handoffShipmentPreviousStatus: "handed_over" }],
+    ["wrong Shipment target", { handoffShipmentTargetStatus: "in_transit" }],
+    ["wrong Job status", { handoffJobPreviousStatus: "accepted" }],
+    ["wrong Job target", { handoffJobTargetStatus: "packed" }],
+    ["missing completion", { handoffCompleted: false }],
+    ["missing atomicity", { handoffAtomic: false }],
+    ["incomplete slots", { handoffSlots: [permittedContext.handoffSlots[0]] }],
+    [
+      "duplicate slot",
+      {
+        handoffSlots: [
+          permittedContext.handoffSlots[0],
+          { ...permittedContext.handoffSlots[1], id: "slot-1" },
+        ],
+      },
+    ],
+    [
+      "foreign slot",
+      {
+        handoffSlots: [
+          permittedContext.handoffSlots[0],
+          { ...permittedContext.handoffSlots[1], id: "foreign-slot" },
+        ],
+      },
+    ],
+    ["incomplete Jobs", { handoffJobs: [permittedContext.handoffJobs[0]] }],
+    [
+      "unmapped Job",
+      {
+        handoffJobIds: ["job-1", "job-2", "job-3"],
+        handoffJobs: [
+          ...permittedContext.handoffJobs,
+          { ...permittedContext.handoffJobs[1], id: "job-3" },
+        ],
+      },
+    ],
+    [
+      "duplicate Job",
+      {
+        handoffJobs: [
+          permittedContext.handoffJobs[0],
+          { ...permittedContext.handoffJobs[1], id: "job-1" },
+        ],
+      },
+    ],
+    [
+      "foreign Job",
+      {
+        handoffJobs: [
+          permittedContext.handoffJobs[0],
+          { ...permittedContext.handoffJobs[1], id: "foreign-job" },
+        ],
+      },
+    ],
+  ] as const)(
+    "rejects ordinary Job handoff with %s evidence",
+    (_case, mutation) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `ordinary-handoff-job-${_case}`,
+          context: {
+            ...contextForTransition("handed_over", "packed"),
+            ...mutation,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each([
     ["jobId", " "],
