@@ -561,13 +561,38 @@ const permittedContext = {
   reconciliationRefundAllocated: true,
   shipmentLineageSetOrderId: "order-1",
   shipmentLineageSetPhaseId: "phase-1",
+  shipmentLineageAuthoritativeSetId: "shipment-lineage-set-1",
+  shipmentLineageAuthoritativeSetResultId: "shipment-lineage-set-result-1",
+  shipmentLineageAuthoritativeSet: {
+    id: "shipment-lineage-set-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    shipmentIds: ["shipment-1"],
+    lineageLeafIds: ["shipment-lineage-leaf-1"],
+    resultId: "shipment-lineage-set-result-1",
+    immutable: true,
+  },
+  shipmentLineageAuthoritativeLeaves: [
+    {
+      shipmentId: "shipment-1",
+      lineageLeafId: "shipment-lineage-leaf-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      status: "delivered",
+      currentLineageLeaf: true,
+      resultId: "shipment-lineage-set-result-1",
+      immutable: true,
+    },
+  ],
   expectedShipmentLineageLeafIds: ["shipment-lineage-leaf-1"],
   shipmentLineageLeaves: [
     {
       id: "shipment-lineage-leaf-1",
+      shipmentId: "shipment-1",
       orderId: "order-1",
       phaseId: "phase-1",
       status: "delivered",
+      currentLineageLeaf: true,
     },
   ],
   shipmentLineageLeafSetComplete: true,
@@ -850,12 +875,38 @@ const permittedContext = {
   qcCompletionPhaseTargetStatus: "qc_passed",
   qcCompletionCompleted: true,
   qcCompletionAtomic: true,
+  qcAuthoritativePhaseTopologyId: "phase-1",
+  qcExpectedPhaseTopologyId: "phase-1",
+  qcExpectedPhaseTopology: {
+    id: "phase-1",
+    orderId: "order-1",
+    kind: "single",
+    status: "in_production",
+    authoritativeFulfilmentSlotSetId: "qc-slot-set-1",
+    authoritativeFulfilmentSlotSetResultId: "qc-slot-set-result-1",
+    immutable: true,
+  },
   qcSlotSetOrderId: "order-1",
   qcSlotSetPhaseId: "phase-1",
+  qcSlotSetPhaseTopologyId: "phase-1",
+  qcAuthoritativeFulfilmentSlotSetId: "qc-slot-set-1",
+  qcExpectedFulfilmentSlotSetId: "qc-slot-set-1",
+  qcAuthoritativeFulfilmentSlotSetResultId: "qc-slot-set-result-1",
+  qcAuthoritativeFulfilmentSlotSet: {
+    id: "qc-slot-set-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    phaseTopologyId: "phase-1",
+    slotIds: ["slot-1"],
+    resultId: "qc-slot-set-result-1",
+    immutable: true,
+  },
   expectedQcFulfilmentSlotIds: ["slot-1"],
   qcFulfilmentSlots: [
     {
       id: "slot-1",
+      authoritativeFulfilmentSlotSetId: "qc-slot-set-1",
+      authoritativePhaseTopologyId: "phase-1",
       orderId: "order-1",
       phaseId: "phase-1",
       currentJobId: "job-1",
@@ -1294,6 +1345,66 @@ const permittedContext = {
   claimId: "claim-1",
   claimSlotResolutionId: "claim-resolution-1",
   claimSlotId: "claim-slot-1",
+  reprintSelectionResultId: "reprint-selection-result-1",
+  reprintSelectionPreviousResolutionResultId: "resolution-pending-result-1",
+  reprintSelectionCurrentStateCommandKey: "resolution-pending-command-1",
+  reprintSelectionPreviousStatus: "pending",
+  reprintSelectionTargetStatus: "reprint_pending",
+  reprintSelectionExpectedResolution: {
+    id: "claim-resolution-1",
+    claimId: "claim-1",
+    slotId: "claim-slot-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "pending",
+    activeClaimId: "claim-1",
+    canonicalDeliveredArtifactId: "delivered-artifact-1",
+    canonicalDeliveredArtifactSourceJobId: "job-1",
+    canonicalDeliveredArtifactSourceShipmentId: "shipment-1",
+    canonicalDeliveredArtifactVersionId: "artifact-version-1",
+    canonicalDeliveredPrintConfigRevisionId: "config-revision-1",
+    resultId: "resolution-pending-result-1",
+    currentStateCommandKey: "resolution-pending-command-1",
+    immutable: true,
+  },
+  reprintSelectionSlotOwnership: {
+    slotId: "claim-slot-1",
+    claimId: "claim-1",
+    activeClaimId: "claim-1",
+    resolutionId: "claim-resolution-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    immutable: true,
+  },
+  reprintSelectionArtifactId: "delivered-artifact-1",
+  reprintSelectionSourceJobId: "job-1",
+  reprintSelectionSourceShipmentId: "shipment-1",
+  reprintSelectionArtifactVersionId: "artifact-version-1",
+  reprintSelectionPrintConfigRevisionId: "config-revision-1",
+  reprintSelectionArtifact: {
+    id: "delivered-artifact-1",
+    sourceJobId: "job-1",
+    sourceShipmentId: "shipment-1",
+    claimId: "claim-1",
+    resolutionId: "claim-resolution-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    slotId: "claim-slot-1",
+    reproductionArtifactVersionId: "artifact-version-1",
+    printConfigRevisionId: "config-revision-1",
+    status: "sealed",
+    delivered: true,
+    currentLineageLeaf: true,
+    canonical: true,
+    immutable: true,
+    resultId: "reprint-selection-result-1",
+  },
+  reprintSelectionResolutionResultId: "reprint-selection-result-1",
+  reprintSelectionSlotResultId: "reprint-selection-result-1",
+  reprintSelectionArtifactResultId: "reprint-selection-result-1",
+  reprintSelectionConfigResultId: "reprint-selection-result-1",
+  reprintSelectionCompleted: true,
+  reprintSelectionAtomic: true,
   claimRefundScopeId: "claim-refund-scope-1",
   claimRefundScopeClaimId: "claim-1",
   claimRefundScopeOrderId: "order-1",
@@ -2477,8 +2588,19 @@ function contextForTransition(target: string, current?: string) {
   const shipmentProviderOutcomeSource = current ?? "handed_over";
   const shipmentProviderOutcomeTarget = target;
   const shipmentProviderOutcomeResultId = `shipment-${shipmentProviderOutcomeTarget}-provider-result-1`;
+  const reprintSelectionState =
+    current === "recovery_pending" ? "recovery_pending" : "pending";
   return {
     ...permittedContext,
+    reprintSelectionPreviousResolutionResultId: `resolution-${reprintSelectionState}-result-1`,
+    reprintSelectionCurrentStateCommandKey: `resolution-${reprintSelectionState}-command-1`,
+    reprintSelectionPreviousStatus: reprintSelectionState,
+    reprintSelectionExpectedResolution: {
+      ...permittedContext.reprintSelectionExpectedResolution,
+      status: reprintSelectionState,
+      resultId: `resolution-${reprintSelectionState}-result-1`,
+      currentStateCommandKey: `resolution-${reprintSelectionState}-command-1`,
+    },
     paymentFailureExpectedPayment: {
       ...permittedContext.paymentFailureExpectedPayment,
       role: permittedContext.paymentRole,
@@ -2698,6 +2820,13 @@ function contextForTransition(target: string, current?: string) {
       target === "qc_passed"
         ? current
         : permittedContext.qcCompletionPhasePreviousStatus,
+    qcExpectedPhaseTopology: {
+      ...permittedContext.qcExpectedPhaseTopology,
+      status:
+        target === "qc_passed"
+          ? (current ?? permittedContext.qcExpectedPhaseTopology.status)
+          : permittedContext.qcExpectedPhaseTopology.status,
+    },
     phaseCancellationOrderPreviousStatus:
       current === "active" ? "confirmed" : current,
     phaseCancellationPhasePreviousStatus: cancellationPhaseDisposition.previous,
@@ -2740,6 +2869,24 @@ function commandAnchors(
   current: string,
   target: string,
 ): Readonly<{ aggregateId?: string; currentStateCommandKey?: string }> {
+  if (
+    policy.name === "Order" &&
+    (target === "completed" ||
+      target === "partially_fulfilled" ||
+      target === "refunded" ||
+      target === "cancelled_settled")
+  ) {
+    return { aggregateId: "order-1" };
+  }
+  if (
+    policy.name === "OrderPhase(single)" &&
+    (target === "completed" ||
+      target === "partially_fulfilled" ||
+      target === "cancelled_refunded" ||
+      target === "cancelled_settled")
+  ) {
+    return { aggregateId: "phase-1" };
+  }
   if (
     policy.name === "Payment" &&
     current === "pending" &&
@@ -2809,6 +2956,16 @@ function commandAnchors(
     (target.startsWith("resolved_") || target === "withdrawn")
   ) {
     return { aggregateId: "claim-1" };
+  }
+  if (
+    policy.name === "ClaimSlotResolution" &&
+    (current === "pending" || current === "recovery_pending") &&
+    target === "reprint_pending"
+  ) {
+    return {
+      aggregateId: "claim-resolution-1",
+      currentStateCommandKey: `resolution-${current}-command-1`,
+    };
   }
   if (
     policy.name === "Job" &&
@@ -3777,6 +3934,10 @@ describe("v0 lifecycle policy tables", () => {
     };
     const baseContext = {
       ...contextForTransition("qc_passed", "in_production"),
+      qcAuthoritativeFulfilmentSlotSet: {
+        ...permittedContext.qcAuthoritativeFulfilmentSlotSet,
+        slotIds: ["slot-1", "slot-2"],
+      },
       expectedQcFulfilmentSlotIds: ["slot-1", "slot-2"],
       qcFulfilmentSlots: [permittedContext.qcFulfilmentSlots[0], secondSlot],
     };
@@ -3785,6 +3946,10 @@ describe("v0 lifecycle policy tables", () => {
         const context = {
           ...baseContext,
           ...contextForTransition("qc_passed", current),
+          qcAuthoritativeFulfilmentSlotSet: {
+            ...permittedContext.qcAuthoritativeFulfilmentSlotSet,
+            slotIds: ["slot-1", "slot-2"],
+          },
           expectedQcFulfilmentSlotIds: ["slot-1", "slot-2"],
           qcFulfilmentSlots: [
             permittedContext.qcFulfilmentSlots[0],
@@ -3795,10 +3960,51 @@ describe("v0 lifecycle policy tables", () => {
           transition(policy, {
             current,
             target: "qc_passed",
+            idempotencyKey: `qc-slot-coordinated-subset-${policy.name}-${current}`,
+            context: {
+              ...context,
+              expectedQcFulfilmentSlotIds: ["slot-1"],
+              qcFulfilmentSlots: [permittedContext.qcFulfilmentSlots[0]],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
             idempotencyKey: `qc-slot-omission-${policy.name}-${current}`,
             context: {
               ...context,
               qcFulfilmentSlots: [permittedContext.qcFulfilmentSlots[0]],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-coordinated-set-substitution-${policy.name}-${current}`,
+            context: {
+              ...context,
+              qcAuthoritativeFulfilmentSlotSetId: "qc-slot-set-2",
+              qcExpectedFulfilmentSlotSetId: "qc-slot-set-2",
+              qcAuthoritativeFulfilmentSlotSetResultId: "qc-slot-set-result-2",
+              qcAuthoritativeFulfilmentSlotSet: {
+                id: "qc-slot-set-2",
+                orderId: "order-1",
+                phaseId: "phase-1",
+                phaseTopologyId: "phase-1",
+                slotIds: ["slot-1"],
+                resultId: "qc-slot-set-result-2",
+                immutable: true,
+              },
+              expectedQcFulfilmentSlotIds: ["slot-1"],
+              qcFulfilmentSlots: [
+                {
+                  ...permittedContext.qcFulfilmentSlots[0],
+                  authoritativeFulfilmentSlotSetId: "qc-slot-set-2",
+                },
+              ],
             },
           }),
         ).toThrow(TransitionGuardError);
@@ -3852,8 +4058,14 @@ describe("v0 lifecycle policy tables", () => {
     ["verifiedQcReadiness", false],
     ["qcCompletionCompleted", false],
     ["qcCompletionAtomic", false],
+    ["qcAuthoritativePhaseTopologyId", "another-phase"],
+    ["qcExpectedPhaseTopologyId", "another-phase"],
     ["qcSlotSetOrderId", "another-order"],
     ["qcSlotSetPhaseId", "another-phase"],
+    ["qcSlotSetPhaseTopologyId", "another-phase"],
+    ["qcAuthoritativeFulfilmentSlotSetId", "another-set"],
+    ["qcExpectedFulfilmentSlotSetId", "another-set"],
+    ["qcAuthoritativeFulfilmentSlotSetResultId", "another-result"],
     ["expectedQcFulfilmentSlotIds", []],
     ["qcFulfilmentSlots", []],
     [
@@ -5022,6 +5234,7 @@ describe("v0 lifecycle policy tables", () => {
     (current, target) => {
       expect(
         transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, current, target),
           current,
           target,
           idempotencyKey: `order-terminal-phase-${current}-${target}`,
@@ -5095,6 +5308,7 @@ describe("v0 lifecycle policy tables", () => {
       };
       expect(
         transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, current, target),
           current,
           target,
           idempotencyKey: `terminal-phase-before-order-${current}-${target}`,
@@ -5377,6 +5591,7 @@ describe("v0 lifecycle policy tables", () => {
     (_lifecycle, policy, target) => {
       expect(
         transition(policy, {
+          ...commandAnchors(policy, "cancelled", target),
           current: "cancelled",
           target,
           idempotencyKey: `financial-match-${target}`,
@@ -7088,6 +7303,7 @@ describe("v0 lifecycle policy tables", () => {
       const context = multiSlotPartialCompletion();
       expect(
         transition(policy, {
+          ...commandAnchors(policy, "shipped", "partially_fulfilled"),
           current: "shipped",
           target: "partially_fulfilled",
           idempotencyKey: `completion-complete-reordered-${_lifecycle}`,
@@ -8538,6 +8754,42 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)(
     "requires all current shipment lineage leaves before %s enters delivered",
     (_lifecycle, policy) => {
+      const completeAuthoritativeTopology = {
+        shipmentLineageAuthoritativeSet: {
+          ...permittedContext.shipmentLineageAuthoritativeSet,
+          shipmentIds: ["shipment-1", "shipment-2"],
+          lineageLeafIds: [
+            "shipment-lineage-leaf-1",
+            "shipment-lineage-leaf-2",
+          ],
+        },
+        shipmentLineageAuthoritativeLeaves: [
+          permittedContext.shipmentLineageAuthoritativeLeaves[0],
+          {
+            shipmentId: "shipment-2",
+            lineageLeafId: "shipment-lineage-leaf-2",
+            orderId: "order-1",
+            phaseId: "phase-1",
+            status: "delivered",
+            currentLineageLeaf: true,
+            resultId: "shipment-lineage-set-result-1",
+            immutable: true,
+          },
+        ],
+      };
+      expect(() =>
+        transition(policy, {
+          current: "shipped",
+          target: "delivered",
+          idempotencyKey: `delivery-lineage-coordinated-subset-${policy.name}`,
+          context: {
+            ...permittedContext,
+            ...completeAuthoritativeTopology,
+            expectedShipmentLineageLeafIds: ["shipment-lineage-leaf-1"],
+            shipmentLineageLeaves: [permittedContext.shipmentLineageLeaves[0]],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
       expect(() =>
         transition(policy, {
           current: "shipped",
@@ -8545,6 +8797,7 @@ describe("v0 lifecycle policy tables", () => {
           idempotencyKey: "delivery-leaves",
           context: {
             ...permittedContext,
+            ...completeAuthoritativeTopology,
             expectedShipmentLineageLeafIds: [
               "shipment-lineage-leaf-1",
               "shipment-lineage-leaf-2",
@@ -8553,9 +8806,11 @@ describe("v0 lifecycle policy tables", () => {
               permittedContext.shipmentLineageLeaves[0],
               {
                 id: "shipment-lineage-leaf-2",
+                shipmentId: "shipment-2",
                 orderId: "order-1",
                 phaseId: "phase-1",
                 status: "in_transit",
+                currentLineageLeaf: true,
               },
             ],
           },
@@ -8568,6 +8823,7 @@ describe("v0 lifecycle policy tables", () => {
           idempotencyKey: "delivery-leaves-complete",
           context: {
             ...permittedContext,
+            ...completeAuthoritativeTopology,
             expectedShipmentLineageLeafIds: [
               "shipment-lineage-leaf-1",
               "shipment-lineage-leaf-2",
@@ -8576,9 +8832,11 @@ describe("v0 lifecycle policy tables", () => {
               permittedContext.shipmentLineageLeaves[0],
               {
                 id: "shipment-lineage-leaf-2",
+                shipmentId: "shipment-2",
                 orderId: "order-1",
                 phaseId: "phase-1",
                 status: "delivered",
+                currentLineageLeaf: true,
               },
             ],
           },
@@ -8703,6 +8961,24 @@ describe("v0 lifecycle policy tables", () => {
   it("accepts a reordered complete shipment lineage leaf set", () => {
     const context = {
       ...contextForTransition("delivered", "shipped"),
+      shipmentLineageAuthoritativeSet: {
+        ...permittedContext.shipmentLineageAuthoritativeSet,
+        shipmentIds: ["shipment-1", "shipment-2"],
+        lineageLeafIds: ["shipment-lineage-leaf-1", "shipment-lineage-leaf-2"],
+      },
+      shipmentLineageAuthoritativeLeaves: [
+        permittedContext.shipmentLineageAuthoritativeLeaves[0],
+        {
+          shipmentId: "shipment-2",
+          lineageLeafId: "shipment-lineage-leaf-2",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          status: "delivered",
+          currentLineageLeaf: true,
+          resultId: "shipment-lineage-set-result-1",
+          immutable: true,
+        },
+      ],
       expectedShipmentLineageLeafIds: [
         "shipment-lineage-leaf-1",
         "shipment-lineage-leaf-2",
@@ -8710,9 +8986,11 @@ describe("v0 lifecycle policy tables", () => {
       shipmentLineageLeaves: [
         {
           id: "shipment-lineage-leaf-2",
+          shipmentId: "shipment-2",
           orderId: "order-1",
           phaseId: "phase-1",
           status: "delivered",
+          currentLineageLeaf: true,
         },
         permittedContext.shipmentLineageLeaves[0],
       ],
@@ -8759,6 +9037,11 @@ describe("v0 lifecycle policy tables", () => {
       });
       expect(
         transition(policy, {
+          ...commandAnchors(
+            policy,
+            "cancelled",
+            policy === orderPolicy ? "refunded" : "cancelled_refunded",
+          ),
           current: "cancelled",
           target: policy === orderPolicy ? "refunded" : "cancelled_refunded",
           idempotencyKey: "captured-cancellation-refund",
@@ -14966,6 +15249,373 @@ describe("v0 lifecycle policy tables", () => {
       }),
     ).toThrow(TransitionGuardError);
   });
+
+  it.each([
+    ["id", "another-phase"],
+    ["orderId", "another-order"],
+    ["kind", "sample"],
+    ["status", "recovery_pending"],
+    ["authoritativeFulfilmentSlotSetId", "another-set"],
+    ["authoritativeFulfilmentSlotSetResultId", "another-result"],
+    ["immutable", false],
+  ] as const)(
+    "rejects QC readiness with invalid immutable phase topology %s",
+    (field, value) => {
+      const context = contextForTransition("qc_passed", "in_production");
+      expect(() =>
+        transition(orderPolicy, {
+          current: "in_production",
+          target: "qc_passed",
+          idempotencyKey: `qc-phase-topology-${field}`,
+          context: {
+            ...context,
+            qcExpectedPhaseTopology: {
+              ...context.qcExpectedPhaseTopology,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "another-set"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
+    ["slotIds", []],
+    ["slotIds", ["slot-1", "slot-1"]],
+    ["resultId", "another-result"],
+    ["immutable", false],
+  ] as const)(
+    "rejects QC readiness with invalid authoritative slot set %s",
+    (field, value) => {
+      const context = contextForTransition("qc_passed", "in_production");
+      expect(() =>
+        transition(orderPolicy, {
+          current: "in_production",
+          target: "qc_passed",
+          idempotencyKey: `qc-authoritative-slot-set-${field}`,
+          context: {
+            ...context,
+            qcAuthoritativeFulfilmentSlotSet: {
+              ...context.qcAuthoritativeFulfilmentSlotSet,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "another-set"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
+    ["shipmentIds", []],
+    ["shipmentIds", ["shipment-1", "shipment-1"]],
+    ["lineageLeafIds", []],
+    ["lineageLeafIds", ["shipment-lineage-leaf-1", "shipment-lineage-leaf-1"]],
+    ["resultId", "another-result"],
+    ["immutable", false],
+  ] as const)(
+    "rejects delivery with invalid authoritative Shipment set %s",
+    (field, value) => {
+      const context = contextForTransition("delivered", "shipped");
+      expect(() =>
+        transition(orderPolicy, {
+          current: "shipped",
+          target: "delivered",
+          idempotencyKey: `delivery-authoritative-set-${field}`,
+          context: {
+            ...context,
+            shipmentLineageAuthoritativeSet: {
+              ...context.shipmentLineageAuthoritativeSet,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["shipmentId", "shipment-2"],
+    ["lineageLeafId", "another-leaf"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
+    ["status", "in_transit"],
+    ["currentLineageLeaf", false],
+    ["resultId", "another-result"],
+    ["immutable", false],
+  ] as const)(
+    "rejects delivery with invalid authoritative Shipment leaf %s",
+    (field, value) => {
+      const context = contextForTransition("delivered", "shipped");
+      expect(() =>
+        transition(orderPolicy, {
+          current: "shipped",
+          target: "delivered",
+          idempotencyKey: `delivery-authoritative-leaf-${field}`,
+          context: {
+            ...context,
+            shipmentLineageAuthoritativeLeaves: [
+              {
+                ...context.shipmentLineageAuthoritativeLeaves[0],
+                [field]: value,
+              },
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [orderPolicy, "delivered", "completed", "phase-1"],
+    [orderPolicy, "shipped", "partially_fulfilled", "phase-1"],
+    [orderPolicy, "cancelled", "refunded", "phase-1"],
+    [orderPolicy, "cancelled", "cancelled_settled", "phase-1"],
+    [singleOrderPhasePolicy, "delivered", "completed", "order-1"],
+    [singleOrderPhasePolicy, "shipped", "partially_fulfilled", "order-1"],
+    [singleOrderPhasePolicy, "cancelled", "cancelled_refunded", "order-1"],
+    [singleOrderPhasePolicy, "cancelled", "cancelled_settled", "order-1"],
+  ] as const)(
+    "rejects %s %s -> %s completion for cross-wired aggregate %s",
+    (policy, current, target, aggregateId) => {
+      expect(() =>
+        transition(policy, {
+          aggregateId,
+          current,
+          target,
+          idempotencyKey: `completion-cross-wired-${policy.name}-${target}`,
+          context: contextForTransition(target, current),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [orderPolicy, "order-1"],
+    [singleOrderPhasePolicy, "phase-1"],
+  ] as const)(
+    "requires the selected aggregate for %s completion",
+    (policy, aggregateId) => {
+      const command = {
+        current: "delivered" as const,
+        target: "completed" as const,
+        idempotencyKey: `completion-selected-${policy.name}`,
+        context: contextForTransition("completed", "delivered"),
+      };
+      expect(() => transition(policy, command)).toThrow(TransitionGuardError);
+      expect(transition(policy, { ...command, aggregateId })).toEqual({
+        kind: "changed",
+        previous: "delivered",
+        current: "completed",
+      });
+    },
+  );
+
+  it.each(["pending", "recovery_pending"] as const)(
+    "selects reprint from %s with exact Claim-slot and artifact evidence",
+    (current) => {
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            current,
+            "reprint_pending",
+          ),
+          current,
+          target: "reprint_pending",
+          idempotencyKey: `reprint-selection-${current}`,
+          context: contextForTransition("reprint_pending", current),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "reprint_pending",
+      });
+    },
+  );
+
+  it.each([
+    ["reprintSelectionResultId", " "],
+    ["reprintSelectionPreviousResolutionResultId", "another-result"],
+    ["reprintSelectionCurrentStateCommandKey", "another-command"],
+    ["reprintSelectionPreviousStatus", "reprint_pending"],
+    ["reprintSelectionTargetStatus", "replacement_in_production"],
+    ["reprintSelectionArtifactId", "another-artifact"],
+    ["reprintSelectionSourceJobId", "another-job"],
+    ["reprintSelectionSourceShipmentId", "another-shipment"],
+    ["reprintSelectionArtifactVersionId", "another-version"],
+    ["reprintSelectionPrintConfigRevisionId", "another-config"],
+    ["reprintSelectionResolutionResultId", "another-result"],
+    ["reprintSelectionSlotResultId", "another-result"],
+    ["reprintSelectionArtifactResultId", "another-result"],
+    ["reprintSelectionConfigResultId", "another-result"],
+    ["reprintSelectionCompleted", false],
+    ["reprintSelectionAtomic", false],
+  ] as const)(
+    "rejects reprint selection with invalid root proof %s",
+    (field, value) => {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            "pending",
+            "reprint_pending",
+          ),
+          current: "pending",
+          target: "reprint_pending",
+          idempotencyKey: `reprint-selection-root-${field}`,
+          context: {
+            ...contextForTransition("reprint_pending", "pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["reprintSelectionExpectedResolution", "id", "resolution-2"],
+    ["reprintSelectionExpectedResolution", "claimId", "claim-2"],
+    ["reprintSelectionExpectedResolution", "slotId", "slot-2"],
+    ["reprintSelectionExpectedResolution", "status", "recovery_pending"],
+    ["reprintSelectionExpectedResolution", "activeClaimId", "claim-2"],
+    [
+      "reprintSelectionExpectedResolution",
+      "canonicalDeliveredArtifactId",
+      "artifact-2",
+    ],
+    [
+      "reprintSelectionExpectedResolution",
+      "canonicalDeliveredArtifactSourceJobId",
+      "job-2",
+    ],
+    [
+      "reprintSelectionExpectedResolution",
+      "canonicalDeliveredArtifactSourceShipmentId",
+      "shipment-2",
+    ],
+    [
+      "reprintSelectionExpectedResolution",
+      "canonicalDeliveredArtifactVersionId",
+      "artifact-version-2",
+    ],
+    [
+      "reprintSelectionExpectedResolution",
+      "canonicalDeliveredPrintConfigRevisionId",
+      "config-revision-2",
+    ],
+    ["reprintSelectionExpectedResolution", "immutable", false],
+    ["reprintSelectionSlotOwnership", "activeClaimId", "claim-2"],
+    ["reprintSelectionSlotOwnership", "resolutionId", "resolution-2"],
+    ["reprintSelectionSlotOwnership", "immutable", false],
+    ["reprintSelectionArtifact", "sourceJobId", "job-2"],
+    ["reprintSelectionArtifact", "sourceShipmentId", "shipment-2"],
+    ["reprintSelectionArtifact", "claimId", "claim-2"],
+    ["reprintSelectionArtifact", "resolutionId", "resolution-2"],
+    ["reprintSelectionArtifact", "slotId", "slot-2"],
+    ["reprintSelectionArtifact", "status", "draft"],
+    ["reprintSelectionArtifact", "delivered", false],
+    ["reprintSelectionArtifact", "currentLineageLeaf", false],
+    ["reprintSelectionArtifact", "canonical", false],
+    ["reprintSelectionArtifact", "immutable", false],
+    ["reprintSelectionArtifact", "resultId", "another-result"],
+  ] as const)(
+    "rejects reprint selection with invalid %s.%s",
+    (recordField, field, value) => {
+      const context = contextForTransition("reprint_pending", "pending");
+      const record = context[recordField] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            "pending",
+            "reprint_pending",
+          ),
+          current: "pending",
+          target: "reprint_pending",
+          idempotencyKey: `reprint-selection-${recordField}-${field}`,
+          context: {
+            ...context,
+            [recordField]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects coordinated foreign Claim-slot reprint selection", () => {
+    const context = contextForTransition("reprint_pending", "pending");
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "pending",
+          "reprint_pending",
+        ),
+        current: "pending",
+        target: "reprint_pending",
+        idempotencyKey: "reprint-selection-coordinated-substitution",
+        context: {
+          ...context,
+          claimSlotResolutionId: "resolution-2",
+          reprintSelectionExpectedResolution: {
+            ...context.reprintSelectionExpectedResolution,
+            id: "resolution-2",
+          },
+          reprintSelectionSlotOwnership: {
+            ...context.reprintSelectionSlotOwnership,
+            resolutionId: "resolution-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each(["pending", "recovery_pending"] as const)(
+    "rejects coordinated foreign artifact/config reprint selection from %s",
+    (current) => {
+      const context = contextForTransition("reprint_pending", current);
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            current,
+            "reprint_pending",
+          ),
+          current,
+          target: "reprint_pending",
+          idempotencyKey: `reprint-selection-foreign-artifact-${current}`,
+          context: {
+            ...context,
+            reprintSelectionArtifactId: "delivered-artifact-2",
+            reprintSelectionSourceJobId: "job-2",
+            reprintSelectionSourceShipmentId: "shipment-2",
+            reprintSelectionArtifactVersionId: "artifact-version-2",
+            reprintSelectionPrintConfigRevisionId: "config-revision-2",
+            reprintSelectionResultId: "reprint-selection-result-2",
+            reprintSelectionArtifact: {
+              ...context.reprintSelectionArtifact,
+              id: "delivered-artifact-2",
+              sourceJobId: "job-2",
+              sourceShipmentId: "shipment-2",
+              reproductionArtifactVersionId: "artifact-version-2",
+              printConfigRevisionId: "config-revision-2",
+              resultId: "reprint-selection-result-2",
+            },
+            reprintSelectionResolutionResultId: "reprint-selection-result-2",
+            reprintSelectionSlotResultId: "reprint-selection-result-2",
+            reprintSelectionArtifactResultId: "reprint-selection-result-2",
+            reprintSelectionConfigResultId: "reprint-selection-result-2",
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each(["job-1", "job-2"] as const)(
     "dispatches cancellation-race handoff through the exact result for %s",

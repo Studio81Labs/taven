@@ -349,6 +349,9 @@ function requireProjectedCompletionTarget<S extends string>(
   let hasDeliveredOutcome = false;
   let hasCancelledRefundedOutcome = false;
   const valid =
+    ((lifecycle === "Order" && command.aggregateId === context?.orderId) ||
+      (lifecycle === "OrderPhase(single)" &&
+        command.aggregateId === context?.phaseId)) &&
     Array.isArray(expected) &&
     expected.length > 0 &&
     new Set(expected).size === expected.length &&
@@ -789,6 +792,8 @@ function requireAtomicOrderPhaseCompletion<S extends string>(
   if (
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
+    (lifecycle === "Order" && command.aggregateId !== orderId) ||
+    (lifecycle === "OrderPhase(single)" && command.aggregateId !== phaseId) ||
     command.context?.orderCompletionOrderId !== orderId ||
     command.context?.orderCompletionPhaseOrderId !== orderId ||
     typeof phaseId !== "string" ||
@@ -893,6 +898,29 @@ function requireCompleteQcSlotSet<S extends string>(
   orderId: string,
   phaseId: string,
 ): void {
+  const topologyId = command.context?.qcAuthoritativePhaseTopologyId;
+  const expectedTopologyId = command.context?.qcExpectedPhaseTopologyId;
+  const topologyValue = command.context?.qcExpectedPhaseTopology;
+  const topology =
+    typeof topologyValue === "object" &&
+    topologyValue !== null &&
+    !Array.isArray(topologyValue)
+      ? (topologyValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const setId = command.context?.qcAuthoritativeFulfilmentSlotSetId;
+  const expectedSetId = command.context?.qcExpectedFulfilmentSlotSetId;
+  const setResultId = command.context?.qcAuthoritativeFulfilmentSlotSetResultId;
+  const authoritativeValue = command.context?.qcAuthoritativeFulfilmentSlotSet;
+  const authoritative =
+    typeof authoritativeValue === "object" &&
+    authoritativeValue !== null &&
+    !Array.isArray(authoritativeValue)
+      ? (authoritativeValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const authoritativeIdsValue = authoritative?.slotIds;
+  const authoritativeIds = Array.isArray(authoritativeIdsValue)
+    ? [...authoritativeIdsValue]
+    : undefined;
   const expectedIdsValue = command.context?.expectedQcFulfilmentSlotIds;
   const slotsValue = command.context?.qcFulfilmentSlots;
   const expectedIds = Array.isArray(expectedIdsValue)
@@ -900,14 +928,44 @@ function requireCompleteQcSlotSet<S extends string>(
     : undefined;
   const slots = Array.isArray(slotsValue) ? [...slotsValue] : undefined;
   if (
+    typeof topologyId !== "string" ||
+    topologyId.trim().length === 0 ||
+    topologyId !== phaseId ||
+    expectedTopologyId !== topologyId ||
+    topology?.id !== topologyId ||
+    topology.orderId !== orderId ||
+    topology.kind !== "single" ||
+    topology.status !== command.current ||
+    topology.authoritativeFulfilmentSlotSetId !== setId ||
+    topology.authoritativeFulfilmentSlotSetResultId !== setResultId ||
+    topology.immutable !== true ||
+    typeof setId !== "string" ||
+    setId.trim().length === 0 ||
+    expectedSetId !== setId ||
+    typeof setResultId !== "string" ||
+    setResultId.trim().length === 0 ||
+    authoritative?.id !== setId ||
+    authoritative.orderId !== orderId ||
+    authoritative.phaseId !== phaseId ||
+    authoritative.phaseTopologyId !== topologyId ||
+    authoritative.resultId !== setResultId ||
+    authoritative.immutable !== true ||
+    authoritativeIds === undefined ||
+    authoritativeIds.length === 0 ||
+    authoritativeIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(authoritativeIds).size !== authoritativeIds.length ||
     command.context?.qcSlotSetOrderId !== orderId ||
     command.context?.qcSlotSetPhaseId !== phaseId ||
+    command.context?.qcSlotSetPhaseTopologyId !== topologyId ||
     expectedIds === undefined ||
     expectedIds.length === 0 ||
     expectedIds.some(
       (id) => typeof id !== "string" || id.trim().length === 0,
     ) ||
     new Set(expectedIds).size !== expectedIds.length ||
+    !hasSameNonEmptyStringSet(expectedIds, authoritativeIds) ||
     slots === undefined ||
     slots.length !== expectedIds.length
   ) {
@@ -918,7 +976,6 @@ function requireCompleteQcSlotSet<S extends string>(
       "QC completion requires the authoritative complete fulfilment slot set",
     );
   }
-  const authoritativeIds = expectedIds as string[];
   const projectedIds = new Set<string>();
   for (const value of slots) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -937,6 +994,8 @@ function requireCompleteQcSlotSet<S extends string>(
       id.trim().length === 0 ||
       projectedIds.has(id) ||
       !authoritativeIds.includes(id) ||
+      slot.authoritativeFulfilmentSlotSetId !== setId ||
+      slot.authoritativePhaseTopologyId !== topologyId ||
       slot.orderId !== orderId ||
       slot.phaseId !== phaseId ||
       typeof currentJobId !== "string" ||
@@ -1169,6 +1228,28 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
 ): void {
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
+  const setId = command.context?.shipmentLineageAuthoritativeSetId;
+  const setResultId = command.context?.shipmentLineageAuthoritativeSetResultId;
+  const setValue = command.context?.shipmentLineageAuthoritativeSet;
+  const set =
+    typeof setValue === "object" &&
+    setValue !== null &&
+    !Array.isArray(setValue)
+      ? (setValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const shipmentIdsValue = set?.shipmentIds;
+  const authoritativeIdsValue = set?.lineageLeafIds;
+  const shipmentIds = Array.isArray(shipmentIdsValue)
+    ? [...shipmentIdsValue]
+    : undefined;
+  const authoritativeIds = Array.isArray(authoritativeIdsValue)
+    ? [...authoritativeIdsValue]
+    : undefined;
+  const authoritativeLeavesValue =
+    command.context?.shipmentLineageAuthoritativeLeaves;
+  const authoritativeLeaves = Array.isArray(authoritativeLeavesValue)
+    ? [...authoritativeLeavesValue]
+    : undefined;
   const expectedIdsValue = command.context?.expectedShipmentLineageLeafIds;
   const leavesValue = command.context?.shipmentLineageLeaves;
   const expectedIds = Array.isArray(expectedIdsValue)
@@ -1183,12 +1264,36 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
     phaseId.trim().length === 0 ||
     command.context?.shipmentLineageSetPhaseId !== phaseId ||
     command.context?.phaseKind !== "single" ||
+    typeof setId !== "string" ||
+    setId.trim().length === 0 ||
+    typeof setResultId !== "string" ||
+    setResultId.trim().length === 0 ||
+    set?.id !== setId ||
+    set.orderId !== orderId ||
+    set.phaseId !== phaseId ||
+    set.resultId !== setResultId ||
+    set.immutable !== true ||
+    shipmentIds === undefined ||
+    authoritativeIds === undefined ||
+    shipmentIds.length === 0 ||
+    shipmentIds.length !== authoritativeIds.length ||
+    shipmentIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    authoritativeIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(shipmentIds).size !== shipmentIds.length ||
+    new Set(authoritativeIds).size !== authoritativeIds.length ||
+    authoritativeLeaves === undefined ||
+    authoritativeLeaves.length !== authoritativeIds.length ||
     expectedIds === undefined ||
     expectedIds.length === 0 ||
     expectedIds.some(
       (id) => typeof id !== "string" || id.trim().length === 0,
     ) ||
     new Set(expectedIds).size !== expectedIds.length ||
+    !hasSameNonEmptyStringSet(expectedIds, authoritativeIds) ||
     leaves === undefined ||
     leaves.length !== expectedIds.length
   ) {
@@ -1199,7 +1304,55 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
       "delivery requires the authoritative complete shipment lineage leaf set",
     );
   }
-  const authoritativeIds = expectedIds as string[];
+  const authoritativeShipmentByLeafId = new Map<string, string>();
+  const projectedAuthoritativeShipmentIds = new Set<string>();
+  for (const value of authoritativeLeaves) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "delivery requires immutable authoritative Shipment lineage records",
+      );
+    }
+    const leaf = value as Readonly<Record<string, unknown>>;
+    const shipmentId = leaf.shipmentId;
+    const lineageLeafId = leaf.lineageLeafId;
+    if (
+      typeof shipmentId !== "string" ||
+      !shipmentIds.includes(shipmentId) ||
+      projectedAuthoritativeShipmentIds.has(shipmentId) ||
+      typeof lineageLeafId !== "string" ||
+      !authoritativeIds.includes(lineageLeafId) ||
+      authoritativeShipmentByLeafId.has(lineageLeafId) ||
+      leaf.orderId !== orderId ||
+      leaf.phaseId !== phaseId ||
+      leaf.status !== "delivered" ||
+      leaf.currentLineageLeaf !== true ||
+      leaf.resultId !== setResultId ||
+      leaf.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "authoritative delivery topology must contain each exact current Shipment lineage leaf once",
+      );
+    }
+    projectedAuthoritativeShipmentIds.add(shipmentId);
+    authoritativeShipmentByLeafId.set(lineageLeafId, shipmentId);
+  }
+  if (
+    shipmentIds.some((id) => !projectedAuthoritativeShipmentIds.has(id)) ||
+    authoritativeIds.some((id) => !authoritativeShipmentByLeafId.has(id))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "authoritative delivery topology cannot omit a Shipment or lineage leaf",
+    );
+  }
   const projectedIds = new Set<string>();
   for (const value of leaves) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -1217,9 +1370,11 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
       id.trim().length === 0 ||
       projectedIds.has(id) ||
       !authoritativeIds.includes(id) ||
+      leaf.shipmentId !== authoritativeShipmentByLeafId.get(id as string) ||
       leaf.orderId !== orderId ||
       leaf.phaseId !== phaseId ||
-      leaf.status !== "delivered"
+      leaf.status !== "delivered" ||
+      leaf.currentLineageLeaf !== true
     ) {
       throw new TransitionGuardError(
         lifecycle,
@@ -10361,6 +10516,119 @@ function requireExactClaimRefundCompletion<S extends string>(
   );
 }
 
+function requireExactReprintSelection<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const resolutionId = context?.claimSlotResolutionId;
+  const claimId = context?.claimId;
+  const slotId = context?.claimSlotId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const artifactId = context?.reprintSelectionArtifactId;
+  const sourceJobId = context?.reprintSelectionSourceJobId;
+  const sourceShipmentId = context?.reprintSelectionSourceShipmentId;
+  const artifactVersionId = context?.reprintSelectionArtifactVersionId;
+  const configRevisionId = context?.reprintSelectionPrintConfigRevisionId;
+  const previousResultId = context?.reprintSelectionPreviousResolutionResultId;
+  const resultId = context?.reprintSelectionResultId;
+  const stateKey = context?.reprintSelectionCurrentStateCommandKey;
+  const expectedValue = context?.reprintSelectionExpectedResolution;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const ownershipValue = context?.reprintSelectionSlotOwnership;
+  const ownership =
+    typeof ownershipValue === "object" &&
+    ownershipValue !== null &&
+    !Array.isArray(ownershipValue)
+      ? (ownershipValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const artifactValue = context?.reprintSelectionArtifact;
+  const artifact =
+    typeof artifactValue === "object" &&
+    artifactValue !== null &&
+    !Array.isArray(artifactValue)
+      ? (artifactValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    !nonBlank(resolutionId) ||
+    !nonBlank(claimId) ||
+    !nonBlank(slotId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(artifactId) ||
+    !nonBlank(sourceJobId) ||
+    !nonBlank(sourceShipmentId) ||
+    !nonBlank(artifactVersionId) ||
+    !nonBlank(configRevisionId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== resolutionId ||
+    command.currentStateCommandKey !== stateKey ||
+    context?.reprintSelectionPreviousStatus !== command.current ||
+    context?.reprintSelectionTargetStatus !== "reprint_pending" ||
+    expected?.id !== resolutionId ||
+    expected.claimId !== claimId ||
+    expected.slotId !== slotId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.status !== command.current ||
+    expected.activeClaimId !== claimId ||
+    expected.canonicalDeliveredArtifactId !== artifactId ||
+    expected.canonicalDeliveredArtifactSourceJobId !== sourceJobId ||
+    expected.canonicalDeliveredArtifactSourceShipmentId !== sourceShipmentId ||
+    expected.canonicalDeliveredArtifactVersionId !== artifactVersionId ||
+    expected.canonicalDeliveredPrintConfigRevisionId !== configRevisionId ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true ||
+    ownership?.slotId !== slotId ||
+    ownership.claimId !== claimId ||
+    ownership.activeClaimId !== claimId ||
+    ownership.resolutionId !== resolutionId ||
+    ownership.orderId !== orderId ||
+    ownership.phaseId !== phaseId ||
+    ownership.immutable !== true ||
+    artifact?.id !== artifactId ||
+    artifact.sourceJobId !== sourceJobId ||
+    artifact.sourceShipmentId !== sourceShipmentId ||
+    artifact.claimId !== claimId ||
+    artifact.resolutionId !== resolutionId ||
+    artifact.orderId !== orderId ||
+    artifact.phaseId !== phaseId ||
+    artifact.slotId !== slotId ||
+    artifact.reproductionArtifactVersionId !== artifactVersionId ||
+    artifact.printConfigRevisionId !== configRevisionId ||
+    artifact.status !== "sealed" ||
+    artifact.delivered !== true ||
+    artifact.currentLineageLeaf !== true ||
+    artifact.canonical !== true ||
+    artifact.immutable !== true ||
+    artifact.resultId !== resultId ||
+    context?.reprintSelectionResolutionResultId !== resultId ||
+    context?.reprintSelectionSlotResultId !== resultId ||
+    context?.reprintSelectionArtifactResultId !== resultId ||
+    context?.reprintSelectionConfigResultId !== resultId ||
+    context?.reprintSelectionCompleted !== true ||
+    context?.reprintSelectionAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "reprint selection requires the command-selected Claim slot and its exact canonical delivered reproduction artifact",
+    );
+  }
+}
+
 export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStatus> =
   {
     name: "ClaimSlotResolution",
@@ -10403,6 +10671,13 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
       ],
     },
     guard: (command) => {
+      if (
+        (command.current === "pending" ||
+          command.current === "recovery_pending") &&
+        command.target === "reprint_pending"
+      ) {
+        requireExactReprintSelection("ClaimSlotResolution", command);
+      }
       if (command.current === "pending" && command.target === "rejected") {
         requireAtomicWholeClaimRejection("ClaimSlotResolution", command);
         requireFlag(
