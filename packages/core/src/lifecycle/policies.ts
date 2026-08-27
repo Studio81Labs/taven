@@ -4503,6 +4503,341 @@ function requireCompleteClaimResolutionSet<S extends string>(
   return statuses;
 }
 
+function requireAtomicWholeClaimRejection<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const slotId = context?.claimSlotId;
+  const resultId = context?.claimRejectionResultId;
+  const resolutions = Array.isArray(context?.claimSlotResolutions)
+    ? context.claimSlotResolutions
+    : undefined;
+  const selected = resolutions?.filter((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const resolution = value as Readonly<Record<string, unknown>>;
+    return resolution.id === resolutionId && resolution.slotId === slotId;
+  });
+  const completeRejectionChildren = resolutions?.every((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const resolution = value as Readonly<Record<string, unknown>>;
+    return (
+      resolution.status === "rejected" &&
+      resolution.statusBefore === "pending" &&
+      resolution.statusAfter === "rejected" &&
+      resolution.claimRejectionResultId === resultId
+    );
+  });
+  const statuses = requireCompleteClaimResolutionSet(lifecycle, command);
+
+  if (
+    statuses.length === 0 ||
+    statuses.some((status) => status !== "rejected") ||
+    typeof claimId !== "string" ||
+    claimId.trim().length === 0 ||
+    typeof resolutionId !== "string" ||
+    resolutionId.trim().length === 0 ||
+    typeof slotId !== "string" ||
+    slotId.trim().length === 0 ||
+    typeof resultId !== "string" ||
+    resultId.trim().length === 0 ||
+    context?.claimRejectionResultClaimId !== claimId ||
+    context?.claimRejectionParentResultId !== resultId ||
+    context?.claimRejectionChildSetResultId !== resultId ||
+    context?.claimRejectionSlotOwnershipResultId !== resultId ||
+    context?.claimRejectionRetentionResultId !== resultId ||
+    context?.claimRejectionParentClaimId !== claimId ||
+    context?.claimRejectionParentPreviousStatus !== "investigating" ||
+    context?.claimRejectionParentTargetStatus !== "resolved_rejected" ||
+    context?.claimRejectionChildResolutionId !== resolutionId ||
+    context?.claimRejectionChildSlotId !== slotId ||
+    context?.claimRejectionChildResultId !== resultId ||
+    context?.claimRejectionChildStatusBefore !== "pending" ||
+    context?.claimRejectionChildStatusAfter !== "rejected" ||
+    completeRejectionChildren !== true ||
+    selected === undefined ||
+    selected.length !== 1 ||
+    (selected[0] as Readonly<Record<string, unknown>> | undefined)?.status !==
+      "rejected" ||
+    (selected[0] as Readonly<Record<string, unknown>> | undefined)
+      ?.statusBefore !== "pending" ||
+    (selected[0] as Readonly<Record<string, unknown>> | undefined)
+      ?.statusAfter !== "rejected"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim rejection requires one exact complete rejected child set and its selected child",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "claimRejectionSlotOwnershipReleased",
+    "Claim rejection must release the exact complete slot set",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimRejectionRetentionCleanupCompleted",
+    "Claim rejection must complete retention cleanup and deadline recomputation",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimRejectionDeadlineRecomputed",
+    "Claim rejection must persist the recomputed retention deadline",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimRejectionResultAtomic",
+    "Claim rejection, slot release, and retention cleanup must be atomic",
+  );
+}
+
+function requireAtomicWholeClaimWithdrawal<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const withdrawableChildSources = new Set([
+    "pending",
+    "reship_pending",
+    "reprint_pending",
+    "replacement_in_production",
+    "recovery_pending",
+  ]);
+  const context = command.context;
+  const isParentTransition = lifecycle === "Claim";
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const slotId = context?.claimSlotId;
+  const resultId = context?.claimWithdrawalResultId;
+  const resolutions = Array.isArray(context?.claimSlotResolutions)
+    ? context.claimSlotResolutions
+    : undefined;
+  const selected = resolutions?.filter((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const resolution = value as Readonly<Record<string, unknown>>;
+    return resolution.id === resolutionId && resolution.slotId === slotId;
+  });
+  const selectedRecord =
+    selected?.length === 1 &&
+    typeof selected[0] === "object" &&
+    selected[0] !== null &&
+    !Array.isArray(selected[0])
+      ? (selected[0] as Readonly<Record<string, unknown>>)
+      : undefined;
+  const selectedChildSource = selectedRecord?.statusBefore;
+  const completeWithdrawalChildren = resolutions?.every((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const resolution = value as Readonly<Record<string, unknown>>;
+    return (
+      resolution.status === "withdrawn" &&
+      typeof resolution.statusBefore === "string" &&
+      withdrawableChildSources.has(resolution.statusBefore) &&
+      resolution.statusAfter === "withdrawn" &&
+      resolution.claimWithdrawalResultId === resultId
+    );
+  });
+  const needsCancellation = resolutions?.some((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const resolution = value as Readonly<Record<string, unknown>>;
+    return resolution.statusBefore !== "pending";
+  });
+  const statuses = requireCompleteClaimResolutionSet(lifecycle, command);
+
+  if (
+    statuses.length === 0 ||
+    statuses.some((status) => status !== "withdrawn") ||
+    typeof claimId !== "string" ||
+    claimId.trim().length === 0 ||
+    typeof resolutionId !== "string" ||
+    resolutionId.trim().length === 0 ||
+    typeof slotId !== "string" ||
+    slotId.trim().length === 0 ||
+    typeof resultId !== "string" ||
+    resultId.trim().length === 0 ||
+    context?.claimWithdrawalResultClaimId !== claimId ||
+    context?.claimWithdrawalParentResultId !== resultId ||
+    context?.claimWithdrawalChildSetResultId !== resultId ||
+    context?.claimWithdrawalSlotOwnershipResultId !== resultId ||
+    context?.claimWithdrawalRetentionResultId !== resultId ||
+    context?.claimWithdrawalParentClaimId !== claimId ||
+    (isParentTransition
+      ? context?.claimWithdrawalParentPreviousStatus !== command.current
+      : context?.claimWithdrawalParentPreviousStatus !== "opened" &&
+        context?.claimWithdrawalParentPreviousStatus !== "investigating" &&
+        context?.claimWithdrawalParentPreviousStatus !== "active") ||
+    context?.claimWithdrawalParentTargetStatus !== "withdrawn" ||
+    context?.claimWithdrawalChildResolutionId !== resolutionId ||
+    context?.claimWithdrawalChildSlotId !== slotId ||
+    context?.claimWithdrawalChildResultId !== resultId ||
+    context?.claimWithdrawalChildStatusBefore !== selectedChildSource ||
+    context?.claimWithdrawalChildStatusAfter !== "withdrawn" ||
+    completeWithdrawalChildren !== true ||
+    selected === undefined ||
+    selected.length !== 1 ||
+    selectedRecord?.status !== "withdrawn" ||
+    (isParentTransition !== true && selectedChildSource !== command.current) ||
+    selectedRecord?.statusAfter !== "withdrawn"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim withdrawal requires one exact complete withdrawn child set and its selected child",
+    );
+  }
+
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalSlotOwnershipReleased",
+    "Claim withdrawal must release the exact complete slot set",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalRetentionCleanupCompleted",
+    "Claim withdrawal must complete retention cleanup and deadline recomputation",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalDeadlineRecomputed",
+    "Claim withdrawal must persist the recomputed retention deadline",
+  );
+
+  if (needsCancellation !== true) {
+    requireFlag(
+      lifecycle,
+      command,
+      "claimWithdrawalResultAtomic",
+      "Claim withdrawal, slot release, and retention cleanup must be atomic",
+    );
+    return;
+  }
+
+  const cancellationResultId = context?.claimWithdrawalCancellationResultId;
+  const expectedResolutionIds = Array.isArray(
+    context?.expectedClaimSlotResolutionIds,
+  )
+    ? [...context.expectedClaimSlotResolutionIds]
+    : undefined;
+  const expectedSlotIds = Array.isArray(context?.expectedClaimSlotIds)
+    ? [...context.expectedClaimSlotIds]
+    : undefined;
+  const cancellationResolutionIds = Array.isArray(
+    context?.claimWithdrawalCancellationResolutionIds,
+  )
+    ? [...context.claimWithdrawalCancellationResolutionIds]
+    : undefined;
+  const cancellationSlotIds = Array.isArray(
+    context?.claimWithdrawalCancellationSlotIds,
+  )
+    ? [...context.claimWithdrawalCancellationSlotIds]
+    : undefined;
+  const exactSet = (
+    expected: readonly unknown[] | undefined,
+    actual: readonly unknown[] | undefined,
+  ): actual is string[] =>
+    expected !== undefined &&
+    expected.length > 0 &&
+    actual !== undefined &&
+    actual.length === expected.length &&
+    expected.every((id) => typeof id === "string" && id.trim().length > 0) &&
+    new Set(expected).size === expected.length &&
+    actual.every(
+      (id) =>
+        typeof id === "string" && id.trim().length > 0 && expected.includes(id),
+    ) &&
+    new Set(actual).size === actual.length;
+
+  if (
+    typeof cancellationResultId !== "string" ||
+    cancellationResultId.trim().length === 0 ||
+    cancellationResultId !== resultId ||
+    context?.claimWithdrawalCancellationClaimId !== claimId ||
+    !exactSet(expectedResolutionIds, cancellationResolutionIds) ||
+    !exactSet(expectedSlotIds, cancellationSlotIds) ||
+    context?.claimWithdrawalCancellationShipmentResultId !== resultId ||
+    context?.claimWithdrawalCancellationRequestResultId !== resultId ||
+    context?.claimWithdrawalCancellationJobResultId !== resultId ||
+    context?.claimWithdrawalCancellationAuthorizationResultId !== resultId ||
+    context?.claimWithdrawalCancellationReservationResultId !== resultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "remedy Claim withdrawal requires the complete pre-handoff cancellation result",
+    );
+  }
+
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalAllRemedyShipmentsCancelled",
+    "Claim withdrawal requires all applicable remedy Shipments to be cancelled",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalOpenRequestSetCancelled",
+    "Claim withdrawal requires the applicable open request set to be cancelled",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalJobsCancelled",
+    "Claim withdrawal requires all applicable Jobs to be cancelled",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalAuthorizationsInvalidated",
+    "Claim withdrawal requires all applicable authorizations to be invalidated",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalReservationsSettled",
+    "Claim withdrawal requires all applicable reservations to be settled",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalCancellationCompleted",
+    "Claim withdrawal requires every pre-handoff remedy cancellation to complete",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalCancellationAtomic",
+    "Claim withdrawal cancellation and Claim cleanup must be atomic",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimWithdrawalResultAtomic",
+    "Claim withdrawal, remedy cancellation, slot release, and retention cleanup must be atomic",
+  );
+}
+
 export const claimPolicy: TransitionPolicy<ClaimStatus> = {
   name: "Claim",
   initial: ["opened"],
@@ -4526,6 +4861,15 @@ export const claimPolicy: TransitionPolicy<ClaimStatus> = {
     ],
   },
   guard: (command) => {
+    if (
+      command.current === "investigating" &&
+      command.target === "resolved_rejected"
+    ) {
+      requireAtomicWholeClaimRejection("Claim", command);
+    }
+    if (command.target === "withdrawn") {
+      requireAtomicWholeClaimWithdrawal("Claim", command);
+    }
     if (
       command.target.startsWith("resolved_") ||
       command.target === "withdrawn"
@@ -4574,6 +4918,10 @@ function requireCompleteReplacementRequiredSlotSet<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  if (Array.isArray(command.context?.replacementRequiredRequests)) {
+    requireIndependentReplacementResourceSet(lifecycle, command);
+    return;
+  }
   const resolutionId = command.context?.claimSlotResolutionId;
   const claimId = command.context?.claimId;
   const resolutionSlotId = command.context?.claimSlotId;
@@ -4581,11 +4929,16 @@ function requireCompleteReplacementRequiredSlotSet<S extends string>(
   const expectedSlotIdsValue =
     command.context?.expectedReplacementRequiredSlotIds;
   const bindingsValue = command.context?.replacementRequiredSlotBindings;
+  const resourceGroupsValue =
+    command.context?.replacementRequiredResourceGroups;
   const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
     ? [...expectedSlotIdsValue]
     : undefined;
   const bindings = Array.isArray(bindingsValue)
     ? [...bindingsValue]
+    : undefined;
+  const resourceGroups = Array.isArray(resourceGroupsValue)
+    ? [...resourceGroupsValue]
     : undefined;
   if (
     typeof resolutionId !== "string" ||
@@ -4607,7 +4960,9 @@ function requireCompleteReplacementRequiredSlotSet<S extends string>(
     ) ||
     new Set(expectedSlotIds).size !== expectedSlotIds.length ||
     bindings === undefined ||
-    bindings.length !== expectedSlotIds.length
+    bindings.length !== expectedSlotIds.length ||
+    resourceGroups === undefined ||
+    resourceGroups.length === 0
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -4618,81 +4973,411 @@ function requireCompleteReplacementRequiredSlotSet<S extends string>(
   }
 
   const expectedSlots = expectedSlotIds as string[];
-  const boundSlotIds = new Set<string>();
+  const isExactIdSet = (
+    expected: readonly string[],
+    actual: unknown,
+  ): actual is string[] =>
+    Array.isArray(actual) &&
+    actual.length === expected.length &&
+    actual.every(
+      (id) =>
+        typeof id === "string" && id.trim().length > 0 && expected.includes(id),
+    ) &&
+    new Set(actual).size === actual.length;
+
+  const resourceGroupIds = new Set<string>();
   const requestIds = new Set<string>();
   const reservationIds = new Set<string>();
   const shipmentIds = new Set<string>();
   const jobIds = new Set<string>();
-  for (const value of bindings) {
+  const coveredSlotIds = new Set<string>();
+  const resourceGroupsById = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  for (const value of resourceGroups) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new TransitionGuardError(
         lifecycle,
         command.current,
         command.target,
-        "replacement production requires slot-to-resource identity records",
+        "replacement production requires authoritative resource-to-slot group records",
       );
     }
-    const binding = value as Readonly<Record<string, unknown>>;
-    const slotId = binding.slotId;
-    const requestId = binding.replacementRequestId;
-    const reservationId = binding.replacementReservationId;
-    const shipmentId = binding.replacementShipmentId;
-    const jobId = binding.currentReplacementJobId;
+    const group = value as Readonly<Record<string, unknown>>;
+    const groupId = group.id;
+    const slotIds = group.slotIds;
+    const requestId = group.replacementRequestId;
+    const reservationId = group.replacementReservationId;
+    const shipmentId = group.replacementShipmentId;
+    const jobId = group.currentReplacementJobId;
     if (
-      typeof slotId !== "string" ||
-      slotId.trim().length === 0 ||
-      boundSlotIds.has(slotId) ||
-      !expectedSlots.includes(slotId) ||
-      binding.claimId !== claimId ||
-      binding.resolutionId !== resolutionId ||
-      binding.replacementSetId !== replacementSetId ||
+      typeof groupId !== "string" ||
+      groupId.trim().length === 0 ||
+      resourceGroupIds.has(groupId) ||
+      !Array.isArray(slotIds) ||
+      slotIds.length === 0 ||
+      !isExactIdSet(
+        Array.isArray(slotIds) ? (slotIds as string[]) : [],
+        slotIds,
+      ) ||
+      !(slotIds as string[]).every((slotId) =>
+        expectedSlots.includes(slotId),
+      ) ||
+      (slotIds as string[]).some((slotId) => coveredSlotIds.has(slotId)) ||
+      group.claimId !== claimId ||
+      group.resolutionId !== resolutionId ||
+      group.replacementSetId !== replacementSetId ||
       typeof requestId !== "string" ||
       requestId.trim().length === 0 ||
       requestIds.has(requestId) ||
-      binding.replacementRequestClaimId !== claimId ||
-      binding.replacementRequestResolutionId !== resolutionId ||
-      binding.replacementRequestSlotId !== slotId ||
+      group.replacementRequestClaimId !== claimId ||
+      group.replacementRequestResolutionId !== resolutionId ||
+      !isExactIdSet(slotIds as string[], group.replacementRequestSlotIds) ||
       typeof reservationId !== "string" ||
       reservationId.trim().length === 0 ||
       reservationIds.has(reservationId) ||
-      binding.replacementReservationRequestId !== requestId ||
-      binding.replacementReservationSlotId !== slotId ||
+      group.replacementReservationRequestId !== requestId ||
+      !isExactIdSet(slotIds as string[], group.replacementReservationSlotIds) ||
       typeof shipmentId !== "string" ||
       shipmentId.trim().length === 0 ||
       shipmentIds.has(shipmentId) ||
-      binding.replacementShipmentRequestId !== requestId ||
-      binding.replacementShipmentReservationId !== reservationId ||
-      binding.replacementShipmentSlotId !== slotId ||
+      group.replacementShipmentRequestId !== requestId ||
+      group.replacementShipmentReservationId !== reservationId ||
+      !isExactIdSet(slotIds as string[], group.replacementShipmentSlotIds) ||
       typeof jobId !== "string" ||
       jobId.trim().length === 0 ||
       jobIds.has(jobId) ||
-      binding.currentReplacementJobRequestId !== requestId ||
-      binding.currentReplacementJobReservationId !== reservationId ||
-      binding.currentReplacementJobShipmentId !== shipmentId ||
-      binding.currentReplacementJobSlotId !== slotId ||
-      binding.currentReplacementJobLineageLeaf !== true ||
-      binding.currentReplacementJobStatus !== "created"
+      group.currentReplacementJobRequestId !== requestId ||
+      group.currentReplacementJobReservationId !== reservationId ||
+      group.currentReplacementJobShipmentId !== shipmentId ||
+      !isExactIdSet(slotIds as string[], group.currentReplacementJobSlotIds) ||
+      group.currentReplacementJobLineageLeaf !== true ||
+      group.currentReplacementJobStatus !== "created"
     ) {
       throw new TransitionGuardError(
         lifecycle,
         command.current,
         command.target,
-        "each replacement-required slot must bind this Claim child to its exact request, reservation, Shipment, and current Job leaf",
+        "each replacement resource group must bind its exact Claim child slots to one request, reservation, Shipment, and current Job leaf",
       );
     }
-    boundSlotIds.add(slotId);
+    resourceGroupIds.add(groupId);
     requestIds.add(requestId);
     reservationIds.add(reservationId);
     shipmentIds.add(shipmentId);
     jobIds.add(jobId);
+    for (const slotId of slotIds as string[]) {
+      coveredSlotIds.add(slotId);
+    }
+    resourceGroupsById.set(groupId, group);
   }
-  if (expectedSlots.some((slotId) => !boundSlotIds.has(slotId))) {
+  if (expectedSlots.some((slotId) => !coveredSlotIds.has(slotId))) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
       command.target,
       "replacement production cannot omit a required slot binding",
     );
+  }
+  const boundSlotIds = new Set<string>();
+  for (const value of bindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement production requires exact slot-to-resource-group records",
+      );
+    }
+    const binding = value as Readonly<Record<string, unknown>>;
+    const slotId = binding.slotId;
+    const resourceGroupId = binding.replacementResourceGroupId;
+    const group =
+      typeof resourceGroupId === "string"
+        ? resourceGroupsById.get(resourceGroupId)
+        : undefined;
+    if (
+      typeof slotId !== "string" ||
+      slotId.trim().length === 0 ||
+      boundSlotIds.has(slotId) ||
+      !expectedSlots.includes(slotId) ||
+      group === undefined ||
+      !Array.isArray(group.slotIds) ||
+      !group.slotIds.includes(slotId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement production requires every required slot to reference its exact authoritative resource group",
+      );
+    }
+    boundSlotIds.add(slotId);
+  }
+  if (expectedSlots.some((slotId) => !boundSlotIds.has(slotId))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement production cannot omit a required slot-to-resource-group binding",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementRequiredSlotSetComplete",
+    "replacement production requires the authoritative complete required-slot set",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementSetupAtomic",
+    "replacement production must persist the complete replacement setup atomically",
+  );
+}
+
+function requireIndependentReplacementResourceSet<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const resolutionSlotId = context?.claimSlotId;
+  const replacementSetId = context?.replacementSetId;
+  const expected = Array.isArray(context?.expectedReplacementRequiredSlotIds)
+    ? context.expectedReplacementRequiredSlotIds
+    : undefined;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const exact = (
+    expectedIds: readonly string[],
+    value: unknown,
+  ): value is string[] =>
+    Array.isArray(value) &&
+    value.length === expectedIds.length &&
+    value.every((id) => nonBlank(id) && expectedIds.includes(id)) &&
+    new Set(value).size === value.length;
+  if (
+    !nonBlank(claimId) ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(resolutionSlotId) ||
+    !nonBlank(replacementSetId) ||
+    context?.replacementRequiredSetClaimId !== claimId ||
+    context?.replacementRequiredSetResolutionId !== resolutionId ||
+    context?.replacementRequiredSetId !== replacementSetId ||
+    !Array.isArray(expected) ||
+    expected.length === 0 ||
+    !exact(expected as string[], expected) ||
+    !(expected as string[]).includes(resolutionSlotId)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement production requires its exact required-slot scope",
+    );
+  }
+  const expectedSlots = expected as string[];
+  const records = (collection: unknown, label: string, requireLeaf = false) => {
+    if (!Array.isArray(collection) || collection.length === 0) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        `replacement production requires ${label} records`,
+      );
+    }
+    const byId = new Map<string, Readonly<Record<string, unknown>>>();
+    const covered = new Set<string>();
+    for (const value of collection) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement production requires exact ${label} identity records`,
+        );
+      }
+      const record = value as Readonly<Record<string, unknown>>;
+      const id = record.id;
+      const slotIds = record.slotIds;
+      if (
+        !nonBlank(id) ||
+        byId.has(id) ||
+        !Array.isArray(slotIds) ||
+        slotIds.length === 0 ||
+        !exact(slotIds as string[], slotIds) ||
+        !(slotIds as string[]).every(
+          (slotId) => expectedSlots.includes(slotId) && !covered.has(slotId),
+        ) ||
+        record.claimId !== claimId ||
+        record.resolutionId !== resolutionId ||
+        record.replacementSetId !== replacementSetId ||
+        (requireLeaf &&
+          (record.currentReplacementJobLineageLeaf !== true ||
+            record.currentReplacementJobStatus !== "created"))
+      ) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement ${label} must form an exact rooted slot partition`,
+        );
+      }
+      byId.set(id, record);
+      for (const slotId of slotIds as string[]) covered.add(slotId);
+    }
+    if (expectedSlots.some((slotId) => !covered.has(slotId))) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        `replacement ${label} cannot omit a required slot`,
+      );
+    }
+    return byId;
+  };
+  const requests = records(context?.replacementRequiredRequests, "request");
+  const reservations = records(
+    context?.replacementRequiredReservations,
+    "reservation",
+  );
+  const shipments = records(context?.replacementRequiredShipments, "Shipment");
+  const jobs = records(context?.replacementRequiredJobs, "Job", true);
+  const bindings = context?.replacementRequiredSlotBindings;
+  if (!Array.isArray(bindings) || bindings.length !== expectedSlots.length) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement production requires exact per-slot resource links",
+    );
+  }
+  const links = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const value of bindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement production requires resource link records",
+      );
+    }
+    const link = value as Readonly<Record<string, unknown>>;
+    const slotId = link.slotId;
+    const request = requests.get(link.replacementRequestId as string);
+    const reservation = reservations.get(
+      link.replacementReservationId as string,
+    );
+    const shipment = shipments.get(link.replacementShipmentId as string);
+    const job = jobs.get(link.currentReplacementJobId as string);
+    if (
+      !nonBlank(slotId) ||
+      links.has(slotId) ||
+      !expectedSlots.includes(slotId) ||
+      request === undefined ||
+      reservation === undefined ||
+      shipment === undefined ||
+      job === undefined ||
+      ![request, reservation, shipment, job].every(
+        (record) =>
+          Array.isArray(record.slotIds) && record.slotIds.includes(slotId),
+      )
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement slot links must reference every authoritative resource dimension",
+      );
+    }
+    links.set(slotId, link);
+  }
+  const linkedIds = (slotIds: readonly string[], key: string) => [
+    ...new Set(
+      slotIds.map((slotId) => links.get(slotId)?.[key]).filter(nonBlank),
+    ),
+  ];
+  const verifyRelations = (
+    all: Map<string, Readonly<Record<string, unknown>>>,
+    fields: readonly string[],
+  ) => {
+    for (const [id, record] of all) {
+      const slotIds = record.slotIds as string[];
+      for (const field of fields) {
+        const linkKey =
+          field === "replacementRequestIds"
+            ? "replacementRequestId"
+            : field === "replacementReservationIds"
+              ? "replacementReservationId"
+              : field === "replacementShipmentIds"
+                ? "replacementShipmentId"
+                : "currentReplacementJobId";
+        if (!exact(linkedIds(slotIds, linkKey), record[field])) {
+          throw new TransitionGuardError(
+            lifecycle,
+            command.current,
+            command.target,
+            "replacement resource relationship backlinks must equal the authoritative slot links",
+          );
+        }
+      }
+      if (!nonBlank(id))
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          "replacement resources require stable identities",
+        );
+    }
+  };
+  verifyRelations(requests, [
+    "replacementReservationIds",
+    "currentReplacementJobIds",
+  ]);
+  verifyRelations(reservations, [
+    "replacementRequestIds",
+    "currentReplacementJobIds",
+  ]);
+  verifyRelations(shipments, [
+    "replacementRequestIds",
+    "replacementReservationIds",
+    "currentReplacementJobIds",
+  ]);
+  verifyRelations(jobs, [
+    "replacementRequestIds",
+    "replacementReservationIds",
+    "replacementShipmentIds",
+  ]);
+  for (const reservation of reservations.values()) {
+    if (
+      !Array.isArray(reservation.currentReplacementJobIds) ||
+      reservation.currentReplacementJobIds.length !== 1
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "each replacement ProductionReservation must reference exactly one current Job",
+      );
+    }
+  }
+  for (const job of jobs.values()) {
+    if (
+      !Array.isArray(job.replacementReservationIds) ||
+      job.replacementReservationIds.length !== 1 ||
+      !Array.isArray(job.replacementShipmentIds) ||
+      job.replacementShipmentIds.length !== 1
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "each replacement Job must reference exactly one ProductionReservation and one Shipment",
+      );
+    }
   }
   requireFlag(
     lifecycle,
@@ -4713,6 +5398,14 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
   command: TransitionCommand<S>,
   cancellationRaceShipmentId?: string,
 ): void {
+  if (Array.isArray(command.context?.replacementRequiredRequests)) {
+    requireIndependentReplacementHandoff(
+      lifecycle,
+      command,
+      cancellationRaceShipmentId,
+    );
+    return;
+  }
   requireCompleteReplacementRequiredSlotSet(lifecycle, command);
   const resolutionId = command.context?.claimSlotResolutionId;
   const claimId = command.context?.claimId;
@@ -4727,7 +5420,8 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
   const authorizationShipmentIdsValue =
     command.context?.replacementAuthorizationShipmentIds;
   const bindingsValue = command.context?.replacementHandoffSlotBindings;
-  const setupBindingsValue = command.context?.replacementRequiredSlotBindings;
+  const handoffGroupsValue = command.context?.replacementHandoffResourceGroups;
+  const setupGroupsValue = command.context?.replacementRequiredResourceGroups;
   const requiredSlotIds = Array.isArray(requiredSlotIdsValue)
     ? [...requiredSlotIdsValue]
     : undefined;
@@ -4743,10 +5437,13 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
   const bindings = Array.isArray(bindingsValue)
     ? [...bindingsValue]
     : undefined;
-  const setupBindings = Array.isArray(setupBindingsValue)
-    ? [...setupBindingsValue]
+  const handoffGroups = Array.isArray(handoffGroupsValue)
+    ? [...handoffGroupsValue]
     : undefined;
-  const isExactIdSet = (
+  const setupGroups = Array.isArray(setupGroupsValue)
+    ? [...setupGroupsValue]
+    : undefined;
+  const isExactIdArray = (
     expected: readonly unknown[] | undefined,
     actual: readonly unknown[] | undefined,
   ): actual is string[] =>
@@ -4774,8 +5471,8 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
     command.context?.replacementRequiredSetId !== replacementSetId ||
     command.context?.replacementRequiredSetClaimId !== claimId ||
     command.context?.replacementRequiredSetResolutionId !== resolutionId ||
-    !isExactIdSet(requiredSlotIds, handoffSlotIds) ||
-    !isExactIdSet(requiredSlotIds, authorizationSlotIds) ||
+    !isExactIdArray(requiredSlotIds, handoffSlotIds) ||
+    !isExactIdArray(requiredSlotIds, authorizationSlotIds) ||
     requiredSlotIds === undefined ||
     !requiredSlotIds.includes(resolutionSlotId) ||
     typeof authorizationId !== "string" ||
@@ -4784,18 +5481,18 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
     command.context?.replacementAuthorizationResolutionId !== resolutionId ||
     command.context?.replacementAuthorizationSetId !== replacementSetId ||
     authorizationShipmentIds === undefined ||
-    requiredSlotIds === undefined ||
-    authorizationShipmentIds.length !== requiredSlotIds.length ||
+    authorizationShipmentIds.length === 0 ||
     authorizationShipmentIds.some(
       (id) => typeof id !== "string" || id.trim().length === 0,
     ) ||
     new Set(authorizationShipmentIds).size !==
       authorizationShipmentIds.length ||
     bindings === undefined ||
-    requiredSlotIds === undefined ||
     bindings.length !== requiredSlotIds.length ||
-    setupBindings === undefined ||
-    setupBindings.length !== requiredSlotIds.length ||
+    handoffGroups === undefined ||
+    handoffGroups.length === 0 ||
+    setupGroups === undefined ||
+    setupGroups.length === 0 ||
     command.context?.replacementConsumedAuthorizationId !== authorizationId ||
     command.context?.replacementConsumedAuthorizationClaimId !== claimId ||
     command.context?.replacementConsumedAuthorizationResolutionId !==
@@ -4816,104 +5513,189 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
 
   const expectedSlots = requiredSlotIds as string[];
   const expectedShipments = authorizationShipmentIds as string[];
-  const setupBySlotId = new Map<string, Readonly<Record<string, unknown>>>();
-  for (const value of setupBindings) {
+  const isExactStringIdSet = (
+    expected: readonly string[],
+    actual: unknown,
+  ): actual is string[] =>
+    Array.isArray(actual) &&
+    actual.length === expected.length &&
+    actual.every(
+      (id) =>
+        typeof id === "string" && id.trim().length > 0 && expected.includes(id),
+    ) &&
+    new Set(actual).size === actual.length;
+  const setupGroupsById = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const value of setupGroups) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new TransitionGuardError(
         lifecycle,
         command.current,
         command.target,
-        "replacement handoff requires the exact persisted setup bindings",
+        "replacement handoff requires the exact persisted setup resource groups",
       );
     }
     const setup = value as Readonly<Record<string, unknown>>;
-    const setupSlotId = setup.slotId;
+    const setupGroupId = setup.id;
     if (
-      typeof setupSlotId !== "string" ||
-      !expectedSlots.includes(setupSlotId) ||
-      setupBySlotId.has(setupSlotId)
+      typeof setupGroupId !== "string" ||
+      setupGroupId.trim().length === 0 ||
+      setupGroupsById.has(setupGroupId)
     ) {
       throw new TransitionGuardError(
         lifecycle,
         command.current,
         command.target,
-        "replacement handoff setup slots must form one exact set",
+        "replacement handoff setup resource groups must form one exact set",
       );
     }
-    setupBySlotId.set(setupSlotId, setup);
+    setupGroupsById.set(setupGroupId, setup);
   }
-  const boundSlotIds = new Set<string>();
-  const boundShipmentIds = new Set<string>();
-  const boundJobIds = new Set<string>();
-  for (const value of bindings) {
+  const handoffGroupsById = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  const handoffGroupSlotIds = new Set<string>();
+  const handoffShipmentIds = new Set<string>();
+  const handoffJobIds = new Set<string>();
+  for (const value of handoffGroups) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new TransitionGuardError(
         lifecycle,
         command.current,
         command.target,
-        "replacement handoff requires exact per-slot Shipment and Job records",
+        "replacement handoff requires authoritative resource-to-slot group records",
       );
     }
-    const binding = value as Readonly<Record<string, unknown>>;
-    const slotId = binding.slotId;
-    const shipmentId = binding.replacementShipmentId;
-    const jobId = binding.currentReplacementJobId;
+    const group = value as Readonly<Record<string, unknown>>;
+    const groupId = group.id;
+    const setupGroupId = group.setupResourceGroupId;
+    const slotIds = group.slotIds;
+    const shipmentId = group.replacementShipmentId;
+    const jobId = group.currentReplacementJobId;
     const setup =
-      typeof slotId === "string" ? setupBySlotId.get(slotId) : undefined;
+      typeof setupGroupId === "string"
+        ? setupGroupsById.get(setupGroupId)
+        : undefined;
     const expectedShipmentPreviousStatus =
       cancellationRaceShipmentId === shipmentId
         ? "cancellation_pending"
         : "label_created";
     if (
-      typeof slotId !== "string" ||
-      slotId.trim().length === 0 ||
-      boundSlotIds.has(slotId) ||
-      !expectedSlots.includes(slotId) ||
-      binding.claimId !== claimId ||
-      binding.resolutionId !== resolutionId ||
-      binding.replacementSetId !== replacementSetId ||
+      typeof groupId !== "string" ||
+      groupId.trim().length === 0 ||
+      handoffGroupsById.has(groupId) ||
+      typeof setupGroupId !== "string" ||
+      setupGroupId !== groupId ||
       setup === undefined ||
+      !Array.isArray(setup.slotIds) ||
+      !isExactStringIdSet(setup.slotIds as string[], slotIds) ||
+      (slotIds as string[]).some(
+        (slotId) =>
+          !expectedSlots.includes(slotId) || handoffGroupSlotIds.has(slotId),
+      ) ||
+      group.claimId !== claimId ||
+      group.resolutionId !== resolutionId ||
+      group.replacementSetId !== replacementSetId ||
       typeof shipmentId !== "string" ||
       shipmentId.trim().length === 0 ||
-      boundShipmentIds.has(shipmentId) ||
+      handoffShipmentIds.has(shipmentId) ||
       !expectedShipments.includes(shipmentId) ||
-      binding.replacementShipmentClaimId !== claimId ||
-      binding.replacementShipmentResolutionId !== resolutionId ||
-      binding.replacementShipmentSetId !== replacementSetId ||
-      binding.replacementShipmentSlotId !== slotId ||
-      binding.replacementShipmentPreviousStatus !==
+      group.replacementShipmentClaimId !== claimId ||
+      group.replacementShipmentResolutionId !== resolutionId ||
+      group.replacementShipmentSetId !== replacementSetId ||
+      !isExactStringIdSet(
+        slotIds as string[],
+        group.replacementShipmentSlotIds,
+      ) ||
+      group.replacementShipmentPreviousStatus !==
         expectedShipmentPreviousStatus ||
-      binding.replacementShipmentTargetStatus !== "handed_over" ||
+      group.replacementShipmentTargetStatus !== "handed_over" ||
       setup.replacementShipmentId !== shipmentId ||
       typeof jobId !== "string" ||
       jobId.trim().length === 0 ||
-      boundJobIds.has(jobId) ||
-      binding.currentReplacementJobClaimId !== claimId ||
-      binding.currentReplacementJobResolutionId !== resolutionId ||
-      binding.currentReplacementJobSetId !== replacementSetId ||
-      binding.currentReplacementJobShipmentId !== shipmentId ||
-      binding.currentReplacementJobSlotId !== slotId ||
-      binding.currentReplacementJobLineageLeaf !== true ||
-      binding.currentReplacementJobPreviousStatus !== "packed" ||
-      binding.currentReplacementJobTargetStatus !== "handed_over" ||
+      handoffJobIds.has(jobId) ||
+      group.currentReplacementJobClaimId !== claimId ||
+      group.currentReplacementJobResolutionId !== resolutionId ||
+      group.currentReplacementJobSetId !== replacementSetId ||
+      group.currentReplacementJobShipmentId !== shipmentId ||
+      !isExactStringIdSet(
+        slotIds as string[],
+        group.currentReplacementJobSlotIds,
+      ) ||
+      group.currentReplacementJobLineageLeaf !== true ||
+      group.currentReplacementJobPreviousStatus !== "packed" ||
+      group.currentReplacementJobTargetStatus !== "handed_over" ||
       setup.currentReplacementJobId !== jobId
     ) {
       throw new TransitionGuardError(
         lifecycle,
         command.current,
         command.target,
-        "every replacement slot must hand over its exact Shipment and current packed Job leaf",
+        "every replacement resource group must hand over its exact Shipment and current packed Job leaf",
+      );
+    }
+    handoffGroupsById.set(groupId, group);
+    handoffShipmentIds.add(shipmentId);
+    handoffJobIds.add(jobId);
+    for (const slotId of slotIds as string[]) {
+      handoffGroupSlotIds.add(slotId);
+    }
+  }
+  if (
+    setupGroupsById.size !== handoffGroupsById.size ||
+    [...setupGroupsById.keys()].some(
+      (groupId) => !handoffGroupsById.has(groupId),
+    ) ||
+    expectedSlots.some((slotId) => !handoffGroupSlotIds.has(slotId)) ||
+    !isExactStringIdSet(expectedShipments, [...handoffShipmentIds]) ||
+    (cancellationRaceShipmentId !== undefined &&
+      !handoffShipmentIds.has(cancellationRaceShipmentId))
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement handoff cannot omit or substitute an authorized replacement resource group",
+    );
+  }
+  const boundSlotIds = new Set<string>();
+  for (const value of bindings) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement handoff requires exact slot-to-resource-group records",
+      );
+    }
+    const binding = value as Readonly<Record<string, unknown>>;
+    const slotId = binding.slotId;
+    const resourceGroupId = binding.replacementResourceGroupId;
+    const group =
+      typeof resourceGroupId === "string"
+        ? handoffGroupsById.get(resourceGroupId)
+        : undefined;
+    if (
+      typeof slotId !== "string" ||
+      slotId.trim().length === 0 ||
+      boundSlotIds.has(slotId) ||
+      !expectedSlots.includes(slotId) ||
+      group === undefined ||
+      !Array.isArray(group.slotIds) ||
+      !group.slotIds.includes(slotId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "every replacement slot must reference its exact authoritative handoff resource group",
       );
     }
     boundSlotIds.add(slotId);
-    boundShipmentIds.add(shipmentId);
-    boundJobIds.add(jobId);
   }
   if (
     expectedSlots.some((slotId) => !boundSlotIds.has(slotId)) ||
-    expectedShipments.some((shipmentId) => !boundShipmentIds.has(shipmentId)) ||
-    (cancellationRaceShipmentId !== undefined &&
-      !boundShipmentIds.has(cancellationRaceShipmentId))
+    expectedSlots.some((slotId) => !handoffGroupSlotIds.has(slotId))
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -4922,6 +5704,220 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
       "replacement handoff cannot omit an authorized replacement slot or Shipment",
     );
   }
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementHandoffSlotSetComplete",
+    "replacement handoff requires the authoritative complete setup slot set",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "replacementHandoffAtomic",
+    "replacement authorization consumption, Shipment handoff, and Job transitions must be atomic",
+  );
+}
+
+function requireIndependentReplacementHandoff<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  cancellationRaceShipmentId?: string,
+): void {
+  requireIndependentReplacementResourceSet(lifecycle, command);
+  const context = command.context;
+  const expected =
+    context?.expectedReplacementRequiredSlotIds as readonly string[];
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const exact = (
+    expectedIds: readonly string[],
+    value: unknown,
+  ): value is string[] =>
+    Array.isArray(value) &&
+    value.length === expectedIds.length &&
+    value.every((id) => nonBlank(id) && expectedIds.includes(id)) &&
+    new Set(value).size === value.length;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const replacementSetId = context?.replacementSetId;
+  const authorizationId = context?.replacementFulfilmentAuthorizationId;
+  const setupShipments = Array.isArray(context?.replacementRequiredShipments)
+    ? context.replacementRequiredShipments
+    : [];
+  const setupJobs = Array.isArray(context?.replacementRequiredJobs)
+    ? context.replacementRequiredJobs
+    : [];
+  const handoffShipments = Array.isArray(context?.replacementHandoffShipments)
+    ? context.replacementHandoffShipments
+    : undefined;
+  const handoffJobs = Array.isArray(context?.replacementHandoffJobs)
+    ? context.replacementHandoffJobs
+    : undefined;
+  const handoffLinks = Array.isArray(context?.replacementHandoffSlotBindings)
+    ? context.replacementHandoffSlotBindings
+    : undefined;
+  const shipmentMap = new Map(
+    setupShipments
+      .filter(
+        (value): value is Readonly<Record<string, unknown>> =>
+          typeof value === "object" && value !== null && !Array.isArray(value),
+      )
+      .map((record) => [record.id, record]),
+  );
+  const jobMap = new Map(
+    setupJobs
+      .filter(
+        (value): value is Readonly<Record<string, unknown>> =>
+          typeof value === "object" && value !== null && !Array.isArray(value),
+      )
+      .map((record) => [record.id, record]),
+  );
+  if (
+    !nonBlank(claimId) ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(replacementSetId) ||
+    !nonBlank(authorizationId) ||
+    context?.replacementAuthorizationClaimId !== claimId ||
+    context?.replacementAuthorizationResolutionId !== resolutionId ||
+    context?.replacementAuthorizationSetId !== replacementSetId ||
+    context?.replacementConsumedAuthorizationId !== authorizationId ||
+    context?.replacementConsumedAuthorizationClaimId !== claimId ||
+    context?.replacementConsumedAuthorizationResolutionId !== resolutionId ||
+    context?.replacementConsumedAuthorizationSetId !== replacementSetId ||
+    context?.replacementAuthorizationStatusBefore !== "issued" ||
+    context?.replacementAuthorizationStatusAfter !== "consumed" ||
+    context?.replacementHandoffAuthorizationId !== authorizationId ||
+    !exact(expected, context?.replacementHandoffSlotIds) ||
+    !exact(expected, context?.replacementAuthorizationSlotIds) ||
+    !Array.isArray(handoffShipments) ||
+    !Array.isArray(handoffJobs) ||
+    !Array.isArray(handoffLinks) ||
+    handoffLinks.length !== expected.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement handoff requires exact authorization and complete setup slot scope",
+    );
+  }
+  const verify = (
+    records: readonly unknown[],
+    setup: Map<unknown, Readonly<Record<string, unknown>>>,
+    label: string,
+    job = false,
+  ) => {
+    const ids = new Set<string>();
+    const covered = new Set<string>();
+    for (const value of records) {
+      if (typeof value !== "object" || value === null || Array.isArray(value))
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement handoff requires ${label} records`,
+        );
+      const record = value as Readonly<Record<string, unknown>>;
+      const id = record.id;
+      const persisted = setup.get(id);
+      const expectedPrevious =
+        cancellationRaceShipmentId === id
+          ? "cancellation_pending"
+          : job
+            ? "packed"
+            : "label_created";
+      if (
+        !nonBlank(id) ||
+        ids.has(id) ||
+        persisted === undefined ||
+        !exact(persisted.slotIds as string[], record.slotIds) ||
+        record.claimId !== claimId ||
+        record.resolutionId !== resolutionId ||
+        record.replacementSetId !== replacementSetId ||
+        record.previousStatus !== expectedPrevious ||
+        record.targetStatus !== "handed_over" ||
+        (job && record.currentReplacementJobLineageLeaf !== true)
+      )
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement handoff must preserve each exact ${label} identity, membership, and status`,
+        );
+      ids.add(id);
+      for (const slotId of record.slotIds as string[]) covered.add(slotId);
+    }
+    if (
+      !exact([...setup.keys()].filter(nonBlank), [...ids]) ||
+      !exact(expected, [...covered])
+    )
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        `replacement handoff cannot omit or substitute a ${label}`,
+      );
+    return ids;
+  };
+  const shipmentIds = verify(handoffShipments, shipmentMap, "Shipment");
+  verify(handoffJobs, jobMap, "Job", true);
+  if (
+    !exact([...shipmentIds], context?.replacementAuthorizationShipmentIds) ||
+    (cancellationRaceShipmentId !== undefined &&
+      !shipmentIds.has(cancellationRaceShipmentId))
+  )
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement handoff authorization must include its exact Shipment set",
+    );
+  const setupLinks = new Map(
+    (context?.replacementRequiredSlotBindings as readonly unknown[])
+      .filter(
+        (value): value is Readonly<Record<string, unknown>> =>
+          typeof value === "object" && value !== null && !Array.isArray(value),
+      )
+      .map((link) => [link.slotId, link]),
+  );
+  const linked = new Set<string>();
+  for (const value of handoffLinks) {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement handoff requires per-slot resource links",
+      );
+    const link = value as Readonly<Record<string, unknown>>;
+    const setup = setupLinks.get(link.slotId);
+    if (
+      !nonBlank(link.slotId) ||
+      linked.has(link.slotId) ||
+      !expected.includes(link.slotId) ||
+      setup === undefined ||
+      setup.replacementRequestId !== link.replacementRequestId ||
+      setup.replacementReservationId !== link.replacementReservationId ||
+      setup.replacementShipmentId !== link.replacementShipmentId ||
+      setup.currentReplacementJobId !== link.currentReplacementJobId ||
+      !shipmentIds.has(link.replacementShipmentId as string) ||
+      !jobMap.has(link.currentReplacementJobId)
+    )
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement handoff links must preserve every exact setup resource assignment",
+      );
+    linked.add(link.slotId);
+  }
+  if (!exact(expected, [...linked]))
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement handoff cannot omit a required slot link",
+    );
   requireFlag(
     lifecycle,
     command,
@@ -5589,6 +6585,7 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
     },
     guard: (command) => {
       if (command.current === "pending" && command.target === "rejected") {
+        requireAtomicWholeClaimRejection("ClaimSlotResolution", command);
         requireFlag(
           "ClaimSlotResolution",
           command,
@@ -5770,20 +6767,13 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
         );
       }
       if (command.target === "withdrawn") {
+        requireAtomicWholeClaimWithdrawal("ClaimSlotResolution", command);
         requireFlag(
           "ClaimSlotResolution",
           command,
           "cleanPostDeliveryQualityClaim",
           "only a clean post-delivery quality claim can be withdrawn",
         );
-        if (command.current !== "pending") {
-          requireFlag(
-            "ClaimSlotResolution",
-            command,
-            "remedyCancellationCompleted",
-            "withdrawal requires the pre-handoff cancellation barrier",
-          );
-        }
       }
     },
   };

@@ -610,25 +610,32 @@ const permittedContext = {
   replacementRequiredSlotBindings: [
     {
       slotId: "claim-slot-1",
+      replacementResourceGroupId: "replacement-group-1",
+    },
+  ],
+  replacementRequiredResourceGroups: [
+    {
+      id: "replacement-group-1",
+      slotIds: ["claim-slot-1"],
       claimId: "claim-1",
       resolutionId: "claim-resolution-1",
       replacementSetId: "replacement-set-1",
       replacementRequestId: "replacement-request-1",
       replacementRequestClaimId: "claim-1",
       replacementRequestResolutionId: "claim-resolution-1",
-      replacementRequestSlotId: "claim-slot-1",
+      replacementRequestSlotIds: ["claim-slot-1"],
       replacementReservationId: "replacement-reservation-1",
       replacementReservationRequestId: "replacement-request-1",
-      replacementReservationSlotId: "claim-slot-1",
+      replacementReservationSlotIds: ["claim-slot-1"],
       replacementShipmentId: "replacement-shipment-1",
       replacementShipmentRequestId: "replacement-request-1",
       replacementShipmentReservationId: "replacement-reservation-1",
-      replacementShipmentSlotId: "claim-slot-1",
+      replacementShipmentSlotIds: ["claim-slot-1"],
       currentReplacementJobId: "replacement-job-1",
       currentReplacementJobRequestId: "replacement-request-1",
       currentReplacementJobReservationId: "replacement-reservation-1",
       currentReplacementJobShipmentId: "replacement-shipment-1",
-      currentReplacementJobSlotId: "claim-slot-1",
+      currentReplacementJobSlotIds: ["claim-slot-1"],
       currentReplacementJobLineageLeaf: true,
       currentReplacementJobStatus: "created",
     },
@@ -654,6 +661,14 @@ const permittedContext = {
   replacementHandoffSlotBindings: [
     {
       slotId: "claim-slot-1",
+      replacementResourceGroupId: "replacement-group-1",
+    },
+  ],
+  replacementHandoffResourceGroups: [
+    {
+      id: "replacement-group-1",
+      setupResourceGroupId: "replacement-group-1",
+      slotIds: ["claim-slot-1"],
       claimId: "claim-1",
       resolutionId: "claim-resolution-1",
       replacementSetId: "replacement-set-1",
@@ -661,7 +676,7 @@ const permittedContext = {
       replacementShipmentClaimId: "claim-1",
       replacementShipmentResolutionId: "claim-resolution-1",
       replacementShipmentSetId: "replacement-set-1",
-      replacementShipmentSlotId: "claim-slot-1",
+      replacementShipmentSlotIds: ["claim-slot-1"],
       replacementShipmentPreviousStatus: "label_created",
       replacementShipmentTargetStatus: "handed_over",
       currentReplacementJobId: "replacement-job-1",
@@ -669,7 +684,7 @@ const permittedContext = {
       currentReplacementJobResolutionId: "claim-resolution-1",
       currentReplacementJobSetId: "replacement-set-1",
       currentReplacementJobShipmentId: "replacement-shipment-1",
-      currentReplacementJobSlotId: "claim-slot-1",
+      currentReplacementJobSlotIds: ["claim-slot-1"],
       currentReplacementJobLineageLeaf: true,
       currentReplacementJobPreviousStatus: "packed",
       currentReplacementJobTargetStatus: "handed_over",
@@ -835,6 +850,7 @@ const permittedContext = {
 
 function claimSlotStatusesForTarget(target: string): readonly string[] {
   switch (target) {
+    case "rejected":
     case "resolved_rejected":
       return ["rejected"];
     case "resolved_reprint":
@@ -952,6 +968,11 @@ function contextForTransition(target: string, current?: string) {
   const resolutionEvidence = claimResolutionEvidence(
     claimSlotResolutionStatuses,
   );
+  const claimParentCurrent =
+    current === "opened" || current === "investigating" || current === "active";
+  const withdrawalChildSource =
+    claimParentCurrent || current === undefined ? "pending" : current;
+  const withdrawalParentSource = claimParentCurrent ? current : "active";
   const capacityCaptureCompensation =
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
@@ -964,6 +985,104 @@ function contextForTransition(target: string, current?: string) {
             : child,
         )
       : permittedContext.claimRefundScopeChildren;
+  const claimRejectionEvidence =
+    (current === "pending" && target === "rejected") ||
+    (current === "investigating" && target === "resolved_rejected")
+      ? {
+          claimSlotResolutionId: "claim-resolution-1",
+          claimSlotId: "claim-slot-1",
+          claimSlotResolutions: resolutionEvidence.claimSlotResolutions.map(
+            (resolution) => ({
+              ...resolution,
+              statusBefore: "pending",
+              statusAfter: "rejected",
+              claimRejectionResultId: "claim-rejection-result-1",
+            }),
+          ),
+          claimRejectionResultId: "claim-rejection-result-1",
+          claimRejectionResultClaimId: "claim-1",
+          claimRejectionParentResultId: "claim-rejection-result-1",
+          claimRejectionChildSetResultId: "claim-rejection-result-1",
+          claimRejectionSlotOwnershipResultId: "claim-rejection-result-1",
+          claimRejectionRetentionResultId: "claim-rejection-result-1",
+          claimRejectionParentClaimId: "claim-1",
+          claimRejectionParentPreviousStatus: "investigating",
+          claimRejectionParentTargetStatus: "resolved_rejected",
+          claimRejectionChildResolutionId: "claim-resolution-1",
+          claimRejectionChildSlotId: "claim-slot-1",
+          claimRejectionChildResultId: "claim-rejection-result-1",
+          claimRejectionChildStatusBefore: "pending",
+          claimRejectionChildStatusAfter: "rejected",
+          claimRejectionSlotOwnershipReleased: true,
+          claimRejectionRetentionCleanupCompleted: true,
+          claimRejectionDeadlineRecomputed: true,
+          claimRejectionResultAtomic: true,
+        }
+      : {};
+  const claimWithdrawalResultId = "claim-withdrawal-result-1";
+  const claimWithdrawalEvidence =
+    target === "withdrawn"
+      ? {
+          claimSlotResolutionId: "claim-resolution-1",
+          claimSlotId: "claim-slot-1",
+          claimSlotResolutions: resolutionEvidence.claimSlotResolutions.map(
+            (resolution) => ({
+              ...resolution,
+              statusBefore: withdrawalChildSource,
+              statusAfter: "withdrawn",
+              claimWithdrawalResultId,
+            }),
+          ),
+          claimWithdrawalResultId,
+          claimWithdrawalResultClaimId: "claim-1",
+          claimWithdrawalParentResultId: claimWithdrawalResultId,
+          claimWithdrawalChildSetResultId: claimWithdrawalResultId,
+          claimWithdrawalSlotOwnershipResultId: claimWithdrawalResultId,
+          claimWithdrawalRetentionResultId: claimWithdrawalResultId,
+          claimWithdrawalParentClaimId: "claim-1",
+          claimWithdrawalParentPreviousStatus: withdrawalParentSource,
+          claimWithdrawalParentTargetStatus: "withdrawn",
+          claimWithdrawalChildResolutionId: "claim-resolution-1",
+          claimWithdrawalChildSlotId: "claim-slot-1",
+          claimWithdrawalChildResultId: claimWithdrawalResultId,
+          claimWithdrawalChildStatusBefore: withdrawalChildSource,
+          claimWithdrawalChildStatusAfter: "withdrawn",
+          claimWithdrawalSlotOwnershipReleased: true,
+          claimWithdrawalRetentionCleanupCompleted: true,
+          claimWithdrawalDeadlineRecomputed: true,
+          claimWithdrawalResultAtomic: true,
+          ...(withdrawalChildSource === "pending"
+            ? {}
+            : {
+                claimWithdrawalCancellationResultId: claimWithdrawalResultId,
+                claimWithdrawalCancellationClaimId: "claim-1",
+                claimWithdrawalCancellationResolutionIds:
+                  resolutionEvidence.claimSlotResolutions.map(
+                    (resolution) => resolution.id,
+                  ),
+                claimWithdrawalCancellationSlotIds:
+                  resolutionEvidence.claimSlotResolutions.map(
+                    (resolution) => resolution.slotId,
+                  ),
+                claimWithdrawalCancellationShipmentResultId:
+                  claimWithdrawalResultId,
+                claimWithdrawalCancellationRequestResultId:
+                  claimWithdrawalResultId,
+                claimWithdrawalCancellationJobResultId: claimWithdrawalResultId,
+                claimWithdrawalCancellationAuthorizationResultId:
+                  claimWithdrawalResultId,
+                claimWithdrawalCancellationReservationResultId:
+                  claimWithdrawalResultId,
+                claimWithdrawalAllRemedyShipmentsCancelled: true,
+                claimWithdrawalOpenRequestSetCancelled: true,
+                claimWithdrawalJobsCancelled: true,
+                claimWithdrawalAuthorizationsInvalidated: true,
+                claimWithdrawalReservationsSettled: true,
+                claimWithdrawalCancellationCompleted: true,
+                claimWithdrawalCancellationAtomic: true,
+              }),
+        }
+      : {};
   const remedyIncident =
     target === "recovery_pending" &&
     (current === "replacement_shipped" || current === "reship_shipped");
@@ -1017,6 +1136,8 @@ function contextForTransition(target: string, current?: string) {
         : permittedContext.handoffShipmentPreviousStatus,
     claimSlotResolutionStatuses,
     ...resolutionEvidence,
+    ...claimRejectionEvidence,
+    ...claimWithdrawalEvidence,
     claimRefundScopeChildren,
     financialTerminalTarget: target,
     completionProjectedTarget: target,
@@ -2564,6 +2685,11 @@ describe("v0 lifecycle policy tables", () => {
                       ...binding,
                       replacementShipmentPreviousStatus: "cancellation_pending",
                     })),
+                  replacementHandoffResourceGroups:
+                    base.replacementHandoffResourceGroups.map((group) => ({
+                      ...group,
+                      replacementShipmentPreviousStatus: "cancellation_pending",
+                    })),
                 }
               : {
                   ...base,
@@ -2595,6 +2721,80 @@ describe("v0 lifecycle policy tables", () => {
       });
     },
   );
+
+  it("lets one verified cancellation-race scan hand over a grouped replacement Shipment", () => {
+    const base = contextForTransition("handed_over", "cancellation_pending");
+    const setupGroup = base.replacementRequiredResourceGroups[0]!;
+    const handoffGroup = base.replacementHandoffResourceGroups[0]!;
+    expect(
+      transition(shipmentPolicy, {
+        current: "cancellation_pending",
+        target: "handed_over",
+        idempotencyKey: "cancellation-race-grouped-replacement",
+        context: {
+          ...base,
+          shipmentId: "replacement-shipment-1",
+          providerEventShipmentId: "replacement-shipment-1",
+          cancellationRaceResultShipmentId: "replacement-shipment-1",
+          cancellationRaceHandoffKind: "replacement",
+          cancellationRaceResultKind: "replacement",
+          cancellationRaceAggregateResultStatus: "replacement_child_shipped",
+          cancellationRaceFinancialResultStatus: "claim_remedy_no_charge",
+          cancellationRaceAuthorizationResultStatus:
+            "replacement_authorization_consumed",
+          cancellationRaceJobResultStatus:
+            "complete_replacement_job_set_handed_over",
+          expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementRequiredSlotBindings: [
+            {
+              slotId: "claim-slot-1",
+              replacementResourceGroupId: setupGroup.id,
+            },
+            {
+              slotId: "claim-slot-2",
+              replacementResourceGroupId: setupGroup.id,
+            },
+          ],
+          replacementRequiredResourceGroups: [
+            {
+              ...setupGroup,
+              slotIds: ["claim-slot-1", "claim-slot-2"],
+              replacementRequestSlotIds: ["claim-slot-1", "claim-slot-2"],
+              replacementReservationSlotIds: ["claim-slot-1", "claim-slot-2"],
+              replacementShipmentSlotIds: ["claim-slot-1", "claim-slot-2"],
+              currentReplacementJobSlotIds: ["claim-slot-1", "claim-slot-2"],
+            },
+          ],
+          replacementAuthorizationSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementAuthorizationShipmentIds: ["replacement-shipment-1"],
+          replacementHandoffSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementHandoffSlotBindings: [
+            {
+              slotId: "claim-slot-1",
+              replacementResourceGroupId: handoffGroup.id,
+            },
+            {
+              slotId: "claim-slot-2",
+              replacementResourceGroupId: handoffGroup.id,
+            },
+          ],
+          replacementHandoffResourceGroups: [
+            {
+              ...handoffGroup,
+              slotIds: ["claim-slot-1", "claim-slot-2"],
+              replacementShipmentSlotIds: ["claim-slot-1", "claim-slot-2"],
+              currentReplacementJobSlotIds: ["claim-slot-1", "claim-slot-2"],
+              replacementShipmentPreviousStatus: "cancellation_pending",
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancellation_pending",
+      current: "handed_over",
+    });
+  });
 
   it.each(["packed", "created", "failed"] as const)(
     "rejects a reship cancellation-race result with an unchanged original Job in %s",
@@ -2807,6 +3007,597 @@ describe("v0 lifecycle policy tables", () => {
             financialTerminalTarget: target,
             preHandoffShipmentCancellationsCompleted: true,
           },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  const completeWholeClaimWithdrawal = (
+    parentPreviousStatus: "opened" | "investigating" | "active" = "active",
+  ) => {
+    const evidence = claimResolutionEvidence(["withdrawn", "withdrawn"]);
+    const resultId = "claim-withdrawal-result-1";
+    const hasRemedyChild = parentPreviousStatus === "active";
+    const children = evidence.claimSlotResolutions.map((resolution, index) => ({
+      ...resolution,
+      statusBefore:
+        index === 0 || !hasRemedyChild ? "pending" : "reship_pending",
+      statusAfter: "withdrawn",
+      claimWithdrawalResultId: resultId,
+    }));
+    return {
+      ...evidence,
+      claimSlotResolutionId: "claim-resolution-1",
+      claimSlotId: "claim-slot-1",
+      claimSlotResolutions: children,
+      claimWithdrawalResultId: resultId,
+      claimWithdrawalResultClaimId: "claim-1",
+      claimWithdrawalParentResultId: resultId,
+      claimWithdrawalChildSetResultId: resultId,
+      claimWithdrawalSlotOwnershipResultId: resultId,
+      claimWithdrawalRetentionResultId: resultId,
+      claimWithdrawalParentClaimId: "claim-1",
+      claimWithdrawalParentPreviousStatus: parentPreviousStatus,
+      claimWithdrawalParentTargetStatus: "withdrawn",
+      claimWithdrawalChildResolutionId: "claim-resolution-1",
+      claimWithdrawalChildSlotId: "claim-slot-1",
+      claimWithdrawalChildResultId: resultId,
+      claimWithdrawalChildStatusBefore: "pending",
+      claimWithdrawalChildStatusAfter: "withdrawn",
+      claimWithdrawalSlotOwnershipReleased: true,
+      claimWithdrawalRetentionCleanupCompleted: true,
+      claimWithdrawalDeadlineRecomputed: true,
+      claimWithdrawalResultAtomic: true,
+      cleanPostDeliveryQualityClaim: true,
+      ...(hasRemedyChild
+        ? {
+            claimWithdrawalCancellationResultId: resultId,
+            claimWithdrawalCancellationClaimId: "claim-1",
+            claimWithdrawalCancellationResolutionIds: [
+              "claim-resolution-1",
+              "claim-resolution-2",
+            ],
+            claimWithdrawalCancellationSlotIds: [
+              "claim-slot-1",
+              "claim-slot-2",
+            ],
+            claimWithdrawalCancellationShipmentResultId: resultId,
+            claimWithdrawalCancellationRequestResultId: resultId,
+            claimWithdrawalCancellationJobResultId: resultId,
+            claimWithdrawalCancellationAuthorizationResultId: resultId,
+            claimWithdrawalCancellationReservationResultId: resultId,
+            claimWithdrawalAllRemedyShipmentsCancelled: true,
+            claimWithdrawalOpenRequestSetCancelled: true,
+            claimWithdrawalJobsCancelled: true,
+            claimWithdrawalAuthorizationsInvalidated: true,
+            claimWithdrawalReservationsSettled: true,
+            claimWithdrawalCancellationCompleted: true,
+            claimWithdrawalCancellationAtomic: true,
+          }
+        : {}),
+    };
+  };
+
+  it.each(["opened", "investigating", "active"] as const)(
+    "withdraws a Claim child with an exact %s parent source",
+    (parentPreviousStatus) => {
+      const context = completeWholeClaimWithdrawal(parentPreviousStatus);
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          current: "pending",
+          target: "withdrawn",
+          idempotencyKey: "claim-child-withdrawal-complete",
+          context: {
+            ...context,
+            claimSlotResolutions: [...context.claimSlotResolutions].reverse(),
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "pending",
+        current: "withdrawn",
+      });
+    },
+  );
+
+  it.each(["opened", "investigating", "active"] as const)(
+    "withdraws a Claim directly from %s only with the whole-Claim proof",
+    (parentPreviousStatus) => {
+      expect(
+        transition(claimPolicy, {
+          current: parentPreviousStatus,
+          target: "withdrawn",
+          idempotencyKey: `claim-withdrawal-${parentPreviousStatus}`,
+          context: completeWholeClaimWithdrawal(parentPreviousStatus),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: parentPreviousStatus,
+        current: "withdrawn",
+      });
+    },
+  );
+
+  it.each([
+    [
+      "missing withdrawal result",
+      (context: Record<string, unknown>) => {
+        delete context.claimWithdrawalResultId;
+      },
+    ],
+    [
+      "mismatched parent result",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalParentResultId = "another-result";
+      },
+    ],
+    [
+      "missing cancellation result",
+      (context: Record<string, unknown>) => {
+        delete context.claimWithdrawalCancellationResultId;
+      },
+    ],
+    [
+      "missing cancellation completion",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationCompleted = false;
+      },
+    ],
+  ] as const)(
+    "rejects direct active Claim withdrawal with %s evidence",
+    (_case, mutate) => {
+      const context: Record<string, unknown> = {
+        ...completeWholeClaimWithdrawal("active"),
+      };
+      mutate(context);
+      expect(() =>
+        transition(claimPolicy, {
+          current: "active",
+          target: "withdrawn",
+          idempotencyKey: `claim-withdrawal-invalid-${_case}`,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "omitted child",
+      (context: Record<string, unknown>) => {
+        context.claimSlotResolutions = (
+          context.claimSlotResolutions as ReadonlyArray<Record<string, unknown>>
+        ).slice(0, 1);
+      },
+    ],
+    [
+      "duplicate child",
+      (context: Record<string, unknown>) => {
+        const children = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          children[0],
+          { ...children[1], id: children[0]?.id },
+        ];
+      },
+    ],
+    [
+      "foreign child",
+      (context: Record<string, unknown>) => {
+        const children = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          children[0],
+          { ...children[1], claimId: "another-claim" },
+        ];
+      },
+    ],
+    [
+      "sibling wrong source",
+      (context: Record<string, unknown>) => {
+        const children = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          children[0],
+          { ...children[1], statusBefore: "rejected" },
+        ];
+      },
+    ],
+    [
+      "sibling wrong target",
+      (context: Record<string, unknown>) => {
+        const children = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          children[0],
+          { ...children[1], statusAfter: "rejected" },
+        ];
+      },
+    ],
+    [
+      "selected child wrong source",
+      (context: Record<string, unknown>) =>
+        (context.claimWithdrawalChildStatusBefore = "reship_pending"),
+    ],
+    [
+      "foreign parent",
+      (context: Record<string, unknown>) =>
+        (context.claimWithdrawalParentClaimId = "another-claim"),
+    ],
+    [
+      "wrong parent source",
+      (context: Record<string, unknown>) =>
+        (context.claimWithdrawalParentPreviousStatus = "resolved"),
+    ],
+    [
+      "wrong parent target",
+      (context: Record<string, unknown>) =>
+        (context.claimWithdrawalParentTargetStatus = "resolved_rejected"),
+    ],
+    [
+      "parent result reuse",
+      (context: Record<string, unknown>) =>
+        (context.claimWithdrawalParentResultId = "another-result"),
+    ],
+    [
+      "cancellation omission",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationResolutionIds = [
+          "claim-resolution-1",
+        ];
+      },
+    ],
+    [
+      "cancellation scope foreign",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationResolutionIds = [
+          "claim-resolution-1",
+          "foreign-resolution",
+        ];
+      },
+    ],
+    [
+      "Shipment not cancelled",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalAllRemedyShipmentsCancelled = false;
+      },
+    ],
+    [
+      "request not cancelled",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalOpenRequestSetCancelled = false;
+      },
+    ],
+    [
+      "Job not cancelled",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalJobsCancelled = false;
+      },
+    ],
+    [
+      "authorization not invalidated",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalAuthorizationsInvalidated = false;
+      },
+    ],
+    [
+      "reservation not settled",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalReservationsSettled = false;
+      },
+    ],
+    [
+      "cancellation incomplete",
+      (context: Record<string, unknown>) =>
+        (context.claimWithdrawalCancellationCompleted = false),
+    ],
+    [
+      "cleanup incomplete",
+      (context: Record<string, unknown>) =>
+        (context.claimWithdrawalRetentionCleanupCompleted = false),
+    ],
+    [
+      "non-atomic result",
+      (context: Record<string, unknown>) =>
+        (context.claimWithdrawalResultAtomic = false),
+    ],
+  ] as const)(
+    "rejects whole-Claim withdrawal with %s evidence",
+    (_case, mutate) => {
+      const context: Record<string, unknown> = {
+        ...completeWholeClaimWithdrawal(),
+      };
+      mutate(context);
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "pending",
+          target: "withdrawn",
+          idempotencyKey: `claim-child-withdrawal-invalid-${_case}`,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  const completeWholeClaimRejection = () => {
+    const evidence = claimResolutionEvidence(["rejected", "rejected"]);
+    return {
+      ...evidence,
+      claimSlotResolutionId: "claim-resolution-1",
+      claimSlotId: "claim-slot-1",
+      claimSlotResolutions: evidence.claimSlotResolutions.map(
+        (resolution, index) => ({
+          ...resolution,
+          statusBefore: "pending",
+          statusAfter: "rejected",
+          claimRejectionResultId: "claim-rejection-result-1",
+          ...(index === 0
+            ? {
+                statusBefore: "pending",
+                statusAfter: "rejected",
+              }
+            : {}),
+        }),
+      ),
+      claimRejectionResultId: "claim-rejection-result-1",
+      claimRejectionResultClaimId: "claim-1",
+      claimRejectionParentResultId: "claim-rejection-result-1",
+      claimRejectionChildSetResultId: "claim-rejection-result-1",
+      claimRejectionSlotOwnershipResultId: "claim-rejection-result-1",
+      claimRejectionRetentionResultId: "claim-rejection-result-1",
+      claimRejectionParentClaimId: "claim-1",
+      claimRejectionParentPreviousStatus: "investigating",
+      claimRejectionParentTargetStatus: "resolved_rejected",
+      claimRejectionChildResolutionId: "claim-resolution-1",
+      claimRejectionChildSlotId: "claim-slot-1",
+      claimRejectionChildResultId: "claim-rejection-result-1",
+      claimRejectionChildStatusBefore: "pending",
+      claimRejectionChildStatusAfter: "rejected",
+      claimRejectionSlotOwnershipReleased: true,
+      claimRejectionRetentionCleanupCompleted: true,
+      claimRejectionDeadlineRecomputed: true,
+      claimRejectionResultAtomic: true,
+      cleanPostDeliveryQualityClaim: true,
+    };
+  };
+
+  it("rejects one Claim child only after an atomic whole-Claim rejection result", () => {
+    const context = completeWholeClaimRejection();
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "pending",
+        target: "rejected",
+        idempotencyKey: "claim-child-rejection-complete",
+        context: {
+          ...context,
+          claimSlotResolutions: [...context.claimSlotResolutions].reverse(),
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "pending",
+      current: "rejected",
+    });
+  });
+
+  it("resolves a Claim directly to rejected only after the same atomic result", () => {
+    expect(
+      transition(claimPolicy, {
+        current: "investigating",
+        target: "resolved_rejected",
+        idempotencyKey: "claim-rejection-complete",
+        context: contextForTransition("resolved_rejected", "investigating"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "investigating",
+      current: "resolved_rejected",
+    });
+  });
+
+  it.each([
+    [
+      "missing rejection result",
+      (context: Record<string, unknown>) => {
+        delete context.claimRejectionResultId;
+      },
+    ],
+    [
+      "mismatched child-set result",
+      (context: Record<string, unknown>) => {
+        context.claimRejectionChildSetResultId = "another-result";
+      },
+    ],
+  ] as const)(
+    "rejects direct Claim rejection with %s evidence",
+    (_case, mutate) => {
+      const context: Record<string, unknown> = {
+        ...contextForTransition("resolved_rejected", "investigating"),
+      };
+      mutate(context);
+      expect(() =>
+        transition(claimPolicy, {
+          current: "investigating",
+          target: "resolved_rejected",
+          idempotencyKey: `claim-rejection-invalid-${_case}`,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "omitted child",
+      (context: Record<string, unknown>) => {
+        const resolutions = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = resolutions.slice(0, 1);
+      },
+    ],
+    [
+      "duplicate child identity",
+      (context: Record<string, unknown>) => {
+        const resolutions = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          resolutions[0],
+          { ...resolutions[1], id: resolutions[0]?.id },
+        ];
+      },
+    ],
+    [
+      "foreign child",
+      (context: Record<string, unknown>) => {
+        const resolutions = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          resolutions[0],
+          { ...resolutions[1], claimId: "another-claim" },
+        ];
+      },
+    ],
+    [
+      "sibling not rejected",
+      (context: Record<string, unknown>) => {
+        const resolutions = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          resolutions[0],
+          { ...resolutions[1], status: "refunded" },
+        ];
+      },
+    ],
+    [
+      "sibling wrong source status",
+      (context: Record<string, unknown>) => {
+        const resolutions = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          resolutions[0],
+          { ...resolutions[1], statusBefore: "recovery_pending" },
+        ];
+      },
+    ],
+    [
+      "sibling wrong target status",
+      (context: Record<string, unknown>) => {
+        const resolutions = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          resolutions[0],
+          { ...resolutions[1], statusAfter: "withdrawn" },
+        ];
+      },
+    ],
+    [
+      "sibling belongs to another result",
+      (context: Record<string, unknown>) => {
+        const resolutions = context.claimSlotResolutions as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.claimSlotResolutions = [
+          resolutions[0],
+          {
+            ...resolutions[1],
+            claimRejectionResultId: "another-rejection-result",
+          },
+        ];
+      },
+    ],
+    [
+      "selected child not included",
+      (context: Record<string, unknown>) => {
+        context.claimSlotResolutionId = "claim-resolution-2";
+        context.claimSlotId = "claim-slot-2";
+      },
+    ],
+    [
+      "selected child wrong source status",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionChildStatusBefore = "recovery_pending"),
+    ],
+    [
+      "foreign slot ownership",
+      (context: Record<string, unknown>) => {
+        context.claimSlotOwnershipReleased = false;
+        context.claimRejectionSlotOwnershipReleased = false;
+      },
+    ],
+    [
+      "wrong parent target",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionParentTargetStatus = "resolved_refund"),
+    ],
+    [
+      "wrong parent source",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionParentPreviousStatus = "active"),
+    ],
+    [
+      "foreign parent Claim",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionParentClaimId = "another-claim"),
+    ],
+    [
+      "parent belongs to another result",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionParentResultId = "another-rejection-result"),
+    ],
+    [
+      "child set belongs to another result",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionChildSetResultId = "another-rejection-result"),
+    ],
+    [
+      "ownership release belongs to another result",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionSlotOwnershipResultId =
+          "another-rejection-result"),
+    ],
+    [
+      "retention cleanup belongs to another result",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionRetentionResultId = "another-rejection-result"),
+    ],
+    [
+      "retention cleanup incomplete",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionRetentionCleanupCompleted = false),
+    ],
+    [
+      "deadline not recomputed",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionDeadlineRecomputed = false),
+    ],
+    [
+      "non-atomic result",
+      (context: Record<string, unknown>) =>
+        (context.claimRejectionResultAtomic = false),
+    ],
+  ] as const)(
+    "rejects whole-Claim rejection with %s evidence",
+    (_case, mutate) => {
+      const context: Record<string, unknown> = {
+        ...completeWholeClaimRejection(),
+      };
+      mutate(context);
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "pending",
+          target: "rejected",
+          idempotencyKey: `claim-child-rejection-invalid-${_case}`,
+          context,
         }),
       ).toThrow(TransitionGuardError);
     },
@@ -3823,28 +4614,35 @@ describe("v0 lifecycle policy tables", () => {
 
   it("requires an exact complete replacement-required slot setup before production", () => {
     const firstBinding = permittedContext.replacementRequiredSlotBindings[0]!;
+    const firstGroup = permittedContext.replacementRequiredResourceGroups[0]!;
     const secondBinding = {
-      ...firstBinding,
       slotId: "claim-slot-2",
+      replacementResourceGroupId: "replacement-group-2",
+    };
+    const secondGroup = {
+      ...firstGroup,
+      id: "replacement-group-2",
+      slotIds: ["claim-slot-2"],
       replacementRequestId: "replacement-request-2",
-      replacementRequestSlotId: "claim-slot-2",
+      replacementRequestSlotIds: ["claim-slot-2"],
       replacementReservationId: "replacement-reservation-2",
       replacementReservationRequestId: "replacement-request-2",
-      replacementReservationSlotId: "claim-slot-2",
+      replacementReservationSlotIds: ["claim-slot-2"],
       replacementShipmentId: "replacement-shipment-2",
       replacementShipmentRequestId: "replacement-request-2",
       replacementShipmentReservationId: "replacement-reservation-2",
-      replacementShipmentSlotId: "claim-slot-2",
+      replacementShipmentSlotIds: ["claim-slot-2"],
       currentReplacementJobId: "replacement-job-2",
       currentReplacementJobRequestId: "replacement-request-2",
       currentReplacementJobReservationId: "replacement-reservation-2",
       currentReplacementJobShipmentId: "replacement-shipment-2",
-      currentReplacementJobSlotId: "claim-slot-2",
+      currentReplacementJobSlotIds: ["claim-slot-2"],
     };
     const completeContext = {
       ...permittedContext,
       expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
       replacementRequiredSlotBindings: [firstBinding, secondBinding],
+      replacementRequiredResourceGroups: [firstGroup, secondGroup],
     };
     const invalidContexts = [
       {
@@ -3856,70 +4654,55 @@ describe("v0 lifecycle policy tables", () => {
       {
         replacementRequiredSlotBindings: [
           firstBinding,
+          { ...secondBinding, replacementResourceGroupId: "foreign-group" },
+        ],
+      },
+      {
+        replacementRequiredResourceGroups: [firstGroup],
+      },
+      {
+        replacementRequiredResourceGroups: [
+          { ...firstGroup, slotIds: ["claim-slot-1", "claim-slot-2"] },
+          secondGroup,
+        ],
+      },
+      {
+        replacementRequiredResourceGroups: [
           {
-            ...secondBinding,
-            replacementRequestId: "replacement-request-1",
-            replacementReservationRequestId: "replacement-request-1",
-            replacementShipmentRequestId: "replacement-request-1",
-            currentReplacementJobRequestId: "replacement-request-1",
+            ...firstGroup,
+            replacementRequestSlotIds: ["claim-slot-1", "claim-slot-2"],
           },
+          secondGroup,
         ],
       },
       {
-        replacementRequiredSlotBindings: [
-          firstBinding,
-          {
-            ...secondBinding,
-            replacementReservationId: "replacement-reservation-1",
-            replacementShipmentReservationId: "replacement-reservation-1",
-            currentReplacementJobReservationId: "replacement-reservation-1",
-          },
+        replacementRequiredResourceGroups: [
+          firstGroup,
+          { ...secondGroup, slotIds: ["foreign-slot"] },
         ],
       },
       {
-        replacementRequiredSlotBindings: [
-          firstBinding,
-          {
-            ...secondBinding,
-            replacementShipmentId: "replacement-shipment-1",
-            currentReplacementJobShipmentId: "replacement-shipment-1",
-          },
+        replacementRequiredResourceGroups: [
+          firstGroup,
+          { ...secondGroup, currentReplacementJobLineageLeaf: false },
         ],
       },
       {
-        replacementRequiredSlotBindings: [
-          firstBinding,
-          { ...secondBinding, currentReplacementJobId: "replacement-job-1" },
+        replacementRequiredResourceGroups: [
+          firstGroup,
+          { ...secondGroup, currentReplacementJobStatus: "accepted" },
         ],
       },
       {
-        replacementRequiredSlotBindings: [
-          firstBinding,
-          { ...secondBinding, slotId: "foreign-slot" },
+        replacementRequiredResourceGroups: [
+          firstGroup,
+          { ...secondGroup, resolutionId: "another-resolution" },
         ],
       },
       {
-        replacementRequiredSlotBindings: [
-          firstBinding,
-          { ...secondBinding, currentReplacementJobLineageLeaf: false },
-        ],
-      },
-      {
-        replacementRequiredSlotBindings: [
-          firstBinding,
-          { ...secondBinding, currentReplacementJobStatus: "accepted" },
-        ],
-      },
-      {
-        replacementRequiredSlotBindings: [
-          firstBinding,
-          { ...secondBinding, resolutionId: "another-resolution" },
-        ],
-      },
-      {
-        replacementRequiredSlotBindings: [
-          firstBinding,
-          { ...secondBinding, replacementRequestClaimId: "another-claim" },
+        replacementRequiredResourceGroups: [
+          firstGroup,
+          { ...secondGroup, replacementRequestClaimId: "another-claim" },
         ],
       },
       { replacementRequiredSlotSetComplete: false },
@@ -3943,6 +4726,7 @@ describe("v0 lifecycle policy tables", () => {
         context: {
           ...completeContext,
           replacementRequiredSlotBindings: [secondBinding, firstBinding],
+          replacementRequiredResourceGroups: [secondGroup, firstGroup],
         },
       }),
     ).toEqual({
@@ -3950,6 +4734,528 @@ describe("v0 lifecycle policy tables", () => {
       previous: "reprint_pending",
       current: "replacement_in_production",
     });
+  });
+
+  it("permits one authoritative replacement resource group to cover multiple required slots", () => {
+    const group = permittedContext.replacementRequiredResourceGroups[0]!;
+    const groupedContext = {
+      ...permittedContext,
+      expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementRequiredSlotBindings: [
+        { slotId: "claim-slot-1", replacementResourceGroupId: group.id },
+        { slotId: "claim-slot-2", replacementResourceGroupId: group.id },
+      ],
+      replacementRequiredResourceGroups: [
+        {
+          ...group,
+          slotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementRequestSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementReservationSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementShipmentSlotIds: ["claim-slot-1", "claim-slot-2"],
+          currentReplacementJobSlotIds: ["claim-slot-1", "claim-slot-2"],
+        },
+      ],
+    };
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "reprint_pending",
+        target: "replacement_in_production",
+        idempotencyKey: "replacement-required-grouped",
+        context: groupedContext,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "reprint_pending",
+      current: "replacement_in_production",
+    });
+  });
+
+  const independentReplacementContext = (
+    slotLinks: ReadonlyArray<{
+      slotId: string;
+      request: string;
+      reservation: string;
+      shipment: string;
+      job: string;
+    }>,
+  ) => {
+    const idsFor = (
+      link: (typeof slotLinks)[number],
+      key: "request" | "reservation" | "shipment" | "job",
+    ) => [
+      ...new Set(
+        slotLinks
+          .filter((candidate) => candidate[key] === link[key])
+          .map((candidate) => candidate.slotId),
+      ),
+    ];
+    const records = (key: "request" | "reservation" | "shipment" | "job") =>
+      [...new Set(slotLinks.map((link) => link[key]))].map((id) => {
+        const link = slotLinks.find((candidate) => candidate[key] === id)!;
+        const slotIds = idsFor(link, key);
+        const related = (
+          other: "request" | "reservation" | "shipment" | "job",
+        ) => [
+          ...new Set(
+            slotLinks
+              .filter((candidate) => slotIds.includes(candidate.slotId))
+              .map((candidate) => candidate[other]),
+          ),
+        ];
+        return {
+          id,
+          slotIds,
+          claimId: "claim-1",
+          resolutionId: "claim-resolution-1",
+          replacementSetId: "replacement-set-1",
+          ...(key === "request"
+            ? {
+                replacementReservationIds: related("reservation"),
+                currentReplacementJobIds: related("job"),
+              }
+            : {}),
+          ...(key === "reservation"
+            ? {
+                replacementRequestIds: related("request"),
+                currentReplacementJobIds: related("job"),
+              }
+            : {}),
+          ...(key === "shipment"
+            ? {
+                replacementRequestIds: related("request"),
+                replacementReservationIds: related("reservation"),
+                currentReplacementJobIds: related("job"),
+              }
+            : {}),
+          ...(key === "job"
+            ? {
+                replacementRequestIds: related("request"),
+                replacementReservationIds: related("reservation"),
+                replacementShipmentIds: related("shipment"),
+                currentReplacementJobLineageLeaf: true,
+                currentReplacementJobStatus: "created",
+              }
+            : {}),
+        };
+      });
+    return {
+      ...permittedContext,
+      expectedReplacementRequiredSlotIds: slotLinks.map((link) => link.slotId),
+      replacementRequiredSlotBindings: slotLinks.map((link) => ({
+        slotId: link.slotId,
+        replacementRequestId: link.request,
+        replacementReservationId: link.reservation,
+        replacementShipmentId: link.shipment,
+        currentReplacementJobId: link.job,
+      })),
+      replacementRequiredRequests: records("request"),
+      replacementRequiredReservations: records("reservation"),
+      replacementRequiredShipments: records("shipment"),
+      replacementRequiredJobs: records("job"),
+    };
+  };
+
+  it.each([
+    [
+      "one Shipment with multiple Jobs",
+      [
+        {
+          slotId: "claim-slot-1",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+        {
+          slotId: "claim-slot-2",
+          request: "request-2",
+          reservation: "reservation-2",
+          shipment: "shipment-1",
+          job: "job-2",
+        },
+      ],
+    ],
+    [
+      "one Job covering multiple slots in one reservation and Shipment",
+      [
+        {
+          slotId: "claim-slot-1",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+        {
+          slotId: "claim-slot-2",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+      ],
+    ],
+    [
+      "request boundaries differing from reservation and Shipment boundaries",
+      [
+        {
+          slotId: "claim-slot-1",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+        {
+          slotId: "claim-slot-2",
+          request: "request-1",
+          reservation: "reservation-2",
+          shipment: "shipment-1",
+          job: "job-2",
+        },
+      ],
+    ],
+  ] as const)(
+    "permits independent replacement topology: %s",
+    (_case, links) => {
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          current: "reprint_pending",
+          target: "replacement_in_production",
+          idempotencyKey: `independent-replacement-${_case}`,
+          context: independentReplacementContext(links),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "reprint_pending",
+        current: "replacement_in_production",
+      });
+    },
+  );
+
+  it("hands over independent Shipment and Job topology with exact persisted identities", () => {
+    const setup = independentReplacementContext([
+      {
+        slotId: "claim-slot-1",
+        request: "request-1",
+        reservation: "reservation-1",
+        shipment: "shipment-1",
+        job: "job-1",
+      },
+      {
+        slotId: "claim-slot-2",
+        request: "request-2",
+        reservation: "reservation-2",
+        shipment: "shipment-1",
+        job: "job-2",
+      },
+    ]);
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "replacement_shipped",
+        idempotencyKey: "independent-replacement-handoff",
+        context: {
+          ...setup,
+          replacementAuthorizationSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementAuthorizationShipmentIds: ["shipment-1"],
+          replacementHandoffSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementHandoffSlotBindings: setup.replacementRequiredSlotBindings,
+          replacementHandoffShipments: setup.replacementRequiredShipments.map(
+            (record) => ({
+              ...record,
+              previousStatus: "label_created",
+              targetStatus: "handed_over",
+            }),
+          ),
+          replacementHandoffJobs: setup.replacementRequiredJobs.map(
+            (record) => ({
+              ...record,
+              previousStatus: "packed",
+              targetStatus: "handed_over",
+            }),
+          ),
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "replacement_in_production",
+      current: "replacement_shipped",
+    });
+  });
+
+  it.each([
+    [
+      "omitted resource slot",
+      (context: Record<string, unknown>) => {
+        context.replacementRequiredShipments = (
+          context.replacementRequiredShipments as ReadonlyArray<
+            Record<string, unknown>
+          >
+        ).map((record) => ({ ...record, slotIds: ["claim-slot-1"] }));
+      },
+    ],
+    [
+      "overlapping resource membership",
+      (context: Record<string, unknown>) => {
+        context.replacementRequiredRequests = (
+          context.replacementRequiredRequests as ReadonlyArray<
+            Record<string, unknown>
+          >
+        ).map((record, index) =>
+          index === 1
+            ? { ...record, slotIds: ["claim-slot-1", "claim-slot-2"] }
+            : record,
+        );
+      },
+    ],
+    [
+      "foreign resource link",
+      (context: Record<string, unknown>) => {
+        const links = context.replacementRequiredSlotBindings as ReadonlyArray<
+          Record<string, unknown>
+        >;
+        context.replacementRequiredSlotBindings = [
+          { ...links[0], replacementReservationId: "foreign-reservation" },
+          ...links.slice(1),
+        ];
+      },
+    ],
+    [
+      "inconsistent resource backlink",
+      (context: Record<string, unknown>) => {
+        context.replacementRequiredJobs = (
+          context.replacementRequiredJobs as ReadonlyArray<
+            Record<string, unknown>
+          >
+        ).map((record) => ({
+          ...record,
+          replacementShipmentIds: ["foreign-shipment"],
+        }));
+      },
+    ],
+  ] as const)(
+    "rejects independent replacement topology with %s",
+    (_case, mutate) => {
+      const context: Record<string, unknown> = {
+        ...independentReplacementContext([
+          {
+            slotId: "claim-slot-1",
+            request: "request-1",
+            reservation: "reservation-1",
+            shipment: "shipment-1",
+            job: "job-1",
+          },
+          {
+            slotId: "claim-slot-2",
+            request: "request-2",
+            reservation: "reservation-2",
+            shipment: "shipment-1",
+            job: "job-2",
+          },
+        ]),
+      };
+      mutate(context);
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "reprint_pending",
+          target: "replacement_in_production",
+          idempotencyKey: `independent-replacement-invalid-${_case}`,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "Job to multiple Shipments",
+      [
+        {
+          slotId: "claim-slot-1",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+        {
+          slotId: "claim-slot-2",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-2",
+          job: "job-1",
+        },
+      ],
+    ],
+    [
+      "Job to multiple reservations",
+      [
+        {
+          slotId: "claim-slot-1",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+        {
+          slotId: "claim-slot-2",
+          request: "request-1",
+          reservation: "reservation-2",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+      ],
+    ],
+    [
+      "reservation to multiple Jobs",
+      [
+        {
+          slotId: "claim-slot-1",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+        {
+          slotId: "claim-slot-2",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-2",
+        },
+      ],
+    ],
+  ] as const)("rejects %s in setup and handoff", (_case, links) => {
+    const setup = independentReplacementContext(links);
+    const handoff = {
+      ...setup,
+      replacementAuthorizationSlotIds: links.map((link) => link.slotId),
+      replacementAuthorizationShipmentIds: [
+        ...new Set(links.map((link) => link.shipment)),
+      ],
+      replacementHandoffSlotIds: links.map((link) => link.slotId),
+      replacementHandoffSlotBindings: setup.replacementRequiredSlotBindings,
+      replacementHandoffShipments: setup.replacementRequiredShipments.map(
+        (record) => ({
+          ...record,
+          previousStatus: "label_created",
+          targetStatus: "handed_over",
+        }),
+      ),
+      replacementHandoffJobs: setup.replacementRequiredJobs.map((record) => ({
+        ...record,
+        previousStatus: "packed",
+        targetStatus: "handed_over",
+      })),
+    };
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "reprint_pending",
+        target: "replacement_in_production",
+        idempotencyKey: `independent-lineage-setup-${_case}`,
+        context: setup,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "replacement_shipped",
+        idempotencyKey: `independent-lineage-handoff-${_case}`,
+        context: handoff,
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    "missing group membership",
+    "duplicate group membership",
+    "foreign group reference",
+    "inconsistent grouped request backlink",
+    "non-leaf grouped Job",
+  ] as const)("rejects %s in grouped replacement setup", (caseName) => {
+    const group = permittedContext.replacementRequiredResourceGroups[0]!;
+    const groupedContext = {
+      ...permittedContext,
+      expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementRequiredSlotBindings: [
+        { slotId: "claim-slot-1", replacementResourceGroupId: group.id },
+        { slotId: "claim-slot-2", replacementResourceGroupId: group.id },
+      ],
+      replacementRequiredResourceGroups: [
+        {
+          ...group,
+          slotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementRequestSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementReservationSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementShipmentSlotIds: ["claim-slot-1", "claim-slot-2"],
+          currentReplacementJobSlotIds: ["claim-slot-1", "claim-slot-2"],
+        },
+      ],
+    };
+    const invalidContext =
+      caseName === "missing group membership"
+        ? {
+            replacementRequiredResourceGroups: [
+              {
+                ...groupedContext.replacementRequiredResourceGroups[0],
+                slotIds: ["claim-slot-1"],
+              },
+            ],
+          }
+        : caseName === "duplicate group membership"
+          ? {
+              replacementRequiredResourceGroups: [
+                groupedContext.replacementRequiredResourceGroups[0],
+                {
+                  ...groupedContext.replacementRequiredResourceGroups[0],
+                  id: "replacement-group-2",
+                  replacementRequestId: "replacement-request-2",
+                  replacementReservationId: "replacement-reservation-2",
+                  replacementReservationRequestId: "replacement-request-2",
+                  replacementShipmentId: "replacement-shipment-2",
+                  replacementShipmentRequestId: "replacement-request-2",
+                  replacementShipmentReservationId: "replacement-reservation-2",
+                  currentReplacementJobId: "replacement-job-2",
+                  currentReplacementJobRequestId: "replacement-request-2",
+                  currentReplacementJobReservationId:
+                    "replacement-reservation-2",
+                  currentReplacementJobShipmentId: "replacement-shipment-2",
+                },
+              ],
+            }
+          : caseName === "foreign group reference"
+            ? {
+                replacementRequiredSlotBindings: [
+                  groupedContext.replacementRequiredSlotBindings[0],
+                  {
+                    slotId: "claim-slot-2",
+                    replacementResourceGroupId: "foreign-group",
+                  },
+                ],
+              }
+            : caseName === "inconsistent grouped request backlink"
+              ? {
+                  replacementRequiredResourceGroups: [
+                    {
+                      ...groupedContext.replacementRequiredResourceGroups[0],
+                      replacementRequestSlotIds: ["claim-slot-1"],
+                    },
+                  ],
+                }
+              : {
+                  replacementRequiredResourceGroups: [
+                    {
+                      ...groupedContext.replacementRequiredResourceGroups[0],
+                      currentReplacementJobLineageLeaf: false,
+                    },
+                  ],
+                };
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "reprint_pending",
+        target: "replacement_in_production",
+        idempotencyKey: `replacement-grouped-setup-${caseName}`,
+        context: { ...groupedContext, ...invalidContext },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it.each([
@@ -3997,38 +5303,54 @@ describe("v0 lifecycle policy tables", () => {
   it("requires an exact complete replacement set handoff before shipping", () => {
     const firstSetupBinding =
       permittedContext.replacementRequiredSlotBindings[0]!;
+    const firstSetupGroup =
+      permittedContext.replacementRequiredResourceGroups[0]!;
     const secondSetupBinding = {
-      ...firstSetupBinding,
       slotId: "claim-slot-2",
+      replacementResourceGroupId: "replacement-group-2",
+    };
+    const secondSetupGroup = {
+      ...firstSetupGroup,
+      id: "replacement-group-2",
+      slotIds: ["claim-slot-2"],
       replacementRequestId: "replacement-request-2",
-      replacementRequestSlotId: "claim-slot-2",
+      replacementRequestSlotIds: ["claim-slot-2"],
       replacementReservationId: "replacement-reservation-2",
       replacementReservationRequestId: "replacement-request-2",
-      replacementReservationSlotId: "claim-slot-2",
+      replacementReservationSlotIds: ["claim-slot-2"],
       replacementShipmentId: "replacement-shipment-2",
       replacementShipmentRequestId: "replacement-request-2",
       replacementShipmentReservationId: "replacement-reservation-2",
-      replacementShipmentSlotId: "claim-slot-2",
+      replacementShipmentSlotIds: ["claim-slot-2"],
       currentReplacementJobId: "replacement-job-2",
       currentReplacementJobRequestId: "replacement-request-2",
       currentReplacementJobReservationId: "replacement-reservation-2",
       currentReplacementJobShipmentId: "replacement-shipment-2",
-      currentReplacementJobSlotId: "claim-slot-2",
+      currentReplacementJobSlotIds: ["claim-slot-2"],
     };
     const firstBinding = permittedContext.replacementHandoffSlotBindings[0]!;
+    const firstHandoffGroup =
+      permittedContext.replacementHandoffResourceGroups[0]!;
     const secondBinding = {
-      ...firstBinding,
       slotId: "claim-slot-2",
+      replacementResourceGroupId: "replacement-group-2",
+    };
+    const secondHandoffGroup = {
+      ...firstHandoffGroup,
+      id: "replacement-group-2",
+      setupResourceGroupId: "replacement-group-2",
+      slotIds: ["claim-slot-2"],
       replacementShipmentId: "replacement-shipment-2",
-      replacementShipmentSlotId: "claim-slot-2",
+      replacementShipmentSlotIds: ["claim-slot-2"],
       currentReplacementJobId: "replacement-job-2",
       currentReplacementJobShipmentId: "replacement-shipment-2",
-      currentReplacementJobSlotId: "claim-slot-2",
+      currentReplacementJobSlotIds: ["claim-slot-2"],
     };
     const completeContext = {
       ...permittedContext,
       expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
       replacementRequiredSlotBindings: [firstSetupBinding, secondSetupBinding],
+      replacementRequiredResourceGroups: [firstSetupGroup, secondSetupGroup],
       replacementHandoffSlotIds: ["claim-slot-1", "claim-slot-2"],
       replacementAuthorizationSlotIds: ["claim-slot-1", "claim-slot-2"],
       replacementAuthorizationShipmentIds: [
@@ -4036,6 +5358,7 @@ describe("v0 lifecycle policy tables", () => {
         "replacement-shipment-2",
       ],
       replacementHandoffSlotBindings: [firstBinding, secondBinding],
+      replacementHandoffResourceGroups: [firstHandoffGroup, secondHandoffGroup],
     };
     const invalidContexts = [
       { replacementHandoffSlotBindings: [firstBinding] },
@@ -4047,21 +5370,24 @@ describe("v0 lifecycle policy tables", () => {
         ],
       },
       {
-        replacementHandoffSlotBindings: [
-          firstBinding,
-          { ...secondBinding, currentReplacementJobLineageLeaf: false },
+        replacementHandoffResourceGroups: [
+          firstHandoffGroup,
+          { ...secondHandoffGroup, currentReplacementJobLineageLeaf: false },
         ],
       },
       {
-        replacementHandoffSlotBindings: [
-          firstBinding,
-          { ...secondBinding, currentReplacementJobPreviousStatus: "created" },
+        replacementHandoffResourceGroups: [
+          firstHandoffGroup,
+          {
+            ...secondHandoffGroup,
+            currentReplacementJobPreviousStatus: "created",
+          },
         ],
       },
       {
-        replacementHandoffSlotBindings: [
-          firstBinding,
-          { ...secondBinding, resolutionId: "another-resolution" },
+        replacementHandoffResourceGroups: [
+          firstHandoffGroup,
+          { ...secondHandoffGroup, resolutionId: "another-resolution" },
         ],
       },
       {
@@ -4069,19 +5395,19 @@ describe("v0 lifecycle policy tables", () => {
           "replacement-shipment-1",
           "another-replacement-shipment",
         ],
-        replacementHandoffSlotBindings: [
-          firstBinding,
+        replacementHandoffResourceGroups: [
+          firstHandoffGroup,
           {
-            ...secondBinding,
+            ...secondHandoffGroup,
             replacementShipmentId: "another-replacement-shipment",
             currentReplacementJobShipmentId: "another-replacement-shipment",
           },
         ],
       },
       {
-        replacementHandoffSlotBindings: [
-          firstBinding,
-          { ...secondBinding, currentReplacementJobId: "another-job" },
+        replacementHandoffResourceGroups: [
+          firstHandoffGroup,
+          { ...secondHandoffGroup, currentReplacementJobId: "another-job" },
         ],
       },
       { replacementAuthorizationClaimId: "another-claim" },
@@ -4109,6 +5435,10 @@ describe("v0 lifecycle policy tables", () => {
         context: {
           ...completeContext,
           replacementHandoffSlotBindings: [secondBinding, firstBinding],
+          replacementHandoffResourceGroups: [
+            secondHandoffGroup,
+            firstHandoffGroup,
+          ],
         },
       }),
     ).toEqual({
@@ -4116,6 +5446,144 @@ describe("v0 lifecycle policy tables", () => {
       previous: "replacement_in_production",
       current: "replacement_shipped",
     });
+  });
+
+  it("hands over a grouped replacement Shipment and Job for every member slot", () => {
+    const setupGroup = permittedContext.replacementRequiredResourceGroups[0]!;
+    const handoffGroup = permittedContext.replacementHandoffResourceGroups[0]!;
+    const groupedContext = {
+      ...permittedContext,
+      expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementRequiredSlotBindings: [
+        { slotId: "claim-slot-1", replacementResourceGroupId: setupGroup.id },
+        { slotId: "claim-slot-2", replacementResourceGroupId: setupGroup.id },
+      ],
+      replacementRequiredResourceGroups: [
+        {
+          ...setupGroup,
+          slotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementRequestSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementReservationSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementShipmentSlotIds: ["claim-slot-1", "claim-slot-2"],
+          currentReplacementJobSlotIds: ["claim-slot-1", "claim-slot-2"],
+        },
+      ],
+      replacementAuthorizationSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementAuthorizationShipmentIds: ["replacement-shipment-1"],
+      replacementHandoffSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementHandoffSlotBindings: [
+        { slotId: "claim-slot-1", replacementResourceGroupId: handoffGroup.id },
+        { slotId: "claim-slot-2", replacementResourceGroupId: handoffGroup.id },
+      ],
+      replacementHandoffResourceGroups: [
+        {
+          ...handoffGroup,
+          slotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementShipmentSlotIds: ["claim-slot-1", "claim-slot-2"],
+          currentReplacementJobSlotIds: ["claim-slot-1", "claim-slot-2"],
+        },
+      ],
+    };
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "replacement_shipped",
+        idempotencyKey: "replacement-handoff-grouped",
+        context: groupedContext,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "replacement_in_production",
+      current: "replacement_shipped",
+    });
+  });
+
+  it.each([
+    "missing handoff group membership",
+    "foreign handoff group",
+    "inconsistent grouped Shipment backlink",
+    "wrong grouped Shipment status",
+  ] as const)("rejects %s for grouped replacement handoff", (caseName) => {
+    const setupGroup = permittedContext.replacementRequiredResourceGroups[0]!;
+    const handoffGroup = permittedContext.replacementHandoffResourceGroups[0]!;
+    const groupedContext = {
+      ...permittedContext,
+      expectedReplacementRequiredSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementRequiredSlotBindings: [
+        { slotId: "claim-slot-1", replacementResourceGroupId: setupGroup.id },
+        { slotId: "claim-slot-2", replacementResourceGroupId: setupGroup.id },
+      ],
+      replacementRequiredResourceGroups: [
+        {
+          ...setupGroup,
+          slotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementRequestSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementReservationSlotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementShipmentSlotIds: ["claim-slot-1", "claim-slot-2"],
+          currentReplacementJobSlotIds: ["claim-slot-1", "claim-slot-2"],
+        },
+      ],
+      replacementAuthorizationSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementAuthorizationShipmentIds: ["replacement-shipment-1"],
+      replacementHandoffSlotIds: ["claim-slot-1", "claim-slot-2"],
+      replacementHandoffSlotBindings: [
+        { slotId: "claim-slot-1", replacementResourceGroupId: handoffGroup.id },
+        { slotId: "claim-slot-2", replacementResourceGroupId: handoffGroup.id },
+      ],
+      replacementHandoffResourceGroups: [
+        {
+          ...handoffGroup,
+          slotIds: ["claim-slot-1", "claim-slot-2"],
+          replacementShipmentSlotIds: ["claim-slot-1", "claim-slot-2"],
+          currentReplacementJobSlotIds: ["claim-slot-1", "claim-slot-2"],
+        },
+      ],
+    };
+    const invalidContext =
+      caseName === "missing handoff group membership"
+        ? {
+            replacementHandoffResourceGroups: [
+              {
+                ...groupedContext.replacementHandoffResourceGroups[0],
+                slotIds: ["claim-slot-1"],
+              },
+            ],
+          }
+        : caseName === "foreign handoff group"
+          ? {
+              replacementHandoffSlotBindings: [
+                groupedContext.replacementHandoffSlotBindings[0],
+                {
+                  slotId: "claim-slot-2",
+                  replacementResourceGroupId: "foreign-group",
+                },
+              ],
+            }
+          : caseName === "inconsistent grouped Shipment backlink"
+            ? {
+                replacementHandoffResourceGroups: [
+                  {
+                    ...groupedContext.replacementHandoffResourceGroups[0],
+                    replacementShipmentSlotIds: ["claim-slot-1"],
+                  },
+                ],
+              }
+            : {
+                replacementHandoffResourceGroups: [
+                  {
+                    ...groupedContext.replacementHandoffResourceGroups[0],
+                    replacementShipmentPreviousStatus: "packed",
+                  },
+                ],
+              };
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "replacement_shipped",
+        idempotencyKey: `replacement-grouped-handoff-${caseName}`,
+        context: { ...groupedContext, ...invalidContext },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it.each([
