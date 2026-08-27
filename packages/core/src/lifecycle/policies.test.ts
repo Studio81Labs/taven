@@ -59,6 +59,15 @@ const permittedContext = {
   quoteIssuanceCompleted: true,
   quoteIssuanceAtomic: true,
   quoteAcceptanceResultId: "quote-acceptance-result-1",
+  quoteAcceptancePreviousQuoteRequestResultId: "quote-request-quoted-result-1",
+  quoteAcceptanceCurrentStateCommandKey: "quote-request-quoted-command-1",
+  quoteAcceptanceExpectedQuoteRequest: {
+    id: "quote-request-1",
+    status: "quoted",
+    resultId: "quote-request-quoted-result-1",
+    currentStateCommandKey: "quote-request-quoted-command-1",
+    immutable: true,
+  },
   quoteAcceptanceQuoteRequestId: "quote-request-1",
   quoteAcceptanceIssuedQuoteId: "quote-1",
   quoteAcceptanceIssuedQuoteRequestId: "quote-request-1",
@@ -2025,6 +2034,20 @@ const permittedContext = {
   reshipmentAuthorizationCreated: true,
   reshipmentAuthorizationSetupAtomic: true,
   reshipmentSetupResultId: "reship-setup-result-1",
+  reshipmentSetupPreviousResolutionResultId:
+    "claim-resolution-pending-result-1",
+  reshipmentSetupCurrentStateCommandKey: "claim-resolution-pending-command-1",
+  reshipmentSetupExpectedResolution: {
+    id: "claim-resolution-1",
+    claimId: "claim-1",
+    slotId: "claim-slot-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "pending",
+    resultId: "claim-resolution-pending-result-1",
+    currentStateCommandKey: "claim-resolution-pending-command-1",
+    immutable: true,
+  },
   reshipmentSetupAllocationId: "shipment-allocation-1",
   reshipmentSetupExpectedClaimId: "claim-1",
   reshipmentSetupExpectedResolutionId: "claim-resolution-1",
@@ -2521,17 +2544,51 @@ const permittedContext = {
   handoffResultCustodyConfirmed: true,
   handoffResultCompleted: true,
   handoffResultAtomic: true,
+  handoffOrderPreviousResultId: "order-ready_to_ship-result-1",
+  handoffOrderCurrentStateCommandKey: "order-ready_to_ship-command-1",
+  handoffExpectedOrder: {
+    id: "order-1",
+    phaseId: "phase-1",
+    status: "ready_to_ship",
+    resultId: "order-ready_to_ship-result-1",
+    currentStateCommandKey: "order-ready_to_ship-command-1",
+    immutable: true,
+  },
+  handoffPhasePreviousResultId: "phase-qc_passed-result-1",
+  handoffPhaseCurrentStateCommandKey: "phase-qc_passed-command-1",
+  handoffExpectedPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    status: "qc_passed",
+    resultId: "phase-qc_passed-result-1",
+    currentStateCommandKey: "phase-qc_passed-command-1",
+    immutable: true,
+  },
+  handoffShipmentPreviousResultId: "shipment-label_created-result-1",
+  handoffShipmentCurrentStateCommandKey: "shipment-label_created-command-1",
+  handoffExpectedShipment: {
+    id: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "label_created",
+    resultId: "shipment-label_created-result-1",
+    currentStateCommandKey: "shipment-label_created-command-1",
+    immutable: true,
+  },
   jobHandoffKind: "ordinary",
   jobHandoffJobId: "job-1",
   jobHandoffExpectedJob: {
     id: "job-1",
     kind: "ordinary",
     shipmentId: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
     claimId: null,
     resolutionId: null,
     replacementSetId: null,
     status: "packed",
     currentStateCommandKey: "job-packed-command-1",
+    resultId: "job-packed-result-1",
     currentLineageLeaf: true,
     immutable: true,
   },
@@ -2544,6 +2601,7 @@ const permittedContext = {
   jobHandoffPreviousStatus: "packed",
   jobHandoffTargetStatus: "handed_over",
   jobHandoffCurrentStateCommandKey: "job-packed-command-1",
+  jobHandoffPreviousResultId: "job-packed-result-1",
   jobHandoffCompleted: true,
   jobHandoffAtomic: true,
   labelledHandoffKind: "ordinary",
@@ -3207,6 +3265,8 @@ function contextForTransition(target: string, current?: string) {
   const shipmentProviderOutcomeResultId = `shipment-${shipmentProviderOutcomeTarget}-provider-result-1`;
   const reprintSelectionState =
     current === "recovery_pending" ? "recovery_pending" : "pending";
+  const reshipmentSetupStateKey = `claim-resolution-${current}-command-1`;
+  const reshipmentSetupPreviousResultId = `claim-resolution-${current}-result-1`;
   const ordinaryRefundState =
     current === "partially_refunded" ? "partially_refunded" : "captured";
   return {
@@ -3502,6 +3562,30 @@ function contextForTransition(target: string, current?: string) {
       target === "reship_pending"
         ? current
         : permittedContext.reshipmentSetupResolutionPreviousStatus,
+    reshipmentSetupPreviousResolutionResultId:
+      target === "reship_pending"
+        ? reshipmentSetupPreviousResultId
+        : permittedContext.reshipmentSetupPreviousResolutionResultId,
+    reshipmentSetupCurrentStateCommandKey:
+      target === "reship_pending"
+        ? reshipmentSetupStateKey
+        : permittedContext.reshipmentSetupCurrentStateCommandKey,
+    reshipmentSetupExpectedResolution: {
+      ...permittedContext.reshipmentSetupExpectedResolution,
+      status:
+        target === "reship_pending"
+          ? current
+          : permittedContext.reshipmentSetupExpectedResolution.status,
+      resultId:
+        target === "reship_pending"
+          ? reshipmentSetupPreviousResultId
+          : permittedContext.reshipmentSetupExpectedResolution.resultId,
+      currentStateCommandKey:
+        target === "reship_pending"
+          ? reshipmentSetupStateKey
+          : permittedContext.reshipmentSetupExpectedResolution
+              .currentStateCommandKey,
+    },
     claimSlotResolutionStatuses,
     ...resolutionEvidence,
     claimResolutionOwnershipSnapshot: {
@@ -3615,6 +3699,17 @@ function commandAnchors(
     };
   }
   if (
+    policy.name === "QuoteRequest" &&
+    current === "quoted" &&
+    target === "accepted"
+  ) {
+    return {
+      aggregateId: "quote-request-1",
+      currentStateCommandKey: "quote-request-quoted-command-1",
+      currentStateResultId: "quote-request-quoted-result-1",
+    };
+  }
+  if (
     policy.name === "Order" &&
     ((current === "draft" && target === "quoted") ||
       (current === "quoted" && target === "confirmed") ||
@@ -3674,6 +3769,39 @@ function commandAnchors(
     target === "ready_to_ship"
   ) {
     return { aggregateId: "order-1" };
+  }
+  if (
+    policy.name === "Order" &&
+    current === "ready_to_ship" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "order-1",
+      currentStateCommandKey: "order-ready_to_ship-command-1",
+      currentStateResultId: "order-ready_to_ship-result-1",
+    };
+  }
+  if (
+    policy.name === "OrderPhase(single)" &&
+    current === "qc_passed" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "phase-1",
+      currentStateCommandKey: "phase-qc_passed-command-1",
+      currentStateResultId: "phase-qc_passed-result-1",
+    };
+  }
+  if (
+    policy.name === "Shipment" &&
+    current === "label_created" &&
+    target === "handed_over"
+  ) {
+    return {
+      aggregateId: "shipment-1",
+      currentStateCommandKey: "shipment-label_created-command-1",
+      currentStateResultId: "shipment-label_created-result-1",
+    };
   }
   if (
     policy.name === "Order" &&
@@ -3832,6 +3960,17 @@ function commandAnchors(
   }
   if (
     policy.name === "Job" &&
+    current === "packed" &&
+    target === "handed_over"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-packed-command-1",
+      currentStateResultId: "job-packed-result-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
     target === "failed" &&
     [
       "accepted",
@@ -3912,6 +4051,17 @@ function commandAnchors(
     return {
       aggregateId: "claim-resolution-1",
       currentStateCommandKey: "claim-resolution-refund-pending-command-1",
+    };
+  }
+  if (
+    policy.name === "ClaimSlotResolution" &&
+    (current === "pending" || current === "recovery_pending") &&
+    target === "reship_pending"
+  ) {
+    return {
+      aggregateId: "claim-resolution-1",
+      currentStateCommandKey: `claim-resolution-${current}-command-1`,
+      currentStateResultId: `claim-resolution-${current}-result-1`,
     };
   }
   if (
@@ -4885,12 +5035,204 @@ describe("v0 lifecycle policy tables", () => {
     (_name, policy, current) => {
       expect(
         transition(policy, {
+          ...commandAnchors(policy, current, "shipped"),
           current,
           target: "shipped",
           idempotencyKey: `aggregate-handoff-${_name}`,
           context: contextForTransition("shipped", current),
         }),
       ).toEqual({ kind: "changed", previous: current, current: "shipped" });
+    },
+  );
+
+  it.each([
+    [
+      "Order",
+      orderPolicy,
+      "ready_to_ship",
+      "order-2",
+      "phase-2",
+      "order-ready_to_ship-result-2",
+      "order-ready_to_ship-command-2",
+      "handoffExpectedOrder",
+    ],
+    [
+      "OrderPhase(single)",
+      singleOrderPhasePolicy,
+      "qc_passed",
+      "order-2",
+      "phase-2",
+      "phase-qc_passed-result-2",
+      "phase-qc_passed-command-2",
+      "handoffExpectedPhase",
+    ],
+    [
+      "Shipment",
+      shipmentPolicy,
+      "label_created",
+      "order-2",
+      "phase-2",
+      "shipment-label_created-result-2",
+      "shipment-label_created-command-2",
+      "handoffExpectedShipment",
+    ],
+  ] as const)(
+    "rejects ordinary handoff for %s with a missing, blank, or foreign selected aggregate anchor",
+    (
+      _name,
+      policy,
+      current,
+      foreignOrderId,
+      foreignPhaseId,
+      foreignResultId,
+      foreignCommandKey,
+    ) => {
+      const validContext = contextForTransition("handed_over", current);
+      const target = policy === shipmentPolicy ? "handed_over" : "shipped";
+      for (const invalidCommand of [
+        { aggregateId: undefined },
+        { aggregateId: " " },
+        {
+          aggregateId:
+            policy === orderPolicy
+              ? foreignOrderId
+              : policy === singleOrderPhasePolicy
+                ? foreignPhaseId
+                : "shipment-2",
+        },
+        { currentStateCommandKey: undefined },
+        { currentStateCommandKey: " " },
+        { currentStateCommandKey: foreignCommandKey },
+        { currentStateResultId: undefined },
+        { currentStateResultId: " " },
+        { currentStateResultId: foreignResultId },
+      ]) {
+        expect(() =>
+          transition(policy, {
+            ...commandAnchors(policy, current, target),
+            ...invalidCommand,
+            current,
+            target,
+            idempotencyKey: `ordinary-handoff-anchor-${_name}-${JSON.stringify(invalidCommand)}`,
+            context: validContext,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["Order", orderPolicy, "ready_to_ship", "handoffExpectedOrder"],
+    [
+      "OrderPhase(single)",
+      singleOrderPhasePolicy,
+      "qc_passed",
+      "handoffExpectedPhase",
+    ],
+    ["Shipment", shipmentPolicy, "label_created", "handoffExpectedShipment"],
+  ] as const)(
+    "rejects ordinary handoff for %s with a stale selected aggregate snapshot",
+    (_name, policy, current, snapshotField) => {
+      const validContext = contextForTransition("handed_over", current);
+      const target = policy === shipmentPolicy ? "handed_over" : "shipped";
+      const snapshot = (validContext as Record<string, unknown>)[
+        snapshotField
+      ] as Record<string, unknown>;
+      const invalidSnapshots = [
+        { id: "foreign-aggregate" },
+        { status: "shipped" },
+        { resultId: "foreign-source-result" },
+        { currentStateCommandKey: "foreign-source-command" },
+        { immutable: false },
+      ];
+      for (const mutation of invalidSnapshots) {
+        expect(() =>
+          transition(policy, {
+            ...commandAnchors(policy, current, target),
+            current,
+            target,
+            idempotencyKey: `ordinary-handoff-snapshot-${_name}-${JSON.stringify(mutation)}`,
+            context: {
+              ...validContext,
+              [snapshotField]: { ...snapshot, ...mutation },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["Order", orderPolicy, "ready_to_ship"],
+    ["OrderPhase(single)", singleOrderPhasePolicy, "qc_passed"],
+    ["Shipment", shipmentPolicy, "label_created"],
+  ] as const)(
+    "rejects fully coordinated B substitution behind the %s ordinary handoff command anchor",
+    (_name, policy, current) => {
+      const context = contextForTransition("handed_over", current);
+      const target = policy === shipmentPolicy ? "handed_over" : "shipped";
+      const foreignSlots = ["slot-3", "slot-4"];
+      const foreignJobs = ["job-3", "job-4"];
+      expect(() =>
+        transition(policy, {
+          ...commandAnchors(policy, current, target),
+          current,
+          target,
+          idempotencyKey: `ordinary-handoff-coordinated-${_name}`,
+          context: {
+            ...context,
+            orderId: "order-2",
+            phaseId: "phase-2",
+            shipmentId: "shipment-2",
+            handoffOrderId: "order-2",
+            handoffPhaseOrderId: "order-2",
+            handoffPhaseId: "phase-2",
+            handoffShipmentId: "shipment-2",
+            shipmentFulfilmentSlotIds: foreignSlots,
+            handoffSlotIds: foreignSlots,
+            handoffJobIds: foreignJobs,
+            handoffSlots: foreignSlots.map((id, index) => ({
+              id,
+              shipmentId: "shipment-2",
+              orderId: "order-2",
+              phaseId: "phase-2",
+              jobId: foreignJobs[index],
+            })),
+            handoffJobs: foreignJobs.map((id) => ({
+              id,
+              shipmentId: "shipment-2",
+              orderId: "order-2",
+              phaseId: "phase-2",
+              previousStatus: "packed",
+              targetStatus: "handed_over",
+            })),
+            handoffResultShipmentId: "shipment-2",
+            handoffResultOrderId: "order-2",
+            handoffResultPhaseId: "phase-2",
+            handoffResultSlotIds: foreignSlots,
+            handoffResultJobIds: foreignJobs,
+            handoffResultProviderScanShipmentId: "shipment-2",
+            handoffResultProviderScanOrderId: "order-2",
+            handoffResultProviderScanPhaseId: "phase-2",
+            handoffExpectedOrder: {
+              ...context.handoffExpectedOrder,
+              id: "order-2",
+              phaseId: "phase-2",
+            },
+            handoffExpectedPhase: {
+              ...context.handoffExpectedPhase,
+              id: "phase-2",
+              orderId: "order-2",
+            },
+            handoffExpectedShipment: {
+              ...context.handoffExpectedShipment,
+              id: "shipment-2",
+              orderId: "order-2",
+              phaseId: "phase-2",
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
     },
   );
 
@@ -4927,6 +5269,7 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(policy, {
+            ...commandAnchors(policy, current, "shipped"),
             current,
             target: "shipped",
             idempotencyKey: `aggregate-handoff-invalid-${policy.name}-${_case}`,
@@ -4948,6 +5291,7 @@ describe("v0 lifecycle policy tables", () => {
     (name, policy, current) => {
       expect(
         transition(policy, {
+          ...commandAnchors(policy, current, "handed_over"),
           current,
           target: "handed_over",
           idempotencyKey: `later-parcel-${name}`,
@@ -5727,6 +6071,15 @@ describe("v0 lifecycle policy tables", () => {
     ["quoteAcceptanceExpiresAt", Instant.parse("2026-01-01T23:59:59.999Z")],
     ["quoteAcceptanceEvaluatedAt", "2026-01-01T12:00:00.000Z"],
     ["quoteAcceptanceResultId", " "],
+    ["quoteAcceptancePreviousQuoteRequestResultId", undefined],
+    ["quoteAcceptancePreviousQuoteRequestResultId", " "],
+    [
+      "quoteAcceptancePreviousQuoteRequestResultId",
+      "quote-request-quoted-result-2",
+    ],
+    ["quoteAcceptanceCurrentStateCommandKey", undefined],
+    ["quoteAcceptanceCurrentStateCommandKey", " "],
+    ["quoteAcceptanceCurrentStateCommandKey", "quote-request-quoted-command-2"],
     ["quoteAcceptanceAvailabilityResultId", "another-result"],
     ["quoteAcceptanceOrderResultId", "another-result"],
     ["quoteAcceptanceRequestResultId", "another-result"],
@@ -5743,6 +6096,7 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(quoteRequestPolicy, {
+          ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
           current: "quoted",
           target: "accepted",
           idempotencyKey: `quote-acceptance-${field}`,
@@ -5752,6 +6106,133 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it.each([
+    ["missing aggregate", { aggregateId: undefined }],
+    ["blank aggregate", { aggregateId: " " }],
+    ["foreign aggregate", { aggregateId: "quote-request-2" }],
+    ["missing state result", { currentStateResultId: undefined }],
+    ["blank state result", { currentStateResultId: " " }],
+    [
+      "foreign state result",
+      { currentStateResultId: "quote-request-quoted-result-2" },
+    ],
+    ["missing state key", { currentStateCommandKey: undefined }],
+    ["blank state key", { currentStateCommandKey: " " }],
+    [
+      "foreign state key",
+      { currentStateCommandKey: "quote-request-quoted-command-2" },
+    ],
+  ] as const)(
+    "rejects quote acceptance with %s command source anchor",
+    (_case, invalid) => {
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
+          ...invalid,
+          current: "quoted",
+          target: "accepted",
+          idempotencyKey: `quote-acceptance-command-anchor-${_case}`,
+          context: permittedContext,
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["missing", undefined],
+    ["foreign request", { id: "quote-request-2" }],
+    ["stale status", { status: "in_review" }],
+    ["foreign result", { resultId: "quote-request-quoted-result-2" }],
+    [
+      "foreign state key",
+      { currentStateCommandKey: "quote-request-quoted-command-2" },
+    ],
+    ["mutable", { immutable: false }],
+  ] as const)(
+    "rejects quote acceptance with %s immutable quoted-request snapshot",
+    (_case, mutation) => {
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
+          current: "quoted",
+          target: "accepted",
+          idempotencyKey: `quote-acceptance-request-snapshot-${_case}`,
+          context: {
+            ...permittedContext,
+            quoteAcceptanceExpectedQuoteRequest:
+              mutation === undefined
+                ? undefined
+                : {
+                    ...permittedContext.quoteAcceptanceExpectedQuoteRequest,
+                    ...mutation,
+                  },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a fully coordinated foreign quoted QuoteRequest behind request A command anchors", () => {
+    expect(() =>
+      transition(quoteRequestPolicy, {
+        ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
+        current: "quoted",
+        target: "accepted",
+        idempotencyKey: "quote-acceptance-coordinated-request-b",
+        context: {
+          ...permittedContext,
+          quoteRequestId: "quote-request-2",
+          issuedQuoteId: "quote-2",
+          issuedQuoteRequestId: "quote-request-2",
+          quoteIssuanceResultId: "quote-issuance-result-2",
+          quoteIssuancePreviousQuoteRequestResultId:
+            "quote-request-in-review-result-2",
+          quoteIssuanceCurrentStateCommandKey:
+            "quote-request-in-review-command-2",
+          quoteIssuanceQuoteRequestId: "quote-request-2",
+          quoteIssuanceIssuedQuoteId: "quote-2",
+          quoteIssuanceIssuedQuoteRequestId: "quote-request-2",
+          quoteIssuanceExpectedQuoteRequest: {
+            ...permittedContext.quoteIssuanceExpectedQuoteRequest,
+            id: "quote-request-2",
+            resultId: "quote-request-in-review-result-2",
+            currentStateCommandKey: "quote-request-in-review-command-2",
+          },
+          quoteIssuanceIssuedQuote: {
+            ...permittedContext.quoteIssuanceIssuedQuote,
+            id: "quote-2",
+            quoteRequestId: "quote-request-2",
+            resultId: "quote-issuance-result-2",
+          },
+          quoteIssuanceRequestResultId: "quote-issuance-result-2",
+          quoteIssuanceQuoteResultId: "quote-issuance-result-2",
+          quoteAcceptancePreviousQuoteRequestResultId:
+            "quote-request-quoted-result-2",
+          quoteAcceptanceCurrentStateCommandKey:
+            "quote-request-quoted-command-2",
+          quoteAcceptanceExpectedQuoteRequest: {
+            ...permittedContext.quoteAcceptanceExpectedQuoteRequest,
+            id: "quote-request-2",
+            resultId: "quote-request-quoted-result-2",
+            currentStateCommandKey: "quote-request-quoted-command-2",
+          },
+          quoteAcceptanceQuoteRequestId: "quote-request-2",
+          quoteAcceptanceIssuedQuoteId: "quote-2",
+          quoteAcceptanceIssuedQuoteRequestId: "quote-request-2",
+          quoteAcceptanceIssuedQuoteCreationResultId: "quote-issuance-result-2",
+          quoteAcceptanceIssuedQuote: {
+            ...permittedContext.quoteAcceptanceIssuedQuote,
+            id: "quote-2",
+            quoteRequestId: "quote-request-2",
+            resultId: "quote-issuance-result-2",
+          },
+          createdOrderQuoteRequestId: "quote-request-2",
+          createdOrderSourceQuoteId: "quote-2",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it("derives acceptance from the exact Quote window rather than the legacy boolean", () => {
     for (const [label, evaluatedAt] of [
       ["at-issue", permittedContext.issuedQuoteIssuedAt],
@@ -5760,6 +6241,7 @@ describe("v0 lifecycle policy tables", () => {
     ] as const) {
       expect(
         transition(quoteRequestPolicy, {
+          ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
           current: "quoted",
           target: "accepted",
           idempotencyKey: `quote-acceptance-exact-window-${label}`,
@@ -5779,6 +6261,7 @@ describe("v0 lifecycle policy tables", () => {
     ] as const) {
       expect(() =>
         transition(quoteRequestPolicy, {
+          ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
           current: "quoted",
           target: "accepted",
           idempotencyKey: `quote-acceptance-${label}`,
@@ -5795,6 +6278,7 @@ describe("v0 lifecycle policy tables", () => {
   it("rejects coordinated quote scalar substitution against the immutable record", () => {
     expect(() =>
       transition(quoteRequestPolicy, {
+        ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
         current: "quoted",
         target: "accepted",
         idempotencyKey: "quote-acceptance-coordinated-quote-substitution",
@@ -5811,6 +6295,7 @@ describe("v0 lifecycle policy tables", () => {
   it("rejects coordinated acceptance substitution against the authoritative issuance record", () => {
     expect(() =>
       transition(quoteRequestPolicy, {
+        ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
         current: "quoted",
         target: "accepted",
         idempotencyKey: "quote-acceptance-coordinated-issuance-substitution",
@@ -5838,6 +6323,7 @@ describe("v0 lifecycle policy tables", () => {
     const instant = permittedContext.issuedQuoteIssuedAt;
     expect(() =>
       transition(quoteRequestPolicy, {
+        ...commandAnchors(quoteRequestPolicy, "quoted", "accepted"),
         current: "quoted",
         target: "accepted",
         idempotencyKey: "quote-acceptance-zero-window",
@@ -7876,6 +8362,7 @@ describe("v0 lifecycle policy tables", () => {
   it("requires a complete result before a labelled shipment is handed over", () => {
     expect(() =>
       transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "label_created", "handed_over"),
         current: "label_created",
         target: "handed_over",
         idempotencyKey: "label-handoff-incomplete",
@@ -7883,6 +8370,7 @@ describe("v0 lifecycle policy tables", () => {
     ).toThrow(TransitionGuardError);
     expect(
       transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "label_created", "handed_over"),
         current: "label_created",
         target: "handed_over",
         idempotencyKey: "label-handoff-complete",
@@ -7899,6 +8387,7 @@ describe("v0 lifecycle policy tables", () => {
     const context = contextForTransition("handed_over", "label_created");
     expect(
       transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "label_created", "handed_over"),
         current: "label_created",
         target: "handed_over",
         idempotencyKey: "ordinary-handoff-shipment-reordered",
@@ -8011,6 +8500,7 @@ describe("v0 lifecycle policy tables", () => {
     (_case, mutation) => {
       expect(() =>
         transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "label_created", "handed_over"),
           current: "label_created",
           target: "handed_over",
           idempotencyKey: `ordinary-handoff-shipment-${_case}`,
@@ -8251,6 +8741,9 @@ describe("v0 lifecycle policy tables", () => {
             : base.handoffResultId;
       expect(
         transition(shipmentPolicy, {
+          ...(kind === "ordinary"
+            ? commandAnchors(shipmentPolicy, "label_created", "handed_over")
+            : {}),
           current: "label_created",
           target: "handed_over",
           idempotencyKey: `labelled-handoff-${kind}`,
@@ -12210,6 +12703,11 @@ describe("v0 lifecycle policy tables", () => {
     };
     expect(() =>
       transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "pending",
+          "reship_pending",
+        ),
         current: "pending",
         target: "refund_pending",
         idempotencyKey: `claim-refund-scope-invalid-${_case}`,
@@ -14025,6 +14523,11 @@ describe("v0 lifecycle policy tables", () => {
       };
       expect(() =>
         transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            "recovery_pending",
+            "reship_pending",
+          ),
           current: "recovery_pending",
           target: "reship_pending",
           idempotencyKey: `reship-missing-${missingFlag}`,
@@ -14044,6 +14547,11 @@ describe("v0 lifecycle policy tables", () => {
     (current, shipmentStatus) => {
       expect(
         transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            current,
+            "reship_pending",
+          ),
           current,
           target: "reship_pending",
           idempotencyKey: `reship-${current}-${shipmentStatus}`,
@@ -14063,6 +14571,175 @@ describe("v0 lifecycle policy tables", () => {
         previous: current,
         current: "reship_pending",
       });
+    },
+  );
+
+  it.each(["pending", "recovery_pending"] as const)(
+    "rejects %s -> reship_pending outside the selected child command anchor",
+    (current) => {
+      const context = contextForTransition("reship_pending", current);
+      for (const [field, value] of [
+        ["aggregateId", undefined],
+        ["aggregateId", "claim-resolution-2"],
+        ["currentStateCommandKey", " "],
+        ["currentStateCommandKey", `claim-resolution-${current}-command-2`],
+        ["currentStateResultId", undefined],
+        ["currentStateResultId", `claim-resolution-${current}-result-2`],
+      ] as const) {
+        expect(() =>
+          transition(claimSlotResolutionPolicy, {
+            ...commandAnchors(
+              claimSlotResolutionPolicy,
+              current,
+              "reship_pending",
+            ),
+            current,
+            target: "reship_pending",
+            idempotencyKey: `reship-command-anchor-${current}-${field}-${String(value)}`,
+            [field]: value,
+            context,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["missing", undefined],
+    ["foreign id", { id: "claim-resolution-2" }],
+    ["foreign Claim", { claimId: "claim-2" }],
+    ["foreign slot", { slotId: "claim-slot-2" }],
+    ["stale status", { status: "reprint_pending" }],
+    ["foreign result", { resultId: "claim-resolution-pending-result-2" }],
+    [
+      "foreign state key",
+      { currentStateCommandKey: "claim-resolution-pending-command-2" },
+    ],
+    ["mutable", { immutable: false }],
+  ] as const)(
+    "rejects reship setup with %s immutable current child snapshot",
+    (_case, snapshot) => {
+      const context = contextForTransition("reship_pending", "pending");
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            "pending",
+            "reship_pending",
+          ),
+          current: "pending",
+          target: "reship_pending",
+          idempotencyKey: `reship-snapshot-${_case}`,
+          context: {
+            ...context,
+            reshipmentSetupExpectedResolution:
+              snapshot === undefined
+                ? undefined
+                : {
+                    ...context.reshipmentSetupExpectedResolution,
+                    ...snapshot,
+                  },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each(["pending", "recovery_pending"] as const)(
+    "rejects a coordinated child-B reship setup behind child-A anchors (%s)",
+    (current) => {
+      const context = contextForTransition("reship_pending", current);
+      const b = (suffix: string) => `${suffix}-2`;
+      const bContext = {
+        ...context,
+        claimId: b("claim"),
+        claimSlotResolutionId: b("claim-resolution"),
+        claimSlotId: b("claim-slot"),
+        orderId: b("order"),
+        phaseId: b("phase"),
+        shipmentId: b("shipment"),
+        reshipmentShipmentId: b("reship-shipment"),
+        reshipmentAuthorizationId: b("reship-authorization"),
+        reshipmentCustodyAuthorizationId: b("reship-authorization"),
+        reshipmentSetupResultId: b("reship-setup-result"),
+        reshipmentSetupAuthorizationId: b("reship-authorization"),
+        reshipmentSetupAllocationId: b("shipment-allocation"),
+        reshipmentSetupExpectedClaimId: b("claim"),
+        reshipmentSetupExpectedResolutionId: b("claim-resolution"),
+        reshipmentSetupExpectedSlotId: b("claim-slot"),
+        reshipmentSetupExpectedOrderId: b("order"),
+        reshipmentSetupExpectedPhaseId: b("phase"),
+        reshipmentSetupExpectedOriginalShipmentId: b("shipment"),
+        reshipmentSetupPreviousResolutionResultId: b(
+          `claim-resolution-${current}-result`,
+        ),
+        reshipmentSetupCurrentStateCommandKey: b(
+          `claim-resolution-${current}-command`,
+        ),
+        reshipmentSetupClaimId: b("claim"),
+        reshipmentSetupResolutionId: b("claim-resolution"),
+        reshipmentSetupSlotId: b("claim-slot"),
+        reshipmentSetupOrderId: b("order"),
+        reshipmentSetupPhaseId: b("phase"),
+        reshipmentSetupOriginalShipmentId: b("shipment"),
+        reshipmentSetupOriginalShipmentClaimId: b("claim"),
+        reshipmentSetupOriginalShipmentResolutionId: b("claim-resolution"),
+        reshipmentSetupOriginalShipmentSlotId: b("claim-slot"),
+        reshipmentSetupOriginalShipmentOrderId: b("order"),
+        reshipmentSetupOriginalShipmentPhaseId: b("phase"),
+        reshipmentSetupOriginalShipmentAllocationId: b("shipment-allocation"),
+        reshipmentSetupCustodyShipmentId: b("shipment"),
+        reshipmentSetupCustodyClaimId: b("claim"),
+        reshipmentSetupCustodyResolutionId: b("claim-resolution"),
+        reshipmentSetupQcShipmentId: b("shipment"),
+        reshipmentSetupQcClaimId: b("claim"),
+        reshipmentSetupQcResolutionId: b("claim-resolution"),
+        reshipmentSetupNewShipmentId: b("reship-shipment"),
+        reshipmentSetupNewShipmentClaimId: b("claim"),
+        reshipmentSetupNewShipmentResolutionId: b("claim-resolution"),
+        reshipmentSetupNewShipmentSlotId: b("claim-slot"),
+        reshipmentSetupNewShipmentOrderId: b("order"),
+        reshipmentSetupNewShipmentPhaseId: b("phase"),
+        reshipmentSetupNewShipmentReplacesShipmentId: b("shipment"),
+        reshipmentSetupNewShipmentAllocationId: b("shipment-allocation"),
+        reshipmentSetupNewShipmentOriginClaimId: b("claim"),
+        reshipmentSetupAuthorizationClaimId: b("claim"),
+        reshipmentSetupAuthorizationResolutionId: b("claim-resolution"),
+        reshipmentSetupAuthorizationSlotId: b("claim-slot"),
+        reshipmentSetupAuthorizationOrderId: b("order"),
+        reshipmentSetupAuthorizationPhaseId: b("phase"),
+        reshipmentSetupAuthorizationOriginalShipmentId: b("shipment"),
+        reshipmentSetupAuthorizationNewShipmentId: b("reship-shipment"),
+        reshipmentSetupAuthorizationResultId: b("reship-setup-result"),
+        reshipmentSetupResolutionResultId: b("reship-setup-result"),
+        reshipmentSetupNewShipmentResultId: b("reship-setup-result"),
+        reshipmentSetupCustodyResultId: b("reship-setup-result"),
+        reshipmentSetupQcResultId: b("reship-setup-result"),
+        reshipmentSetupExpectedResolution: {
+          ...context.reshipmentSetupExpectedResolution,
+          id: b("claim-resolution"),
+          claimId: b("claim"),
+          slotId: b("claim-slot"),
+          orderId: b("order"),
+          phaseId: b("phase"),
+          status: current,
+          resultId: b(`claim-resolution-${current}-result`),
+          currentStateCommandKey: b(`claim-resolution-${current}-command`),
+        },
+      };
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(
+            claimSlotResolutionPolicy,
+            current,
+            "reship_pending",
+          ),
+          current,
+          target: "reship_pending",
+          idempotencyKey: `reship-coordinated-child-b-${current}`,
+          context: bContext,
+        }),
+      ).toThrow(TransitionGuardError);
     },
   );
 
@@ -14093,6 +14770,11 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)("rejects reship setup with invalid %s", (field, value) => {
     expect(() =>
       transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "recovery_pending",
+          "reship_pending",
+        ),
         current: "recovery_pending",
         target: "reship_pending",
         idempotencyKey: `reship-setup-invalid-${field}`,
@@ -14107,6 +14789,11 @@ describe("v0 lifecycle policy tables", () => {
   it("rejects reship setup when fresh QC predates custody", () => {
     expect(() =>
       transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "pending",
+          "reship_pending",
+        ),
         current: "pending",
         target: "reship_pending",
         idempotencyKey: "reship-setup-stale-qc",
@@ -14124,6 +14811,11 @@ describe("v0 lifecycle policy tables", () => {
     const context = contextForTransition("reship_pending", "pending");
     expect(() =>
       transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "pending",
+          "reship_pending",
+        ),
         current: "pending",
         target: "reship_pending",
         idempotencyKey: "reship-setup-same-time-qc",
@@ -14484,6 +15176,7 @@ describe("v0 lifecycle policy tables", () => {
   it("requires the complete shipment handoff transaction before a packed Job is handed over", () => {
     expect(() =>
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "packed", "handed_over"),
         current: "packed",
         target: "handed_over",
         idempotencyKey: "job-handoff-missing",
@@ -14491,6 +15184,7 @@ describe("v0 lifecycle policy tables", () => {
     ).toThrow(TransitionGuardError);
     expect(
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "packed", "handed_over"),
         current: "packed",
         target: "handed_over",
         idempotencyKey: "job-handoff-complete",
@@ -14503,6 +15197,7 @@ describe("v0 lifecycle policy tables", () => {
     const context = contextForTransition("handed_over", "packed");
     expect(
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "packed", "handed_over"),
         current: "packed",
         target: "handed_over",
         idempotencyKey: "ordinary-handoff-job-reordered",
@@ -14517,6 +15212,95 @@ describe("v0 lifecycle policy tables", () => {
       previous: "packed",
       current: "handed_over",
     });
+  });
+
+  it.each([
+    ["missing aggregate", "aggregateId", undefined],
+    ["blank aggregate", "aggregateId", "  "],
+    ["foreign aggregate", "aggregateId", "job-2"],
+    ["missing state key", "currentStateCommandKey", undefined],
+    ["blank state key", "currentStateCommandKey", "  "],
+    ["foreign state key", "currentStateCommandKey", "job-packed-command-2"],
+    ["missing state result", "currentStateResultId", undefined],
+    ["blank state result", "currentStateResultId", "  "],
+    ["foreign state result", "currentStateResultId", "job-packed-result-2"],
+  ] as const)(
+    "rejects ordinary Job handoff with %s command anchor",
+    (_label, field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "packed", "handed_over"),
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `ordinary-job-handoff-anchor-${field}-${String(value)}`,
+          [field]: value,
+          context: contextForTransition("handed_over", "packed"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "job-2"],
+    ["orderId", "order-2"],
+    ["phaseId", "phase-2"],
+    ["shipmentId", "shipment-2"],
+    ["resultId", "job-packed-result-2"],
+    ["currentStateCommandKey", "job-packed-command-2"],
+    ["currentLineageLeaf", false],
+    ["immutable", false],
+  ] as const)(
+    "rejects ordinary Job handoff with stale immutable packed snapshot %s",
+    (field, value) => {
+      const context = contextForTransition("handed_over", "packed");
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "packed", "handed_over"),
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `ordinary-job-handoff-snapshot-${field}`,
+          context: {
+            ...context,
+            jobHandoffExpectedJob: {
+              ...context.jobHandoffExpectedJob,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a fully coordinated Job B substitution behind the Job A handoff command", () => {
+    const context = contextForTransition("handed_over", "packed");
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "packed", "handed_over"),
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "ordinary-job-handoff-coordinated-job-b",
+        context: {
+          ...context,
+          jobId: "job-2",
+          orderId: "order-2",
+          phaseId: "phase-2",
+          shipmentId: "shipment-2",
+          jobHandoffJobId: "job-2",
+          jobHandoffShipmentId: "shipment-2",
+          jobHandoffExpectedJob: {
+            ...context.jobHandoffExpectedJob,
+            id: "job-2",
+            shipmentId: "shipment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+          handoffShipmentId: "shipment-2",
+          handoffOrderId: "order-2",
+          handoffPhaseOrderId: "order-2",
+          handoffPhaseId: "phase-2",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it("dispatches a replacement Job through its exact Claim-scoped handoff", () => {
@@ -14669,6 +15453,7 @@ describe("v0 lifecycle policy tables", () => {
       const base = contextForTransition("handed_over", "packed");
       expect(() =>
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "packed", "handed_over"),
           current: "packed",
           target: "handed_over",
           idempotencyKey: `replacement-job-handoff-${field}`,
@@ -15094,6 +15879,7 @@ describe("v0 lifecycle policy tables", () => {
     (_case, mutation) => {
       expect(() =>
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "packed", "handed_over"),
           current: "packed",
           target: "handed_over",
           idempotencyKey: `ordinary-handoff-job-${_case}`,

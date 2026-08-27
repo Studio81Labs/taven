@@ -4978,12 +4978,24 @@ function requireQuoteAcceptanceAvailability<S extends string>(
 ): void {
   requireAtomicIssuedQuoteCreation(lifecycle, command);
   const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const quoteRequestId = context?.quoteRequestId;
   const issuedQuoteId = context?.issuedQuoteId;
   const issuedAt = context?.issuedQuoteIssuedAt;
   const expiresAt = context?.issuedQuoteExpiresAt;
   const evaluatedAt = context?.quoteAcceptanceEvaluatedAt;
   const resultId = context?.quoteAcceptanceResultId;
+  const requestPreviousResultId =
+    context?.quoteAcceptancePreviousQuoteRequestResultId;
+  const requestStateKey = context?.quoteAcceptanceCurrentStateCommandKey;
+  const expectedRequestValue = context?.quoteAcceptanceExpectedQuoteRequest;
+  const expectedRequest =
+    typeof expectedRequestValue === "object" &&
+    expectedRequestValue !== null &&
+    !Array.isArray(expectedRequestValue)
+      ? (expectedRequestValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const issuedQuoteValue = context?.quoteAcceptanceIssuedQuote;
   const issuedQuote =
     typeof issuedQuoteValue === "object" &&
@@ -4996,6 +5008,16 @@ function requireQuoteAcceptanceAvailability<S extends string>(
   if (
     typeof quoteRequestId !== "string" ||
     quoteRequestId.trim().length === 0 ||
+    !nonBlank(requestPreviousResultId) ||
+    !nonBlank(requestStateKey) ||
+    command.aggregateId !== quoteRequestId ||
+    command.currentStateResultId !== requestPreviousResultId ||
+    command.currentStateCommandKey !== requestStateKey ||
+    expectedRequest?.id !== quoteRequestId ||
+    expectedRequest.status !== "quoted" ||
+    expectedRequest.resultId !== requestPreviousResultId ||
+    expectedRequest.currentStateCommandKey !== requestStateKey ||
+    expectedRequest.immutable !== true ||
     typeof issuedQuoteId !== "string" ||
     issuedQuoteId.trim().length === 0 ||
     context?.issuedQuoteRequestId !== quoteRequestId ||
@@ -6472,6 +6494,26 @@ function requireExactJobHandoff<S extends string>(
         "ordinary Job handoff cannot carry Claim-replacement provenance",
       );
     }
+    const stateKey = context?.jobHandoffCurrentStateCommandKey;
+    const previousResultId = context?.jobHandoffPreviousResultId;
+    if (
+      !nonBlank(stateKey) ||
+      !nonBlank(previousResultId) ||
+      command.aggregateId !== jobId ||
+      command.currentStateCommandKey !== stateKey ||
+      command.currentStateResultId !== previousResultId ||
+      expected?.orderId !== context?.orderId ||
+      expected?.phaseId !== context?.phaseId ||
+      expected?.resultId !== previousResultId ||
+      expected?.currentStateCommandKey !== stateKey
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "ordinary Job handoff must bind the command-selected immutable packed Job",
+      );
+    }
     requireAtomicOrdinaryHandoff(lifecycle, command, {
       shipmentPrevious: "label_created",
       orderPrevious: "ready_to_ship",
@@ -7280,13 +7322,22 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     phasePrevious: "qc_passed",
   },
 ): void {
-  const shipmentId = command.context?.shipmentId;
-  const orderId = command.context?.orderId;
-  const phaseId = command.context?.phaseId;
-  const expectedSlotIdsValue = command.context?.handoffSlotIds;
-  const slotsValue = command.context?.handoffSlots;
-  const expectedJobIdsValue = command.context?.handoffJobIds;
-  const jobsValue = command.context?.handoffJobs;
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const shipmentId = context?.shipmentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const expectedSlotIdsValue = context?.handoffSlotIds;
+  const slotsValue = context?.handoffSlots;
+  const expectedJobIdsValue = context?.handoffJobIds;
+  const jobsValue = context?.handoffJobs;
   const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
     ? [...expectedSlotIdsValue]
     : undefined;
@@ -7296,18 +7347,16 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     : undefined;
   const jobs = Array.isArray(jobsValue) ? [...jobsValue] : undefined;
   const firstParcelStatusesMatch =
-    command.context?.handoffOrderPreviousStatus ===
-      expectedStatuses.orderPrevious &&
-    command.context?.handoffOrderTargetStatus === "shipped" &&
-    command.context?.handoffPhasePreviousStatus ===
-      expectedStatuses.phasePrevious &&
-    command.context?.handoffPhaseTargetStatus === "shipped";
+    context?.handoffOrderPreviousStatus === expectedStatuses.orderPrevious &&
+    context?.handoffOrderTargetStatus === "shipped" &&
+    context?.handoffPhasePreviousStatus === expectedStatuses.phasePrevious &&
+    context?.handoffPhaseTargetStatus === "shipped";
   const laterParcelStatusesMatch =
     expectedStatuses.allowLaterParcel === true &&
-    command.context?.handoffOrderPreviousStatus === "shipped" &&
-    command.context?.handoffOrderTargetStatus === "shipped" &&
-    command.context?.handoffPhasePreviousStatus === "shipped" &&
-    command.context?.handoffPhaseTargetStatus === "shipped";
+    context?.handoffOrderPreviousStatus === "shipped" &&
+    context?.handoffOrderTargetStatus === "shipped" &&
+    context?.handoffPhasePreviousStatus === "shipped" &&
+    context?.handoffPhaseTargetStatus === "shipped";
   const orderPrevious = laterParcelStatusesMatch
     ? "shipped"
     : expectedStatuses.orderPrevious;
@@ -7317,21 +7366,21 @@ function requireAtomicOrdinaryHandoff<S extends string>(
   if (
     typeof shipmentId !== "string" ||
     shipmentId.trim().length === 0 ||
-    command.context?.handoffShipmentId !== shipmentId ||
+    context?.handoffShipmentId !== shipmentId ||
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
-    command.context?.handoffOrderId !== orderId ||
-    command.context?.handoffPhaseOrderId !== orderId ||
+    context?.handoffOrderId !== orderId ||
+    context?.handoffPhaseOrderId !== orderId ||
     typeof phaseId !== "string" ||
     phaseId.trim().length === 0 ||
-    command.context?.handoffPhaseId !== phaseId ||
-    command.context?.phaseKind !== "single" ||
+    context?.handoffPhaseId !== phaseId ||
+    context?.phaseKind !== "single" ||
     (!firstParcelStatusesMatch && !laterParcelStatusesMatch) ||
-    command.context?.handoffShipmentPreviousStatus !==
+    context?.handoffShipmentPreviousStatus !==
       expectedStatuses.shipmentPrevious ||
-    command.context?.handoffShipmentTargetStatus !== "handed_over" ||
-    command.context?.handoffJobPreviousStatus !== "packed" ||
-    command.context?.handoffJobTargetStatus !== "handed_over" ||
+    context?.handoffShipmentTargetStatus !== "handed_over" ||
+    context?.handoffJobPreviousStatus !== "packed" ||
+    context?.handoffJobTargetStatus !== "handed_over" ||
     expectedSlotIds === undefined ||
     expectedSlotIds.length === 0 ||
     expectedSlotIds.some(
@@ -7355,6 +7404,66 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       command.target,
       "ordinary handoff requires the exact Shipment, Order, phase, slot, and Job sets",
     );
+  }
+
+  if (expectedStatuses.resultProof !== "cancellation_race") {
+    const selectedAggregate =
+      lifecycle === "Order"
+        ? {
+            id: orderId,
+            previousResultId: context?.handoffOrderPreviousResultId,
+            stateKey: context?.handoffOrderCurrentStateCommandKey,
+            expected: record(context?.handoffExpectedOrder),
+            previousStatus: orderPrevious,
+          }
+        : lifecycle === "OrderPhase(single)"
+          ? {
+              id: phaseId,
+              previousResultId: context?.handoffPhasePreviousResultId,
+              stateKey: context?.handoffPhaseCurrentStateCommandKey,
+              expected: record(context?.handoffExpectedPhase),
+              previousStatus: phasePrevious,
+            }
+          : lifecycle === "Shipment"
+            ? {
+                id: shipmentId,
+                previousResultId: context?.handoffShipmentPreviousResultId,
+                stateKey: context?.handoffShipmentCurrentStateCommandKey,
+                expected: record(context?.handoffExpectedShipment),
+                previousStatus: expectedStatuses.shipmentPrevious,
+              }
+            : undefined;
+    if (
+      selectedAggregate !== undefined &&
+      (!nonBlank(selectedAggregate.id) ||
+        !nonBlank(selectedAggregate.previousResultId) ||
+        !nonBlank(selectedAggregate.stateKey) ||
+        command.aggregateId !== selectedAggregate.id ||
+        command.currentStateResultId !== selectedAggregate.previousResultId ||
+        command.currentStateCommandKey !== selectedAggregate.stateKey ||
+        selectedAggregate.expected?.id !== selectedAggregate.id ||
+        selectedAggregate.expected.status !==
+          selectedAggregate.previousStatus ||
+        selectedAggregate.expected.resultId !==
+          selectedAggregate.previousResultId ||
+        selectedAggregate.expected.currentStateCommandKey !==
+          selectedAggregate.stateKey ||
+        selectedAggregate.expected.immutable !== true ||
+        (lifecycle === "Order" &&
+          selectedAggregate.expected.phaseId !== phaseId) ||
+        (lifecycle === "OrderPhase(single)" &&
+          selectedAggregate.expected.orderId !== orderId) ||
+        (lifecycle === "Shipment" &&
+          (selectedAggregate.expected.orderId !== orderId ||
+            selectedAggregate.expected.phaseId !== phaseId)))
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "ordinary handoff must bind the selected aggregate and immutable source snapshot",
+      );
+    }
   }
   if (
     !hasSameNonEmptyStringSet(
@@ -10848,6 +10957,16 @@ function requireExactReshipmentSetup<S extends string>(
   const newShipmentId = context?.reshipmentShipmentId;
   const authorizationId = context?.reshipmentAuthorizationId;
   const setupResultId = context?.reshipmentSetupResultId;
+  const previousResolutionResultId =
+    context?.reshipmentSetupPreviousResolutionResultId;
+  const stateKey = context?.reshipmentSetupCurrentStateCommandKey;
+  const expectedResolutionValue = context?.reshipmentSetupExpectedResolution;
+  const expectedResolution =
+    typeof expectedResolutionValue === "object" &&
+    expectedResolutionValue !== null &&
+    !Array.isArray(expectedResolutionValue)
+      ? (expectedResolutionValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const allocationId = context?.reshipmentSetupAllocationId;
   const shipmentStatus = context?.shipmentStatus;
   const custodyConfirmedAt = context?.reshipmentSetupCustodyConfirmedAt;
@@ -10876,6 +10995,20 @@ function requireExactReshipmentSetup<S extends string>(
     originalShipmentId === newShipmentId ||
     !nonBlank(authorizationId) ||
     !nonBlank(setupResultId) ||
+    !nonBlank(previousResolutionResultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== resolutionId ||
+    command.currentStateCommandKey !== stateKey ||
+    command.currentStateResultId !== previousResolutionResultId ||
+    expectedResolution?.id !== resolutionId ||
+    expectedResolution.claimId !== claimId ||
+    expectedResolution.slotId !== slotId ||
+    expectedResolution.orderId !== orderId ||
+    expectedResolution.phaseId !== phaseId ||
+    expectedResolution.status !== command.current ||
+    expectedResolution.resultId !== previousResolutionResultId ||
+    expectedResolution.currentStateCommandKey !== stateKey ||
+    expectedResolution.immutable !== true ||
     !nonBlank(allocationId) ||
     (shipmentStatus !== "returned" && shipmentStatus !== "recovered") ||
     !(custodyConfirmedAt instanceof Instant) ||
