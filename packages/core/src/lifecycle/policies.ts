@@ -6958,6 +6958,24 @@ function requireDeliveredJobSettlement<S extends string>(
     !Array.isArray(expectedValue)
       ? (expectedValue as Readonly<Record<string, unknown>>)
       : undefined;
+  const slotSetId = command.context?.jobSettlementAuthoritativeSlotSetId;
+  const slotSetResultId =
+    command.context?.jobSettlementAuthoritativeSlotSetResultId;
+  const slotSetValue = command.context?.jobSettlementAuthoritativeSlotSet;
+  const slotSet =
+    typeof slotSetValue === "object" &&
+    slotSetValue !== null &&
+    !Array.isArray(slotSetValue)
+      ? (slotSetValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const authoritativeSlotIdsValue = slotSet?.slotIds;
+  const authoritativeSlotIds = Array.isArray(authoritativeSlotIdsValue)
+    ? [...authoritativeSlotIdsValue]
+    : undefined;
+  const authoritativeSlotsValue = slotSet?.slotSnapshots;
+  const authoritativeSlots = Array.isArray(authoritativeSlotsValue)
+    ? [...authoritativeSlotsValue]
+    : undefined;
   const expectedSlotIdsValue = command.context?.expectedJobSettlementSlotIds;
   const slotsValue = command.context?.jobSettlementSlots;
   const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
@@ -7002,19 +7020,34 @@ function requireDeliveredJobSettlement<S extends string>(
     expected.currentStateCommandKey !== stateKey ||
     expected.currentLineageLeaf !== true ||
     expected.immutable !== true ||
+    !nonBlank(slotSetId) ||
+    !nonBlank(slotSetResultId) ||
+    command.ownershipSnapshotId !== slotSetId ||
+    command.ownershipSnapshotResultId !== slotSetResultId ||
+    command.context?.jobSettlementExpectedSlotSetId !== slotSetId ||
+    expected.slotSetId !== slotSetId ||
+    expected.slotSetResultId !== slotSetResultId ||
+    slotSet?.id !== slotSetId ||
+    slotSet.jobId !== jobId ||
+    slotSet.shipmentId !== shipmentId ||
+    slotSet.orderId !== orderId ||
+    slotSet.phaseId !== phaseId ||
+    slotSet.previousJobResultId !== previousResultId ||
+    slotSet.currentStateCommandKey !== stateKey ||
+    slotSet.resultId !== slotSetResultId ||
+    slotSet.immutable !== true ||
+    authoritativeSlotIds === undefined ||
+    authoritativeSlots === undefined ||
+    authoritativeSlots.length !== authoritativeSlotIds.length ||
     command.context?.jobSettlementJobResultId !== resultId ||
     command.context?.jobSettlementShipmentResultId !== resultId ||
     command.context?.jobSettlementLineageResultId !== resultId ||
     command.context?.jobSettlementSlotSetResultId !== resultId ||
     !(evaluatedAt instanceof Instant) ||
     expectedSlotIds === undefined ||
-    expectedSlotIds.length === 0 ||
-    expectedSlotIds.some(
-      (id) => typeof id !== "string" || id.trim().length === 0,
-    ) ||
-    new Set(expectedSlotIds).size !== expectedSlotIds.length ||
+    !hasSameNonEmptyStringSet(expectedSlotIds, authoritativeSlotIds) ||
     slots === undefined ||
-    slots.length !== expectedSlotIds.length
+    slots.length !== authoritativeSlotIds.length
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -7023,7 +7056,54 @@ function requireDeliveredJobSettlement<S extends string>(
       "Job settlement requires its exact delivered Shipment lineage and complete slot set",
     );
   }
-  const authoritativeSlotIds = expectedSlotIds as string[];
+  const authoritativeSlotIdList = authoritativeSlotIds as string[];
+  const authoritativeSlotById = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  for (const value of authoritativeSlots) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Job settlement requires immutable per-slot source snapshots",
+      );
+    }
+    const slot = value as Readonly<Record<string, unknown>>;
+    const id = slot.id;
+    if (
+      !nonBlank(id) ||
+      !authoritativeSlotIdList.includes(id) ||
+      authoritativeSlotById.has(id) ||
+      slot.slotSetId !== slotSetId ||
+      slot.jobId !== jobId ||
+      slot.shipmentId !== shipmentId ||
+      slot.orderId !== orderId ||
+      slot.phaseId !== phaseId ||
+      slot.status !== "delivered" ||
+      !nonBlank(slot.resultId) ||
+      !nonBlank(slot.currentStateCommandKey) ||
+      !(slot.claimUntil instanceof Instant) ||
+      slot.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Job settlement requires an exact immutable authoritative slot set",
+      );
+    }
+    authoritativeSlotById.set(id, slot);
+  }
+  if (authoritativeSlotById.size !== authoritativeSlotIdList.length) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job settlement authoritative slot set must be a complete bijection",
+    );
+  }
   const projectedSlotIds = new Set<string>();
   for (const value of slots) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -7039,6 +7119,9 @@ function requireDeliveredJobSettlement<S extends string>(
     const claimUntil = slot.claimUntil;
     const resolvedClaimId = slot.resolvedClaimId;
     const resolvedClaimStatus = slot.resolvedClaimStatus;
+    const source =
+      typeof id === "string" ? authoritativeSlotById.get(id) : undefined;
+    const sourceClaimUntil = source?.claimUntil;
     const claimWindowElapsed =
       claimUntil instanceof Instant && evaluatedAt.compare(claimUntil) >= 0;
     const claimResolved =
@@ -7064,12 +7147,34 @@ function requireDeliveredJobSettlement<S extends string>(
       typeof id !== "string" ||
       id.trim().length === 0 ||
       projectedSlotIds.has(id) ||
-      !authoritativeSlotIds.includes(id) ||
+      source === undefined ||
       slot.jobId !== jobId ||
       slot.shipmentId !== shipmentId ||
       slot.orderId !== orderId ||
       slot.phaseId !== phaseId ||
+      slot.slotSetId !== slotSetId ||
+      slot.status !== source.status ||
+      slot.resultId !== resultId ||
+      slot.currentStateCommandKey !== source.currentStateCommandKey ||
+      slot.immutable !== true ||
       !(claimUntil instanceof Instant) ||
+      !(sourceClaimUntil instanceof Instant) ||
+      claimUntil.compare(sourceClaimUntil) !== 0 ||
+      slot.sourceResultId !== source.resultId ||
+      slot.sourceCurrentStateCommandKey !== source.currentStateCommandKey ||
+      slot.settlementResultId !== resultId ||
+      slot.resolvedClaimId !== source.resolvedClaimId ||
+      slot.resolvedClaimStatus !== source.resolvedClaimStatus ||
+      slot.resolvedClaimSlotId !== source.resolvedClaimSlotId ||
+      slot.resolvedClaimShipmentId !== source.resolvedClaimShipmentId ||
+      slot.resolvedClaimOrderId !== source.resolvedClaimOrderId ||
+      slot.resolvedClaimPhaseId !== source.resolvedClaimPhaseId ||
+      slot.resolvedClaimPreviousActiveClaimId !==
+        source.resolvedClaimPreviousActiveClaimId ||
+      slot.resolvedClaimTargetActiveClaimId !==
+        source.resolvedClaimTargetActiveClaimId ||
+      slot.activeClaimId !== source.activeClaimId ||
+      slot.claimRetentionHoldReleased !== source.claimRetentionHoldReleased ||
       (!claimWindowElapsed && !claimResolved) ||
       (!noClaim && !claimResolved) ||
       slot.activeClaimId !== null ||
@@ -7084,7 +7189,7 @@ function requireDeliveredJobSettlement<S extends string>(
     }
     projectedSlotIds.add(id);
   }
-  if (authoritativeSlotIds.some((id) => !projectedSlotIds.has(id))) {
+  if (authoritativeSlotIdList.some((id) => !projectedSlotIds.has(id))) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
@@ -7644,19 +7749,77 @@ function requireAtomicShipmentIncidentRouting<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const shipmentId = command.context?.shipmentId;
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
+  const previousResultId =
+    command.context?.shipmentProviderOutcomePreviousResultId;
+  const stateKey =
+    command.context?.shipmentProviderOutcomeCurrentStateCommandKey;
+  const resultId = command.context?.shipmentIncidentRoutingResultId;
+  const expectedValue =
+    command.context?.shipmentProviderOutcomeExpectedShipment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const slotSetId = command.context?.shipmentIncidentAuthoritativeSlotSetId;
+  const slotSetResultId =
+    command.context?.shipmentIncidentAuthoritativeSlotSetResultId;
+  const slotSetValue = command.context?.shipmentIncidentAuthoritativeSlotSet;
+  const slotSet =
+    typeof slotSetValue === "object" &&
+    slotSetValue !== null &&
+    !Array.isArray(slotSetValue)
+      ? (slotSetValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const authoritativeSlotIdsValue = slotSet?.slotIds;
+  const authoritativeSlotIds = Array.isArray(authoritativeSlotIdsValue)
+    ? [...authoritativeSlotIdsValue]
+    : undefined;
+  const ownershipSourcesValue = slotSet?.slotOwnershipSources;
+  const ownershipSources = Array.isArray(ownershipSourcesValue)
+    ? [...ownershipSourcesValue]
+    : undefined;
+  const originClaimIdValue = command.context?.shipmentOriginClaimId;
   if (
-    typeof shipmentId !== "string" ||
-    shipmentId.trim().length === 0 ||
+    !nonBlank(shipmentId) ||
     command.context?.incidentShipmentId !== shipmentId ||
-    typeof orderId !== "string" ||
-    orderId.trim().length === 0 ||
+    !nonBlank(orderId) ||
     command.context?.incidentOrderId !== orderId ||
-    typeof phaseId !== "string" ||
-    phaseId.trim().length === 0 ||
-    command.context?.incidentPhaseId !== phaseId
+    !nonBlank(phaseId) ||
+    command.context?.incidentPhaseId !== phaseId ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(resultId) ||
+    resultId !== command.context?.shipmentProviderOutcomeResultId ||
+    !nonBlank(slotSetId) ||
+    !nonBlank(slotSetResultId) ||
+    command.ownershipSnapshotId !== slotSetId ||
+    command.ownershipSnapshotResultId !== slotSetResultId ||
+    command.context?.shipmentIncidentExpectedSlotSetId !== slotSetId ||
+    expected?.incidentSlotSetId !== slotSetId ||
+    expected.incidentSlotSetResultId !== slotSetResultId ||
+    expected.incidentOriginClaimId !== originClaimIdValue ||
+    slotSet?.id !== slotSetId ||
+    slotSet.shipmentId !== shipmentId ||
+    slotSet.orderId !== orderId ||
+    slotSet.phaseId !== phaseId ||
+    slotSet.status !== command.current ||
+    slotSet.targetStatus !== command.target ||
+    slotSet.previousShipmentResultId !== previousResultId ||
+    slotSet.currentStateCommandKey !== stateKey ||
+    slotSet.resultId !== slotSetResultId ||
+    slotSet.routingResultId !== resultId ||
+    slotSet.originClaimId !== originClaimIdValue ||
+    slotSet.immutable !== true ||
+    authoritativeSlotIds === undefined ||
+    ownershipSources === undefined ||
+    ownershipSources.length !== authoritativeSlotIds.length
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -7704,11 +7867,69 @@ function requireAtomicShipmentIncidentRouting<S extends string>(
       "shipment incident routing requires the complete affected slot set",
     );
   }
-  const authoritativeSlotIds = shipmentSlotIds as string[];
+  const authoritativeSlotIdList = authoritativeSlotIds as string[];
+  if (
+    !hasSameNonEmptyStringSet(shipmentSlotIds, authoritativeSlotIdList) ||
+    !hasSameNonEmptyStringSet(affectedSlotIds, authoritativeSlotIdList)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "shipment incident affected slots must exactly match the authoritative Shipment snapshot",
+    );
+  }
+  const authoritativeOwnershipBySlotId = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  for (const value of ownershipSources) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "shipment incident requires immutable per-slot ownership sources",
+      );
+    }
+    const source = value as Readonly<Record<string, unknown>>;
+    const slotId = source.slotId;
+    const activeClaimId = source.activeClaimId;
+    if (
+      !nonBlank(slotId) ||
+      !authoritativeSlotIdList.includes(slotId) ||
+      authoritativeOwnershipBySlotId.has(slotId) ||
+      source.slotSetId !== slotSetId ||
+      source.shipmentId !== shipmentId ||
+      source.orderId !== orderId ||
+      source.phaseId !== phaseId ||
+      source.status !== command.current ||
+      !nonBlank(source.resultId) ||
+      !nonBlank(source.currentStateCommandKey) ||
+      source.immutable !== true ||
+      (activeClaimId !== null && !nonBlank(activeClaimId))
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "shipment incident authoritative ownership must be a complete slot bijection",
+      );
+    }
+    authoritativeOwnershipBySlotId.set(slotId, source);
+  }
+  if (authoritativeOwnershipBySlotId.size !== authoritativeSlotIdList.length) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "shipment incident authoritative ownership cannot omit a Shipment slot",
+    );
+  }
   const affectedIds = affectedSlotIds as string[];
   if (
-    authoritativeSlotIds.some((id) => !affectedIds.includes(id)) ||
-    affectedIds.some((id) => !authoritativeSlotIds.includes(id))
+    authoritativeSlotIdList.some((id) => !affectedIds.includes(id)) ||
+    affectedIds.some((id) => !authoritativeSlotIdList.includes(id))
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -7730,10 +7951,24 @@ function requireAtomicShipmentIncidentRouting<S extends string>(
     const ownership = value as Readonly<Record<string, unknown>>;
     const slotId = ownership.slotId;
     const activeClaimId = ownership.activeClaimId;
+    const source =
+      typeof slotId === "string"
+        ? authoritativeOwnershipBySlotId.get(slotId)
+        : undefined;
     if (
       typeof slotId !== "string" ||
       !affectedIds.includes(slotId) ||
       activeClaimBySlotId.has(slotId) ||
+      source === undefined ||
+      ownership.slotSetId !== slotSetId ||
+      ownership.shipmentId !== shipmentId ||
+      ownership.orderId !== orderId ||
+      ownership.phaseId !== phaseId ||
+      ownership.sourceResultId !== source.resultId ||
+      ownership.sourceCurrentStateCommandKey !==
+        source.currentStateCommandKey ||
+      activeClaimId !== source.activeClaimId ||
+      ownership.immutable !== true ||
       (activeClaimId !== null &&
         (typeof activeClaimId !== "string" ||
           activeClaimId.trim().length === 0))
@@ -7756,7 +7991,6 @@ function requireAtomicShipmentIncidentRouting<S extends string>(
     );
   }
 
-  const originClaimIdValue = command.context?.shipmentOriginClaimId;
   const originClaimId =
     typeof originClaimIdValue === "string" &&
     originClaimIdValue.trim().length > 0
@@ -7821,7 +8055,16 @@ function requireAtomicShipmentIncidentRouting<S extends string>(
       route.childResolutionShipmentId !== shipmentId ||
       route.childResolutionStatus !== "recovery_pending" ||
       route.claimStatus !== "active" ||
-      route.claimRetentionHoldActive !== true
+      route.claimRetentionHoldActive !== true ||
+      route.slotSetId !== slotSetId ||
+      route.sourceResultId !==
+        authoritativeOwnershipBySlotId.get(slotId as string)?.resultId ||
+      route.sourceCurrentStateCommandKey !==
+        authoritativeOwnershipBySlotId.get(slotId as string)
+          ?.currentStateCommandKey ||
+      route.incidentRecordResultId !== resultId ||
+      route.childResolutionResultId !== resultId ||
+      route.resultId !== resultId
     ) {
       throw new TransitionGuardError(
         lifecycle,
@@ -7893,13 +8136,25 @@ function requireAtomicShipmentIncidentRouting<S extends string>(
     newClaim.orderId !== orderId ||
     newClaim.phaseId !== phaseId ||
     newClaim.status !== "active" ||
-    newClaim.retentionHoldActive !== true
+    newClaim.retentionHoldActive !== true ||
+    newClaim.resultId !== resultId
   ) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
       command.target,
       "unowned slots require one exact active incident-backed Claim",
+    );
+  }
+  if (
+    command.context?.shipmentIncidentShipmentResultId !== resultId ||
+    command.context?.shipmentIncidentRouteResultId !== resultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Shipment incident routing must share the provider outcome result",
     );
   }
   requireFlag(

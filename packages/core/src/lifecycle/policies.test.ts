@@ -1141,6 +1141,8 @@ const permittedContext = {
     resultId: "job-handed-over-result-1",
     currentStateCommandKey: "job-handed-over-command-1",
     currentLineageLeaf: true,
+    slotSetId: "job-settlement-slot-set-1",
+    slotSetResultId: "job-settlement-slot-set-result-1",
     immutable: true,
   },
   jobSettlementPreviousStatus: "handed_over",
@@ -1150,7 +1152,70 @@ const permittedContext = {
   jobSettlementLineageResultId: "job-settlement-result-1",
   jobSettlementSlotSetResultId: "job-settlement-result-1",
   jobSettlementEvaluatedAt: Instant.parse("2026-03-02T00:00:00.000Z"),
-  expectedJobSettlementSlotIds: ["slot-1"],
+  jobSettlementExpectedSlotSetId: "job-settlement-slot-set-1",
+  jobSettlementAuthoritativeSlotSetId: "job-settlement-slot-set-1",
+  jobSettlementAuthoritativeSlotSetResultId: "job-settlement-slot-set-result-1",
+  jobSettlementAuthoritativeSlotSet: {
+    id: "job-settlement-slot-set-1",
+    jobId: "job-1",
+    shipmentId: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    previousJobResultId: "job-handed-over-result-1",
+    currentStateCommandKey: "job-handed-over-command-1",
+    resultId: "job-settlement-slot-set-result-1",
+    slotIds: ["slot-1", "slot-2"],
+    slotSnapshots: [
+      {
+        id: "slot-1",
+        slotSetId: "job-settlement-slot-set-1",
+        jobId: "job-1",
+        shipmentId: "shipment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "delivered",
+        resultId: "slot-delivered-result-1",
+        currentStateCommandKey: "slot-delivered-command-1",
+        claimUntil: Instant.parse("2026-03-01T00:00:00.000Z"),
+        resolvedClaimId: null,
+        resolvedClaimStatus: null,
+        resolvedClaimSlotId: null,
+        resolvedClaimShipmentId: null,
+        resolvedClaimOrderId: null,
+        resolvedClaimPhaseId: null,
+        resolvedClaimPreviousActiveClaimId: null,
+        resolvedClaimTargetActiveClaimId: null,
+        activeClaimId: null,
+        claimRetentionHoldReleased: true,
+        immutable: true,
+      },
+      {
+        id: "slot-2",
+        slotSetId: "job-settlement-slot-set-1",
+        jobId: "job-1",
+        shipmentId: "shipment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "delivered",
+        resultId: "slot-delivered-result-2",
+        currentStateCommandKey: "slot-delivered-command-2",
+        claimUntil: Instant.parse("2026-03-01T12:00:00.000Z"),
+        resolvedClaimId: null,
+        resolvedClaimStatus: null,
+        resolvedClaimSlotId: null,
+        resolvedClaimShipmentId: null,
+        resolvedClaimOrderId: null,
+        resolvedClaimPhaseId: null,
+        resolvedClaimPreviousActiveClaimId: null,
+        resolvedClaimTargetActiveClaimId: null,
+        activeClaimId: null,
+        claimRetentionHoldReleased: true,
+        immutable: true,
+      },
+    ],
+    immutable: true,
+  },
+  expectedJobSettlementSlotIds: ["slot-1", "slot-2"],
   jobSettlementSlots: [
     {
       id: "slot-1",
@@ -1158,6 +1223,10 @@ const permittedContext = {
       shipmentId: "shipment-1",
       orderId: "order-1",
       phaseId: "phase-1",
+      slotSetId: "job-settlement-slot-set-1",
+      status: "delivered",
+      resultId: "job-settlement-result-1",
+      currentStateCommandKey: "slot-delivered-command-1",
       claimUntil: Instant.parse("2026-03-01T00:00:00.000Z"),
       resolvedClaimId: null,
       resolvedClaimStatus: null,
@@ -1169,6 +1238,36 @@ const permittedContext = {
       resolvedClaimTargetActiveClaimId: null,
       activeClaimId: null,
       claimRetentionHoldReleased: true,
+      sourceResultId: "slot-delivered-result-1",
+      sourceCurrentStateCommandKey: "slot-delivered-command-1",
+      settlementResultId: "job-settlement-result-1",
+      immutable: true,
+    },
+    {
+      id: "slot-2",
+      jobId: "job-1",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      slotSetId: "job-settlement-slot-set-1",
+      status: "delivered",
+      resultId: "job-settlement-result-1",
+      currentStateCommandKey: "slot-delivered-command-2",
+      claimUntil: Instant.parse("2026-03-01T12:00:00.000Z"),
+      resolvedClaimId: null,
+      resolvedClaimStatus: null,
+      resolvedClaimSlotId: null,
+      resolvedClaimShipmentId: null,
+      resolvedClaimOrderId: null,
+      resolvedClaimPhaseId: null,
+      resolvedClaimPreviousActiveClaimId: null,
+      resolvedClaimTargetActiveClaimId: null,
+      activeClaimId: null,
+      claimRetentionHoldReleased: true,
+      sourceResultId: "slot-delivered-result-2",
+      sourceCurrentStateCommandKey: "slot-delivered-command-2",
+      settlementResultId: "job-settlement-result-1",
+      immutable: true,
     },
   ],
   jobSettlementSlotSetComplete: true,
@@ -3079,9 +3178,74 @@ const permittedContext = {
   incidentPhaseId: "phase-1",
   shipmentFulfilmentSlotIds: ["slot-1", "slot-2"],
   incidentAffectedSlotIds: ["slot-1", "slot-2"],
+  shipmentIncidentExpectedSlotSetId: "shipment-incident-slot-set-1",
+  shipmentIncidentAuthoritativeSlotSetId: "shipment-incident-slot-set-1",
+  shipmentIncidentAuthoritativeSlotSetResultId:
+    "shipment-incident-slot-set-result-1",
+  shipmentIncidentAuthoritativeSlotSet: {
+    id: "shipment-incident-slot-set-1",
+    shipmentId: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "in_transit",
+    targetStatus: "lost",
+    previousShipmentResultId: "shipment-in_transit-result-1",
+    currentStateCommandKey: "shipment-in_transit-command-1",
+    resultId: "shipment-incident-slot-set-result-1",
+    routingResultId: "shipment-lost-provider-result-1",
+    originClaimId: null,
+    slotIds: ["slot-1", "slot-2"],
+    slotOwnershipSources: [
+      {
+        slotId: "slot-1",
+        slotSetId: "shipment-incident-slot-set-1",
+        shipmentId: "shipment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "in_transit",
+        activeClaimId: null,
+        resultId: "shipment-slot-result-1",
+        currentStateCommandKey: "shipment-slot-command-1",
+        immutable: true,
+      },
+      {
+        slotId: "slot-2",
+        slotSetId: "shipment-incident-slot-set-1",
+        shipmentId: "shipment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "in_transit",
+        activeClaimId: null,
+        resultId: "shipment-slot-result-2",
+        currentStateCommandKey: "shipment-slot-command-2",
+        immutable: true,
+      },
+    ],
+    immutable: true,
+  },
   shipmentIncidentSlotOwnerships: [
-    { slotId: "slot-1", activeClaimId: null },
-    { slotId: "slot-2", activeClaimId: null },
+    {
+      slotId: "slot-1",
+      slotSetId: "shipment-incident-slot-set-1",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      activeClaimId: null,
+      sourceResultId: "shipment-slot-result-1",
+      sourceCurrentStateCommandKey: "shipment-slot-command-1",
+      immutable: true,
+    },
+    {
+      slotId: "slot-2",
+      slotSetId: "shipment-incident-slot-set-1",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      activeClaimId: null,
+      sourceResultId: "shipment-slot-result-2",
+      sourceCurrentStateCommandKey: "shipment-slot-command-2",
+      immutable: true,
+    },
   ],
   shipmentOriginClaimId: null,
   shipmentIncidentNewClaim: {
@@ -3092,6 +3256,7 @@ const permittedContext = {
     phaseId: "phase-1",
     status: "active",
     retentionHoldActive: true,
+    resultId: "shipment-lost-provider-result-1",
   },
   shipmentIncidentSlotRoutes: [
     {
@@ -3110,6 +3275,12 @@ const permittedContext = {
       claimStatus: "active",
       claimRetentionHoldActive: true,
       createdNewClaim: true,
+      slotSetId: "shipment-incident-slot-set-1",
+      sourceResultId: "shipment-slot-result-1",
+      sourceCurrentStateCommandKey: "shipment-slot-command-1",
+      incidentRecordResultId: "shipment-lost-provider-result-1",
+      childResolutionResultId: "shipment-lost-provider-result-1",
+      resultId: "shipment-lost-provider-result-1",
     },
     {
       slotId: "slot-2",
@@ -3127,8 +3298,17 @@ const permittedContext = {
       claimStatus: "active",
       claimRetentionHoldActive: true,
       createdNewClaim: true,
+      slotSetId: "shipment-incident-slot-set-1",
+      sourceResultId: "shipment-slot-result-2",
+      sourceCurrentStateCommandKey: "shipment-slot-command-2",
+      incidentRecordResultId: "shipment-lost-provider-result-1",
+      childResolutionResultId: "shipment-lost-provider-result-1",
+      resultId: "shipment-lost-provider-result-1",
     },
   ],
+  shipmentIncidentRoutingResultId: "shipment-lost-provider-result-1",
+  shipmentIncidentShipmentResultId: "shipment-lost-provider-result-1",
+  shipmentIncidentRouteResultId: "shipment-lost-provider-result-1",
   shipmentIncidentRouted: true,
   shipmentIncidentRoutingAtomic: true,
   providerEventShipmentId: "shipment-1",
@@ -3152,6 +3332,9 @@ const permittedContext = {
     status: "handed_over",
     resultId: "shipment-handed_over-result-1",
     currentStateCommandKey: "shipment-handed_over-command-1",
+    incidentSlotSetId: "shipment-incident-slot-set-1",
+    incidentSlotSetResultId: "shipment-incident-slot-set-result-1",
+    incidentOriginClaimId: null,
     immutable: true,
   },
   shipmentProviderOutcomeEvent: {
@@ -3916,6 +4099,29 @@ function contextForTransition(target: string, current?: string) {
     shipmentProviderOutcomeShipmentResultId: shipmentProviderOutcomeResultId,
     shipmentProviderOutcomeEventResultId: shipmentProviderOutcomeResultId,
     shipmentProviderOutcomeTransactionResultId: shipmentProviderOutcomeResultId,
+    shipmentIncidentAuthoritativeSlotSet: {
+      ...permittedContext.shipmentIncidentAuthoritativeSlotSet,
+      status: shipmentProviderOutcomeSource,
+      targetStatus: shipmentProviderOutcomeTarget,
+      previousShipmentResultId: `shipment-${shipmentProviderOutcomeSource}-result-1`,
+      currentStateCommandKey: `shipment-${shipmentProviderOutcomeSource}-command-1`,
+      routingResultId: shipmentProviderOutcomeResultId,
+    },
+    shipmentIncidentNewClaim: {
+      ...permittedContext.shipmentIncidentNewClaim,
+      resultId: shipmentProviderOutcomeResultId,
+    },
+    shipmentIncidentSlotRoutes: permittedContext.shipmentIncidentSlotRoutes.map(
+      (route) => ({
+        ...route,
+        incidentRecordResultId: shipmentProviderOutcomeResultId,
+        childResolutionResultId: shipmentProviderOutcomeResultId,
+        resultId: shipmentProviderOutcomeResultId,
+      }),
+    ),
+    shipmentIncidentRoutingResultId: shipmentProviderOutcomeResultId,
+    shipmentIncidentShipmentResultId: shipmentProviderOutcomeResultId,
+    shipmentIncidentRouteResultId: shipmentProviderOutcomeResultId,
     jobCancellationPreviousJobResultId: `job-${jobCancellationState}-result-1`,
     jobCancellationPreviousReservationResultId: `reservation-${jobCancellationReservationState}-result-1`,
     jobCancellationCurrentStateCommandKey: `job-${jobCancellationState}-command-1`,
@@ -4850,6 +5056,13 @@ function commandAnchors(
       aggregateId: "shipment-1",
       currentStateCommandKey: `shipment-${current}-command-1`,
       currentStateResultId: `shipment-${current}-result-1`,
+      ...(current === "in_transit" &&
+      (target === "lost" || target === "returned")
+        ? {
+            ownershipSnapshotId: "shipment-incident-slot-set-1",
+            ownershipSnapshotResultId: "shipment-incident-slot-set-result-1",
+          }
+        : {}),
     };
   }
   if (
@@ -4910,6 +5123,8 @@ function commandAnchors(
       aggregateId: "job-1",
       currentStateCommandKey: "job-handed-over-command-1",
       currentStateResultId: "job-handed-over-result-1",
+      ownershipSnapshotId: "job-settlement-slot-set-1",
+      ownershipSnapshotResultId: "job-settlement-slot-set-result-1",
     };
   }
   if (
@@ -19165,6 +19380,7 @@ describe("v0 lifecycle policy tables", () => {
           ...permittedContext.jobSettlementSlots[0],
           claimUntil: Instant.parse("2026-03-03T00:00:00.000Z"),
         },
+        permittedContext.jobSettlementSlots[1],
       ],
     ],
     [
@@ -19174,6 +19390,7 @@ describe("v0 lifecycle policy tables", () => {
           ...permittedContext.jobSettlementSlots[0],
           activeClaimId: "claim-1",
         },
+        permittedContext.jobSettlementSlots[1],
       ],
     ],
     [
@@ -19183,6 +19400,7 @@ describe("v0 lifecycle policy tables", () => {
           ...permittedContext.jobSettlementSlots[0],
           claimRetentionHoldReleased: false,
         },
+        permittedContext.jobSettlementSlots[1],
       ],
     ],
     ["jobSettlementSlotSetComplete", false],
@@ -19213,6 +19431,28 @@ describe("v0 lifecycle policy tables", () => {
         context: {
           ...contextForTransition("settled", "handed_over"),
           jobSettlementEvaluatedAt: Instant.parse("2026-02-28T00:00:00.000Z"),
+          jobSettlementAuthoritativeSlotSet: {
+            ...permittedContext.jobSettlementAuthoritativeSlotSet,
+            slotSnapshots: [
+              {
+                ...permittedContext.jobSettlementAuthoritativeSlotSet
+                  .slotSnapshots[0],
+                resolvedClaimId: "claim-1",
+                resolvedClaimStatus: "resolved_refund",
+                resolvedClaimSlotId: "slot-1",
+                resolvedClaimShipmentId: "shipment-1",
+                resolvedClaimOrderId: "order-1",
+                resolvedClaimPhaseId: "phase-1",
+                resolvedClaimPreviousActiveClaimId: "claim-1",
+                resolvedClaimTargetActiveClaimId: null,
+              },
+              {
+                ...permittedContext.jobSettlementAuthoritativeSlotSet
+                  .slotSnapshots[1],
+                claimUntil: Instant.parse("2026-02-27T00:00:00.000Z"),
+              },
+            ],
+          },
           jobSettlementSlots: [
             {
               ...permittedContext.jobSettlementSlots[0],
@@ -19224,6 +19464,10 @@ describe("v0 lifecycle policy tables", () => {
               resolvedClaimPhaseId: "phase-1",
               resolvedClaimPreviousActiveClaimId: "claim-1",
               resolvedClaimTargetActiveClaimId: null,
+            },
+            {
+              ...permittedContext.jobSettlementSlots[1],
+              claimUntil: Instant.parse("2026-02-27T00:00:00.000Z"),
             },
           ],
         },
@@ -19242,26 +19486,48 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)(
     "rejects Job settlement with foreign resolved Claim field %s",
     (field, value) => {
+      const context = contextForTransition("settled", "handed_over");
+      const resolvedClaim = {
+        resolvedClaimId: "claim-1",
+        resolvedClaimStatus: "resolved_refund",
+        resolvedClaimSlotId: "slot-1",
+        resolvedClaimShipmentId: "shipment-1",
+        resolvedClaimOrderId: "order-1",
+        resolvedClaimPhaseId: "phase-1",
+        resolvedClaimPreviousActiveClaimId: "claim-1",
+        resolvedClaimTargetActiveClaimId: null,
+      } as const;
       expect(() =>
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "handed_over", "settled"),
           current: "handed_over",
           target: "settled",
           idempotencyKey: `job-settlement-foreign-claim-${field}`,
           context: {
-            ...contextForTransition("settled", "handed_over"),
+            ...context,
             jobSettlementEvaluatedAt: Instant.parse("2026-02-28T00:00:00.000Z"),
+            jobSettlementAuthoritativeSlotSet: {
+              ...context.jobSettlementAuthoritativeSlotSet,
+              slotSnapshots: [
+                {
+                  ...context.jobSettlementAuthoritativeSlotSet.slotSnapshots[0],
+                  ...resolvedClaim,
+                },
+                {
+                  ...context.jobSettlementAuthoritativeSlotSet.slotSnapshots[1],
+                  claimUntil: Instant.parse("2026-02-27T00:00:00.000Z"),
+                },
+              ],
+            },
             jobSettlementSlots: [
               {
-                ...permittedContext.jobSettlementSlots[0],
-                resolvedClaimId: "claim-1",
-                resolvedClaimStatus: "resolved_refund",
-                resolvedClaimSlotId: "slot-1",
-                resolvedClaimShipmentId: "shipment-1",
-                resolvedClaimOrderId: "order-1",
-                resolvedClaimPhaseId: "phase-1",
-                resolvedClaimPreviousActiveClaimId: "claim-1",
-                resolvedClaimTargetActiveClaimId: null,
+                ...context.jobSettlementSlots[0],
+                ...resolvedClaim,
                 [field]: value,
+              },
+              {
+                ...context.jobSettlementSlots[1],
+                claimUntil: Instant.parse("2026-02-27T00:00:00.000Z"),
               },
             ],
           },
@@ -19318,17 +19584,52 @@ describe("v0 lifecycle policy tables", () => {
   it("rejects incomplete Shipment incident routing", () => {
     const firstRoute = permittedContext.shipmentIncidentSlotRoutes[0];
     const secondRoute = permittedContext.shipmentIncidentSlotRoutes[1];
+    const firstOwnership = permittedContext.shipmentIncidentSlotOwnerships[0];
+    const firstOwnershipSource =
+      permittedContext.shipmentIncidentAuthoritativeSlotSet
+        .slotOwnershipSources[0];
     const sparseRoutes = [firstRoute] as Array<typeof firstRoute | undefined>;
     sparseRoutes.length = 2;
     const invalidContexts = [
       { incidentShipmentId: "another-shipment" },
       { incidentOrderId: "another-order" },
       { incidentPhaseId: "another-phase" },
+      { shipmentIncidentExpectedSlotSetId: "shipment-slot-set-2" },
+      { shipmentIncidentAuthoritativeSlotSetId: "shipment-slot-set-2" },
+      {
+        shipmentIncidentAuthoritativeSlotSetResultId:
+          "shipment-slot-set-result-2",
+      },
+      { shipmentIncidentRoutingResultId: "shipment-result-2" },
+      { shipmentIncidentShipmentResultId: "shipment-result-2" },
+      { shipmentIncidentRouteResultId: "shipment-result-2" },
       { shipmentFulfilmentSlotIds: [] },
       { shipmentFulfilmentSlotIds: ["slot-1", "slot-1"] },
       { incidentAffectedSlotIds: ["slot-1"] },
       { incidentAffectedSlotIds: ["slot-1", "foreign-slot"] },
       { shipmentIncidentSlotOwnerships: [] },
+      {
+        shipmentIncidentSlotOwnerships: [
+          { ...firstOwnership, sourceResultId: "stale-slot-result" },
+          permittedContext.shipmentIncidentSlotOwnerships[1],
+        ],
+      },
+      {
+        shipmentIncidentAuthoritativeSlotSet: {
+          ...permittedContext.shipmentIncidentAuthoritativeSlotSet,
+          immutable: false,
+        },
+      },
+      {
+        shipmentIncidentAuthoritativeSlotSet: {
+          ...permittedContext.shipmentIncidentAuthoritativeSlotSet,
+          slotOwnershipSources: [
+            { ...firstOwnershipSource, resultId: "stale-slot-result" },
+            permittedContext.shipmentIncidentAuthoritativeSlotSet
+              .slotOwnershipSources[1],
+          ],
+        },
+      },
       {
         shipmentIncidentSlotOwnerships: [
           { slotId: "slot-1", activeClaimId: null },
@@ -19432,9 +19733,21 @@ describe("v0 lifecycle policy tables", () => {
         ],
       },
       {
+        shipmentIncidentSlotRoutes: [
+          { ...firstRoute, resultId: "shipment-result-2" },
+          secondRoute,
+        ],
+      },
+      {
         shipmentIncidentNewClaim: {
           ...permittedContext.shipmentIncidentNewClaim,
           status: "opened",
+        },
+      },
+      {
+        shipmentIncidentNewClaim: {
+          ...permittedContext.shipmentIncidentNewClaim,
+          resultId: "shipment-result-2",
         },
       },
     ];
@@ -19442,6 +19755,7 @@ describe("v0 lifecycle policy tables", () => {
       for (const [index, invalidContext] of invalidContexts.entries()) {
         expect(() =>
           transition(shipmentPolicy, {
+            ...commandAnchors(shipmentPolicy, "in_transit", target),
             current: "in_transit",
             target,
             idempotencyKey: `shipment-incident-${target}-${index}`,
@@ -19455,10 +19769,184 @@ describe("v0 lifecycle policy tables", () => {
     }
   });
 
+  it.each([
+    ["missing ownership ID", { ownershipSnapshotId: undefined }],
+    [
+      "foreign ownership ID",
+      { ownershipSnapshotId: "shipment-incident-slot-set-2" },
+    ],
+    ["missing ownership result", { ownershipSnapshotResultId: undefined }],
+    [
+      "foreign ownership result",
+      { ownershipSnapshotResultId: "shipment-incident-slot-set-result-2" },
+    ],
+  ] as const)(
+    "rejects Shipment incident routing with %s",
+    (_case, mutation) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "in_transit", "lost"),
+          ...mutation,
+          current: "in_transit",
+          target: "lost",
+          idempotencyKey: `shipment-incident-${_case}`,
+          context: contextForTransition("lost", "in_transit"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each(["lost", "returned"] as const)(
+    "routes a reordered complete Shipment slot set to %s",
+    (target) => {
+      const context = contextForTransition(target, "in_transit");
+      expect(
+        transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "in_transit", target),
+          current: "in_transit",
+          target,
+          idempotencyKey: `shipment-incident-reordered-${target}`,
+          context: {
+            ...context,
+            shipmentFulfilmentSlotIds: [
+              ...context.shipmentFulfilmentSlotIds,
+            ].reverse(),
+            incidentAffectedSlotIds: [
+              ...context.incidentAffectedSlotIds,
+            ].reverse(),
+            shipmentIncidentSlotOwnerships: [
+              ...context.shipmentIncidentSlotOwnerships,
+            ].reverse(),
+            shipmentIncidentSlotRoutes: [
+              ...context.shipmentIncidentSlotRoutes,
+            ].reverse(),
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "in_transit", current: target });
+    },
+  );
+
+  it("rejects a coordinated caller-supplied Shipment incident subset", () => {
+    const context = contextForTransition("lost", "in_transit");
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "in_transit", "lost"),
+        current: "in_transit",
+        target: "lost",
+        idempotencyKey: "shipment-incident-caller-subset",
+        context: {
+          ...context,
+          shipmentFulfilmentSlotIds: ["slot-1"],
+          incidentAffectedSlotIds: ["slot-1"],
+          shipmentIncidentSlotOwnerships: [
+            context.shipmentIncidentSlotOwnerships[0],
+          ],
+          shipmentIncidentSlotRoutes: [context.shipmentIncidentSlotRoutes[0]],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each(["lost", "returned"] as const)(
+    "rejects %s incident routes coordinated onto a foreign origin Claim",
+    (target) => {
+      const context = contextForTransition(target, "in_transit");
+      expect(() =>
+        transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "in_transit", target),
+          current: "in_transit",
+          target,
+          idempotencyKey: `shipment-incident-foreign-origin-${target}`,
+          context: {
+            ...context,
+            shipmentOriginClaimId: "foreign-claim",
+            shipmentIncidentNewClaim: null,
+            shipmentIncidentSlotRoutes: context.shipmentIncidentSlotRoutes.map(
+              (route) => ({
+                ...route,
+                routedClaimId: "foreign-claim",
+                incidentRecordClaimId: "foreign-claim",
+                childResolutionClaimId: "foreign-claim",
+                createdNewClaim: false,
+              }),
+            ),
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated alternate Shipment incident slot subset", () => {
+    const context = contextForTransition("lost", "in_transit");
+    const source =
+      context.shipmentIncidentAuthoritativeSlotSet.slotOwnershipSources[0];
+    const ownership = context.shipmentIncidentSlotOwnerships[0];
+    const route = context.shipmentIncidentSlotRoutes[0];
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "in_transit", "lost"),
+        current: "in_transit",
+        target: "lost",
+        idempotencyKey: "shipment-incident-coordinated-slot-set-b",
+        context: {
+          ...context,
+          shipmentIncidentExpectedSlotSetId: "shipment-incident-slot-set-2",
+          shipmentIncidentAuthoritativeSlotSetId:
+            "shipment-incident-slot-set-2",
+          shipmentIncidentAuthoritativeSlotSetResultId:
+            "shipment-incident-slot-set-result-2",
+          shipmentProviderOutcomeExpectedShipment: {
+            ...context.shipmentProviderOutcomeExpectedShipment,
+            incidentSlotSetId: "shipment-incident-slot-set-2",
+            incidentSlotSetResultId: "shipment-incident-slot-set-result-2",
+          },
+          shipmentIncidentAuthoritativeSlotSet: {
+            ...context.shipmentIncidentAuthoritativeSlotSet,
+            id: "shipment-incident-slot-set-2",
+            resultId: "shipment-incident-slot-set-result-2",
+            slotIds: ["slot-3"],
+            slotOwnershipSources: [
+              {
+                ...source,
+                slotId: "slot-3",
+                slotSetId: "shipment-incident-slot-set-2",
+                resultId: "shipment-slot-result-3",
+                currentStateCommandKey: "shipment-slot-command-3",
+              },
+            ],
+          },
+          shipmentFulfilmentSlotIds: ["slot-3"],
+          incidentAffectedSlotIds: ["slot-3"],
+          shipmentIncidentSlotOwnerships: [
+            {
+              ...ownership,
+              slotId: "slot-3",
+              slotSetId: "shipment-incident-slot-set-2",
+              sourceResultId: "shipment-slot-result-3",
+              sourceCurrentStateCommandKey: "shipment-slot-command-3",
+            },
+          ],
+          shipmentIncidentSlotRoutes: [
+            {
+              ...route,
+              slotId: "slot-3",
+              incidentRecordSlotId: "slot-3",
+              childResolutionSlotId: "slot-3",
+              slotSetId: "shipment-incident-slot-set-2",
+              sourceResultId: "shipment-slot-result-3",
+              sourceCurrentStateCommandKey: "shipment-slot-command-3",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it.each(["existing owners", "mixed ownership", "origin Claim"] as const)(
     "routes a Shipment incident across %s",
     (ownership) => {
-      const baseRoutes = permittedContext.shipmentIncidentSlotRoutes;
+      const baseContext = contextForTransition("lost", "in_transit");
+      const baseRoutes = baseContext.shipmentIncidentSlotRoutes;
       const existingRoute = {
         ...baseRoutes[0],
         ownerClaimId: "existing-claim-1",
@@ -19470,8 +19958,16 @@ describe("v0 lifecycle policy tables", () => {
       const context =
         ownership === "origin Claim"
           ? {
-              ...contextForTransition("lost", "in_transit"),
+              ...baseContext,
               shipmentOriginClaimId: "origin-claim-1",
+              shipmentProviderOutcomeExpectedShipment: {
+                ...baseContext.shipmentProviderOutcomeExpectedShipment,
+                incidentOriginClaimId: "origin-claim-1",
+              },
+              shipmentIncidentAuthoritativeSlotSet: {
+                ...baseContext.shipmentIncidentAuthoritativeSlotSet,
+                originClaimId: "origin-claim-1",
+              },
               shipmentIncidentNewClaim: null,
               shipmentIncidentSlotRoutes: baseRoutes.map((route) => ({
                 ...route,
@@ -19482,7 +19978,7 @@ describe("v0 lifecycle policy tables", () => {
               })),
             }
           : {
-              ...contextForTransition("lost", "in_transit"),
+              ...baseContext,
               shipmentIncidentNewClaim:
                 ownership === "existing owners"
                   ? null
@@ -19490,13 +19986,37 @@ describe("v0 lifecycle policy tables", () => {
               shipmentIncidentSlotOwnerships:
                 ownership === "existing owners"
                   ? [
-                      { slotId: "slot-1", activeClaimId: "existing-claim-1" },
-                      { slotId: "slot-2", activeClaimId: "existing-claim-2" },
+                      {
+                        ...baseContext.shipmentIncidentSlotOwnerships[0],
+                        activeClaimId: "existing-claim-1",
+                      },
+                      {
+                        ...baseContext.shipmentIncidentSlotOwnerships[1],
+                        activeClaimId: "existing-claim-2",
+                      },
                     ]
                   : [
-                      { slotId: "slot-1", activeClaimId: "existing-claim-1" },
-                      { slotId: "slot-2", activeClaimId: null },
+                      {
+                        ...baseContext.shipmentIncidentSlotOwnerships[0],
+                        activeClaimId: "existing-claim-1",
+                      },
+                      baseContext.shipmentIncidentSlotOwnerships[1],
                     ],
+              shipmentIncidentAuthoritativeSlotSet: {
+                ...baseContext.shipmentIncidentAuthoritativeSlotSet,
+                slotOwnershipSources:
+                  baseContext.shipmentIncidentAuthoritativeSlotSet.slotOwnershipSources.map(
+                    (source, index) => ({
+                      ...source,
+                      activeClaimId:
+                        index === 0
+                          ? "existing-claim-1"
+                          : ownership === "existing owners"
+                            ? "existing-claim-2"
+                            : null,
+                    }),
+                  ),
+              },
               shipmentIncidentSlotRoutes:
                 ownership === "existing owners"
                   ? [
@@ -24031,6 +24551,186 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it.each([
+    ["missing ownership ID", { ownershipSnapshotId: undefined }],
+    ["foreign ownership ID", { ownershipSnapshotId: "job-slot-set-2" }],
+    ["missing ownership result", { ownershipSnapshotResultId: undefined }],
+    [
+      "foreign ownership result",
+      { ownershipSnapshotResultId: "job-slot-set-result-2" },
+    ],
+  ] as const)("rejects Job settlement with %s", (_case, mutation) => {
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "handed_over", "settled"),
+        ...mutation,
+        current: "handed_over",
+        target: "settled",
+        idempotencyKey: `job-settlement-${_case}`,
+        context: contextForTransition("settled", "handed_over"),
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("settles a multi-slot Job with reordered authoritative projections", () => {
+    const context = contextForTransition("settled", "handed_over");
+    expect(
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "handed_over", "settled"),
+        current: "handed_over",
+        target: "settled",
+        idempotencyKey: "job-settlement-reordered-slots",
+        context: {
+          ...context,
+          expectedJobSettlementSlotIds: [
+            ...context.expectedJobSettlementSlotIds,
+          ].reverse(),
+          jobSettlementSlots: [...context.jobSettlementSlots].reverse(),
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "handed_over", current: "settled" });
+  });
+
+  it("rejects a coordinated caller-supplied Job settlement subset", () => {
+    const context = contextForTransition("settled", "handed_over");
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "handed_over", "settled"),
+        current: "handed_over",
+        target: "settled",
+        idempotencyKey: "job-settlement-caller-subset",
+        context: {
+          ...context,
+          expectedJobSettlementSlotIds: ["slot-1"],
+          jobSettlementSlots: [context.jobSettlementSlots[0]],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["slotSetId", "job-settlement-slot-set-2"],
+    ["status", "returned"],
+    ["resultId", "job-settlement-result-2"],
+    ["currentStateCommandKey", "stale-slot-command"],
+    ["immutable", false],
+  ] as const)(
+    "rejects Job settlement with relabelled projected slot %s",
+    (field, value) => {
+      const context = contextForTransition("settled", "handed_over");
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "handed_over", "settled"),
+          current: "handed_over",
+          target: "settled",
+          idempotencyKey: `job-settlement-projected-${field}`,
+          context: {
+            ...context,
+            jobSettlementSlots: [
+              { ...context.jobSettlementSlots[0], [field]: value },
+              context.jobSettlementSlots[1],
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["jobSettlementExpectedSlotSetId", "job-slot-set-2"],
+    ["jobSettlementAuthoritativeSlotSetId", "job-slot-set-2"],
+    ["jobSettlementAuthoritativeSlotSetResultId", "job-slot-set-result-2"],
+  ] as const)("rejects Job settlement with foreign %s", (field, value) => {
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "handed_over", "settled"),
+        current: "handed_over",
+        target: "settled",
+        idempotencyKey: `job-settlement-${field}`,
+        context: {
+          ...contextForTransition("settled", "handed_over"),
+          [field]: value,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["immutable", false],
+    ["previousJobResultId", "stale-job-result"],
+    ["currentStateCommandKey", "stale-job-command"],
+  ] as const)(
+    "rejects Job settlement with invalid authoritative slot set %s",
+    (field, value) => {
+      const context = contextForTransition("settled", "handed_over");
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "handed_over", "settled"),
+          current: "handed_over",
+          target: "settled",
+          idempotencyKey: `job-settlement-authoritative-${field}`,
+          context: {
+            ...context,
+            jobSettlementAuthoritativeSlotSet: {
+              ...context.jobSettlementAuthoritativeSlotSet,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated alternate Job settlement slot set", () => {
+    const context = contextForTransition("settled", "handed_over");
+    const source = context.jobSettlementAuthoritativeSlotSet.slotSnapshots[0];
+    const projection = context.jobSettlementSlots[0];
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "handed_over", "settled"),
+        current: "handed_over",
+        target: "settled",
+        idempotencyKey: "job-settlement-coordinated-slot-set-b",
+        context: {
+          ...context,
+          jobSettlementExpectedSlotSetId: "job-settlement-slot-set-2",
+          jobSettlementAuthoritativeSlotSetId: "job-settlement-slot-set-2",
+          jobSettlementAuthoritativeSlotSetResultId:
+            "job-settlement-slot-set-result-2",
+          jobSettlementExpectedJob: {
+            ...context.jobSettlementExpectedJob,
+            slotSetId: "job-settlement-slot-set-2",
+            slotSetResultId: "job-settlement-slot-set-result-2",
+          },
+          jobSettlementAuthoritativeSlotSet: {
+            ...context.jobSettlementAuthoritativeSlotSet,
+            id: "job-settlement-slot-set-2",
+            resultId: "job-settlement-slot-set-result-2",
+            slotIds: ["slot-3"],
+            slotSnapshots: [
+              {
+                ...source,
+                id: "slot-3",
+                slotSetId: "job-settlement-slot-set-2",
+                resultId: "slot-delivered-result-3",
+                currentStateCommandKey: "slot-delivered-command-3",
+              },
+            ],
+          },
+          expectedJobSettlementSlotIds: ["slot-3"],
+          jobSettlementSlots: [
+            {
+              ...projection,
+              id: "slot-3",
+              sourceResultId: "slot-delivered-result-3",
+              sourceCurrentStateCommandKey: "slot-delivered-command-3",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it.each([undefined, "  ", "job-handed_over-result-2"] as const)(
     "rejects Job settlement with a mismatched command result (%s)",
     (currentStateResultId) => {
@@ -24056,6 +24756,8 @@ describe("v0 lifecycle policy tables", () => {
     ["resultId", "another-result"],
     ["currentStateCommandKey", "another-command"],
     ["currentLineageLeaf", false],
+    ["slotSetId", "job-settlement-slot-set-2"],
+    ["slotSetResultId", "job-settlement-slot-set-result-2"],
     ["immutable", false],
   ] as const)(
     "rejects Job settlement with mismatched expected Job %s",
