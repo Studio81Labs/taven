@@ -1,0 +1,154 @@
+# ADR 0004: Enforce persistence invariants in PostgreSQL
+
+- **Status:** accepted
+- **Date:** 2026-08-27
+
+## Context
+
+Issue #15 establishes the persistence foundation for immutable slicing inputs,
+source-file retention, and resource reservations. These records are written by
+different backend commands and workers, so application validation alone cannot
+protect them from concurrent writers or a future adapter. The database must
+reject ambiguous revision references, invalid source lineage, cross-node
+references, oversubscribed inventory, overlapping machine reservations, and
+incomplete reservation sets at commit time.
+
+Prisma remains the schema and client boundary. Prisma migrations, including
+their hand-written PostgreSQL SQL, are the source of truth for extensions,
+indexes, triggers, and constraint timing. Generated Prisma schema and types do
+not replace reviewed migration SQL. Phase, Job, and Shipment identifiers are
+opaque UUIDs in this foundation; their domain relationships and lifecycle
+rules are deferred to issue #16.
+
+## Decision
+
+Use PostgreSQL declarative constraints, indexes, and narrowly scoped triggers
+as the final persistence boundary. Backend commands still use the transaction
+and lock protocol from ADR 0003, but a transaction cannot commit when one of
+the following invariants is violated.
+
+### Global revision identity
+
+Maintain one immutable registry of globally unique revision IDs. The registry
+is used only by `PrintConfigRevision`, `ReferenceProfile`, `MachineProfile`,
+and `MachineCalibration`. Each revision table uses its revision ID as a
+primary/foreign key to the registry, and an insert trigger verifies the
+registry's family discriminator. A revision ID therefore cannot collide with
+a local version number in another table or be interpreted as a different
+revision family.
+
+Revision identities and payloads are insert-only. A database trigger rejects
+payload updates and deletes, including writes made outside the application.
+Profiles and calibrations may move only forward through their explicit
+draft/active/retired lifecycle while their content stays unchanged. The
+revision payload and identity remain stable for cache keys, estimates, plans,
+and production input snapshots.
+
+### Source lineage and retention deadlines
+
+`ModelGeometry` must reference its source `ModelFile`; the foreign key is
+required and cannot be replaced by a hash-only association. Source-derived
+records carry the source-file identity needed to enforce the same lineage.
+Row checks require an upload timestamp and a deletion deadline, with the
+deadline no earlier than the upload/creation instant. An upload cannot become
+persisted without its initial deadline.
+
+Deadline extensions and retention holds are monotonic: a valid quote/order
+hold or legal hold may extend the deadline, but a write cannot shorten it,
+clear required source lineage, or remove the deadline. Cleanup is an
+outbox-driven backend side effect; the database remains authoritative for the
+deadline and hold state. Object deletion therefore cannot be justified by a
+stale deadline copied by a worker.
+
+### Node scope and declarative constraints
+
+Operational resource records always carry `node_id`, and inventory is also
+scoped to its concrete machine. Composite foreign keys include `node_id` (and
+`machine_id` for machine inventory), proving that a candidate estimate,
+inventory reservation, capacity reservation, production reservation, or
+related resource belongs to the same node and physical machine. A missing
+node scope is invalid; it never means “all nodes”.
+
+Use `CHECK` constraints for row-local facts such as non-negative quantities,
+positive durations, valid interval bounds, and required/forbidden nullable
+columns. Use partial unique indexes for active planned keys and other
+conditional cardinality rules while retaining historical rows. Phase, Job,
+and Shipment IDs are intentionally treated as opaque UUID foreign-key targets
+until issue #16 defines their domain topology.
+
+### Inventory and capacity
+
+Inventory reservations are node-scoped, reference a concrete inventory bucket,
+and store non-negative required milligrams. A reservation trigger locks the
+affected `Inventory` row and atomically updates
+`Inventory.reserved_milligrams` when a reservation is created, changed, or
+released. The trigger rejects an operation when the resulting reserved amount
+would exceed available stock. The maintained counter, rather than a deferred
+aggregate `SUM`, is the invariant used for concurrency-safe anti-
+oversubscription; reservation state transitions and the counter update happen
+in the same transaction.
+
+Capacity reservations are node- and machine-scoped and store a non-empty,
+half-open time interval. Install PostgreSQL's `btree_gist` extension and use a
+GiST exclusion constraint on machine identity and the interval for active
+reservations. PostgreSQL consequently rejects overlapping reservations for the
+same machine while allowing disjoint intervals and different machines. Checks
+reject reversed or empty ranges; released historical reservations are excluded
+by the active-state predicate.
+
+### Complete reservation sets
+
+`PhaseReservationSet` is the atomic resource hold for an eligible plan.
+Each planned job has a stable `planned_job_key`, a candidate estimate, and one
+or more normalized fulfilment-slot rows. The candidate stores the exact
+profile, calibration, config, machine inventory, and immutable plate-interval
+snapshots. Production, inventory, and one-or-more capacity reservation rows
+copy and protect those selections. Composite foreign keys prove set, plan,
+machine, and node ownership; unique indexes allow each planned key and slot
+only once within its scope, and a partial unique index allows only one active
+reservation set per plan.
+
+A deferred constraint trigger compares the reservation children with the
+authoritative plan. Every required planned key must have exactly one complete
+production/inventory reservation and a matching active capacity reservation
+for every candidate plate interval; every required fulfilment slot must be
+assigned exactly once, and no extra key or interval is allowed. Plan and
+candidate-interval membership freeze when reservation/planning begins. The set
+cannot become held or active while that comparison fails. Deferral permits one
+confirming transaction to insert the set and all children together; it does
+not make a partial set valid across transactions.
+
+### Immutable inputs and snapshots
+
+The following payloads are immutable once persisted: the four revision
+families, source and geometry inputs, candidate resource estimates, and phase
+resource plans. Their hashes, selected revision IDs, and resource facts are
+protected by immutable-row triggers. Corrections create a new revision,
+estimate, or plan and preserve the old row for auditability. Retention
+deadlines/holds, profile lifecycle state, reservation status, and other
+explicitly operational fields remain mutable only where the model defines
+them as such; immutability is not an application convention.
+
+Triggers are kept narrow. Checks, foreign keys, partial unique indexes, and
+the GiST exclusion constraint remain preferred for facts they can express
+declaratively. Every trigger function, extension, non-default index, and
+deferrable constraint is versioned in migration SQL and tested with concurrent
+transactions.
+
+## Consequences
+
+The commit boundary rejects ambiguous revision identities, broken model-source
+lineage, missing upload deadlines, cross-node resource references,
+oversubscribed inventory, overlapping machine intervals, incomplete phase
+reservation sets, and rewritten immutable inputs. The maintained inventory
+counter gives a direct and lockable anti-oversubscription invariant, while
+GiST exclusion provides a database-native machine calendar guarantee.
+
+The tradeoff is PostgreSQL-specific migration complexity. Prisma
+introspection and generated clients may not expose every trigger, partial
+index, extension, or exclusion constraint, and some errors surface at commit
+because reservation completeness is deferred. The backend must preserve lock
+ordering and make cleanup/outbox effects retry-safe. Those costs are accepted
+because application-only checks cannot reliably protect finite inventory,
+machine time, or immutable production inputs under concurrent and future
+writers.
