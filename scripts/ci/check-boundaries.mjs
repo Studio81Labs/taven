@@ -613,6 +613,7 @@ function importSpecifiers(source, file) {
         token.escaped !== true &&
         token.value === "import" &&
         previous?.value !== "." &&
+        previous?.value !== "#" &&
         next?.value !== "."
       ) {
         const dynamic =
@@ -632,7 +633,8 @@ function importSpecifiers(source, file) {
         token.kind === "identifier" &&
         token.value === "require" &&
         previous?.value !== "." &&
-        previous?.value !== "?."
+        previous?.value !== "?." &&
+        previous?.value !== "#"
       ) {
         const callIndex =
           next?.value === "("

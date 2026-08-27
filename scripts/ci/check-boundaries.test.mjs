@@ -141,6 +141,7 @@ describe("checkBoundaries", () => {
           'adapter?.require?.("@prisma/optional-chain-member");',
           'adapter.\\u0072equire("@prisma/escaped-member");',
           'adapter?.\\u0072equire?.("@prisma/escaped-optional-member");',
+          'class PrivateLoader { #require() {} #import() {} load() { this.#require("@prisma/private-member"); this . #require /* comment */ ?. ("@prisma/private-optional-member"); this.#import("@prisma/private-import-member"); this.#\\u0072equire("@prisma/private-escaped-member"); } }',
           'void requ\\u{ZZ}ire("@prisma/invalid-escape");',
           'void \\u0069mport("@prisma/escaped-import-keyword");',
           '\\u0065xport {} from "@prisma/escaped-export-keyword";',
