@@ -937,6 +937,44 @@ const permittedContext = {
   qcApprovalVerified: true,
   qcRejectionVerified: true,
   qcPhotoAssetId: "qc-photo-1",
+  qcPhotoSubmissionResultId: "photo-submission-result-1",
+  qcPhotoSubmissionPrintedJobResultId: "job-printing-result-1",
+  qcPhotoSubmissionPrintedStateCommandKey: "job-printing-command-1",
+  qcPhotoRetentionDeadlineAt: Instant.parse("2026-03-01T00:00:00.000Z"),
+  qcPhotoSubmissionJobId: "job-1",
+  qcPhotoSubmissionOrderId: "order-1",
+  qcPhotoSubmissionPhaseId: "phase-1",
+  qcPhotoSubmissionReservationId: "production-reservation-1",
+  qcPhotoSubmissionPhotoAssetId: "qc-photo-1",
+  qcPhotoSubmissionJobPreviousStatus: "printed",
+  qcPhotoSubmissionJobTargetStatus: "photo_submitted",
+  qcPhotoSubmissionExpectedJob: {
+    id: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    status: "printed",
+    resultId: "job-printing-result-1",
+    currentStateCommandKey: "job-printing-command-1",
+    immutable: true,
+  },
+  qcPhotoSubmissionPhotoAsset: {
+    id: "qc-photo-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    previousStatus: "pending",
+    targetStatus: "stored",
+    retentionDeadlineAt: Instant.parse("2026-03-01T00:00:00.000Z"),
+    resultId: "photo-submission-result-1",
+    submissionResultId: "photo-submission-result-1",
+    immutable: true,
+  },
+  qcPhotoSubmissionJobResultId: "photo-submission-result-1",
+  qcPhotoSubmissionPhotoAssetResultId: "photo-submission-result-1",
+  qcPhotoSubmissionRetentionResultId: "photo-submission-result-1",
+  qcPhotoSubmissionCompleted: true,
+  qcPhotoSubmissionAtomic: true,
   qcDecisionReviewerId: "reviewer-1",
   qcDecisionId: "qc-decision-1",
   qcDecisionResultId: "qc-decision-result-1",
@@ -2334,6 +2372,16 @@ function commandAnchors(
     return {
       aggregateId: "job-1",
       currentStateCommandKey: "job-acceptance-command-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
+    current === "printed" &&
+    target === "photo_submitted"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-printing-command-1",
     };
   }
   if (
@@ -11812,6 +11860,168 @@ describe("v0 lifecycle policy tables", () => {
     ["phaseId", "another-phase"],
     ["productionReservationId", "another-reservation"],
     ["qcPhotoAssetId", "another-photo"],
+    ["qcPhotoSubmissionResultId", " "],
+    ["qcPhotoSubmissionPrintedJobResultId", "another-result"],
+    ["qcPhotoSubmissionPrintedStateCommandKey", "another-command"],
+    ["qcPhotoRetentionDeadlineAt", "not-an-instant"],
+    ["qcPhotoSubmissionJobId", "another-job"],
+    ["qcPhotoSubmissionOrderId", "another-order"],
+    ["qcPhotoSubmissionPhaseId", "another-phase"],
+    ["qcPhotoSubmissionReservationId", "another-reservation"],
+    ["qcPhotoSubmissionPhotoAssetId", "another-photo"],
+    ["qcPhotoSubmissionJobPreviousStatus", "printing"],
+    ["qcPhotoSubmissionJobTargetStatus", "qc_approved"],
+    ["qcPhotoSubmissionJobResultId", "another-result"],
+    ["qcPhotoSubmissionPhotoAssetResultId", "another-result"],
+    ["qcPhotoSubmissionRetentionResultId", "another-result"],
+    ["qcPhotoSubmissionCompleted", false],
+    ["qcPhotoSubmissionAtomic", false],
+  ] as const)("rejects QC photo submission with invalid %s", (field, value) => {
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-printing-command-1",
+        current: "printed",
+        target: "photo_submitted",
+        idempotencyKey: `qc-photo-submission-${field}`,
+        context: {
+          ...contextForTransition("photo_submitted", "printed"),
+          [field]: value,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["qcPhotoSubmissionExpectedJob", "id", "another-job"],
+    ["qcPhotoSubmissionExpectedJob", "orderId", "another-order"],
+    ["qcPhotoSubmissionExpectedJob", "phaseId", "another-phase"],
+    [
+      "qcPhotoSubmissionExpectedJob",
+      "productionReservationId",
+      "another-reservation",
+    ],
+    ["qcPhotoSubmissionExpectedJob", "status", "printing"],
+    ["qcPhotoSubmissionExpectedJob", "resultId", "another-result"],
+    [
+      "qcPhotoSubmissionExpectedJob",
+      "currentStateCommandKey",
+      "another-command",
+    ],
+    ["qcPhotoSubmissionExpectedJob", "immutable", false],
+    ["qcPhotoSubmissionPhotoAsset", "id", "another-photo"],
+    ["qcPhotoSubmissionPhotoAsset", "jobId", "another-job"],
+    ["qcPhotoSubmissionPhotoAsset", "orderId", "another-order"],
+    ["qcPhotoSubmissionPhotoAsset", "phaseId", "another-phase"],
+    ["qcPhotoSubmissionPhotoAsset", "previousStatus", "stored"],
+    ["qcPhotoSubmissionPhotoAsset", "targetStatus", "pending"],
+    [
+      "qcPhotoSubmissionPhotoAsset",
+      "retentionDeadlineAt",
+      Instant.parse("2026-04-01T00:00:00.000Z"),
+    ],
+    ["qcPhotoSubmissionPhotoAsset", "resultId", "another-result"],
+    ["qcPhotoSubmissionPhotoAsset", "submissionResultId", "another-result"],
+    ["qcPhotoSubmissionPhotoAsset", "immutable", false],
+  ] as const)(
+    "rejects QC photo submission with invalid %s.%s",
+    (recordName, field, value) => {
+      const context = contextForTransition("photo_submitted", "printed");
+      const evidence = context[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-printing-command-1",
+          current: "printed",
+          target: "photo_submitted",
+          idempotencyKey: `qc-photo-submission-${recordName}-${field}`,
+          context: {
+            ...context,
+            [recordName]: { ...evidence, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign QC photo submission", () => {
+    const context = contextForTransition("photo_submitted", "printed");
+    const foreignDeadline = Instant.parse("2026-04-01T00:00:00.000Z");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-printing-command-1",
+        current: "printed",
+        target: "photo_submitted",
+        idempotencyKey: "qc-photo-submission-foreign-substitution",
+        context: {
+          ...context,
+          jobId: "foreign-job",
+          orderId: "foreign-order",
+          phaseId: "foreign-phase",
+          productionReservationId: "foreign-reservation",
+          qcPhotoAssetId: "foreign-photo",
+          qcPhotoSubmissionResultId: "foreign-submission-result",
+          qcPhotoSubmissionPrintedJobResultId: "foreign-print-result",
+          qcPhotoSubmissionPrintedStateCommandKey: "foreign-print-command",
+          qcPhotoRetentionDeadlineAt: foreignDeadline,
+          qcPhotoSubmissionJobId: "foreign-job",
+          qcPhotoSubmissionOrderId: "foreign-order",
+          qcPhotoSubmissionPhaseId: "foreign-phase",
+          qcPhotoSubmissionReservationId: "foreign-reservation",
+          qcPhotoSubmissionPhotoAssetId: "foreign-photo",
+          qcPhotoSubmissionExpectedJob: {
+            ...context.qcPhotoSubmissionExpectedJob,
+            id: "foreign-job",
+            orderId: "foreign-order",
+            phaseId: "foreign-phase",
+            productionReservationId: "foreign-reservation",
+            resultId: "foreign-print-result",
+            currentStateCommandKey: "foreign-print-command",
+          },
+          qcPhotoSubmissionPhotoAsset: {
+            ...context.qcPhotoSubmissionPhotoAsset,
+            id: "foreign-photo",
+            jobId: "foreign-job",
+            orderId: "foreign-order",
+            phaseId: "foreign-phase",
+            retentionDeadlineAt: foreignDeadline,
+            resultId: "foreign-submission-result",
+            submissionResultId: "foreign-submission-result",
+          },
+          qcPhotoSubmissionJobResultId: "foreign-submission-result",
+          qcPhotoSubmissionPhotoAssetResultId: "foreign-submission-result",
+          qcPhotoSubmissionRetentionResultId: "foreign-submission-result",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["another-job", "job-printing-command-1"],
+    ["job-1", "another-command"],
+  ] as const)(
+    "rejects QC photo submission outside its aggregate/current-state anchor (%s, %s)",
+    (aggregateId, currentStateCommandKey) => {
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId,
+          currentStateCommandKey,
+          current: "printed",
+          target: "photo_submitted",
+          idempotencyKey: `qc-photo-submission-command-anchor-${aggregateId}-${currentStateCommandKey}`,
+          context: contextForTransition("photo_submitted", "printed"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["jobId", "another-job"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
+    ["productionReservationId", "another-reservation"],
+    ["qcPhotoAssetId", "another-photo"],
     ["qcDecisionReviewerId", "another-reviewer"],
     ["qcDecisionId", "another-decision"],
     ["qcDecisionResultId", " "],
@@ -11990,6 +12200,26 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("rejects QC rejection when the PhotoAsset submission result is detached", () => {
+    const context = contextForTransition("qc_rejected", "photo_submitted");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "photo-submission-command-1",
+        current: "photo_submitted",
+        target: "qc_rejected",
+        idempotencyKey: "qc-rejection-detached-photo-submission",
+        context: {
+          ...context,
+          qcDecisionPhotoAsset: {
+            ...context.qcDecisionPhotoAsset,
+            submissionResultId: "another-submission-result",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each([
     ["printingReservationJobId", "another-job"],

@@ -2450,6 +2450,93 @@ function requireAtomicGcodeReadyProduction<S extends string>(
   }
 }
 
+function requireAtomicQcPhotoSubmission<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobId = context?.jobId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const reservationId = context?.productionReservationId;
+  const photoAssetId = context?.qcPhotoAssetId;
+  const resultId = context?.qcPhotoSubmissionResultId;
+  const printedResultId = context?.qcPhotoSubmissionPrintedJobResultId;
+  const retentionDeadlineAt = context?.qcPhotoRetentionDeadlineAt;
+  const currentStateCommandKey = command.currentStateCommandKey;
+  const expectedJob = record(context?.qcPhotoSubmissionExpectedJob);
+  const photoAsset = record(context?.qcPhotoSubmissionPhotoAsset);
+  if (
+    !nonBlank(jobId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(reservationId) ||
+    !nonBlank(photoAssetId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(printedResultId) ||
+    !(retentionDeadlineAt instanceof Instant) ||
+    !nonBlank(currentStateCommandKey) ||
+    command.aggregateId !== jobId ||
+    context?.qcPhotoSubmissionPrintedStateCommandKey !==
+      currentStateCommandKey ||
+    context?.qcPhotoSubmissionJobId !== jobId ||
+    context?.qcPhotoSubmissionOrderId !== orderId ||
+    context?.qcPhotoSubmissionPhaseId !== phaseId ||
+    context?.qcPhotoSubmissionReservationId !== reservationId ||
+    context?.qcPhotoSubmissionPhotoAssetId !== photoAssetId ||
+    context?.qcPhotoSubmissionJobPreviousStatus !== "printed" ||
+    context?.qcPhotoSubmissionJobTargetStatus !== "photo_submitted" ||
+    expectedJob?.id !== jobId ||
+    expectedJob.orderId !== orderId ||
+    expectedJob.phaseId !== phaseId ||
+    expectedJob.productionReservationId !== reservationId ||
+    expectedJob.status !== "printed" ||
+    expectedJob.resultId !== printedResultId ||
+    expectedJob.currentStateCommandKey !== currentStateCommandKey ||
+    expectedJob.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "photo submission must bind the exact immutable printed Job",
+    );
+  }
+  if (
+    photoAsset?.id !== photoAssetId ||
+    photoAsset.jobId !== jobId ||
+    photoAsset.orderId !== orderId ||
+    photoAsset.phaseId !== phaseId ||
+    photoAsset.previousStatus !== "pending" ||
+    photoAsset.targetStatus !== "stored" ||
+    !(photoAsset.retentionDeadlineAt instanceof Instant) ||
+    !photoAsset.retentionDeadlineAt.equals(retentionDeadlineAt) ||
+    photoAsset.resultId !== resultId ||
+    photoAsset.submissionResultId !== resultId ||
+    photoAsset.immutable !== true ||
+    context?.qcPhotoSubmissionJobResultId !== resultId ||
+    context?.qcPhotoSubmissionPhotoAssetResultId !== resultId ||
+    context?.qcPhotoSubmissionRetentionResultId !== resultId ||
+    context?.qcPhotoSubmissionCompleted !== true ||
+    context?.qcPhotoSubmissionAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "photo submission requires the exact retained PhotoAsset and one atomic result",
+    );
+  }
+}
+
 function requireExactQcDecision<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -4783,6 +4870,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
         "photoRetentionDeadlineSet",
         "photo submission requires the PhotoAsset retention deadline",
       );
+      requireAtomicQcPhotoSubmission("Job", command);
     }
     if (
       command.current === "photo_submitted" &&
