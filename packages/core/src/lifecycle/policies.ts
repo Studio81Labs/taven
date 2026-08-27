@@ -2301,6 +2301,272 @@ function requireJobAcceptanceOwnership<S extends string>(
   );
 }
 
+function requireAtomicGcodeReadyProduction<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobId = context?.jobId;
+  const reservationId = context?.productionReservationId;
+  const artifactVersionId = context?.reproductionArtifactVersionId;
+  const orderItemId = context?.orderItemId;
+  const phaseId = context?.phaseId;
+  const resultId = context?.gcodeReadyResultId;
+  const productionSliceId = context?.productionSliceId;
+  const outputDigest = context?.productionSliceOutputDigest;
+  const acceptedResultId = context?.gcodeReadyAcceptedJobResultId;
+  const currentStateCommandKey = command.currentStateCommandKey;
+  const expectedJob = record(context?.gcodeReadyExpectedJob);
+  const expectedReservation = record(
+    context?.gcodeReadyExpectedReservationSnapshot,
+  );
+  const expectedArtifact = record(context?.gcodeReadyExpectedArtifactVersion);
+  const productionSlice = record(context?.gcodeReadyProductionSlice);
+  if (
+    !nonBlank(jobId) ||
+    !nonBlank(reservationId) ||
+    !nonBlank(artifactVersionId) ||
+    !nonBlank(orderItemId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(productionSliceId) ||
+    !nonBlank(outputDigest) ||
+    !nonBlank(acceptedResultId) ||
+    !nonBlank(currentStateCommandKey) ||
+    command.aggregateId !== jobId ||
+    context?.gcodeReadyAcceptedStateCommandKey !== currentStateCommandKey ||
+    context?.gcodeReadyJobId !== jobId ||
+    context?.gcodeReadyReservationId !== reservationId ||
+    context?.gcodeReadyArtifactVersionId !== artifactVersionId ||
+    context?.gcodeReadyOrderItemId !== orderItemId ||
+    context?.gcodeReadyPhaseId !== phaseId ||
+    context?.gcodeReadyJobPreviousStatus !== "accepted" ||
+    context?.gcodeReadyJobTargetStatus !== "gcode_ready" ||
+    expectedJob?.id !== jobId ||
+    expectedJob.productionReservationId !== reservationId ||
+    expectedJob.reproductionArtifactVersionId !== artifactVersionId ||
+    expectedJob.orderItemId !== orderItemId ||
+    expectedJob.phaseId !== phaseId ||
+    expectedJob.status !== "accepted" ||
+    expectedJob.resultId !== acceptedResultId ||
+    expectedJob.currentStateCommandKey !== currentStateCommandKey ||
+    expectedJob.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "G-code readiness must bind the exact immutable accepted Job",
+    );
+  }
+
+  const candidateResourceEstimateId =
+    context?.productionReservationCandidateResourceEstimateId;
+  const machineProfileId = context?.productionReservationMachineProfileId;
+  const machineCalibrationId =
+    context?.productionReservationMachineCalibrationId;
+  const printConfigRevisionId =
+    context?.productionReservationPrintConfigRevisionId;
+  if (
+    !nonBlank(candidateResourceEstimateId) ||
+    !nonBlank(machineProfileId) ||
+    !nonBlank(machineCalibrationId) ||
+    !nonBlank(printConfigRevisionId) ||
+    expectedReservation?.id !== reservationId ||
+    expectedReservation.jobId !== jobId ||
+    expectedReservation.orderItemId !== orderItemId ||
+    expectedReservation.phaseId !== phaseId ||
+    expectedReservation.status !== "scheduled" ||
+    expectedReservation.candidateResourceEstimateId !==
+      candidateResourceEstimateId ||
+    expectedReservation.machineProfileId !== machineProfileId ||
+    expectedReservation.machineCalibrationId !== machineCalibrationId ||
+    expectedReservation.printConfigRevisionId !== printConfigRevisionId ||
+    expectedReservation.resultId !== acceptedResultId ||
+    expectedReservation.immutable !== true ||
+    expectedArtifact?.id !== artifactVersionId ||
+    expectedArtifact.jobId !== jobId ||
+    expectedArtifact.productionReservationId !== reservationId ||
+    expectedArtifact.orderItemId !== orderItemId ||
+    expectedArtifact.phaseId !== phaseId ||
+    expectedArtifact.status !== "draft" ||
+    expectedArtifact.candidateResourceEstimateId !==
+      candidateResourceEstimateId ||
+    expectedArtifact.machineProfileId !== machineProfileId ||
+    expectedArtifact.machineCalibrationId !== machineCalibrationId ||
+    expectedArtifact.printConfigRevisionId !== printConfigRevisionId ||
+    expectedArtifact.resultId !== acceptedResultId ||
+    expectedArtifact.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "G-code readiness must use the exact accepted artifact and reservation snapshot",
+    );
+  }
+  if (
+    productionSlice?.id !== productionSliceId ||
+    productionSlice.jobId !== jobId ||
+    productionSlice.productionReservationId !== reservationId ||
+    productionSlice.reproductionArtifactVersionId !== artifactVersionId ||
+    productionSlice.orderItemId !== orderItemId ||
+    productionSlice.phaseId !== phaseId ||
+    productionSlice.previousStatus !== "pending" ||
+    productionSlice.targetStatus !== "completed" ||
+    productionSlice.candidateResourceEstimateId !==
+      candidateResourceEstimateId ||
+    productionSlice.machineProfileId !== machineProfileId ||
+    productionSlice.machineCalibrationId !== machineCalibrationId ||
+    productionSlice.printConfigRevisionId !== printConfigRevisionId ||
+    productionSlice.outputDigest !== outputDigest ||
+    productionSlice.resultId !== resultId ||
+    productionSlice.sourceStateCommandKey !== currentStateCommandKey ||
+    productionSlice.immutable !== true ||
+    context?.gcodeReadyArtifactPreviousStatus !== "draft" ||
+    context?.gcodeReadyArtifactTargetStatus !== "sealed" ||
+    context?.gcodeReadyArtifactOutputDigest !== outputDigest ||
+    context?.gcodeReadyJobResultId !== resultId ||
+    context?.gcodeReadyReservationResultId !== resultId ||
+    context?.gcodeReadyArtifactResultId !== resultId ||
+    context?.gcodeReadyProductionSliceResultId !== resultId ||
+    context?.gcodeReadyCompleted !== true ||
+    context?.gcodeReadyAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "G-code readiness requires the exact sealed production slice and one atomic result",
+    );
+  }
+}
+
+function requireExactQcDecision<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  outcome: "approved" | "rejected",
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobId = context?.jobId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const reservationId = context?.productionReservationId;
+  const photoAssetId = context?.qcPhotoAssetId;
+  const reviewerId = context?.qcDecisionReviewerId;
+  const decisionId = context?.qcDecisionId;
+  const resultId = context?.qcDecisionResultId;
+  const submittedResultId = context?.qcDecisionSubmittedJobResultId;
+  const currentStateCommandKey = command.currentStateCommandKey;
+  const targetStatus = outcome === "approved" ? "qc_approved" : "qc_rejected";
+  const expectedJob = record(context?.qcDecisionExpectedJob);
+  const photoAsset = record(context?.qcDecisionPhotoAsset);
+  const reviewer = record(context?.qcDecisionReviewer);
+  const decision = record(context?.qcDecision);
+  if (
+    !nonBlank(jobId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(reservationId) ||
+    !nonBlank(photoAssetId) ||
+    !nonBlank(reviewerId) ||
+    !nonBlank(decisionId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(submittedResultId) ||
+    !nonBlank(currentStateCommandKey) ||
+    command.aggregateId !== jobId ||
+    context?.qcDecisionSubmittedStateCommandKey !== currentStateCommandKey ||
+    context?.qcDecisionJobId !== jobId ||
+    context?.qcDecisionOrderId !== orderId ||
+    context?.qcDecisionPhaseId !== phaseId ||
+    context?.qcDecisionReservationId !== reservationId ||
+    context?.qcDecisionPhotoAssetId !== photoAssetId ||
+    context?.qcDecisionPreviousJobStatus !== "photo_submitted" ||
+    context?.qcDecisionTargetJobStatus !== targetStatus ||
+    expectedJob?.id !== jobId ||
+    expectedJob.orderId !== orderId ||
+    expectedJob.phaseId !== phaseId ||
+    expectedJob.productionReservationId !== reservationId ||
+    expectedJob.photoAssetId !== photoAssetId ||
+    expectedJob.status !== "photo_submitted" ||
+    expectedJob.resultId !== submittedResultId ||
+    expectedJob.currentStateCommandKey !== currentStateCommandKey ||
+    expectedJob.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "QC decision must bind the exact immutable photo-submitted Job",
+    );
+  }
+  if (
+    photoAsset?.id !== photoAssetId ||
+    photoAsset.jobId !== jobId ||
+    photoAsset.orderId !== orderId ||
+    photoAsset.phaseId !== phaseId ||
+    photoAsset.status !== "stored" ||
+    !(photoAsset.retentionDeadlineAt instanceof Instant) ||
+    photoAsset.submissionResultId !== submittedResultId ||
+    photoAsset.resultId !== resultId ||
+    photoAsset.immutable !== true ||
+    reviewer?.id !== reviewerId ||
+    reviewer.active !== true ||
+    reviewer.authorized !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "QC decision requires the exact retained PhotoAsset and authorized reviewer",
+    );
+  }
+  if (
+    decision?.id !== decisionId ||
+    decision.jobId !== jobId ||
+    decision.orderId !== orderId ||
+    decision.phaseId !== phaseId ||
+    decision.productionReservationId !== reservationId ||
+    decision.photoAssetId !== photoAssetId ||
+    decision.reviewerId !== reviewerId ||
+    decision.outcome !== outcome ||
+    decision.previousJobStatus !== "photo_submitted" ||
+    decision.targetJobStatus !== targetStatus ||
+    decision.resultId !== resultId ||
+    decision.sourceStateCommandKey !== currentStateCommandKey ||
+    decision.immutable !== true ||
+    context?.qcDecisionJobResultId !== resultId ||
+    context?.qcDecisionPhotoAssetResultId !== resultId ||
+    context?.qcDecisionReviewerResultId !== resultId ||
+    context?.qcDecisionRecordResultId !== resultId ||
+    context?.qcDecisionCompleted !== true ||
+    context?.qcDecisionAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "QC decision requires one exact immutable decision and atomic result",
+    );
+  }
+}
+
 function isJobFailureStageForCurrent(
   current: string,
   value: unknown,
@@ -4499,6 +4765,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
         "reproductionArtifactSealed",
         "G-code requires its reproduction artifact to be sealed",
       );
+      requireAtomicGcodeReadyProduction("Job", command);
     }
     if (command.current === "gcode_ready" && command.target === "printing") {
       requirePrintingReservationCommit("Job", command);
@@ -4527,6 +4794,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
         "qcApprovalVerified",
         "QC approval requires a verified QC decision",
       );
+      requireExactQcDecision("Job", command, "approved");
     }
     if (
       command.current === "photo_submitted" &&
@@ -4538,6 +4806,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
         "qcRejectionVerified",
         "QC rejection requires a verified QC decision",
       );
+      requireExactQcDecision("Job", command, "rejected");
       requireJobResourceSettlement("Job", command);
       requireFlag(
         "Job",

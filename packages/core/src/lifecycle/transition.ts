@@ -47,6 +47,8 @@ export class TransitionGuardError<
 export type TransitionContext = Readonly<Record<string, unknown>>;
 
 export interface TransitionCommand<S extends string> {
+  /** The adapter-owned identity of the aggregate being transitioned. */
+  readonly aggregateId?: string;
   readonly current: S;
   readonly target: S;
   /** A durable command identity, normally an idempotency key. */

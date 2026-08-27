@@ -855,10 +855,148 @@ const permittedContext = {
   jobFulfilmentSlotIds: ["slot-1"],
   productionSliceFromReservationSnapshot: true,
   reproductionArtifactSealed: true,
+  gcodeReadyResultId: "gcode-ready-result-1",
+  gcodeReadyAcceptedJobResultId: "job-acceptance-result-1",
+  gcodeReadyAcceptedStateCommandKey: "job-acceptance-command-1",
+  gcodeReadyJobId: "job-1",
+  gcodeReadyReservationId: "production-reservation-1",
+  gcodeReadyArtifactVersionId: "artifact-version-1",
+  gcodeReadyOrderItemId: "order-item-1",
+  gcodeReadyPhaseId: "phase-1",
+  gcodeReadyJobPreviousStatus: "accepted",
+  gcodeReadyJobTargetStatus: "gcode_ready",
+  gcodeReadyExpectedJob: {
+    id: "job-1",
+    productionReservationId: "production-reservation-1",
+    reproductionArtifactVersionId: "artifact-version-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    status: "accepted",
+    resultId: "job-acceptance-result-1",
+    currentStateCommandKey: "job-acceptance-command-1",
+    immutable: true,
+  },
+  gcodeReadyExpectedReservationSnapshot: {
+    id: "production-reservation-1",
+    jobId: "job-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    status: "scheduled",
+    candidateResourceEstimateId: "estimate-1",
+    machineProfileId: "profile-1",
+    machineCalibrationId: "calibration-1",
+    printConfigRevisionId: "config-revision-1",
+    resultId: "job-acceptance-result-1",
+    immutable: true,
+  },
+  gcodeReadyExpectedArtifactVersion: {
+    id: "artifact-version-1",
+    jobId: "job-1",
+    productionReservationId: "production-reservation-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    status: "draft",
+    candidateResourceEstimateId: "estimate-1",
+    machineProfileId: "profile-1",
+    machineCalibrationId: "calibration-1",
+    printConfigRevisionId: "config-revision-1",
+    resultId: "job-acceptance-result-1",
+    immutable: true,
+  },
+  productionSliceId: "production-slice-1",
+  productionSliceOutputDigest: "sha256:gcode-1",
+  gcodeReadyProductionSlice: {
+    id: "production-slice-1",
+    jobId: "job-1",
+    productionReservationId: "production-reservation-1",
+    reproductionArtifactVersionId: "artifact-version-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    previousStatus: "pending",
+    targetStatus: "completed",
+    candidateResourceEstimateId: "estimate-1",
+    machineProfileId: "profile-1",
+    machineCalibrationId: "calibration-1",
+    printConfigRevisionId: "config-revision-1",
+    outputDigest: "sha256:gcode-1",
+    resultId: "gcode-ready-result-1",
+    sourceStateCommandKey: "job-acceptance-command-1",
+    immutable: true,
+  },
+  gcodeReadyArtifactPreviousStatus: "draft",
+  gcodeReadyArtifactTargetStatus: "sealed",
+  gcodeReadyArtifactOutputDigest: "sha256:gcode-1",
+  gcodeReadyJobResultId: "gcode-ready-result-1",
+  gcodeReadyReservationResultId: "gcode-ready-result-1",
+  gcodeReadyArtifactResultId: "gcode-ready-result-1",
+  gcodeReadyProductionSliceResultId: "gcode-ready-result-1",
+  gcodeReadyCompleted: true,
+  gcodeReadyAtomic: true,
   qcPhotoAssetStored: true,
   photoRetentionDeadlineSet: true,
   qcApprovalVerified: true,
   qcRejectionVerified: true,
+  qcPhotoAssetId: "qc-photo-1",
+  qcDecisionReviewerId: "reviewer-1",
+  qcDecisionId: "qc-decision-1",
+  qcDecisionResultId: "qc-decision-result-1",
+  qcDecisionSubmittedJobResultId: "photo-submission-result-1",
+  qcDecisionSubmittedStateCommandKey: "photo-submission-command-1",
+  qcDecisionJobId: "job-1",
+  qcDecisionOrderId: "order-1",
+  qcDecisionPhaseId: "phase-1",
+  qcDecisionReservationId: "production-reservation-1",
+  qcDecisionPhotoAssetId: "qc-photo-1",
+  qcDecisionPreviousJobStatus: "photo_submitted",
+  qcDecisionTargetJobStatus: "qc_approved",
+  qcDecisionExpectedJob: {
+    id: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    photoAssetId: "qc-photo-1",
+    status: "photo_submitted",
+    resultId: "photo-submission-result-1",
+    currentStateCommandKey: "photo-submission-command-1",
+    immutable: true,
+  },
+  qcDecisionPhotoAsset: {
+    id: "qc-photo-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "stored",
+    retentionDeadlineAt: Instant.parse("2026-03-01T00:00:00.000Z"),
+    submissionResultId: "photo-submission-result-1",
+    resultId: "qc-decision-result-1",
+    immutable: true,
+  },
+  qcDecisionReviewer: {
+    id: "reviewer-1",
+    active: true,
+    authorized: true,
+  },
+  qcDecision: {
+    id: "qc-decision-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    photoAssetId: "qc-photo-1",
+    reviewerId: "reviewer-1",
+    outcome: "approved",
+    previousJobStatus: "photo_submitted",
+    targetJobStatus: "qc_approved",
+    resultId: "qc-decision-result-1",
+    sourceStateCommandKey: "photo-submission-command-1",
+    immutable: true,
+  },
+  qcDecisionJobResultId: "qc-decision-result-1",
+  qcDecisionPhotoAssetResultId: "qc-decision-result-1",
+  qcDecisionReviewerResultId: "qc-decision-result-1",
+  qcDecisionRecordResultId: "qc-decision-result-1",
+  qcDecisionCompleted: true,
+  qcDecisionAtomic: true,
   shipmentStatus: "returned",
   custodyConfirmed: true,
   freshQcPassed: true,
@@ -1981,6 +2119,18 @@ function contextForTransition(target: string, current?: string) {
         : "actual_recorded";
   return {
     ...permittedContext,
+    qcDecisionTargetJobStatus:
+      target === "qc_rejected"
+        ? "qc_rejected"
+        : permittedContext.qcDecisionTargetJobStatus,
+    qcDecision:
+      target === "qc_rejected"
+        ? {
+            ...permittedContext.qcDecision,
+            outcome: "rejected",
+            targetJobStatus: "qc_rejected",
+          }
+        : permittedContext.qcDecision,
     replacementRequiredResourceGroups:
       current === "replacement_in_production"
         ? permittedContext.replacementRequiredResourceGroups.map((group) => ({
@@ -2171,6 +2321,34 @@ function errorCode(action: () => unknown): string | undefined {
   return undefined;
 }
 
+function commandAnchors(
+  policy: Readonly<{ name: string }>,
+  current: string,
+  target: string,
+): Readonly<{ aggregateId?: string; currentStateCommandKey?: string }> {
+  if (
+    policy.name === "Job" &&
+    current === "accepted" &&
+    target === "gcode_ready"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-acceptance-command-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
+    current === "photo_submitted" &&
+    (target === "qc_approved" || target === "qc_rejected")
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "photo-submission-command-1",
+    };
+  }
+  return {};
+}
+
 function verifyEveryStatePair<S extends string>(
   policy: TransitionPolicy<S>,
 ): void {
@@ -2191,6 +2369,7 @@ function verifyEveryStatePair<S extends string>(
         expect(
           () =>
             transition(policy, {
+              ...commandAnchors(policy, current, target),
               current,
               target,
               idempotencyKey: "new",
@@ -2201,6 +2380,7 @@ function verifyEveryStatePair<S extends string>(
       } else {
         expect(
           transition(policy, {
+            ...commandAnchors(policy, current, target),
             current,
             target,
             idempotencyKey: "new",
@@ -3715,6 +3895,7 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(policy, {
+            ...commandAnchors(policy, current, target),
             current,
             target,
             idempotencyKey: `confirmation-activation-${target}-${field}`,
@@ -4233,6 +4414,7 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(policy, {
+            ...commandAnchors(policy, current, target),
             current,
             target,
             idempotencyKey: `confirmation-job-links-${index}-${target}`,
@@ -6376,6 +6558,7 @@ describe("v0 lifecycle policy tables", () => {
     (_lifecycle, policy, current, target) => {
       expect(() =>
         transition(policy, {
+          ...commandAnchors(policy, current, target),
           current,
           target,
           idempotencyKey: `completion-target-mismatch-${target}`,
@@ -7381,6 +7564,7 @@ describe("v0 lifecycle policy tables", () => {
     (_lifecycle, policy, current, target) => {
       expect(
         transition(policy, {
+          ...commandAnchors(policy, current, target),
           current,
           target,
           idempotencyKey: `completion-target-match-${target}`,
@@ -11202,6 +11386,7 @@ describe("v0 lifecycle policy tables", () => {
       for (const flag of flags) {
         expect(() =>
           transition(policy, {
+            ...commandAnchors(policy, current, target),
             current,
             target,
             idempotencyKey: `missing-${current}-${target}-${flag}`,
@@ -11258,6 +11443,7 @@ describe("v0 lifecycle policy tables", () => {
     (policy, current, target) => {
       expect(
         transition(policy, {
+          ...commandAnchors(policy, current, target),
           current,
           target,
           idempotencyKey: `complete-${current}-${target}`,
@@ -11342,6 +11528,470 @@ describe("v0 lifecycle policy tables", () => {
   });
 
   it.each([
+    ["jobId", "another-job"],
+    ["productionReservationId", "another-reservation"],
+    ["reproductionArtifactVersionId", "another-artifact"],
+    ["orderItemId", "another-item"],
+    ["phaseId", "another-phase"],
+    ["gcodeReadyResultId", " "],
+    ["gcodeReadyAcceptedJobResultId", "another-result"],
+    ["gcodeReadyAcceptedStateCommandKey", "another-command"],
+    ["productionSliceId", "another-slice"],
+    ["productionSliceOutputDigest", "sha256:another"],
+    ["gcodeReadyJobId", "another-job"],
+    ["gcodeReadyReservationId", "another-reservation"],
+    ["gcodeReadyArtifactVersionId", "another-artifact"],
+    ["gcodeReadyOrderItemId", "another-item"],
+    ["gcodeReadyPhaseId", "another-phase"],
+    ["gcodeReadyJobPreviousStatus", "created"],
+    ["gcodeReadyJobTargetStatus", "printing"],
+    ["gcodeReadyArtifactPreviousStatus", "sealed"],
+    ["gcodeReadyArtifactTargetStatus", "draft"],
+    ["gcodeReadyArtifactOutputDigest", "sha256:another"],
+    ["gcodeReadyJobResultId", "another-result"],
+    ["gcodeReadyReservationResultId", "another-result"],
+    ["gcodeReadyArtifactResultId", "another-result"],
+    ["gcodeReadyProductionSliceResultId", "another-result"],
+    ["gcodeReadyCompleted", false],
+    ["gcodeReadyAtomic", false],
+  ] as const)("rejects G-code readiness with invalid %s", (field, value) => {
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-acceptance-command-1",
+        current: "accepted",
+        target: "gcode_ready",
+        idempotencyKey: `gcode-ready-${field}`,
+        context: {
+          ...contextForTransition("gcode_ready", "accepted"),
+          [field]: value,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["gcodeReadyExpectedJob", "id", "another-job"],
+    ["gcodeReadyExpectedJob", "productionReservationId", "another-reservation"],
+    [
+      "gcodeReadyExpectedJob",
+      "reproductionArtifactVersionId",
+      "another-artifact",
+    ],
+    ["gcodeReadyExpectedJob", "orderItemId", "another-item"],
+    ["gcodeReadyExpectedJob", "phaseId", "another-phase"],
+    ["gcodeReadyExpectedJob", "status", "created"],
+    ["gcodeReadyExpectedJob", "resultId", "another-result"],
+    ["gcodeReadyExpectedJob", "currentStateCommandKey", "another-command"],
+    ["gcodeReadyExpectedJob", "immutable", false],
+    ["gcodeReadyExpectedReservationSnapshot", "id", "another-reservation"],
+    ["gcodeReadyExpectedReservationSnapshot", "jobId", "another-job"],
+    ["gcodeReadyExpectedReservationSnapshot", "orderItemId", "another-item"],
+    ["gcodeReadyExpectedReservationSnapshot", "phaseId", "another-phase"],
+    ["gcodeReadyExpectedReservationSnapshot", "status", "held"],
+    ["gcodeReadyExpectedReservationSnapshot", "resultId", "another-result"],
+    [
+      "gcodeReadyExpectedReservationSnapshot",
+      "candidateResourceEstimateId",
+      "another-estimate",
+    ],
+    [
+      "gcodeReadyExpectedReservationSnapshot",
+      "machineProfileId",
+      "another-profile",
+    ],
+    [
+      "gcodeReadyExpectedReservationSnapshot",
+      "machineCalibrationId",
+      "another-calibration",
+    ],
+    [
+      "gcodeReadyExpectedReservationSnapshot",
+      "printConfigRevisionId",
+      "another-config",
+    ],
+    ["gcodeReadyExpectedReservationSnapshot", "immutable", false],
+    ["gcodeReadyExpectedArtifactVersion", "id", "another-artifact"],
+    ["gcodeReadyExpectedArtifactVersion", "jobId", "another-job"],
+    [
+      "gcodeReadyExpectedArtifactVersion",
+      "productionReservationId",
+      "another-reservation",
+    ],
+    ["gcodeReadyExpectedArtifactVersion", "orderItemId", "another-item"],
+    ["gcodeReadyExpectedArtifactVersion", "phaseId", "another-phase"],
+    ["gcodeReadyExpectedArtifactVersion", "status", "sealed"],
+    ["gcodeReadyExpectedArtifactVersion", "resultId", "another-result"],
+    [
+      "gcodeReadyExpectedArtifactVersion",
+      "candidateResourceEstimateId",
+      "another-estimate",
+    ],
+    [
+      "gcodeReadyExpectedArtifactVersion",
+      "machineProfileId",
+      "another-profile",
+    ],
+    [
+      "gcodeReadyExpectedArtifactVersion",
+      "machineCalibrationId",
+      "another-calibration",
+    ],
+    [
+      "gcodeReadyExpectedArtifactVersion",
+      "printConfigRevisionId",
+      "another-config",
+    ],
+    ["gcodeReadyExpectedArtifactVersion", "immutable", false],
+    ["gcodeReadyProductionSlice", "id", "another-slice"],
+    ["gcodeReadyProductionSlice", "jobId", "another-job"],
+    [
+      "gcodeReadyProductionSlice",
+      "productionReservationId",
+      "another-reservation",
+    ],
+    [
+      "gcodeReadyProductionSlice",
+      "reproductionArtifactVersionId",
+      "another-artifact",
+    ],
+    ["gcodeReadyProductionSlice", "orderItemId", "another-item"],
+    ["gcodeReadyProductionSlice", "phaseId", "another-phase"],
+    ["gcodeReadyProductionSlice", "previousStatus", "created"],
+    ["gcodeReadyProductionSlice", "targetStatus", "failed"],
+    [
+      "gcodeReadyProductionSlice",
+      "candidateResourceEstimateId",
+      "another-estimate",
+    ],
+    ["gcodeReadyProductionSlice", "machineProfileId", "another-profile"],
+    [
+      "gcodeReadyProductionSlice",
+      "machineCalibrationId",
+      "another-calibration",
+    ],
+    ["gcodeReadyProductionSlice", "printConfigRevisionId", "another-config"],
+    ["gcodeReadyProductionSlice", "outputDigest", "sha256:another"],
+    ["gcodeReadyProductionSlice", "resultId", "another-result"],
+    ["gcodeReadyProductionSlice", "sourceStateCommandKey", "another-command"],
+    ["gcodeReadyProductionSlice", "immutable", false],
+  ] as const)(
+    "rejects G-code readiness with invalid %s.%s",
+    (recordName, field, value) => {
+      const context = contextForTransition("gcode_ready", "accepted");
+      const evidence = context[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-acceptance-command-1",
+          current: "accepted",
+          target: "gcode_ready",
+          idempotencyKey: `gcode-ready-${recordName}-${field}`,
+          context: {
+            ...context,
+            [recordName]: { ...evidence, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign production slice substitution", () => {
+    const context = contextForTransition("gcode_ready", "accepted");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-acceptance-command-1",
+        current: "accepted",
+        target: "gcode_ready",
+        idempotencyKey: "gcode-ready-foreign-substitution",
+        context: {
+          ...context,
+          jobId: "foreign-job",
+          productionReservationId: "foreign-reservation",
+          reproductionArtifactVersionId: "foreign-artifact",
+          orderItemId: "foreign-item",
+          phaseId: "foreign-phase",
+          productionReservationCandidateResourceEstimateId: "foreign-estimate",
+          productionReservationMachineProfileId: "foreign-profile",
+          productionReservationMachineCalibrationId: "foreign-calibration",
+          productionReservationPrintConfigRevisionId: "foreign-config",
+          gcodeReadyResultId: "foreign-gcode-result",
+          gcodeReadyAcceptedJobResultId: "foreign-acceptance-result",
+          gcodeReadyAcceptedStateCommandKey: "foreign-acceptance-command",
+          productionSliceId: "foreign-slice",
+          productionSliceOutputDigest: "sha256:foreign",
+          gcodeReadyJobId: "foreign-job",
+          gcodeReadyReservationId: "foreign-reservation",
+          gcodeReadyArtifactVersionId: "foreign-artifact",
+          gcodeReadyOrderItemId: "foreign-item",
+          gcodeReadyPhaseId: "foreign-phase",
+          gcodeReadyExpectedJob: {
+            ...context.gcodeReadyExpectedJob,
+            id: "foreign-job",
+            productionReservationId: "foreign-reservation",
+            reproductionArtifactVersionId: "foreign-artifact",
+            orderItemId: "foreign-item",
+            phaseId: "foreign-phase",
+            resultId: "foreign-acceptance-result",
+            currentStateCommandKey: "foreign-acceptance-command",
+          },
+          gcodeReadyExpectedReservationSnapshot: {
+            ...context.gcodeReadyExpectedReservationSnapshot,
+            id: "foreign-reservation",
+            jobId: "foreign-job",
+            orderItemId: "foreign-item",
+            phaseId: "foreign-phase",
+            candidateResourceEstimateId: "foreign-estimate",
+            machineProfileId: "foreign-profile",
+            machineCalibrationId: "foreign-calibration",
+            printConfigRevisionId: "foreign-config",
+            resultId: "foreign-acceptance-result",
+          },
+          gcodeReadyExpectedArtifactVersion: {
+            ...context.gcodeReadyExpectedArtifactVersion,
+            id: "foreign-artifact",
+            jobId: "foreign-job",
+            productionReservationId: "foreign-reservation",
+            orderItemId: "foreign-item",
+            phaseId: "foreign-phase",
+            candidateResourceEstimateId: "foreign-estimate",
+            machineProfileId: "foreign-profile",
+            machineCalibrationId: "foreign-calibration",
+            printConfigRevisionId: "foreign-config",
+            resultId: "foreign-acceptance-result",
+          },
+          gcodeReadyProductionSlice: {
+            ...context.gcodeReadyProductionSlice,
+            id: "foreign-slice",
+            jobId: "foreign-job",
+            productionReservationId: "foreign-reservation",
+            reproductionArtifactVersionId: "foreign-artifact",
+            orderItemId: "foreign-item",
+            phaseId: "foreign-phase",
+            candidateResourceEstimateId: "foreign-estimate",
+            machineProfileId: "foreign-profile",
+            machineCalibrationId: "foreign-calibration",
+            printConfigRevisionId: "foreign-config",
+            outputDigest: "sha256:foreign",
+            resultId: "foreign-gcode-result",
+            sourceStateCommandKey: "foreign-acceptance-command",
+          },
+          gcodeReadyArtifactOutputDigest: "sha256:foreign",
+          gcodeReadyJobResultId: "foreign-gcode-result",
+          gcodeReadyReservationResultId: "foreign-gcode-result",
+          gcodeReadyArtifactResultId: "foreign-gcode-result",
+          gcodeReadyProductionSliceResultId: "foreign-gcode-result",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["another-job", "job-acceptance-command-1"],
+    ["job-1", "another-command"],
+  ] as const)(
+    "rejects G-code readiness outside its aggregate/current-state anchor (%s, %s)",
+    (aggregateId, currentStateCommandKey) => {
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId,
+          currentStateCommandKey,
+          current: "accepted",
+          target: "gcode_ready",
+          idempotencyKey: `gcode-ready-command-anchor-${aggregateId}-${currentStateCommandKey}`,
+          context: contextForTransition("gcode_ready", "accepted"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["jobId", "another-job"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
+    ["productionReservationId", "another-reservation"],
+    ["qcPhotoAssetId", "another-photo"],
+    ["qcDecisionReviewerId", "another-reviewer"],
+    ["qcDecisionId", "another-decision"],
+    ["qcDecisionResultId", " "],
+    ["qcDecisionSubmittedJobResultId", "another-result"],
+    ["qcDecisionSubmittedStateCommandKey", "another-command"],
+    ["qcDecisionJobId", "another-job"],
+    ["qcDecisionOrderId", "another-order"],
+    ["qcDecisionPhaseId", "another-phase"],
+    ["qcDecisionReservationId", "another-reservation"],
+    ["qcDecisionPhotoAssetId", "another-photo"],
+    ["qcDecisionPreviousJobStatus", "printed"],
+    ["qcDecisionTargetJobStatus", "qc_rejected"],
+    ["qcDecisionJobResultId", "another-result"],
+    ["qcDecisionPhotoAssetResultId", "another-result"],
+    ["qcDecisionReviewerResultId", "another-result"],
+    ["qcDecisionRecordResultId", "another-result"],
+    ["qcDecisionCompleted", false],
+    ["qcDecisionAtomic", false],
+  ] as const)("rejects QC approval with invalid %s", (field, value) => {
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "photo-submission-command-1",
+        current: "photo_submitted",
+        target: "qc_approved",
+        idempotencyKey: `qc-approval-${field}`,
+        context: {
+          ...contextForTransition("qc_approved", "photo_submitted"),
+          [field]: value,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["qcDecisionExpectedJob", "id", "another-job"],
+    ["qcDecisionExpectedJob", "orderId", "another-order"],
+    ["qcDecisionExpectedJob", "phaseId", "another-phase"],
+    ["qcDecisionExpectedJob", "productionReservationId", "another-reservation"],
+    ["qcDecisionExpectedJob", "photoAssetId", "another-photo"],
+    ["qcDecisionExpectedJob", "status", "printed"],
+    ["qcDecisionExpectedJob", "resultId", "another-result"],
+    ["qcDecisionExpectedJob", "currentStateCommandKey", "another-command"],
+    ["qcDecisionExpectedJob", "immutable", false],
+    ["qcDecisionPhotoAsset", "id", "another-photo"],
+    ["qcDecisionPhotoAsset", "jobId", "another-job"],
+    ["qcDecisionPhotoAsset", "orderId", "another-order"],
+    ["qcDecisionPhotoAsset", "phaseId", "another-phase"],
+    ["qcDecisionPhotoAsset", "status", "deleted"],
+    ["qcDecisionPhotoAsset", "retentionDeadlineAt", "not-an-instant"],
+    ["qcDecisionPhotoAsset", "submissionResultId", "another-result"],
+    ["qcDecisionPhotoAsset", "resultId", "another-result"],
+    ["qcDecisionPhotoAsset", "immutable", false],
+    ["qcDecisionReviewer", "id", "another-reviewer"],
+    ["qcDecisionReviewer", "active", false],
+    ["qcDecisionReviewer", "authorized", false],
+    ["qcDecision", "id", "another-decision"],
+    ["qcDecision", "jobId", "another-job"],
+    ["qcDecision", "orderId", "another-order"],
+    ["qcDecision", "phaseId", "another-phase"],
+    ["qcDecision", "productionReservationId", "another-reservation"],
+    ["qcDecision", "photoAssetId", "another-photo"],
+    ["qcDecision", "reviewerId", "another-reviewer"],
+    ["qcDecision", "outcome", "rejected"],
+    ["qcDecision", "previousJobStatus", "printed"],
+    ["qcDecision", "targetJobStatus", "qc_rejected"],
+    ["qcDecision", "resultId", "another-result"],
+    ["qcDecision", "sourceStateCommandKey", "another-command"],
+    ["qcDecision", "immutable", false],
+  ] as const)(
+    "rejects QC approval with invalid %s.%s",
+    (recordName, field, value) => {
+      const context = contextForTransition("qc_approved", "photo_submitted");
+      const evidence = context[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "photo-submission-command-1",
+          current: "photo_submitted",
+          target: "qc_approved",
+          idempotencyKey: `qc-approval-${recordName}-${field}`,
+          context: {
+            ...context,
+            [recordName]: { ...evidence, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign QC evidence substitution", () => {
+    const context = contextForTransition("qc_approved", "photo_submitted");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "photo-submission-command-1",
+        current: "photo_submitted",
+        target: "qc_approved",
+        idempotencyKey: "qc-approval-foreign-substitution",
+        context: {
+          ...context,
+          jobId: "foreign-job",
+          orderId: "foreign-order",
+          phaseId: "foreign-phase",
+          productionReservationId: "foreign-reservation",
+          qcPhotoAssetId: "foreign-photo",
+          qcDecisionId: "foreign-decision",
+          qcDecisionResultId: "foreign-qc-result",
+          qcDecisionSubmittedJobResultId: "foreign-submission-result",
+          qcDecisionSubmittedStateCommandKey: "foreign-submission-command",
+          qcDecisionJobId: "foreign-job",
+          qcDecisionOrderId: "foreign-order",
+          qcDecisionPhaseId: "foreign-phase",
+          qcDecisionReservationId: "foreign-reservation",
+          qcDecisionPhotoAssetId: "foreign-photo",
+          qcDecisionReviewerId: "foreign-reviewer",
+          qcDecisionExpectedJob: {
+            ...context.qcDecisionExpectedJob,
+            id: "foreign-job",
+            orderId: "foreign-order",
+            phaseId: "foreign-phase",
+            productionReservationId: "foreign-reservation",
+            photoAssetId: "foreign-photo",
+            resultId: "foreign-submission-result",
+            currentStateCommandKey: "foreign-submission-command",
+          },
+          qcDecisionPhotoAsset: {
+            ...context.qcDecisionPhotoAsset,
+            id: "foreign-photo",
+            jobId: "foreign-job",
+            orderId: "foreign-order",
+            phaseId: "foreign-phase",
+            submissionResultId: "foreign-submission-result",
+            resultId: "foreign-qc-result",
+          },
+          qcDecisionReviewer: {
+            ...context.qcDecisionReviewer,
+            id: "foreign-reviewer",
+          },
+          qcDecision: {
+            ...context.qcDecision,
+            id: "foreign-decision",
+            jobId: "foreign-job",
+            orderId: "foreign-order",
+            phaseId: "foreign-phase",
+            productionReservationId: "foreign-reservation",
+            photoAssetId: "foreign-photo",
+            reviewerId: "foreign-reviewer",
+            resultId: "foreign-qc-result",
+            sourceStateCommandKey: "foreign-submission-command",
+          },
+          qcDecisionJobResultId: "foreign-qc-result",
+          qcDecisionPhotoAssetResultId: "foreign-qc-result",
+          qcDecisionReviewerResultId: "foreign-qc-result",
+          qcDecisionRecordResultId: "foreign-qc-result",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["another-job", "photo-submission-command-1"],
+    ["job-1", "another-command"],
+  ] as const)(
+    "rejects QC approval outside its aggregate/current-state anchor (%s, %s)",
+    (aggregateId, currentStateCommandKey) => {
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId,
+          currentStateCommandKey,
+          current: "photo_submitted",
+          target: "qc_approved",
+          idempotencyKey: `qc-approval-command-anchor-${aggregateId}-${currentStateCommandKey}`,
+          context: contextForTransition("qc_approved", "photo_submitted"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
     ["printingReservationJobId", "another-job"],
     ["productionReservationJobId", "another-job"],
     ["printingReservationProductionReservationId", "another-reservation"],
@@ -11374,6 +12024,8 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "photo-submission-command-1",
           current: "photo_submitted",
           target: "qc_rejected",
           idempotencyKey: `qc-rejection-settlement-${field}`,
