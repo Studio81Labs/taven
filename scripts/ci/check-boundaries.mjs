@@ -90,6 +90,7 @@ function readQuotedLiteral(source, start, quote) {
 function findTemplateExpressionEnd(source, start) {
   let depth = 1;
   const tokens = [];
+  const braces = [];
   for (let index = start; index < source.length;) {
     const character = source[index];
     if (/\s/.test(character)) {
@@ -120,10 +121,29 @@ function findTemplateExpressionEnd(source, start) {
       tokens.push({ kind: "number", value: source.slice(index, end) });
       index = end;
     } else {
-      if (character === "{") depth += 1;
+      if (character === "{") {
+        const statementBlock = opensStatementBlock(tokens);
+        braces.push(statementBlock ? "block" : "object");
+        depth += 1;
+        tokens.push({
+          kind: "punctuation",
+          value: "{",
+          statementBlock,
+        });
+        index += 1;
+        continue;
+      }
       if (character === "}") {
+        const kind = braces.pop();
         depth -= 1;
         if (depth === 0) return index;
+        tokens.push({
+          kind: "punctuation",
+          value: "}",
+          expressionEnding: kind === "object",
+        });
+        index += 1;
+        continue;
       }
       const value = source.slice(index, index + 2) === "=>" ? "=>" : character;
       tokens.push({ kind: "punctuation", value });
@@ -201,6 +221,9 @@ function isRegexStart(tokens) {
     ]).has(previous.value);
   }
   if (previous.value === ")" && closesControlCondition(tokens)) return true;
+  if (previous.value === "}" && previous.expressionEnding === false) {
+    return true;
+  }
   if (
     previous.kind === "literal" ||
     previous.kind === "template" ||
@@ -210,6 +233,83 @@ function isRegexStart(tokens) {
     return false;
   }
   return !new Set([")", "]", "}", "++", "--"]).has(previous.value);
+}
+
+function isStatementStart(tokens, index) {
+  let previous = tokens[index];
+  while (
+    previous?.kind === "identifier" &&
+    new Set(["abstract", "async", "declare", "default"]).has(previous.value)
+  ) {
+    index -= 1;
+    previous = tokens[index];
+  }
+  return (
+    previous === undefined ||
+    previous.value === ";" ||
+    (previous.value === "{" && previous.statementBlock === true) ||
+    (previous.value === "}" && previous.expressionEnding === false) ||
+    previous.value === "export"
+  );
+}
+
+function functionDeclarationBody(tokens) {
+  let depth = 0;
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (tokens[index].value === ")") depth += 1;
+    if (tokens[index].value === "(") {
+      depth -= 1;
+      if (depth !== 0) continue;
+      let functionIndex = index - 1;
+      if (tokens[functionIndex]?.value !== "function") functionIndex -= 1;
+      if (tokens[functionIndex]?.value === "*") functionIndex -= 1;
+      const functionToken = tokens[functionIndex];
+      if (functionToken?.value !== "function") return false;
+      return isStatementStart(tokens, functionIndex - 1);
+    }
+  }
+  return false;
+}
+
+function classDeclarationBody(tokens) {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (tokens[index].value === ";" || tokens[index].value === "{") break;
+    if (
+      tokens[index].kind === "identifier" &&
+      tokens[index].value === "class"
+    ) {
+      return isStatementStart(tokens, index - 1);
+    }
+  }
+  return false;
+}
+
+function labelledStatementBlock(tokens) {
+  const label = tokens[tokens.length - 2];
+  return (
+    tokens[tokens.length - 1]?.value === ":" &&
+    label?.kind === "identifier" &&
+    isStatementStart(tokens, tokens.length - 3)
+  );
+}
+
+function opensStatementBlock(tokens) {
+  const previous = tokens[tokens.length - 1];
+  if (previous === undefined || previous.value === ";") return true;
+  if (previous.value === "=>") return false;
+  if (previous.value === "{" && previous.statementBlock === true) return true;
+  if (previous.value === ")") {
+    return closesControlCondition(tokens) || functionDeclarationBody(tokens);
+  }
+  if (classDeclarationBody(tokens) || labelledStatementBlock(tokens))
+    return true;
+  if (previous.value === "}" && previous.expressionEnding === false) {
+    return true;
+  }
+  return (
+    previous.kind === "identifier" &&
+    new Set(["catch", "do", "else", "finally", "try"]).has(previous.value)
+  );
 }
 
 function skipRegexLiteral(source, start) {
@@ -233,6 +333,7 @@ function skipRegexLiteral(source, start) {
 
 function lexicalTokens(source) {
   const tokens = [];
+  const braces = [];
   for (let index = 0; index < source.length;) {
     const character = source[index];
     if (/\s/.test(character)) {
@@ -273,7 +374,20 @@ function lexicalTokens(source) {
       index = end;
     } else {
       const value = source.slice(index, index + 2) === "=>" ? "=>" : character;
-      tokens.push({ kind: "punctuation", value });
+      if (value === "{") {
+        const statementBlock = opensStatementBlock(tokens);
+        braces.push(statementBlock ? "block" : "object");
+        tokens.push({ kind: "punctuation", value, statementBlock });
+      } else if (value === "}") {
+        const kind = braces.pop();
+        tokens.push({
+          kind: "punctuation",
+          value,
+          expressionEnding: kind === "object",
+        });
+      } else {
+        tokens.push({ kind: "punctuation", value });
+      }
       index += value.length;
     }
   }
