@@ -1296,6 +1296,9 @@ const permittedContext = {
     phaseTopologyId: "phase-1",
     immutable: true,
   },
+  qcCompletionResultId: "qc-completion-result-1",
+  qcCompletionOrderResultId: "qc-completion-result-1",
+  qcCompletionPhaseResultId: "qc-completion-result-1",
   qcCompletionCompleted: true,
   qcCompletionAtomic: true,
   qcAuthoritativePhaseTopologyId: "phase-1",
@@ -1322,6 +1325,22 @@ const permittedContext = {
     phaseTopologyId: "phase-1",
     slotIds: ["slot-1"],
     resultId: "qc-slot-set-result-1",
+    currentJobSources: [
+      {
+        slotId: "slot-1",
+        jobId: "job-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        currentJobSlotId: "slot-1",
+        currentJobLineageLeaf: true,
+        status: "qc_approved",
+        resultId: "job-qc_approved-result-1",
+        currentStateCommandKey: "job-qc_approved-command-1",
+        openReplacementRequestId: null,
+        recoveryBlocked: false,
+        immutable: true,
+      },
+    ],
     immutable: true,
   },
   expectedQcFulfilmentSlotIds: ["slot-1"],
@@ -1333,6 +1352,10 @@ const permittedContext = {
       orderId: "order-1",
       phaseId: "phase-1",
       currentJobId: "job-1",
+      currentJobSourceResultId: "job-qc_approved-result-1",
+      currentJobSourceCommandKey: "job-qc_approved-command-1",
+      currentJobImmutable: true,
+      qcCompletionResultId: "qc-completion-result-1",
       currentJobOrderId: "order-1",
       currentJobPhaseId: "phase-1",
       currentJobSlotId: "slot-1",
@@ -3964,13 +3987,59 @@ function contextForTransition(target: string, current?: string) {
     completionExpectedFulfilmentSlotSetId: "completion-slot-set-1",
     completionAuthoritativeFulfilmentSlotSetResultId:
       "completion-slot-set-result-1",
+    completionResultId: "completion-result-1",
+    completionResultAtomic: true,
     completionAuthoritativeFulfilmentSlotSet: {
       id: "completion-slot-set-1",
       orderId: "order-1",
       phaseId: "phase-1",
       phaseTopologyId: "phase-1",
+      completionResultId: "completion-result-1",
+      completionTarget: target,
+      sourceStatus: current,
       slotIds:
         target === "partially_fulfilled" ? ["slot-1", "slot-2"] : ["slot-1"],
+      slotSnapshots:
+        target === "partially_fulfilled"
+          ? [
+              {
+                id: "slot-1",
+                orderId: "order-1",
+                phaseId: "phase-1",
+                status: "delivered",
+                sourceResultId: "completion-slot-source-result-1",
+                sourceCurrentStateCommandKey:
+                  "completion-slot-source-command-1",
+                immutable: true,
+              },
+              {
+                id: "slot-2",
+                orderId: "order-1",
+                phaseId: "phase-1",
+                status: "cancelled_refunded",
+                sourceResultId: "completion-slot-source-result-2",
+                sourceCurrentStateCommandKey:
+                  "completion-slot-source-command-2",
+                immutable: true,
+              },
+            ]
+          : [
+              {
+                id: "slot-1",
+                orderId: "order-1",
+                phaseId: "phase-1",
+                status:
+                  target === "completed"
+                    ? "delivered"
+                    : target === "refunded" || target === "cancelled_refunded"
+                      ? "cancelled_refunded"
+                      : "cancelled_settled",
+                sourceResultId: "completion-slot-source-result-1",
+                sourceCurrentStateCommandKey:
+                  "completion-slot-source-command-1",
+                immutable: true,
+              },
+            ],
       resultId: "completion-slot-set-result-1",
       immutable: true,
     },
@@ -3984,12 +4053,22 @@ function contextForTransition(target: string, current?: string) {
               orderId: "order-1",
               phaseId: "phase-1",
               status: "delivered",
+              sourceResultId: "completion-slot-source-result-1",
+              sourceCurrentStateCommandKey: "completion-slot-source-command-1",
+              resultId: "completion-result-1",
+              completionTarget: target,
+              immutable: true,
             },
             {
               slotId: "slot-2",
               orderId: "order-1",
               phaseId: "phase-1",
               status: "cancelled_refunded",
+              sourceResultId: "completion-slot-source-result-2",
+              sourceCurrentStateCommandKey: "completion-slot-source-command-2",
+              resultId: "completion-result-1",
+              completionTarget: target,
+              immutable: true,
             },
           ]
         : [
@@ -4003,6 +4082,11 @@ function contextForTransition(target: string, current?: string) {
                   : target === "refunded" || target === "cancelled_refunded"
                     ? "cancelled_refunded"
                     : "cancelled_settled",
+              sourceResultId: "completion-slot-source-result-1",
+              sourceCurrentStateCommandKey: "completion-slot-source-command-1",
+              resultId: "completion-result-1",
+              completionTarget: target,
+              immutable: true,
             },
           ],
     failureStage,
@@ -4430,6 +4514,13 @@ function commandAnchors(
   ) {
     return {
       aggregateId: "order-1",
+      ...((current === "in_production" || current === "recovery_pending") &&
+      target === "qc_passed"
+        ? {
+            ownershipSnapshotId: "qc-slot-set-1",
+            ownershipSnapshotResultId: "qc-slot-set-result-1",
+          }
+        : {}),
       ...(current === "draft" && target === "quoted"
         ? {
             currentStateCommandKey: "order-draft-command-1",
@@ -4486,6 +4577,13 @@ function commandAnchors(
   ) {
     return {
       aggregateId: "phase-1",
+      ...((current === "in_production" || current === "recovery_pending") &&
+      target === "qc_passed"
+        ? {
+            ownershipSnapshotId: "qc-slot-set-1",
+            ownershipSnapshotResultId: "qc-slot-set-result-1",
+          }
+        : {}),
       ...(current === "quoted" && target === "active"
         ? {
             currentStateCommandKey: "phase-quoted-command-1",
@@ -4622,6 +4720,8 @@ function commandAnchors(
       aggregateId: "order-1",
       currentStateCommandKey: `order-${current}-command-1`,
       currentStateResultId: `order-${current}-result-1`,
+      ownershipSnapshotId: "completion-slot-set-1",
+      ownershipSnapshotResultId: "completion-slot-set-result-1",
     };
   }
   if (
@@ -4635,6 +4735,8 @@ function commandAnchors(
       aggregateId: "phase-1",
       currentStateCommandKey: `phase-${current}-command-1`,
       currentStateResultId: `phase-${current}-result-1`,
+      ownershipSnapshotId: "completion-slot-set-1",
+      ownershipSnapshotResultId: "completion-slot-set-result-1",
     };
   }
   if (
@@ -6598,17 +6700,30 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it("rejects an incomplete or duplicate multi-slot QC projection", () => {
+    const firstJobSource =
+      permittedContext.qcAuthoritativeFulfilmentSlotSet.currentJobSources[0];
+    const secondJobSource = {
+      ...firstJobSource,
+      slotId: "slot-2",
+      jobId: "job-2",
+      currentJobSlotId: "slot-2",
+      resultId: "job-qc_approved-result-2",
+      currentStateCommandKey: "job-qc_approved-command-2",
+    };
     const secondSlot = {
       ...permittedContext.qcFulfilmentSlots[0],
       id: "slot-2",
       currentJobId: "job-2",
       currentJobSlotId: "slot-2",
+      currentJobSourceResultId: "job-qc_approved-result-2",
+      currentJobSourceCommandKey: "job-qc_approved-command-2",
     };
     const baseContext = {
       ...contextForTransition("qc_passed", "in_production"),
       qcAuthoritativeFulfilmentSlotSet: {
         ...permittedContext.qcAuthoritativeFulfilmentSlotSet,
         slotIds: ["slot-1", "slot-2"],
+        currentJobSources: [firstJobSource, secondJobSource],
       },
       expectedQcFulfilmentSlotIds: ["slot-1", "slot-2"],
       qcFulfilmentSlots: [permittedContext.qcFulfilmentSlots[0], secondSlot],
@@ -6621,6 +6736,7 @@ describe("v0 lifecycle policy tables", () => {
           qcAuthoritativeFulfilmentSlotSet: {
             ...permittedContext.qcAuthoritativeFulfilmentSlotSet,
             slotIds: ["slot-1", "slot-2"],
+            currentJobSources: [firstJobSource, secondJobSource],
           },
           expectedQcFulfilmentSlotIds: ["slot-1", "slot-2"],
           qcFulfilmentSlots: [
@@ -6645,11 +6761,181 @@ describe("v0 lifecycle policy tables", () => {
           transition(policy, {
             current,
             target: "qc_passed",
+            idempotencyKey: `qc-slot-stale-job-source-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
+            context: {
+              ...context,
+              qcFulfilmentSlots: [
+                {
+                  ...permittedContext.qcFulfilmentSlots[0],
+                  currentJobSourceResultId: "job-qc_approved-result-2",
+                },
+                secondSlot,
+              ],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-stale-authoritative-job-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
+            context: {
+              ...context,
+              qcAuthoritativeFulfilmentSlotSet: {
+                ...context.qcAuthoritativeFulfilmentSlotSet,
+                currentJobSources: [
+                  {
+                    ...firstJobSource,
+                    resultId: "job-qc_approved-result-2",
+                  },
+                  secondJobSource,
+                ],
+              },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-mutable-authoritative-job-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
+            context: {
+              ...context,
+              qcAuthoritativeFulfilmentSlotSet: {
+                ...context.qcAuthoritativeFulfilmentSlotSet,
+                currentJobSources: [
+                  { ...firstJobSource, immutable: false },
+                  secondJobSource,
+                ],
+              },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-replaced-job-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
+            context: {
+              ...context,
+              qcFulfilmentSlots: [
+                {
+                  ...permittedContext.qcFulfilmentSlots[0],
+                  currentJobId: "job-2",
+                },
+                secondSlot,
+              ],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-foreign-atomic-result-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
+            context: {
+              ...context,
+              qcFulfilmentSlots: [
+                {
+                  ...permittedContext.qcFulfilmentSlots[0],
+                  qcCompletionResultId: "qc-completion-result-2",
+                },
+                secondSlot,
+              ],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-cross-wired-job-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
+            context: {
+              ...context,
+              qcFulfilmentSlots: [
+                {
+                  ...permittedContext.qcFulfilmentSlots[0],
+                  currentJobId: "job-2",
+                  currentJobSourceResultId: "job-qc_approved-result-2",
+                  currentJobSourceCommandKey: "job-qc_approved-command-2",
+                },
+                secondSlot,
+              ],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-coordinated-job-source-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
+            context: {
+              ...context,
+              qcFulfilmentSlots: [
+                {
+                  ...permittedContext.qcFulfilmentSlots[0],
+                  currentJobId: "job-2",
+                  currentJobSourceResultId: "job-qc_approved-result-2",
+                  currentJobSourceCommandKey: "job-qc_approved-command-2",
+                  currentJobStatus: "packed",
+                },
+                secondSlot,
+              ],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
             idempotencyKey: `qc-slot-omission-${policy.name}-${current}`,
             ...commandAnchors(policy, current, "qc_passed"),
             context: {
               ...context,
               qcFulfilmentSlots: [permittedContext.qcFulfilmentSlots[0]],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-fully-coordinated-set-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
+            context: {
+              ...context,
+              qcExpectedPhaseTopology: {
+                ...context.qcExpectedPhaseTopology,
+                authoritativeFulfilmentSlotSetId: "qc-slot-set-2",
+                authoritativeFulfilmentSlotSetResultId: "qc-slot-set-result-2",
+              },
+              qcAuthoritativeFulfilmentSlotSetId: "qc-slot-set-2",
+              qcExpectedFulfilmentSlotSetId: "qc-slot-set-2",
+              qcAuthoritativeFulfilmentSlotSetResultId: "qc-slot-set-result-2",
+              qcAuthoritativeFulfilmentSlotSet: {
+                ...permittedContext.qcAuthoritativeFulfilmentSlotSet,
+                id: "qc-slot-set-2",
+                slotIds: ["slot-1", "slot-2"],
+                resultId: "qc-slot-set-result-2",
+                currentJobSources: [firstJobSource, secondJobSource],
+              },
+              qcFulfilmentSlots: [
+                {
+                  ...permittedContext.qcFulfilmentSlots[0],
+                  authoritativeFulfilmentSlotSetId: "qc-slot-set-2",
+                },
+                {
+                  ...secondSlot,
+                  authoritativeFulfilmentSlotSetId: "qc-slot-set-2",
+                },
+              ],
             },
           }),
         ).toThrow(TransitionGuardError);
@@ -6671,6 +6957,7 @@ describe("v0 lifecycle policy tables", () => {
                 phaseTopologyId: "phase-1",
                 slotIds: ["slot-1"],
                 resultId: "qc-slot-set-result-2",
+                currentJobSources: [firstJobSource],
                 immutable: true,
               },
               expectedQcFulfilmentSlotIds: ["slot-1"],
@@ -11218,6 +11505,198 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
+    ["missing ownership id", { ownershipSnapshotId: undefined }],
+    ["blank ownership id", { ownershipSnapshotId: " " }],
+    ["foreign ownership id", { ownershipSnapshotId: "completion-slot-set-2" }],
+    ["missing ownership result", { ownershipSnapshotResultId: undefined }],
+    ["blank ownership result", { ownershipSnapshotResultId: " " }],
+    [
+      "foreign ownership result",
+      { ownershipSnapshotResultId: "completion-slot-set-result-2" },
+    ],
+  ] as const)(
+    "rejects terminal completion with a %s command ownership anchor",
+    (_case, invalid) => {
+      for (const [policy, current, target] of [
+        [orderPolicy, "delivered", "completed"],
+        [singleOrderPhasePolicy, "delivered", "completed"],
+      ] as const) {
+        expect(() =>
+          transition(policy, {
+            ...commandAnchors(policy, current, target),
+            ...invalid,
+            current,
+            target,
+            idempotencyKey: `completion-invalid-ownership-${policy.name}-${_case}`,
+            context: multiSlotDeliveredCompletion(),
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    [
+      "slot source result",
+      (slot: Record<string, unknown>) => ({
+        ...slot,
+        sourceResultId: "completion-slot-source-result-2",
+      }),
+    ],
+    [
+      "slot source command",
+      (slot: Record<string, unknown>) => ({
+        ...slot,
+        sourceCurrentStateCommandKey: "completion-slot-source-command-2",
+      }),
+    ],
+    [
+      "slot immutable flag",
+      (slot: Record<string, unknown>) => ({ ...slot, immutable: false }),
+    ],
+    [
+      "outcome source result",
+      (outcome: Record<string, unknown>) => ({
+        ...outcome,
+        sourceResultId: "completion-slot-source-result-2",
+      }),
+    ],
+    [
+      "outcome source command",
+      (outcome: Record<string, unknown>) => ({
+        ...outcome,
+        sourceCurrentStateCommandKey: "completion-slot-source-command-2",
+      }),
+    ],
+    [
+      "outcome completion result",
+      (outcome: Record<string, unknown>) => ({
+        ...outcome,
+        resultId: "completion-result-2",
+      }),
+    ],
+    [
+      "outcome target",
+      (outcome: Record<string, unknown>) => ({
+        ...outcome,
+        completionTarget: "partially_fulfilled",
+      }),
+    ],
+    [
+      "outcome immutable flag",
+      (outcome: Record<string, unknown>) => ({ ...outcome, immutable: false }),
+    ],
+  ] as const)(
+    "rejects terminal completion with a stale or cross-wired %s",
+    (_case, mutate) => {
+      for (const [policy, current, target] of [
+        [orderPolicy, "delivered", "completed"],
+        [singleOrderPhasePolicy, "delivered", "completed"],
+      ] as const) {
+        const context = multiSlotDeliveredCompletion();
+        if (_case.startsWith("slot ")) {
+          context.completionAuthoritativeFulfilmentSlotSet = {
+            ...context.completionAuthoritativeFulfilmentSlotSet,
+            slotSnapshots:
+              context.completionAuthoritativeFulfilmentSlotSet.slotSnapshots.map(
+                (slot, index) => (index === 0 ? mutate(slot) : slot),
+              ),
+          };
+        } else {
+          context.completionFulfilmentSlotOutcomes =
+            context.completionFulfilmentSlotOutcomes.map((outcome, index) =>
+              index === 0 ? mutate(outcome) : outcome,
+            );
+        }
+        expect(() =>
+          transition(policy, {
+            ...commandAnchors(policy, current, target),
+            current,
+            target,
+            idempotencyKey: `completion-invalid-source-${policy.name}-${_case}`,
+            context,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["Order", orderPolicy],
+    ["OrderPhase(single)", singleOrderPhasePolicy],
+  ] as const)(
+    "rejects %s when a fully coordinated alternate set and outcomes hide behind A anchors",
+    (_lifecycle, policy) => {
+      const context = multiSlotDeliveredCompletion();
+      const alternateSnapshots = ["slot-3", "slot-4"].map((id, index) => ({
+        id,
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "delivered",
+        sourceResultId: `completion-slot-source-result-${index + 3}`,
+        sourceCurrentStateCommandKey: `completion-slot-source-command-${index + 3}`,
+        immutable: true,
+      }));
+      expect(() =>
+        transition(policy, {
+          ...commandAnchors(policy, "delivered", "completed"),
+          current: "delivered",
+          target: "completed",
+          idempotencyKey: `completion-coordinated-set-outcomes-${policy.name}`,
+          context: {
+            ...context,
+            completionAuthoritativePhaseTopologyId: "phase-1",
+            completionExpectedPhaseTopologyId: "phase-1",
+            completionExpectedPhaseTopology: {
+              ...context.completionExpectedPhaseTopology,
+              authoritativeFulfilmentSlotSetId: "completion-slot-set-2",
+              authoritativeFulfilmentSlotSetResultId:
+                "completion-slot-set-result-2",
+            },
+            completionExpectedOrder: {
+              ...context.completionExpectedOrder,
+              fulfilmentSlotSetId: "completion-slot-set-2",
+              fulfilmentSlotSetResultId: "completion-slot-set-result-2",
+            },
+            completionExpectedPhase: {
+              ...context.completionExpectedPhase,
+              fulfilmentSlotSetId: "completion-slot-set-2",
+              fulfilmentSlotSetResultId: "completion-slot-set-result-2",
+            },
+            completionAuthoritativeFulfilmentSlotSetId: "completion-slot-set-2",
+            completionExpectedFulfilmentSlotSetId: "completion-slot-set-2",
+            completionAuthoritativeFulfilmentSlotSetResultId:
+              "completion-slot-set-result-2",
+            completionAuthoritativeFulfilmentSlotSet: {
+              ...context.completionAuthoritativeFulfilmentSlotSet,
+              id: "completion-slot-set-2",
+              resultId: "completion-slot-set-result-2",
+              completionResultId: "completion-result-2",
+              slotIds: ["slot-3", "slot-4"],
+              slotSnapshots: alternateSnapshots,
+            },
+            completionResultId: "completion-result-2",
+            expectedCompletionFulfilmentSlotIds: ["slot-3", "slot-4"],
+            completionFulfilmentSlotOutcomes: alternateSnapshots.map(
+              (slot) => ({
+                slotId: slot.id,
+                orderId: slot.orderId,
+                phaseId: slot.phaseId,
+                status: slot.status,
+                sourceResultId: slot.sourceResultId,
+                sourceCurrentStateCommandKey: slot.sourceCurrentStateCommandKey,
+                resultId: "completion-result-2",
+                completionTarget: "completed",
+                immutable: true,
+              }),
+            ),
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
     ["Order", orderPolicy],
     ["OrderPhase(single)", singleOrderPhasePolicy],
   ] as const)(
@@ -11575,12 +12054,22 @@ describe("v0 lifecycle policy tables", () => {
         orderId: "order-1",
         phaseId: "phase-1",
         status: "delivered",
+        sourceResultId: "completion-slot-source-result-1",
+        sourceCurrentStateCommandKey: "completion-slot-source-command-1",
+        resultId: "completion-result-1",
+        completionTarget: "partially_fulfilled",
+        immutable: true,
       },
       {
         slotId: "slot-2",
         orderId: "order-1",
         phaseId: "phase-1",
         status: "cancelled_refunded",
+        sourceResultId: "completion-slot-source-result-2",
+        sourceCurrentStateCommandKey: "completion-slot-source-command-2",
+        resultId: "completion-result-1",
+        completionTarget: "partially_fulfilled",
+        immutable: true,
       },
     ],
   });
@@ -11592,6 +12081,26 @@ describe("v0 lifecycle policy tables", () => {
       completionAuthoritativeFulfilmentSlotSet: {
         ...context.completionAuthoritativeFulfilmentSlotSet,
         slotIds: ["slot-1", "slot-2"],
+        slotSnapshots: [
+          {
+            id: "slot-1",
+            orderId: "order-1",
+            phaseId: "phase-1",
+            status: "delivered",
+            sourceResultId: "completion-slot-source-result-1",
+            sourceCurrentStateCommandKey: "completion-slot-source-command-1",
+            immutable: true,
+          },
+          {
+            id: "slot-2",
+            orderId: "order-1",
+            phaseId: "phase-1",
+            status: "delivered",
+            sourceResultId: "completion-slot-source-result-2",
+            sourceCurrentStateCommandKey: "completion-slot-source-command-2",
+            immutable: true,
+          },
+        ],
       },
       expectedCompletionFulfilmentSlotIds: ["slot-1", "slot-2"],
       completionFulfilmentSlotOutcomes: [
@@ -11600,12 +12109,22 @@ describe("v0 lifecycle policy tables", () => {
           orderId: "order-1",
           phaseId: "phase-1",
           status: "delivered",
+          sourceResultId: "completion-slot-source-result-1",
+          sourceCurrentStateCommandKey: "completion-slot-source-command-1",
+          resultId: "completion-result-1",
+          completionTarget: "completed",
+          immutable: true,
         },
         {
           slotId: "slot-2",
           orderId: "order-1",
           phaseId: "phase-1",
           status: "delivered",
+          sourceResultId: "completion-slot-source-result-2",
+          sourceCurrentStateCommandKey: "completion-slot-source-command-2",
+          resultId: "completion-result-1",
+          completionTarget: "completed",
+          immutable: true,
         },
       ],
     };
@@ -13395,6 +13914,18 @@ describe("v0 lifecycle policy tables", () => {
         ["missing key", { currentStateCommandKey: undefined }, {}],
         ["blank key", { currentStateCommandKey: " " }, {}],
         ["foreign key", { currentStateCommandKey: "foreign-command" }, {}],
+        ["missing ownership ID", { ownershipSnapshotId: undefined }, {}],
+        ["foreign ownership ID", { ownershipSnapshotId: "qc-slot-set-2" }, {}],
+        [
+          "missing ownership result",
+          { ownershipSnapshotResultId: undefined },
+          {},
+        ],
+        [
+          "foreign ownership result",
+          { ownershipSnapshotResultId: "qc-slot-set-result-2" },
+          {},
+        ],
         [
           "stale snapshot",
           {},
@@ -23988,12 +24519,12 @@ describe("v0 lifecycle policy tables", () => {
     "requires the selected aggregate for %s completion",
     (policy, aggregateId) => {
       const anchors = commandAnchors(policy, "delivered", "completed");
+      const { aggregateId: _aggregateId, ...unselectedAnchors } = anchors;
       const command = {
         current: "delivered" as const,
         target: "completed" as const,
         idempotencyKey: `completion-selected-${policy.name}`,
-        currentStateCommandKey: anchors.currentStateCommandKey,
-        currentStateResultId: anchors.currentStateResultId,
+        ...unselectedAnchors,
         context: contextForTransition("completed", "delivered"),
       };
       expect(() => transition(policy, command)).toThrow(TransitionGuardError);

@@ -412,6 +412,11 @@ function requireProjectedCompletionTarget<S extends string>(
   const authoritativeIds = Array.isArray(authoritativeIdsValue)
     ? [...authoritativeIdsValue]
     : undefined;
+  const authoritativeSlotsValue = authoritative?.slotSnapshots;
+  const authoritativeSlots = Array.isArray(authoritativeSlotsValue)
+    ? [...authoritativeSlotsValue]
+    : undefined;
+  const completionResultId = context?.completionResultId;
   const nonBlank = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
   const expectedStatus =
@@ -433,6 +438,32 @@ function requireProjectedCompletionTarget<S extends string>(
     lifecycle === "OrderPhase(single)"
       ? expectedTopologyStatus
       : command.current;
+  const authoritativeSlotById = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  const authoritativeSlotSetValid =
+    authoritativeSlots !== undefined &&
+    authoritativeSlots.every((value) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value))
+        return false;
+      const slot = value as Readonly<Record<string, unknown>>;
+      if (
+        !nonBlank(slot.id) ||
+        authoritativeSlotById.has(slot.id) ||
+        !authoritativeIds?.includes(slot.id) ||
+        slot.orderId !== context?.orderId ||
+        slot.phaseId !== context?.phaseId ||
+        !nonBlank(slot.sourceResultId) ||
+        !nonBlank(slot.sourceCurrentStateCommandKey) ||
+        slot.immutable !== true
+      ) {
+        return false;
+      }
+      authoritativeSlotById.set(slot.id, slot);
+      return true;
+    }) &&
+    authoritativeSlotById.size === authoritativeIds?.length;
   const ids = new Set<string>();
   let hasDeliveredOutcome = false;
   let hasCancelledRefundedOutcome = false;
@@ -467,11 +498,18 @@ function requireProjectedCompletionTarget<S extends string>(
     nonBlank(setId) &&
     expectedSetId === setId &&
     nonBlank(setResultId) &&
+    nonBlank(command.ownershipSnapshotId) &&
+    command.ownershipSnapshotId === setId &&
+    nonBlank(command.ownershipSnapshotResultId) &&
+    command.ownershipSnapshotResultId === setResultId &&
     authoritative?.id === setId &&
     authoritative?.orderId === context?.orderId &&
     authoritative?.phaseId === context?.phaseId &&
     authoritative?.phaseTopologyId === topologyId &&
     authoritative?.resultId === setResultId &&
+    authoritative?.completionResultId === completionResultId &&
+    authoritative?.completionTarget === command.target &&
+    authoritative?.sourceStatus === command.current &&
     authoritative?.immutable === true &&
     context?.completionSlotSetOrderId === context?.orderId &&
     context?.completionSlotSetPhaseId === context?.phaseId &&
@@ -480,6 +518,11 @@ function requireProjectedCompletionTarget<S extends string>(
     authoritativeIds.length > 0 &&
     authoritativeIds.every(nonBlank) &&
     new Set(authoritativeIds).size === authoritativeIds.length &&
+    authoritativeSlots !== undefined &&
+    authoritativeSlots.length === authoritativeIds.length &&
+    authoritativeSlotSetValid &&
+    nonBlank(completionResultId) &&
+    context?.completionResultAtomic === true &&
     Array.isArray(expected) &&
     expected.length > 0 &&
     new Set(expected).size === expected.length &&
@@ -494,8 +537,21 @@ function requireProjectedCompletionTarget<S extends string>(
       const status = outcome.status;
       if (status === "delivered") hasDeliveredOutcome = true;
       if (status === "cancelled_refunded") hasCancelledRefundedOutcome = true;
+      const source = nonBlank(outcome.slotId)
+        ? authoritativeSlotById.get(outcome.slotId)
+        : undefined;
       return (
         nonBlank(outcome.slotId) &&
+        source !== undefined &&
+        source.status === status &&
+        source.sourceResultId === outcome.sourceResultId &&
+        source.sourceCurrentStateCommandKey ===
+          outcome.sourceCurrentStateCommandKey &&
+        nonBlank(outcome.sourceResultId) &&
+        nonBlank(outcome.sourceCurrentStateCommandKey) &&
+        outcome.resultId === completionResultId &&
+        outcome.completionTarget === command.target &&
+        outcome.immutable === true &&
         !ids.has(outcome.slotId) &&
         expected.includes(outcome.slotId) &&
         outcome.orderId === context?.orderId &&
@@ -1216,6 +1272,15 @@ function requireCompleteQcSlotSet<S extends string>(
   orderId: string,
   phaseId: string,
 ): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
   const topologyId = command.context?.qcAuthoritativePhaseTopologyId;
   const expectedTopologyId = command.context?.qcExpectedPhaseTopologyId;
   const topologyValue = command.context?.qcExpectedPhaseTopology;
@@ -1245,6 +1310,11 @@ function requireCompleteQcSlotSet<S extends string>(
     ? [...expectedIdsValue]
     : undefined;
   const slots = Array.isArray(slotsValue) ? [...slotsValue] : undefined;
+  const currentJobSourcesValue = authoritative?.currentJobSources;
+  const currentJobSources = Array.isArray(currentJobSourcesValue)
+    ? [...currentJobSourcesValue]
+    : undefined;
+  const resultId = context?.qcCompletionResultId;
   if (
     typeof topologyId !== "string" ||
     topologyId.trim().length === 0 ||
@@ -1268,6 +1338,8 @@ function requireCompleteQcSlotSet<S extends string>(
     authoritative.phaseTopologyId !== topologyId ||
     authoritative.resultId !== setResultId ||
     authoritative.immutable !== true ||
+    command.ownershipSnapshotId !== setId ||
+    command.ownershipSnapshotResultId !== setResultId ||
     authoritativeIds === undefined ||
     authoritativeIds.length === 0 ||
     authoritativeIds.some(
@@ -1285,7 +1357,12 @@ function requireCompleteQcSlotSet<S extends string>(
     new Set(expectedIds).size !== expectedIds.length ||
     !hasSameNonEmptyStringSet(expectedIds, authoritativeIds) ||
     slots === undefined ||
-    slots.length !== expectedIds.length
+    slots.length !== expectedIds.length ||
+    !nonBlank(resultId) ||
+    context?.qcCompletionOrderResultId !== resultId ||
+    context?.qcCompletionPhaseResultId !== resultId ||
+    currentJobSources === undefined ||
+    currentJobSources.length !== authoritativeIds.length
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -1293,6 +1370,37 @@ function requireCompleteQcSlotSet<S extends string>(
       command.target,
       "QC completion requires the authoritative complete fulfilment slot set",
     );
+  }
+  const sourceBySlotId = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const value of currentJobSources) {
+    const source = record(value);
+    const slotId = source?.slotId;
+    const jobId = source?.jobId;
+    if (
+      source === undefined ||
+      !nonBlank(slotId) ||
+      !nonBlank(jobId) ||
+      sourceBySlotId.has(slotId) ||
+      !authoritativeIds.includes(slotId) ||
+      source.orderId !== orderId ||
+      source.phaseId !== phaseId ||
+      source.currentJobSlotId !== slotId ||
+      source.currentJobLineageLeaf !== true ||
+      !qcReadyJobStatuses.has(source.status as string) ||
+      !nonBlank(source.resultId) ||
+      !nonBlank(source.currentStateCommandKey) ||
+      source.openReplacementRequestId !== null ||
+      source.recoveryBlocked !== false ||
+      source.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "QC readiness requires one immutable current Job source for every authoritative slot",
+      );
+    }
+    sourceBySlotId.set(slotId, source);
   }
   const projectedIds = new Set<string>();
   for (const value of slots) {
@@ -1307,6 +1415,7 @@ function requireCompleteQcSlotSet<S extends string>(
     const slot = value as Readonly<Record<string, unknown>>;
     const id = slot.id;
     const currentJobId = slot.currentJobId;
+    const source = typeof id === "string" ? sourceBySlotId.get(id) : undefined;
     if (
       typeof id !== "string" ||
       id.trim().length === 0 ||
@@ -1318,11 +1427,17 @@ function requireCompleteQcSlotSet<S extends string>(
       slot.phaseId !== phaseId ||
       typeof currentJobId !== "string" ||
       currentJobId.trim().length === 0 ||
+      source === undefined ||
+      source.jobId !== currentJobId ||
+      slot.currentJobSourceResultId !== source.resultId ||
+      slot.currentJobSourceCommandKey !== source.currentStateCommandKey ||
+      slot.currentJobImmutable !== true ||
+      slot.qcCompletionResultId !== resultId ||
       slot.currentJobOrderId !== orderId ||
       slot.currentJobPhaseId !== phaseId ||
       slot.currentJobSlotId !== id ||
       slot.currentJobLineageLeaf !== true ||
-      !qcReadyJobStatuses.has(slot.currentJobStatus as string) ||
+      slot.currentJobStatus !== source.status ||
       slot.openReplacementRequestId !== null ||
       slot.recoveryBlocked !== false
     ) {
@@ -1335,7 +1450,11 @@ function requireCompleteQcSlotSet<S extends string>(
     }
     projectedIds.add(id);
   }
-  if (authoritativeIds.some((id) => !projectedIds.has(id))) {
+  if (
+    authoritativeIds.some(
+      (id) => !projectedIds.has(id) || !sourceBySlotId.has(id),
+    )
+  ) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
