@@ -145,6 +145,52 @@ const permittedContext = {
   singleOrderPhaseCreated: true,
   immutableFulfilmentSlotsCreated: true,
   setupAtomic: true,
+  quotedTopologyResultId: "quoted-topology-result-1",
+  quotedTopologyOrderId: "order-1",
+  quotedTopologyOrderPreviousStatus: "draft",
+  quotedTopologyOrderTargetStatus: "quoted",
+  quotedTopologyOrderResultId: "quoted-topology-result-1",
+  quotedTopologyPhaseSetResultId: "quoted-topology-result-1",
+  quotedTopologySlotSetResultId: "quoted-topology-result-1",
+  quotedTopologyPhaseIds: ["phase-1"],
+  quotedTopologyPhases: [
+    {
+      id: "phase-1",
+      orderId: "order-1",
+      kind: "single",
+      status: "quoted",
+      resultId: "quoted-topology-result-1",
+    },
+  ],
+  quotedTopologyAuthoritativeSlotSetId: "quoted-slot-set-1",
+  quotedTopologyExpectedSlotSetId: "quoted-slot-set-1",
+  quotedTopologyAuthoritativeSlotSet: {
+    id: "quoted-slot-set-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    immutable: true,
+    slotIds: ["slot-1", "slot-2"],
+    resultId: "quoted-topology-result-1",
+  },
+  quotedTopologyExpectedSlotIds: ["slot-1", "slot-2"],
+  quotedTopologySlots: [
+    {
+      id: "slot-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      immutable: true,
+      resultId: "quoted-topology-result-1",
+    },
+    {
+      id: "slot-2",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      immutable: true,
+      resultId: "quoted-topology-result-1",
+    },
+  ],
+  quotedTopologyCompleted: true,
+  quotedTopologyAtomic: true,
   completeReservationCaptured: true,
   confirmationActivationOrderId: "order-1",
   confirmationActivationPhaseId: "phase-1",
@@ -228,6 +274,22 @@ const permittedContext = {
   shipmentHandoffAuthorized: true,
   handoffReconciliation: true,
   handoffSettlementCompleted: true,
+  handoffReconciliationId: "handoff-reconciliation-1",
+  handoffReconciliationResultId: "cancellation-race-result-1",
+  handoffReconciliationShipmentId: "shipment-1",
+  handoffReconciliationOrderId: "order-1",
+  handoffReconciliationPhaseId: "phase-1",
+  handoffReconciliationProviderEventId: "shipment-provider-event-1",
+  handoffReconciliationProviderTransactionId: "shipment-provider-transaction-1",
+  handoffReconciliationStatus: "completed",
+  handoffReconciliationAtomic: true,
+  handoffSettlementId: "handoff-settlement-1",
+  handoffSettlementShipmentId: "shipment-1",
+  handoffSettlementOrderId: "order-1",
+  handoffSettlementPhaseId: "phase-1",
+  handoffSettlementKind: "handoff_reconciliation",
+  handoffSettlementImmutable: true,
+  handoffSettlementResultId: "cancellation-race-result-1",
   amountDueMinor: 0n,
   refundableBalanceMinor: 0n,
   reconciliationRefundAllocated: true,
@@ -890,9 +952,13 @@ const permittedContext = {
   cancellationRaceResultShipmentPreviousStatus: "cancellation_pending",
   cancellationRaceResultShipmentTargetStatus: "handed_over",
   cancellationRaceAggregateResultId: "cancellation-race-result-1",
+  cancellationRaceShipmentResultId: "cancellation-race-result-1",
+  cancellationRaceSlotSetResultId: "cancellation-race-result-1",
   cancellationRaceFinancialResultId: "cancellation-race-result-1",
   cancellationRaceAuthorizationResultId: "cancellation-race-result-1",
   cancellationRaceJobResultId: "cancellation-race-result-1",
+  cancellationRaceResultSlotIds: ["slot-1", "slot-2"],
+  cancellationRaceResultJobIds: ["job-1", "job-2"],
   cancellationRaceBarrierResultId: "cancellation-race-result-1",
   cancellationRaceBarrierResultStatus: "scan_won_reconciled",
   cancellationRaceAggregateResultStatus: "order_phase_shipped",
@@ -1117,6 +1183,8 @@ function contextForTransition(target: string, current?: string) {
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
     current === "voided" && target === "refund_pending";
+  const unauthorizedHandoffReconciliation =
+    current === "awaiting_balance" && target === "shipped";
   const claimRefundScopeChildren =
     target === "refund_pending"
       ? permittedContext.claimRefundScopeChildren.map((child, index) =>
@@ -1333,15 +1401,33 @@ function contextForTransition(target: string, current?: string) {
     currentRemedyShipmentLineageLeafStatus: remedyIncident
       ? "lost"
       : permittedContext.currentRemedyShipmentLineageLeafStatus,
-    providerEventStatus: remedyIncident
-      ? "lost"
-      : target === "delivered_reship" || target === "delivered_reprint"
-        ? "delivered"
-        : target,
+    providerEventStatus: unauthorizedHandoffReconciliation
+      ? "handed_over"
+      : remedyIncident
+        ? "lost"
+        : target === "delivered_reship" || target === "delivered_reprint"
+          ? "delivered"
+          : target,
     handoffShipmentPreviousStatus:
-      current === "cancellation_pending" && target === "handed_over"
+      unauthorizedHandoffReconciliation ||
+      (current === "cancellation_pending" && target === "handed_over")
         ? "cancellation_pending"
         : permittedContext.handoffShipmentPreviousStatus,
+    handoffOrderPreviousStatus: unauthorizedHandoffReconciliation
+      ? "awaiting_balance"
+      : permittedContext.handoffOrderPreviousStatus,
+    cancellationRaceHandoffKind: unauthorizedHandoffReconciliation
+      ? "unauthorized_reconciliation"
+      : permittedContext.cancellationRaceHandoffKind,
+    cancellationRaceResultKind: unauthorizedHandoffReconciliation
+      ? "unauthorized_reconciliation"
+      : permittedContext.cancellationRaceResultKind,
+    cancellationRaceFinancialResultStatus: unauthorizedHandoffReconciliation
+      ? "unauthorized_handoff_settled"
+      : permittedContext.cancellationRaceFinancialResultStatus,
+    cancellationRaceAuthorizationResultStatus: unauthorizedHandoffReconciliation
+      ? "unauthorized_reconciliation"
+      : permittedContext.cancellationRaceAuthorizationResultStatus,
     reshipmentSetupResolutionPreviousStatus:
       target === "reship_pending"
         ? current
@@ -1371,6 +1457,22 @@ function contextForTransition(target: string, current?: string) {
     orderTerminalPhaseIntermediateStatus: terminalPhaseDisposition.intermediate,
     orderTerminalPhaseTargetStatus: terminalPhaseDisposition.target,
   };
+}
+
+function unauthorizedHandoffReconciliationContext() {
+  return {
+    ...contextForTransition("shipped", "awaiting_balance"),
+    providerEventStatus: "handed_over",
+    handoffShipmentPreviousStatus: "cancellation_pending",
+    handoffOrderPreviousStatus: "awaiting_balance",
+    handoffPhasePreviousStatus: "qc_passed",
+    cancellationRaceHandoffKind: "unauthorized_reconciliation",
+    cancellationRaceResultKind: "unauthorized_reconciliation",
+    cancellationRaceAggregateResultStatus: "order_phase_shipped",
+    cancellationRaceFinancialResultStatus: "unauthorized_handoff_settled",
+    cancellationRaceAuthorizationResultStatus: "unauthorized_reconciliation",
+    cancellationRaceJobResultStatus: "complete_job_set_handed_over",
+  } as const;
 }
 
 function errorCode(action: () => unknown): string | undefined {
@@ -1526,6 +1628,215 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("creates the quoted Order topology from one exact reordered atomic result", () => {
+    const context = contextForTransition("quoted", "draft");
+    expect(
+      transition(orderPolicy, {
+        current: "draft",
+        target: "quoted",
+        idempotencyKey: "quoted-topology-complete",
+        context: {
+          ...context,
+          quotedTopologyExpectedSlotIds: ["slot-2", "slot-1"],
+          quotedTopologySlots: [...context.quotedTopologySlots].reverse(),
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "draft", current: "quoted" });
+  });
+
+  it.each([
+    ["blank Order", { orderId: " " }],
+    ["foreign Order", { quotedTopologyOrderId: "another-order" }],
+    ["wrong Order source", { quotedTopologyOrderPreviousStatus: "quoted" }],
+    ["wrong Order target", { quotedTopologyOrderTargetStatus: "confirmed" }],
+    ["blank result", { quotedTopologyResultId: " " }],
+    ["foreign Order result", { quotedTopologyOrderResultId: "another-result" }],
+    [
+      "foreign phase-set result",
+      { quotedTopologyPhaseSetResultId: "another-result" },
+    ],
+    [
+      "foreign slot-set result",
+      { quotedTopologySlotSetResultId: "another-result" },
+    ],
+    ["no phase", { quotedTopologyPhaseIds: [] }],
+    ["two phases", { quotedTopologyPhaseIds: ["phase-1", "phase-2"] }],
+    [
+      "foreign phase record",
+      {
+        quotedTopologyPhases: [
+          { ...permittedContext.quotedTopologyPhases[0], id: "phase-2" },
+        ],
+      },
+    ],
+    [
+      "phase owned by another Order",
+      {
+        quotedTopologyPhases: [
+          {
+            ...permittedContext.quotedTopologyPhases[0],
+            orderId: "another-order",
+          },
+        ],
+      },
+    ],
+    [
+      "non-single phase",
+      {
+        quotedTopologyPhases: [
+          { ...permittedContext.quotedTopologyPhases[0], kind: "sample" },
+        ],
+      },
+    ],
+    [
+      "non-quoted phase",
+      {
+        quotedTopologyPhases: [
+          { ...permittedContext.quotedTopologyPhases[0], status: "active" },
+        ],
+      },
+    ],
+    [
+      "phase from another result",
+      {
+        quotedTopologyPhases: [
+          {
+            ...permittedContext.quotedTopologyPhases[0],
+            resultId: "another-result",
+          },
+        ],
+      },
+    ],
+    [
+      "blank authoritative slot set",
+      { quotedTopologyAuthoritativeSlotSetId: " " },
+    ],
+    [
+      "foreign expected slot set",
+      { quotedTopologyExpectedSlotSetId: "another-slot-set" },
+    ],
+    [
+      "slot set owned by another Order",
+      {
+        quotedTopologyAuthoritativeSlotSet: {
+          ...permittedContext.quotedTopologyAuthoritativeSlotSet,
+          orderId: "another-order",
+        },
+      },
+    ],
+    [
+      "mutable authoritative slot set",
+      {
+        quotedTopologyAuthoritativeSlotSet: {
+          ...permittedContext.quotedTopologyAuthoritativeSlotSet,
+          immutable: false,
+        },
+      },
+    ],
+    [
+      "authoritative slot set from another result",
+      {
+        quotedTopologyAuthoritativeSlotSet: {
+          ...permittedContext.quotedTopologyAuthoritativeSlotSet,
+          resultId: "another-result",
+        },
+      },
+    ],
+    ["no slots", { quotedTopologyExpectedSlotIds: [] }],
+    [
+      "duplicate authoritative slot",
+      { quotedTopologyExpectedSlotIds: ["slot-1", "slot-1"] },
+    ],
+    [
+      "omitted slot record",
+      { quotedTopologySlots: [permittedContext.quotedTopologySlots[0]] },
+    ],
+    [
+      "coordinated projected subset",
+      {
+        quotedTopologyExpectedSlotIds: ["slot-1"],
+        quotedTopologySlots: [permittedContext.quotedTopologySlots[0]],
+      },
+    ],
+    [
+      "duplicate slot record",
+      {
+        quotedTopologySlots: [
+          permittedContext.quotedTopologySlots[0],
+          permittedContext.quotedTopologySlots[0],
+        ],
+      },
+    ],
+    [
+      "foreign slot record",
+      {
+        quotedTopologySlots: [
+          permittedContext.quotedTopologySlots[0],
+          { ...permittedContext.quotedTopologySlots[1], id: "slot-3" },
+        ],
+      },
+    ],
+    [
+      "slot owned by another Order",
+      {
+        quotedTopologySlots: [
+          permittedContext.quotedTopologySlots[0],
+          {
+            ...permittedContext.quotedTopologySlots[1],
+            orderId: "another-order",
+          },
+        ],
+      },
+    ],
+    [
+      "slot owned by another phase",
+      {
+        quotedTopologySlots: [
+          permittedContext.quotedTopologySlots[0],
+          {
+            ...permittedContext.quotedTopologySlots[1],
+            phaseId: "another-phase",
+          },
+        ],
+      },
+    ],
+    [
+      "mutable slot",
+      {
+        quotedTopologySlots: [
+          permittedContext.quotedTopologySlots[0],
+          { ...permittedContext.quotedTopologySlots[1], immutable: false },
+        ],
+      },
+    ],
+    [
+      "slot from another result",
+      {
+        quotedTopologySlots: [
+          permittedContext.quotedTopologySlots[0],
+          {
+            ...permittedContext.quotedTopologySlots[1],
+            resultId: "another-result",
+          },
+        ],
+      },
+    ],
+    ["incomplete result", { quotedTopologyCompleted: false }],
+    ["non-atomic result", { quotedTopologyAtomic: false }],
+  ] as const)("rejects quoted topology with %s evidence", (_case, invalid) => {
+    expect(() =>
+      transition(orderPolicy, {
+        current: "draft",
+        target: "quoted",
+        idempotencyKey: `quoted-topology-invalid-${_case}`,
+        context: {
+          ...contextForTransition("quoted", "draft"),
+          ...invalid,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it.each([
     ["Order", orderPolicy, "ready_to_ship"],
     ["OrderPhase(single)", singleOrderPhasePolicy, "qc_passed"],
@@ -1581,6 +1892,88 @@ describe("v0 lifecycle policy tables", () => {
             idempotencyKey: `aggregate-handoff-invalid-${policy.name}-${_case}`,
             context: {
               ...contextForTransition("shipped", current),
+              ...invalid,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it.each([
+    ["Shipment", shipmentPolicy, "label_created"],
+    ["Job", jobPolicy, "packed"],
+  ] as const)(
+    "hands over a later-parcel %s while Order and phase remain shipped",
+    (name, policy, current) => {
+      expect(
+        transition(policy, {
+          current,
+          target: "handed_over",
+          idempotencyKey: `later-parcel-${name}`,
+          context: {
+            ...contextForTransition("handed_over", current),
+            handoffOrderPreviousStatus: "shipped",
+            handoffPhasePreviousStatus: "shipped",
+            handoffResultOrderPreviousStatus: "shipped",
+            handoffResultPhasePreviousStatus: "shipped",
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: "handed_over" });
+    },
+  );
+
+  it.each([
+    [
+      "Order advanced but phase not advanced",
+      {
+        handoffOrderPreviousStatus: "shipped",
+        handoffPhasePreviousStatus: "qc_passed",
+        handoffResultOrderPreviousStatus: "shipped",
+        handoffResultPhasePreviousStatus: "qc_passed",
+      },
+    ],
+    [
+      "phase advanced but Order not advanced",
+      {
+        handoffOrderPreviousStatus: "ready_to_ship",
+        handoffPhasePreviousStatus: "shipped",
+        handoffResultOrderPreviousStatus: "ready_to_ship",
+        handoffResultPhasePreviousStatus: "shipped",
+      },
+    ],
+    [
+      "stale result Order source",
+      { handoffResultOrderPreviousStatus: "ready_to_ship" },
+    ],
+    [
+      "stale result phase source",
+      { handoffResultPhasePreviousStatus: "qc_passed" },
+    ],
+    ["foreign result Shipment", { handoffResultShipmentId: "shipment-2" }],
+    [
+      "unaccepted provider scan",
+      { handoffResultProviderScanStatus: "pending" },
+    ],
+    ["non-atomic result", { handoffResultAtomic: false }],
+  ] as const)(
+    "rejects later-parcel handoff with %s evidence",
+    (_case, invalid) => {
+      for (const [policy, current] of [
+        [shipmentPolicy, "label_created"],
+        [jobPolicy, "packed"],
+      ] as const) {
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "handed_over",
+            idempotencyKey: `later-parcel-invalid-${policy.name}-${_case}`,
+            context: {
+              ...contextForTransition("handed_over", current),
+              handoffOrderPreviousStatus: "shipped",
+              handoffPhasePreviousStatus: "shipped",
+              handoffResultOrderPreviousStatus: "shipped",
+              handoffResultPhasePreviousStatus: "shipped",
               ...invalid,
             },
           }),
@@ -2550,10 +2943,7 @@ describe("v0 lifecycle policy tables", () => {
           target: "shipped",
           idempotencyKey: `reconciliation-${missingFlag}`,
           context: {
-            handoffReconciliation: true,
-            handoffSettlementCompleted: true,
-            amountDueMinor: 0n,
-            refundableBalanceMinor: 0n,
+            ...unauthorizedHandoffReconciliationContext(),
             [missingFlag]: false,
           },
         }),
@@ -2568,8 +2958,7 @@ describe("v0 lifecycle policy tables", () => {
         target: "shipped",
         idempotencyKey: "reconciliation-amount-due",
         context: {
-          handoffReconciliation: true,
-          handoffSettlementCompleted: true,
+          ...unauthorizedHandoffReconciliationContext(),
           amountDueMinor: 1n,
           refundableBalanceMinor: 0n,
         },
@@ -2579,10 +2968,10 @@ describe("v0 lifecycle policy tables", () => {
 
   it("requires a pending reconciliation refund to be explicitly allocated", () => {
     const context = {
-      handoffReconciliation: true,
-      handoffSettlementCompleted: true,
+      ...unauthorizedHandoffReconciliationContext(),
       amountDueMinor: 0n,
       refundableBalanceMinor: 1n,
+      reconciliationRefundAllocated: false,
     };
     expect(() =>
       transition(orderPolicy, {
@@ -2604,6 +2993,122 @@ describe("v0 lifecycle policy tables", () => {
       previous: "awaiting_balance",
       current: "shipped",
     });
+  });
+
+  it.each([
+    ["ordinary handler", { cancellationRaceHandoffKind: "ordinary" }],
+    ["foreign Shipment", { cancellationRaceResultShipmentId: "shipment-2" }],
+    ["foreign Order", { cancellationRaceResultOrderId: "order-2" }],
+    ["foreign phase", { cancellationRaceResultPhaseId: "phase-2" }],
+    [
+      "foreign provider event",
+      { cancellationRaceResultProviderEventId: "event-2" },
+    ],
+    [
+      "foreign provider transaction",
+      { cancellationRaceResultProviderTransactionId: "transaction-2" },
+    ],
+    ["unauthenticated scan", { providerEventAuthenticated: false }],
+    ["unverified scan", { providerEventVerified: false }],
+    ["wrong scan status", { providerEventStatus: "in_transit" }],
+    [
+      "wrong Shipment source",
+      { handoffShipmentPreviousStatus: "label_created" },
+    ],
+    ["wrong phase source", { handoffPhasePreviousStatus: "shipped" }],
+    ["wrong phase target", { handoffPhaseTargetStatus: "qc_passed" }],
+    ["omitted slot", { handoffSlots: [permittedContext.handoffSlots[0]] }],
+    [
+      "foreign Job",
+      {
+        handoffJobs: [
+          permittedContext.handoffJobs[0],
+          { ...permittedContext.handoffJobs[1], id: "job-3" },
+        ],
+      },
+    ],
+    [
+      "substituted component result",
+      { cancellationRaceFinancialResultId: "another-result" },
+    ],
+    [
+      "substituted Shipment result",
+      { cancellationRaceShipmentResultId: "another-result" },
+    ],
+    [
+      "substituted slot-set result",
+      { cancellationRaceSlotSetResultId: "another-result" },
+    ],
+    [
+      "incomplete result slot set",
+      { cancellationRaceResultSlotIds: ["slot-1"] },
+    ],
+    ["incomplete result Job set", { cancellationRaceResultJobIds: ["job-1"] }],
+    [
+      "wrong financial result",
+      { cancellationRaceFinancialResultStatus: "balances_zero" },
+    ],
+    [
+      "reconciliation from another result",
+      { handoffReconciliationResultId: "another-result" },
+    ],
+    [
+      "reconciliation for another Shipment",
+      { handoffReconciliationShipmentId: "shipment-2" },
+    ],
+    [
+      "reconciliation for another phase",
+      { handoffReconciliationPhaseId: "phase-2" },
+    ],
+    [
+      "reconciliation for another scan",
+      { handoffReconciliationProviderEventId: "event-2" },
+    ],
+    ["incomplete reconciliation", { handoffReconciliationStatus: "pending" }],
+    ["non-atomic reconciliation", { handoffReconciliationAtomic: false }],
+    ["blank settlement", { handoffSettlementId: " " }],
+    ["settlement for another Order", { handoffSettlementOrderId: "order-2" }],
+    ["wrong settlement kind", { handoffSettlementKind: "balance_timeout" }],
+    ["mutable settlement", { handoffSettlementImmutable: false }],
+    [
+      "settlement from another result",
+      { handoffSettlementResultId: "another-result" },
+    ],
+    ["incomplete result", { cancellationRaceResultCompleted: false }],
+    ["non-atomic result", { cancellationRaceResultAtomic: false }],
+  ] as const)(
+    "rejects Order handoff reconciliation with %s evidence",
+    (_case, invalid) => {
+      expect(() =>
+        transition(orderPolicy, {
+          current: "awaiting_balance",
+          target: "shipped",
+          idempotencyKey: `reconciliation-invalid-${_case}`,
+          context: {
+            ...unauthorizedHandoffReconciliationContext(),
+            ...invalid,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects the former generic reconciliation booleans without the exact result", () => {
+    expect(() =>
+      transition(orderPolicy, {
+        current: "awaiting_balance",
+        target: "shipped",
+        idempotencyKey: "reconciliation-generic-bypass",
+        context: {
+          handoffReconciliation: true,
+          handoffSettlementCompleted: true,
+          handoffCompleted: true,
+          handoffAtomic: true,
+          amountDueMinor: 0n,
+          refundableBalanceMinor: 0n,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it.each([
@@ -2937,8 +3442,8 @@ describe("v0 lifecycle policy tables", () => {
     ["foreign Shipment slot set", { shipmentFulfilmentSlotIds: ["slot-1"] }],
     ["wrong Shipment status", { handoffShipmentPreviousStatus: "handed_over" }],
     ["wrong Job status", { handoffJobPreviousStatus: "accepted" }],
-    ["missing completion", { handoffCompleted: false }],
-    ["missing atomicity", { handoffAtomic: false }],
+    ["missing completion", { handoffResultCompleted: false }],
+    ["missing atomicity", { handoffResultAtomic: false }],
     ["incomplete slots", { handoffSlots: [permittedContext.handoffSlots[0]] }],
     [
       "duplicate slot",
@@ -7132,8 +7637,8 @@ describe("v0 lifecycle policy tables", () => {
     ["wrong Shipment target", { handoffShipmentTargetStatus: "in_transit" }],
     ["wrong Job status", { handoffJobPreviousStatus: "accepted" }],
     ["wrong Job target", { handoffJobTargetStatus: "packed" }],
-    ["missing completion", { handoffCompleted: false }],
-    ["missing atomicity", { handoffAtomic: false }],
+    ["missing completion", { handoffResultCompleted: false }],
+    ["missing atomicity", { handoffResultAtomic: false }],
     ["incomplete slots", { handoffSlots: [permittedContext.handoffSlots[0]] }],
     [
       "duplicate slot",
@@ -7848,11 +8353,7 @@ describe("v0 lifecycle policy tables", () => {
       orderPolicy,
       "draft",
       "quoted",
-      [
-        "singleOrderPhaseCreated",
-        "immutableFulfilmentSlotsCreated",
-        "setupAtomic",
-      ],
+      ["quotedTopologyCompleted", "quotedTopologyAtomic"],
     ],
     [
       orderPolicy,

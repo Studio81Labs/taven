@@ -72,6 +72,142 @@ function requireReconciliationRefundAllocation<S extends string>(
   }
 }
 
+function requireAtomicQuotedOrderTopology<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const resultId = context?.quotedTopologyResultId;
+  const phaseIdsValue = context?.quotedTopologyPhaseIds;
+  const phasesValue = context?.quotedTopologyPhases;
+  const slotIdsValue = context?.quotedTopologyExpectedSlotIds;
+  const slotsValue = context?.quotedTopologySlots;
+  const authoritativeSlotSetId = context?.quotedTopologyAuthoritativeSlotSetId;
+  const authoritativeSlotSetValue = context?.quotedTopologyAuthoritativeSlotSet;
+  const phaseIds = Array.isArray(phaseIdsValue)
+    ? [...phaseIdsValue]
+    : undefined;
+  const phases = Array.isArray(phasesValue) ? [...phasesValue] : undefined;
+  const slotIds = Array.isArray(slotIdsValue) ? [...slotIdsValue] : undefined;
+  const slots = Array.isArray(slotsValue) ? [...slotsValue] : undefined;
+  const authoritativeSlotSet =
+    typeof authoritativeSlotSetValue === "object" &&
+    authoritativeSlotSetValue !== null &&
+    !Array.isArray(authoritativeSlotSetValue)
+      ? (authoritativeSlotSetValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const authoritativeSlotIdsValue = authoritativeSlotSet?.slotIds;
+  const authoritativeSlotIds = Array.isArray(authoritativeSlotIdsValue)
+    ? [...authoritativeSlotIdsValue]
+    : undefined;
+
+  if (
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(resultId) ||
+    context?.quotedTopologyOrderId !== orderId ||
+    context?.quotedTopologyOrderPreviousStatus !== "draft" ||
+    context?.quotedTopologyOrderTargetStatus !== "quoted" ||
+    context?.quotedTopologyOrderResultId !== resultId ||
+    context?.quotedTopologyPhaseSetResultId !== resultId ||
+    context?.quotedTopologySlotSetResultId !== resultId ||
+    phaseIds === undefined ||
+    phaseIds.length !== 1 ||
+    phaseIds[0] !== phaseId ||
+    phases === undefined ||
+    phases.length !== 1 ||
+    !nonBlank(authoritativeSlotSetId) ||
+    context?.quotedTopologyExpectedSlotSetId !== authoritativeSlotSetId ||
+    authoritativeSlotSet?.id !== authoritativeSlotSetId ||
+    authoritativeSlotSet.orderId !== orderId ||
+    authoritativeSlotSet.phaseId !== phaseId ||
+    authoritativeSlotSet.immutable !== true ||
+    authoritativeSlotSet.resultId !== resultId ||
+    authoritativeSlotIds === undefined ||
+    authoritativeSlotIds.length === 0 ||
+    !authoritativeSlotIds.every(nonBlank) ||
+    new Set(authoritativeSlotIds).size !== authoritativeSlotIds.length ||
+    slotIds === undefined ||
+    slotIds.length === 0 ||
+    !slotIds.every(nonBlank) ||
+    new Set(slotIds).size !== slotIds.length ||
+    !hasSameNonEmptyStringSet(slotIds, authoritativeSlotIds) ||
+    slots === undefined ||
+    slots.length !== slotIds.length ||
+    context?.quotedTopologyCompleted !== true ||
+    context?.quotedTopologyAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "quoting requires one exact atomic Order, single phase, and immutable slot topology result",
+    );
+  }
+
+  const phase = phases[0];
+  if (
+    typeof phase !== "object" ||
+    phase === null ||
+    Array.isArray(phase) ||
+    (phase as Readonly<Record<string, unknown>>).id !== phaseId ||
+    (phase as Readonly<Record<string, unknown>>).orderId !== orderId ||
+    (phase as Readonly<Record<string, unknown>>).kind !== "single" ||
+    (phase as Readonly<Record<string, unknown>>).status !== "quoted" ||
+    (phase as Readonly<Record<string, unknown>>).resultId !== resultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "quoted topology must contain exactly the selected Order's single quoted phase",
+    );
+  }
+
+  const projectedSlotIds = new Set<string>();
+  for (const value of slots) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "quoted topology slots must be complete identity records",
+      );
+    }
+    const slot = value as Readonly<Record<string, unknown>>;
+    const id = slot.id;
+    if (
+      !nonBlank(id) ||
+      projectedSlotIds.has(id) ||
+      !slotIds.includes(id) ||
+      slot.orderId !== orderId ||
+      slot.phaseId !== phaseId ||
+      slot.immutable !== true ||
+      slot.resultId !== resultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "quoted topology must bind every immutable slot to the exact Order and phase",
+      );
+    }
+    projectedSlotIds.add(id);
+  }
+  if (slotIds.some((id) => !projectedSlotIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "quoted topology cannot omit an authoritative fulfilment slot",
+    );
+  }
+}
+
 function requireProjectedFinancialTerminalTarget<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2894,24 +3030,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
   },
   guard: (command) => {
     if (command.current === "draft" && command.target === "quoted") {
-      requireFlag(
-        "Order",
-        command,
-        "singleOrderPhaseCreated",
-        "quoting requires the single OrderPhase to be created",
-      );
-      requireFlag(
-        "Order",
-        command,
-        "immutableFulfilmentSlotsCreated",
-        "quoting requires immutable fulfilment slots",
-      );
-      requireFlag(
-        "Order",
-        command,
-        "setupAtomic",
-        "order setup requires the phase and slots to be persisted atomically",
-      );
+      requireAtomicQuotedOrderTopology("Order", command);
     }
     if (command.current === "quoted" && command.target === "confirmed") {
       requireAtomicConfirmationActivation("Order", command);
@@ -2972,20 +3091,19 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       command.current === "awaiting_balance" &&
       command.target === "shipped"
     ) {
-      requireFlag(
-        "Order",
-        command,
-        "handoffReconciliation",
-        "only an immutable unauthorized-handoff reconciliation may use this edge",
-      );
-      requireFlag(
-        "Order",
-        command,
-        "handoffSettlementCompleted",
-        "the handoff reconciliation's immutable settlement must be complete",
-      );
-      requireZeroAmountDue("Order", command);
-      requireReconciliationRefundAllocation("Order", command);
+      if (
+        command.context?.cancellationRaceHandoffKind !==
+        "unauthorized_reconciliation"
+      ) {
+        throw new TransitionGuardError(
+          "Order",
+          command.current,
+          command.target,
+          "only the exact unauthorized-handoff reconciliation result may use this edge",
+        );
+      }
+      requireVerifiedMatchingCancellationRaceScan("Order", command);
+      requireExactCancellationRaceHandoffResult("Order", command);
     }
     if (
       command.current === "awaiting_balance" &&
@@ -3540,7 +3658,12 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
       requireJobReplacementObligation("Job", command);
     }
     if (command.current === "packed" && command.target === "handed_over") {
-      requireAtomicOrdinaryHandoff("Job", command);
+      requireAtomicOrdinaryHandoff("Job", command, {
+        shipmentPrevious: "label_created",
+        orderPrevious: "ready_to_ship",
+        phasePrevious: "qc_passed",
+        allowLaterParcel: true,
+      });
     }
     if (command.current === "handed_over" && command.target === "settled") {
       requireDeliveredJobSettlement("Job", command);
@@ -3955,10 +4078,14 @@ function requireAtomicOrdinaryHandoff<S extends string>(
   command: TransitionCommand<S>,
   expectedStatuses: Readonly<{
     shipmentPrevious: "label_created" | "cancellation_pending";
-    orderPrevious: "ready_to_ship" | "awaiting_balance";
+    orderPrevious: "ready_to_ship" | "awaiting_balance" | "shipped";
+    phasePrevious: "qc_passed" | "shipped";
+    allowLaterParcel?: boolean;
+    resultProof?: "ordinary" | "cancellation_race";
   }> = {
     shipmentPrevious: "label_created",
     orderPrevious: "ready_to_ship",
+    phasePrevious: "qc_passed",
   },
 ): void {
   const shipmentId = command.context?.shipmentId;
@@ -3976,6 +4103,25 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     ? [...expectedJobIdsValue]
     : undefined;
   const jobs = Array.isArray(jobsValue) ? [...jobsValue] : undefined;
+  const firstParcelStatusesMatch =
+    command.context?.handoffOrderPreviousStatus ===
+      expectedStatuses.orderPrevious &&
+    command.context?.handoffOrderTargetStatus === "shipped" &&
+    command.context?.handoffPhasePreviousStatus ===
+      expectedStatuses.phasePrevious &&
+    command.context?.handoffPhaseTargetStatus === "shipped";
+  const laterParcelStatusesMatch =
+    expectedStatuses.allowLaterParcel === true &&
+    command.context?.handoffOrderPreviousStatus === "shipped" &&
+    command.context?.handoffOrderTargetStatus === "shipped" &&
+    command.context?.handoffPhasePreviousStatus === "shipped" &&
+    command.context?.handoffPhaseTargetStatus === "shipped";
+  const orderPrevious = laterParcelStatusesMatch
+    ? "shipped"
+    : expectedStatuses.orderPrevious;
+  const phasePrevious = laterParcelStatusesMatch
+    ? "shipped"
+    : expectedStatuses.phasePrevious;
   if (
     typeof shipmentId !== "string" ||
     shipmentId.trim().length === 0 ||
@@ -3988,11 +4134,7 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     phaseId.trim().length === 0 ||
     command.context?.handoffPhaseId !== phaseId ||
     command.context?.phaseKind !== "single" ||
-    command.context?.handoffOrderPreviousStatus !==
-      expectedStatuses.orderPrevious ||
-    command.context?.handoffOrderTargetStatus !== "shipped" ||
-    command.context?.handoffPhasePreviousStatus !== "qc_passed" ||
-    command.context?.handoffPhaseTargetStatus !== "shipped" ||
+    (!firstParcelStatusesMatch && !laterParcelStatusesMatch) ||
     command.context?.handoffShipmentPreviousStatus !==
       expectedStatuses.shipmentPrevious ||
     command.context?.handoffShipmentTargetStatus !== "handed_over" ||
@@ -4134,7 +4276,32 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       "ordinary handoff cannot omit a contributing Job",
     );
   }
-  if (lifecycle === "Order" || lifecycle === "OrderPhase(single)") {
+  if (expectedStatuses.resultProof === "cancellation_race") {
+    const resultId = command.context?.cancellationRaceHandoffResultId;
+    if (
+      typeof resultId !== "string" ||
+      resultId.trim().length === 0 ||
+      command.context?.cancellationRaceShipmentResultId !== resultId ||
+      command.context?.cancellationRaceSlotSetResultId !== resultId ||
+      command.context?.cancellationRaceJobResultId !== resultId ||
+      !hasSameNonEmptyStringSet(
+        command.context?.cancellationRaceResultSlotIds,
+        expectedSlotIds,
+      ) ||
+      !hasSameNonEmptyStringSet(
+        command.context?.cancellationRaceResultJobIds,
+        expectedJobIds,
+      )
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "cancellation-race result must bind the exact Shipment, slot set, and Job set",
+      );
+    }
+  }
+  if (expectedStatuses.resultProof !== "cancellation_race") {
     const resultId = command.context?.handoffResultId;
     const resultSlotIds = command.context?.handoffResultSlotIds;
     const resultJobIds = command.context?.handoffResultJobIds;
@@ -4144,7 +4311,9 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     const aggregateSourceMatches =
       lifecycle === "Order"
         ? command.context?.handoffOrderPreviousStatus === command.current
-        : command.context?.handoffPhasePreviousStatus === command.current;
+        : lifecycle === "OrderPhase(single)"
+          ? command.context?.handoffPhasePreviousStatus === command.current
+          : true;
     if (
       typeof resultId !== "string" ||
       resultId.trim().length === 0 ||
@@ -4165,10 +4334,9 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       command.context?.handoffResultPhaseId !== phaseId ||
       !hasSameNonEmptyStringSet(resultSlotIds, expectedSlotIds) ||
       !hasSameNonEmptyStringSet(resultJobIds, expectedJobIds) ||
-      command.context?.handoffResultOrderPreviousStatus !==
-        expectedStatuses.orderPrevious ||
+      command.context?.handoffResultOrderPreviousStatus !== orderPrevious ||
       command.context?.handoffResultOrderTargetStatus !== "shipped" ||
-      command.context?.handoffResultPhasePreviousStatus !== "qc_passed" ||
+      command.context?.handoffResultPhasePreviousStatus !== phasePrevious ||
       command.context?.handoffResultPhaseTargetStatus !== "shipped" ||
       command.context?.handoffResultShipmentPreviousStatus !==
         expectedStatuses.shipmentPrevious ||
@@ -4195,7 +4363,6 @@ function requireAtomicOrdinaryHandoff<S extends string>(
         "aggregate handoff requires the exact atomic Shipment, Order, phase, slot, Job, and provider-scan result",
       );
     }
-    return;
   }
   if (
     lifecycle === "Job" &&
@@ -4210,18 +4377,6 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       "ordinary handoff Job evidence must include the exact current Job",
     );
   }
-  requireFlag(
-    lifecycle,
-    command,
-    "handoffCompleted",
-    "ordinary Shipment handoff requires the complete result",
-  );
-  requireFlag(
-    lifecycle,
-    command,
-    "handoffAtomic",
-    "ordinary Shipment and Job handoff must be atomic",
-  );
 }
 
 const cancellationRaceHandoffKinds = new Set([
@@ -4346,11 +4501,15 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     requireAtomicOrdinaryHandoff(lifecycle, command, {
       shipmentPrevious: "cancellation_pending",
       orderPrevious: "ready_to_ship",
+      phasePrevious: "qc_passed",
+      resultProof: "cancellation_race",
     });
     return;
   }
 
   if (kind === "unauthorized_reconciliation") {
+    const reconciliationId = context?.handoffReconciliationId;
+    const settlementId = context?.handoffSettlementId;
     if (
       context?.cancellationRaceAggregateResultStatus !==
         "order_phase_shipped" ||
@@ -4359,13 +4518,32 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
       context?.cancellationRaceAuthorizationResultStatus !==
         "unauthorized_reconciliation" ||
       context?.cancellationRaceJobResultStatus !==
-        "complete_job_set_handed_over"
+        "complete_job_set_handed_over" ||
+      typeof reconciliationId !== "string" ||
+      reconciliationId.trim().length === 0 ||
+      context?.handoffReconciliationResultId !== resultId ||
+      context?.handoffReconciliationShipmentId !== shipmentId ||
+      context?.handoffReconciliationOrderId !== orderId ||
+      context?.handoffReconciliationPhaseId !== phaseId ||
+      context?.handoffReconciliationProviderEventId !== providerEventId ||
+      context?.handoffReconciliationProviderTransactionId !==
+        providerTransactionId ||
+      context?.handoffReconciliationStatus !== "completed" ||
+      context?.handoffReconciliationAtomic !== true ||
+      typeof settlementId !== "string" ||
+      settlementId.trim().length === 0 ||
+      context?.handoffSettlementShipmentId !== shipmentId ||
+      context?.handoffSettlementOrderId !== orderId ||
+      context?.handoffSettlementPhaseId !== phaseId ||
+      context?.handoffSettlementKind !== "handoff_reconciliation" ||
+      context?.handoffSettlementImmutable !== true ||
+      context?.handoffSettlementResultId !== resultId
     ) {
       throw new TransitionGuardError(
         lifecycle,
         command.current,
         command.target,
-        "unauthorized cancellation-race handoff requires exact reconciliation and aggregate results",
+        "unauthorized cancellation-race handoff requires the exact reconciliation, immutable settlement, and aggregate results",
       );
     }
     requireFlag(
@@ -4385,6 +4563,8 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     requireAtomicOrdinaryHandoff(lifecycle, command, {
       shipmentPrevious: "cancellation_pending",
       orderPrevious: "awaiting_balance",
+      phasePrevious: "qc_passed",
+      resultProof: "cancellation_race",
     });
     return;
   }
@@ -4479,7 +4659,12 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
       command.current === "label_created" &&
       command.target === "handed_over"
     ) {
-      requireAtomicOrdinaryHandoff("Shipment", command);
+      requireAtomicOrdinaryHandoff("Shipment", command, {
+        shipmentPrevious: "label_created",
+        orderPrevious: "ready_to_ship",
+        phasePrevious: "qc_passed",
+        allowLaterParcel: true,
+      });
     }
     if (
       command.current === "cancellation_pending" &&
