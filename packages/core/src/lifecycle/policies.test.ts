@@ -1027,6 +1027,30 @@ const permittedContext = {
   orderCompletionPhaseTargetStatus: "completed",
   phaseCompletionCompleted: true,
   orderPhaseCompletionAtomic: true,
+  completionOrderCurrentStateCommandKey: "order-delivered-command-1",
+  completionPhaseCurrentStateCommandKey: "phase-delivered-command-1",
+  completionExpectedOrder: {
+    id: "order-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "delivered",
+    currentStateCommandKey: "order-delivered-command-1",
+    phaseTopologyId: "phase-1",
+    fulfilmentSlotSetId: "completion-slot-set-1",
+    fulfilmentSlotSetResultId: "completion-slot-set-result-1",
+    immutable: true,
+  },
+  completionExpectedPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "delivered",
+    currentStateCommandKey: "phase-delivered-command-1",
+    phaseTopologyId: "phase-1",
+    fulfilmentSlotSetId: "completion-slot-set-1",
+    fulfilmentSlotSetResultId: "completion-slot-set-result-1",
+    immutable: true,
+  },
   productionStartOrderId: "order-1",
   productionStartPhaseOrderId: "order-1",
   productionStartPhaseId: "phase-1",
@@ -1832,6 +1856,41 @@ const permittedContext = {
   claimRefundCompletionCompleted: true,
   claimRefundCompletionAtomic: true,
   claimResolutionSetClaimId: "claim-1",
+  claimResolutionOwnershipSetId: "claim-resolution-ownership-set-1",
+  claimResolutionOwnershipSetResultId:
+    "claim-resolution-ownership-set-result-1",
+  claimResolutionOwnershipSet: {
+    id: "claim-resolution-ownership-set-1",
+    claimId: "claim-1",
+    resultId: "claim-resolution-ownership-set-result-1",
+    resolutionIds: ["claim-resolution-1"],
+    slotIds: ["claim-slot-1"],
+    resolutionSlotBindings: [
+      { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+    ],
+    immutable: true,
+  },
+  claimResolutionOwnershipSnapshotId: "claim-resolution-ownership-snapshot-1",
+  claimResolutionOwnershipPreviousClaimResultId: "claim-active-result-1",
+  claimResolutionOwnershipSnapshotResultId:
+    "claim-resolution-ownership-snapshot-result-1",
+  claimResolutionOwnershipSnapshot: {
+    id: "claim-resolution-ownership-snapshot-1",
+    aggregateId: "claim-1",
+    claimId: "claim-1",
+    status: "active",
+    previousResultId: "claim-active-result-1",
+    resultId: "claim-resolution-ownership-snapshot-result-1",
+    ownershipSetId: "claim-resolution-ownership-set-1",
+    ownershipSetResultId: "claim-resolution-ownership-set-result-1",
+    resolutionIds: ["claim-resolution-1"],
+    slotIds: ["claim-slot-1"],
+    resolutionSlotBindings: [
+      { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+    ],
+    currentStateCommandKey: "claim-active-command-1",
+    immutable: true,
+  },
   expectedClaimSlotResolutionIds: ["claim-resolution-1"],
   expectedClaimSlotIds: ["claim-slot-1"],
   expectedClaimResolutionSlots: [
@@ -2641,6 +2700,47 @@ function claimResolutionEvidence(statuses: readonly string[]) {
   return {
     claimId: "claim-1",
     claimResolutionSetClaimId: "claim-1",
+    claimResolutionOwnershipSetId: "claim-resolution-ownership-set-1",
+    claimResolutionOwnershipSetResultId:
+      "claim-resolution-ownership-set-result-1",
+    claimResolutionOwnershipSet: {
+      id: "claim-resolution-ownership-set-1",
+      claimId: "claim-1",
+      resultId: "claim-resolution-ownership-set-result-1",
+      resolutionIds: [...expectedClaimSlotResolutionIds],
+      slotIds: [...expectedClaimSlotIds],
+      resolutionSlotBindings: expectedClaimSlotResolutionIds.map(
+        (resolutionId, index) => ({
+          resolutionId,
+          slotId: expectedClaimSlotIds[index],
+        }),
+      ),
+      immutable: true,
+    },
+    claimResolutionOwnershipSnapshotId: "claim-resolution-ownership-snapshot-1",
+    claimResolutionOwnershipPreviousClaimResultId: "claim-active-result-1",
+    claimResolutionOwnershipSnapshotResultId:
+      "claim-resolution-ownership-snapshot-result-1",
+    claimResolutionOwnershipSnapshot: {
+      id: "claim-resolution-ownership-snapshot-1",
+      aggregateId: "claim-1",
+      claimId: "claim-1",
+      status: "active",
+      previousResultId: "claim-active-result-1",
+      resultId: "claim-resolution-ownership-snapshot-result-1",
+      ownershipSetId: "claim-resolution-ownership-set-1",
+      ownershipSetResultId: "claim-resolution-ownership-set-result-1",
+      resolutionIds: [...expectedClaimSlotResolutionIds],
+      slotIds: [...expectedClaimSlotIds],
+      resolutionSlotBindings: expectedClaimSlotResolutionIds.map(
+        (resolutionId, index) => ({
+          resolutionId,
+          slotId: expectedClaimSlotIds[index],
+        }),
+      ),
+      currentStateCommandKey: "claim-active-command-1",
+      immutable: true,
+    },
     expectedClaimSlotResolutionIds,
     expectedClaimSlotIds,
     expectedClaimResolutionSlots: expectedClaimSlotResolutionIds.map(
@@ -2657,6 +2757,24 @@ function claimResolutionEvidence(statuses: readonly string[]) {
       activeClaimIdAfter: null,
       status,
     })),
+    claimWithdrawalPreviousResolutionResultId:
+      "claim-resolution-pending-result-1",
+    claimWithdrawalCurrentStateCommandKey: "claim-resolution-pending-command-1",
+    claimWithdrawalExpectedResolution: {
+      id: "claim-resolution-1",
+      claimId: "claim-1",
+      slotId: "claim-slot-1",
+      status: "pending",
+      activeClaimId: "claim-1",
+      resultId: "claim-resolution-pending-result-1",
+      currentStateCommandKey: "claim-resolution-pending-command-1",
+      ownershipSetId: "claim-resolution-ownership-set-1",
+      ownershipSetResultId: "claim-resolution-ownership-set-result-1",
+      ownershipSnapshotId: "claim-resolution-ownership-snapshot-1",
+      ownershipSnapshotResultId: "claim-resolution-ownership-snapshot-result-1",
+      claimPreviousResultId: "claim-active-result-1",
+      immutable: true,
+    },
     claimResolutionSetComplete: true,
     claimSlotOwnershipReleased: true,
     claimRetentionClaimId: "claim-1",
@@ -2739,6 +2857,19 @@ function contextForTransition(target: string, current?: string) {
   );
   const claimParentCurrent =
     current === "opened" || current === "investigating" || current === "active";
+  const claimOwnershipSourceStatus = claimParentCurrent ? current : "active";
+  const claimRejectionSourceStatus =
+    current === "pending" && target === "rejected"
+      ? "investigating"
+      : claimOwnershipSourceStatus;
+  const claimOwnershipPreviousClaimResultId =
+    claimRejectionSourceStatus === "active"
+      ? "claim-active-result-1"
+      : `claim-${claimRejectionSourceStatus}-result-1`;
+  const claimOwnershipSnapshotResultId =
+    claimRejectionSourceStatus === "active"
+      ? "claim-resolution-ownership-snapshot-result-1"
+      : `claim-resolution-ownership-snapshot-${claimRejectionSourceStatus}-result-1`;
   const withdrawalChildSource =
     claimParentCurrent || current === undefined ? "pending" : current;
   const withdrawalParentSource = claimParentCurrent ? current : "active";
@@ -2748,6 +2879,12 @@ function contextForTransition(target: string, current?: string) {
     current === "voided" && target === "refund_pending";
   const unauthorizedHandoffReconciliation =
     current === "awaiting_balance" && target === "shipped";
+  const completionTopologyStatus =
+    current === "awaiting_balance" && target === "cancelled_settled"
+      ? "qc_passed"
+      : current;
+  const completionOrderStateKey = `order-${current ?? "delivered"}-command-1`;
+  const completionPhaseStateKey = `phase-${current ?? "delivered"}-command-1`;
   const claimRefundScopeChildren =
     target === "refund_pending"
       ? permittedContext.claimRefundScopeChildren.map((child, index) =>
@@ -2796,6 +2933,11 @@ function contextForTransition(target: string, current?: string) {
             activeClaimId: "claim-1",
             resultId: "claim-resolution-pending-result-1",
             currentStateCommandKey: "claim-resolution-pending-command-1",
+            ownershipSetId: "claim-resolution-ownership-set-1",
+            ownershipSetResultId: "claim-resolution-ownership-set-result-1",
+            ownershipSnapshotId: "claim-resolution-ownership-snapshot-1",
+            ownershipSnapshotResultId: claimOwnershipSnapshotResultId,
+            claimPreviousResultId: claimOwnershipPreviousClaimResultId,
             immutable: true,
           },
           claimRejectionSlotOwnershipReleased: true,
@@ -3043,6 +3185,49 @@ function contextForTransition(target: string, current?: string) {
             currentReplacementJobStatus: "printing",
           }))
         : permittedContext.replacementRequiredResourceGroups,
+    completionAuthoritativePhaseTopologyId: "phase-1",
+    completionExpectedPhaseTopologyId: "phase-1",
+    completionExpectedPhaseTopology: {
+      id: "phase-1",
+      orderId: "order-1",
+      kind: "single",
+      status:
+        current === "awaiting_balance" && target === "cancelled_settled"
+          ? "qc_passed"
+          : current,
+      authoritativeFulfilmentSlotSetId: "completion-slot-set-1",
+      authoritativeFulfilmentSlotSetResultId: "completion-slot-set-result-1",
+      immutable: true,
+    },
+    completionOrderCurrentStateCommandKey: completionOrderStateKey,
+    completionPhaseCurrentStateCommandKey: completionPhaseStateKey,
+    completionExpectedOrder: {
+      ...permittedContext.completionExpectedOrder,
+      status: current,
+      currentStateCommandKey: completionOrderStateKey,
+    },
+    completionExpectedPhase: {
+      ...permittedContext.completionExpectedPhase,
+      status: completionTopologyStatus,
+      currentStateCommandKey: completionPhaseStateKey,
+    },
+    completionSlotSetOrderId: "order-1",
+    completionSlotSetPhaseId: "phase-1",
+    completionSlotSetPhaseTopologyId: "phase-1",
+    completionAuthoritativeFulfilmentSlotSetId: "completion-slot-set-1",
+    completionExpectedFulfilmentSlotSetId: "completion-slot-set-1",
+    completionAuthoritativeFulfilmentSlotSetResultId:
+      "completion-slot-set-result-1",
+    completionAuthoritativeFulfilmentSlotSet: {
+      id: "completion-slot-set-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      phaseTopologyId: "phase-1",
+      slotIds:
+        target === "partially_fulfilled" ? ["slot-1", "slot-2"] : ["slot-1"],
+      resultId: "completion-slot-set-result-1",
+      immutable: true,
+    },
     expectedCompletionFulfilmentSlotIds:
       target === "partially_fulfilled" ? ["slot-1", "slot-2"] : ["slot-1"],
     completionFulfilmentSlotOutcomes:
@@ -3174,6 +3359,16 @@ function contextForTransition(target: string, current?: string) {
         : permittedContext.reshipmentSetupResolutionPreviousStatus,
     claimSlotResolutionStatuses,
     ...resolutionEvidence,
+    claimResolutionOwnershipSnapshot: {
+      ...resolutionEvidence.claimResolutionOwnershipSnapshot,
+      status: claimRejectionSourceStatus,
+      previousResultId: claimOwnershipPreviousClaimResultId,
+      resultId: claimOwnershipSnapshotResultId,
+      currentStateCommandKey: `claim-${claimRejectionSourceStatus}-command-1`,
+    },
+    claimResolutionOwnershipPreviousClaimResultId:
+      claimOwnershipPreviousClaimResultId,
+    claimResolutionOwnershipSnapshotResultId: claimOwnershipSnapshotResultId,
     ...claimRejectionEvidence,
     ...claimWithdrawalEvidence,
     claimRefundScopeChildren,
@@ -3239,7 +3434,16 @@ function commandAnchors(
   policy: Readonly<{ name: string }>,
   current: string,
   target: string,
-): Readonly<{ aggregateId?: string; currentStateCommandKey?: string }> {
+): Readonly<{
+  aggregateId?: string;
+  currentStateCommandKey?: string;
+  currentStateResultId?: string;
+  parentAggregateId?: string;
+  parentCurrentStateCommandKey?: string;
+  parentCurrentStateResultId?: string;
+  ownershipSnapshotId?: string;
+  ownershipSnapshotResultId?: string;
+}> {
   if (
     policy.name === "QuoteRequest" &&
     current === "in_review" &&
@@ -3294,7 +3498,10 @@ function commandAnchors(
       target === "refunded" ||
       target === "cancelled_settled")
   ) {
-    return { aggregateId: "order-1" };
+    return {
+      aggregateId: "order-1",
+      currentStateCommandKey: `order-${current}-command-1`,
+    };
   }
   if (
     policy.name === "OrderPhase(single)" &&
@@ -3303,7 +3510,10 @@ function commandAnchors(
       target === "cancelled_refunded" ||
       target === "cancelled_settled")
   ) {
-    return { aggregateId: "phase-1" };
+    return {
+      aggregateId: "phase-1",
+      currentStateCommandKey: `phase-${current}-command-1`,
+    };
   }
   if (
     policy.name === "Payment" &&
@@ -3439,7 +3649,17 @@ function commandAnchors(
     policy.name === "Claim" &&
     (target.startsWith("resolved_") || target === "withdrawn")
   ) {
-    return { aggregateId: "claim-1" };
+    const ownershipSnapshotResultId =
+      current === "active"
+        ? "claim-resolution-ownership-snapshot-result-1"
+        : `claim-resolution-ownership-snapshot-${current}-result-1`;
+    return {
+      aggregateId: "claim-1",
+      currentStateCommandKey: `claim-${current}-command-1`,
+      currentStateResultId: `claim-${current}-result-1`,
+      ownershipSnapshotId: "claim-resolution-ownership-snapshot-1",
+      ownershipSnapshotResultId,
+    };
   }
   if (
     policy.name === "ClaimSlotResolution" &&
@@ -3449,6 +3669,25 @@ function commandAnchors(
     return {
       aggregateId: "claim-resolution-1",
       currentStateCommandKey: "claim-resolution-pending-command-1",
+      currentStateResultId: "claim-resolution-pending-result-1",
+      parentAggregateId: "claim-1",
+      parentCurrentStateCommandKey: "claim-investigating-command-1",
+      parentCurrentStateResultId: "claim-investigating-result-1",
+      ownershipSnapshotId: "claim-resolution-ownership-snapshot-1",
+      ownershipSnapshotResultId:
+        "claim-resolution-ownership-snapshot-investigating-result-1",
+    };
+  }
+  if (policy.name === "ClaimSlotResolution" && target === "withdrawn") {
+    return {
+      aggregateId: "claim-resolution-1",
+      currentStateCommandKey: `claim-resolution-${current}-command-1`,
+      currentStateResultId: `claim-resolution-${current}-result-1`,
+      parentAggregateId: "claim-1",
+      parentCurrentStateCommandKey: "claim-active-command-1",
+      parentCurrentStateResultId: "claim-active-result-1",
+      ownershipSnapshotId: "claim-resolution-ownership-snapshot-1",
+      ownershipSnapshotResultId: "claim-resolution-ownership-snapshot-result-1",
     };
   }
   if (
@@ -7895,6 +8134,69 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
+    ["Order", orderPolicy],
+    ["OrderPhase(single)", singleOrderPhasePolicy],
+  ] as const)(
+    "rejects %s terminal completion when a caller substitutes a slot subset",
+    (_lifecycle, policy) => {
+      const context = multiSlotDeliveredCompletion();
+      expect(() =>
+        transition(policy, {
+          ...commandAnchors(policy, "delivered", "completed"),
+          current: "delivered",
+          target: "completed",
+          idempotencyKey: `completion-subset-${_lifecycle}`,
+          context: {
+            ...context,
+            expectedCompletionFulfilmentSlotIds: ["slot-1"],
+            completionFulfilmentSlotOutcomes: [
+              context.completionFulfilmentSlotOutcomes[0],
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["Order", orderPolicy],
+    ["OrderPhase(single)", singleOrderPhasePolicy],
+  ] as const)(
+    "rejects %s terminal completion with a coordinated alternate slot-set substitution",
+    (_lifecycle, policy) => {
+      const context = multiSlotDeliveredCompletion();
+      expect(() =>
+        transition(policy, {
+          ...commandAnchors(policy, "delivered", "completed"),
+          current: "delivered",
+          target: "completed",
+          idempotencyKey: `completion-slot-set-substitution-${_lifecycle}`,
+          context: {
+            ...context,
+            completionAuthoritativeFulfilmentSlotSetId: "completion-slot-set-2",
+            completionExpectedFulfilmentSlotSetId: "completion-slot-set-2",
+            completionAuthoritativeFulfilmentSlotSetResultId:
+              "completion-slot-set-result-2",
+            completionAuthoritativeFulfilmentSlotSet: {
+              id: "completion-slot-set-2",
+              orderId: "order-1",
+              phaseId: "phase-1",
+              phaseTopologyId: "phase-1",
+              slotIds: ["slot-1"],
+              resultId: "completion-slot-set-result-2",
+              immutable: true,
+            },
+            expectedCompletionFulfilmentSlotIds: ["slot-1"],
+            completionFulfilmentSlotOutcomes: [
+              context.completionFulfilmentSlotOutcomes[0],
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
     [1n, 0n],
     [0n, 1n],
   ] as const)(
@@ -8182,6 +8484,32 @@ describe("v0 lifecycle policy tables", () => {
     ],
   });
 
+  const multiSlotDeliveredCompletion = () => {
+    const context = contextForTransition("completed", "delivered");
+    return {
+      ...context,
+      completionAuthoritativeFulfilmentSlotSet: {
+        ...context.completionAuthoritativeFulfilmentSlotSet,
+        slotIds: ["slot-1", "slot-2"],
+      },
+      expectedCompletionFulfilmentSlotIds: ["slot-1", "slot-2"],
+      completionFulfilmentSlotOutcomes: [
+        {
+          slotId: "slot-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          status: "delivered",
+        },
+        {
+          slotId: "slot-2",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          status: "delivered",
+        },
+      ],
+    };
+  };
+
   it.each([
     ["Order", orderPolicy],
     ["OrderPhase(single)", singleOrderPhasePolicy],
@@ -8314,9 +8642,41 @@ describe("v0 lifecycle policy tables", () => {
     }));
     return {
       ...evidence,
+      claimResolutionOwnershipPreviousClaimResultId:
+        parentPreviousStatus === "active"
+          ? "claim-active-result-1"
+          : `claim-${parentPreviousStatus}-result-1`,
+      claimResolutionOwnershipSnapshotResultId:
+        parentPreviousStatus === "active"
+          ? "claim-resolution-ownership-snapshot-result-1"
+          : `claim-resolution-ownership-snapshot-${parentPreviousStatus}-result-1`,
+      claimResolutionOwnershipSnapshot: {
+        ...evidence.claimResolutionOwnershipSnapshot,
+        status: parentPreviousStatus,
+        previousResultId:
+          parentPreviousStatus === "active"
+            ? "claim-active-result-1"
+            : `claim-${parentPreviousStatus}-result-1`,
+        resultId:
+          parentPreviousStatus === "active"
+            ? "claim-resolution-ownership-snapshot-result-1"
+            : `claim-resolution-ownership-snapshot-${parentPreviousStatus}-result-1`,
+        currentStateCommandKey: `claim-${parentPreviousStatus}-command-1`,
+      },
       claimSlotResolutionId: "claim-resolution-1",
       claimSlotId: "claim-slot-1",
       claimSlotResolutions: children,
+      claimWithdrawalExpectedResolution: {
+        ...evidence.claimWithdrawalExpectedResolution,
+        ownershipSnapshotResultId:
+          parentPreviousStatus === "active"
+            ? "claim-resolution-ownership-snapshot-result-1"
+            : `claim-resolution-ownership-snapshot-${parentPreviousStatus}-result-1`,
+        claimPreviousResultId:
+          parentPreviousStatus === "active"
+            ? "claim-active-result-1"
+            : `claim-${parentPreviousStatus}-result-1`,
+      },
       claimWithdrawalResultId: resultId,
       claimWithdrawalResultClaimId: "claim-1",
       claimWithdrawalParentResultId: resultId,
@@ -8393,6 +8753,13 @@ describe("v0 lifecycle policy tables", () => {
       const context = completeWholeClaimWithdrawal(parentPreviousStatus);
       expect(
         transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(claimSlotResolutionPolicy, "pending", "withdrawn"),
+          parentCurrentStateCommandKey: `claim-${parentPreviousStatus}-command-1`,
+          parentCurrentStateResultId: `claim-${parentPreviousStatus}-result-1`,
+          ownershipSnapshotResultId:
+            parentPreviousStatus === "active"
+              ? "claim-resolution-ownership-snapshot-result-1"
+              : `claim-resolution-ownership-snapshot-${parentPreviousStatus}-result-1`,
           current: "pending",
           target: "withdrawn",
           idempotencyKey: "claim-child-withdrawal-complete",
@@ -8408,6 +8775,237 @@ describe("v0 lifecycle policy tables", () => {
       });
     },
   );
+
+  it.each([
+    ["missing aggregate", { aggregateId: undefined }],
+    ["blank aggregate", { aggregateId: " " }],
+    ["foreign aggregate", { aggregateId: "claim-resolution-2" }],
+    ["missing state key", { currentStateCommandKey: undefined }],
+    ["blank state key", { currentStateCommandKey: " " }],
+    [
+      "foreign state key",
+      { currentStateCommandKey: "claim-resolution-pending-command-2" },
+    ],
+    ["missing result", { currentStateResultId: undefined }],
+    ["foreign result", { currentStateResultId: "resolution-result-2" }],
+    ["missing parent", { parentAggregateId: undefined }],
+    ["foreign parent", { parentAggregateId: "claim-2" }],
+    ["missing parent state key", { parentCurrentStateCommandKey: undefined }],
+    [
+      "foreign parent state key",
+      { parentCurrentStateCommandKey: "claim-active-command-2" },
+    ],
+    ["missing parent result", { parentCurrentStateResultId: undefined }],
+    [
+      "foreign parent result",
+      { parentCurrentStateResultId: "claim-active-result-2" },
+    ],
+    ["missing ownership snapshot", { ownershipSnapshotId: undefined }],
+    [
+      "foreign ownership snapshot",
+      { ownershipSnapshotId: "claim-resolution-ownership-snapshot-2" },
+    ],
+    [
+      "missing ownership snapshot result",
+      { ownershipSnapshotResultId: undefined },
+    ],
+    [
+      "foreign ownership snapshot result",
+      {
+        ownershipSnapshotResultId:
+          "claim-resolution-ownership-snapshot-result-2",
+      },
+    ],
+  ] as const)("rejects child Claim withdrawal with a %s", (_case, invalid) => {
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(claimSlotResolutionPolicy, "pending", "withdrawn"),
+        ...invalid,
+        current: "pending",
+        target: "withdrawn",
+        idempotencyKey: `claim-child-withdrawal-command-${_case}`,
+        context: completeWholeClaimWithdrawal(),
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["Order", orderPolicy],
+    ["OrderPhase(single)", singleOrderPhasePolicy],
+  ] as const)(
+    "rejects %s completion when topology and slots are coordinately substituted",
+    (_lifecycle, policy) => {
+      const context = multiSlotDeliveredCompletion();
+      expect(() =>
+        transition(policy, {
+          ...commandAnchors(policy, "delivered", "completed"),
+          current: "delivered",
+          target: "completed",
+          idempotencyKey: `completion-coordinated-topology-${policy.name}`,
+          context: {
+            ...context,
+            completionExpectedPhaseTopology: {
+              ...context.completionExpectedPhaseTopology,
+              authoritativeFulfilmentSlotSetId: "completion-slot-set-2",
+              authoritativeFulfilmentSlotSetResultId:
+                "completion-slot-set-result-2",
+            },
+            completionSlotSetPhaseTopologyId: "phase-1",
+            completionAuthoritativeFulfilmentSlotSetId: "completion-slot-set-2",
+            completionExpectedFulfilmentSlotSetId: "completion-slot-set-2",
+            completionAuthoritativeFulfilmentSlotSetResultId:
+              "completion-slot-set-result-2",
+            completionAuthoritativeFulfilmentSlotSet: {
+              ...context.completionAuthoritativeFulfilmentSlotSet,
+              id: "completion-slot-set-2",
+              slotIds: ["slot-3", "slot-4"],
+              resultId: "completion-slot-set-result-2",
+            },
+            expectedCompletionFulfilmentSlotIds: ["slot-3", "slot-4"],
+            completionFulfilmentSlotOutcomes: [
+              {
+                slotId: "slot-3",
+                orderId: "order-1",
+                phaseId: "phase-1",
+                status: "delivered",
+              },
+              {
+                slotId: "slot-4",
+                orderId: "order-1",
+                phaseId: "phase-1",
+                status: "delivered",
+              },
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [orderPolicy, "delivered", "completed", "in_production"],
+    [orderPolicy, "awaiting_balance", "cancelled_settled", "awaiting_balance"],
+    [singleOrderPhasePolicy, "delivered", "completed", "in_production"],
+  ] as const)(
+    "rejects completion with a topology snapshot from the wrong source status",
+    (policy, current, target, wrongStatus) => {
+      expect(() =>
+        transition(policy, {
+          ...commandAnchors(policy, current, target),
+          current,
+          target,
+          idempotencyKey: `completion-topology-status-${policy.name}-${target}`,
+          context: {
+            ...contextForTransition(target, current),
+            completionExpectedPhaseTopology: {
+              ...contextForTransition(target, current)
+                .completionExpectedPhaseTopology,
+              status: wrongStatus,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "claim-resolution-2"],
+    ["claimId", "claim-2"],
+    ["slotId", "claim-slot-2"],
+    ["status", "withdrawn"],
+    ["activeClaimId", "claim-2"],
+    ["resultId", "another-result"],
+    ["currentStateCommandKey", "another-command"],
+    ["immutable", false],
+  ] as const)(
+    "rejects child Claim withdrawal with a stale expected resolution %s",
+    (field, value) => {
+      const context = completeWholeClaimWithdrawal("opened");
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          ...commandAnchors(claimSlotResolutionPolicy, "pending", "withdrawn"),
+          current: "pending",
+          target: "withdrawn",
+          idempotencyKey: `claim-child-withdrawal-stale-resolution-${field}`,
+          context: {
+            ...context,
+            claimWithdrawalExpectedResolution: {
+              ...context.claimWithdrawalExpectedResolution,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign Claim child withdrawal substitution", () => {
+    const source = completeWholeClaimWithdrawal("opened");
+    const resolutionIds = ["claim-resolution-3", "claim-resolution-4"];
+    const slotIds = ["claim-slot-3", "claim-slot-4"];
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(claimSlotResolutionPolicy, "pending", "withdrawn"),
+        current: "pending",
+        target: "withdrawn",
+        idempotencyKey: "claim-child-withdrawal-foreign-substitution",
+        context: {
+          ...source,
+          claimId: "claim-2",
+          claimResolutionSetClaimId: "claim-2",
+          claimResolutionOwnershipSet: {
+            id: "claim-resolution-ownership-set-2",
+            claimId: "claim-2",
+            resolutionIds,
+            slotIds,
+            resolutionSlotBindings: resolutionIds.map(
+              (resolutionId, index) => ({
+                resolutionId,
+                slotId: slotIds[index],
+              }),
+            ),
+            immutable: true,
+          },
+          claimResolutionOwnershipSetId: "claim-resolution-ownership-set-2",
+          expectedClaimSlotResolutionIds: resolutionIds,
+          expectedClaimSlotIds: slotIds,
+          expectedClaimResolutionSlots: resolutionIds.map(
+            (resolutionId, index) => ({
+              resolutionId,
+              slotId: slotIds[index],
+            }),
+          ),
+          claimSlotResolutions: source.claimSlotResolutions.map(
+            (resolution, index) => ({
+              ...resolution,
+              id: resolutionIds[index],
+              claimId: "claim-2",
+              slotId: slotIds[index],
+              activeClaimIdBefore: "claim-2",
+            }),
+          ),
+          claimRetentionClaimId: "claim-2",
+          claimWithdrawalResultClaimId: "claim-2",
+          claimWithdrawalParentClaimId: "claim-2",
+          claimWithdrawalChildResolutionId: "claim-resolution-3",
+          claimWithdrawalChildSlotId: "claim-slot-3",
+          claimWithdrawalPreviousResolutionResultId:
+            "claim-resolution-pending-result-3",
+          claimWithdrawalCurrentStateCommandKey:
+            "claim-resolution-pending-command-3",
+          claimWithdrawalExpectedResolution: {
+            ...source.claimWithdrawalExpectedResolution,
+            id: "claim-resolution-3",
+            claimId: "claim-2",
+            slotId: "claim-slot-3",
+            activeClaimId: "claim-2",
+            resultId: "claim-resolution-pending-result-3",
+            currentStateCommandKey: "claim-resolution-pending-command-3",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each(["opened", "investigating", "active"] as const)(
     "withdraws a Claim directly from %s only with the whole-Claim proof",
@@ -8850,8 +9448,25 @@ describe("v0 lifecycle policy tables", () => {
     const evidence = claimResolutionEvidence(["rejected", "rejected"]);
     return {
       ...evidence,
+      claimResolutionOwnershipPreviousClaimResultId:
+        "claim-investigating-result-1",
+      claimResolutionOwnershipSnapshotResultId:
+        "claim-resolution-ownership-snapshot-investigating-result-1",
+      claimResolutionOwnershipSnapshot: {
+        ...evidence.claimResolutionOwnershipSnapshot,
+        status: "investigating",
+        previousResultId: "claim-investigating-result-1",
+        resultId: "claim-resolution-ownership-snapshot-investigating-result-1",
+        currentStateCommandKey: "claim-investigating-command-1",
+      },
       claimSlotResolutionId: "claim-resolution-1",
       claimSlotId: "claim-slot-1",
+      claimRejectionExpectedResolution: {
+        ...evidence.claimWithdrawalExpectedResolution,
+        ownershipSnapshotResultId:
+          "claim-resolution-ownership-snapshot-investigating-result-1",
+        claimPreviousResultId: "claim-investigating-result-1",
+      },
       claimSlotResolutions: evidence.claimSlotResolutions.map(
         (resolution, index) => ({
           ...resolution,
@@ -8892,6 +9507,12 @@ describe("v0 lifecycle policy tables", () => {
         activeClaimId: "claim-1",
         resultId: "claim-resolution-pending-result-1",
         currentStateCommandKey: "claim-resolution-pending-command-1",
+        ownershipSetId: "claim-resolution-ownership-set-1",
+        ownershipSetResultId: "claim-resolution-ownership-set-result-1",
+        ownershipSnapshotId: "claim-resolution-ownership-snapshot-1",
+        ownershipSnapshotResultId:
+          "claim-resolution-ownership-snapshot-investigating-result-1",
+        claimPreviousResultId: "claim-investigating-result-1",
         immutable: true,
       },
       claimRejectionSlotOwnershipReleased: true,
@@ -8947,6 +9568,36 @@ describe("v0 lifecycle policy tables", () => {
     [
       "foreign state key",
       { currentStateCommandKey: "claim-resolution-pending-command-2" },
+    ],
+    ["missing result", { currentStateResultId: undefined }],
+    ["foreign result", { currentStateResultId: "resolution-result-2" }],
+    ["missing parent", { parentAggregateId: undefined }],
+    ["foreign parent", { parentAggregateId: "claim-2" }],
+    ["missing parent state key", { parentCurrentStateCommandKey: undefined }],
+    [
+      "foreign parent state key",
+      { parentCurrentStateCommandKey: "claim-investigating-command-2" },
+    ],
+    ["missing parent result", { parentCurrentStateResultId: undefined }],
+    [
+      "foreign parent result",
+      { parentCurrentStateResultId: "claim-investigating-result-2" },
+    ],
+    ["missing ownership snapshot", { ownershipSnapshotId: undefined }],
+    [
+      "foreign ownership snapshot",
+      { ownershipSnapshotId: "claim-resolution-ownership-snapshot-2" },
+    ],
+    [
+      "missing ownership snapshot result",
+      { ownershipSnapshotResultId: undefined },
+    ],
+    [
+      "foreign ownership snapshot result",
+      {
+        ownershipSnapshotResultId:
+          "claim-resolution-ownership-snapshot-result-2",
+      },
     ],
   ] as const)("rejects child Claim rejection with a %s", (_case, invalid) => {
     expect(() =>
@@ -17297,6 +17948,79 @@ describe("v0 lifecycle policy tables", () => {
       current: "resolved_mixed",
     });
   });
+
+  it.each([
+    ["Claim terminal projection", "resolved_mixed"],
+    ["Claim child withdrawal", "withdrawn"],
+  ] as const)(
+    "rejects a terminal %s when the caller submits only a subset of the authoritative ownership set",
+    (_case, target) => {
+      const source =
+        target === "withdrawn"
+          ? completeWholeClaimWithdrawal("opened")
+          : claimResolutionEvidence(["delivered_reprint", "refunded"]);
+      const context: Record<string, unknown> = { ...source };
+      context.expectedClaimSlotResolutionIds = ["claim-resolution-1"];
+      context.expectedClaimSlotIds = ["claim-slot-1"];
+      context.expectedClaimResolutionSlots = [
+        { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+      ];
+      context.claimSlotResolutions = [
+        ...(
+          source.claimSlotResolutions as ReadonlyArray<Record<string, unknown>>
+        ).slice(0, 1),
+      ];
+
+      expect(() =>
+        transition(
+          target === "withdrawn" ? claimSlotResolutionPolicy : claimPolicy,
+          {
+            ...(target === "withdrawn"
+              ? {}
+              : commandAnchors(claimPolicy, "active", target)),
+            current: target === "withdrawn" ? "pending" : "active",
+            target,
+            idempotencyKey: `claim-authoritative-subset-${target}`,
+            context,
+          },
+        ),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects coordinated Claim child substitution when the submitted set differs from the immutable ownership set", () => {
+    const evidence = claimResolutionEvidence(["delivered_reprint", "refunded"]);
+    const context: Record<string, unknown> = { ...evidence };
+    context.expectedClaimSlotResolutionIds = [
+      "foreign-resolution-1",
+      "foreign-resolution-2",
+    ];
+    context.expectedClaimSlotIds = ["foreign-slot-1", "foreign-slot-2"];
+    context.expectedClaimResolutionSlots = [
+      { resolutionId: "foreign-resolution-1", slotId: "foreign-slot-1" },
+      { resolutionId: "foreign-resolution-2", slotId: "foreign-slot-2" },
+    ];
+    context.claimSlotResolutions = [
+      ...(
+        evidence.claimSlotResolutions as ReadonlyArray<Record<string, unknown>>
+      ).map((resolution, index) => ({
+        ...resolution,
+        id: `foreign-resolution-${index + 1}`,
+        slotId: `foreign-slot-${index + 1}`,
+      })),
+    ];
+
+    expect(() =>
+      transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "active", "resolved_mixed"),
+        current: "active",
+        target: "resolved_mixed",
+        idempotencyKey: "claim-authoritative-coordinated-substitution",
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it.each(["full", "deposit", "balance"] as const)(
     "fails a %s Payment only from its exact authenticated provider result",
     (paymentRole) => {
@@ -17636,6 +18360,43 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it.each([
+    ["missing state key", { currentStateCommandKey: undefined }],
+    ["foreign state key", { currentStateCommandKey: "claim-active-command-2" }],
+    ["missing result", { currentStateResultId: undefined }],
+    ["foreign result", { currentStateResultId: "claim-active-result-2" }],
+    ["missing ownership snapshot", { ownershipSnapshotId: undefined }],
+    [
+      "foreign ownership snapshot",
+      { ownershipSnapshotId: "claim-resolution-ownership-snapshot-2" },
+    ],
+    [
+      "missing ownership snapshot result",
+      { ownershipSnapshotResultId: undefined },
+    ],
+    [
+      "foreign ownership snapshot result",
+      {
+        ownershipSnapshotResultId:
+          "claim-resolution-ownership-snapshot-result-2",
+      },
+    ],
+  ] as const)(
+    "rejects terminal Claim projection with a %s",
+    (_case, invalid) => {
+      expect(() =>
+        transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "active", "resolved_refund"),
+          ...invalid,
+          current: "active",
+          target: "resolved_refund",
+          idempotencyKey: `claim-terminal-command-${_case}`,
+          context: contextForTransition("resolved_refund", "active"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
   it("rejects a coordinated foreign terminal Claim projection", () => {
     const context = contextForTransition("resolved_refund", "active");
     expect(() =>
@@ -17657,6 +18418,179 @@ describe("v0 lifecycle policy tables", () => {
             }),
           ),
         },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["parent Claim", "parent"],
+    ["selected Claim child", "child"],
+  ] as const)(
+    "rejects a fully coordinated %s substitution with the original command anchor",
+    (_label, entryPoint) => {
+      const source =
+        entryPoint === "parent"
+          ? {
+              ...contextForTransition("resolved_refund", "active"),
+              ...claimResolutionEvidence(["refunded", "refunded"]),
+            }
+          : completeWholeClaimRejection();
+      const resolutionIds =
+        entryPoint === "parent"
+          ? ["claim-resolution-3", "claim-resolution-4"]
+          : ["claim-resolution-1", "claim-resolution-3"];
+      const slotIds =
+        entryPoint === "parent"
+          ? ["claim-slot-3", "claim-slot-4"]
+          : ["claim-slot-1", "claim-slot-3"];
+      const claimSource = entryPoint === "parent" ? "active" : "investigating";
+      const claimPreviousResultId = `claim-${claimSource}-result-2`;
+      const context: Record<string, unknown> = {
+        ...source,
+        claimResolutionOwnershipSetId: "claim-resolution-ownership-set-2",
+        claimResolutionOwnershipSetResultId:
+          "claim-resolution-ownership-set-result-2",
+        claimResolutionOwnershipSet: {
+          id: "claim-resolution-ownership-set-2",
+          claimId: "claim-1",
+          resultId: "claim-resolution-ownership-set-result-2",
+          resolutionIds,
+          slotIds,
+          resolutionSlotBindings: resolutionIds.map((resolutionId, index) => ({
+            resolutionId,
+            slotId: slotIds[index],
+          })),
+          immutable: true,
+        },
+        expectedClaimSlotResolutionIds: resolutionIds,
+        expectedClaimSlotIds: slotIds,
+        expectedClaimResolutionSlots: resolutionIds.map(
+          (resolutionId, index) => ({
+            resolutionId,
+            slotId: slotIds[index],
+          }),
+        ),
+        claimResolutionOwnershipSnapshotId:
+          "claim-resolution-ownership-snapshot-2",
+        claimResolutionOwnershipPreviousClaimResultId: claimPreviousResultId,
+        claimResolutionOwnershipSnapshotResultId:
+          "claim-resolution-ownership-snapshot-result-2",
+        claimResolutionOwnershipSnapshot: {
+          ...(source.claimResolutionOwnershipSnapshot as Record<
+            string,
+            unknown
+          >),
+          id: "claim-resolution-ownership-snapshot-2",
+          status: claimSource,
+          previousResultId: claimPreviousResultId,
+          resultId: "claim-resolution-ownership-snapshot-result-2",
+          currentStateCommandKey: `claim-${claimSource}-command-2`,
+          ownershipSetId: "claim-resolution-ownership-set-2",
+          ownershipSetResultId: "claim-resolution-ownership-set-result-2",
+          resolutionIds,
+          slotIds,
+          resolutionSlotBindings: resolutionIds.map((resolutionId, index) => ({
+            resolutionId,
+            slotId: slotIds[index],
+          })),
+        },
+        claimSlotResolutions: (
+          source.claimSlotResolutions as ReadonlyArray<Record<string, unknown>>
+        ).map((resolution, index) => ({
+          ...resolution,
+          id: resolutionIds[index],
+          slotId: slotIds[index],
+        })),
+        ...(entryPoint === "child"
+          ? {
+              claimRejectionExpectedResolution: {
+                ...(source.claimRejectionExpectedResolution as Record<
+                  string,
+                  unknown
+                >),
+                ownershipSetId: "claim-resolution-ownership-set-2",
+                ownershipSetResultId: "claim-resolution-ownership-set-result-2",
+                ownershipSnapshotId: "claim-resolution-ownership-snapshot-2",
+                ownershipSnapshotResultId:
+                  "claim-resolution-ownership-snapshot-result-2",
+                claimPreviousResultId,
+              },
+            }
+          : {}),
+      };
+      const command =
+        entryPoint === "parent"
+          ? {
+              ...commandAnchors(claimPolicy, "active", "resolved_refund"),
+              current: "active" as const,
+              target: "resolved_refund" as const,
+              idempotencyKey: "claim-coordinated-snapshot-substitution",
+              context,
+            }
+          : {
+              ...commandAnchors(
+                claimSlotResolutionPolicy,
+                "pending",
+                "rejected",
+              ),
+              current: "pending" as const,
+              target: "rejected" as const,
+              idempotencyKey: "claim-child-coordinated-snapshot-substitution",
+              context,
+            };
+      expect(() =>
+        transition(
+          entryPoint === "parent" ? claimPolicy : claimSlotResolutionPolicy,
+          command,
+        ),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a fixed Claim when child-set evidence is coordinated around a foreign ownership set", () => {
+    const evidence = claimResolutionEvidence(["refunded", "refunded"]);
+    const context: Record<string, unknown> = {
+      ...evidence,
+      expectedClaimSlotResolutionIds: [
+        "claim-resolution-3",
+        "claim-resolution-4",
+      ],
+      expectedClaimSlotIds: ["claim-slot-3", "claim-slot-4"],
+      expectedClaimResolutionSlots: [
+        { resolutionId: "claim-resolution-3", slotId: "claim-slot-3" },
+        { resolutionId: "claim-resolution-4", slotId: "claim-slot-4" },
+      ],
+      claimResolutionOwnershipSetId: "claim-resolution-ownership-set-2",
+      claimResolutionOwnershipSetResultId:
+        "claim-resolution-ownership-set-result-2",
+      claimResolutionOwnershipSet: {
+        id: "claim-resolution-ownership-set-2",
+        claimId: "claim-1",
+        resultId: "claim-resolution-ownership-set-result-2",
+        resolutionIds: ["claim-resolution-3", "claim-resolution-4"],
+        slotIds: ["claim-slot-3", "claim-slot-4"],
+        resolutionSlotBindings: [
+          { resolutionId: "claim-resolution-3", slotId: "claim-slot-3" },
+          { resolutionId: "claim-resolution-4", slotId: "claim-slot-4" },
+        ],
+        immutable: true,
+      },
+      claimSlotResolutions: evidence.claimSlotResolutions.map(
+        (resolution, index) => ({
+          ...resolution,
+          id: `claim-resolution-${index + 3}`,
+          slotId: `claim-slot-${index + 3}`,
+        }),
+      ),
+    };
+
+    expect(() =>
+      transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "active", "resolved_refund"),
+        current: "active",
+        target: "resolved_refund",
+        idempotencyKey: "claim-fixed-coordinated-ownership-substitution",
+        context,
       }),
     ).toThrow(TransitionGuardError);
   });
@@ -17907,10 +18841,12 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)(
     "requires the selected aggregate for %s completion",
     (policy, aggregateId) => {
+      const anchors = commandAnchors(policy, "delivered", "completed");
       const command = {
         current: "delivered" as const,
         target: "completed" as const,
         idempotencyKey: `completion-selected-${policy.name}`,
+        currentStateCommandKey: anchors.currentStateCommandKey,
         context: contextForTransition("completed", "delivered"),
       };
       expect(() => transition(policy, command)).toThrow(TransitionGuardError);

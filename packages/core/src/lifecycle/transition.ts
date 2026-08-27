@@ -55,6 +55,15 @@ export interface TransitionCommand<S extends string> {
   readonly idempotencyKey: string;
   /** The key of the command that produced the current state, if known. */
   readonly currentStateCommandKey?: string;
+  /** The adapter-owned result that produced the selected aggregate state. */
+  readonly currentStateResultId?: string;
+  /** A related parent aggregate selected in the same adapter transaction. */
+  readonly parentAggregateId?: string;
+  readonly parentCurrentStateCommandKey?: string;
+  readonly parentCurrentStateResultId?: string;
+  /** The exact immutable ownership snapshot selected by the adapter. */
+  readonly ownershipSnapshotId?: string;
+  readonly ownershipSnapshotResultId?: string;
   readonly context?: TransitionContext;
 }
 

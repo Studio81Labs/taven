@@ -351,8 +351,47 @@ function requireProjectedCompletionTarget<S extends string>(
   command: TransitionCommand<S>,
 ): void {
   const context = command.context;
+  const selectedAggregateId =
+    lifecycle === "Order" ? context?.orderId : context?.phaseId;
+  const selectedAggregateStateKey =
+    lifecycle === "Order"
+      ? context?.completionOrderCurrentStateCommandKey
+      : context?.completionPhaseCurrentStateCommandKey;
+  const expectedAggregateValue =
+    lifecycle === "Order"
+      ? context?.completionExpectedOrder
+      : context?.completionExpectedPhase;
+  const expectedAggregate =
+    typeof expectedAggregateValue === "object" &&
+    expectedAggregateValue !== null &&
+    !Array.isArray(expectedAggregateValue)
+      ? (expectedAggregateValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const expected = context?.expectedCompletionFulfilmentSlotIds;
   const outcomes = context?.completionFulfilmentSlotOutcomes;
+  const topologyId = context?.completionAuthoritativePhaseTopologyId;
+  const expectedTopologyId = context?.completionExpectedPhaseTopologyId;
+  const topologyValue = context?.completionExpectedPhaseTopology;
+  const topology =
+    typeof topologyValue === "object" &&
+    topologyValue !== null &&
+    !Array.isArray(topologyValue)
+      ? (topologyValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const setId = context?.completionAuthoritativeFulfilmentSlotSetId;
+  const expectedSetId = context?.completionExpectedFulfilmentSlotSetId;
+  const setResultId = context?.completionAuthoritativeFulfilmentSlotSetResultId;
+  const authoritativeValue = context?.completionAuthoritativeFulfilmentSlotSet;
+  const authoritative =
+    typeof authoritativeValue === "object" &&
+    authoritativeValue !== null &&
+    !Array.isArray(authoritativeValue)
+      ? (authoritativeValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const authoritativeIdsValue = authoritative?.slotIds;
+  const authoritativeIds = Array.isArray(authoritativeIdsValue)
+    ? [...authoritativeIdsValue]
+    : undefined;
   const nonBlank = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
   const expectedStatus =
@@ -364,6 +403,16 @@ function requireProjectedCompletionTarget<S extends string>(
             command.target === "cancelled_refunded"
           ? "cancelled_refunded"
           : "cancelled_settled";
+  const expectedTopologyStatus =
+    lifecycle === "Order" &&
+    command.current === "awaiting_balance" &&
+    command.target === "cancelled_settled"
+      ? "qc_passed"
+      : command.current;
+  const expectedAggregateStatus =
+    lifecycle === "OrderPhase(single)"
+      ? expectedTopologyStatus
+      : command.current;
   const ids = new Set<string>();
   let hasDeliveredOutcome = false;
   let hasCancelledRefundedOutcome = false;
@@ -371,10 +420,49 @@ function requireProjectedCompletionTarget<S extends string>(
     ((lifecycle === "Order" && command.aggregateId === context?.orderId) ||
       (lifecycle === "OrderPhase(single)" &&
         command.aggregateId === context?.phaseId)) &&
+    nonBlank(selectedAggregateId) &&
+    nonBlank(selectedAggregateStateKey) &&
+    command.currentStateCommandKey === selectedAggregateStateKey &&
+    expectedAggregate?.id === selectedAggregateId &&
+    expectedAggregate.orderId === context?.orderId &&
+    expectedAggregate.phaseId === context?.phaseId &&
+    expectedAggregate.status === expectedAggregateStatus &&
+    expectedAggregate.currentStateCommandKey === selectedAggregateStateKey &&
+    expectedAggregate.phaseTopologyId === topologyId &&
+    expectedAggregate.fulfilmentSlotSetId === setId &&
+    expectedAggregate.fulfilmentSlotSetResultId === setResultId &&
+    expectedAggregate.immutable === true &&
+    nonBlank(topologyId) &&
+    topologyId === context?.phaseId &&
+    expectedTopologyId === topologyId &&
+    topology?.id === topologyId &&
+    topology?.orderId === context?.orderId &&
+    topology?.kind === "single" &&
+    topology?.status === expectedTopologyStatus &&
+    topology?.authoritativeFulfilmentSlotSetId === setId &&
+    topology?.authoritativeFulfilmentSlotSetResultId === setResultId &&
+    topology?.immutable === true &&
+    nonBlank(setId) &&
+    expectedSetId === setId &&
+    nonBlank(setResultId) &&
+    authoritative?.id === setId &&
+    authoritative?.orderId === context?.orderId &&
+    authoritative?.phaseId === context?.phaseId &&
+    authoritative?.phaseTopologyId === topologyId &&
+    authoritative?.resultId === setResultId &&
+    authoritative?.immutable === true &&
+    context?.completionSlotSetOrderId === context?.orderId &&
+    context?.completionSlotSetPhaseId === context?.phaseId &&
+    context?.completionSlotSetPhaseTopologyId === topologyId &&
+    authoritativeIds !== undefined &&
+    authoritativeIds.length > 0 &&
+    authoritativeIds.every(nonBlank) &&
+    new Set(authoritativeIds).size === authoritativeIds.length &&
     Array.isArray(expected) &&
     expected.length > 0 &&
     new Set(expected).size === expected.length &&
     expected.every(nonBlank) &&
+    hasSameNonEmptyStringSet(expected, authoritativeIds) &&
     Array.isArray(outcomes) &&
     outcomes.length === expected.length &&
     outcomes.every((value) => {
@@ -7801,6 +7889,71 @@ function requireCompleteClaimResolutionSet<S extends string>(
   command: TransitionCommand<S>,
 ): ClaimSlotResolutionStatus[] {
   const claimId = command.context?.claimId;
+  const ownershipSetId = command.context?.claimResolutionOwnershipSetId;
+  const ownershipSetResultId =
+    command.context?.claimResolutionOwnershipSetResultId;
+  const ownershipSetValue = command.context?.claimResolutionOwnershipSet;
+  const ownershipSet =
+    typeof ownershipSetValue === "object" &&
+    ownershipSetValue !== null &&
+    !Array.isArray(ownershipSetValue)
+      ? (ownershipSetValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const ownershipSnapshotId =
+    command.context?.claimResolutionOwnershipSnapshotId;
+  const ownershipPreviousClaimResultId =
+    command.context?.claimResolutionOwnershipPreviousClaimResultId;
+  const ownershipSnapshotResultId =
+    command.context?.claimResolutionOwnershipSnapshotResultId;
+  const ownershipSnapshotValue =
+    command.context?.claimResolutionOwnershipSnapshot;
+  const ownershipSnapshot =
+    typeof ownershipSnapshotValue === "object" &&
+    ownershipSnapshotValue !== null &&
+    !Array.isArray(ownershipSnapshotValue)
+      ? (ownershipSnapshotValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const isExactIdArray = (value: unknown): value is string[] =>
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((id) => typeof id === "string" && id.trim().length > 0) &&
+    new Set(value).size === value.length;
+  const bindingKeys = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value) || value.length === 0) return undefined;
+    const keys: string[] = [];
+    for (const entry of value) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        return undefined;
+      }
+      const binding = entry as Readonly<Record<string, unknown>>;
+      if (
+        typeof binding.resolutionId !== "string" ||
+        binding.resolutionId.trim().length === 0 ||
+        typeof binding.slotId !== "string" ||
+        binding.slotId.trim().length === 0
+      ) {
+        return undefined;
+      }
+      keys.push(`${binding.resolutionId}\u0000${binding.slotId}`);
+    }
+    return new Set(keys).size === keys.length ? keys.sort() : undefined;
+  };
+  const sameIdSet = (left: unknown, right: unknown): boolean => {
+    if (!isExactIdArray(left) || !isExactIdArray(right)) return false;
+    return (
+      left.length === right.length && left.every((id) => right.includes(id))
+    );
+  };
+  const sameBindingSet = (left: unknown, right: unknown): boolean => {
+    const leftKeys = bindingKeys(left);
+    const rightKeys = bindingKeys(right);
+    return (
+      leftKeys !== undefined &&
+      rightKeys !== undefined &&
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every((key, index) => key === rightKeys[index])
+    );
+  };
   const expectedIdsValue = command.context?.expectedClaimSlotResolutionIds;
   const expectedSlotIdsValue = command.context?.expectedClaimSlotIds;
   const expectedBindingsValue = command.context?.expectedClaimResolutionSlots;
@@ -7817,10 +7970,69 @@ function requireCompleteClaimResolutionSet<S extends string>(
   const resolutions = Array.isArray(resolutionsValue)
     ? [...resolutionsValue]
     : undefined;
+  const expectedClaimStatus =
+    lifecycle === "Claim"
+      ? command.current
+      : (command.context?.claimWithdrawalParentPreviousStatus ??
+        command.context?.claimRejectionParentPreviousStatus ??
+        "active");
   if (
     typeof claimId !== "string" ||
     claimId.trim().length === 0 ||
     (lifecycle === "Claim" && command.aggregateId !== claimId) ||
+    typeof ownershipSetId !== "string" ||
+    ownershipSetId.trim().length === 0 ||
+    typeof ownershipSetResultId !== "string" ||
+    ownershipSetResultId.trim().length === 0 ||
+    ownershipSet?.id !== ownershipSetId ||
+    ownershipSet.claimId !== claimId ||
+    ownershipSet.resultId !== ownershipSetResultId ||
+    ownershipSet.immutable !== true ||
+    !isExactIdArray(ownershipSet.resolutionIds) ||
+    !isExactIdArray(ownershipSet.slotIds) ||
+    !sameIdSet(expectedIdsValue, ownershipSet.resolutionIds) ||
+    !sameIdSet(expectedSlotIdsValue, ownershipSet.slotIds) ||
+    !sameBindingSet(
+      expectedBindingsValue,
+      ownershipSet.resolutionSlotBindings,
+    ) ||
+    typeof ownershipSnapshotId !== "string" ||
+    ownershipSnapshotId.trim().length === 0 ||
+    typeof ownershipPreviousClaimResultId !== "string" ||
+    ownershipPreviousClaimResultId.trim().length === 0 ||
+    typeof ownershipSnapshotResultId !== "string" ||
+    ownershipSnapshotResultId.trim().length === 0 ||
+    ownershipSnapshot?.id !== ownershipSnapshotId ||
+    ownershipSnapshot.claimId !== claimId ||
+    ownershipSnapshot.aggregateId !== claimId ||
+    ownershipSnapshot.status !== expectedClaimStatus ||
+    ownershipSnapshot.previousResultId !== ownershipPreviousClaimResultId ||
+    ownershipSnapshot.resultId !== ownershipSnapshotResultId ||
+    ownershipSnapshot.ownershipSetId !== ownershipSetId ||
+    ownershipSnapshot.ownershipSetResultId !== ownershipSetResultId ||
+    ownershipSnapshot.immutable !== true ||
+    !sameIdSet(ownershipSnapshot.resolutionIds, ownershipSet.resolutionIds) ||
+    !sameIdSet(ownershipSnapshot.slotIds, ownershipSet.slotIds) ||
+    !sameBindingSet(
+      ownershipSnapshot.resolutionSlotBindings,
+      ownershipSet.resolutionSlotBindings,
+    ) ||
+    (lifecycle === "Claim"
+      ? typeof command.currentStateCommandKey !== "string" ||
+        command.currentStateCommandKey.trim().length === 0 ||
+        command.currentStateResultId !== ownershipPreviousClaimResultId ||
+        command.ownershipSnapshotId !== ownershipSnapshotId ||
+        command.ownershipSnapshotResultId !== ownershipSnapshotResultId ||
+        ownershipSnapshot.currentStateCommandKey !==
+          command.currentStateCommandKey
+      : command.parentAggregateId !== claimId ||
+        typeof command.parentCurrentStateCommandKey !== "string" ||
+        command.parentCurrentStateCommandKey.trim().length === 0 ||
+        command.parentCurrentStateCommandKey !==
+          ownershipSnapshot.currentStateCommandKey ||
+        command.parentCurrentStateResultId !== ownershipPreviousClaimResultId ||
+        command.ownershipSnapshotId !== ownershipSnapshotId ||
+        command.ownershipSnapshotResultId !== ownershipSnapshotResultId) ||
     command.context?.claimResolutionSetClaimId !== claimId ||
     expectedIds === undefined ||
     expectedIds.length === 0 ||
@@ -8056,6 +8268,7 @@ function requireAtomicWholeClaimRejection<S extends string>(
         !nonBlank(resolutionStateKey) ||
         command.aggregateId !== resolutionId ||
         command.currentStateCommandKey !== resolutionStateKey ||
+        command.currentStateResultId !== resolutionPreviousResultId ||
         expectedResolution?.id !== resolutionId ||
         expectedResolution.claimId !== claimId ||
         expectedResolution.slotId !== slotId ||
@@ -8063,6 +8276,16 @@ function requireAtomicWholeClaimRejection<S extends string>(
         expectedResolution.activeClaimId !== claimId ||
         expectedResolution.resultId !== resolutionPreviousResultId ||
         expectedResolution.currentStateCommandKey !== resolutionStateKey ||
+        expectedResolution.ownershipSetId !==
+          context?.claimResolutionOwnershipSetId ||
+        expectedResolution.ownershipSetResultId !==
+          context?.claimResolutionOwnershipSetResultId ||
+        expectedResolution.ownershipSnapshotId !==
+          context?.claimResolutionOwnershipSnapshotId ||
+        expectedResolution.ownershipSnapshotResultId !==
+          context?.claimResolutionOwnershipSnapshotResultId ||
+        expectedResolution.claimPreviousResultId !==
+          context?.claimResolutionOwnershipPreviousClaimResultId ||
         expectedResolution.immutable !== true)) ||
     context?.claimRejectionResultClaimId !== claimId ||
     context?.claimRejectionParentResultId !== resultId ||
@@ -8133,10 +8356,26 @@ function requireAtomicWholeClaimWithdrawal<S extends string>(
   ]);
   const context = command.context;
   const isParentTransition = lifecycle === "Claim";
+  const isSelectedPendingChildTransition =
+    lifecycle === "ClaimSlotResolution" &&
+    command.current === "pending" &&
+    command.target === "withdrawn";
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const claimId = context?.claimId;
   const resolutionId = context?.claimSlotResolutionId;
   const slotId = context?.claimSlotId;
   const resultId = context?.claimWithdrawalResultId;
+  const resolutionPreviousResultId =
+    context?.claimWithdrawalPreviousResolutionResultId;
+  const resolutionStateKey = context?.claimWithdrawalCurrentStateCommandKey;
+  const expectedResolutionValue = context?.claimWithdrawalExpectedResolution;
+  const expectedResolution =
+    typeof expectedResolutionValue === "object" &&
+    expectedResolutionValue !== null &&
+    !Array.isArray(expectedResolutionValue)
+      ? (expectedResolutionValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const resolutions = Array.isArray(context?.claimSlotResolutions)
     ? context.claimSlotResolutions
     : undefined;
@@ -8188,6 +8427,30 @@ function requireAtomicWholeClaimWithdrawal<S extends string>(
     slotId.trim().length === 0 ||
     typeof resultId !== "string" ||
     resultId.trim().length === 0 ||
+    (isSelectedPendingChildTransition &&
+      (!nonBlank(resolutionPreviousResultId) ||
+        !nonBlank(resolutionStateKey) ||
+        command.aggregateId !== resolutionId ||
+        command.currentStateCommandKey !== resolutionStateKey ||
+        command.currentStateResultId !== resolutionPreviousResultId ||
+        expectedResolution?.id !== resolutionId ||
+        expectedResolution.claimId !== claimId ||
+        expectedResolution.slotId !== slotId ||
+        expectedResolution.status !== "pending" ||
+        expectedResolution.activeClaimId !== claimId ||
+        expectedResolution.resultId !== resolutionPreviousResultId ||
+        expectedResolution.currentStateCommandKey !== resolutionStateKey ||
+        expectedResolution.ownershipSetId !==
+          context?.claimResolutionOwnershipSetId ||
+        expectedResolution.ownershipSetResultId !==
+          context?.claimResolutionOwnershipSetResultId ||
+        expectedResolution.ownershipSnapshotId !==
+          context?.claimResolutionOwnershipSnapshotId ||
+        expectedResolution.ownershipSnapshotResultId !==
+          context?.claimResolutionOwnershipSnapshotResultId ||
+        expectedResolution.claimPreviousResultId !==
+          context?.claimResolutionOwnershipPreviousClaimResultId ||
+        expectedResolution.immutable !== true)) ||
     context?.claimWithdrawalResultClaimId !== claimId ||
     context?.claimWithdrawalParentResultId !== resultId ||
     context?.claimWithdrawalChildSetResultId !== resultId ||
