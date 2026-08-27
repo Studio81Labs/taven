@@ -2198,6 +2198,97 @@ const permittedContext = {
     currentStateCommandKey: "claim-active-command-1",
     immutable: true,
   },
+  claimInvestigationPreviousClaimResultId: "claim-opened-result-1",
+  claimInvestigationCurrentStateCommandKey: "claim-opened-command-1",
+  claimInvestigationExpectedClaim: {
+    id: "claim-1",
+    status: "opened",
+    resultId: "claim-opened-result-1",
+    currentStateCommandKey: "claim-opened-command-1",
+    immutable: true,
+  },
+  claimInvestigationResultId: "claim-investigation-result-1",
+  claimInvestigationClaimResultId: "claim-investigation-result-1",
+  claimInvestigationCompleted: true,
+  claimInvestigationAtomic: true,
+  claimActivationPreviousClaimResultId: "claim-investigating-result-1",
+  claimActivationCurrentStateCommandKey: "claim-investigating-command-1",
+  claimActivationExpectedClaim: {
+    id: "claim-1",
+    status: "investigating",
+    resultId: "claim-investigating-result-1",
+    currentStateCommandKey: "claim-investigating-command-1",
+    ownershipSetId: "claim-activation-ownership-set-1",
+    ownershipSetResultId: "claim-activation-ownership-set-result-1",
+    immutable: true,
+  },
+  claimActivationOwnershipSetId: "claim-activation-ownership-set-1",
+  claimActivationOwnershipSetResultId:
+    "claim-activation-ownership-set-result-1",
+  claimActivationOwnershipSet: {
+    id: "claim-activation-ownership-set-1",
+    claimId: "claim-1",
+    resultId: "claim-activation-ownership-set-result-1",
+    resolutionIds: ["claim-resolution-1"],
+    slotIds: ["claim-slot-1"],
+    resolutionSlotBindings: [
+      { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+    ],
+    sourceChildren: [
+      {
+        id: "claim-resolution-1",
+        claimId: "claim-1",
+        slotId: "claim-slot-1",
+        activeClaimId: "claim-1",
+        status: "pending",
+        resultId: "claim-resolution-pending-result-1",
+        currentStateCommandKey: "claim-resolution-pending-command-1",
+        immutable: true,
+      },
+    ],
+    immutable: true,
+  },
+  claimActivationExpectedResolutionIds: ["claim-resolution-1"],
+  claimActivationExpectedSlotIds: ["claim-slot-1"],
+  claimActivationExpectedResolutionSlots: [
+    { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+  ],
+  claimActivationExpectedChildren: [
+    {
+      id: "claim-resolution-1",
+      claimId: "claim-1",
+      slotId: "claim-slot-1",
+      activeClaimId: "claim-1",
+      status: "pending",
+      resultId: "claim-resolution-pending-result-1",
+      currentStateCommandKey: "claim-resolution-pending-command-1",
+      ownershipSetId: "claim-activation-ownership-set-1",
+      ownershipSetResultId: "claim-activation-ownership-set-result-1",
+      immutable: true,
+    },
+  ],
+  claimActivationSelections: [
+    {
+      resolutionId: "claim-resolution-1",
+      claimId: "claim-1",
+      slotId: "claim-slot-1",
+      activeClaimId: "claim-1",
+      previousStatus: "pending",
+      targetStatus: "reprint_pending",
+      previousResultId: "claim-resolution-pending-result-1",
+      currentStateCommandKey: "claim-resolution-pending-command-1",
+      ownershipSetId: "claim-activation-ownership-set-1",
+      ownershipSetResultId: "claim-activation-ownership-set-result-1",
+      resultId: "claim-activation-result-1",
+      immutable: true,
+    },
+  ],
+  claimActivationResultId: "claim-activation-result-1",
+  claimActivationClaimResultId: "claim-activation-result-1",
+  claimActivationOwnershipResultId: "claim-activation-result-1",
+  claimActivationChildResultId: "claim-activation-result-1",
+  claimActivationCompleted: true,
+  claimActivationAtomic: true,
   expectedClaimSlotResolutionIds: ["claim-resolution-1"],
   expectedClaimSlotIds: ["claim-slot-1"],
   expectedClaimResolutionSlots: [
@@ -4757,6 +4848,30 @@ function commandAnchors(
     return {
       aggregateId: "job-1",
       currentStateCommandKey: "job-printing-command-1",
+    };
+  }
+  if (
+    policy.name === "Claim" &&
+    current === "opened" &&
+    target === "investigating"
+  ) {
+    return {
+      aggregateId: "claim-1",
+      currentStateCommandKey: "claim-opened-command-1",
+      currentStateResultId: "claim-opened-result-1",
+    };
+  }
+  if (
+    policy.name === "Claim" &&
+    current === "investigating" &&
+    target === "active"
+  ) {
+    return {
+      aggregateId: "claim-1",
+      currentStateCommandKey: "claim-investigating-command-1",
+      currentStateResultId: "claim-investigating-result-1",
+      ownershipSnapshotId: "claim-activation-ownership-set-1",
+      ownershipSnapshotResultId: "claim-activation-ownership-set-result-1",
     };
   }
   if (
@@ -24399,6 +24514,469 @@ describe("v0 lifecycle policy tables", () => {
         },
       }),
     ).toThrow(TransitionGuardError);
+  });
+  it("atomically activates an investigating Claim with each valid selected remedy", () => {
+    for (const targetStatus of [
+      "reprint_pending",
+      "reship_pending",
+      "refund_pending",
+    ] as const) {
+      const context = contextForTransition("active", "investigating");
+      expect(
+        transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "investigating", "active"),
+          current: "investigating",
+          target: "active",
+          idempotencyKey: `claim-activation-${targetStatus}`,
+          context: {
+            ...context,
+            claimActivationSelections: context.claimActivationSelections.map(
+              (selection) => ({
+                ...selection,
+                targetStatus,
+              }),
+            ),
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "investigating",
+        current: "active",
+      });
+    }
+  });
+
+  it.each([
+    ["missing selection", { claimActivationSelections: [] }],
+    [
+      "foreign selection",
+      {
+        claimActivationSelections: [
+          {
+            ...permittedContext.claimActivationSelections[0],
+            resolutionId: "claim-resolution-2",
+          },
+        ],
+      },
+    ],
+    [
+      "non-remedy target",
+      {
+        claimActivationSelections: [
+          {
+            ...permittedContext.claimActivationSelections[0],
+            targetStatus: "rejected",
+          },
+        ],
+      },
+    ],
+    ["non-atomic", { claimActivationAtomic: false }],
+    ["missing child", { claimActivationExpectedChildren: [] }],
+  ] as const)("rejects Claim activation with %s evidence", (_case, invalid) => {
+    expect(() =>
+      transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "investigating", "active"),
+        current: "investigating",
+        target: "active",
+        idempotencyKey: `claim-activation-invalid-${_case}`,
+        context: {
+          ...contextForTransition("active", "investigating"),
+          ...invalid,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  const twoChildClaimActivation = () => {
+    const base = contextForTransition("active", "investigating");
+    const secondChild = {
+      ...base.claimActivationExpectedChildren[0],
+      id: "claim-resolution-2",
+      slotId: "claim-slot-2",
+      resultId: "claim-resolution-pending-result-2",
+      currentStateCommandKey: "claim-resolution-pending-command-2",
+    };
+    const secondSelection = {
+      ...base.claimActivationSelections[0],
+      resolutionId: "claim-resolution-2",
+      slotId: "claim-slot-2",
+      previousResultId: "claim-resolution-pending-result-2",
+      currentStateCommandKey: "claim-resolution-pending-command-2",
+      targetStatus: "reship_pending",
+    };
+    return {
+      ...base,
+      claimActivationOwnershipSet: {
+        ...base.claimActivationOwnershipSet,
+        resolutionIds: ["claim-resolution-1", "claim-resolution-2"],
+        slotIds: ["claim-slot-1", "claim-slot-2"],
+        resolutionSlotBindings: [
+          { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+          { resolutionId: "claim-resolution-2", slotId: "claim-slot-2" },
+        ],
+        sourceChildren: [
+          base.claimActivationOwnershipSet.sourceChildren[0],
+          {
+            ...base.claimActivationOwnershipSet.sourceChildren[0],
+            id: "claim-resolution-2",
+            slotId: "claim-slot-2",
+            resultId: "claim-resolution-pending-result-2",
+            currentStateCommandKey: "claim-resolution-pending-command-2",
+          },
+        ],
+      },
+      claimActivationExpectedResolutionIds: [
+        "claim-resolution-1",
+        "claim-resolution-2",
+      ],
+      claimActivationExpectedSlotIds: ["claim-slot-1", "claim-slot-2"],
+      claimActivationExpectedResolutionSlots: [
+        { resolutionId: "claim-resolution-1", slotId: "claim-slot-1" },
+        { resolutionId: "claim-resolution-2", slotId: "claim-slot-2" },
+      ],
+      claimActivationExpectedChildren: [
+        base.claimActivationExpectedChildren[0],
+        secondChild,
+      ],
+      claimActivationSelections: [base.claimActivationSelections[0]],
+      secondSelection,
+    };
+  };
+
+  it.each([
+    ["missing aggregate", { aggregateId: undefined }],
+    ["blank aggregate", { aggregateId: " " }],
+    ["foreign aggregate", { aggregateId: "claim-2" }],
+    ["missing key", { currentStateCommandKey: undefined }],
+    ["blank key", { currentStateCommandKey: " " }],
+    [
+      "foreign key",
+      { currentStateCommandKey: "claim-investigating-command-2" },
+    ],
+    ["missing result", { currentStateResultId: undefined }],
+    ["blank result", { currentStateResultId: " " }],
+    [
+      "foreign result",
+      { currentStateResultId: "claim-investigating-result-2" },
+    ],
+  ] as const)(
+    "rejects Claim activation with a %s command anchor",
+    (_case, invalid) => {
+      expect(() =>
+        transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "investigating", "active"),
+          ...invalid,
+          current: "investigating",
+          target: "active",
+          idempotencyKey: `claim-activation-anchor-${_case}`,
+          context: contextForTransition("active", "investigating"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["missing ownership ID", { ownershipSnapshotId: undefined }],
+    [
+      "foreign ownership ID",
+      { ownershipSnapshotId: "claim-activation-ownership-set-2" },
+    ],
+    ["missing ownership result", { ownershipSnapshotResultId: undefined }],
+    [
+      "foreign ownership result",
+      {
+        ownershipSnapshotResultId: "claim-activation-ownership-set-result-2",
+      },
+    ],
+  ] as const)(
+    "rejects Claim activation with a %s command ownership anchor",
+    (_case, invalid) => {
+      expect(() =>
+        transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "investigating", "active"),
+          ...invalid,
+          current: "investigating",
+          target: "active",
+          idempotencyKey: `claim-activation-ownership-anchor-${_case}`,
+          context: contextForTransition("active", "investigating"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["stale Claim", { resultId: "claim-investigating-result-2" }],
+    ["mutable Claim", { immutable: false }],
+  ] as const)(
+    "rejects Claim activation with a %s source snapshot",
+    (_case, mutation) => {
+      const context = contextForTransition("active", "investigating");
+      expect(() =>
+        transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "investigating", "active"),
+          current: "investigating",
+          target: "active",
+          idempotencyKey: `claim-activation-source-${_case}`,
+          context: {
+            ...context,
+            claimActivationExpectedClaim: {
+              ...context.claimActivationExpectedClaim,
+              ...mutation,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "omitted ownership",
+      (context: ReturnType<typeof twoChildClaimActivation>) => ({
+        ...context,
+        claimActivationExpectedResolutionIds: ["claim-resolution-1"],
+      }),
+    ],
+    [
+      "foreign ownership",
+      (context: ReturnType<typeof twoChildClaimActivation>) => ({
+        ...context,
+        claimActivationOwnershipSet: {
+          ...context.claimActivationOwnershipSet,
+          claimId: "claim-2",
+        },
+      }),
+    ],
+    [
+      "duplicate binding",
+      (context: ReturnType<typeof twoChildClaimActivation>) => ({
+        ...context,
+        claimActivationOwnershipSet: {
+          ...context.claimActivationOwnershipSet,
+          resolutionSlotBindings: [
+            context.claimActivationOwnershipSet.resolutionSlotBindings[0],
+            context.claimActivationOwnershipSet.resolutionSlotBindings[0],
+          ],
+        },
+      }),
+    ],
+    [
+      "swapped binding",
+      (context: ReturnType<typeof twoChildClaimActivation>) => ({
+        ...context,
+        claimActivationOwnershipSet: {
+          ...context.claimActivationOwnershipSet,
+          resolutionSlotBindings: [
+            { resolutionId: "claim-resolution-1", slotId: "claim-slot-2" },
+            { resolutionId: "claim-resolution-2", slotId: "claim-slot-1" },
+          ],
+        },
+      }),
+    ],
+  ] as const)("rejects Claim activation with %s ownership", (_case, mutate) => {
+    expect(() =>
+      transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "investigating", "active"),
+        current: "investigating",
+        target: "active",
+        idempotencyKey: `claim-activation-ownership-${_case}`,
+        context: mutate(twoChildClaimActivation()),
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["child status", { status: "reprint_pending" }],
+    ["child result", { resultId: "claim-resolution-pending-result-2" }],
+    [
+      "child key",
+      { currentStateCommandKey: "claim-resolution-pending-command-2" },
+    ],
+    ["child ownership", { ownershipSetId: "claim-activation-ownership-set-2" }],
+    ["mutable child", { immutable: false }],
+    [
+      "selection source result",
+      { previousResultId: "claim-resolution-pending-result-2" },
+    ],
+    [
+      "selection source key",
+      { currentStateCommandKey: "claim-resolution-pending-command-2" },
+    ],
+    [
+      "selection ownership",
+      { ownershipSetId: "claim-activation-ownership-set-2" },
+    ],
+    ["selection result", { resultId: "claim-activation-result-2" }],
+    ["mutable selection", { immutable: false }],
+  ] as const)(
+    "rejects Claim activation with %s mutation",
+    (_case, mutation) => {
+      const context = contextForTransition("active", "investigating");
+      const selection = _case.startsWith("selection");
+      expect(() =>
+        transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "investigating", "active"),
+          current: "investigating",
+          target: "active",
+          idempotencyKey: `claim-activation-child-${_case}`,
+          context: selection
+            ? {
+                ...context,
+                claimActivationSelections: [
+                  { ...context.claimActivationSelections[0], ...mutation },
+                ],
+              }
+            : {
+                ...context,
+                claimActivationExpectedChildren: [
+                  {
+                    ...context.claimActivationExpectedChildren[0],
+                    ...mutation,
+                  },
+                ],
+              },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects coordinated child and selection source mutation behind immutable ownership anchors", () => {
+    const context = contextForTransition("active", "investigating");
+    expect(() =>
+      transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "investigating", "active"),
+        current: "investigating",
+        target: "active",
+        idempotencyKey: "claim-activation-coordinated-child-source",
+        context: {
+          ...context,
+          claimActivationExpectedChildren: [
+            {
+              ...context.claimActivationExpectedChildren[0],
+              resultId: "claim-resolution-pending-result-2",
+              currentStateCommandKey: "claim-resolution-pending-command-2",
+            },
+          ],
+          claimActivationSelections: [
+            {
+              ...context.claimActivationSelections[0],
+              previousResultId: "claim-resolution-pending-result-2",
+              currentStateCommandKey: "claim-resolution-pending-command-2",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("accepts reordered complete ownership with a pending sibling and mixed remedies", () => {
+    const context = twoChildClaimActivation();
+    expect(
+      transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "investigating", "active"),
+        current: "investigating",
+        target: "active",
+        idempotencyKey: "claim-activation-two-child-reordered",
+        context: {
+          ...context,
+          claimActivationExpectedChildren: [
+            ...context.claimActivationExpectedChildren,
+          ].reverse(),
+          claimActivationExpectedResolutionSlots: [
+            ...context.claimActivationExpectedResolutionSlots,
+          ].reverse(),
+          claimActivationOwnershipSet: {
+            ...context.claimActivationOwnershipSet,
+            resolutionSlotBindings: [
+              ...context.claimActivationOwnershipSet.resolutionSlotBindings,
+            ].reverse(),
+          },
+          claimActivationSelections: [
+            context.claimActivationSelections[0],
+            context.secondSelection,
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "investigating",
+      current: "active",
+    });
+  });
+
+  it("rejects a coordinated Claim-B activation behind Claim-A anchors", () => {
+    const context = contextForTransition("active", "investigating");
+    expect(() =>
+      transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "investigating", "active"),
+        current: "investigating",
+        target: "active",
+        idempotencyKey: "claim-activation-coordinated-b",
+        context: {
+          ...context,
+          claimId: "claim-2",
+          claimActivationExpectedClaim: {
+            ...context.claimActivationExpectedClaim,
+            id: "claim-2",
+            resultId: "claim-investigating-result-2",
+            currentStateCommandKey: "claim-investigating-command-2",
+          },
+          claimActivationOwnershipSet: {
+            ...context.claimActivationOwnershipSet,
+            claimId: "claim-2",
+          },
+          claimActivationExpectedChildren:
+            context.claimActivationExpectedChildren.map((child) => ({
+              ...child,
+              claimId: "claim-2",
+              activeClaimId: "claim-2",
+            })),
+          claimActivationSelections: context.claimActivationSelections.map(
+            (selection) => ({
+              ...selection,
+              claimId: "claim-2",
+              activeClaimId: "claim-2",
+            }),
+          ),
+          claimActivationPreviousClaimResultId: "claim-investigating-result-2",
+          claimActivationCurrentStateCommandKey:
+            "claim-investigating-command-2",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("binds opened Claim investigation to its immutable selected source", () => {
+    const context = contextForTransition("investigating", "opened");
+    expect(
+      transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "opened", "investigating"),
+        current: "opened",
+        target: "investigating",
+        idempotencyKey: "claim-investigation",
+        context,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "opened",
+      current: "investigating",
+    });
+    for (const currentStateResultId of [
+      undefined,
+      " ",
+      "claim-opened-result-2",
+    ]) {
+      expect(() =>
+        transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "opened", "investigating"),
+          currentStateResultId,
+          current: "opened",
+          target: "investigating",
+          idempotencyKey: `claim-investigation-result-${String(currentStateResultId)}`,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+    }
   });
 });
 

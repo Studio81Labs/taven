@@ -9957,6 +9957,310 @@ function requireAtomicWholeClaimWithdrawal<S extends string>(
   );
 }
 
+function requireExactClaimInvestigationSource<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const expectedValue = context?.claimInvestigationExpectedClaim;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const claimId = context?.claimId;
+  const resultId = context?.claimInvestigationResultId;
+  const previousResultId = context?.claimInvestigationPreviousClaimResultId;
+  const stateKey = context?.claimInvestigationCurrentStateCommandKey;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  if (
+    !nonBlank(claimId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== claimId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expected?.id !== claimId ||
+    expected.status !== "opened" ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true ||
+    context?.claimInvestigationClaimResultId !== resultId ||
+    context?.claimInvestigationCompleted !== true ||
+    context?.claimInvestigationAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim investigation must bind the command-selected immutable opened Claim source",
+    );
+  }
+}
+
+function requireAtomicClaimActivation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const claimId = context?.claimId;
+  const previousResultId = context?.claimActivationPreviousClaimResultId;
+  const stateKey = context?.claimActivationCurrentStateCommandKey;
+  const expectedClaim = record(context?.claimActivationExpectedClaim);
+  const ownershipSetId = context?.claimActivationOwnershipSetId;
+  const ownershipSetResultId = context?.claimActivationOwnershipSetResultId;
+  const ownershipSet = record(context?.claimActivationOwnershipSet);
+  const expectedIds = context?.claimActivationExpectedResolutionIds;
+  const expectedSlots = context?.claimActivationExpectedSlotIds;
+  const expectedBindings = context?.claimActivationExpectedResolutionSlots;
+  const childrenValue = context?.claimActivationExpectedChildren;
+  const selectionsValue = context?.claimActivationSelections;
+  const children = Array.isArray(childrenValue) ? childrenValue : undefined;
+  const selections = Array.isArray(selectionsValue)
+    ? selectionsValue
+    : undefined;
+  const resultId = context?.claimActivationResultId;
+  const validRemedies = new Set([
+    "reprint_pending",
+    "reship_pending",
+    "refund_pending",
+  ]);
+  const exactIds = (value: unknown): value is string[] =>
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(nonBlank) &&
+    new Set(value).size === value.length;
+  const sameSet = (left: unknown, right: unknown): boolean =>
+    exactIds(left) &&
+    exactIds(right) &&
+    left.length === right.length &&
+    left.every((id) => right.includes(id));
+  if (
+    !nonBlank(claimId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(ownershipSetId) ||
+    !nonBlank(ownershipSetResultId) ||
+    !nonBlank(resultId) ||
+    command.aggregateId !== claimId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    command.ownershipSnapshotId !== ownershipSetId ||
+    command.ownershipSnapshotResultId !== ownershipSetResultId ||
+    expectedClaim?.id !== claimId ||
+    expectedClaim.status !== "investigating" ||
+    expectedClaim.resultId !== previousResultId ||
+    expectedClaim.currentStateCommandKey !== stateKey ||
+    expectedClaim.ownershipSetId !== ownershipSetId ||
+    expectedClaim.ownershipSetResultId !== ownershipSetResultId ||
+    expectedClaim.immutable !== true ||
+    ownershipSet?.id !== ownershipSetId ||
+    ownershipSet.claimId !== claimId ||
+    ownershipSet.resultId !== ownershipSetResultId ||
+    ownershipSet.immutable !== true ||
+    !sameSet(expectedIds, ownershipSet.resolutionIds) ||
+    !sameSet(expectedSlots, ownershipSet.slotIds) ||
+    (expectedIds as unknown[])?.length !==
+      (expectedSlots as unknown[])?.length ||
+    !Array.isArray(expectedBindings) ||
+    !Array.isArray(ownershipSet.resolutionSlotBindings) ||
+    expectedBindings.length !== (expectedIds as unknown[])?.length ||
+    children === undefined ||
+    children.length !== (expectedIds as unknown[])?.length ||
+    selections === undefined ||
+    selections.length === 0 ||
+    context?.claimActivationClaimResultId !== resultId ||
+    context?.claimActivationOwnershipResultId !== resultId ||
+    context?.claimActivationChildResultId !== resultId ||
+    context?.claimActivationCompleted !== true ||
+    context?.claimActivationAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim activation requires its command-selected immutable ownership and remedy-selection result",
+    );
+  }
+  const expectedSlotByResolution = new Map<string, string>();
+  for (const value of expectedBindings as unknown[]) {
+    const binding = record(value);
+    const resolutionId = binding?.resolutionId;
+    const slotId = binding?.slotId;
+    if (
+      !nonBlank(resolutionId) ||
+      !nonBlank(slotId) ||
+      expectedSlotByResolution.has(resolutionId) ||
+      !(expectedIds as string[]).includes(resolutionId) ||
+      !(expectedSlots as string[]).includes(slotId)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim activation requires an exact authoritative resolution-to-slot ownership bijection",
+      );
+    }
+    expectedSlotByResolution.set(resolutionId, slotId);
+  }
+  const ownershipBindingKeys = new Set<string>();
+  for (const value of ownershipSet.resolutionSlotBindings as unknown[]) {
+    const binding = record(value);
+    const resolutionId = binding?.resolutionId;
+    const slotId = binding?.slotId;
+    if (
+      !nonBlank(resolutionId) ||
+      !nonBlank(slotId) ||
+      ownershipBindingKeys.has(resolutionId) ||
+      expectedSlotByResolution.get(resolutionId) !== slotId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim activation ownership bindings must exactly match the immutable child set",
+      );
+    }
+    ownershipBindingKeys.add(resolutionId);
+  }
+  if (ownershipBindingKeys.size !== expectedSlotByResolution.size) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim activation ownership bindings cannot omit a child",
+    );
+  }
+  const childById = new Map<string, Readonly<Record<string, unknown>>>();
+  const sourceChildrenValue = ownershipSet.sourceChildren;
+  const sourceChildren = Array.isArray(sourceChildrenValue)
+    ? sourceChildrenValue
+    : undefined;
+  if (
+    sourceChildren === undefined ||
+    sourceChildren.length !== expectedSlotByResolution.size
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim activation ownership must contain every immutable child source record",
+    );
+  }
+  const sourceById = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const value of sourceChildren) {
+    const source = record(value);
+    if (source === undefined) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim activation ownership child sources must be records",
+      );
+    }
+    const id = source?.id;
+    const slotId = source?.slotId;
+    if (
+      !nonBlank(id) ||
+      !nonBlank(slotId) ||
+      sourceById.has(id) ||
+      expectedSlotByResolution.get(id) !== slotId ||
+      source.claimId !== claimId ||
+      source.activeClaimId !== claimId ||
+      source.status !== "pending" ||
+      !nonBlank(source.resultId) ||
+      !nonBlank(source.currentStateCommandKey) ||
+      source.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim activation ownership child sources must exactly match the immutable pending child set",
+      );
+    }
+    sourceById.set(id, source);
+  }
+  const slots = new Set<string>();
+  for (const value of children) {
+    const child = record(value);
+    const id = child?.id;
+    const slotId = child?.slotId;
+    if (
+      !nonBlank(id) ||
+      !nonBlank(slotId) ||
+      childById.has(id) ||
+      slots.has(slotId) ||
+      !(expectedIds as string[]).includes(id) ||
+      expectedSlotByResolution.get(id) !== slotId ||
+      child?.claimId !== claimId ||
+      child.status !== "pending" ||
+      child.activeClaimId !== claimId ||
+      child.resultId !== sourceById.get(id)?.resultId ||
+      child.currentStateCommandKey !==
+        sourceById.get(id)?.currentStateCommandKey ||
+      !nonBlank(child.resultId) ||
+      !nonBlank(child.currentStateCommandKey) ||
+      child.ownershipSetId !== ownershipSetId ||
+      child.ownershipSetResultId !== ownershipSetResultId ||
+      child.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim activation requires every immutable owned pending child exactly once",
+      );
+    }
+    childById.set(id, child);
+    slots.add(slotId);
+  }
+  const selectedIds = new Set<string>();
+  for (const value of selections) {
+    const selection = record(value);
+    const id = selection?.resolutionId;
+    const slotId = selection?.slotId;
+    const child = nonBlank(id) ? childById.get(id) : undefined;
+    if (
+      selection === undefined ||
+      !nonBlank(id) ||
+      !nonBlank(slotId) ||
+      selectedIds.has(id) ||
+      child === undefined ||
+      child.slotId !== slotId ||
+      selection.claimId !== claimId ||
+      selection.activeClaimId !== claimId ||
+      selection.previousStatus !== "pending" ||
+      selection.previousResultId !== child.resultId ||
+      selection.currentStateCommandKey !== child.currentStateCommandKey ||
+      selection.ownershipSetId !== ownershipSetId ||
+      selection.ownershipSetResultId !== ownershipSetResultId ||
+      !validRemedies.has(selection.targetStatus as string) ||
+      selection.resultId !== resultId ||
+      selection.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Claim activation selections must be exact owned pending children with a remedy result",
+      );
+    }
+    selectedIds.add(id);
+  }
+}
+
 export const claimPolicy: TransitionPolicy<ClaimStatus> = {
   name: "Claim",
   initial: ["opened"],
@@ -9980,6 +10284,12 @@ export const claimPolicy: TransitionPolicy<ClaimStatus> = {
     ],
   },
   guard: (command) => {
+    if (command.current === "opened" && command.target === "investigating") {
+      requireExactClaimInvestigationSource("Claim", command);
+    }
+    if (command.current === "investigating" && command.target === "active") {
+      requireAtomicClaimActivation("Claim", command);
+    }
     if (
       command.current === "investigating" &&
       command.target === "resolved_rejected"
