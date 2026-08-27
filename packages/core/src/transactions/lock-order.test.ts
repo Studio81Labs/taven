@@ -40,6 +40,15 @@ describe("orderLockTargets", () => {
     );
   });
 
+  it.each(["payment", "shipment"] as const)(
+    "rejects node scope on globally scoped %s targets",
+    (kind) => {
+      expect(() =>
+        orderLockTargets([{ kind, id: `${kind}-1`, nodeId: "node-1" }]),
+      ).toThrow(/must not include node scope/);
+    },
+  );
+
   it("allows a phase reservation set to span node-scoped child reservations", () => {
     const targets = [
       { kind: "production_reservation", id: "reservation-b", nodeId: "node-2" },
@@ -59,6 +68,24 @@ describe("orderLockTargets", () => {
     expect(() => orderLockTargets([target, target])).toThrow(
       /Duplicate lock target/,
     );
+  });
+
+  it("cannot use node IDs to split a duplicate global lock target", () => {
+    expect(() =>
+      orderLockTargets([
+        { kind: "payment", id: "payment-1", nodeId: "node-a" },
+        { kind: "payment", id: "payment-1", nodeId: "node-b" },
+      ]),
+    ).toThrow(/must not include node scope/);
+  });
+
+  it("cannot use node IDs to derive a different global lock order", () => {
+    expect(() =>
+      orderLockTargets([
+        { kind: "shipment", id: "shipment-a", nodeId: "node-z" },
+        { kind: "shipment", id: "shipment-b", nodeId: "node-a" },
+      ]),
+    ).toThrow(/must not include node scope/);
   });
 
   it("does not collide when opaque node and target IDs contain delimiters", () => {

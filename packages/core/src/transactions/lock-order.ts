@@ -45,7 +45,11 @@ const nodeScopedKinds = new Set<LockTargetKind>([
 ]);
 
 function canonicalIdentity(target: LockTarget): string {
-  const components = [target.kind, target.nodeId ?? "", target.id];
+  const components = [
+    target.kind,
+    nodeScopedKinds.has(target.kind) ? (target.nodeId ?? "") : "",
+    target.id,
+  ];
   return components.map((value) => `${value.length}:${value}`).join("|");
 }
 
@@ -65,6 +69,12 @@ export function orderLockTargets(
       throw new DomainError(
         "INVALID_ARGUMENT",
         `${target.kind} lock targets require node scope.`,
+      );
+    }
+    if (!nodeScopedKinds.has(target.kind) && target.nodeId !== undefined) {
+      throw new DomainError(
+        "INVALID_ARGUMENT",
+        `${target.kind} lock targets must not include node scope.`,
       );
     }
     const identity = canonicalIdentity(target);

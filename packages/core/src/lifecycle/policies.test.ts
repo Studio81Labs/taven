@@ -82,6 +82,97 @@ const permittedContext = {
   paymentId: "payment-1",
   paymentRole: "full",
   paymentCaptureKind: "settlement",
+  paymentIntentSetupResultId: "payment-intent-setup-result-1",
+  paymentIntentSetupPreviousPaymentResultId: "payment-created-result-1",
+  paymentIntentSetupCurrentStateCommandKey: "payment-created-command-1",
+  paymentIntentSetupExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "created",
+    providerTransactionId: "provider-transaction-1",
+    authorizationId: "capture-authorization-1",
+    captureWindowId: "capture-window-1",
+    captureExpiresAt: Instant.parse("2026-01-01T01:00:00.000Z"),
+    resultId: "payment-created-result-1",
+    currentStateCommandKey: "payment-created-command-1",
+    immutable: true,
+  },
+  paymentIntentSetupActivatedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    previousStatus: "created",
+    targetStatus: "pending",
+    providerTransactionId: "provider-transaction-1",
+    authorizationId: "capture-authorization-1",
+    captureWindowId: "capture-window-1",
+    resultId: "payment-intent-setup-result-1",
+    immutable: true,
+  },
+  paymentIntentSetupProviderTransactionId: "provider-transaction-1",
+  paymentIntentSetupAuthorizationId: "capture-authorization-1",
+  paymentIntentSetupCaptureWindowId: "capture-window-1",
+  paymentIntentSetupCaptureExpiresAt: Instant.parse("2026-01-01T01:00:00.000Z"),
+  paymentIntentSetupProviderTransaction: {
+    id: "provider-transaction-1",
+    paymentId: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "intent_created",
+    authorizationId: "capture-authorization-1",
+    resultId: "payment-intent-setup-result-1",
+    immutable: true,
+  },
+  paymentIntentSetupAuthorization: {
+    id: "capture-authorization-1",
+    paymentId: "payment-1",
+    providerTransactionId: "provider-transaction-1",
+    status: "authorized",
+    captureCutoffAt: null,
+    resultId: "payment-intent-setup-result-1",
+    immutable: true,
+  },
+  paymentIntentSetupCaptureWindow: {
+    id: "capture-window-1",
+    paymentId: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    kind: "checkout",
+    status: "open",
+    authorizationId: "capture-authorization-1",
+    cutoffAt: Instant.parse("2026-01-01T01:00:00.000Z"),
+    resultId: "payment-intent-setup-result-1",
+    immutable: true,
+  },
+  paymentIntentSetupOrder: {
+    id: "order-1",
+    phaseId: "phase-1",
+    status: "quoted",
+    resultId: "payment-intent-setup-result-1",
+    immutable: true,
+  },
+  paymentIntentSetupPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    kind: "single",
+    status: "quoted",
+    resultId: "payment-intent-setup-result-1",
+    immutable: true,
+  },
+  paymentIntentSetupPaymentResultId: "payment-intent-setup-result-1",
+  paymentIntentSetupProviderTransactionResultId:
+    "payment-intent-setup-result-1",
+  paymentIntentSetupAuthorizationResultId: "payment-intent-setup-result-1",
+  paymentIntentSetupCaptureWindowResultId: "payment-intent-setup-result-1",
+  paymentIntentSetupOrderResultId: "payment-intent-setup-result-1",
+  paymentIntentSetupPhaseResultId: "payment-intent-setup-result-1",
+  paymentIntentSetupCompleted: true,
+  paymentIntentSetupAtomic: true,
   checkoutCaptureExpiresAt: Instant.parse("2026-01-01T01:00:00.000Z"),
   paymentCaptureWindowId: "capture-window-1",
   paymentCaptureWindowResultId: "capture-window-result-1",
@@ -1032,12 +1123,124 @@ const permittedContext = {
   reproductionArtifactVersionPrintConfigRevisionId: "config-revision-1",
   acceptanceArtifactCreated: true,
   jobAcceptanceAtomic: true,
+  createdCancellationJobId: "job-1",
+  createdCancellationOrderId: "order-1",
+  createdCancellationPhaseId: "phase-1",
+  createdCancellationReservationId: "production-reservation-1",
+  createdCancellationPreviousStatus: "created",
+  createdCancellationTargetStatus: "cancelled",
+  createdCancellationPreviousJobResultId: "job-created-result-1",
+  createdCancellationPreviousReservationResultId:
+    "production-reservation-held-result-1",
+  createdCancellationCurrentStateCommandKey: "job-created-command-1",
+  createdCancellationResultId: "created-job-cancellation-result-1",
+  createdCancellationOfferSetId: "routing-offer-set-1",
+  createdCancellationOfferSetResultId: "routing-offer-set-result-1",
+  createdCancellationExpectedOfferIds: ["routing-offer-1", "routing-offer-2"],
+  createdCancellationOfferSet: {
+    id: "routing-offer-set-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    offerIds: ["routing-offer-1", "routing-offer-2"],
+    resultId: "routing-offer-set-result-1",
+    immutable: true,
+  },
+  createdCancellationOffers: [
+    {
+      id: "routing-offer-1",
+      jobId: "job-1",
+      productionReservationId: "production-reservation-1",
+      orderId: "order-1",
+      orderItemId: "order-item-1",
+      phaseId: "phase-1",
+      previousStatus: "open",
+      targetStatus: "closed",
+      resultId: "created-job-cancellation-result-1",
+      immutable: true,
+    },
+    {
+      id: "routing-offer-2",
+      jobId: "job-1",
+      productionReservationId: "production-reservation-1",
+      orderId: "order-1",
+      orderItemId: "order-item-1",
+      phaseId: "phase-1",
+      previousStatus: "open",
+      targetStatus: "closed",
+      resultId: "created-job-cancellation-result-1",
+      immutable: true,
+    },
+  ],
+  createdCancellationJobResultId: "created-job-cancellation-result-1",
+  createdCancellationReservationResultId: "created-job-cancellation-result-1",
+  createdCancellationOffersResultId: "created-job-cancellation-result-1",
+  createdCancellationReservationPreviousStatus: "held",
+  createdCancellationReservationTargetStatus: "released",
+  createdCancellationExpectedJob: {
+    id: "job-1",
+    orderId: "order-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    status: "created",
+    resultId: "job-created-result-1",
+    currentStateCommandKey: "job-created-command-1",
+    immutable: true,
+  },
+  createdCancellationExpectedReservation: {
+    id: "production-reservation-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    status: "held",
+    resultId: "production-reservation-held-result-1",
+    immutable: true,
+  },
+  createdCancellationCompleted: true,
+  createdCancellationAtomic: true,
   jobResourceSettlementJobId: "job-1",
   jobResourceSettlementProductionReservationId: "production-reservation-1",
   jobResourceSettlementAtomic: true,
   printingReservationJobId: "job-1",
   printingReservationProductionReservationId: "production-reservation-1",
   printingReservationState: "printing",
+  printingJobId: "job-1",
+  printingReservationId: "production-reservation-1",
+  printingReservationPreviousStatus: "scheduled",
+  printingReservationTargetStatus: "printing",
+  printingJobPreviousStatus: "gcode_ready",
+  printingJobTargetStatus: "printing",
+  printingPreviousJobResultId: "gcode-ready-result-1",
+  printingPreviousReservationResultId: "job-acceptance-result-1",
+  printingCurrentStateCommandKey: "job-gcode-ready-command-1",
+  printingResultId: "printing-result-1",
+  printingExpectedJob: {
+    id: "job-1",
+    productionReservationId: "production-reservation-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    status: "gcode_ready",
+    resultId: "gcode-ready-result-1",
+    currentStateCommandKey: "job-gcode-ready-command-1",
+    immutable: true,
+  },
+  printingExpectedReservation: {
+    id: "production-reservation-1",
+    jobId: "job-1",
+    orderItemId: "order-item-1",
+    phaseId: "phase-1",
+    status: "scheduled",
+    resultId: "job-acceptance-result-1",
+    immutable: true,
+  },
+  printingJobResultId: "printing-result-1",
+  printingReservationResultId: "printing-result-1",
+  printingCompleted: true,
+  printingAtomic: true,
   printingReservationCommitAtomic: true,
   materialConsumptionMode: "zero_pre_print",
   materialConsumptionSettled: true,
@@ -3047,6 +3250,16 @@ function commandAnchors(
   }
   if (
     policy.name === "Payment" &&
+    current === "created" &&
+    target === "pending"
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: "payment-created-command-1",
+    };
+  }
+  if (
+    policy.name === "Payment" &&
     current === "pending" &&
     target === "captured"
   ) {
@@ -3127,6 +3340,16 @@ function commandAnchors(
   }
   if (
     policy.name === "Job" &&
+    current === "gcode_ready" &&
+    target === "printing"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-gcode-ready-command-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
     current === "handed_over" &&
     target === "settled"
   ) {
@@ -3179,6 +3402,16 @@ function commandAnchors(
     return {
       aggregateId: "job-1",
       currentStateCommandKey: "photo-submission-command-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
+    current === "created" &&
+    target === "cancelled"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-created-command-1",
     };
   }
   if (
@@ -9087,6 +9320,327 @@ describe("v0 lifecycle policy tables", () => {
     ).toThrow(TransitionGuardError);
   });
 
+  it("atomically binds Payment activation to its selected intent setup", () => {
+    const base = contextForTransition("pending", "created");
+    for (const role of ["full", "deposit", "balance"] as const) {
+      const captureExpiresAt =
+        role === "balance" ? base.balanceDueAt : base.checkoutCaptureExpiresAt;
+      const context = {
+        ...base,
+        paymentRole: role,
+        paymentIntentSetupCaptureExpiresAt: captureExpiresAt,
+        paymentIntentSetupExpectedPayment: {
+          ...base.paymentIntentSetupExpectedPayment,
+          role,
+          captureExpiresAt,
+        },
+        paymentIntentSetupActivatedPayment: {
+          ...base.paymentIntentSetupActivatedPayment,
+          role,
+        },
+        paymentIntentSetupProviderTransaction: {
+          ...base.paymentIntentSetupProviderTransaction,
+          role,
+        },
+        paymentIntentSetupCaptureWindow: {
+          ...base.paymentIntentSetupCaptureWindow,
+          role,
+          kind: role === "balance" ? "balance_deadline" : "checkout",
+          cutoffAt: captureExpiresAt,
+        },
+        paymentIntentSetupOrder: {
+          ...base.paymentIntentSetupOrder,
+          status: role === "balance" ? "awaiting_balance" : "quoted",
+        },
+        paymentIntentSetupPhase: {
+          ...base.paymentIntentSetupPhase,
+          status: role === "balance" ? "qc_passed" : "quoted",
+        },
+      };
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "created", "pending"),
+          current: "created",
+          target: "pending",
+          idempotencyKey: `payment-intent-setup-${role}`,
+          context,
+        }),
+      ).toEqual({ kind: "changed", previous: "created", current: "pending" });
+    }
+
+    const command = {
+      current: "created" as const,
+      target: "pending" as const,
+      idempotencyKey: "payment-intent-selected",
+      context: base,
+    };
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        currentStateCommandKey: "payment-created-command-1",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        aggregateId: "payment-2",
+        currentStateCommandKey: "payment-created-command-1",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        aggregateId: "payment-1",
+        currentStateCommandKey: "foreign-command",
+      }),
+    ).toThrow(TransitionGuardError);
+
+    for (const [recordName, field, value] of [
+      ["paymentIntentSetupExpectedPayment", "id", "payment-2"],
+      ["paymentIntentSetupExpectedPayment", "orderId", "order-2"],
+      ["paymentIntentSetupExpectedPayment", "phaseId", "phase-2"],
+      ["paymentIntentSetupExpectedPayment", "role", "deposit"],
+      ["paymentIntentSetupExpectedPayment", "status", "pending"],
+      [
+        "paymentIntentSetupExpectedPayment",
+        "providerTransactionId",
+        "provider-intent-2",
+      ],
+      [
+        "paymentIntentSetupExpectedPayment",
+        "authorizationId",
+        "authorization-2",
+      ],
+      ["paymentIntentSetupExpectedPayment", "captureWindowId", "window-2"],
+      [
+        "paymentIntentSetupExpectedPayment",
+        "captureExpiresAt",
+        Instant.parse("2026-01-01T02:00:00.000Z"),
+      ],
+      ["paymentIntentSetupExpectedPayment", "resultId", "foreign-result"],
+      [
+        "paymentIntentSetupExpectedPayment",
+        "currentStateCommandKey",
+        "foreign-command",
+      ],
+      ["paymentIntentSetupExpectedPayment", "immutable", false],
+      ["paymentIntentSetupActivatedPayment", "id", "payment-2"],
+      ["paymentIntentSetupActivatedPayment", "orderId", "order-2"],
+      ["paymentIntentSetupActivatedPayment", "phaseId", "phase-2"],
+      ["paymentIntentSetupActivatedPayment", "role", "deposit"],
+      ["paymentIntentSetupActivatedPayment", "previousStatus", "pending"],
+      ["paymentIntentSetupActivatedPayment", "targetStatus", "captured"],
+      [
+        "paymentIntentSetupActivatedPayment",
+        "providerTransactionId",
+        "provider-intent-2",
+      ],
+      [
+        "paymentIntentSetupActivatedPayment",
+        "authorizationId",
+        "authorization-2",
+      ],
+      ["paymentIntentSetupActivatedPayment", "captureWindowId", "window-2"],
+      ["paymentIntentSetupActivatedPayment", "resultId", "foreign-result"],
+      ["paymentIntentSetupActivatedPayment", "immutable", false],
+      ["paymentIntentSetupProviderTransaction", "id", "provider-intent-2"],
+      ["paymentIntentSetupProviderTransaction", "paymentId", "payment-2"],
+      ["paymentIntentSetupProviderTransaction", "orderId", "order-2"],
+      ["paymentIntentSetupProviderTransaction", "phaseId", "phase-2"],
+      ["paymentIntentSetupProviderTransaction", "role", "deposit"],
+      ["paymentIntentSetupProviderTransaction", "status", "failed"],
+      [
+        "paymentIntentSetupProviderTransaction",
+        "authorizationId",
+        "authorization-2",
+      ],
+      ["paymentIntentSetupProviderTransaction", "resultId", "foreign-result"],
+      ["paymentIntentSetupProviderTransaction", "immutable", false],
+      ["paymentIntentSetupAuthorization", "id", "authorization-2"],
+      ["paymentIntentSetupAuthorization", "paymentId", "payment-2"],
+      [
+        "paymentIntentSetupAuthorization",
+        "providerTransactionId",
+        "provider-intent-2",
+      ],
+      ["paymentIntentSetupAuthorization", "status", "revoked"],
+      [
+        "paymentIntentSetupAuthorization",
+        "captureCutoffAt",
+        Instant.parse("2026-01-01T00:30:00.000Z"),
+      ],
+      ["paymentIntentSetupAuthorization", "resultId", "foreign-result"],
+      ["paymentIntentSetupAuthorization", "immutable", false],
+      ["paymentIntentSetupCaptureWindow", "id", "window-2"],
+      ["paymentIntentSetupCaptureWindow", "paymentId", "payment-2"],
+      ["paymentIntentSetupCaptureWindow", "orderId", "order-2"],
+      ["paymentIntentSetupCaptureWindow", "phaseId", "phase-2"],
+      ["paymentIntentSetupCaptureWindow", "kind", "balance_deadline"],
+      ["paymentIntentSetupCaptureWindow", "status", "closed"],
+      ["paymentIntentSetupCaptureWindow", "resultId", "foreign-result"],
+      ["paymentIntentSetupCaptureWindow", "immutable", false],
+      ["paymentIntentSetupOrder", "id", "order-2"],
+      ["paymentIntentSetupOrder", "phaseId", "phase-2"],
+      ["paymentIntentSetupOrder", "status", "confirmed"],
+      ["paymentIntentSetupOrder", "resultId", "foreign-result"],
+      ["paymentIntentSetupOrder", "immutable", false],
+      ["paymentIntentSetupPhase", "id", "phase-2"],
+      ["paymentIntentSetupPhase", "orderId", "order-2"],
+      ["paymentIntentSetupPhase", "kind", "sample"],
+      ["paymentIntentSetupPhase", "status", "active"],
+      ["paymentIntentSetupPhase", "resultId", "foreign-result"],
+      ["paymentIntentSetupPhase", "immutable", false],
+    ] as const) {
+      const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          ...commandAnchors(paymentPolicy, "created", "pending"),
+          idempotencyKey: `payment-intent-snapshot-${recordName}-${field}`,
+          context: {
+            ...base,
+            [recordName]: { ...snapshot, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    for (const [field, value] of [
+      ["paymentIntentSetupResultId", " "],
+      ["paymentIntentSetupPreviousPaymentResultId", "foreign-result"],
+      ["paymentIntentSetupCurrentStateCommandKey", "foreign-command"],
+      ["paymentIntentSetupProviderTransactionId", "provider-intent-2"],
+      ["paymentIntentSetupAuthorizationId", "authorization-2"],
+      ["paymentIntentSetupCaptureWindowId", "window-2"],
+      [
+        "paymentIntentSetupCaptureExpiresAt",
+        Instant.parse("2026-01-01T02:00:00.000Z"),
+      ],
+      ["paymentIntentSetupPaymentResultId", "foreign-result"],
+      ["paymentIntentSetupProviderTransactionResultId", "foreign-result"],
+      ["paymentIntentSetupAuthorizationResultId", "foreign-result"],
+      ["paymentIntentSetupCaptureWindowResultId", "foreign-result"],
+      ["paymentIntentSetupOrderResultId", "foreign-result"],
+      ["paymentIntentSetupPhaseResultId", "foreign-result"],
+      ["paymentIntentSetupCompleted", false],
+      ["paymentIntentSetupAtomic", false],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          ...commandAnchors(paymentPolicy, "created", "pending"),
+          idempotencyKey: `payment-intent-${field}`,
+          context: { ...base, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        ...commandAnchors(paymentPolicy, "created", "pending"),
+        idempotencyKey: "payment-intent-coordinated-foreign-setup",
+        context: {
+          ...base,
+          paymentId: "payment-2",
+          orderId: "order-2",
+          phaseId: "phase-2",
+          paymentIntentSetupExpectedPayment: {
+            ...base.paymentIntentSetupExpectedPayment,
+            id: "payment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+          paymentIntentSetupActivatedPayment: {
+            ...base.paymentIntentSetupActivatedPayment,
+            id: "payment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+          paymentIntentSetupProviderTransaction: {
+            ...base.paymentIntentSetupProviderTransaction,
+            paymentId: "payment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+          paymentIntentSetupAuthorization: {
+            ...base.paymentIntentSetupAuthorization,
+            paymentId: "payment-2",
+          },
+          paymentIntentSetupCaptureWindow: {
+            ...base.paymentIntentSetupCaptureWindow,
+            paymentId: "payment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+          paymentIntentSetupOrder: {
+            ...base.paymentIntentSetupOrder,
+            id: "order-2",
+            phaseId: "phase-2",
+          },
+          paymentIntentSetupPhase: {
+            ...base.paymentIntentSetupPhase,
+            id: "phase-2",
+            orderId: "order-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        ...commandAnchors(paymentPolicy, "created", "pending"),
+        idempotencyKey: "payment-intent-coordinated-foreign-provider-tuple",
+        context: {
+          ...base,
+          paymentIntentSetupProviderTransactionId: "provider-intent-2",
+          paymentIntentSetupAuthorizationId: "authorization-2",
+          paymentIntentSetupCaptureWindowId: "window-2",
+          paymentIntentSetupActivatedPayment: {
+            ...base.paymentIntentSetupActivatedPayment,
+            providerTransactionId: "provider-intent-2",
+            authorizationId: "authorization-2",
+            captureWindowId: "window-2",
+          },
+          paymentIntentSetupProviderTransaction: {
+            ...base.paymentIntentSetupProviderTransaction,
+            id: "provider-intent-2",
+            authorizationId: "authorization-2",
+          },
+          paymentIntentSetupAuthorization: {
+            ...base.paymentIntentSetupAuthorization,
+            id: "authorization-2",
+            providerTransactionId: "provider-intent-2",
+          },
+          paymentIntentSetupCaptureWindow: {
+            ...base.paymentIntentSetupCaptureWindow,
+            id: "window-2",
+            authorizationId: "authorization-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "created", "pending"),
+        current: "created",
+        target: "pending",
+        idempotencyKey: "payment-intent-generic-capture-only",
+        context: {
+          paymentId: base.paymentId,
+          orderId: base.orderId,
+          phaseId: base.phaseId,
+          paymentRole: base.paymentRole,
+          captureAuthorized: true,
+          providerPaymentTransactionId: base.providerPaymentTransactionId,
+          paymentCaptureWindow: base.paymentCaptureWindow,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it("binds both Payment void branches to the selected immutable pending Payment", () => {
     for (const paymentRole of ["full", "balance"] as const) {
       const base = contextForTransition("voided", "pending");
@@ -14371,9 +14925,22 @@ describe("v0 lifecycle policy tables", () => {
   });
 
   it.each([
-    ["printingReservationJobId", "another-job"],
-    ["productionReservationJobId", "another-job"],
+    ["printingJobId", "another-job"],
+    ["productionReservationId", "another-reservation"],
     ["printingReservationProductionReservationId", "another-reservation"],
+    ["printingPreviousJobResultId", "another-result"],
+    ["printingPreviousReservationResultId", "another-result"],
+    ["printingCurrentStateCommandKey", "another-command"],
+    ["printingResultId", "another-result"],
+    ["printingJobPreviousStatus", "accepted"],
+    ["printingJobTargetStatus", "gcode_ready"],
+    ["printingReservationPreviousStatus", "held"],
+    ["printingReservationTargetStatus", "scheduled"],
+    ["printingJobResultId", "another-result"],
+    ["printingReservationResultId", "another-result"],
+    ["printingCompleted", false],
+    ["printingAtomic", false],
+    ["printingReservationJobId", "another-job"],
     ["printingReservationState", "allocated"],
     ["materialConsumptionMode", "zero_pre_print"],
   ] as const)(
@@ -14381,6 +14948,7 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "gcode_ready", "printing"),
           current: "gcode_ready",
           target: "printing",
           idempotencyKey: `printing-reservation-${field}`,
@@ -14392,6 +14960,229 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("binds printing to the selected immutable Job and atomic commit result", () => {
+    const context = contextForTransition("printing", "gcode_ready");
+    expect(
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "gcode_ready", "printing"),
+        current: "gcode_ready",
+        target: "printing",
+        idempotencyKey: "printing-selected-job",
+        context,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "gcode_ready",
+      current: "printing",
+    });
+    expect(() =>
+      transition(jobPolicy, {
+        current: "gcode_ready",
+        target: "printing",
+        idempotencyKey: "printing-missing-anchor",
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "gcode_ready", "printing"),
+        aggregateId: "job-2",
+        current: "gcode_ready",
+        target: "printing",
+        idempotencyKey: "printing-foreign-job",
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "gcode_ready", "printing"),
+        currentStateCommandKey: "foreign-command",
+        current: "gcode_ready",
+        target: "printing",
+        idempotencyKey: "printing-foreign-state",
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "gcode_ready", "printing"),
+        current: "gcode_ready",
+        target: "printing",
+        idempotencyKey: "printing-foreign-context",
+        context: {
+          ...context,
+          jobId: "job-2",
+          productionReservationId: "reservation-2",
+          printingJobId: "job-2",
+          printingReservationId: "reservation-2",
+          printingReservationJobId: "job-2",
+          productionReservationJobId: "job-2",
+          printingReservationProductionReservationId: "reservation-2",
+          printingExpectedJob: {
+            ...context.printingExpectedJob,
+            id: "job-2",
+            productionReservationId: "reservation-2",
+          },
+          printingExpectedReservation: {
+            ...context.printingExpectedReservation,
+            id: "reservation-2",
+            jobId: "job-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    for (const [recordName, field, value] of [
+      ["printingExpectedJob", "id", "job-2"],
+      ["printingExpectedJob", "status", "accepted"],
+      ["printingExpectedJob", "resultId", "another-result"],
+      ["printingExpectedJob", "currentStateCommandKey", "another-command"],
+      ["printingExpectedJob", "immutable", false],
+      ["printingExpectedReservation", "id", "reservation-2"],
+      ["printingExpectedReservation", "jobId", "job-2"],
+      ["printingExpectedReservation", "status", "held"],
+      ["printingExpectedReservation", "resultId", "another-result"],
+      ["printingExpectedReservation", "immutable", false],
+    ] as const) {
+      const record = context[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "gcode_ready", "printing"),
+          current: "gcode_ready",
+          target: "printing",
+          idempotencyKey: `printing-snapshot-${recordName}-${field}`,
+          context: {
+            ...context,
+            [recordName]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+  });
+
+  it("binds created Job cancellation to its immutable Job, offers, and reservation", () => {
+    const context = contextForTransition("cancelled", "created");
+    expect(
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "created", "cancelled"),
+        current: "created",
+        target: "cancelled",
+        idempotencyKey: "created-job-cancellation-selected",
+        context,
+      }),
+    ).toEqual({ kind: "changed", previous: "created", current: "cancelled" });
+
+    for (const [field, value] of [
+      ["createdCancellationPreviousJobResultId", "another-result"],
+      ["createdCancellationCurrentStateCommandKey", "another-command"],
+      ["createdCancellationOfferSetId", "another-set"],
+      ["createdCancellationExpectedOfferIds", ["routing-offer-1"]],
+      ["createdCancellationOffersResultId", "another-result"],
+      ["createdCancellationReservationResultId", "another-result"],
+      ["createdCancellationCompleted", false],
+      ["createdCancellationAtomic", false],
+      ["offersClosed", false],
+      ["productionReservationReleased", false],
+    ] as const) {
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "created", "cancelled"),
+          current: "created",
+          target: "cancelled",
+          idempotencyKey: `created-job-cancellation-${field}`,
+          context: { ...context, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(jobPolicy, {
+        current: "created",
+        target: "cancelled",
+        idempotencyKey: "created-job-cancellation-foreign-context",
+        context: {
+          ...context,
+          jobId: "job-2",
+          productionReservationId: "reservation-2",
+          createdCancellationJobId: "job-2",
+          createdCancellationReservationId: "reservation-2",
+          createdCancellationExpectedJob: {
+            ...context.createdCancellationExpectedJob,
+            id: "job-2",
+            productionReservationId: "reservation-2",
+          },
+          createdCancellationExpectedReservation: {
+            ...context.createdCancellationExpectedReservation,
+            id: "reservation-2",
+            jobId: "job-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    for (const [recordName, field, value] of [
+      ["createdCancellationExpectedJob", "id", "job-2"],
+      ["createdCancellationExpectedJob", "status", "accepted"],
+      ["createdCancellationExpectedJob", "resultId", "another-result"],
+      [
+        "createdCancellationExpectedJob",
+        "currentStateCommandKey",
+        "another-command",
+      ],
+      ["createdCancellationExpectedJob", "immutable", false],
+      ["createdCancellationExpectedReservation", "id", "reservation-2"],
+      ["createdCancellationExpectedReservation", "jobId", "job-2"],
+      ["createdCancellationExpectedReservation", "status", "scheduled"],
+      ["createdCancellationExpectedReservation", "resultId", "another-result"],
+      ["createdCancellationExpectedReservation", "immutable", false],
+      ["createdCancellationOfferSet", "id", "offer-set-2"],
+      ["createdCancellationOfferSet", "offerIds", ["routing-offer-1"]],
+      ["createdCancellationOfferSet", "resultId", "another-result"],
+      ["createdCancellationOfferSet", "immutable", false],
+    ] as const) {
+      const record = context[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "created", "cancelled"),
+          current: "created",
+          target: "cancelled",
+          idempotencyKey: `created-job-cancellation-snapshot-${recordName}-${field}`,
+          context: {
+            ...context,
+            [recordName]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(jobPolicy, {
+        current: "created",
+        target: "cancelled",
+        idempotencyKey: "created-job-cancellation-missing-anchor",
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "created", "cancelled"),
+        aggregateId: "job-2",
+        current: "created",
+        target: "cancelled",
+        idempotencyKey: "created-job-cancellation-foreign-anchor",
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "created", "cancelled"),
+        currentStateCommandKey: "foreign-command",
+        current: "created",
+        target: "cancelled",
+        idempotencyKey: "created-job-cancellation-foreign-state",
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each([
     ["jobResourceSettlementJobId", "another-job"],

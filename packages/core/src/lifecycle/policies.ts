@@ -2979,13 +2979,51 @@ function requirePrintingReservationCommit<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  const jobId = command.context?.jobId;
-  const productionReservationId = command.context?.productionReservationId;
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobId = context?.jobId;
+  const productionReservationId = context?.productionReservationId;
+  const orderItemId = context?.orderItemId;
+  const phaseId = context?.phaseId;
+  const previousJobResultId = context?.printingPreviousJobResultId;
+  const previousReservationResultId =
+    context?.printingPreviousReservationResultId;
+  const stateKey = context?.printingCurrentStateCommandKey;
+  const resultId = context?.printingResultId;
+  const expectedJob = record(context?.printingExpectedJob);
+  const expectedReservation = record(context?.printingExpectedReservation);
   if (
-    typeof jobId !== "string" ||
-    jobId.length === 0 ||
-    command.context?.productionReservationJobId !== jobId ||
-    command.context?.printingReservationJobId !== jobId
+    !nonBlank(jobId) ||
+    !nonBlank(productionReservationId) ||
+    !nonBlank(orderItemId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(previousJobResultId) ||
+    !nonBlank(previousReservationResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(resultId) ||
+    command.aggregateId !== jobId ||
+    command.currentStateCommandKey !== stateKey ||
+    context?.productionReservationJobId !== jobId ||
+    context?.printingReservationJobId !== jobId ||
+    context?.printingJobId !== jobId ||
+    context?.printingReservationId !== productionReservationId ||
+    context?.printingJobPreviousStatus !== "gcode_ready" ||
+    context?.printingJobTargetStatus !== "printing" ||
+    expectedJob?.id !== jobId ||
+    expectedJob.productionReservationId !== productionReservationId ||
+    expectedJob.orderItemId !== orderItemId ||
+    expectedJob.phaseId !== phaseId ||
+    expectedJob.status !== "gcode_ready" ||
+    expectedJob.resultId !== previousJobResultId ||
+    expectedJob.currentStateCommandKey !== stateKey ||
+    expectedJob.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -2995,10 +3033,17 @@ function requirePrintingReservationCommit<S extends string>(
     );
   }
   if (
-    typeof productionReservationId !== "string" ||
-    productionReservationId.length === 0 ||
-    command.context?.printingReservationProductionReservationId !==
-      productionReservationId
+    context?.printingReservationProductionReservationId !==
+      productionReservationId ||
+    context?.printingReservationPreviousStatus !== "scheduled" ||
+    context?.printingReservationTargetStatus !== "printing" ||
+    expectedReservation?.id !== productionReservationId ||
+    expectedReservation.jobId !== jobId ||
+    expectedReservation.orderItemId !== orderItemId ||
+    expectedReservation.phaseId !== phaseId ||
+    expectedReservation.status !== "scheduled" ||
+    expectedReservation.resultId !== previousReservationResultId ||
+    expectedReservation.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -3008,8 +3053,12 @@ function requirePrintingReservationCommit<S extends string>(
     );
   }
   if (
-    command.context?.printingReservationState !== "printing" ||
-    command.context?.materialConsumptionMode !== "actual_recorded"
+    context?.printingReservationState !== "printing" ||
+    context?.materialConsumptionMode !== "actual_recorded" ||
+    context?.printingJobResultId !== resultId ||
+    context?.printingReservationResultId !== resultId ||
+    context?.printingCompleted !== true ||
+    context?.printingAtomic !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -3157,6 +3206,163 @@ function requireJobAcceptanceOwnership<S extends string>(
     "jobAcceptanceAtomic",
     "reservation ownership, artifact creation, and Job acceptance must be atomic",
   );
+}
+
+function requireCreatedJobCancellationOwnership<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const exactSet = (actual: unknown, expected: unknown): boolean => {
+    if (!Array.isArray(actual) || !Array.isArray(expected)) return false;
+    const left = actual.filter(nonBlank);
+    const right = expected.filter(nonBlank);
+    return (
+      left.length === actual.length &&
+      right.length === expected.length &&
+      left.length === right.length &&
+      new Set(left).size === left.length &&
+      new Set(right).size === right.length &&
+      left.every((id) => right.includes(id))
+    );
+  };
+  const jobId = context?.jobId;
+  const orderId = context?.orderId;
+  const orderItemId = context?.orderItemId;
+  const phaseId = context?.phaseId;
+  const reservationId = context?.productionReservationId;
+  const resultId = context?.createdCancellationResultId;
+  const previousJobResultId = context?.createdCancellationPreviousJobResultId;
+  const previousReservationResultId =
+    context?.createdCancellationPreviousReservationResultId;
+  const stateKey = context?.createdCancellationCurrentStateCommandKey;
+  const expectedJob = record(context?.createdCancellationExpectedJob);
+  const expectedReservation = record(
+    context?.createdCancellationExpectedReservation,
+  );
+  const offerSet = record(context?.createdCancellationOfferSet);
+  const expectedOfferIds = context?.createdCancellationExpectedOfferIds;
+  const offers = context?.createdCancellationOffers;
+  if (
+    !nonBlank(jobId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(orderItemId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(reservationId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(previousJobResultId) ||
+    !nonBlank(previousReservationResultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== jobId ||
+    command.currentStateCommandKey !== stateKey ||
+    context?.createdCancellationJobId !== jobId ||
+    context?.createdCancellationOrderId !== orderId ||
+    context?.createdCancellationPhaseId !== phaseId ||
+    context?.createdCancellationReservationId !== reservationId ||
+    context?.createdCancellationPreviousStatus !== "created" ||
+    context?.createdCancellationTargetStatus !== "cancelled" ||
+    expectedJob?.id !== jobId ||
+    expectedJob.orderId !== orderId ||
+    expectedJob.orderItemId !== orderItemId ||
+    expectedJob.phaseId !== phaseId ||
+    expectedJob.productionReservationId !== reservationId ||
+    expectedJob.status !== "created" ||
+    expectedJob.resultId !== previousJobResultId ||
+    expectedJob.currentStateCommandKey !== stateKey ||
+    expectedJob.immutable !== true ||
+    context?.createdCancellationOfferSetId !== offerSet?.id ||
+    !nonBlank(context?.createdCancellationOfferSetId) ||
+    !nonBlank(context?.createdCancellationOfferSetResultId) ||
+    offerSet?.id !== context?.createdCancellationOfferSetId ||
+    offerSet.jobId !== jobId ||
+    offerSet.orderId !== orderId ||
+    offerSet.orderItemId !== orderItemId ||
+    offerSet.phaseId !== phaseId ||
+    offerSet.productionReservationId !== reservationId ||
+    offerSet.resultId !== context?.createdCancellationOfferSetResultId ||
+    offerSet.immutable !== true ||
+    !exactSet(offerSet.offerIds, expectedOfferIds) ||
+    !Array.isArray(offers) ||
+    offers.length !== (expectedOfferIds as unknown[]).length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "created Job cancellation must bind the exact Job and immutable offer set",
+    );
+  }
+  if (
+    !nonBlank(context?.createdCancellationJobResultId) ||
+    !nonBlank(context?.createdCancellationReservationResultId) ||
+    context?.createdCancellationJobResultId !== resultId ||
+    context?.createdCancellationReservationResultId !== resultId ||
+    context?.createdCancellationOffersResultId !== resultId ||
+    context?.createdCancellationCompleted !== true ||
+    context?.createdCancellationAtomic !== true ||
+    context?.offersClosed !== true ||
+    context?.productionReservationReleased !== true ||
+    context?.createdCancellationReservationPreviousStatus !== "held" ||
+    context?.createdCancellationReservationTargetStatus !== "released" ||
+    expectedReservation?.id !== reservationId ||
+    expectedReservation.jobId !== jobId ||
+    expectedReservation.orderId !== orderId ||
+    expectedReservation.orderItemId !== orderItemId ||
+    expectedReservation.phaseId !== phaseId ||
+    expectedReservation.status !== "held" ||
+    expectedReservation.resultId !== previousReservationResultId ||
+    expectedReservation.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "created Job cancellation must release its exact reservation atomically",
+    );
+  }
+  const offerIds = new Set<string>();
+  for (const value of offers) {
+    const offer = record(value);
+    if (
+      offer === undefined ||
+      !nonBlank(offer.id) ||
+      offerIds.has(offer.id) ||
+      !(expectedOfferIds as unknown[]).includes(offer.id) ||
+      offer.jobId !== jobId ||
+      offer.productionReservationId !== reservationId ||
+      offer.orderItemId !== orderItemId ||
+      offer.orderId !== orderId ||
+      offer.phaseId !== phaseId ||
+      offer.previousStatus !== "open" ||
+      offer.targetStatus !== "closed" ||
+      offer.resultId !== resultId ||
+      offer.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "created Job cancellation must close every exact routing offer",
+      );
+    }
+    offerIds.add(offer.id as string);
+  }
+  if (!exactSet([...offerIds], expectedOfferIds)) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "created Job cancellation cannot omit or duplicate routing offers",
+    );
+  }
 }
 
 function requireAtomicGcodeReadyProduction<S extends string>(
@@ -4669,6 +4875,168 @@ export function canAcceptQuote(
   return isQuoteAvailable(quote, quoteRequestStatus, now);
 }
 
+function requireExactPaymentIntentSetup<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const providerTransactionId =
+    context?.paymentIntentSetupProviderTransactionId;
+  const authorizationId = context?.paymentIntentSetupAuthorizationId;
+  const captureWindowId = context?.paymentIntentSetupCaptureWindowId;
+  const previousPaymentResultId =
+    context?.paymentIntentSetupPreviousPaymentResultId;
+  const stateKey = context?.paymentIntentSetupCurrentStateCommandKey;
+  const resultId = context?.paymentIntentSetupResultId;
+  const expectedPayment = record(context?.paymentIntentSetupExpectedPayment);
+  const activatedPayment = record(context?.paymentIntentSetupActivatedPayment);
+  const providerTransaction = record(
+    context?.paymentIntentSetupProviderTransaction,
+  );
+  const authorization = record(context?.paymentIntentSetupAuthorization);
+  const captureWindow = record(context?.paymentIntentSetupCaptureWindow);
+  const order = record(context?.paymentIntentSetupOrder);
+  const phase = record(context?.paymentIntentSetupPhase);
+  const captureExpiresAt = context?.paymentIntentSetupCaptureExpiresAt;
+  const persistedCaptureExpiresAt =
+    role === "balance"
+      ? context?.balanceDueAt
+      : context?.checkoutCaptureExpiresAt;
+  const expectedWindowKind =
+    role === "balance" ? "balance_deadline" : "checkout";
+  const expectedOrderStatus =
+    role === "balance" ? "awaiting_balance" : "quoted";
+  const expectedPhaseStatus = role === "balance" ? "qc_passed" : "quoted";
+
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(authorizationId) ||
+    !nonBlank(captureWindowId) ||
+    !nonBlank(previousPaymentResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(resultId) ||
+    !(captureExpiresAt instanceof Instant) ||
+    !(persistedCaptureExpiresAt instanceof Instant) ||
+    !captureExpiresAt.equals(persistedCaptureExpiresAt) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedPayment?.id !== paymentId ||
+    expectedPayment.orderId !== orderId ||
+    expectedPayment.phaseId !== phaseId ||
+    expectedPayment.role !== role ||
+    expectedPayment.status !== "created" ||
+    expectedPayment.providerTransactionId !== providerTransactionId ||
+    expectedPayment.authorizationId !== authorizationId ||
+    expectedPayment.captureWindowId !== captureWindowId ||
+    !(expectedPayment.captureExpiresAt instanceof Instant) ||
+    !expectedPayment.captureExpiresAt.equals(captureExpiresAt) ||
+    expectedPayment.resultId !== previousPaymentResultId ||
+    expectedPayment.currentStateCommandKey !== stateKey ||
+    expectedPayment.immutable !== true ||
+    activatedPayment?.id !== paymentId ||
+    activatedPayment.orderId !== orderId ||
+    activatedPayment.phaseId !== phaseId ||
+    activatedPayment.role !== role ||
+    activatedPayment.previousStatus !== "created" ||
+    activatedPayment.targetStatus !== "pending" ||
+    activatedPayment.providerTransactionId !== providerTransactionId ||
+    activatedPayment.authorizationId !== authorizationId ||
+    activatedPayment.captureWindowId !== captureWindowId ||
+    activatedPayment.resultId !== resultId ||
+    activatedPayment.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Payment activation must bind the command-selected immutable created Payment",
+    );
+  }
+
+  if (
+    providerTransaction?.id !== providerTransactionId ||
+    providerTransaction.paymentId !== paymentId ||
+    providerTransaction.orderId !== orderId ||
+    providerTransaction.phaseId !== phaseId ||
+    providerTransaction.role !== role ||
+    providerTransaction.status !== "intent_created" ||
+    providerTransaction.authorizationId !== authorizationId ||
+    providerTransaction.resultId !== resultId ||
+    providerTransaction.immutable !== true ||
+    authorization?.id !== authorizationId ||
+    authorization.paymentId !== paymentId ||
+    authorization.providerTransactionId !== providerTransactionId ||
+    authorization.status !== "authorized" ||
+    authorization.captureCutoffAt !== null ||
+    authorization.resultId !== resultId ||
+    authorization.immutable !== true ||
+    captureWindow?.id !== captureWindowId ||
+    captureWindow.paymentId !== paymentId ||
+    captureWindow.orderId !== orderId ||
+    captureWindow.phaseId !== phaseId ||
+    captureWindow.role !== role ||
+    captureWindow.kind !== expectedWindowKind ||
+    captureWindow.status !== "open" ||
+    captureWindow.authorizationId !== authorizationId ||
+    !(captureWindow.cutoffAt instanceof Instant) ||
+    !captureWindow.cutoffAt.equals(captureExpiresAt) ||
+    captureWindow.resultId !== resultId ||
+    captureWindow.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Payment activation requires its exact provider intent, authorization, and immutable capture window",
+    );
+  }
+
+  if (
+    order?.id !== orderId ||
+    order.phaseId !== phaseId ||
+    order.status !== expectedOrderStatus ||
+    order.resultId !== resultId ||
+    order.immutable !== true ||
+    phase?.id !== phaseId ||
+    phase.orderId !== orderId ||
+    phase.kind !== "single" ||
+    phase.status !== expectedPhaseStatus ||
+    phase.resultId !== resultId ||
+    phase.immutable !== true ||
+    context?.paymentIntentSetupPaymentResultId !== resultId ||
+    context?.paymentIntentSetupProviderTransactionResultId !== resultId ||
+    context?.paymentIntentSetupAuthorizationResultId !== resultId ||
+    context?.paymentIntentSetupCaptureWindowResultId !== resultId ||
+    context?.paymentIntentSetupOrderResultId !== resultId ||
+    context?.paymentIntentSetupPhaseResultId !== resultId ||
+    context?.paymentIntentSetupCompleted !== true ||
+    context?.paymentIntentSetupAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Payment activation must atomically commit its exact Payment, intent, window, Order, and phase topology",
+    );
+  }
+}
+
 function requireRoleSpecificPaymentVoidClosure<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -5028,6 +5396,9 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
     refund_pending: ["partially_refunded", "refunded"],
   },
   guard: (command) => {
+    if (command.current === "created" && command.target === "pending") {
+      requireExactPaymentIntentSetup("Payment", command);
+    }
     if (command.current === "pending" && command.target === "captured") {
       if (command.context?.paymentCaptureKind !== "settlement") {
         throw new TransitionGuardError(
@@ -5894,6 +6265,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
           "productionReservationReleased",
           "cancellation requires its production reservation to be released",
         );
+        requireCreatedJobCancellationOwnership("Job", command);
       } else {
         requireJobResourceSettlement("Job", command);
         requireFlag(
