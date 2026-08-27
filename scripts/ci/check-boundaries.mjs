@@ -14,6 +14,7 @@ function vueScripts(source) {
 
 const identifierStartPattern = /^[$_\p{ID_Start}]$/u;
 const identifierPartPattern = /^[$_\u200c\u200d\p{ID_Continue}]$/u;
+const punctuationPairs = new Set(["++", "--", "=>", "?."]);
 
 function isIdentifierStart(character) {
   return identifierStartPattern.test(character);
@@ -215,8 +216,7 @@ function findTemplateExpressionEnd(source, start) {
         lineTerminatorSinceToken = false;
         continue;
       }
-      const pair = source.slice(index, index + 2);
-      const value = pair === "=>" || pair === "?." ? pair : character;
+      const value = punctuationAt(source, index);
       tokens.push({ kind: "punctuation", value });
       index += value.length;
       lineTerminatorSinceToken = false;
@@ -539,6 +539,11 @@ function skipRegexLiteral(source, start) {
   return source.length;
 }
 
+function punctuationAt(source, index) {
+  const pair = source.slice(index, index + 2);
+  return punctuationPairs.has(pair) ? pair : source[index];
+}
+
 function lexicalTokens(source) {
   let lineTerminatorSinceToken = false;
   const tokens = [];
@@ -596,8 +601,7 @@ function lexicalTokens(source) {
       index = end;
       lineTerminatorSinceToken = false;
     } else {
-      const pair = source.slice(index, index + 2);
-      const value = pair === "=>" || pair === "?." ? pair : character;
+      const value = punctuationAt(source, index);
       if (value === "{") {
         const statementBlock = opensStatementBlock(tokens);
         braces.push(statementBlock ? "block" : "object");
