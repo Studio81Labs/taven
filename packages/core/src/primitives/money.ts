@@ -5,6 +5,26 @@ export type RoundingMode =
 
 export type MinorUnitInput = bigint | number;
 
+// ISO 4217 List One currency and fund codes with defined minor units,
+// published by the maintenance agency on 2026-01-01.
+// Source: https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml
+const supportedMinorUnitCurrencies = new Set(
+  `
+AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD BIF BMD BND BOB BOV
+BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CLF CLP CNY COP COU CRC CUP
+CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF
+GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR
+KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT
+MOP MRU MUR MVR MWK MXN MXV MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN
+PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS
+SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD
+USN UYI UYU UYW UZS VED VES VND VUV WST XAD XAF XCD XCG XOF XPF YER ZAR
+ZMW ZWG
+  `
+    .trim()
+    .split(/\s+/),
+);
+
 function asNonNegativeInteger(value: MinorUnitInput, name: string): bigint {
   if (typeof value === "number" && !Number.isSafeInteger(value)) {
     throw new DomainError("INVALID_ARGUMENT", `${name} must be a safe integer`);
@@ -19,10 +39,10 @@ function asNonNegativeInteger(value: MinorUnitInput, name: string): bigint {
 }
 
 function validateCurrency(currency: string): string {
-  if (!/^[A-Z]{3}$/.test(currency)) {
+  if (!supportedMinorUnitCurrencies.has(currency)) {
     throw new DomainError(
       "INVALID_CURRENCY",
-      "currency must be a three-letter uppercase ISO 4217 code",
+      "currency must be a supported ISO 4217 code with defined minor units",
     );
   }
   return currency;

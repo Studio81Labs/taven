@@ -6,9 +6,16 @@ describe("Money", () => {
   it("uses immutable integer minor units and rejects invalid construction", () => {
     expect(Money.of(1250n, "CZK").minorUnits).toBe(1250n);
     expect(Object.isFrozen(Money.of(1, "CZK"))).toBe(true);
+    for (const currency of ["CZK", "EUR", "USD", "JPY"]) {
+      expect(Money.zero(currency).currency).toBe(currency);
+    }
     expect(() => Money.of(1.5, "CZK")).toThrow(DomainError);
     expect(() => Money.of(-1, "CZK")).toThrow(/must not be negative/);
     expect(() => Money.of(1, "czk")).toThrow(/ISO 4217/);
+    for (const currency of ["EUU", "AAA", "QAB", "ZZZ", "BGN", "XAU", "XXX"]) {
+      expect(() => Money.of(1, currency)).toThrow(/ISO 4217/);
+      expect(() => Money.zero(currency)).toThrow(/ISO 4217/);
+    }
   });
 
   it("guards currency and negative results", () => {
