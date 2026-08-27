@@ -62,6 +62,15 @@ function requireCompleteShipmentReadiness<S extends string>(
   const orderId = context?.orderId;
   const phaseId = context?.phaseId;
   const resultId = context?.shipmentReadinessResultId;
+  const previousOrderResultId = context?.shipmentReadinessPreviousOrderResultId;
+  const orderStateKey = context?.shipmentReadinessCurrentStateCommandKey;
+  const expectedOrderValue = context?.shipmentReadinessExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const authoritativeSetId =
     context?.shipmentReadinessAuthoritativeShipmentSetId;
   const authoritativeSetValue =
@@ -85,6 +94,16 @@ function requireCompleteShipmentReadiness<S extends string>(
     !nonBlank(phaseId) ||
     !nonBlank(resultId) ||
     command.aggregateId !== orderId ||
+    !nonBlank(previousOrderResultId) ||
+    !nonBlank(orderStateKey) ||
+    command.currentStateResultId !== previousOrderResultId ||
+    command.currentStateCommandKey !== orderStateKey ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.phaseId !== phaseId ||
+    expectedOrder.status !== command.current ||
+    expectedOrder.resultId !== previousOrderResultId ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    expectedOrder.immutable !== true ||
     context?.shipmentReadinessOrderId !== orderId ||
     context?.shipmentReadinessPhaseId !== phaseId ||
     context?.shipmentReadinessOrderResultId !== resultId ||
@@ -227,6 +246,7 @@ function requireAtomicQuotedOrderTopology<S extends string>(
     !nonBlank(orderPreviousResultId) ||
     !nonBlank(orderStateKey) ||
     command.aggregateId !== orderId ||
+    command.currentStateResultId !== orderPreviousResultId ||
     command.currentStateCommandKey !== orderStateKey ||
     expectedOrder?.id !== orderId ||
     expectedOrder.status !== "draft" ||
@@ -422,6 +442,8 @@ function requireProjectedCompletionTarget<S extends string>(
         command.aggregateId === context?.phaseId)) &&
     nonBlank(selectedAggregateId) &&
     nonBlank(selectedAggregateStateKey) &&
+    nonBlank(expectedAggregate?.resultId) &&
+    command.currentStateResultId === expectedAggregate.resultId &&
     command.currentStateCommandKey === selectedAggregateStateKey &&
     expectedAggregate?.id === selectedAggregateId &&
     expectedAggregate.orderId === context?.orderId &&
@@ -667,9 +689,11 @@ function requireAtomicConfirmationActivation<S extends string>(
     typeof phaseStateKey !== "string" ||
     phaseStateKey.trim().length === 0 ||
     (lifecycle === "Order" &&
-      command.currentStateCommandKey !== orderStateKey) ||
+      (command.currentStateResultId !== orderPreviousResultId ||
+        command.currentStateCommandKey !== orderStateKey)) ||
     (lifecycle === "OrderPhase(single)" &&
-      command.currentStateCommandKey !== phaseStateKey) ||
+      (command.currentStateResultId !== phasePreviousResultId ||
+        command.currentStateCommandKey !== phaseStateKey)) ||
     expectedOrder?.id !== orderId ||
     expectedOrder.phaseId !== phaseId ||
     expectedOrder.status !== "quoted" ||
@@ -989,18 +1013,62 @@ function requireAtomicOrderPhaseCompletion<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  const orderId = command.context?.orderId;
-  const phaseId = command.context?.phaseId;
+  const context = command.context;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const orderStateKey = context?.completionOrderCurrentStateCommandKey;
+  const phaseStateKey = context?.completionPhaseCurrentStateCommandKey;
+  const expectedOrderValue = context?.completionExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const expectedPhaseValue = context?.completionExpectedPhase;
+  const expectedPhase =
+    typeof expectedPhaseValue === "object" &&
+    expectedPhaseValue !== null &&
+    !Array.isArray(expectedPhaseValue)
+      ? (expectedPhaseValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const selectedStateKey =
+    lifecycle === "Order" ? orderStateKey : phaseStateKey;
+  const selectedExpected =
+    lifecycle === "Order" ? expectedOrder : expectedPhase;
   if (
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
     (lifecycle === "Order" && command.aggregateId !== orderId) ||
     (lifecycle === "OrderPhase(single)" && command.aggregateId !== phaseId) ||
-    command.context?.orderCompletionOrderId !== orderId ||
-    command.context?.orderCompletionPhaseOrderId !== orderId ||
+    context?.orderCompletionOrderId !== orderId ||
+    context?.orderCompletionPhaseOrderId !== orderId ||
     typeof phaseId !== "string" ||
     phaseId.trim().length === 0 ||
-    command.context?.orderCompletionPhaseId !== phaseId
+    context?.orderCompletionPhaseId !== phaseId ||
+    !nonBlank(selectedStateKey) ||
+    !nonBlank(selectedExpected?.resultId) ||
+    command.currentStateCommandKey !== selectedStateKey ||
+    command.currentStateResultId !== selectedExpected.resultId ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.phaseId !== phaseId ||
+    expectedOrder.status !== "delivered" ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    !nonBlank(expectedOrder.resultId) ||
+    expectedOrder.immutable !== true ||
+    expectedPhase?.id !== phaseId ||
+    expectedPhase.orderId !== orderId ||
+    expectedPhase.status !== "delivered" ||
+    expectedPhase.currentStateCommandKey !== phaseStateKey ||
+    !nonBlank(expectedPhase.resultId) ||
+    expectedPhase.immutable !== true ||
+    context?.completionAuthoritativePhaseTopologyId !== phaseId ||
+    expectedOrder.phaseTopologyId !==
+      context?.completionAuthoritativePhaseTopologyId ||
+    expectedPhase.phaseTopologyId !==
+      context?.completionAuthoritativePhaseTopologyId
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -1288,18 +1356,64 @@ function requireAtomicOrderPhaseQcCompletion<S extends string>(
   command: TransitionCommand<S>,
 ): void {
   const previousStatus = command.current;
-  const orderId = command.context?.orderId;
-  const phaseId = command.context?.phaseId;
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const orderPreviousResultId = context?.qcCompletionOrderPreviousResultId;
+  const phasePreviousResultId = context?.qcCompletionPhasePreviousResultId;
+  const orderStateKey = context?.qcCompletionOrderCurrentStateCommandKey;
+  const phaseStateKey = context?.qcCompletionPhaseCurrentStateCommandKey;
+  const expectedOrderValue = context?.qcCompletionExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const expectedPhaseValue = context?.qcCompletionExpectedPhase;
+  const expectedPhase =
+    typeof expectedPhaseValue === "object" &&
+    expectedPhaseValue !== null &&
+    !Array.isArray(expectedPhaseValue)
+      ? (expectedPhaseValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const isPhaseEntry = lifecycle === "OrderPhase(single)";
+  const selectedAggregateId = isPhaseEntry ? phaseId : orderId;
+  const selectedPreviousResultId = isPhaseEntry
+    ? phasePreviousResultId
+    : orderPreviousResultId;
+  const selectedStateKey = isPhaseEntry ? phaseStateKey : orderStateKey;
   if (
-    (lifecycle === "Order" && command.aggregateId !== orderId) ||
-    (lifecycle === "OrderPhase(single)" && command.aggregateId !== phaseId) ||
+    command.aggregateId !== selectedAggregateId ||
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
-    command.context?.qcCompletionOrderId !== orderId ||
-    command.context?.qcCompletionPhaseOrderId !== orderId ||
+    context?.qcCompletionOrderId !== orderId ||
+    context?.qcCompletionPhaseOrderId !== orderId ||
     typeof phaseId !== "string" ||
     phaseId.trim().length === 0 ||
-    command.context?.qcCompletionPhaseId !== phaseId
+    context?.qcCompletionPhaseId !== phaseId ||
+    !nonBlank(orderPreviousResultId) ||
+    !nonBlank(phasePreviousResultId) ||
+    !nonBlank(orderStateKey) ||
+    !nonBlank(phaseStateKey) ||
+    command.currentStateResultId !== selectedPreviousResultId ||
+    command.currentStateCommandKey !== selectedStateKey ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.phaseId !== phaseId ||
+    expectedOrder.status !== previousStatus ||
+    expectedOrder.resultId !== orderPreviousResultId ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    expectedOrder.phaseTopologyId !== phaseId ||
+    expectedOrder.immutable !== true ||
+    expectedPhase?.id !== phaseId ||
+    expectedPhase.orderId !== orderId ||
+    expectedPhase.status !== previousStatus ||
+    expectedPhase.resultId !== phasePreviousResultId ||
+    expectedPhase.currentStateCommandKey !== phaseStateKey ||
+    expectedPhase.phaseTopologyId !== phaseId ||
+    expectedPhase.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -1480,6 +1594,31 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
 ): void {
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const orderPreviousResultId =
+    command.context?.shipmentLineageOrderPreviousResultId;
+  const orderStateKey =
+    command.context?.shipmentLineageOrderCurrentStateCommandKey;
+  const expectedOrderValue = command.context?.shipmentLineageExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const phasePreviousResultId =
+    command.context?.shipmentLineagePhasePreviousResultId;
+  const phaseStateKey =
+    command.context?.shipmentLineagePhaseCurrentStateCommandKey;
+  const expectedPhaseValue = command.context?.shipmentLineageExpectedPhase;
+  const expectedPhase =
+    typeof expectedPhaseValue === "object" &&
+    expectedPhaseValue !== null &&
+    !Array.isArray(expectedPhaseValue)
+      ? (expectedPhaseValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const isPhaseEntry = lifecycle === "OrderPhase(single)";
   const setId = command.context?.shipmentLineageAuthoritativeSetId;
   const setResultId = command.context?.shipmentLineageAuthoritativeSetResultId;
   const setValue = command.context?.shipmentLineageAuthoritativeSet;
@@ -1516,6 +1655,29 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
     phaseId.trim().length === 0 ||
     command.context?.shipmentLineageSetPhaseId !== phaseId ||
     command.context?.phaseKind !== "single" ||
+    (isPhaseEntry
+      ? !nonBlank(phasePreviousResultId) ||
+        !nonBlank(phaseStateKey) ||
+        command.aggregateId !== phaseId ||
+        command.currentStateResultId !== phasePreviousResultId ||
+        command.currentStateCommandKey !== phaseStateKey ||
+        expectedPhase?.id !== phaseId ||
+        expectedPhase.orderId !== orderId ||
+        expectedPhase.status !== command.current ||
+        expectedPhase.resultId !== phasePreviousResultId ||
+        expectedPhase.currentStateCommandKey !== phaseStateKey ||
+        expectedPhase.immutable !== true
+      : !nonBlank(orderPreviousResultId) ||
+        !nonBlank(orderStateKey) ||
+        command.aggregateId !== orderId ||
+        command.currentStateResultId !== orderPreviousResultId ||
+        command.currentStateCommandKey !== orderStateKey ||
+        expectedOrder?.id !== orderId ||
+        expectedOrder.phaseId !== phaseId ||
+        expectedOrder.status !== command.current ||
+        expectedOrder.resultId !== orderPreviousResultId ||
+        expectedOrder.currentStateCommandKey !== orderStateKey ||
+        expectedOrder.immutable !== true) ||
     typeof setId !== "string" ||
     setId.trim().length === 0 ||
     typeof setResultId !== "string" ||
@@ -1775,6 +1937,16 @@ function requireBalancePaymentDeadlineSetup<S extends string>(
     !Array.isArray(orderValue)
       ? (orderValue as Readonly<Record<string, unknown>>)
       : undefined;
+  const previousOrderResultId =
+    context?.balanceDeadlineSetupPreviousOrderResultId;
+  const orderStateKey = context?.balanceDeadlineSetupCurrentStateCommandKey;
+  const expectedOrderValue = context?.balanceDeadlineSetupExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const phaseValue = context?.balanceDeadlineSetupPhase;
   const phase =
     typeof phaseValue === "object" &&
@@ -1808,6 +1980,17 @@ function requireBalancePaymentDeadlineSetup<S extends string>(
   if (
     !nonBlank(orderId) ||
     (bindCommandToOrder && command.aggregateId !== orderId) ||
+    (bindCommandToOrder &&
+      (!nonBlank(previousOrderResultId) ||
+        !nonBlank(orderStateKey) ||
+        command.currentStateResultId !== previousOrderResultId ||
+        command.currentStateCommandKey !== orderStateKey ||
+        expectedOrder?.id !== orderId ||
+        expectedOrder.phaseId !== phaseId ||
+        expectedOrder.status !== "qc_passed" ||
+        expectedOrder.resultId !== previousOrderResultId ||
+        expectedOrder.currentStateCommandKey !== orderStateKey ||
+        expectedOrder.immutable !== true)) ||
     !nonBlank(phaseId) ||
     !nonBlank(paymentId) ||
     !nonBlank(scheduleId) ||
@@ -2265,6 +2448,47 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
   );
 }
 
+function requireExactQuotedCheckoutOrderSource<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  sourceEvidence: Readonly<{
+    previousResultId: unknown;
+    currentStateCommandKey: unknown;
+    expectedOrder: unknown;
+  }>,
+): void {
+  if (lifecycle !== "Order") return;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const orderId = command.context?.orderId;
+  const expected =
+    typeof sourceEvidence.expectedOrder === "object" &&
+    sourceEvidence.expectedOrder !== null &&
+    !Array.isArray(sourceEvidence.expectedOrder)
+      ? (sourceEvidence.expectedOrder as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    !nonBlank(orderId) ||
+    !nonBlank(sourceEvidence.previousResultId) ||
+    !nonBlank(sourceEvidence.currentStateCommandKey) ||
+    command.aggregateId !== orderId ||
+    command.currentStateResultId !== sourceEvidence.previousResultId ||
+    command.currentStateCommandKey !== sourceEvidence.currentStateCommandKey ||
+    expected?.id !== orderId ||
+    expected.status !== "quoted" ||
+    expected.resultId !== sourceEvidence.previousResultId ||
+    expected.currentStateCommandKey !== sourceEvidence.currentStateCommandKey ||
+    expected.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "checkout termination must bind the selected quoted Order command to its immutable source snapshot",
+    );
+  }
+}
+
 function requireInitialCapacityCaptureCompensation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2283,6 +2507,12 @@ function requireInitialCapacityCaptureCompensation<S extends string>(
   const phaseReservationSetId = command.context?.phaseReservationSetId;
   const providerTransactionId = command.context?.providerPaymentTransactionId;
   const refundTransactionId = command.context?.refundTransactionId;
+  requireExactQuotedCheckoutOrderSource(lifecycle, command, {
+    previousResultId: command.context?.capacityCapturePreviousOrderResultId,
+    currentStateCommandKey:
+      command.context?.capacityCaptureOrderCurrentStateCommandKey,
+    expectedOrder: command.context?.capacityCaptureExpectedOrder,
+  });
   if (
     typeof paymentId !== "string" ||
     paymentId.length === 0 ||
@@ -2506,6 +2736,12 @@ function requireInitialCaptureWindowClosed<S extends string>(
 ): void {
   const orderId = command.context?.orderId;
   const initialPaymentId = command.context?.initialPaymentId;
+  requireExactQuotedCheckoutOrderSource(lifecycle, command, {
+    previousResultId: command.context?.initialCaptureClosePreviousOrderResultId,
+    currentStateCommandKey:
+      command.context?.initialCaptureCloseOrderCurrentStateCommandKey,
+    expectedOrder: command.context?.initialCaptureCloseExpectedOrder,
+  });
   if (
     typeof orderId !== "string" ||
     orderId.length === 0 ||
@@ -2837,6 +3073,8 @@ function requireExactPostAcceptanceJobCancellation<S extends string>(
     !nonBlank(scopeId) ||
     !nonBlank(scopeResultId) ||
     command.aggregateId !== jobId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousJobResultId ||
     context?.jobCancellationCurrentStateCommandKey !== currentStateCommandKey ||
     context?.jobCancellationJobId !== jobId ||
     context?.jobCancellationOrderId !== orderId ||
@@ -3396,6 +3634,8 @@ function requireJobAcceptanceOwnership<S extends string>(
     command.aggregateId !== jobId ||
     !nonBlank(previousResultId) ||
     !nonBlank(stateKey) ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     command.context?.productionReservationJobId !== jobId ||
     command.context?.acceptanceReservationJobId !== jobId ||
@@ -3558,6 +3798,8 @@ function requireCreatedJobCancellationOwnership<S extends string>(
     !nonBlank(previousReservationResultId) ||
     !nonBlank(stateKey) ||
     command.aggregateId !== jobId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousJobResultId ||
     command.currentStateCommandKey !== stateKey ||
     context?.createdCancellationJobId !== jobId ||
     context?.createdCancellationOrderId !== orderId ||
@@ -4070,10 +4312,34 @@ function requirePostQcJobFailureResolution<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const jobId = command.context?.jobId;
   const phaseId = command.context?.phaseId;
   const phaseKind = command.context?.phaseKind;
   const orderId = command.context?.orderId;
+  const orderPreviousResultId =
+    command.context?.postQcFailureOrderPreviousResultId;
+  const orderStateKey =
+    command.context?.postQcFailureOrderCurrentStateCommandKey;
+  const expectedOrderValue = command.context?.postQcFailureExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const phasePreviousResultId =
+    command.context?.postQcFailurePhasePreviousResultId;
+  const phaseStateKey =
+    command.context?.postQcFailurePhaseCurrentStateCommandKey;
+  const expectedPhaseValue = command.context?.postQcFailureExpectedPhase;
+  const expectedPhase =
+    typeof expectedPhaseValue === "object" &&
+    expectedPhaseValue !== null &&
+    !Array.isArray(expectedPhaseValue)
+      ? (expectedPhaseValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const resultId = command.context?.postQcFailureResultId;
   const jobPreviousStatus = command.context?.postQcFailureJobPreviousStatus;
   const expectedFailureStage =
@@ -4110,6 +4376,30 @@ function requirePostQcJobFailureResolution<S extends string>(
     command.context?.replacementRequestCreated !== true ||
     command.context?.replacementDeadlineSet !== true ||
     command.context?.postQcFailureResolutionCompleted !== true ||
+    (lifecycle === "Order" &&
+      (!nonBlank(orderPreviousResultId) ||
+        !nonBlank(orderStateKey) ||
+        command.aggregateId !== orderId ||
+        command.currentStateResultId !== orderPreviousResultId ||
+        command.currentStateCommandKey !== orderStateKey ||
+        expectedOrder?.id !== orderId ||
+        expectedOrder.phaseId !== phaseId ||
+        expectedOrder.status !== command.current ||
+        expectedOrder.resultId !== orderPreviousResultId ||
+        expectedOrder.currentStateCommandKey !== orderStateKey ||
+        expectedOrder.immutable !== true)) ||
+    (lifecycle === "OrderPhase(single)" &&
+      (!nonBlank(phasePreviousResultId) ||
+        !nonBlank(phaseStateKey) ||
+        command.aggregateId !== phaseId ||
+        command.currentStateResultId !== phasePreviousResultId ||
+        command.currentStateCommandKey !== phaseStateKey ||
+        expectedPhase?.id !== phaseId ||
+        expectedPhase.orderId !== orderId ||
+        expectedPhase.status !== command.current ||
+        expectedPhase.resultId !== phasePreviousResultId ||
+        expectedPhase.currentStateCommandKey !== phaseStateKey ||
+        expectedPhase.immutable !== true)) ||
     (lifecycle === "Job" &&
       (command.current !== jobPreviousStatus ||
         command.target !== "failed" ||
@@ -4503,6 +4793,26 @@ function requireExactVerifiedProviderVoid<S extends string>(
   const eventId = context?.providerVoidEventId;
   const transactionId = context?.providerVoidTransactionId;
   const cancellationResultId = context?.shipmentCancellationResultId;
+  const previousShipmentResultId =
+    context?.shipmentCancellationCompletionPreviousShipmentResultId;
+  const stateKey =
+    context?.shipmentCancellationCompletionCurrentStateCommandKey;
+  const expectedShipmentValue =
+    context?.shipmentCancellationCompletionExpectedShipment;
+  const expectedShipment =
+    typeof expectedShipmentValue === "object" &&
+    expectedShipmentValue !== null &&
+    !Array.isArray(expectedShipmentValue)
+      ? (expectedShipmentValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const requestValue = context?.shipmentCancellationRequest;
+  const request =
+    typeof requestValue === "object" &&
+    requestValue !== null &&
+    !Array.isArray(requestValue)
+      ? (requestValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const requestId = context?.shipmentCancellationRequestId;
   const payload = context?.providerVoidOutboxPayload;
   const payloadRecord =
     typeof payload === "object" && payload !== null && !Array.isArray(payload)
@@ -4519,6 +4829,24 @@ function requireExactVerifiedProviderVoid<S extends string>(
     !nonBlank(expectedLabelId) ||
     shipmentId !== expectedShipmentId ||
     labelId !== expectedLabelId ||
+    !nonBlank(previousShipmentResultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== shipmentId ||
+    command.currentStateResultId !== previousShipmentResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedShipment?.id !== shipmentId ||
+    expectedShipment.status !== "cancellation_pending" ||
+    expectedShipment.resultId !== previousShipmentResultId ||
+    expectedShipment.currentStateCommandKey !== stateKey ||
+    expectedShipment.immutable !== true ||
+    !nonBlank(requestId) ||
+    request?.id !== requestId ||
+    request.shipmentId !== shipmentId ||
+    request.carrierLabelId !== labelId ||
+    request.previousStatus !== "label_created" ||
+    request.targetStatus !== "cancellation_pending" ||
+    request.resultId !== cancellationResultId ||
+    request.immutable !== true ||
     !nonBlank(outboxId) ||
     !nonBlank(eventId) ||
     !nonBlank(transactionId) ||
@@ -4535,12 +4863,15 @@ function requireExactVerifiedProviderVoid<S extends string>(
     context?.providerVoidOutboxShipmentId !== shipmentId ||
     context?.providerVoidOutboxCarrierLabelId !== labelId ||
     context?.providerVoidOutboxLabelId !== labelId ||
+    context?.providerVoidOutboxCancellationRequestId !== requestId ||
     context?.providerVoidEventShipmentId !== shipmentId ||
     context?.providerVoidEventLabelId !== labelId ||
     context?.providerVoidEventOutboxId !== outboxId ||
+    context?.providerVoidEventCancellationRequestId !== requestId ||
     context?.providerVoidTransactionShipmentId !== shipmentId ||
     context?.providerVoidTransactionLabelId !== labelId ||
     context?.providerVoidTransactionOutboxId !== outboxId ||
+    context?.providerVoidTransactionCancellationRequestId !== requestId ||
     context?.providerVoidEventTransactionId !== transactionId ||
     context?.providerVoidOutboxPreviousStatus !== "pending" ||
     context?.providerVoidOutboxTargetStatus !== "succeeded" ||
@@ -4646,6 +4977,8 @@ function requireExactShipmentProviderOutcome<S extends string>(
     !nonBlank(resultId) ||
     !nonBlank(stateKey) ||
     command.aggregateId !== shipmentId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     context?.providerEventShipmentId !== shipmentId ||
     context?.providerEventTransactionId !== providerTransactionId ||
@@ -4709,6 +5042,16 @@ function requireVerifiedCurrentRemedyDelivery<S extends string>(
   const eventShipmentId = context?.providerEventShipmentId;
   const providerEventId = context?.providerEventId;
   const resultId = context?.remedyDeliveryResultId;
+  const previousResolutionResultId =
+    context?.remedyDeliveryPreviousResolutionResultId;
+  const stateKey = context?.remedyDeliveryCurrentStateCommandKey;
+  const expectedResolutionValue = context?.remedyDeliveryExpectedResolution;
+  const expectedResolution =
+    typeof expectedResolutionValue === "object" &&
+    expectedResolutionValue !== null &&
+    !Array.isArray(expectedResolutionValue)
+      ? (expectedResolutionValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const expectedKind =
     command.current === "reship_shipped" &&
     command.target === "delivered_reship"
@@ -4727,6 +5070,20 @@ function requireVerifiedCurrentRemedyDelivery<S extends string>(
     !nonBlank(currentLeafId) ||
     !nonBlank(providerEventId) ||
     !nonBlank(resultId) ||
+    !nonBlank(previousResolutionResultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== resolutionId ||
+    command.currentStateResultId !== previousResolutionResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedResolution?.id !== resolutionId ||
+    expectedResolution.claimId !== claimId ||
+    expectedResolution.slotId !== slotId ||
+    expectedResolution.orderId !== orderId ||
+    expectedResolution.phaseId !== phaseId ||
+    expectedResolution.status !== command.current ||
+    expectedResolution.resultId !== previousResolutionResultId ||
+    expectedResolution.currentStateCommandKey !== stateKey ||
+    expectedResolution.immutable !== true ||
     eventShipmentId !== currentLeafId ||
     context?.remedyDeliveryKind !== expectedKind ||
     context?.remedyDeliveryClaimId !== claimId ||
@@ -4810,6 +5167,16 @@ function requireVerifiedCurrentRemedyIncident<S extends string>(
   const providerEventId = context?.providerEventId;
   const providerTransactionId = context?.shipmentProviderTransactionId;
   const resultId = context?.remedyIncidentResultId;
+  const previousResolutionResultId =
+    context?.remedyIncidentPreviousResolutionResultId;
+  const stateKey = context?.remedyIncidentCurrentStateCommandKey;
+  const expectedResolutionValue = context?.remedyIncidentExpectedResolution;
+  const expectedResolution =
+    typeof expectedResolutionValue === "object" &&
+    expectedResolutionValue !== null &&
+    !Array.isArray(expectedResolutionValue)
+      ? (expectedResolutionValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const eventStatus = context?.providerEventStatus;
   const expectedKind =
     command.current === "reship_shipped" &&
@@ -4830,6 +5197,21 @@ function requireVerifiedCurrentRemedyIncident<S extends string>(
     !nonBlank(providerEventId) ||
     !nonBlank(providerTransactionId) ||
     !nonBlank(resultId) ||
+    !nonBlank(previousResolutionResultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== resolutionId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResolutionResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedResolution?.id !== resolutionId ||
+    expectedResolution.claimId !== claimId ||
+    expectedResolution.slotId !== slotId ||
+    expectedResolution.orderId !== orderId ||
+    expectedResolution.phaseId !== phaseId ||
+    expectedResolution.status !== command.current ||
+    expectedResolution.resultId !== previousResolutionResultId ||
+    expectedResolution.currentStateCommandKey !== stateKey ||
+    expectedResolution.immutable !== true ||
     (eventStatus !== "lost" && eventStatus !== "returned") ||
     eventShipmentId !== currentLeafId ||
     context?.providerEventTransactionId !== providerTransactionId ||
@@ -6266,6 +6648,8 @@ function requireDeliveredJobSettlement<S extends string>(
     !nonBlank(resultId) ||
     !nonBlank(stateKey) ||
     command.aggregateId !== jobId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     command.context?.jobSettlementJobId !== jobId ||
     command.context?.jobSettlementPreviousStatus !== "handed_over" ||
@@ -6447,13 +6831,17 @@ function requireExactJobHandoff<S extends string>(
     if (raceKind !== undefined) {
       const raceResultId = context?.cancellationRaceHandoffResultId;
       const stateKey = context?.jobHandoffCurrentStateCommandKey;
+      const previousResultId = context?.jobHandoffPreviousResultId;
       if (
         raceKind !== "ordinary" ||
         !nonBlank(raceResultId) ||
         !nonBlank(stateKey) ||
+        !nonBlank(previousResultId) ||
         command.aggregateId !== jobId ||
+        command.currentStateResultId !== previousResultId ||
         command.currentStateCommandKey !== stateKey ||
         expected.currentStateCommandKey !== stateKey ||
+        expected.resultId !== previousResultId ||
         expected.shipmentId !== context?.shipmentId ||
         expected.claimId !== null ||
         expected.resolutionId !== null ||
@@ -6858,6 +7246,8 @@ function requireAtomicShipmentLabelCreation<S extends string>(
     !nonBlank(providerEventId) ||
     !nonBlank(providerTransactionId) ||
     command.aggregateId !== shipmentId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== shipmentPreviousResultId ||
     command.currentStateCommandKey !== shipmentStateKey ||
     expected?.id !== shipmentId ||
     expected.orderId !== orderId ||
@@ -7262,6 +7652,25 @@ function requireExactShipmentCancellationRequest<S extends string>(
       ? (payload as Readonly<Record<string, unknown>>)
       : undefined;
   const cancellationResultId = context?.shipmentCancellationResultId;
+  const previousShipmentResultId =
+    context?.shipmentCancellationRequestPreviousShipmentResultId;
+  const stateKey = context?.shipmentCancellationRequestCurrentStateCommandKey;
+  const expectedShipmentValue =
+    context?.shipmentCancellationRequestExpectedShipment;
+  const expectedShipment =
+    typeof expectedShipmentValue === "object" &&
+    expectedShipmentValue !== null &&
+    !Array.isArray(expectedShipmentValue)
+      ? (expectedShipmentValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const requestValue = context?.shipmentCancellationRequest;
+  const request =
+    typeof requestValue === "object" &&
+    requestValue !== null &&
+    !Array.isArray(requestValue)
+      ? (requestValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const requestId = context?.shipmentCancellationRequestId;
   if (
     typeof shipmentId !== "string" ||
     shipmentId.trim().length === 0 ||
@@ -7274,6 +7683,24 @@ function requireExactShipmentCancellationRequest<S extends string>(
     typeof expectedCarrierLabelId !== "string" ||
     expectedCarrierLabelId.trim().length === 0 ||
     carrierLabelId !== expectedCarrierLabelId ||
+    !nonBlank(previousShipmentResultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== shipmentId ||
+    command.currentStateResultId !== previousShipmentResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedShipment?.id !== shipmentId ||
+    expectedShipment.status !== "label_created" ||
+    expectedShipment.resultId !== previousShipmentResultId ||
+    expectedShipment.currentStateCommandKey !== stateKey ||
+    expectedShipment.immutable !== true ||
+    !nonBlank(requestId) ||
+    request?.id !== requestId ||
+    request.shipmentId !== shipmentId ||
+    request.carrierLabelId !== carrierLabelId ||
+    request.previousStatus !== "label_created" ||
+    request.targetStatus !== "cancellation_pending" ||
+    request.resultId !== cancellationResultId ||
+    request.immutable !== true ||
     !nonBlank(cancellationResultId) ||
     context?.shipmentCarrierLabelId !== carrierLabelId ||
     context?.carrierLabelInvalidationShipmentId !== shipmentId ||
@@ -7287,6 +7714,7 @@ function requireExactShipmentCancellationRequest<S extends string>(
     context?.providerVoidOutboxShipmentId !== shipmentId ||
     context?.providerVoidOutboxCarrierLabelId !== carrierLabelId ||
     context?.providerVoidOutboxLabelId !== carrierLabelId ||
+    context?.providerVoidOutboxCancellationRequestId !== requestId ||
     context?.providerVoidOutboxIdempotencyKey !== expectedIdempotencyKey ||
     context?.providerVoidOutboxStatus !== "pending" ||
     context?.providerVoidOutboxPayloadShipmentId !== shipmentId ||
@@ -7716,18 +8144,107 @@ function requireExactHandoffShipmentOrigin<S extends string>(
   }
 }
 
+function requireExactSelectedLabelledShipmentAggregate<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  kind: "replacement" | "reship",
+): void {
+  if (lifecycle !== "Shipment") return;
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const shipmentId = context?.shipmentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const slotId = context?.claimSlotId;
+  const previousResultId =
+    kind === "replacement"
+      ? context?.replacementHandoffShipmentPreviousResultId
+      : context?.reshipmentHandoffShipmentPreviousResultId;
+  const stateKey =
+    kind === "replacement"
+      ? context?.replacementHandoffShipmentCurrentStateCommandKey
+      : context?.reshipmentHandoffShipmentCurrentStateCommandKey;
+  const expectedValue =
+    kind === "replacement"
+      ? context?.replacementHandoffExpectedShipment
+      : context?.reshipmentHandoffExpectedShipment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    !nonBlank(shipmentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(claimId) ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(slotId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== shipmentId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expected?.id !== shipmentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.claimId !== claimId ||
+    expected.resolutionId !== resolutionId ||
+    expected.slotId !== slotId ||
+    expected.originClaimId !== claimId ||
+    expected.originResolutionId !== resolutionId ||
+    expected.originKind !== kind ||
+    expected.status !== "label_created" ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Claim-remedy Shipment handoff must bind the selected Shipment aggregate and immutable source snapshot",
+    );
+  }
+}
+
 function requireExactCancellationRaceHandoffResult<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
   const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
   const kind = context?.cancellationRaceHandoffKind;
+  const expectedShipmentOriginKind =
+    kind === "replacement" || kind === "reship" ? kind : "ordinary";
   const resultId = context?.cancellationRaceHandoffResultId;
   const shipmentId = context?.shipmentId;
   const orderId = context?.orderId;
   const phaseId = context?.phaseId;
   const providerEventId = context?.providerEventId;
   const providerTransactionId = context?.shipmentProviderTransactionId;
+  const previousShipmentResultId =
+    context?.cancellationRacePreviousShipmentResultId;
+  const stateKey = context?.cancellationRaceCurrentStateCommandKey;
+  const expectedShipment = record(context?.cancellationRaceExpectedShipment);
+  const previousOrderResultId = context?.cancellationRacePreviousOrderResultId;
+  const orderStateKey = context?.cancellationRaceCurrentOrderStateCommandKey;
+  const expectedOrder = record(context?.cancellationRaceExpectedOrder);
+  const cancellationRequestId = context?.shipmentCancellationRequestId;
+  const cancellationRequest = record(context?.shipmentCancellationRequest);
+  const carrierLabelId = context?.carrierLabelId;
   if (
     typeof kind !== "string" ||
     !cancellationRaceHandoffKinds.has(kind) ||
@@ -7743,6 +8260,56 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     providerEventId.trim().length === 0 ||
     typeof providerTransactionId !== "string" ||
     providerTransactionId.trim().length === 0 ||
+    (lifecycle === "Shipment" &&
+      (!nonBlank(previousShipmentResultId) ||
+        !nonBlank(stateKey) ||
+        command.aggregateId !== shipmentId ||
+        command.currentStateResultId !== previousShipmentResultId ||
+        command.currentStateCommandKey !== stateKey ||
+        expectedShipment?.id !== shipmentId ||
+        expectedShipment.status !== "cancellation_pending" ||
+        expectedShipment.originKind !== expectedShipmentOriginKind ||
+        expectedShipment.resultId !== previousShipmentResultId ||
+        expectedShipment.currentStateCommandKey !== stateKey ||
+        expectedShipment.immutable !== true ||
+        !nonBlank(cancellationRequestId) ||
+        !nonBlank(carrierLabelId) ||
+        cancellationRequest?.id !== cancellationRequestId ||
+        cancellationRequest.shipmentId !== shipmentId ||
+        cancellationRequest.carrierLabelId !== carrierLabelId ||
+        cancellationRequest.previousStatus !== "label_created" ||
+        cancellationRequest.targetStatus !== "cancellation_pending" ||
+        !nonBlank(cancellationRequest.resultId) ||
+        cancellationRequest.immutable !== true ||
+        context?.cancellationRaceCancellationRequestId !==
+          cancellationRequestId ||
+        context?.cancellationRaceCancellationRequestShipmentId !== shipmentId ||
+        context?.cancellationRaceCancellationRequestResultId !==
+          cancellationRequest.resultId ||
+        context?.shipmentProviderScanCancellationRequestId !==
+          cancellationRequestId)) ||
+    (lifecycle === "Order" &&
+      (!nonBlank(previousShipmentResultId) ||
+        !nonBlank(stateKey) ||
+        expectedShipment?.id !== shipmentId ||
+        expectedShipment.orderId !== orderId ||
+        expectedShipment.phaseId !== phaseId ||
+        expectedShipment.status !== "cancellation_pending" ||
+        expectedShipment.originKind !== expectedShipmentOriginKind ||
+        expectedShipment.resultId !== previousShipmentResultId ||
+        expectedShipment.currentStateCommandKey !== stateKey ||
+        expectedShipment.immutable !== true ||
+        !nonBlank(previousOrderResultId) ||
+        !nonBlank(orderStateKey) ||
+        command.aggregateId !== orderId ||
+        command.currentStateResultId !== previousOrderResultId ||
+        command.currentStateCommandKey !== orderStateKey ||
+        expectedOrder?.id !== orderId ||
+        expectedOrder.phaseId !== phaseId ||
+        expectedOrder.status !== "awaiting_balance" ||
+        expectedOrder.resultId !== previousOrderResultId ||
+        expectedOrder.currentStateCommandKey !== orderStateKey ||
+        expectedOrder.immutable !== true)) ||
     context?.cancellationRaceResultKind !== kind ||
     context?.cancellationRaceResultShipmentId !== shipmentId ||
     context?.cancellationRaceResultOrderId !== orderId ||
@@ -8014,6 +8581,9 @@ function requireExactLabelledShipmentHandoff<S extends string>(
     );
   }
   requireExactHandoffShipmentOrigin(lifecycle, command, kind);
+  if (kind === "replacement" || kind === "reship") {
+    requireExactSelectedLabelledShipmentAggregate(lifecycle, command, kind);
+  }
 
   if (kind === "ordinary") {
     requireAtomicOrdinaryHandoff(lifecycle, command, {
@@ -8676,10 +9246,7 @@ function requireAtomicWholeClaimWithdrawal<S extends string>(
   ]);
   const context = command.context;
   const isParentTransition = lifecycle === "Claim";
-  const isSelectedPendingChildTransition =
-    lifecycle === "ClaimSlotResolution" &&
-    command.current === "pending" &&
-    command.target === "withdrawn";
+  const isSelectedChildTransition = lifecycle === "ClaimSlotResolution";
   const nonBlank = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
   const claimId = context?.claimId;
@@ -8747,7 +9314,7 @@ function requireAtomicWholeClaimWithdrawal<S extends string>(
     slotId.trim().length === 0 ||
     typeof resultId !== "string" ||
     resultId.trim().length === 0 ||
-    (isSelectedPendingChildTransition &&
+    (isSelectedChildTransition &&
       (!nonBlank(resolutionPreviousResultId) ||
         !nonBlank(resolutionStateKey) ||
         command.aggregateId !== resolutionId ||
@@ -8756,7 +9323,7 @@ function requireAtomicWholeClaimWithdrawal<S extends string>(
         expectedResolution?.id !== resolutionId ||
         expectedResolution.claimId !== claimId ||
         expectedResolution.slotId !== slotId ||
-        expectedResolution.status !== "pending" ||
+        expectedResolution.status !== command.current ||
         expectedResolution.activeClaimId !== claimId ||
         expectedResolution.resultId !== resolutionPreviousResultId ||
         expectedResolution.currentStateCommandKey !== resolutionStateKey ||
@@ -9276,6 +9843,72 @@ const cancellableReplacementJobStatuses = new Set([
   "failed",
 ]);
 
+function requireExactReplacementResolutionSource<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  sourceStatus: "reprint_pending" | "replacement_in_production",
+  sourceEvidence?: Readonly<{
+    previousResultId?: unknown;
+    currentStateCommandKey?: unknown;
+    expectedResolution?: unknown;
+  }>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const snapshotValue =
+    sourceEvidence === undefined
+      ? context?.replacementLifecycleExpectedResolution
+      : sourceEvidence.expectedResolution;
+  const snapshot =
+    typeof snapshotValue === "object" &&
+    snapshotValue !== null &&
+    !Array.isArray(snapshotValue)
+      ? (snapshotValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const resolutionId = context?.claimSlotResolutionId;
+  const claimId = context?.claimId;
+  const slotId = context?.claimSlotId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const previousResultId =
+    sourceEvidence === undefined
+      ? context?.replacementLifecyclePreviousResolutionResultId
+      : sourceEvidence.previousResultId;
+  const currentStateCommandKey =
+    sourceEvidence === undefined
+      ? context?.replacementLifecycleCurrentStateCommandKey
+      : sourceEvidence.currentStateCommandKey;
+  if (
+    !nonBlank(resolutionId) ||
+    !nonBlank(claimId) ||
+    !nonBlank(slotId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(currentStateCommandKey) ||
+    command.aggregateId !== resolutionId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== currentStateCommandKey ||
+    snapshot?.id !== resolutionId ||
+    snapshot.claimId !== claimId ||
+    snapshot.slotId !== slotId ||
+    snapshot.orderId !== orderId ||
+    snapshot.phaseId !== phaseId ||
+    snapshot.status !== sourceStatus ||
+    snapshot.resultId !== previousResultId ||
+    snapshot.currentStateCommandKey !== currentStateCommandKey ||
+    snapshot.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement lifecycle must bind the selected Claim child command to its immutable source snapshot",
+    );
+  }
+}
+
 function requireCompleteReplacementRequiredSlotSet<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -9775,6 +10408,21 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
   selectedShipmentId?: string,
   cancellationRace = false,
 ): void {
+  if (lifecycle === "ClaimSlotResolution") {
+    requireExactReplacementResolutionSource(
+      lifecycle,
+      command,
+      "replacement_in_production",
+      {
+        previousResultId:
+          command.context?.replacementHandoffPreviousResolutionResultId,
+        currentStateCommandKey:
+          command.context?.replacementHandoffCurrentStateCommandKey,
+        expectedResolution:
+          command.context?.replacementHandoffExpectedResolution,
+      },
+    );
+  }
   const resultId = command.context?.replacementHandoffResultId;
   const claimId = command.context?.claimId;
   const resolutionId = command.context?.claimSlotResolutionId;
@@ -10134,6 +10782,11 @@ function requireExactReplacementRecoveryCancellation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  requireExactReplacementResolutionSource(
+    lifecycle,
+    command,
+    "replacement_in_production",
+  );
   requireCompleteReplacementRequiredSlotSet(lifecycle, command, true);
   const context = command.context;
   const nonBlank = (value: unknown): value is string =>
@@ -10998,6 +11651,7 @@ function requireExactReshipmentSetup<S extends string>(
     !nonBlank(previousResolutionResultId) ||
     !nonBlank(stateKey) ||
     command.aggregateId !== resolutionId ||
+    !nonBlank(command.currentStateResultId) ||
     command.currentStateCommandKey !== stateKey ||
     command.currentStateResultId !== previousResolutionResultId ||
     expectedResolution?.id !== resolutionId ||
@@ -11120,6 +11774,16 @@ function requireExactReshipmentHandoff<S extends string>(
   const originalJobId = context?.reshipmentOriginalJobId;
   const originalJobStatus = context?.reshipmentHandoffOriginalJobPreviousStatus;
   const resultId = context?.reshipmentHandoffResultId;
+  const previousResolutionResultId =
+    context?.reshipmentHandoffPreviousResolutionResultId;
+  const stateKey = context?.reshipmentHandoffCurrentStateCommandKey;
+  const expectedResolutionValue = context?.reshipmentHandoffExpectedResolution;
+  const expectedResolution =
+    typeof expectedResolutionValue === "object" &&
+    expectedResolutionValue !== null &&
+    !Array.isArray(expectedResolutionValue)
+      ? (expectedResolutionValue as Readonly<Record<string, unknown>>)
+      : undefined;
 
   const nonBlank = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
@@ -11216,6 +11880,31 @@ function requireExactReshipmentHandoff<S extends string>(
       "reship handoff requires the exact Claim child, custody authorization, new Shipment result, and unchanged original Job",
     );
   }
+  if (!cancellationRace && lifecycle === "ClaimSlotResolution") {
+    if (
+      !nonBlank(previousResolutionResultId) ||
+      !nonBlank(stateKey) ||
+      command.aggregateId !== resolutionId ||
+      command.currentStateResultId !== previousResolutionResultId ||
+      command.currentStateCommandKey !== stateKey ||
+      expectedResolution?.id !== resolutionId ||
+      expectedResolution.claimId !== claimId ||
+      expectedResolution.slotId !== slotId ||
+      expectedResolution.orderId !== orderId ||
+      expectedResolution.phaseId !== phaseId ||
+      expectedResolution.status !== "reship_pending" ||
+      expectedResolution.resultId !== previousResolutionResultId ||
+      expectedResolution.currentStateCommandKey !== stateKey ||
+      expectedResolution.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "reship handoff must bind the command-selected immutable Claim child",
+      );
+    }
+  }
 }
 
 function requireExactClaimRefundScope<S extends string>(
@@ -11234,6 +11923,16 @@ function requireExactClaimRefundScope<S extends string>(
   const allocationId = context?.claimRefundAllocationId;
   const amountMinor = context?.claimRefundAmountMinor;
   const scopeId = context?.claimRefundScopeId;
+  const setupPreviousResultId =
+    context?.claimRefundSetupPreviousResolutionResultId;
+  const setupStateKey = context?.claimRefundSetupCurrentStateCommandKey;
+  const setupExpectedValue = context?.claimRefundSetupExpectedResolution;
+  const setupExpected =
+    typeof setupExpectedValue === "object" &&
+    setupExpectedValue !== null &&
+    !Array.isArray(setupExpectedValue)
+      ? (setupExpectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const expectedResolutionIdsValue = context?.claimRefundScopeResolutionIds;
   const expectedSlotIdsValue = context?.claimRefundScopeSlotIds;
   const expectedBindingsValue = context?.claimRefundScopeResolutionSlots;
@@ -11295,6 +11994,22 @@ function requireExactClaimRefundScope<S extends string>(
     amountMinor <= 0n ||
     typeof scopeId !== "string" ||
     scopeId.trim().length === 0 ||
+    typeof setupPreviousResultId !== "string" ||
+    setupPreviousResultId.trim().length === 0 ||
+    typeof setupStateKey !== "string" ||
+    setupStateKey.trim().length === 0 ||
+    command.aggregateId !== resolutionId ||
+    command.currentStateResultId !== setupPreviousResultId ||
+    command.currentStateCommandKey !== setupStateKey ||
+    setupExpected?.id !== resolutionId ||
+    setupExpected.claimId !== claimId ||
+    setupExpected.slotId !== slotId ||
+    setupExpected.orderId !== orderId ||
+    setupExpected.phaseId !== phaseId ||
+    setupExpected.status !== command.current ||
+    setupExpected.resultId !== setupPreviousResultId ||
+    setupExpected.currentStateCommandKey !== setupStateKey ||
+    setupExpected.immutable !== true ||
     context?.claimRefundScopeClaimId !== claimId ||
     context?.claimRefundScopeOrderId !== orderId ||
     context?.claimRefundScopePhaseId !== phaseId ||
@@ -11652,6 +12367,7 @@ function requireExactClaimRefundCompletion<S extends string>(
   const previousResultId = context?.claimRefundPreviousResolutionResultId;
   const resultId = context?.claimRefundCompletionResultId;
   const stateKey = context?.claimRefundCurrentStateCommandKey;
+  const currentStateResultId = command.currentStateResultId;
   const expectedValue = context?.claimRefundExpectedResolution;
   const expected =
     typeof expectedValue === "object" &&
@@ -11686,6 +12402,7 @@ function requireExactClaimRefundCompletion<S extends string>(
     !nonBlank(resultId) ||
     !nonBlank(stateKey) ||
     command.aggregateId !== resolutionId ||
+    currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     context?.claimRefundResolutionId !== resolutionId ||
     context?.claimRefundClaimId !== claimId ||
@@ -11846,6 +12563,8 @@ function requireExactReprintSelection<S extends string>(
     !nonBlank(resultId) ||
     !nonBlank(stateKey) ||
     command.aggregateId !== resolutionId ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     context?.reprintSelectionPreviousStatus !== command.current ||
     context?.reprintSelectionTargetStatus !== "reprint_pending" ||
@@ -11983,6 +12702,11 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
         command.current === "reprint_pending" &&
         command.target === "replacement_in_production"
       ) {
+        requireExactReplacementResolutionSource(
+          "ClaimSlotResolution",
+          command,
+          "reprint_pending",
+        );
         requireFlag(
           "ClaimSlotResolution",
           command,
