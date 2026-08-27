@@ -1096,6 +1096,31 @@ ALTER TABLE "idempotency_records"
         ("status" <> 'COMPLETED' AND "response_status_code" IS NULL AND "response_body" IS NULL)
     );
 
+CREATE FUNCTION taven_validate_reference_slice_quality()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."kind" = 'REFERENCE' AND NOT EXISTS (
+        SELECT 1
+        FROM "print_config_revisions" print_config
+        JOIN "reference_profiles" reference_profile
+          ON reference_profile."id" = NEW."reference_profile_id"
+         AND reference_profile."quality" = print_config."quality"
+        WHERE print_config."id" = NEW."print_config_revision_id"
+    ) THEN
+        RAISE EXCEPTION 'reference slice print configuration and reference profile quality must match'
+            USING ERRCODE = '23514', CONSTRAINT = 'slice_results_reference_quality_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "slice_results_reference_quality"
+    BEFORE INSERT ON "slice_results"
+    FOR EACH ROW EXECUTE FUNCTION taven_validate_reference_slice_quality();
+
 CREATE UNIQUE INDEX "reference_profiles_active_material_quality_key"
     ON "reference_profiles" ("material", "quality")
     WHERE "state" = 'ACTIVE';

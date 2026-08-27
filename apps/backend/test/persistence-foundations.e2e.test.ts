@@ -516,6 +516,64 @@ describe("persistence foundations", () => {
     );
   });
 
+  it("requires reference slices to use a profile for the requested quality", async () => {
+    await inRollbackTransaction(
+      "reference-slice-quality",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const printConfigRevisionId = fixtures.id("fine-print-config");
+        const referenceProfileId = fixtures.id("standard-reference-profile");
+        await fixtures.createRevisionIdentity(
+          printConfigRevisionId,
+          "PRINT_CONFIG",
+        );
+        await fixtures.createRevisionIdentity(
+          referenceProfileId,
+          "REFERENCE_PROFILE",
+        );
+        await client.query(
+          'INSERT INTO "print_config_revisions" ("id", "quality", "infill_percent", "layer_height_micrometers", "settings") VALUES ($1, $2, $3, $4, $5::jsonb)',
+          [printConfigRevisionId, "FINE", 20, 200, JSON.stringify({})],
+        );
+        await client.query(
+          'INSERT INTO "reference_profiles" ("id", "material", "quality", "slicer_engine", "slicer_version", "settings") VALUES ($1, $2, $3, $4, $5, $6::jsonb)',
+          [
+            referenceProfileId,
+            "PLA",
+            "STANDARD",
+            "orca",
+            "test",
+            JSON.stringify({}),
+          ],
+        );
+
+        await expect(
+          client.query(
+            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "reference_profile_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+            [
+              fixtures.id("mismatched-reference-slice"),
+              "REFERENCE",
+              `reference-${fixtures.id("cache-key")}`,
+              foundation.modelGeometryId,
+              printConfigRevisionId,
+              referenceProfileId,
+              1,
+              `slices/${fixtures.id("artifact-key")}`,
+              "9".repeat(64),
+              60,
+              60,
+              "orca",
+              "test",
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "slice_results_reference_quality_check",
+        });
+      },
+    );
+  });
+
   it("rejects records that combine a node with another node's machine", async () => {
     await inRollbackTransaction("node-scoping", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation();
