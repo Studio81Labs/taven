@@ -2282,6 +2282,24 @@ CREATE TRIGGER "candidate_capacity_intervals_membership_frozen"
     BEFORE INSERT ON "candidate_capacity_intervals"
     FOR EACH ROW EXECUTE FUNCTION taven_freeze_candidate_intervals_after_planning();
 
+CREATE FUNCTION taven_model_source_live_capacity_horizon(target_source_id uuid)
+RETURNS timestamptz
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT max(capacity_reservation."ends_at")
+    FROM "model_geometries" geometry
+    JOIN "slice_results" slice_result
+      ON slice_result."model_geometry_id" = geometry."id"
+    JOIN "production_reservations" production
+      ON production."slice_result_id" = slice_result."id"
+    JOIN "capacity_reservations" capacity_reservation
+      ON capacity_reservation."production_reservation_id" = production."id"
+    WHERE geometry."source_model_file_id" = target_source_id
+      AND production."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+      AND capacity_reservation."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING');
+$$;
+
 CREATE FUNCTION taven_protect_asset_retention()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2291,6 +2309,7 @@ DECLARE
     old_deadline timestamptz;
     new_deadline timestamptz;
     checked_at timestamptz := clock_timestamp();
+    live_capacity_horizon timestamptz;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION '% metadata is retained after object deletion', TG_TABLE_NAME
@@ -2310,6 +2329,22 @@ BEGIN
     IF new_deadline < old_deadline THEN
         RAISE EXCEPTION '% deletion deadline cannot be shortened', TG_TABLE_NAME
             USING ERRCODE = '23514', CONSTRAINT = 'asset_deadline_monotonic_check';
+    END IF;
+
+    IF TG_TABLE_NAME = 'model_files' THEN
+        live_capacity_horizon := taven_model_source_live_capacity_horizon(NEW."id");
+        IF live_capacity_horizon IS NOT NULL AND (
+            NEW."deleted_at" IS NOT NULL OR (
+                NEW."retention_hold" = 'NONE'
+                AND (
+                    new_deadline <= checked_at
+                    OR new_deadline < live_capacity_horizon
+                )
+            )
+        ) THEN
+            RAISE EXCEPTION 'model source must remain available through live production capacity'
+                USING ERRCODE = '23514', CONSTRAINT = 'model_file_live_capacity_horizon_check';
+        END IF;
     END IF;
 
     IF OLD."deleted_at" IS NULL
@@ -2532,6 +2567,78 @@ CREATE TRIGGER "capacity_reservations_production_binding"
     BEFORE INSERT ON "capacity_reservations"
     FOR EACH ROW EXECUTE FUNCTION taven_validate_capacity_reservation_binding();
 
+CREATE FUNCTION taven_production_reservation_group_is_consistent(target_production_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "production_reservations" production
+        WHERE production."id" = target_production_id
+          AND (
+              (
+                  production."status" IN ('HELD', 'SCHEDULED', 'PRINTING')
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "inventory_reservations" inventory_reservation
+                      WHERE inventory_reservation."production_reservation_id" = production."id"
+                        AND inventory_reservation."status" IN ('HELD', 'ALLOCATED')
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."status" NOT IN ('HELD', 'SCHEDULED', 'PRINTING')
+                  )
+              ) OR (
+                  production."status" = 'CONSUMED'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "inventory_reservations" inventory_reservation
+                      WHERE inventory_reservation."production_reservation_id" = production."id"
+                        AND inventory_reservation."status" = 'CONSUMED'
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."status" <> 'COMPLETED'
+                  )
+              ) OR (
+                  production."status" IN ('RELEASED', 'EXPIRED')
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "inventory_reservations" inventory_reservation
+                      WHERE inventory_reservation."production_reservation_id" = production."id"
+                        AND inventory_reservation."status" IN ('CONSUMED', 'RELEASED', 'EXPIRED')
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."status" NOT IN ('COMPLETED', 'RELEASED', 'EXPIRED')
+                  )
+              )
+          )
+    );
+$$;
+
 CREATE FUNCTION taven_validate_phase_reservation_set(set_id uuid)
 RETURNS void
 LANGUAGE plpgsql
@@ -2554,6 +2661,17 @@ BEGIN
     IF target_set."status" = 'BUILDING' THEN
         RAISE EXCEPTION 'building phase reservation set % cannot survive the transaction', target_set."id"
             USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_building_commit_check';
+    END IF;
+
+    IF target_set."status" = 'HELD'
+       AND EXISTS (
+           SELECT 1
+           FROM "production_reservations" production
+           WHERE production."phase_reservation_set_id" = target_set."id"
+             AND NOT taven_production_reservation_group_is_consistent(production."id")
+       ) THEN
+        RAISE EXCEPTION 'phase reservation set % has child states outside its lifecycle phase', target_set."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_child_status_check';
     END IF;
 
     IF target_set."status" IN ('SETTLED', 'RELEASED', 'EXPIRED') THEN
@@ -2581,10 +2699,22 @@ BEGIN
                 USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_terminal_children_check';
         END IF;
 
-        RETURN;
+        IF EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            WHERE production."phase_reservation_set_id" = target_set."id"
+              AND NOT taven_production_reservation_group_is_consistent(production."id")
+        ) THEN
+            RAISE EXCEPTION 'phase reservation set % has child states outside its lifecycle phase', target_set."id"
+                USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_child_status_check';
+        END IF;
+
+        IF target_set."status" IN ('RELEASED', 'EXPIRED') THEN
+            RETURN;
+        END IF;
     END IF;
 
-    IF target_set."status" NOT IN ('RESERVED', 'HELD') THEN
+    IF target_set."status" NOT IN ('RESERVED', 'HELD', 'SETTLED') THEN
         RETURN;
     END IF;
 
@@ -2612,100 +2742,17 @@ BEGIN
             )
         )
     ) OR (
-        target_set."status" = 'HELD' AND (
-            EXISTS (
-                SELECT 1
-                FROM "production_reservations" production
-                WHERE production."phase_reservation_set_id" = target_set."id"
-                  AND NOT (
-                      (
-                          production."status" IN ('HELD', 'SCHEDULED', 'PRINTING')
-                          AND EXISTS (
-                              SELECT 1
-                              FROM "inventory_reservations" inventory_reservation
-                              WHERE inventory_reservation."production_reservation_id" = production."id"
-                                AND inventory_reservation."status" IN ('HELD', 'ALLOCATED')
-                          )
-                          AND EXISTS (
-                              SELECT 1
-                              FROM "capacity_reservations" capacity_reservation
-                              WHERE capacity_reservation."production_reservation_id" = production."id"
-                          )
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM "capacity_reservations" capacity_reservation
-                              WHERE capacity_reservation."production_reservation_id" = production."id"
-                                AND capacity_reservation."status" NOT IN ('HELD', 'SCHEDULED', 'PRINTING')
-                          )
-                      ) OR (
-                          production."status" = 'CONSUMED'
-                          AND EXISTS (
-                              SELECT 1
-                              FROM "inventory_reservations" inventory_reservation
-                              WHERE inventory_reservation."production_reservation_id" = production."id"
-                                AND inventory_reservation."status" = 'CONSUMED'
-                          )
-                          AND EXISTS (
-                              SELECT 1
-                              FROM "capacity_reservations" capacity_reservation
-                              WHERE capacity_reservation."production_reservation_id" = production."id"
-                          )
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM "capacity_reservations" capacity_reservation
-                              WHERE capacity_reservation."production_reservation_id" = production."id"
-                                AND capacity_reservation."status" <> 'COMPLETED'
-                          )
-                      ) OR (
-                          production."status" IN ('RELEASED', 'EXPIRED')
-                          AND EXISTS (
-                              SELECT 1
-                              FROM "inventory_reservations" inventory_reservation
-                              WHERE inventory_reservation."production_reservation_id" = production."id"
-                                AND inventory_reservation."status" IN ('CONSUMED', 'RELEASED', 'EXPIRED')
-                          )
-                          AND EXISTS (
-                              SELECT 1
-                              FROM "capacity_reservations" capacity_reservation
-                              WHERE capacity_reservation."production_reservation_id" = production."id"
-                          )
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM "capacity_reservations" capacity_reservation
-                              WHERE capacity_reservation."production_reservation_id" = production."id"
-                                AND capacity_reservation."status" NOT IN ('COMPLETED', 'RELEASED', 'EXPIRED')
-                          )
-                      )
-                  )
-            ) OR (
-                EXISTS (
-                    SELECT 1
-                    FROM "production_reservations"
-                    WHERE "phase_reservation_set_id" = target_set."id"
-                ) AND NOT EXISTS (
-                    SELECT 1
-                    FROM "production_reservations" production
-                    WHERE production."phase_reservation_set_id" = target_set."id"
-                      AND production."status" IN ('HELD', 'SCHEDULED', 'PRINTING')
-                      AND EXISTS (
-                          SELECT 1
-                          FROM "inventory_reservations" inventory_reservation
-                          WHERE inventory_reservation."production_reservation_id" = production."id"
-                            AND inventory_reservation."status" IN ('HELD', 'ALLOCATED')
-                      )
-                      AND EXISTS (
-                          SELECT 1
-                          FROM "capacity_reservations" capacity_reservation
-                          WHERE capacity_reservation."production_reservation_id" = production."id"
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM "capacity_reservations" capacity_reservation
-                          WHERE capacity_reservation."production_reservation_id" = production."id"
-                            AND capacity_reservation."status" NOT IN ('HELD', 'SCHEDULED', 'PRINTING')
-                      )
-                )
-            )
+        target_set."status" = 'HELD'
+        AND EXISTS (
+            SELECT 1
+            FROM "production_reservations"
+            WHERE "phase_reservation_set_id" = target_set."id"
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            WHERE production."phase_reservation_set_id" = target_set."id"
+              AND production."status" IN ('HELD', 'SCHEDULED', 'PRINTING')
         )
     ) THEN
         RAISE EXCEPTION 'phase reservation set % has child states outside its lifecycle phase', target_set."id"
@@ -2754,7 +2801,16 @@ BEGIN
               OR source."deleted_at" IS NOT NULL
               OR (
                   source."retention_hold" = 'NONE'
-                  AND source."source_delete_after" <= clock_timestamp()
+                  AND (
+                      source."source_delete_after" <= clock_timestamp()
+                      OR EXISTS (
+                          SELECT 1
+                          FROM "capacity_reservations" capacity_reservation
+                          WHERE capacity_reservation."production_reservation_id" = production."id"
+                            AND capacity_reservation."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+                            AND source."source_delete_after" < capacity_reservation."ends_at"
+                      )
+                  )
               )
           )
     ) THEN

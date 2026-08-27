@@ -1991,6 +1991,123 @@ describe("persistence foundations", () => {
     }
   });
 
+  it("allows staggered capacity states for one multi-plate production", async () => {
+    await inRollbackTransaction(
+      "multi-plate-staggered-capacity",
+      async (client, fixtures) => {
+        const intervals = [
+          {
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
+          },
+          {
+            startsAt: testTimes.capacityEnd,
+            endsAt: testTimes.capacityTwoHours,
+          },
+        ];
+        const foundation = await fixtures.createFoundation("multi-plate-live");
+        const production = await fixtures.planProduction(
+          foundation,
+          "multi-plate-live",
+          intervals,
+        );
+        await fixtures.createResourcePlan(foundation, [production]);
+        await fixtures.createPhaseReservationSet(foundation);
+        await fixtures.createProductionReservation(foundation, production);
+        await client.query(
+          'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+          [
+            production.inventoryReservationId,
+            foundation.nodeId,
+            production.productionReservationId,
+            foundation.inventoryId,
+            60,
+            testTimes.expiresAt,
+            testTimes.createdAt,
+            testTimes.createdAt,
+          ],
+        );
+        const capacityReservationIds = intervals.map((interval, index) => {
+          const candidateCapacityIntervalId =
+            production.candidateCapacityIntervalIds[index];
+          if (!candidateCapacityIntervalId) {
+            throw new Error("multi-plate candidate interval is missing");
+          }
+          return {
+            id: fixtures.id(`multi-plate-capacity-${index}`),
+            candidateCapacityIntervalId,
+            interval,
+          };
+        });
+        for (const capacity of capacityReservationIds) {
+          await client.query(
+            'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+            [
+              capacity.id,
+              foundation.nodeId,
+              production.productionReservationId,
+              capacity.candidateCapacityIntervalId,
+              foundation.machineId,
+              capacity.interval.startsAt,
+              capacity.interval.endsAt,
+              testTimes.expiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
+            ],
+          );
+        }
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+          [production.productionReservationId, "HELD", production.jobId],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.inventoryReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "HELD"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "SCHEDULED"],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.inventoryReservationId, "ALLOCATED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "SCHEDULED"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "PRINTING"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+          [capacityReservationIds[0]?.id, "PRINTING"],
+        );
+
+        await expect(
+          client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+        ).resolves.toBeDefined();
+      },
+    );
+  });
+
   it("freezes plan membership once a reservation set exists", async () => {
     await inRollbackTransaction(
       "plan-membership-freeze",
@@ -2231,26 +2348,50 @@ describe("persistence foundations", () => {
     );
 
     await inRollbackTransaction(
-      "geometry-source-confirmation",
+      "elapsed-source-horizon-retention",
+      async (client, fixtures) => {
+        const capacityStartsAt = new Date(Date.now() - 120_000);
+        const capacityEndsAt = new Date(Date.now() - 60_000);
+        const { foundation } = await createCompleteSingleReservationGraph(
+          client,
+          fixtures,
+          "elapsed-source-horizon-retention",
+          {
+            startsAt: capacityStartsAt,
+            endsAt: capacityEndsAt,
+          },
+          {},
+          {
+            uploadedAt: new Date(capacityStartsAt.getTime() - 60_000),
+            deleteAfter: capacityEndsAt,
+            hold: "ACTIVE_ORDER",
+          },
+        );
+        await expect(
+          client.query(
+            'UPDATE "model_files" SET "retention_hold" = $2 WHERE "id" = $1',
+            [foundation.modelFileId, "NONE"],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "model_file_live_capacity_horizon_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "short-source-horizon-confirmation",
       async (client, fixtures) => {
         const { foundation } = await createCompleteSingleReservationGraph(
           client,
           fixtures,
-          "geometry-source-confirmation",
+          "short-source-horizon-confirmation",
           {
             startsAt: testTimes.capacityStart,
             endsAt: testTimes.capacityEnd,
           },
           {},
-          {
-            uploadedAt: new Date(Date.now() - 120_000),
-            deleteAfter: new Date(Date.now() - 60_000),
-            hold: "ACTIVE_ORDER",
-          },
-        );
-        await client.query(
-          'UPDATE "model_files" SET "retention_hold" = $2 WHERE "id" = $1',
-          [foundation.modelFileId, "NONE"],
+          { deleteAfter: testTimes.capacityHalfHour, hold: "NONE" },
         );
         await client.query(
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
@@ -2262,6 +2403,90 @@ describe("persistence foundations", () => {
         ).rejects.toMatchObject({
           code: "23514",
           constraint: "model_geometry_source_available_check",
+        });
+      },
+    );
+
+    for (const hold of ["ACTIVE_ORDER", "LEGAL"] as const) {
+      const holdName = hold === "ACTIVE_ORDER" ? "order" : "legal";
+      await inRollbackTransaction(
+        `held-source-horizon-${holdName}`,
+        async (client, fixtures) => {
+          const { foundation } = await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            `held-source-horizon-${holdName}`,
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+            {},
+            { deleteAfter: testTimes.capacityHalfHour, hold },
+          );
+          await client.query(
+            'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+            [foundation.phaseReservationSetId, "RESERVED"],
+          );
+
+          await expect(
+            client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+          ).resolves.toBeDefined();
+        },
+      );
+    }
+  });
+
+  it("retains model sources through live production capacity", async () => {
+    await inRollbackTransaction(
+      "live-source-retention-horizon",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "live-source-retention-horizon",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+            {},
+            {
+              deleteAfter: testTimes.capacityHalfHour,
+              hold: "ACTIVE_ORDER",
+            },
+          );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+          [production.productionReservationId, "HELD", production.jobId],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "HELD"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+
+        await expect(
+          client.query(
+            'UPDATE "model_files" SET "retention_hold" = $2 WHERE "id" = $1',
+            [foundation.modelFileId, "NONE"],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "model_file_live_capacity_horizon_check",
         });
       },
     );
@@ -2925,42 +3150,68 @@ describe("persistence foundations", () => {
       );
 
       const terminalProduction = graph.productions[0];
-      if (!terminalProduction) {
-        throw new Error("terminal reservation group fixture is missing");
+      const liveProduction = graph.productions[1];
+      if (!terminalProduction || !liveProduction) {
+        throw new Error("reservation group fixture is missing");
       }
+      const heldSetId = graph.foundation.phaseReservationSetId;
+      const consumeWithReleasedInventory = async (
+        settleParent: boolean,
+      ): Promise<void> => {
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [terminalProduction.productionReservationId, "SCHEDULED"],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+          [terminalProduction.inventoryReservationId, "ALLOCATED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+          [capacityReservationIds[0], "SCHEDULED"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [terminalProduction.productionReservationId, "PRINTING"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+          [capacityReservationIds[0], "PRINTING"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [terminalProduction.productionReservationId, "CONSUMED"],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+          [terminalProduction.inventoryReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+          [capacityReservationIds[0], "COMPLETED"],
+        );
+        if (settleParent) {
+          await client.query(
+            'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+            [liveProduction.productionReservationId, "RELEASED"],
+          );
+          await client.query(
+            'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+            [liveProduction.inventoryReservationId, "RELEASED"],
+          );
+          await client.query(
+            'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+            [capacityReservationIds[1], "RELEASED"],
+          );
+          await client.query(
+            'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+            [heldSetId, "SETTLED"],
+          );
+        }
+      };
+
       await client.query("SAVEPOINT mismatched_consumed_group");
-      await client.query(
-        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [terminalProduction.productionReservationId, "SCHEDULED"],
-      );
-      await client.query(
-        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-        [terminalProduction.inventoryReservationId, "ALLOCATED"],
-      );
-      await client.query(
-        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-        [capacityReservationIds[0], "SCHEDULED"],
-      );
-      await client.query(
-        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [terminalProduction.productionReservationId, "PRINTING"],
-      );
-      await client.query(
-        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-        [capacityReservationIds[0], "PRINTING"],
-      );
-      await client.query(
-        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [terminalProduction.productionReservationId, "CONSUMED"],
-      );
-      await client.query(
-        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-        [terminalProduction.inventoryReservationId, "RELEASED"],
-      );
-      await client.query(
-        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-        [capacityReservationIds[0], "COMPLETED"],
-      );
+      await consumeWithReleasedInventory(false);
       await expect(
         client.query("SET CONSTRAINTS ALL IMMEDIATE"),
       ).rejects.toMatchObject({
@@ -2968,6 +3219,17 @@ describe("persistence foundations", () => {
         constraint: "phase_reservation_set_child_status_check",
       });
       await client.query("ROLLBACK TO SAVEPOINT mismatched_consumed_group");
+      await client.query("SET CONSTRAINTS ALL DEFERRED");
+
+      await client.query("SAVEPOINT mismatched_settled_group");
+      await consumeWithReleasedInventory(true);
+      await expect(
+        client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "phase_reservation_set_child_status_check",
+      });
+      await client.query("ROLLBACK TO SAVEPOINT mismatched_settled_group");
       await client.query("SET CONSTRAINTS ALL DEFERRED");
 
       await client.query(
@@ -2985,10 +3247,6 @@ describe("persistence foundations", () => {
       await client.query("COMMIT");
       heldCommitted = true;
 
-      const liveProduction = graph.productions[1];
-      if (!liveProduction) {
-        throw new Error("live reservation group fixture is missing");
-      }
       await client.query("BEGIN");
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -3031,6 +3289,117 @@ describe("persistence foundations", () => {
       }
       client.release();
     }
+  });
+
+  it("settles only reservation groups with reconciled consumption", async () => {
+    await inRollbackTransaction(
+      "settled-consumed-group",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "settled-consumed-group",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+          );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+          [production.productionReservationId, "HELD", production.jobId],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "HELD"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "HELD"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "SCHEDULED"],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "ALLOCATED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "SCHEDULED"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "PRINTING"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "PRINTING"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "CONSUMED"],
+        );
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2, "consumed_milligrams" = $3 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "CONSUMED", 60],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "COMPLETED"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "SETTLED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+
+        expect(
+          await client.query<{
+            capacity_status: string;
+            inventory_status: string;
+            production_status: string;
+            set_status: string;
+          }>(
+            'SELECT production."status" AS production_status, inventory_reservation."status" AS inventory_status, capacity_reservation."status" AS capacity_status, reservation_set."status" AS set_status FROM "production_reservations" production JOIN "inventory_reservations" inventory_reservation ON inventory_reservation."production_reservation_id" = production."id" JOIN "capacity_reservations" capacity_reservation ON capacity_reservation."production_reservation_id" = production."id" JOIN "phase_reservation_sets" reservation_set ON reservation_set."id" = production."phase_reservation_set_id" WHERE production."id" = $1',
+            [production.productionReservationId],
+          ),
+        ).toMatchObject({
+          rows: [
+            {
+              capacity_status: "COMPLETED",
+              inventory_status: "CONSUMED",
+              production_status: "CONSUMED",
+              set_status: "SETTLED",
+            },
+          ],
+        });
+        expect(
+          await client.query<{
+            remaining_milligrams: string;
+            reserved_milligrams: string;
+          }>(
+            'SELECT "remaining_milligrams", "reserved_milligrams" FROM "inventories" WHERE "id" = $1',
+            [foundation.inventoryId],
+          ),
+        ).toMatchObject({
+          rows: [{ remaining_milligrams: "40", reserved_milligrams: "0" }],
+        });
+      },
+    );
   });
 
   it("revalidates mutable resources and sources only for live jobs in a HELD set", async () => {
@@ -3190,21 +3559,14 @@ describe("persistence foundations", () => {
       await expect(client.query("COMMIT")).resolves.toBeDefined();
 
       await client.query("BEGIN");
-      await client.query(
-        'UPDATE "model_files" SET "retention_hold" = $2, "deleted_at" = clock_timestamp() WHERE "id" = $1',
-        [liveFoundation.modelFileId, "NONE"],
-      );
-      await client.query(
-        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [liveProduction.productionReservationId, "PRINTING"],
-      );
-      await client.query(
-        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-        [liveCapacityId, "PRINTING"],
-      );
-      await expect(client.query("COMMIT")).rejects.toMatchObject({
+      await expect(
+        client.query(
+          'UPDATE "model_files" SET "retention_hold" = $2, "deleted_at" = clock_timestamp() WHERE "id" = $1',
+          [liveFoundation.modelFileId, "NONE"],
+        ),
+      ).rejects.toMatchObject({
         code: "23514",
-        constraint: "model_geometry_source_available_check",
+        constraint: "model_file_live_capacity_horizon_check",
       });
       await client.query("ROLLBACK");
 
