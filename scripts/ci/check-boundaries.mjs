@@ -767,13 +767,33 @@ function groupingParenthesis(tokens, openIndex) {
 }
 
 function exactRequireExpression(tokens, start, end, requireIndex) {
-  const expression = finalSequenceOperand(tokens, start, end);
+  let expression = { start, end };
+  let previous;
+  do {
+    previous = expression;
+    while (
+      expression.end > expression.start &&
+      tokens[expression.end - 1]?.value === "!"
+    ) {
+      expression = { ...expression, end: expression.end - 1 };
+    }
+    expression = finalSequenceOperand(tokens, expression.start, expression.end);
+  } while (
+    expression.start !== previous.start ||
+    expression.end !== previous.end
+  );
   return (
     expression.start === requireIndex && expression.end === requireIndex + 1
   );
 }
 
+function skipNonNullAssertions(tokens, index) {
+  while (tokens[index]?.value === "!") index += 1;
+  return index;
+}
+
 function callOpening(tokens, index) {
+  index = skipNonNullAssertions(tokens, index);
   if (tokens[index]?.value === "(") return index;
   return tokens[index]?.value === "?." && tokens[index + 1]?.value === "("
     ? index + 1
@@ -783,12 +803,15 @@ function callOpening(tokens, index) {
 function requireCallOpening(tokens, requireIndex) {
   const direct = callOpening(tokens, requireIndex + 1);
   if (direct !== undefined) return direct;
-  let cursor = requireIndex + 1;
-  if (tokens[cursor]?.value !== ")") return undefined;
-  while (tokens[cursor]?.value === ")") cursor += 1;
+  let cursor = skipNonNullAssertions(tokens, requireIndex + 1);
+  let closeIndex;
+  while (tokens[cursor]?.value === ")") {
+    closeIndex = cursor;
+    cursor = skipNonNullAssertions(tokens, cursor + 1);
+  }
+  if (closeIndex === undefined) return undefined;
   const call = callOpening(tokens, cursor);
   if (call === undefined) return undefined;
-  const closeIndex = cursor - 1;
   const openIndex = matchingOpenParenthesis(tokens, closeIndex);
   if (
     openIndex === undefined ||
