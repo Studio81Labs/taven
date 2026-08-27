@@ -145,7 +145,8 @@ function findTemplateExpressionEnd(source, start) {
         index += 1;
         continue;
       }
-      const value = source.slice(index, index + 2) === "=>" ? "=>" : character;
+      const pair = source.slice(index, index + 2);
+      const value = pair === "=>" || pair === "?." ? pair : character;
       tokens.push({ kind: "punctuation", value });
       index += value.length;
     }
@@ -373,7 +374,8 @@ function lexicalTokens(source) {
       tokens.push({ kind: "number", value: source.slice(index, end) });
       index = end;
     } else {
-      const value = source.slice(index, index + 2) === "=>" ? "=>" : character;
+      const pair = source.slice(index, index + 2);
+      const value = pair === "=>" || pair === "?." ? pair : character;
       if (value === "{") {
         const statementBlock = opensStatementBlock(tokens);
         braces.push(statementBlock ? "block" : "object");
@@ -447,9 +449,18 @@ function importSpecifiers(source, file) {
         token.kind === "identifier" &&
         token.value === "require" &&
         previous?.value !== "." &&
-        next?.value === "("
+        previous?.value !== "?."
       ) {
-        const specifier = wrappedLiteralSpecifier(tokens, index + 2);
+        const callIndex =
+          next?.value === "("
+            ? index + 1
+            : next?.value === "?." && tokens[index + 2]?.value === "("
+              ? index + 2
+              : undefined;
+        const specifier =
+          callIndex === undefined
+            ? undefined
+            : wrappedLiteralSpecifier(tokens, callIndex + 1);
         if (specifier !== undefined) specifiers.push(specifier);
       }
     }
