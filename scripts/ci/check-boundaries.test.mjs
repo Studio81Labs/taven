@@ -107,9 +107,13 @@ describe("checkBoundaries", () => {
           'const templateExample = `import("@taven/backend") from text`;',
           'const nestedTemplate = `${"export * from \\"vue\\""}`;',
           'const regexpExample = /import\\("@prisma\\/client"\\)/;',
+          'const regexpCharacterClass = /[import("@prisma\\/client")]/;',
+          'if (enabled) /require\\("@prisma\\/client"\\)/.test(value);',
           'const moduleName = "@prisma/client";',
           "void import(moduleName);",
           "void require(moduleName);",
+          'adapter.require("@prisma/client");',
+          'adapter.import("bullmq");',
         ].join("\n"),
       );
       await writeFile(
@@ -137,10 +141,20 @@ describe("checkBoundaries", () => {
         path.join(root, "packages/core/src/imports.ts"),
         [
           'import {} from "@prisma/client";',
+          'import type { PrismaClient } from "@prisma/type-only";',
           'export {} from "@nestjs/common";',
+          'import { from as importFrom } from "ioredis";',
+          'export { from as exportFrom } from "@aws-sdk/client-s3";',
           'void import("bullmq");',
+          "void import(`@prisma/template`);",
+          'void import(("@prisma/wrapped-import"));',
           'void require("redis");',
+          'void require(("@prisma/wrapped-require"));',
+          'import RedisClient = require("@prisma/import-equals");',
           'type Prisma = import("prisma").Prisma;',
+          'const templateImport = `${import("@nestjs/template-expression")}`;',
+          'void import("@pri\\u0073ma/escaped");',
+          'const quotient = numerator / denominator; void import("@prisma/after-division");',
         ].join("\n"),
       );
       await writeFile(
@@ -156,10 +170,20 @@ describe("checkBoundaries", () => {
       expect(await checkBoundaries(root)).toEqual(
         expect.arrayContaining([
           "packages/core/src/imports.ts imports forbidden '@prisma/client'",
+          "packages/core/src/imports.ts imports forbidden '@prisma/type-only'",
           "packages/core/src/imports.ts imports forbidden '@nestjs/common'",
+          "packages/core/src/imports.ts imports forbidden 'ioredis'",
+          "packages/core/src/imports.ts imports forbidden '@aws-sdk/client-s3'",
           "packages/core/src/imports.ts imports forbidden 'bullmq'",
+          "packages/core/src/imports.ts imports forbidden '@prisma/template'",
+          "packages/core/src/imports.ts imports forbidden '@prisma/wrapped-import'",
           "packages/core/src/imports.ts imports forbidden 'redis'",
+          "packages/core/src/imports.ts imports forbidden '@prisma/wrapped-require'",
+          "packages/core/src/imports.ts imports forbidden '@prisma/import-equals'",
           "packages/core/src/imports.ts imports forbidden 'prisma'",
+          "packages/core/src/imports.ts imports forbidden '@nestjs/template-expression'",
+          "packages/core/src/imports.ts imports forbidden '@prisma/escaped'",
+          "packages/core/src/imports.ts imports forbidden '@prisma/after-division'",
           "packages/core/src/component.vue imports forbidden 'vue'",
         ]),
       );

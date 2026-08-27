@@ -2,17 +2,6 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-
-function scriptKindFor(file) {
-  if (file.endsWith(".tsx") || file.endsWith(".jsx") || file.endsWith(".vue")) {
-    return ts.ScriptKind.TSX;
-  }
-  if (file.endsWith(".js") || file.endsWith(".mjs")) {
-    return ts.ScriptKind.JS;
-  }
-  return ts.ScriptKind.TS;
-}
 
 function vueScripts(source) {
   const withoutHtmlComments = source.replace(/<!--[\s\S]*?-->/g, "");
@@ -24,55 +13,332 @@ function vueScripts(source) {
   );
 }
 
-function literalSpecifier(node) {
-  return node !== undefined &&
-    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
-    ? node.text
+function isIdentifierStart(character) {
+  return /[A-Za-z_$]/.test(character);
+}
+
+function isIdentifierPart(character) {
+  return /[A-Za-z0-9_$]/.test(character);
+}
+
+function decodeEscape(source, start) {
+  const character = source[start];
+  if (character === undefined) return { end: start, value: "" };
+  const simple = {
+    0: "\0",
+    b: "\b",
+    f: "\f",
+    n: "\n",
+    r: "\r",
+    t: "\t",
+    v: "\v",
+  };
+  if (character in simple) return { end: start + 1, value: simple[character] };
+  if (character === "\r" || character === "\n") {
+    return {
+      end: source[start + 1] === "\n" ? start + 2 : start + 1,
+      value: "",
+    };
+  }
+  if (character === "x") {
+    const value = source.slice(start + 1, start + 3);
+    if (/^[0-9A-Fa-f]{2}$/.test(value)) {
+      return {
+        end: start + 3,
+        value: String.fromCodePoint(Number.parseInt(value, 16)),
+      };
+    }
+  }
+  if (character === "u") {
+    const braced = source[start + 1] === "{";
+    const end = braced ? source.indexOf("}", start + 2) : start + 5;
+    const value = braced
+      ? end === -1
+        ? ""
+        : source.slice(start + 2, end)
+      : source.slice(start + 1, end);
+    if (
+      /^[0-9A-Fa-f]{4,6}$/.test(value) &&
+      (!braced || Number.parseInt(value, 16) <= 0x10ffff)
+    ) {
+      return {
+        end: braced ? end + 1 : end,
+        value: String.fromCodePoint(Number.parseInt(value, 16)),
+      };
+    }
+  }
+  return { end: start + 1, value: character };
+}
+
+function readQuotedLiteral(source, start, quote) {
+  let value = "";
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\") {
+      const escaped = decodeEscape(source, index + 1);
+      value += escaped.value;
+      index = escaped.end - 1;
+    } else if (character === quote) {
+      return { end: index + 1, value };
+    } else {
+      value += character;
+    }
+  }
+  return { end: source.length, value: undefined };
+}
+
+function findTemplateExpressionEnd(source, start) {
+  let depth = 1;
+  const tokens = [];
+  for (let index = start; index < source.length;) {
+    const character = source[index];
+    if (/\s/.test(character)) {
+      index += 1;
+    } else if (character === "/" && source[index + 1] === "/") {
+      index = source.indexOf("\n", index + 2);
+      if (index === -1) return source.length;
+    } else if (character === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      index = end === -1 ? source.length : end + 2;
+    } else if (character === '"' || character === "'") {
+      index = readQuotedLiteral(source, index, character).end;
+      tokens.push({ kind: "literal", value: "" });
+    } else if (character === "`") {
+      index = readTemplateLiteral(source, index).end;
+      tokens.push({ kind: "template", value: "" });
+    } else if (character === "/" && isRegexStart(tokens)) {
+      index = skipRegexLiteral(source, index);
+      tokens.push({ kind: "regex", value: "" });
+    } else if (isIdentifierStart(character)) {
+      let end = index + 1;
+      while (isIdentifierPart(source[end] ?? "")) end += 1;
+      tokens.push({ kind: "identifier", value: source.slice(index, end) });
+      index = end;
+    } else if (/[0-9]/.test(character)) {
+      let end = index + 1;
+      while (/[A-Za-z0-9._]/.test(source[end] ?? "")) end += 1;
+      tokens.push({ kind: "number", value: source.slice(index, end) });
+      index = end;
+    } else {
+      if (character === "{") depth += 1;
+      if (character === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+      const value = source.slice(index, index + 2) === "=>" ? "=>" : character;
+      tokens.push({ kind: "punctuation", value });
+      index += value.length;
+    }
+  }
+  return source.length;
+}
+
+function readTemplateLiteral(source, start) {
+  let value = "";
+  const expressions = [];
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\") {
+      const escaped = decodeEscape(source, index + 1);
+      value += escaped.value;
+      index = escaped.end - 1;
+      continue;
+    }
+    if (character === "`") {
+      return { end: index + 1, expressions, value };
+    }
+    if (character === "$" && source[index + 1] === "{") {
+      const expressionStart = index + 2;
+      const expressionEnd = findTemplateExpressionEnd(source, expressionStart);
+      expressions.push(source.slice(expressionStart, expressionEnd));
+      index = expressionEnd;
+      continue;
+    }
+    value += character;
+  }
+  return { end: source.length, expressions, value: undefined };
+}
+
+function closesControlCondition(tokens) {
+  let depth = 0;
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (tokens[index].value === ")") depth += 1;
+    if (tokens[index].value === "(") {
+      depth -= 1;
+      if (depth === 0) {
+        const keyword = tokens[index - 1];
+        return (
+          keyword?.kind === "identifier" &&
+          new Set(["catch", "for", "if", "switch", "while", "with"]).has(
+            keyword.value,
+          )
+        );
+      }
+    }
+  }
+  return false;
+}
+
+function isRegexStart(tokens) {
+  const previous = tokens[tokens.length - 1];
+  if (previous === undefined) return true;
+  if (previous.kind === "identifier") {
+    return new Set([
+      "await",
+      "case",
+      "delete",
+      "do",
+      "else",
+      "in",
+      "instanceof",
+      "new",
+      "of",
+      "return",
+      "throw",
+      "typeof",
+      "void",
+      "yield",
+    ]).has(previous.value);
+  }
+  if (previous.value === ")" && closesControlCondition(tokens)) return true;
+  if (
+    previous.kind === "literal" ||
+    previous.kind === "template" ||
+    previous.kind === "number" ||
+    previous.kind === "regex"
+  ) {
+    return false;
+  }
+  return !new Set([")", "]", "}", "++", "--"]).has(previous.value);
+}
+
+function skipRegexLiteral(source, start) {
+  let inCharacterClass = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\") {
+      index += 1;
+    } else if (character === "[") {
+      inCharacterClass = true;
+    } else if (character === "]") {
+      inCharacterClass = false;
+    } else if (character === "/" && !inCharacterClass) {
+      let end = index + 1;
+      while (/[A-Za-z]/.test(source[end] ?? "")) end += 1;
+      return end;
+    }
+  }
+  return source.length;
+}
+
+function lexicalTokens(source) {
+  const tokens = [];
+  for (let index = 0; index < source.length;) {
+    const character = source[index];
+    if (/\s/.test(character)) {
+      index += 1;
+    } else if (character === "/" && source[index + 1] === "/") {
+      index = source.indexOf("\n", index + 2);
+      if (index === -1) break;
+    } else if (character === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      index = end === -1 ? source.length : end + 2;
+    } else if (character === '"' || character === "'") {
+      const literal = readQuotedLiteral(source, index, character);
+      if (literal.value !== undefined) {
+        tokens.push({ kind: "literal", value: literal.value });
+      }
+      index = literal.end;
+    } else if (character === "`") {
+      const literal = readTemplateLiteral(source, index);
+      if (literal.value !== undefined && literal.expressions.length === 0) {
+        tokens.push({ kind: "template", value: literal.value });
+      }
+      for (const expression of literal.expressions) {
+        tokens.push(...lexicalTokens(expression));
+      }
+      index = literal.end;
+    } else if (character === "/" && isRegexStart(tokens)) {
+      index = skipRegexLiteral(source, index);
+      tokens.push({ kind: "regex", value: "" });
+    } else if (isIdentifierStart(character)) {
+      let end = index + 1;
+      while (isIdentifierPart(source[end] ?? "")) end += 1;
+      tokens.push({ kind: "identifier", value: source.slice(index, end) });
+      index = end;
+    } else if (/[0-9]/.test(character)) {
+      let end = index + 1;
+      while (/[A-Za-z0-9._]/.test(source[end] ?? "")) end += 1;
+      tokens.push({ kind: "number", value: source.slice(index, end) });
+      index = end;
+    } else {
+      const value = source.slice(index, index + 2) === "=>" ? "=>" : character;
+      tokens.push({ kind: "punctuation", value });
+      index += value.length;
+    }
+  }
+  return tokens;
+}
+
+function literalSpecifier(token) {
+  return token?.kind === "literal" || token?.kind === "template"
+    ? token.value
     : undefined;
+}
+
+function wrappedLiteralSpecifier(tokens, start) {
+  let index = start;
+  while (tokens[index]?.value === "(") index += 1;
+  return literalSpecifier(tokens[index]);
+}
+
+function staticSpecifier(tokens, start) {
+  const first = literalSpecifier(tokens[start + 1]);
+  if (first !== undefined) return first;
+  for (let index = start + 1; index < tokens.length; index += 1) {
+    if (tokens[index].value === ";") break;
+    if (tokens[index].kind === "identifier" && tokens[index].value === "from") {
+      const specifier = literalSpecifier(tokens[index + 1]);
+      if (specifier !== undefined) return specifier;
+    }
+  }
+  return undefined;
 }
 
 function importSpecifiers(source, file) {
   const specifiers = [];
   const scripts = file.endsWith(".vue") ? vueScripts(source) : [source];
   for (const script of scripts) {
-    const parsed = ts.createSourceFile(
-      file,
-      script,
-      ts.ScriptTarget.Latest,
-      false,
-      scriptKindFor(file),
-    );
-    const visit = (node) => {
-      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-        const specifier = literalSpecifier(node.moduleSpecifier);
+    const tokens = lexicalTokens(script);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      const previous = tokens[index - 1];
+      const next = tokens[index + 1];
+      if (
+        token.kind === "identifier" &&
+        token.value === "import" &&
+        previous?.value !== "." &&
+        next?.value !== "."
+      ) {
+        const dynamic =
+          next?.value === "("
+            ? wrappedLiteralSpecifier(tokens, index + 2)
+            : undefined;
+        const specifier = dynamic ?? staticSpecifier(tokens, index);
+        if (specifier !== undefined) specifiers.push(specifier);
+      } else if (token.kind === "identifier" && token.value === "export") {
+        const specifier = staticSpecifier(tokens, index);
         if (specifier !== undefined) specifiers.push(specifier);
       } else if (
-        ts.isImportEqualsDeclaration(node) &&
-        ts.isExternalModuleReference(node.moduleReference)
+        token.kind === "identifier" &&
+        token.value === "require" &&
+        previous?.value !== "." &&
+        next?.value === "("
       ) {
-        const specifier = literalSpecifier(node.moduleReference.expression);
+        const specifier = wrappedLiteralSpecifier(tokens, index + 2);
         if (specifier !== undefined) specifiers.push(specifier);
-      } else if (
-        ts.isImportTypeNode(node) &&
-        ts.isLiteralTypeNode(node.argument)
-      ) {
-        const specifier = literalSpecifier(node.argument.literal);
-        if (specifier !== undefined) specifiers.push(specifier);
-      } else if (ts.isCallExpression(node)) {
-        const [argument] = node.arguments;
-        const isDynamicImport =
-          node.expression.kind === ts.SyntaxKind.ImportKeyword;
-        const isRequire =
-          ts.isIdentifier(node.expression) &&
-          node.expression.text === "require";
-        const specifier = literalSpecifier(argument);
-        if ((isDynamicImport || isRequire) && specifier !== undefined) {
-          specifiers.push(specifier);
-        }
       }
-      ts.forEachChild(node, visit);
-    };
-    visit(parsed);
+    }
   }
   return specifiers;
 }
