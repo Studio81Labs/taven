@@ -105,10 +105,10 @@ function decodeEscape(source, start) {
         ? ""
         : source.slice(start + 2, end)
       : source.slice(start + 1, end);
-    if (
-      /^[0-9A-Fa-f]{4,6}$/.test(value) &&
-      (!braced || Number.parseInt(value, 16) <= 0x10ffff)
-    ) {
+    const validDigits = braced
+      ? /^[0-9A-Fa-f]{1,6}$/.test(value)
+      : /^[0-9A-Fa-f]{4}$/.test(value);
+    if (validDigits && (!braced || Number.parseInt(value, 16) <= 0x10ffff)) {
       return {
         end: braced ? end + 1 : end,
         value: String.fromCodePoint(Number.parseInt(value, 16)),
