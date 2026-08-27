@@ -10728,10 +10728,9 @@ export type ClaimSlotResolutionStatus =
   | "recovery_pending"
   | "withdrawn";
 
-const cancellableReplacementJobStatuses = new Set([
+const replacementRecoveryJobStatuses = [
   "created",
   "accepted",
-  "slicing",
   "gcode_ready",
   "printing",
   "printed",
@@ -10739,7 +10738,11 @@ const cancellableReplacementJobStatuses = new Set([
   "qc_approved",
   "packed",
   "failed",
-]);
+] as const satisfies readonly JobStatus[];
+
+const cancellableReplacementJobStatuses = new Set<string>(
+  replacementRecoveryJobStatuses,
+);
 
 function requireExactReplacementResolutionSource<S extends string>(
   lifecycle: string,
@@ -11988,18 +11991,7 @@ function requireExactReplacementRecoveryCancellation<S extends string>(
     snapshotJobs,
     context?.replacementRecoveryCancellationJobs,
     context?.replacementRecoveryCancellationJobIds,
-    [
-      "created",
-      "accepted",
-      "slicing",
-      "gcode_ready",
-      "printing",
-      "printed",
-      "photo_submitted",
-      "qc_approved",
-      "packed",
-      "failed",
-    ],
+    replacementRecoveryJobStatuses,
     "cancelled",
     "Job",
     true,

@@ -6155,6 +6155,49 @@ describe("v0 lifecycle policy tables", () => {
     ).toThrow(TransitionGuardError);
   });
 
+  it("rejects the nonexistent slicing state across coordinated replacement Job evidence", () => {
+    const base = contextForTransition(
+      "recovery_pending",
+      "replacement_in_production",
+    );
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        ...commandAnchors(
+          claimSlotResolutionPolicy,
+          "replacement_in_production",
+          "recovery_pending",
+        ),
+        current: "replacement_in_production",
+        target: "recovery_pending",
+        idempotencyKey: "replacement-recovery-nonexistent-slicing-job",
+        context: {
+          ...base,
+          replacementRequiredResourceGroups: [
+            {
+              ...base.replacementRequiredResourceGroups[0],
+              currentReplacementJobStatus: "slicing",
+            },
+          ],
+          replacementRecoveryCancellationExpectedSnapshot: {
+            ...base.replacementRecoveryCancellationExpectedSnapshot,
+            jobs: [
+              {
+                ...base.replacementRecoveryCancellationExpectedSnapshot.jobs[0],
+                status: "slicing",
+              },
+            ],
+          },
+          replacementRecoveryCancellationJobs: [
+            {
+              ...base.replacementRecoveryCancellationJobs[0],
+              previousStatus: "slicing",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it("rejects replacement recovery when the expected Job status differs from the persisted current leaf", () => {
     const base = contextForTransition(
       "recovery_pending",
