@@ -1,5 +1,5 @@
 export class DomainInvariantError extends Error {
-  override readonly name = "DomainInvariantError";
+  override readonly name: string = "DomainInvariantError";
 }
 
 export function assertInvariant(
