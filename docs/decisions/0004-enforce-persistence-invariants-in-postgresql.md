@@ -117,9 +117,9 @@ machine, and node ownership; unique indexes allow each planned key and slot
 only once within its scope, and a partial unique index allows only one active
 reservation set per plan. Terminal sets retain their immutable history without
 preventing a later set from retrying the same planned jobs. Reference slices
-require their immutable print configuration and reference profile to select the
-same quality; candidate creation enforces the equivalent production-profile
-match. Before planning,
+lock and require an active reference profile whose quality matches their
+immutable print configuration; candidate creation enforces the equivalent
+production-profile match. Before planning,
 the union of a candidate's capacity intervals must cover its declared machine
 seconds, and intervals must not overlap within a candidate or across candidates
 assigned to the same machine in one plan. This keeps every accepted plan

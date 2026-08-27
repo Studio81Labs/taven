@@ -1100,15 +1100,40 @@ CREATE FUNCTION taven_validate_reference_slice_quality()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    requested_quality "print_quality";
+    selected_quality "print_quality";
+    selected_state "revision_state";
 BEGIN
-    IF NEW."kind" = 'REFERENCE' AND NOT EXISTS (
-        SELECT 1
-        FROM "print_config_revisions" print_config
-        JOIN "reference_profiles" reference_profile
-          ON reference_profile."id" = NEW."reference_profile_id"
-         AND reference_profile."quality" = print_config."quality"
-        WHERE print_config."id" = NEW."print_config_revision_id"
-    ) THEN
+    IF NEW."kind" <> 'REFERENCE' THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT print_config."quality"
+    INTO requested_quality
+    FROM "print_config_revisions" print_config
+    WHERE print_config."id" = NEW."print_config_revision_id";
+
+    IF NOT FOUND THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT reference_profile."quality", reference_profile."state"
+    INTO selected_quality, selected_state
+    FROM "reference_profiles" reference_profile
+    WHERE reference_profile."id" = NEW."reference_profile_id"
+    FOR SHARE;
+
+    IF NOT FOUND THEN
+        RETURN NEW;
+    END IF;
+
+    IF selected_state <> 'ACTIVE' THEN
+        RAISE EXCEPTION 'reference slice must use an active reference profile'
+            USING ERRCODE = '23514', CONSTRAINT = 'slice_results_reference_profile_active_check';
+    END IF;
+
+    IF selected_quality IS DISTINCT FROM requested_quality THEN
         RAISE EXCEPTION 'reference slice print configuration and reference profile quality must match'
             USING ERRCODE = '23514', CONSTRAINT = 'slice_results_reference_quality_check';
     END IF;

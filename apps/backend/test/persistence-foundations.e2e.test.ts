@@ -82,6 +82,33 @@ async function createCompleteSingleReservationGraph(
   return { foundation, production };
 }
 
+async function createReferenceSlice(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  foundation: PersistenceFoundation,
+  referenceProfileId: string,
+  name: string,
+): Promise<void> {
+  await client.query(
+    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "reference_profile_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+    [
+      fixtures.id(`${name}:slice`),
+      "REFERENCE",
+      `reference-${fixtures.id(`${name}:cache-key`)}`,
+      foundation.modelGeometryId,
+      foundation.printConfigRevisionId,
+      referenceProfileId,
+      1,
+      `slices/${fixtures.id(`${name}:artifact-key`)}`,
+      "9".repeat(64),
+      60,
+      60,
+      "orca",
+      "test",
+    ],
+  );
+}
+
 describe("persistence foundations", () => {
   beforeAll(() => {
     if (!databaseUrl) {
@@ -516,24 +543,53 @@ describe("persistence foundations", () => {
     );
   });
 
-  it("requires reference slices to use a profile for the requested quality", async () => {
+  it("requires reference slices to use an active profile for the requested quality", async () => {
     await inRollbackTransaction(
       "reference-slice-quality",
       async (client, fixtures) => {
         const foundation = await fixtures.createFoundation();
-        const printConfigRevisionId = fixtures.id("fine-print-config");
-        const referenceProfileId = fixtures.id("standard-reference-profile");
-        await fixtures.createRevisionIdentity(
-          printConfigRevisionId,
-          "PRINT_CONFIG",
-        );
+        const referenceProfileId = fixtures.id("fine-reference-profile");
         await fixtures.createRevisionIdentity(
           referenceProfileId,
           "REFERENCE_PROFILE",
         );
         await client.query(
-          'INSERT INTO "print_config_revisions" ("id", "quality", "infill_percent", "layer_height_micrometers", "settings") VALUES ($1, $2, $3, $4, $5::jsonb)',
-          [printConfigRevisionId, "FINE", 20, 200, JSON.stringify({})],
+          'INSERT INTO "reference_profiles" ("id", "material", "quality", "slicer_engine", "slicer_version", "settings", "state", "activated_at") VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)',
+          [
+            referenceProfileId,
+            "PLA",
+            "FINE",
+            "orca",
+            "test",
+            JSON.stringify({}),
+            "ACTIVE",
+            new Date("2026-08-27T12:00:00.000Z"),
+          ],
+        );
+
+        await expect(
+          createReferenceSlice(
+            client,
+            fixtures,
+            foundation,
+            referenceProfileId,
+            "mismatched",
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "slice_results_reference_quality_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "reference-slice-inactive",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const referenceProfileId = fixtures.id("draft-reference-profile");
+        await fixtures.createRevisionIdentity(
+          referenceProfileId,
+          "REFERENCE_PROFILE",
         );
         await client.query(
           'INSERT INTO "reference_profiles" ("id", "material", "quality", "slicer_engine", "slicer_version", "settings") VALUES ($1, $2, $3, $4, $5, $6::jsonb)',
@@ -548,28 +604,44 @@ describe("persistence foundations", () => {
         );
 
         await expect(
-          client.query(
-            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "reference_profile_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
-            [
-              fixtures.id("mismatched-reference-slice"),
-              "REFERENCE",
-              `reference-${fixtures.id("cache-key")}`,
-              foundation.modelGeometryId,
-              printConfigRevisionId,
-              referenceProfileId,
-              1,
-              `slices/${fixtures.id("artifact-key")}`,
-              "9".repeat(64),
-              60,
-              60,
-              "orca",
-              "test",
-            ],
+          createReferenceSlice(
+            client,
+            fixtures,
+            foundation,
+            referenceProfileId,
+            "inactive",
           ),
         ).rejects.toMatchObject({
           code: "23514",
-          constraint: "slice_results_reference_quality_check",
+          constraint: "slice_results_reference_profile_active_check",
         });
+      },
+    );
+
+    await inRollbackTransaction(
+      "reference-slice-active",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const referenceProfile = await client.query<{ id: string }>(
+          'SELECT "id" FROM "reference_profiles" WHERE "material" = $1 AND "quality" = $2 AND "state" = $3 ORDER BY "id" LIMIT 1',
+          ["PLA", "STANDARD", "ACTIVE"],
+        );
+        const referenceProfileId = referenceProfile.rows[0]?.id;
+        if (!referenceProfileId) {
+          throw new Error(
+            "foundation machine profile has no reference profile",
+          );
+        }
+
+        await expect(
+          createReferenceSlice(
+            client,
+            fixtures,
+            foundation,
+            referenceProfileId,
+            "active",
+          ),
+        ).resolves.toBeUndefined();
       },
     );
   });
