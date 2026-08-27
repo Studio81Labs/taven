@@ -175,6 +175,46 @@ describe("checkBoundaries", () => {
     }
   });
 
+  it("preserves HTML comment delimiters inside Vue scripts", async () => {
+    const root = await fixture();
+    try {
+      await writeFile(
+        path.join(root, "packages/core/package.json"),
+        JSON.stringify({}),
+      );
+      await writeFile(
+        path.join(root, "packages/core/src/component.vue"),
+        [
+          '<!-- <script>import "@prisma/commented";</script> -->',
+          '<script setup lang="ts">',
+          'const literalStart = "<!--";',
+          'import "@prisma/client";',
+          'const literalEnd = "-->";',
+          "const regexpStart = /<!--/;",
+          'void import("bullmq");',
+          "const regexpEnd = /-->/;",
+          "const templateStart = `<!--`;",
+          'void require("redis");',
+          "const templateEnd = `-->`;",
+          "</script>",
+          "<!-- an actual SFC comment between script blocks -->",
+          "<script>",
+          'export * from "@nestjs/common";',
+          "</script>",
+        ].join("\n"),
+      );
+
+      expect(await checkBoundaries(root)).toEqual([
+        "packages/core/src/component.vue imports forbidden '@prisma/client'",
+        "packages/core/src/component.vue imports forbidden 'bullmq'",
+        "packages/core/src/component.vue imports forbidden 'redis'",
+        "packages/core/src/component.vue imports forbidden '@nestjs/common'",
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("detects real import forms in TypeScript and Vue scripts", async () => {
     const root = await fixture();
     try {

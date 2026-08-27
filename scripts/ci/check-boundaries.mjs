@@ -4,13 +4,12 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 function vueScripts(source) {
-  const withoutHtmlComments = source.replace(/<!--[\s\S]*?-->/g, "");
   return Array.from(
-    withoutHtmlComments.matchAll(
-      /<script(?:\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi,
+    source.matchAll(
+      /<!--[\s\S]*?-->|<script(?:\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi,
     ),
     (match) => match[1],
-  );
+  ).filter((script) => script !== undefined);
 }
 
 const identifierStartPattern = /^[$_\p{ID_Start}]$/u;
