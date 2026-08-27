@@ -2071,6 +2071,33 @@ const permittedContext = {
   qcDecisionRecordResultId: "qc-decision-result-1",
   qcDecisionCompleted: true,
   qcDecisionAtomic: true,
+  qcRejectionReplacementRequestId: "replacement-request-1",
+  qcRejectionReplacementCreatedAt: Instant.parse("2026-02-15T00:00:00.000Z"),
+  qcRejectionReplacementDeadlineAt: Instant.parse("2026-02-22T00:00:00.000Z"),
+  qcRejectionReplacementRequest: {
+    id: "replacement-request-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    qcDecisionId: "qc-decision-1",
+    previousJobStatus: "photo_submitted",
+    targetJobStatus: "qc_rejected",
+    status: "open",
+    createdAt: Instant.parse("2026-02-15T00:00:00.000Z"),
+    deadlineAt: Instant.parse("2026-02-22T00:00:00.000Z"),
+    sourceJobResultId: "photo-submission-result-1",
+    sourceStateCommandKey: "photo-submission-command-1",
+    resultId: "qc-decision-result-1",
+    immutable: true,
+  },
+  qcRejectionReplacementJobResultId: "qc-decision-result-1",
+  qcRejectionResourceSettlementResultId: "qc-decision-result-1",
+  qcRejectionLabelBarrierResultId: "qc-decision-result-1",
+  qcRejectionReplacementRequestResultId: "qc-decision-result-1",
+  qcRejectionReplacementDeadlineResultId: "qc-decision-result-1",
+  qcRejectionReplacementCompleted: true,
+  qcRejectionReplacementAtomic: true,
   shipmentStatus: "returned",
   custodyConfirmed: true,
   freshQcPassed: true,
@@ -4149,6 +4176,7 @@ function contextForTransition(target: string, current?: string) {
             ...permittedContext.qcDecision,
             outcome: "rejected",
             targetJobStatus: "qc_rejected",
+            replacementRequestId: "replacement-request-1",
           }
         : permittedContext.qcDecision,
     replacementRequiredResourceGroups:
@@ -5353,6 +5381,7 @@ function commandAnchors(
     return {
       aggregateId: "job-1",
       currentStateCommandKey: "photo-submission-command-1",
+      currentStateResultId: "photo-submission-result-1",
     };
   }
   if (
@@ -21430,6 +21459,7 @@ describe("v0 lifecycle policy tables", () => {
       transition(jobPolicy, {
         aggregateId: "job-1",
         currentStateCommandKey: "photo-submission-command-1",
+        currentStateResultId: "photo-submission-result-1",
         current: "photo_submitted",
         target: "qc_approved",
         idempotencyKey: `qc-approval-${field}`,
@@ -21485,6 +21515,7 @@ describe("v0 lifecycle policy tables", () => {
         transition(jobPolicy, {
           aggregateId: "job-1",
           currentStateCommandKey: "photo-submission-command-1",
+          currentStateResultId: "photo-submission-result-1",
           current: "photo_submitted",
           target: "qc_approved",
           idempotencyKey: `qc-approval-${recordName}-${field}`,
@@ -21503,6 +21534,7 @@ describe("v0 lifecycle policy tables", () => {
       transition(jobPolicy, {
         aggregateId: "job-1",
         currentStateCommandKey: "photo-submission-command-1",
+        currentStateResultId: "photo-submission-result-1",
         current: "photo_submitted",
         target: "qc_approved",
         idempotencyKey: "qc-approval-foreign-substitution",
@@ -21577,10 +21609,34 @@ describe("v0 lifecycle policy tables", () => {
         transition(jobPolicy, {
           aggregateId,
           currentStateCommandKey,
+          currentStateResultId: "photo-submission-result-1",
           current: "photo_submitted",
           target: "qc_approved",
           idempotencyKey: `qc-approval-command-anchor-${aggregateId}-${currentStateCommandKey}`,
           context: contextForTransition("qc_approved", "photo_submitted"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["qc_approved", undefined],
+    ["qc_approved", "  "],
+    ["qc_approved", "another-submission-result"],
+    ["qc_rejected", undefined],
+    ["qc_rejected", "  "],
+    ["qc_rejected", "another-submission-result"],
+  ] as const)(
+    "rejects %s with an unselected photo-submitted Job result (%s)",
+    (target, currentStateResultId) => {
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "photo_submitted", target),
+          currentStateResultId,
+          current: "photo_submitted",
+          target,
+          idempotencyKey: `qc-command-result-${target}-${String(currentStateResultId)}`,
+          context: contextForTransition(target, "photo_submitted"),
         }),
       ).toThrow(TransitionGuardError);
     },
@@ -21592,6 +21648,7 @@ describe("v0 lifecycle policy tables", () => {
       transition(jobPolicy, {
         aggregateId: "job-1",
         currentStateCommandKey: "photo-submission-command-1",
+        currentStateResultId: "photo-submission-result-1",
         current: "photo_submitted",
         target: "qc_rejected",
         idempotencyKey: "qc-rejection-detached-photo-submission",
@@ -21600,6 +21657,144 @@ describe("v0 lifecycle policy tables", () => {
           qcDecisionPhotoAsset: {
             ...context.qcDecisionPhotoAsset,
             submissionResultId: "another-submission-result",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["qcRejectionReplacementRequestId", undefined],
+    ["qcRejectionReplacementRequestId", "  "],
+    ["qcRejectionReplacementRequestId", "replacement-request-2"],
+    ["qcRejectionReplacementCreatedAt", "not-an-instant"],
+    ["qcRejectionReplacementDeadlineAt", "not-an-instant"],
+    ["qcRejectionReplacementRequest", undefined],
+    ["qcRejectionReplacementJobResultId", "another-result"],
+    ["qcRejectionResourceSettlementResultId", "another-result"],
+    ["qcRejectionLabelBarrierResultId", "another-result"],
+    ["qcRejectionReplacementRequestResultId", "another-result"],
+    ["qcRejectionReplacementDeadlineResultId", "another-result"],
+    ["qcRejectionReplacementCompleted", false],
+    ["qcRejectionReplacementAtomic", false],
+  ] as const)(
+    "rejects QC rejection with invalid replacement evidence %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "photo_submitted", "qc_rejected"),
+          current: "photo_submitted",
+          target: "qc_rejected",
+          idempotencyKey: `qc-rejection-replacement-${field}`,
+          context: {
+            ...contextForTransition("qc_rejected", "photo_submitted"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "replacement-request-2"],
+    ["jobId", "job-2"],
+    ["orderId", "order-2"],
+    ["phaseId", "phase-2"],
+    ["productionReservationId", "production-reservation-2"],
+    ["qcDecisionId", "qc-decision-2"],
+    ["previousJobStatus", "printed"],
+    ["targetJobStatus", "failed"],
+    ["status", "pending_capacity"],
+    ["createdAt", Instant.parse("2026-02-16T00:00:00.000Z")],
+    ["deadlineAt", Instant.parse("2026-02-23T00:00:00.000Z")],
+    ["sourceJobResultId", "another-submission-result"],
+    ["sourceStateCommandKey", "another-command"],
+    ["resultId", "another-result"],
+    ["immutable", false],
+  ] as const)(
+    "rejects QC rejection with invalid replacement request %s",
+    (field, value) => {
+      const context = contextForTransition("qc_rejected", "photo_submitted");
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "photo_submitted", "qc_rejected"),
+          current: "photo_submitted",
+          target: "qc_rejected",
+          idempotencyKey: `qc-rejection-request-${field}`,
+          context: {
+            ...context,
+            qcRejectionReplacementRequest: {
+              ...context.qcRejectionReplacementRequest,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a non-positive QC replacement deadline", () => {
+    const context = contextForTransition("qc_rejected", "photo_submitted");
+    const deadlineAt = context.qcRejectionReplacementCreatedAt;
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "photo_submitted", "qc_rejected"),
+        current: "photo_submitted",
+        target: "qc_rejected",
+        idempotencyKey: "qc-rejection-non-positive-deadline",
+        context: {
+          ...context,
+          qcRejectionReplacementDeadlineAt: deadlineAt,
+          qcRejectionReplacementRequest: {
+            ...context.qcRejectionReplacementRequest,
+            deadlineAt,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a QC replacement request detached from its decision", () => {
+    const context = contextForTransition("qc_rejected", "photo_submitted");
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "photo_submitted", "qc_rejected"),
+        current: "photo_submitted",
+        target: "qc_rejected",
+        idempotencyKey: "qc-rejection-detached-replacement-decision",
+        context: {
+          ...context,
+          qcDecision: {
+            ...context.qcDecision,
+            replacementRequestId: "replacement-request-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a coordinated foreign replacement request behind the selected QC Job", () => {
+    const context = contextForTransition("qc_rejected", "photo_submitted");
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "photo_submitted", "qc_rejected"),
+        current: "photo_submitted",
+        target: "qc_rejected",
+        idempotencyKey: "qc-rejection-coordinated-foreign-request",
+        context: {
+          ...context,
+          qcRejectionReplacementRequestId: "replacement-request-2",
+          qcDecision: {
+            ...context.qcDecision,
+            replacementRequestId: "replacement-request-2",
+          },
+          qcRejectionReplacementRequest: {
+            ...context.qcRejectionReplacementRequest,
+            id: "replacement-request-2",
+            jobId: "job-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+            productionReservationId: "production-reservation-2",
           },
         },
       }),
@@ -21618,6 +21813,7 @@ describe("v0 lifecycle policy tables", () => {
         transition(jobPolicy, {
           aggregateId: "job-1",
           currentStateCommandKey: "photo-submission-command-1",
+          currentStateResultId: "photo-submission-result-1",
           current: "photo_submitted",
           target: "qc_approved",
           idempotencyKey: `qc-result-role-${field}`,
@@ -21636,6 +21832,7 @@ describe("v0 lifecycle policy tables", () => {
       transition(jobPolicy, {
         aggregateId: "job-1",
         currentStateCommandKey: "photo-submission-command-1",
+        currentStateResultId: "photo-submission-result-1",
         current: "photo_submitted",
         target: "qc_approved",
         idempotencyKey: "qc-result-role-photo-rewrite",
@@ -21656,6 +21853,7 @@ describe("v0 lifecycle policy tables", () => {
       transition(jobPolicy, {
         aggregateId: "job-1",
         currentStateCommandKey: "photo-submission-command-1",
+        currentStateResultId: "photo-submission-result-1",
         current: "photo_submitted",
         target: "qc_approved",
         idempotencyKey: "qc-result-role-consistent-decision",
@@ -21966,6 +22164,7 @@ describe("v0 lifecycle policy tables", () => {
         transition(jobPolicy, {
           aggregateId: "job-1",
           currentStateCommandKey: "photo-submission-command-1",
+          currentStateResultId: "photo-submission-result-1",
           current: "photo_submitted",
           target: "qc_rejected",
           idempotencyKey: `qc-rejection-settlement-${field}`,

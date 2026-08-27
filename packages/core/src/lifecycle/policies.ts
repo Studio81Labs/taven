@@ -4451,6 +4451,7 @@ function requireExactQcDecision<S extends string>(
   const resultId = context?.qcDecisionResultId;
   const submittedResultId = context?.qcDecisionSubmittedJobResultId;
   const currentStateCommandKey = command.currentStateCommandKey;
+  const currentStateResultId = command.currentStateResultId;
   const targetStatus = outcome === "approved" ? "qc_approved" : "qc_rejected";
   const expectedJob = record(context?.qcDecisionExpectedJob);
   const photoAsset = record(context?.qcDecisionPhotoAsset);
@@ -4467,7 +4468,9 @@ function requireExactQcDecision<S extends string>(
     !nonBlank(resultId) ||
     !nonBlank(submittedResultId) ||
     !nonBlank(currentStateCommandKey) ||
+    !nonBlank(currentStateResultId) ||
     command.aggregateId !== jobId ||
+    currentStateResultId !== submittedResultId ||
     context?.qcDecisionSubmittedStateCommandKey !== currentStateCommandKey ||
     context?.qcDecisionJobId !== jobId ||
     context?.qcDecisionOrderId !== orderId ||
@@ -4527,6 +4530,9 @@ function requireExactQcDecision<S extends string>(
     decision.targetJobStatus !== targetStatus ||
     decision.resultId !== resultId ||
     decision.sourceStateCommandKey !== currentStateCommandKey ||
+    (outcome === "rejected" &&
+      decision.replacementRequestId !==
+        context?.qcRejectionReplacementRequestId) ||
     decision.immutable !== true ||
     context?.qcDecisionJobResultId !== resultId ||
     context?.qcDecisionPhotoAssetResultId !== submittedResultId ||
@@ -4540,6 +4546,78 @@ function requireExactQcDecision<S extends string>(
       command.current,
       command.target,
       "QC decision requires one exact immutable decision and atomic result",
+    );
+  }
+}
+
+function requireExactQcRejectionReplacement<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const value = context?.qcRejectionReplacementRequest;
+  const request =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobId = context?.jobId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const reservationId = context?.productionReservationId;
+  const decisionId = context?.qcDecisionId;
+  const resultId = context?.qcDecisionResultId;
+  const requestId = context?.qcRejectionReplacementRequestId;
+  const sourceResultId = context?.qcDecisionSubmittedJobResultId;
+  const sourceStateCommandKey = command.currentStateCommandKey;
+  const createdAt = context?.qcRejectionReplacementCreatedAt;
+  const deadlineAt = context?.qcRejectionReplacementDeadlineAt;
+  if (
+    command.current !== "photo_submitted" ||
+    command.target !== "qc_rejected" ||
+    !nonBlank(jobId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(reservationId) ||
+    !nonBlank(decisionId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(requestId) ||
+    !nonBlank(sourceResultId) ||
+    !nonBlank(sourceStateCommandKey) ||
+    !(createdAt instanceof Instant) ||
+    !(deadlineAt instanceof Instant) ||
+    deadlineAt.compare(createdAt) <= 0 ||
+    request?.id !== requestId ||
+    request.jobId !== jobId ||
+    request.orderId !== orderId ||
+    request.phaseId !== phaseId ||
+    request.productionReservationId !== reservationId ||
+    request.qcDecisionId !== decisionId ||
+    request.previousJobStatus !== "photo_submitted" ||
+    request.targetJobStatus !== "qc_rejected" ||
+    request.status !== "open" ||
+    !(request.createdAt instanceof Instant) ||
+    !request.createdAt.equals(createdAt) ||
+    !(request.deadlineAt instanceof Instant) ||
+    !request.deadlineAt.equals(deadlineAt) ||
+    request.sourceJobResultId !== sourceResultId ||
+    request.sourceStateCommandKey !== sourceStateCommandKey ||
+    request.resultId !== resultId ||
+    request.immutable !== true ||
+    context?.qcRejectionReplacementJobResultId !== resultId ||
+    context?.qcRejectionResourceSettlementResultId !== resultId ||
+    context?.qcRejectionLabelBarrierResultId !== resultId ||
+    context?.qcRejectionReplacementRequestResultId !== resultId ||
+    context?.qcRejectionReplacementDeadlineResultId !== resultId ||
+    context?.qcRejectionReplacementCompleted !== true ||
+    context?.qcRejectionReplacementAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "QC rejection must create the exact Job replacement request and deadline in the decision result",
     );
   }
 }
@@ -4815,6 +4893,12 @@ function requireJobReplacementObligation<S extends string>(
     "replacementDeadlineSet",
     "the failed or rejected job requires a replacement deadline",
   );
+  if (
+    command.current === "photo_submitted" &&
+    command.target === "qc_rejected"
+  ) {
+    requireExactQcRejectionReplacement(lifecycle, command);
+  }
 }
 
 function requireAtomicPlannedShipmentCancellation<S extends string>(
