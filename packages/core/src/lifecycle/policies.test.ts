@@ -306,6 +306,70 @@ const permittedContext = {
   balancePaymentScheduleComplete: true,
   balanceDueAtSet: true,
   balancePaymentDeadlineSetupAtomic: true,
+  balanceDeadlineSetupResultId: "balance-deadline-result-1",
+  balanceDeadlineSetupOrderId: "order-1",
+  balanceDeadlineSetupPhaseId: "phase-1",
+  balanceDeadlineSetupPaymentId: "payment-1",
+  balanceDeadlineSetupScheduleId: "balance-schedule-1",
+  balanceDeadlineSetupCreatedAt: Instant.parse("2026-01-01T00:00:00.000Z"),
+  balanceDeadlineSetupQcApprovedAt: Instant.parse("2026-01-01T00:00:00.000Z"),
+  balanceDeadlineSetupPaymentDays: 1,
+  balanceDueAt: Instant.parse("2026-01-02T00:00:00.000Z"),
+  balanceDeadlineSetupOrderPreviousStatus: "qc_passed",
+  balanceDeadlineSetupOrderTargetStatus: "awaiting_balance",
+  balanceDeadlineSetupPhasePreviousStatus: "qc_passed",
+  balanceDeadlineSetupPhaseTargetStatus: "qc_passed",
+  balanceDeadlineSetupOrderResultId: "balance-deadline-result-1",
+  balanceDeadlineSetupPhaseResultId: "balance-deadline-result-1",
+  balanceDeadlineSetupPaymentResultId: "balance-deadline-result-1",
+  balanceDeadlineSetupScheduleResultId: "balance-deadline-result-1",
+  balanceDeadlineSetupDeadlineResultId: "balance-deadline-result-1",
+  balanceDeadlineSetupOrder: {
+    id: "order-1",
+    phaseId: "phase-1",
+    balancePaymentId: "payment-1",
+    balanceDeadlineScheduleId: "balance-schedule-1",
+    qcApprovedAt: Instant.parse("2026-01-01T00:00:00.000Z"),
+    balancePaymentDays: 1,
+    previousStatus: "qc_passed",
+    targetStatus: "awaiting_balance",
+    resultId: "balance-deadline-result-1",
+  },
+  balanceDeadlineSetupPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    previousStatus: "qc_passed",
+    targetStatus: "qc_passed",
+    resultId: "balance-deadline-result-1",
+  },
+  balanceDeadlineSetupPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "balance",
+    status: "pending",
+    resultId: "balance-deadline-result-1",
+  },
+  balanceDeadlineSetupSchedule: {
+    id: "balance-schedule-1",
+    paymentId: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    dueAt: Instant.parse("2026-01-02T00:00:00.000Z"),
+    status: "scheduled",
+    immutable: true,
+    resultId: "balance-deadline-result-1",
+  },
+  balanceDeadlineSetupDeadline: {
+    orderId: "order-1",
+    phaseId: "phase-1",
+    paymentId: "payment-1",
+    scheduleId: "balance-schedule-1",
+    dueAt: Instant.parse("2026-01-02T00:00:00.000Z"),
+    resultId: "balance-deadline-result-1",
+  },
+  balanceDeadlineSetupCompleted: true,
+  balanceDeadlineSetupAtomic: true,
   completeShipmentReadiness: true,
   shipmentReadinessResultId: "shipment-readiness-result-1",
   shipmentReadinessOrderId: "order-1",
@@ -986,6 +1050,190 @@ const permittedContext = {
   ],
   replacementRequiredSlotSetComplete: true,
   replacementSetupAtomic: true,
+  replacementRecoveryCancellationResultId: "replacement-cancellation-result-1",
+  replacementRecoveryCancellationExpectedSnapshotId:
+    "replacement-cancellation-expected-1",
+  replacementRecoveryCancellationExpectedSnapshot: {
+    id: "replacement-cancellation-expected-1",
+    immutable: true,
+    claimId: "claim-1",
+    resolutionId: "claim-resolution-1",
+    slotId: "claim-slot-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    replacementSetId: "replacement-set-1",
+    resolutionPreviousStatus: "replacement_in_production",
+    resolutionTargetStatus: "recovery_pending",
+    requests: [
+      {
+        id: "replacement-request-1",
+        slotIds: ["claim-slot-1"],
+        claimId: "claim-1",
+        resolutionId: "claim-resolution-1",
+        replacementSetId: "replacement-set-1",
+        status: "open",
+      },
+    ],
+    reservations: [
+      {
+        id: "replacement-reservation-1",
+        slotIds: ["claim-slot-1"],
+        claimId: "claim-1",
+        resolutionId: "claim-resolution-1",
+        replacementSetId: "replacement-set-1",
+        status: "active",
+      },
+    ],
+    shipments: [
+      {
+        id: "replacement-shipment-1",
+        slotIds: ["claim-slot-1"],
+        claimId: "claim-1",
+        resolutionId: "claim-resolution-1",
+        replacementSetId: "replacement-set-1",
+        status: "label_created",
+        labelId: "replacement-label-1",
+        labelStatus: "created",
+        providerTransactionId: "replacement-provider-transaction-1",
+      },
+    ],
+    jobs: [
+      {
+        id: "replacement-job-1",
+        slotIds: ["claim-slot-1"],
+        claimId: "claim-1",
+        resolutionId: "claim-resolution-1",
+        replacementSetId: "replacement-set-1",
+        status: "printing",
+        currentReplacementJobLineageLeaf: true,
+      },
+    ],
+    authorizations: [
+      {
+        id: "replacement-authorization-1",
+        claimId: "claim-1",
+        resolutionId: "claim-resolution-1",
+        replacementSetId: "replacement-set-1",
+        shipmentIds: ["replacement-shipment-1"],
+        status: "issued",
+      },
+    ],
+  },
+  replacementRecoveryCancellationClaimId: "claim-1",
+  replacementRecoveryCancellationResolutionId: "claim-resolution-1",
+  replacementRecoveryCancellationSlotId: "claim-slot-1",
+  replacementRecoveryCancellationOrderId: "order-1",
+  replacementRecoveryCancellationPhaseId: "phase-1",
+  replacementRecoveryCancellationSetId: "replacement-set-1",
+  replacementRecoveryCancellationResolutionPreviousStatus:
+    "replacement_in_production",
+  replacementRecoveryCancellationResolutionTargetStatus: "recovery_pending",
+  replacementRecoveryCancellationClaimResultId:
+    "replacement-cancellation-result-1",
+  replacementRecoveryCancellationResolutionResultId:
+    "replacement-cancellation-result-1",
+  replacementRecoveryCancellationRequestSetResultId:
+    "replacement-cancellation-result-1",
+  replacementRecoveryCancellationReservationSetResultId:
+    "replacement-cancellation-result-1",
+  replacementRecoveryCancellationShipmentSetResultId:
+    "replacement-cancellation-result-1",
+  replacementRecoveryCancellationJobSetResultId:
+    "replacement-cancellation-result-1",
+  replacementRecoveryCancellationAuthorizationResultId:
+    "replacement-cancellation-result-1",
+  replacementRecoveryCancellationLabelSetResultId:
+    "replacement-cancellation-result-1",
+  replacementRecoveryCancellationRequestIds: ["replacement-request-1"],
+  replacementRecoveryCancellationRequests: [
+    {
+      id: "replacement-request-1",
+      slotIds: ["claim-slot-1"],
+      claimId: "claim-1",
+      resolutionId: "claim-resolution-1",
+      replacementSetId: "replacement-set-1",
+      previousStatus: "open",
+      targetStatus: "cancelled",
+      resultId: "replacement-cancellation-result-1",
+    },
+  ],
+  replacementRecoveryCancellationReservationIds: ["replacement-reservation-1"],
+  replacementRecoveryCancellationReservations: [
+    {
+      id: "replacement-reservation-1",
+      slotIds: ["claim-slot-1"],
+      claimId: "claim-1",
+      resolutionId: "claim-resolution-1",
+      replacementSetId: "replacement-set-1",
+      previousStatus: "active",
+      targetStatus: "released",
+      resultId: "replacement-cancellation-result-1",
+    },
+  ],
+  replacementRecoveryCancellationShipmentIds: ["replacement-shipment-1"],
+  replacementRecoveryCancellationShipments: [
+    {
+      id: "replacement-shipment-1",
+      slotIds: ["claim-slot-1"],
+      claimId: "claim-1",
+      resolutionId: "claim-resolution-1",
+      replacementSetId: "replacement-set-1",
+      previousStatus: "label_created",
+      targetStatus: "cancelled",
+      labelId: "replacement-label-1",
+      providerTransactionId: "replacement-provider-transaction-1",
+      cancellationIntermediateStatus: "cancellation_pending",
+      providerVoidStatus: "succeeded",
+      providerVoidAuthenticated: true,
+      providerVoidVerified: true,
+      providerVoidResultId: "replacement-cancellation-result-1",
+      resultId: "replacement-cancellation-result-1",
+    },
+  ],
+  replacementRecoveryCancellationJobIds: ["replacement-job-1"],
+  replacementRecoveryCancellationJobs: [
+    {
+      id: "replacement-job-1",
+      slotIds: ["claim-slot-1"],
+      claimId: "claim-1",
+      resolutionId: "claim-resolution-1",
+      replacementSetId: "replacement-set-1",
+      previousStatus: "printing",
+      targetStatus: "cancelled",
+      currentReplacementJobLineageLeaf: true,
+      resultId: "replacement-cancellation-result-1",
+    },
+  ],
+  replacementRecoveryCancellationAuthorizationIds: [
+    "replacement-authorization-1",
+  ],
+  replacementRecoveryCancellationAuthorizations: [
+    {
+      id: "replacement-authorization-1",
+      claimId: "claim-1",
+      resolutionId: "claim-resolution-1",
+      replacementSetId: "replacement-set-1",
+      shipmentIds: ["replacement-shipment-1"],
+      previousStatus: "issued",
+      targetStatus: "invalidated",
+      resultId: "replacement-cancellation-result-1",
+    },
+  ],
+  replacementRecoveryCancellationLabelIds: ["replacement-label-1"],
+  replacementRecoveryCancellationLabels: [
+    {
+      id: "replacement-label-1",
+      shipmentId: "replacement-shipment-1",
+      claimId: "claim-1",
+      resolutionId: "claim-resolution-1",
+      replacementSetId: "replacement-set-1",
+      previousStatus: "created",
+      targetStatus: "invalidated",
+      resultId: "replacement-cancellation-result-1",
+    },
+  ],
+  replacementRecoveryCancellationCompleted: true,
+  replacementRecoveryCancellationAtomic: true,
   replacementFulfilmentAuthorizationConsumed: true,
   replacementFulfilmentHandoffCompleted: true,
   replacementHandoffResultId: "replacement-handoff-result-1",
@@ -1244,6 +1492,36 @@ const permittedContext = {
   providerEventVerified: true,
   currentRemedyShipmentLineageLeafId: "shipment-1",
   currentRemedyShipmentLineageLeafStatus: "delivered",
+  remedyIncidentResultId: "remedy-incident-result-1",
+  remedyIncidentKind: "reship",
+  remedyIncidentClaimId: "claim-1",
+  remedyIncidentResolutionId: "claim-resolution-1",
+  remedyIncidentSlotId: "claim-slot-1",
+  remedyIncidentOrderId: "order-1",
+  remedyIncidentPhaseId: "phase-1",
+  remedyIncidentResolutionPreviousStatus: "reship_shipped",
+  remedyIncidentResolutionTargetStatus: "recovery_pending",
+  remedyIncidentShipmentId: "shipment-1",
+  remedyIncidentLineageLeafId: "shipment-1",
+  remedyIncidentShipmentClaimId: "claim-1",
+  remedyIncidentShipmentResolutionId: "claim-resolution-1",
+  remedyIncidentShipmentSlotId: "claim-slot-1",
+  remedyIncidentShipmentOrderId: "order-1",
+  remedyIncidentShipmentPhaseId: "phase-1",
+  remedyIncidentCurrentLineageLeaf: true,
+  remedyIncidentShipmentPreviousStatus: "in_transit",
+  remedyIncidentShipmentTargetStatus: "lost",
+  remedyIncidentProviderEventId: "shipment-provider-event-1",
+  remedyIncidentProviderEventShipmentId: "shipment-1",
+  remedyIncidentProviderTransactionId: "shipment-provider-transaction-1",
+  remedyIncidentClaimResultId: "remedy-incident-result-1",
+  remedyIncidentResolutionResultId: "remedy-incident-result-1",
+  remedyIncidentShipmentResultId: "remedy-incident-result-1",
+  remedyIncidentLineageResultId: "remedy-incident-result-1",
+  remedyIncidentProviderEventResultId: "remedy-incident-result-1",
+  remedyIncidentProviderTransactionResultId: "remedy-incident-result-1",
+  remedyIncidentCompleted: true,
+  remedyIncidentAtomic: true,
   remedyDeliveryResultId: "remedy-delivery-result-1",
   remedyDeliveryKind: "reship",
   remedyDeliveryClaimId: "claim-1",
@@ -1583,6 +1861,13 @@ function contextForTransition(target: string, current?: string) {
         : "actual_recorded";
   return {
     ...permittedContext,
+    replacementRequiredResourceGroups:
+      current === "replacement_in_production"
+        ? permittedContext.replacementRequiredResourceGroups.map((group) => ({
+            ...group,
+            currentReplacementJobStatus: "printing",
+          }))
+        : permittedContext.replacementRequiredResourceGroups,
     expectedCompletionFulfilmentSlotIds:
       target === "partially_fulfilled" ? ["slot-1", "slot-2"] : ["slot-1"],
     completionFulfilmentSlotOutcomes:
@@ -1673,6 +1958,19 @@ function contextForTransition(target: string, current?: string) {
       target === "delivered_reship" || target === "delivered_reprint"
         ? target
         : permittedContext.remedyDeliveryResolutionTargetStatus,
+    remedyIncidentKind:
+      remedyIncident && current === "replacement_shipped"
+        ? "reprint"
+        : permittedContext.remedyIncidentKind,
+    remedyIncidentResolutionPreviousStatus: remedyIncident
+      ? current
+      : permittedContext.remedyIncidentResolutionPreviousStatus,
+    remedyIncidentResolutionTargetStatus: remedyIncident
+      ? "recovery_pending"
+      : permittedContext.remedyIncidentResolutionTargetStatus,
+    remedyIncidentShipmentTargetStatus: remedyIncident
+      ? "lost"
+      : permittedContext.remedyIncidentShipmentTargetStatus,
     handoffShipmentPreviousStatus:
       unauthorizedHandoffReconciliation ||
       (current === "cancellation_pending" && target === "handed_over")
@@ -1839,6 +2137,441 @@ describe("v0 lifecycle policy tables", () => {
         }),
       ),
     ).toBe("INVALID_TRANSITION");
+  });
+
+  it("enters replacement recovery only after cancelling the exact complete replacement set", () => {
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "recovery_pending",
+        idempotencyKey: "replacement-recovery-cancellation-complete",
+        context: contextForTransition(
+          "recovery_pending",
+          "replacement_in_production",
+        ),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "replacement_in_production",
+      current: "recovery_pending",
+    });
+  });
+
+  it.each([
+    ["replacementRecoveryCancellationResultId", " "],
+    ["replacementRecoveryCancellationExpectedSnapshotId", " "],
+    ["replacementRecoveryCancellationClaimId", "sibling-claim"],
+    ["replacementRecoveryCancellationResolutionId", "sibling-resolution"],
+    ["replacementRecoveryCancellationSlotId", "sibling-slot"],
+    ["replacementRecoveryCancellationOrderId", "another-order"],
+    ["replacementRecoveryCancellationPhaseId", "another-phase"],
+    ["replacementRecoveryCancellationSetId", "another-set"],
+    [
+      "replacementRecoveryCancellationResolutionPreviousStatus",
+      "reprint_pending",
+    ],
+    ["replacementRecoveryCancellationResolutionTargetStatus", "refund_pending"],
+    ["replacementRecoveryCancellationClaimResultId", "another-result"],
+    ["replacementRecoveryCancellationResolutionResultId", "another-result"],
+    ["replacementRecoveryCancellationRequestSetResultId", "another-result"],
+    ["replacementRecoveryCancellationReservationSetResultId", "another-result"],
+    ["replacementRecoveryCancellationShipmentSetResultId", "another-result"],
+    ["replacementRecoveryCancellationJobSetResultId", "another-result"],
+    ["replacementRecoveryCancellationAuthorizationResultId", "another-result"],
+    ["replacementRecoveryCancellationLabelSetResultId", "another-result"],
+    ["replacementRecoveryCancellationRequestIds", []],
+    ["replacementRecoveryCancellationReservationIds", []],
+    ["replacementRecoveryCancellationShipmentIds", []],
+    ["replacementRecoveryCancellationJobIds", []],
+    ["replacementRecoveryCancellationAuthorizationIds", []],
+    ["replacementRecoveryCancellationLabelIds", []],
+    ["replacementRecoveryCancellationCompleted", false],
+    ["replacementRecoveryCancellationAtomic", false],
+  ] as const)(
+    "rejects replacement recovery with invalid cancellation proof (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "replacement_in_production",
+          target: "recovery_pending",
+          idempotencyKey: `replacement-recovery-invalid-${field}`,
+          context: {
+            ...contextForTransition(
+              "recovery_pending",
+              "replacement_in_production",
+            ),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["replacementRecoveryCancellationRequests", "id", "another-request"],
+    ["replacementRecoveryCancellationRequests", "claimId", "sibling-claim"],
+    [
+      "replacementRecoveryCancellationRequests",
+      "resolutionId",
+      "sibling-resolution",
+    ],
+    ["replacementRecoveryCancellationRequests", "slotIds", ["sibling-slot"]],
+    [
+      "replacementRecoveryCancellationRequests",
+      "replacementSetId",
+      "another-set",
+    ],
+    ["replacementRecoveryCancellationRequests", "previousStatus", "closed"],
+    ["replacementRecoveryCancellationRequests", "targetStatus", "open"],
+    ["replacementRecoveryCancellationRequests", "resultId", "another-result"],
+    [
+      "replacementRecoveryCancellationReservations",
+      "id",
+      "another-reservation",
+    ],
+    [
+      "replacementRecoveryCancellationReservations",
+      "previousStatus",
+      "released",
+    ],
+    ["replacementRecoveryCancellationReservations", "targetStatus", "active"],
+    ["replacementRecoveryCancellationShipments", "id", "another-shipment"],
+    ["replacementRecoveryCancellationShipments", "previousStatus", "planned"],
+    ["replacementRecoveryCancellationShipments", "targetStatus", "planned"],
+    ["replacementRecoveryCancellationShipments", "labelId", "another-label"],
+    [
+      "replacementRecoveryCancellationShipments",
+      "providerTransactionId",
+      "another-transaction",
+    ],
+    [
+      "replacementRecoveryCancellationShipments",
+      "cancellationIntermediateStatus",
+      null,
+    ],
+    [
+      "replacementRecoveryCancellationShipments",
+      "providerVoidStatus",
+      "failed",
+    ],
+    [
+      "replacementRecoveryCancellationShipments",
+      "providerVoidAuthenticated",
+      false,
+    ],
+    ["replacementRecoveryCancellationShipments", "providerVoidVerified", false],
+    [
+      "replacementRecoveryCancellationShipments",
+      "providerVoidResultId",
+      "another-result",
+    ],
+    ["replacementRecoveryCancellationJobs", "id", "another-job"],
+    ["replacementRecoveryCancellationJobs", "previousStatus", "created"],
+    ["replacementRecoveryCancellationJobs", "targetStatus", "created"],
+    [
+      "replacementRecoveryCancellationJobs",
+      "currentReplacementJobLineageLeaf",
+      false,
+    ],
+  ] as const)(
+    "rejects replacement recovery with invalid %s record field %s",
+    (collectionField, field, value) => {
+      const base = contextForTransition(
+        "recovery_pending",
+        "replacement_in_production",
+      );
+      const collection = base[collectionField] as readonly Readonly<
+        Record<string, unknown>
+      >[];
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "replacement_in_production",
+          target: "recovery_pending",
+          idempotencyKey: `replacement-recovery-invalid-${collectionField}-${field}`,
+          context: {
+            ...base,
+            [collectionField]: [
+              { ...collection[0], [field]: value },
+              ...collection.slice(1),
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "another-authorization"],
+    ["claimId", "sibling-claim"],
+    ["resolutionId", "sibling-resolution"],
+    ["replacementSetId", "another-set"],
+    ["shipmentIds", ["another-shipment"]],
+    ["previousStatus", "consumed"],
+    ["targetStatus", "issued"],
+    ["resultId", "another-result"],
+  ] as const)(
+    "rejects replacement recovery with invalid authorization %s",
+    (field, value) => {
+      const base = contextForTransition(
+        "recovery_pending",
+        "replacement_in_production",
+      );
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "replacement_in_production",
+          target: "recovery_pending",
+          idempotencyKey: `replacement-recovery-authorization-${field}`,
+          context: {
+            ...base,
+            replacementRecoveryCancellationAuthorizations: [
+              {
+                ...base.replacementRecoveryCancellationAuthorizations[0],
+                [field]: value,
+              },
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "another-label"],
+    ["shipmentId", "another-shipment"],
+    ["claimId", "sibling-claim"],
+    ["resolutionId", "sibling-resolution"],
+    ["replacementSetId", "another-set"],
+    ["previousStatus", "not_created"],
+    ["targetStatus", "created"],
+    ["resultId", "another-result"],
+  ] as const)(
+    "rejects replacement recovery with invalid label %s",
+    (field, value) => {
+      const base = contextForTransition(
+        "recovery_pending",
+        "replacement_in_production",
+      );
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "replacement_in_production",
+          target: "recovery_pending",
+          idempotencyKey: `replacement-recovery-label-${field}`,
+          context: {
+            ...base,
+            replacementRecoveryCancellationLabels: [
+              {
+                ...base.replacementRecoveryCancellationLabels[0],
+                [field]: value,
+              },
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["immutable", false],
+    ["claimId", "sibling-claim"],
+    ["resolutionId", "sibling-resolution"],
+    ["slotId", "sibling-slot"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
+    ["replacementSetId", "another-set"],
+    ["resolutionPreviousStatus", "reprint_pending"],
+    ["resolutionTargetStatus", "refund_pending"],
+  ] as const)(
+    "rejects replacement recovery with invalid expected snapshot %s",
+    (field, value) => {
+      const base = contextForTransition(
+        "recovery_pending",
+        "replacement_in_production",
+      );
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "replacement_in_production",
+          target: "recovery_pending",
+          idempotencyKey: `replacement-recovery-snapshot-${field}`,
+          context: {
+            ...base,
+            replacementRecoveryCancellationExpectedSnapshot: {
+              ...base.replacementRecoveryCancellationExpectedSnapshot,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign replacement resource substitution against the expected snapshot", () => {
+    const base = contextForTransition(
+      "recovery_pending",
+      "replacement_in_production",
+    );
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "recovery_pending",
+        idempotencyKey: "replacement-recovery-foreign-coordinated-set",
+        context: {
+          ...base,
+          replacementRequiredResourceGroups: [
+            {
+              ...base.replacementRequiredResourceGroups[0],
+              replacementRequestId: "foreign-request",
+              replacementShipmentId: "foreign-shipment",
+              currentReplacementJobId: "foreign-job",
+            },
+          ],
+          replacementRecoveryCancellationRequestIds: ["foreign-request"],
+          replacementRecoveryCancellationRequests: [
+            {
+              ...base.replacementRecoveryCancellationRequests[0],
+              id: "foreign-request",
+            },
+          ],
+          replacementRecoveryCancellationShipmentIds: ["foreign-shipment"],
+          replacementRecoveryCancellationShipments: [
+            {
+              ...base.replacementRecoveryCancellationShipments[0],
+              id: "foreign-shipment",
+            },
+          ],
+          replacementRecoveryCancellationJobIds: ["foreign-job"],
+          replacementRecoveryCancellationJobs: [
+            {
+              ...base.replacementRecoveryCancellationJobs[0],
+              id: "foreign-job",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("accepts exact cancellation for a planned replacement Shipment without a label", () => {
+    const base = contextForTransition(
+      "recovery_pending",
+      "replacement_in_production",
+    );
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "recovery_pending",
+        idempotencyKey: "replacement-recovery-planned-shipment",
+        context: {
+          ...base,
+          replacementRecoveryCancellationExpectedSnapshot: {
+            ...base.replacementRecoveryCancellationExpectedSnapshot,
+            shipments: [
+              {
+                ...base.replacementRecoveryCancellationExpectedSnapshot
+                  .shipments[0],
+                status: "planned",
+                labelId: null,
+                labelStatus: null,
+                providerTransactionId: null,
+              },
+            ],
+          },
+          replacementRecoveryCancellationShipments: [
+            {
+              ...base.replacementRecoveryCancellationShipments[0],
+              previousStatus: "planned",
+              labelId: null,
+              providerTransactionId: null,
+              cancellationIntermediateStatus: null,
+              providerVoidStatus: "not_required",
+              providerVoidAuthenticated: false,
+              providerVoidVerified: false,
+            },
+          ],
+          replacementRecoveryCancellationLabelIds: [],
+          replacementRecoveryCancellationLabels: [],
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "replacement_in_production",
+      current: "recovery_pending",
+    });
+  });
+
+  it("accepts exact cancellation for a failed current replacement Job leaf", () => {
+    const base = contextForTransition(
+      "recovery_pending",
+      "replacement_in_production",
+    );
+    expect(
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "recovery_pending",
+        idempotencyKey: "replacement-recovery-failed-job",
+        context: {
+          ...base,
+          replacementRequiredResourceGroups: [
+            {
+              ...base.replacementRequiredResourceGroups[0],
+              currentReplacementJobStatus: "failed",
+            },
+          ],
+          replacementRecoveryCancellationExpectedSnapshot: {
+            ...base.replacementRecoveryCancellationExpectedSnapshot,
+            jobs: [
+              {
+                ...base.replacementRecoveryCancellationExpectedSnapshot.jobs[0],
+                status: "failed",
+              },
+            ],
+          },
+          replacementRecoveryCancellationJobs: [
+            {
+              ...base.replacementRecoveryCancellationJobs[0],
+              previousStatus: "failed",
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "replacement_in_production",
+      current: "recovery_pending",
+    });
+  });
+
+  it("rejects replacement recovery when the expected Job status differs from the persisted current leaf", () => {
+    const base = contextForTransition(
+      "recovery_pending",
+      "replacement_in_production",
+    );
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "recovery_pending",
+        idempotencyKey: "replacement-recovery-stale-job-snapshot",
+        context: {
+          ...base,
+          replacementRequiredResourceGroups: [
+            {
+              ...base.replacementRequiredResourceGroups[0],
+              currentReplacementJobStatus: "packed",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects the legacy replacement recovery cancellation boolean by itself", () => {
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "replacement_in_production",
+        target: "recovery_pending",
+        idempotencyKey: "replacement-recovery-legacy-boolean",
+        context: { remedyCancellationCompleted: true },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it.each([
@@ -2779,6 +3512,20 @@ describe("v0 lifecycle policy tables", () => {
     ["issuedQuoteId", "\t"],
     ["quoteExpirationIssuedQuoteId", "another-quote"],
     ["issuedQuoteExpiresAt", "2026-01-02T00:00:00.000Z"],
+    [
+      "quoteIssuanceIssuedQuote",
+      {
+        ...permittedContext.quoteIssuanceIssuedQuote,
+        expiresAt: Instant.parse("2026-01-01T23:00:00.000Z"),
+      },
+    ],
+    [
+      "quoteIssuanceIssuedQuote",
+      {
+        ...permittedContext.quoteIssuanceIssuedQuote,
+        resultId: "another-result",
+      },
+    ],
     ["quoteExpirationEvaluatedAt", "2026-01-02T00:00:00.000Z"],
     ["quoteExpirationEvaluatedAt", Instant.parse("2026-01-01T23:59:59.999Z")],
   ] as const)("rejects quote expiration with invalid %s", (field, value) => {
@@ -2788,6 +3535,22 @@ describe("v0 lifecycle policy tables", () => {
         target: "expired",
         idempotencyKey: `quote-expiration-${field}`,
         context: { ...permittedContext, [field]: value },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects coordinated stale expiration scalars against the immutable issued Quote", () => {
+    const staleExpiry = Instant.parse("2026-01-01T23:00:00.000Z");
+    expect(() =>
+      transition(quoteRequestPolicy, {
+        current: "quoted",
+        target: "expired",
+        idempotencyKey: "quote-expiration-stale-scalar",
+        context: {
+          ...permittedContext,
+          issuedQuoteExpiresAt: staleExpiry,
+          quoteExpirationEvaluatedAt: staleExpiry,
+        },
       }),
     ).toThrow(TransitionGuardError);
   });
@@ -8534,52 +9297,40 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
-    "balancePaymentOrderMatches",
-    "balancePaymentCreated",
-    "balancePaymentScheduleComplete",
-    "balanceDueAtSet",
-    "balancePaymentDeadlineSetupAtomic",
+    ["orderId", " "],
+    ["phaseId", " "],
+    ["balancePaymentId", " "],
+    ["balanceDeadlineSetupScheduleId", " "],
+    ["balanceDeadlineSetupResultId", " "],
+    ["balanceDeadlineSetupOrderId", "another-order"],
+    ["balanceDeadlineSetupPhaseId", "another-phase"],
+    ["balanceDeadlineSetupPaymentId", "another-payment"],
+    ["balanceDeadlineSetupOrderPreviousStatus", "printing"],
+    ["balanceDeadlineSetupOrderTargetStatus", "ready_to_ship"],
+    ["balanceDeadlineSetupPhasePreviousStatus", "printing"],
+    ["balanceDeadlineSetupPhaseTargetStatus", "ready_to_ship"],
+    ["balanceDeadlineSetupOrderResultId", "another-result"],
+    ["balanceDeadlineSetupPhaseResultId", "another-result"],
+    ["balanceDeadlineSetupPaymentResultId", "another-result"],
+    ["balanceDeadlineSetupScheduleResultId", "another-result"],
+    ["balanceDeadlineSetupDeadlineResultId", "another-result"],
+    ["balanceDeadlineSetupCreatedAt", "2026-01-01T00:00:00.000Z"],
+    ["balanceDeadlineSetupQcApprovedAt", "2026-01-01T00:00:00.000Z"],
+    ["balanceDeadlineSetupPaymentDays", 0],
+    ["balanceDeadlineSetupPaymentDays", 1.5],
+    ["balanceDueAt", "2026-01-02T00:00:00.000Z"],
+    ["balanceDeadlineSetupCompleted", false],
+    ["balanceDeadlineSetupAtomic", false],
   ] as const)(
-    "requires %s before Order qc_passed -> awaiting_balance",
-    (missingFlag) => {
-      expect(() =>
-        transition(orderPolicy, {
-          current: "qc_passed",
-          target: "awaiting_balance",
-          idempotencyKey: `balance-setup-${missingFlag}`,
-          context: {
-            balancePaymentRole: "balance",
-            balancePaymentOrderMatches: true,
-            balancePaymentCreated: true,
-            balancePaymentScheduleComplete: true,
-            balanceDueAtSet: true,
-            balancePaymentDeadlineSetupAtomic: true,
-            [missingFlag]: false,
-          },
-        }),
-      ).toThrow(TransitionGuardError);
-    },
-  );
-
-  it.each([
-    ["balancePaymentRole", undefined],
-    ["balancePaymentRole", "deposit"],
-    ["balancePaymentOrderMatches", false],
-  ] as const)(
-    "rejects balance setup with invalid %s evidence",
+    "rejects balance deadline setup with invalid root proof (%s)",
     (field, value) => {
       expect(() =>
         transition(orderPolicy, {
           current: "qc_passed",
           target: "awaiting_balance",
-          idempotencyKey: `balance-setup-${field}-${String(value)}`,
+          idempotencyKey: `balance-setup-invalid-${field}`,
           context: {
-            balancePaymentRole: "balance",
-            balancePaymentOrderMatches: true,
-            balancePaymentCreated: true,
-            balancePaymentScheduleComplete: true,
-            balanceDueAtSet: true,
-            balancePaymentDeadlineSetupAtomic: true,
+            ...contextForTransition("awaiting_balance", "qc_passed"),
             [field]: value,
           },
         }),
@@ -8587,20 +9338,152 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
-  it("enters awaiting_balance only after the balance Payment and deadline are atomically set", () => {
+  it.each([
+    ["balanceDeadlineSetupOrder", "id", "another-order"],
+    ["balanceDeadlineSetupOrder", "phaseId", "another-phase"],
+    ["balanceDeadlineSetupOrder", "balancePaymentId", "another-payment"],
+    [
+      "balanceDeadlineSetupOrder",
+      "balanceDeadlineScheduleId",
+      "another-schedule",
+    ],
+    [
+      "balanceDeadlineSetupOrder",
+      "qcApprovedAt",
+      Instant.parse("2025-12-31T00:00:00.000Z"),
+    ],
+    ["balanceDeadlineSetupOrder", "balancePaymentDays", 2],
+    ["balanceDeadlineSetupOrder", "previousStatus", "printing"],
+    ["balanceDeadlineSetupOrder", "targetStatus", "ready_to_ship"],
+    ["balanceDeadlineSetupOrder", "resultId", "another-result"],
+    ["balanceDeadlineSetupPhase", "id", "another-phase"],
+    ["balanceDeadlineSetupPhase", "orderId", "another-order"],
+    ["balanceDeadlineSetupPhase", "previousStatus", "printing"],
+    ["balanceDeadlineSetupPhase", "targetStatus", "ready_to_ship"],
+    ["balanceDeadlineSetupPhase", "resultId", "another-result"],
+    ["balanceDeadlineSetupPayment", "id", "another-payment"],
+    ["balanceDeadlineSetupPayment", "orderId", "another-order"],
+    ["balanceDeadlineSetupPayment", "phaseId", "another-phase"],
+    ["balanceDeadlineSetupPayment", "role", "deposit"],
+    ["balanceDeadlineSetupPayment", "status", "captured"],
+    ["balanceDeadlineSetupPayment", "resultId", "another-result"],
+    ["balanceDeadlineSetupSchedule", "id", "another-schedule"],
+    ["balanceDeadlineSetupSchedule", "paymentId", "another-payment"],
+    ["balanceDeadlineSetupSchedule", "orderId", "another-order"],
+    ["balanceDeadlineSetupSchedule", "phaseId", "another-phase"],
+    ["balanceDeadlineSetupSchedule", "status", "cancelled"],
+    ["balanceDeadlineSetupSchedule", "immutable", false],
+    ["balanceDeadlineSetupSchedule", "resultId", "another-result"],
+    ["balanceDeadlineSetupDeadline", "orderId", "another-order"],
+    ["balanceDeadlineSetupDeadline", "phaseId", "another-phase"],
+    ["balanceDeadlineSetupDeadline", "paymentId", "another-payment"],
+    ["balanceDeadlineSetupDeadline", "scheduleId", "another-schedule"],
+    ["balanceDeadlineSetupDeadline", "resultId", "another-result"],
+  ] as const)(
+    "rejects balance deadline setup with invalid %s.%s",
+    (recordField, field, value) => {
+      const base = contextForTransition("awaiting_balance", "qc_passed");
+      const record = base[recordField] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(orderPolicy, {
+          current: "qc_passed",
+          target: "awaiting_balance",
+          idempotencyKey: `balance-setup-invalid-${recordField}-${field}`,
+          context: {
+            ...base,
+            [recordField]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a balance deadline that is not later than its setup", () => {
+    const base = contextForTransition("awaiting_balance", "qc_passed");
+    const dueAt = base.balanceDeadlineSetupCreatedAt;
+    expect(() =>
+      transition(orderPolicy, {
+        current: "qc_passed",
+        target: "awaiting_balance",
+        idempotencyKey: "balance-setup-non-future-deadline",
+        context: {
+          ...base,
+          balanceDueAt: dueAt,
+          balanceDeadlineSetupSchedule: {
+            ...base.balanceDeadlineSetupSchedule,
+            dueAt,
+          },
+          balanceDeadlineSetupDeadline: {
+            ...base.balanceDeadlineSetupDeadline,
+            dueAt,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a consistently supplied deadline that does not match the QC-based configuration", () => {
+    const base = contextForTransition("awaiting_balance", "qc_passed");
+    const dueAt = Instant.parse("2026-01-03T00:00:00.000Z");
+    expect(() =>
+      transition(orderPolicy, {
+        current: "qc_passed",
+        target: "awaiting_balance",
+        idempotencyKey: "balance-setup-wrong-derived-deadline",
+        context: {
+          ...base,
+          balanceDueAt: dueAt,
+          balanceDeadlineSetupSchedule: {
+            ...base.balanceDeadlineSetupSchedule,
+            dueAt,
+          },
+          balanceDeadlineSetupDeadline: {
+            ...base.balanceDeadlineSetupDeadline,
+            dueAt,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a coordinated foreign balance Payment and schedule substitution", () => {
+    const base = contextForTransition("awaiting_balance", "qc_passed");
+    expect(() =>
+      transition(orderPolicy, {
+        current: "qc_passed",
+        target: "awaiting_balance",
+        idempotencyKey: "balance-setup-foreign-payment-schedule",
+        context: {
+          ...base,
+          balancePaymentId: "payment-2",
+          balanceDeadlineSetupPaymentId: "payment-2",
+          balanceDeadlineSetupScheduleId: "balance-schedule-2",
+          balanceDeadlineSetupPayment: {
+            ...base.balanceDeadlineSetupPayment,
+            id: "payment-2",
+          },
+          balanceDeadlineSetupSchedule: {
+            ...base.balanceDeadlineSetupSchedule,
+            id: "balance-schedule-2",
+            paymentId: "payment-2",
+          },
+          balanceDeadlineSetupDeadline: {
+            ...base.balanceDeadlineSetupDeadline,
+            paymentId: "payment-2",
+            scheduleId: "balance-schedule-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("enters awaiting_balance only after the exact balance Payment and deadline are atomically set", () => {
     expect(
       transition(orderPolicy, {
         current: "qc_passed",
         target: "awaiting_balance",
         idempotencyKey: "balance-setup-complete",
-        context: {
-          balancePaymentRole: "balance",
-          balancePaymentOrderMatches: true,
-          balancePaymentCreated: true,
-          balancePaymentScheduleComplete: true,
-          balanceDueAtSet: true,
-          balancePaymentDeadlineSetupAtomic: true,
-        },
+        context: contextForTransition("awaiting_balance", "qc_passed"),
       }),
     ).toEqual({
       kind: "changed",
@@ -9118,36 +10001,6 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
-    ["currentRemedyShipmentLineageLeafId", ""],
-    ["providerEventShipmentId", "sibling-remedy-shipment"],
-    ["providerEventAuthenticated", false],
-    ["providerEventVerified", false],
-    ["providerEventStatus", "delivered"],
-    ["currentRemedyShipmentLineageLeafStatus", "in_transit"],
-    ["currentRemedyShipmentLineageLeafStatus", "returned"],
-  ] as const)(
-    "rejects a remedy incident without exact current lineage proof (%s)",
-    (field, value) => {
-      expect(() =>
-        transition(claimSlotResolutionPolicy, {
-          current: "replacement_shipped",
-          target: "recovery_pending",
-          idempotencyKey: `remedy-incident-${field}`,
-          context: {
-            currentRemedyShipmentLineageLeafId: "remedy-shipment-1",
-            currentRemedyShipmentLineageLeafStatus: "lost",
-            providerEventShipmentId: "remedy-shipment-1",
-            providerEventAuthenticated: true,
-            providerEventVerified: true,
-            providerEventStatus: "lost",
-            [field]: value,
-          },
-        }),
-      ).toThrow(TransitionGuardError);
-    },
-  );
-
-  it.each([
     ["replacement_shipped", "lost"],
     ["replacement_shipped", "returned"],
     ["reship_shipped", "lost"],
@@ -9155,18 +10008,17 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)(
     "records %s -> recovery_pending only for its matching %s remedy event",
     (current, providerEventStatus) => {
+      const base = contextForTransition("recovery_pending", current);
       expect(
         transition(claimSlotResolutionPolicy, {
           current,
           target: "recovery_pending",
           idempotencyKey: `remedy-incident-${current}-${providerEventStatus}`,
           context: {
-            currentRemedyShipmentLineageLeafId: "remedy-shipment-1",
+            ...base,
             currentRemedyShipmentLineageLeafStatus: providerEventStatus,
-            providerEventShipmentId: "remedy-shipment-1",
-            providerEventAuthenticated: true,
-            providerEventVerified: true,
             providerEventStatus,
+            remedyIncidentShipmentTargetStatus: providerEventStatus,
           },
         }),
       ).toEqual({
@@ -9174,6 +10026,68 @@ describe("v0 lifecycle policy tables", () => {
         previous: current,
         current: "recovery_pending",
       });
+    },
+  );
+
+  it.each([
+    ["remedyIncidentResultId", " "],
+    ["remedyIncidentKind", "refund"],
+    ["remedyIncidentClaimId", "sibling-claim"],
+    ["remedyIncidentResolutionId", "sibling-resolution"],
+    ["remedyIncidentSlotId", "sibling-slot"],
+    ["remedyIncidentOrderId", "another-order"],
+    ["remedyIncidentPhaseId", "another-phase"],
+    ["remedyIncidentResolutionPreviousStatus", "recovery_pending"],
+    ["remedyIncidentResolutionTargetStatus", "refunded"],
+    ["remedyIncidentShipmentId", "sibling-remedy-shipment"],
+    ["remedyIncidentLineageLeafId", "superseded-remedy-shipment"],
+    ["remedyIncidentShipmentClaimId", "sibling-claim"],
+    ["remedyIncidentShipmentResolutionId", "sibling-resolution"],
+    ["remedyIncidentShipmentSlotId", "sibling-slot"],
+    ["remedyIncidentShipmentOrderId", "another-order"],
+    ["remedyIncidentShipmentPhaseId", "another-phase"],
+    ["remedyIncidentCurrentLineageLeaf", false],
+    ["remedyIncidentShipmentPreviousStatus", "handed_over"],
+    ["remedyIncidentShipmentTargetStatus", "delivered"],
+    ["currentRemedyShipmentLineageLeafId", "sibling-remedy-shipment"],
+    ["currentRemedyShipmentLineageLeafStatus", "in_transit"],
+    ["providerEventId", "another-event"],
+    ["providerEventShipmentId", "sibling-remedy-shipment"],
+    ["shipmentProviderTransactionId", "another-transaction"],
+    ["providerEventTransactionId", "another-transaction"],
+    ["providerEventAuthenticated", false],
+    ["providerEventVerified", false],
+    ["providerEventStatus", "delivered"],
+    ["remedyIncidentProviderEventId", "another-event"],
+    ["remedyIncidentProviderEventShipmentId", "sibling-remedy-shipment"],
+    ["remedyIncidentProviderTransactionId", "another-transaction"],
+    ["remedyIncidentClaimResultId", "another-result"],
+    ["remedyIncidentResolutionResultId", "another-result"],
+    ["remedyIncidentShipmentResultId", "another-result"],
+    ["remedyIncidentLineageResultId", "another-result"],
+    ["remedyIncidentProviderEventResultId", "another-result"],
+    ["remedyIncidentProviderTransactionResultId", "another-result"],
+    ["remedyIncidentCompleted", false],
+    ["remedyIncidentAtomic", false],
+  ] as const)(
+    "rejects remedy incident with mismatched selected-child proof (%s)",
+    (field, value) => {
+      for (const current of [
+        "replacement_shipped",
+        "reship_shipped",
+      ] as const) {
+        expect(() =>
+          transition(claimSlotResolutionPolicy, {
+            current,
+            target: "recovery_pending",
+            idempotencyKey: `remedy-incident-invalid-${current}-${field}`,
+            context: {
+              ...contextForTransition("recovery_pending", current),
+              [field]: value,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
     },
   );
 

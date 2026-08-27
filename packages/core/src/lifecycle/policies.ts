@@ -1313,44 +1313,129 @@ function requireBalancePaymentDeadlineSetup<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  if (command.context?.balancePaymentRole !== "balance") {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const paymentId = context?.balancePaymentId;
+  const scheduleId = context?.balanceDeadlineSetupScheduleId;
+  const resultId = context?.balanceDeadlineSetupResultId;
+  const createdAt = context?.balanceDeadlineSetupCreatedAt;
+  const qcApprovedAt = context?.balanceDeadlineSetupQcApprovedAt;
+  const paymentDays = context?.balanceDeadlineSetupPaymentDays;
+  const balanceDueAt = context?.balanceDueAt;
+  const orderValue = context?.balanceDeadlineSetupOrder;
+  const order =
+    typeof orderValue === "object" &&
+    orderValue !== null &&
+    !Array.isArray(orderValue)
+      ? (orderValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const phaseValue = context?.balanceDeadlineSetupPhase;
+  const phase =
+    typeof phaseValue === "object" &&
+    phaseValue !== null &&
+    !Array.isArray(phaseValue)
+      ? (phaseValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentValue = context?.balanceDeadlineSetupPayment;
+  const payment =
+    typeof paymentValue === "object" &&
+    paymentValue !== null &&
+    !Array.isArray(paymentValue)
+      ? (paymentValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const scheduleValue = context?.balanceDeadlineSetupSchedule;
+  const schedule =
+    typeof scheduleValue === "object" &&
+    scheduleValue !== null &&
+    !Array.isArray(scheduleValue)
+      ? (scheduleValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const deadlineValue = context?.balanceDeadlineSetupDeadline;
+  const deadline =
+    typeof deadlineValue === "object" &&
+    deadlineValue !== null &&
+    !Array.isArray(deadlineValue)
+      ? (deadlineValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const scheduleDueAt = schedule?.dueAt;
+  const deadlineDueAt = deadline?.dueAt;
+  if (
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(paymentId) ||
+    !nonBlank(scheduleId) ||
+    !nonBlank(resultId) ||
+    !(createdAt instanceof Instant) ||
+    !(qcApprovedAt instanceof Instant) ||
+    typeof paymentDays !== "number" ||
+    !Number.isSafeInteger(paymentDays) ||
+    paymentDays <= 0 ||
+    !(balanceDueAt instanceof Instant) ||
+    createdAt.compare(balanceDueAt) >= 0 ||
+    qcApprovedAt.epochMilliseconds + paymentDays * 86_400_000 !==
+      balanceDueAt.epochMilliseconds ||
+    context?.balanceDeadlineSetupOrderId !== orderId ||
+    context?.balanceDeadlineSetupPhaseId !== phaseId ||
+    context?.balanceDeadlineSetupPaymentId !== paymentId ||
+    context?.balanceDeadlineSetupOrderPreviousStatus !== "qc_passed" ||
+    context?.balanceDeadlineSetupOrderTargetStatus !== "awaiting_balance" ||
+    context?.balanceDeadlineSetupPhasePreviousStatus !== "qc_passed" ||
+    context?.balanceDeadlineSetupPhaseTargetStatus !== "qc_passed" ||
+    context?.balanceDeadlineSetupOrderResultId !== resultId ||
+    context?.balanceDeadlineSetupPhaseResultId !== resultId ||
+    context?.balanceDeadlineSetupPaymentResultId !== resultId ||
+    context?.balanceDeadlineSetupScheduleResultId !== resultId ||
+    context?.balanceDeadlineSetupDeadlineResultId !== resultId ||
+    order?.id !== orderId ||
+    order.phaseId !== phaseId ||
+    order.balancePaymentId !== paymentId ||
+    order.balanceDeadlineScheduleId !== scheduleId ||
+    !(order.qcApprovedAt instanceof Instant) ||
+    !order.qcApprovedAt.equals(qcApprovedAt) ||
+    order.balancePaymentDays !== paymentDays ||
+    order.previousStatus !== "qc_passed" ||
+    order.targetStatus !== "awaiting_balance" ||
+    order.resultId !== resultId ||
+    phase?.id !== phaseId ||
+    phase.orderId !== orderId ||
+    phase.previousStatus !== "qc_passed" ||
+    phase.targetStatus !== "qc_passed" ||
+    phase.resultId !== resultId ||
+    payment?.id !== paymentId ||
+    payment.orderId !== orderId ||
+    payment.phaseId !== phaseId ||
+    payment.role !== "balance" ||
+    payment.status !== "pending" ||
+    payment.resultId !== resultId ||
+    schedule?.id !== scheduleId ||
+    schedule.paymentId !== paymentId ||
+    schedule.orderId !== orderId ||
+    schedule.phaseId !== phaseId ||
+    schedule.status !== "scheduled" ||
+    schedule.immutable !== true ||
+    schedule.resultId !== resultId ||
+    !(scheduleDueAt instanceof Instant) ||
+    !scheduleDueAt.equals(balanceDueAt) ||
+    deadline?.orderId !== orderId ||
+    deadline.phaseId !== phaseId ||
+    deadline.paymentId !== paymentId ||
+    deadline.scheduleId !== scheduleId ||
+    deadline.resultId !== resultId ||
+    !(deadlineDueAt instanceof Instant) ||
+    !deadlineDueAt.equals(balanceDueAt) ||
+    context?.balanceDeadlineSetupCompleted !== true ||
+    context?.balanceDeadlineSetupAtomic !== true
+  ) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
       command.target,
-      "awaiting balance requires a Payment with the balance role",
+      "awaiting balance requires one exact atomic Order, phase, Payment, schedule, and deadline result",
     );
   }
-  requireFlag(
-    lifecycle,
-    command,
-    "balancePaymentOrderMatches",
-    "awaiting balance requires the balance payment to belong to this order",
-  );
-  requireFlag(
-    lifecycle,
-    command,
-    "balancePaymentCreated",
-    "awaiting balance requires its balance payment to be created",
-  );
-  requireFlag(
-    lifecycle,
-    command,
-    "balancePaymentScheduleComplete",
-    "awaiting balance requires a complete balance payment schedule",
-  );
-  requireFlag(
-    lifecycle,
-    command,
-    "balanceDueAtSet",
-    "awaiting balance requires a balance payment deadline",
-  );
-  requireFlag(
-    lifecycle,
-    command,
-    "balancePaymentDeadlineSetupAtomic",
-    "the balance payment and deadline must be persisted atomically",
-  );
 }
 
 function requireVerifiedMatchingProviderPaymentEvent<S extends string>(
@@ -2772,18 +2857,77 @@ function requireVerifiedCurrentRemedyIncident<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  const currentLeafId = command.context?.currentRemedyShipmentLineageLeafId;
-  const eventShipmentId = command.context?.providerEventShipmentId;
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const slotId = context?.claimSlotId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const currentLeafId = context?.currentRemedyShipmentLineageLeafId;
+  const eventShipmentId = context?.providerEventShipmentId;
+  const providerEventId = context?.providerEventId;
+  const providerTransactionId = context?.shipmentProviderTransactionId;
+  const resultId = context?.remedyIncidentResultId;
+  const eventStatus = context?.providerEventStatus;
+  const expectedKind =
+    command.current === "reship_shipped" &&
+    command.target === "recovery_pending"
+      ? "reship"
+      : command.current === "replacement_shipped" &&
+          command.target === "recovery_pending"
+        ? "reprint"
+        : undefined;
   if (
-    typeof currentLeafId !== "string" ||
-    currentLeafId.length === 0 ||
-    eventShipmentId !== currentLeafId
+    expectedKind === undefined ||
+    !nonBlank(claimId) ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(slotId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(currentLeafId) ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(resultId) ||
+    (eventStatus !== "lost" && eventStatus !== "returned") ||
+    eventShipmentId !== currentLeafId ||
+    context?.providerEventTransactionId !== providerTransactionId ||
+    context?.remedyIncidentKind !== expectedKind ||
+    context?.remedyIncidentClaimId !== claimId ||
+    context?.remedyIncidentResolutionId !== resolutionId ||
+    context?.remedyIncidentSlotId !== slotId ||
+    context?.remedyIncidentOrderId !== orderId ||
+    context?.remedyIncidentPhaseId !== phaseId ||
+    context?.remedyIncidentResolutionPreviousStatus !== command.current ||
+    context?.remedyIncidentResolutionTargetStatus !== "recovery_pending" ||
+    context?.remedyIncidentShipmentId !== currentLeafId ||
+    context?.remedyIncidentLineageLeafId !== currentLeafId ||
+    context?.remedyIncidentShipmentClaimId !== claimId ||
+    context?.remedyIncidentShipmentResolutionId !== resolutionId ||
+    context?.remedyIncidentShipmentSlotId !== slotId ||
+    context?.remedyIncidentShipmentOrderId !== orderId ||
+    context?.remedyIncidentShipmentPhaseId !== phaseId ||
+    context?.remedyIncidentCurrentLineageLeaf !== true ||
+    context?.remedyIncidentShipmentPreviousStatus !== "in_transit" ||
+    context?.remedyIncidentShipmentTargetStatus !== eventStatus ||
+    context?.remedyIncidentProviderEventId !== providerEventId ||
+    context?.remedyIncidentProviderEventShipmentId !== currentLeafId ||
+    context?.remedyIncidentProviderTransactionId !== providerTransactionId ||
+    context?.remedyIncidentClaimResultId !== resultId ||
+    context?.remedyIncidentResolutionResultId !== resultId ||
+    context?.remedyIncidentShipmentResultId !== resultId ||
+    context?.remedyIncidentLineageResultId !== resultId ||
+    context?.remedyIncidentProviderEventResultId !== resultId ||
+    context?.remedyIncidentProviderTransactionResultId !== resultId ||
+    context?.remedyIncidentCompleted !== true ||
+    context?.remedyIncidentAtomic !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
       command.target,
-      "remedy incident must match the exact current shipment lineage leaf",
+      "remedy incident must bind the selected Claim child to its exact current Shipment leaf and result",
     );
   }
   requireFlag(
@@ -2798,11 +2942,7 @@ function requireVerifiedCurrentRemedyIncident<S extends string>(
     "providerEventVerified",
     "remedy incident requires a verified provider event",
   );
-  const eventStatus = command.context?.providerEventStatus;
-  if (
-    (eventStatus !== "lost" && eventStatus !== "returned") ||
-    command.context?.currentRemedyShipmentLineageLeafStatus !== eventStatus
-  ) {
+  if (context?.currentRemedyShipmentLineageLeafStatus !== eventStatus) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
@@ -3024,6 +3164,7 @@ function requireQuoteExpirationReached<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  requireAtomicIssuedQuoteCreation(lifecycle, command);
   const quoteRequestId = command.context?.quoteRequestId;
   const issuedQuoteId = command.context?.issuedQuoteId;
   const expiresAt = command.context?.issuedQuoteExpiresAt;
@@ -6280,12 +6421,30 @@ export type ClaimSlotResolutionStatus =
   | "recovery_pending"
   | "withdrawn";
 
+const cancellableReplacementJobStatuses = new Set([
+  "created",
+  "accepted",
+  "slicing",
+  "gcode_ready",
+  "printing",
+  "printed",
+  "photo_submitted",
+  "qc_approved",
+  "packed",
+  "failed",
+]);
+
 function requireCompleteReplacementRequiredSlotSet<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
+  allowCurrentPreHandoffJobStatus = false,
 ): void {
   if (Array.isArray(command.context?.replacementRequiredRequests)) {
-    requireIndependentReplacementResourceSet(lifecycle, command);
+    requireIndependentReplacementResourceSet(
+      lifecycle,
+      command,
+      allowCurrentPreHandoffJobStatus,
+    );
     return;
   }
   const resolutionId = command.context?.claimSlotResolutionId;
@@ -6419,7 +6578,11 @@ function requireCompleteReplacementRequiredSlotSet<S extends string>(
       group.currentReplacementJobShipmentId !== shipmentId ||
       !isExactIdSet(slotIds as string[], group.currentReplacementJobSlotIds) ||
       group.currentReplacementJobLineageLeaf !== true ||
-      group.currentReplacementJobStatus !== "created"
+      (allowCurrentPreHandoffJobStatus
+        ? !cancellableReplacementJobStatuses.has(
+            group.currentReplacementJobStatus as string,
+          )
+        : group.currentReplacementJobStatus !== "created")
     ) {
       throw new TransitionGuardError(
         lifecycle,
@@ -6506,6 +6669,7 @@ function requireCompleteReplacementRequiredSlotSet<S extends string>(
 function requireIndependentReplacementResourceSet<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
+  allowCurrentPreHandoffJobStatus = false,
 ): void {
   const context = command.context;
   const claimId = context?.claimId;
@@ -6583,7 +6747,11 @@ function requireIndependentReplacementResourceSet<S extends string>(
         record.replacementSetId !== replacementSetId ||
         (requireLeaf &&
           (record.currentReplacementJobLineageLeaf !== true ||
-            record.currentReplacementJobStatus !== "created"))
+            (allowCurrentPreHandoffJobStatus
+              ? !cancellableReplacementJobStatuses.has(
+                  record.currentReplacementJobStatus as string,
+                )
+              : record.currentReplacementJobStatus !== "created")))
       ) {
         throw new TransitionGuardError(
           lifecycle,
@@ -6807,7 +6975,7 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
     );
     return;
   }
-  requireCompleteReplacementRequiredSlotSet(lifecycle, command);
+  requireCompleteReplacementRequiredSlotSet(lifecycle, command, true);
   const resolutionSlotId = command.context?.claimSlotId;
   const replacementSetId = command.context?.replacementSetId;
   const authorizationId = command.context?.replacementFulfilmentAuthorizationId;
@@ -7120,13 +7288,568 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
   );
 }
 
+function requireExactReplacementRecoveryCancellation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  requireCompleteReplacementRequiredSlotSet(lifecycle, command, true);
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const exact = (
+    expected: readonly string[],
+    value: unknown,
+  ): value is string[] =>
+    Array.isArray(value) &&
+    value.length === expected.length &&
+    value.every((id) => nonBlank(id) && expected.includes(id)) &&
+    new Set(value).size === value.length;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const slotId = context?.claimSlotId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const replacementSetId = context?.replacementSetId;
+  const resultId = context?.replacementRecoveryCancellationResultId;
+  const snapshotId = context?.replacementRecoveryCancellationExpectedSnapshotId;
+  const snapshotValue =
+    context?.replacementRecoveryCancellationExpectedSnapshot;
+  const snapshot =
+    typeof snapshotValue === "object" &&
+    snapshotValue !== null &&
+    !Array.isArray(snapshotValue)
+      ? (snapshotValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    !nonBlank(claimId) ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(slotId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(replacementSetId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(snapshotId) ||
+    snapshot?.id !== snapshotId ||
+    snapshot.immutable !== true ||
+    snapshot.claimId !== claimId ||
+    snapshot.resolutionId !== resolutionId ||
+    snapshot.slotId !== slotId ||
+    snapshot.orderId !== orderId ||
+    snapshot.phaseId !== phaseId ||
+    snapshot.replacementSetId !== replacementSetId ||
+    snapshot.resolutionPreviousStatus !== "replacement_in_production" ||
+    snapshot.resolutionTargetStatus !== "recovery_pending" ||
+    context?.replacementRecoveryCancellationClaimId !== claimId ||
+    context?.replacementRecoveryCancellationResolutionId !== resolutionId ||
+    context?.replacementRecoveryCancellationSlotId !== slotId ||
+    context?.replacementRecoveryCancellationOrderId !== orderId ||
+    context?.replacementRecoveryCancellationPhaseId !== phaseId ||
+    context?.replacementRecoveryCancellationSetId !== replacementSetId ||
+    context?.replacementRecoveryCancellationResolutionPreviousStatus !==
+      "replacement_in_production" ||
+    context?.replacementRecoveryCancellationResolutionTargetStatus !==
+      "recovery_pending" ||
+    context?.replacementRecoveryCancellationClaimResultId !== resultId ||
+    context?.replacementRecoveryCancellationResolutionResultId !== resultId ||
+    context?.replacementRecoveryCancellationRequestSetResultId !== resultId ||
+    context?.replacementRecoveryCancellationReservationSetResultId !==
+      resultId ||
+    context?.replacementRecoveryCancellationShipmentSetResultId !== resultId ||
+    context?.replacementRecoveryCancellationJobSetResultId !== resultId ||
+    context?.replacementRecoveryCancellationAuthorizationResultId !==
+      resultId ||
+    context?.replacementRecoveryCancellationLabelSetResultId !== resultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement recovery cancellation must bind its exact Claim child and replacement set to one result",
+    );
+  }
+
+  const legacyGroups = Array.isArray(context?.replacementRequiredResourceGroups)
+    ? context.replacementRequiredResourceGroups
+    : [];
+  const legacyRecords = (
+    kind: "Request" | "Reservation" | "Shipment" | "Job",
+  ) =>
+    legacyGroups.map((value) => {
+      const group = value as Readonly<Record<string, unknown>>;
+      if (kind === "Request") {
+        return {
+          id: group.replacementRequestId,
+          slotIds: group.replacementRequestSlotIds,
+        };
+      }
+      if (kind === "Reservation") {
+        return {
+          id: group.replacementReservationId,
+          slotIds: group.replacementReservationSlotIds,
+        };
+      }
+      if (kind === "Shipment") {
+        return {
+          id: group.replacementShipmentId,
+          slotIds: group.replacementShipmentSlotIds,
+        };
+      }
+      return {
+        id: group.currentReplacementJobId,
+        slotIds: group.currentReplacementJobSlotIds,
+        currentReplacementJobStatus: group.currentReplacementJobStatus,
+      };
+    });
+  const setupRecords = (
+    independent: unknown,
+    kind: Parameters<typeof legacyRecords>[0],
+  ) => (Array.isArray(independent) ? independent : legacyRecords(kind));
+  const requests = setupRecords(
+    context?.replacementRequiredRequests,
+    "Request",
+  );
+  const reservations = setupRecords(
+    context?.replacementRequiredReservations,
+    "Reservation",
+  );
+  const shipments = setupRecords(
+    context?.replacementRequiredShipments,
+    "Shipment",
+  );
+  const jobs = setupRecords(context?.replacementRequiredJobs, "Job");
+  const snapshotRequests = snapshot.requests;
+  const snapshotReservations = snapshot.reservations;
+  const snapshotShipments = snapshot.shipments;
+  const snapshotJobs = snapshot.jobs;
+
+  const verify = (
+    setup: readonly unknown[],
+    expectedSnapshot: unknown,
+    cancellations: unknown,
+    expectedIds: unknown,
+    allowedPreviousStatuses: readonly string[],
+    targetStatus: string,
+    label: string,
+    requireCurrentLeaf = false,
+  ): Readonly<Record<string, unknown>>[] => {
+    const setupById = new Map<string, Readonly<Record<string, unknown>>>();
+    for (const value of setup) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement recovery requires authoritative ${label} setup records`,
+        );
+      }
+      const record = value as Readonly<Record<string, unknown>>;
+      if (!nonBlank(record.id) || setupById.has(record.id)) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement recovery requires an exact ${label} setup set`,
+        );
+      }
+      setupById.set(record.id, record);
+    }
+    const ids = [...setupById.keys()];
+    if (
+      ids.length === 0 ||
+      !Array.isArray(expectedSnapshot) ||
+      expectedSnapshot.length !== ids.length ||
+      !exact(ids, expectedIds) ||
+      !Array.isArray(cancellations) ||
+      cancellations.length !== ids.length
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        `replacement recovery must cancel the complete exact ${label} set`,
+      );
+    }
+    const snapshotById = new Map<string, Readonly<Record<string, unknown>>>();
+    for (const value of expectedSnapshot) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement recovery requires identity-bearing expected ${label} records`,
+        );
+      }
+      const record = value as Readonly<Record<string, unknown>>;
+      const persisted = nonBlank(record.id)
+        ? setupById.get(record.id)
+        : undefined;
+      if (
+        !nonBlank(record.id) ||
+        snapshotById.has(record.id) ||
+        persisted === undefined ||
+        !Array.isArray(persisted.slotIds) ||
+        !exact(persisted.slotIds as string[], record.slotIds) ||
+        record.claimId !== claimId ||
+        record.resolutionId !== resolutionId ||
+        record.replacementSetId !== replacementSetId ||
+        !allowedPreviousStatuses.includes(record.status as string) ||
+        (requireCurrentLeaf &&
+          (record.currentReplacementJobLineageLeaf !== true ||
+            record.status !== persisted.currentReplacementJobStatus))
+      ) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement recovery expected ${label} snapshot must match its authoritative setup identity and current state`,
+        );
+      }
+      snapshotById.set(record.id, record);
+    }
+    const seen = new Set<string>();
+    const verified: Readonly<Record<string, unknown>>[] = [];
+    for (const value of cancellations) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement recovery requires identity-bearing ${label} cancellation records`,
+        );
+      }
+      const record = value as Readonly<Record<string, unknown>>;
+      const id = record.id;
+      const persisted = nonBlank(id) ? snapshotById.get(id) : undefined;
+      if (
+        !nonBlank(id) ||
+        seen.has(id) ||
+        persisted === undefined ||
+        !Array.isArray(persisted.slotIds) ||
+        !exact(persisted.slotIds as string[], record.slotIds) ||
+        record.claimId !== claimId ||
+        record.resolutionId !== resolutionId ||
+        record.replacementSetId !== replacementSetId ||
+        record.previousStatus !== persisted.status ||
+        record.targetStatus !== targetStatus ||
+        record.resultId !== resultId ||
+        (requireCurrentLeaf && record.currentReplacementJobLineageLeaf !== true)
+      ) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          `replacement recovery must bind every ${label} cancellation to its exact setup identity and result`,
+        );
+      }
+      seen.add(id);
+      verified.push(record);
+    }
+    return verified;
+  };
+
+  verify(
+    requests,
+    snapshotRequests,
+    context?.replacementRecoveryCancellationRequests,
+    context?.replacementRecoveryCancellationRequestIds,
+    ["open", "queued", "in_progress"],
+    "cancelled",
+    "request",
+  );
+  verify(
+    reservations,
+    snapshotReservations,
+    context?.replacementRecoveryCancellationReservations,
+    context?.replacementRecoveryCancellationReservationIds,
+    ["active", "consumed"],
+    "released",
+    "ProductionReservation",
+  );
+  const cancelledShipments = verify(
+    shipments,
+    snapshotShipments,
+    context?.replacementRecoveryCancellationShipments,
+    context?.replacementRecoveryCancellationShipmentIds,
+    ["planned", "label_created", "cancellation_pending"],
+    "cancelled",
+    "Shipment",
+  );
+  verify(
+    jobs,
+    snapshotJobs,
+    context?.replacementRecoveryCancellationJobs,
+    context?.replacementRecoveryCancellationJobIds,
+    [
+      "created",
+      "accepted",
+      "slicing",
+      "gcode_ready",
+      "printing",
+      "printed",
+      "photo_submitted",
+      "qc_approved",
+      "packed",
+      "failed",
+    ],
+    "cancelled",
+    "Job",
+    true,
+  );
+
+  const snapshotAuthorizations = snapshot.authorizations;
+  const authorizationIds =
+    context?.replacementRecoveryCancellationAuthorizationIds;
+  const authorizations = context?.replacementRecoveryCancellationAuthorizations;
+  if (
+    !Array.isArray(snapshotAuthorizations) ||
+    snapshotAuthorizations.length === 0 ||
+    !Array.isArray(authorizations) ||
+    authorizations.length !== snapshotAuthorizations.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement recovery must invalidate its complete expected authorization set",
+    );
+  }
+  const expectedAuthorizationIds = new Set<string>();
+  const expectedAuthorizationById = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  for (const value of snapshotAuthorizations) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement recovery requires identity-bearing expected authorization records",
+      );
+    }
+    const authorization = value as Readonly<Record<string, unknown>>;
+    if (
+      !nonBlank(authorization.id) ||
+      expectedAuthorizationIds.has(authorization.id) ||
+      authorization.claimId !== claimId ||
+      authorization.resolutionId !== resolutionId ||
+      authorization.replacementSetId !== replacementSetId ||
+      authorization.status !== "issued" ||
+      !Array.isArray(authorization.shipmentIds) ||
+      !exact(authorization.shipmentIds as string[], authorization.shipmentIds)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement recovery expected authorization snapshot is invalid",
+      );
+    }
+    expectedAuthorizationIds.add(authorization.id);
+    expectedAuthorizationById.set(authorization.id, authorization);
+  }
+  if (!exact([...expectedAuthorizationIds], authorizationIds)) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement recovery authorization IDs must equal the expected set",
+    );
+  }
+  const invalidatedAuthorizationIds = new Set<string>();
+  for (const value of authorizations) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement recovery requires authorization cancellation records",
+      );
+    }
+    const authorization = value as Readonly<Record<string, unknown>>;
+    const expected = nonBlank(authorization.id)
+      ? expectedAuthorizationById.get(authorization.id)
+      : undefined;
+    if (
+      !nonBlank(authorization.id) ||
+      invalidatedAuthorizationIds.has(authorization.id) ||
+      expected === undefined ||
+      authorization.claimId !== claimId ||
+      authorization.resolutionId !== resolutionId ||
+      authorization.replacementSetId !== replacementSetId ||
+      !Array.isArray(expected.shipmentIds) ||
+      !exact(expected.shipmentIds as string[], authorization.shipmentIds) ||
+      authorization.previousStatus !== expected.status ||
+      authorization.targetStatus !== "invalidated" ||
+      authorization.resultId !== resultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement recovery must bind every authorization invalidation to its expected identity and result",
+      );
+    }
+    invalidatedAuthorizationIds.add(authorization.id);
+  }
+
+  const shipmentIds = cancelledShipments.map((record) => record.id as string);
+  const authorizedShipmentIds = new Set<string>();
+  for (const authorization of expectedAuthorizationById.values()) {
+    for (const shipmentId of authorization.shipmentIds as string[]) {
+      if (!shipmentIds.includes(shipmentId)) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          "replacement recovery authorization scope contains a foreign Shipment",
+        );
+      }
+      authorizedShipmentIds.add(shipmentId);
+    }
+  }
+  if (shipmentIds.some((id) => !authorizedShipmentIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement recovery must invalidate authorization for every expected Shipment",
+    );
+  }
+  const expectedShipmentById = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  for (const value of snapshotShipments as readonly unknown[]) {
+    const shipment = value as Readonly<Record<string, unknown>>;
+    expectedShipmentById.set(shipment.id as string, shipment);
+  }
+  for (const shipment of cancelledShipments) {
+    const expected = expectedShipmentById.get(shipment.id as string);
+    const labelled =
+      expected?.status === "label_created" ||
+      expected?.status === "cancellation_pending";
+    if (
+      expected === undefined ||
+      (labelled &&
+        (!nonBlank(expected.labelId) ||
+          !nonBlank(expected.providerTransactionId) ||
+          expected.labelStatus !== "created" ||
+          shipment.labelId !== expected.labelId ||
+          shipment.providerTransactionId !== expected.providerTransactionId ||
+          shipment.cancellationIntermediateStatus !== "cancellation_pending" ||
+          shipment.providerVoidStatus !== "succeeded" ||
+          shipment.providerVoidAuthenticated !== true ||
+          shipment.providerVoidVerified !== true ||
+          shipment.providerVoidResultId !== resultId)) ||
+      (!labelled &&
+        (expected.status !== "planned" ||
+          expected.labelId !== null ||
+          expected.providerTransactionId !== null ||
+          expected.labelStatus !== null ||
+          shipment.labelId !== null ||
+          shipment.providerTransactionId !== null ||
+          shipment.cancellationIntermediateStatus !== null ||
+          shipment.providerVoidStatus !== "not_required" ||
+          shipment.providerVoidAuthenticated !== false ||
+          shipment.providerVoidVerified !== false ||
+          shipment.providerVoidResultId !== resultId))
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement recovery Shipment cancellation must follow its exact current label and provider-void branch",
+      );
+    }
+  }
+  const labelIds = context?.replacementRecoveryCancellationLabelIds;
+  const labels = context?.replacementRecoveryCancellationLabels;
+  const expectedLabels = [...expectedShipmentById.values()].filter((shipment) =>
+    nonBlank(shipment.labelId),
+  );
+  const expectedLabelIds = expectedLabels.map(
+    (shipment) => shipment.labelId as string,
+  );
+  if (
+    !Array.isArray(labelIds) ||
+    !Array.isArray(labels) ||
+    !exact(expectedLabelIds, labelIds) ||
+    labels.length !== expectedLabels.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement recovery must invalidate the complete exact label set",
+    );
+  }
+  const labelledShipments = new Set<string>();
+  const usedLabelIds = new Set<string>();
+  for (const value of labels) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement recovery requires identity-bearing label cancellation records",
+      );
+    }
+    const label = value as Readonly<Record<string, unknown>>;
+    if (
+      !nonBlank(label.id) ||
+      !labelIds.includes(label.id) ||
+      usedLabelIds.has(label.id) ||
+      !nonBlank(label.shipmentId) ||
+      !shipmentIds.includes(label.shipmentId) ||
+      labelledShipments.has(label.shipmentId) ||
+      expectedShipmentById.get(label.shipmentId)?.labelId !== label.id ||
+      label.claimId !== claimId ||
+      label.resolutionId !== resolutionId ||
+      label.replacementSetId !== replacementSetId ||
+      label.previousStatus !==
+        expectedShipmentById.get(label.shipmentId)?.labelStatus ||
+      label.targetStatus !== "invalidated" ||
+      label.resultId !== resultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "replacement recovery must bind every label invalidation to its exact Shipment and result",
+      );
+    }
+    usedLabelIds.add(label.id);
+    labelledShipments.add(label.shipmentId);
+  }
+  if (
+    labelIds.some((id) => !nonBlank(id) || !usedLabelIds.has(id)) ||
+    expectedLabels.some(
+      (shipment) =>
+        !nonBlank(shipment.id) || !labelledShipments.has(shipment.id),
+    ) ||
+    [...expectedAuthorizationIds].some(
+      (id) => !invalidatedAuthorizationIds.has(id),
+    ) ||
+    context?.replacementRecoveryCancellationCompleted !== true ||
+    context?.replacementRecoveryCancellationAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement recovery requires one complete atomic cancellation result",
+    );
+  }
+}
+
 function requireIndependentReplacementHandoff<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
   transitionShipmentId?: string,
   cancellationRace = false,
 ): void {
-  requireIndependentReplacementResourceSet(lifecycle, command);
+  requireIndependentReplacementResourceSet(lifecycle, command, true);
   const context = command.context;
   const nonBlank = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
@@ -8293,11 +9016,9 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
         command.current === "replacement_in_production" &&
         command.target === "recovery_pending"
       ) {
-        requireFlag(
+        requireExactReplacementRecoveryCancellation(
           "ClaimSlotResolution",
           command,
-          "remedyCancellationCompleted",
-          "pre-handoff replacement recovery requires its cancellation barrier",
         );
       }
       if (
