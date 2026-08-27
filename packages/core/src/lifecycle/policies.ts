@@ -1246,65 +1246,100 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
   );
 }
 
-function requireVerifiedMatchingRefundWebhook<S extends string>(
+function requireExactPaymentRefundCompletion<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  const paymentId = command.context?.paymentId;
-  const webhookPaymentId = command.context?.refundWebhookPaymentId;
-  const refundTransactionId = command.context?.refundTransactionId;
-  const webhookRefundTransactionId =
-    command.context?.refundWebhookRefundTransactionId;
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const refundTransactionId = context?.refundTransactionId;
+  const providerEventId = context?.refundCompletionProviderEventId;
+  const previousResultId = context?.refundCompletionPreviousPaymentResultId;
+  const resultId = context?.refundCompletionResultId;
+  const stateKey = context?.refundCompletionCurrentStateCommandKey;
+  const expectedValue = context?.refundCompletionExpectedPayment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const refundValue = context?.refundCompletionRefundTransaction;
+  const refund =
+    typeof refundValue === "object" &&
+    refundValue !== null &&
+    !Array.isArray(refundValue)
+      ? (refundValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const eventValue = context?.refundCompletionProviderEvent;
+  const event =
+    typeof eventValue === "object" &&
+    eventValue !== null &&
+    !Array.isArray(eventValue)
+      ? (eventValue as Readonly<Record<string, unknown>>)
+      : undefined;
   if (
-    typeof paymentId !== "string" ||
-    paymentId.length === 0 ||
-    webhookPaymentId !== paymentId
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(refundTransactionId) ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateCommandKey !== stateKey ||
+    context?.refundWebhookPaymentId !== paymentId ||
+    context?.refundWebhookRefundTransactionId !== refundTransactionId ||
+    context?.refundWebhookStatus !== "succeeded" ||
+    context?.refundWebhookProjectedTarget !== command.target ||
+    context?.refundWebhookAuthenticated !== true ||
+    context?.refundWebhookVerified !== true ||
+    expected?.id !== paymentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.role !== role ||
+    expected.status !== "refund_pending" ||
+    expected.activeRefundTransactionId !== refundTransactionId ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.immutable !== true ||
+    refund?.id !== refundTransactionId ||
+    refund.paymentId !== paymentId ||
+    refund.orderId !== orderId ||
+    refund.phaseId !== phaseId ||
+    refund.previousStatus !== "pending" ||
+    refund.targetStatus !== "succeeded" ||
+    refund.status !== "succeeded" ||
+    refund.providerEventId !== providerEventId ||
+    refund.resultId !== resultId ||
+    refund.immutable !== true ||
+    event?.id !== providerEventId ||
+    event.paymentId !== paymentId ||
+    event.refundTransactionId !== refundTransactionId ||
+    event.status !== "succeeded" ||
+    event.projectedTarget !== command.target ||
+    event.authenticated !== true ||
+    event.verified !== true ||
+    event.resultId !== resultId ||
+    event.immutable !== true ||
+    context?.refundCompletionPaymentResultId !== resultId ||
+    context?.refundCompletionRefundTransactionResultId !== resultId ||
+    context?.refundCompletionProviderEventResultId !== resultId ||
+    context?.refundCompletionCompleted !== true ||
+    context?.refundCompletionAtomic !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
       command.target,
-      "refund completion requires a webhook for this exact payment",
-    );
-  }
-  if (
-    typeof refundTransactionId !== "string" ||
-    refundTransactionId.length === 0 ||
-    webhookRefundTransactionId !== refundTransactionId
-  ) {
-    throw new TransitionGuardError(
-      lifecycle,
-      command.current,
-      command.target,
-      "refund completion requires a webhook for this exact refund transaction",
-    );
-  }
-  requireFlag(
-    lifecycle,
-    command,
-    "refundWebhookAuthenticated",
-    "refund completion requires an authenticated provider webhook",
-  );
-  requireFlag(
-    lifecycle,
-    command,
-    "refundWebhookVerified",
-    "refund completion requires a verified provider webhook",
-  );
-  if (command.context?.refundWebhookStatus !== "succeeded") {
-    throw new TransitionGuardError(
-      lifecycle,
-      command.current,
-      command.target,
-      "refund completion requires a successful refund webhook result",
-    );
-  }
-  if (command.context?.refundWebhookProjectedTarget !== command.target) {
-    throw new TransitionGuardError(
-      lifecycle,
-      command.current,
-      command.target,
-      "refund webhook result must project this exact refund target",
+      "refund completion requires the command-selected Payment, its exact RefundTransaction, provider event, and atomic result",
     );
   }
 }
@@ -4781,7 +4816,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       command.current === "refund_pending" &&
       (command.target === "partially_refunded" || command.target === "refunded")
     ) {
-      requireVerifiedMatchingRefundWebhook("Payment", command);
+      requireExactPaymentRefundCompletion("Payment", command);
     }
   },
 };
@@ -5165,12 +5200,24 @@ function requireDeliveredJobSettlement<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
   const jobId = command.context?.jobId;
   const shipmentId = command.context?.shipmentId;
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
   const lineageLeafId = command.context?.currentJobShipmentLineageLeafId;
   const evaluatedAt = command.context?.jobSettlementEvaluatedAt;
+  const previousResultId = command.context?.jobSettlementPreviousJobResultId;
+  const resultId = command.context?.jobSettlementResultId;
+  const stateKey = command.context?.jobSettlementCurrentStateCommandKey;
+  const expectedValue = command.context?.jobSettlementExpectedJob;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const expectedSlotIdsValue = command.context?.expectedJobSettlementSlotIds;
   const slotsValue = command.context?.jobSettlementSlots;
   const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
@@ -5178,9 +5225,15 @@ function requireDeliveredJobSettlement<S extends string>(
     : undefined;
   const slots = Array.isArray(slotsValue) ? [...slotsValue] : undefined;
   if (
-    typeof jobId !== "string" ||
-    jobId.trim().length === 0 ||
+    !nonBlank(jobId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(stateKey) ||
+    command.aggregateId !== jobId ||
+    command.currentStateCommandKey !== stateKey ||
     command.context?.jobSettlementJobId !== jobId ||
+    command.context?.jobSettlementPreviousStatus !== "handed_over" ||
+    command.context?.jobSettlementTargetStatus !== "settled" ||
     typeof shipmentId !== "string" ||
     shipmentId.trim().length === 0 ||
     command.context?.jobSettlementShipmentId !== shipmentId ||
@@ -5198,6 +5251,19 @@ function requireDeliveredJobSettlement<S extends string>(
     command.context?.jobSettlementLineageOrderId !== orderId ||
     command.context?.jobSettlementLineagePhaseId !== phaseId ||
     command.context?.jobSettlementLineageStatus !== "delivered" ||
+    expected?.id !== jobId ||
+    expected.shipmentId !== shipmentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.status !== "handed_over" ||
+    expected.resultId !== previousResultId ||
+    expected.currentStateCommandKey !== stateKey ||
+    expected.currentLineageLeaf !== true ||
+    expected.immutable !== true ||
+    command.context?.jobSettlementJobResultId !== resultId ||
+    command.context?.jobSettlementShipmentResultId !== resultId ||
+    command.context?.jobSettlementLineageResultId !== resultId ||
+    command.context?.jobSettlementSlotSetResultId !== resultId ||
     !(evaluatedAt instanceof Instant) ||
     expectedSlotIds === undefined ||
     expectedSlotIds.length === 0 ||
@@ -6918,6 +6984,7 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
     }
     if (command.current === "lost" && command.target === "recovered") {
       requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
+      requireExactShipmentProviderOutcome("Shipment", command);
       requireFlag(
         "Shipment",
         command,
@@ -7027,6 +7094,7 @@ function requireCompleteClaimResolutionSet<S extends string>(
   if (
     typeof claimId !== "string" ||
     claimId.trim().length === 0 ||
+    (lifecycle === "Claim" && command.aggregateId !== claimId) ||
     command.context?.claimResolutionSetClaimId !== claimId ||
     expectedIds === undefined ||
     expectedIds.length === 0 ||

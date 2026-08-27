@@ -192,6 +192,49 @@ const permittedContext = {
   refundWebhookVerified: true,
   refundWebhookStatus: "succeeded",
   refundProviderEventId: "refund-provider-event-1",
+  refundCompletionProviderEventId: "refund-provider-event-1",
+  refundCompletionPreviousPaymentResultId: "refund-pending-result-1",
+  refundCompletionResultId: "refund-completion-result-1",
+  refundCompletionCurrentStateCommandKey: "payment-refund-pending-command-1",
+  refundCompletionExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "refund_pending",
+    activeRefundTransactionId: "refund-1",
+    resultId: "refund-pending-result-1",
+    currentStateCommandKey: "payment-refund-pending-command-1",
+    immutable: true,
+  },
+  refundCompletionRefundTransaction: {
+    id: "refund-1",
+    paymentId: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    previousStatus: "pending",
+    targetStatus: "succeeded",
+    status: "succeeded",
+    providerEventId: "refund-provider-event-1",
+    resultId: "refund-completion-result-1",
+    immutable: true,
+  },
+  refundCompletionProviderEvent: {
+    id: "refund-provider-event-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    status: "succeeded",
+    projectedTarget: "refunded",
+    authenticated: true,
+    verified: true,
+    resultId: "refund-completion-result-1",
+    immutable: true,
+  },
+  refundCompletionPaymentResultId: "refund-completion-result-1",
+  refundCompletionRefundTransactionResultId: "refund-completion-result-1",
+  refundCompletionProviderEventResultId: "refund-completion-result-1",
+  refundCompletionCompleted: true,
+  refundCompletionAtomic: true,
   refundWebhookAmountMinor: 1_000n,
   captureWindowClosed: true,
   captureCutoffSet: true,
@@ -724,6 +767,26 @@ const permittedContext = {
   jobSettlementLineageOrderId: "order-1",
   jobSettlementLineagePhaseId: "phase-1",
   jobSettlementLineageStatus: "delivered",
+  jobSettlementPreviousJobResultId: "job-handed-over-result-1",
+  jobSettlementResultId: "job-settlement-result-1",
+  jobSettlementCurrentStateCommandKey: "job-handed-over-command-1",
+  jobSettlementExpectedJob: {
+    id: "job-1",
+    shipmentId: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "handed_over",
+    resultId: "job-handed-over-result-1",
+    currentStateCommandKey: "job-handed-over-command-1",
+    currentLineageLeaf: true,
+    immutable: true,
+  },
+  jobSettlementPreviousStatus: "handed_over",
+  jobSettlementTargetStatus: "settled",
+  jobSettlementJobResultId: "job-settlement-result-1",
+  jobSettlementShipmentResultId: "job-settlement-result-1",
+  jobSettlementLineageResultId: "job-settlement-result-1",
+  jobSettlementSlotSetResultId: "job-settlement-result-1",
   jobSettlementEvaluatedAt: Instant.parse("2026-03-02T00:00:00.000Z"),
   expectedJobSettlementSlotIds: ["slot-1"],
   jobSettlementSlots: [
@@ -2420,6 +2483,14 @@ function contextForTransition(target: string, current?: string) {
       ...permittedContext.paymentFailureExpectedPayment,
       role: permittedContext.paymentRole,
     },
+    refundCompletionExpectedPayment: {
+      ...permittedContext.refundCompletionExpectedPayment,
+      role: permittedContext.paymentRole,
+    },
+    refundCompletionProviderEvent: {
+      ...permittedContext.refundCompletionProviderEvent,
+      projectedTarget: target,
+    },
     shipmentProviderOutcomePreviousResultId: `shipment-${shipmentProviderOutcomeSource}-result-1`,
     shipmentProviderOutcomeResultId,
     shipmentProviderOutcomeCurrentStateCommandKey: `shipment-${shipmentProviderOutcomeSource}-command-1`,
@@ -2680,10 +2751,23 @@ function commandAnchors(
     };
   }
   if (
-    policy.name === "Shipment" &&
-    ((current === "handed_over" && target === "in_transit") ||
-      (current === "in_transit" &&
-        (target === "delivered" || target === "lost" || target === "returned")))
+    policy.name === "Payment" &&
+    current === "refund_pending" &&
+    (target === "partially_refunded" || target === "refunded")
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: "payment-refund-pending-command-1",
+    };
+  }
+  if (
+    (policy.name === "Shipment" &&
+      ((current === "handed_over" && target === "in_transit") ||
+        (current === "in_transit" &&
+          (target === "delivered" ||
+            target === "lost" ||
+            target === "returned")))) ||
+    (current === "lost" && target === "recovered")
   ) {
     return {
       aggregateId: "shipment-1",
@@ -2702,6 +2786,16 @@ function commandAnchors(
   }
   if (
     policy.name === "Job" &&
+    current === "handed_over" &&
+    target === "settled"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-handed-over-command-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
     current === "printed" &&
     target === "photo_submitted"
   ) {
@@ -2709,6 +2803,12 @@ function commandAnchors(
       aggregateId: "job-1",
       currentStateCommandKey: "job-printing-command-1",
     };
+  }
+  if (
+    policy.name === "Claim" &&
+    (target.startsWith("resolved_") || target === "withdrawn")
+  ) {
+    return { aggregateId: "claim-1" };
   }
   if (
     policy.name === "Job" &&
@@ -7210,6 +7310,7 @@ describe("v0 lifecycle policy tables", () => {
     (parentPreviousStatus) => {
       expect(
         transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, parentPreviousStatus, "withdrawn"),
           current: parentPreviousStatus,
           target: "withdrawn",
           idempotencyKey: `claim-withdrawal-${parentPreviousStatus}`,
@@ -7232,6 +7333,7 @@ describe("v0 lifecycle policy tables", () => {
     )[0];
     expect(
       transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "active", "withdrawn"),
         current: "active",
         target: "withdrawn",
         idempotencyKey: "claim-withdrawal-grouped-shipment",
@@ -7269,6 +7371,7 @@ describe("v0 lifecycle policy tables", () => {
     const context = completeWholeClaimWithdrawal("active");
     expect(
       transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "active", "withdrawn"),
         current: "active",
         target: "withdrawn",
         idempotencyKey: "claim-withdrawal-no-shipment-leaves",
@@ -7703,6 +7806,7 @@ describe("v0 lifecycle policy tables", () => {
   it("resolves a Claim directly to rejected only after the same atomic result", () => {
     expect(
       transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "investigating", "resolved_rejected"),
         current: "investigating",
         target: "resolved_rejected",
         idempotencyKey: "claim-rejection-complete",
@@ -10197,6 +10301,11 @@ describe("v0 lifecycle policy tables", () => {
     (missingFlag) => {
       expect(() =>
         transition(paymentPolicy, {
+          ...commandAnchors(
+            paymentPolicy,
+            "refund_pending",
+            "partially_refunded",
+          ),
           current: "refund_pending",
           target: "partially_refunded",
           idempotencyKey: `payment-refund-${missingFlag}`,
@@ -10250,19 +10359,11 @@ describe("v0 lifecycle policy tables", () => {
     (target) => {
       expect(
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "refund_pending", target),
           current: "refund_pending",
           target,
           idempotencyKey: `payment-refund-success-${target}`,
-          context: {
-            paymentId: "payment-1",
-            refundWebhookPaymentId: "payment-1",
-            refundTransactionId: "refund-1",
-            refundWebhookRefundTransactionId: "refund-1",
-            refundWebhookAuthenticated: true,
-            refundWebhookVerified: true,
-            refundWebhookStatus: "succeeded",
-            refundWebhookProjectedTarget: target,
-          },
+          context: contextForTransition(target, "refund_pending"),
         }),
       ).toEqual({
         kind: "changed",
@@ -11143,6 +11244,7 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)("rejects Job settlement with invalid %s", (field, value) => {
     expect(() =>
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "handed_over", "settled"),
         current: "handed_over",
         target: "settled",
         idempotencyKey: `job-settlement-${field}`,
@@ -11157,6 +11259,7 @@ describe("v0 lifecycle policy tables", () => {
   it("settles a delivered Job after an exact Claim resolution before the window ends", () => {
     expect(
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "handed_over", "settled"),
         current: "handed_over",
         target: "settled",
         idempotencyKey: "job-settlement-resolved-claim",
@@ -14161,6 +14264,7 @@ describe("v0 lifecycle policy tables", () => {
     (target, claimSlotResolutionStatuses) => {
       expect(() =>
         transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "active", target),
           current: "active",
           target,
           idempotencyKey: `claim-mismatch-${target}`,
@@ -14181,6 +14285,7 @@ describe("v0 lifecycle policy tables", () => {
     (target, claimSlotResolutionStatuses) => {
       expect(
         transition(claimPolicy, {
+          ...commandAnchors(claimPolicy, "active", target),
           current: "active",
           target,
           idempotencyKey: `claim-match-${target}`,
@@ -14200,6 +14305,7 @@ describe("v0 lifecycle policy tables", () => {
 
     expect(() =>
       transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "active", "resolved_mixed"),
         current: "active",
         target: "resolved_refund",
         idempotencyKey: "claim-sparse-dispositions",
@@ -14387,6 +14493,7 @@ describe("v0 lifecycle policy tables", () => {
     const evidence = claimResolutionEvidence(["delivered_reprint", "refunded"]);
     expect(
       transition(claimPolicy, {
+        ...commandAnchors(claimPolicy, "active", "resolved_mixed"),
         current: "active",
         target: "resolved_mixed",
         idempotencyKey: "claim-complete-set-reordered",
@@ -14516,6 +14623,7 @@ describe("v0 lifecycle policy tables", () => {
     ["in_transit", "delivered"],
     ["in_transit", "lost"],
     ["in_transit", "returned"],
+    ["lost", "recovered"],
   ] as const)(
     "binds Shipment %s -> %s to its exact provider event and transaction",
     (current, target) => {
@@ -14612,6 +14720,247 @@ describe("v0 lifecycle policy tables", () => {
           shipmentProviderOutcomeTransaction: {
             ...context.shipmentProviderOutcomeTransaction,
             shipmentId: "shipment-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects recovery evidence for a Shipment other than the command aggregate", () => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        aggregateId: "shipment-2",
+        currentStateCommandKey: "shipment-lost-command-1",
+        current: "lost",
+        target: "recovered",
+        idempotencyKey: "shipment-recovery-foreign-command-aggregate",
+        context: contextForTransition("recovered", "lost"),
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["jobSettlementResultId", " "],
+    ["jobSettlementPreviousJobResultId", "another-result"],
+    ["jobSettlementCurrentStateCommandKey", "another-command"],
+    ["jobSettlementPreviousStatus", "packed"],
+    ["jobSettlementTargetStatus", "handed_over"],
+    ["jobSettlementJobResultId", "another-result"],
+    ["jobSettlementShipmentResultId", "another-result"],
+    ["jobSettlementLineageResultId", "another-result"],
+    ["jobSettlementSlotSetResultId", "another-result"],
+  ] as const)(
+    "rejects Job settlement with mismatched selected result proof (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "handed_over", "settled"),
+          current: "handed_over",
+          target: "settled",
+          idempotencyKey: `job-settlement-selected-result-${field}`,
+          context: {
+            ...contextForTransition("settled", "handed_over"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "job-2"],
+    ["shipmentId", "shipment-2"],
+    ["orderId", "order-2"],
+    ["phaseId", "phase-2"],
+    ["status", "packed"],
+    ["resultId", "another-result"],
+    ["currentStateCommandKey", "another-command"],
+    ["currentLineageLeaf", false],
+    ["immutable", false],
+  ] as const)(
+    "rejects Job settlement with mismatched expected Job %s",
+    (field, value) => {
+      const context = contextForTransition("settled", "handed_over");
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "handed_over", "settled"),
+          current: "handed_over",
+          target: "settled",
+          idempotencyKey: `job-settlement-expected-${field}`,
+          context: {
+            ...context,
+            jobSettlementExpectedJob: {
+              ...context.jobSettlementExpectedJob,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign Job settlement substitution", () => {
+    const context = contextForTransition("settled", "handed_over");
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "handed_over", "settled"),
+        current: "handed_over",
+        target: "settled",
+        idempotencyKey: "job-settlement-coordinated-substitution",
+        context: {
+          ...context,
+          jobId: "job-2",
+          jobSettlementJobId: "job-2",
+          jobSettlementShipmentJobId: "job-2",
+          jobSettlementExpectedJob: {
+            ...context.jobSettlementExpectedJob,
+            id: "job-2",
+          },
+          jobSettlementSlots: context.jobSettlementSlots.map((slot) => ({
+            ...slot,
+            jobId: "job-2",
+          })),
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["resolved_rejected", "investigating"],
+    ["resolved_reprint", "active"],
+    ["resolved_reship", "active"],
+    ["resolved_refund", "active"],
+    ["resolved_mixed", "active"],
+    ["withdrawn", "opened"],
+  ] as const)(
+    "rejects Claim %s projection for a foreign command aggregate",
+    (target, current) => {
+      expect(() =>
+        transition(claimPolicy, {
+          aggregateId: "claim-2",
+          current,
+          target,
+          idempotencyKey: `claim-terminal-foreign-aggregate-${target}`,
+          context: contextForTransition(target, current),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign terminal Claim projection", () => {
+    const context = contextForTransition("resolved_refund", "active");
+    expect(() =>
+      transition(claimPolicy, {
+        aggregateId: "claim-1",
+        current: "active",
+        target: "resolved_refund",
+        idempotencyKey: "claim-terminal-coordinated-substitution",
+        context: {
+          ...context,
+          claimId: "claim-2",
+          claimResolutionSetClaimId: "claim-2",
+          claimRetentionClaimId: "claim-2",
+          claimSlotResolutions: context.claimSlotResolutions.map(
+            (resolution) => ({
+              ...resolution,
+              claimId: "claim-2",
+              activeClaimIdBefore: "claim-2",
+            }),
+          ),
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["refundCompletionProviderEventId", "another-event"],
+    ["refundCompletionPreviousPaymentResultId", "another-result"],
+    ["refundCompletionResultId", " "],
+    ["refundCompletionCurrentStateCommandKey", "another-command"],
+    ["refundCompletionPaymentResultId", "another-result"],
+    ["refundCompletionRefundTransactionResultId", "another-result"],
+    ["refundCompletionProviderEventResultId", "another-result"],
+    ["refundCompletionCompleted", false],
+    ["refundCompletionAtomic", false],
+  ] as const)(
+    "rejects refund completion with mismatched selected result proof (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "refund_pending", "refunded"),
+          current: "refund_pending",
+          target: "refunded",
+          idempotencyKey: `refund-completion-selected-result-${field}`,
+          context: {
+            ...contextForTransition("refunded", "refund_pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["refundCompletionExpectedPayment", "id", "payment-2"],
+    [
+      "refundCompletionExpectedPayment",
+      "activeRefundTransactionId",
+      "refund-2",
+    ],
+    ["refundCompletionExpectedPayment", "status", "captured"],
+    ["refundCompletionExpectedPayment", "immutable", false],
+    ["refundCompletionRefundTransaction", "paymentId", "payment-2"],
+    ["refundCompletionRefundTransaction", "providerEventId", "event-2"],
+    ["refundCompletionRefundTransaction", "status", "failed"],
+    ["refundCompletionRefundTransaction", "resultId", "another-result"],
+    ["refundCompletionProviderEvent", "paymentId", "payment-2"],
+    ["refundCompletionProviderEvent", "refundTransactionId", "refund-2"],
+    ["refundCompletionProviderEvent", "projectedTarget", "partially_refunded"],
+    ["refundCompletionProviderEvent", "verified", false],
+    ["refundCompletionProviderEvent", "resultId", "another-result"],
+  ] as const)(
+    "rejects refund completion with mismatched %s.%s",
+    (recordField, field, value) => {
+      const context = contextForTransition("refunded", "refund_pending");
+      const record = context[recordField] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "refund_pending", "refunded"),
+          current: "refund_pending",
+          target: "refunded",
+          idempotencyKey: `refund-completion-${recordField}-${field}`,
+          context: {
+            ...context,
+            [recordField]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign Payment refund substitution", () => {
+    const context = contextForTransition("refunded", "refund_pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "refund_pending", "refunded"),
+        current: "refund_pending",
+        target: "refunded",
+        idempotencyKey: "refund-completion-coordinated-substitution",
+        context: {
+          ...context,
+          paymentId: "payment-2",
+          refundWebhookPaymentId: "payment-2",
+          refundCompletionExpectedPayment: {
+            ...context.refundCompletionExpectedPayment,
+            id: "payment-2",
+          },
+          refundCompletionRefundTransaction: {
+            ...context.refundCompletionRefundTransaction,
+            paymentId: "payment-2",
+          },
+          refundCompletionProviderEvent: {
+            ...context.refundCompletionProviderEvent,
+            paymentId: "payment-2",
           },
         },
       }),
