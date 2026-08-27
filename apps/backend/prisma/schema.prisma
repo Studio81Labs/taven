@@ -203,7 +203,7 @@ model ModelGeometry {
   sourceModelFileId      String   @map("source_model_file_id") @db.Uuid
   sourceSelector         String?  @map("source_selector") @db.Text
   canonicalObjectKey     String   @unique @map("canonical_object_key") @db.Text
-  geometryHash           String   @unique @map("geometry_hash") @db.VarChar(64)
+  geometryHash           String   @map("geometry_hash") @db.VarChar(64)
   canonicalizerRevision  String   @map("canonicalizer_revision") @db.VarChar(64)
   volumeCubicMicrometers BigInt   @map("volume_cubic_micrometers")
   boundsXMicrometers     BigInt   @map("bounds_x_micrometers")
@@ -219,6 +219,7 @@ model ModelGeometry {
 
   @@unique([id, sourceModelFileId])
   @@index([sourceModelFileId])
+  @@index([geometryHash])
   @@map("model_geometries")
 }
 

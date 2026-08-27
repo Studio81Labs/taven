@@ -240,6 +240,59 @@ describe("persistence foundations", () => {
     );
   });
 
+  it("allows identical canonical geometry under distinct source files", async () => {
+    await inRollbackTransaction(
+      "duplicate-geometry-hash",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const existing = await client.query<{ geometry_hash: string }>(
+          'SELECT "geometry_hash" FROM "model_geometries" WHERE "id" = $1',
+          [foundation.modelGeometryId],
+        );
+        const geometryHash = existing.rows[0]?.geometry_hash;
+        if (!geometryHash) {
+          throw new Error("foundation geometry hash was not persisted");
+        }
+
+        const secondFileId = fixtures.id("second-model-file");
+        await client.query(
+          'INSERT INTO "model_files" ("id", "format", "original_filename", "storage_object_key", "content_hash", "size_bytes", "uploaded_at", "source_delete_after") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+          [
+            secondFileId,
+            "STEP",
+            "same-body.step",
+            `models/${secondFileId}`,
+            "f".repeat(64),
+            1,
+            new Date("2026-08-27T12:00:00.000Z"),
+            new Date("2030-08-27T12:00:00.000Z"),
+          ],
+        );
+        await client.query(
+          'INSERT INTO "model_geometries" ("id", "source_model_file_id", "canonical_object_key", "geometry_hash", "canonicalizer_revision", "volume_cubic_micrometers", "bounds_x_micrometers", "bounds_y_micrometers", "bounds_z_micrometers", "triangle_count") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+          [
+            fixtures.id("second-geometry"),
+            secondFileId,
+            `canonical/${fixtures.id("second-geometry")}`,
+            geometryHash,
+            "test",
+            1,
+            1,
+            1,
+            1,
+            1,
+          ],
+        );
+
+        const matching = await client.query<{ count: string }>(
+          'SELECT count(*)::text AS count FROM "model_geometries" WHERE "geometry_hash" = $1',
+          [geometryHash],
+        );
+        expect(matching.rows).toEqual([{ count: "2" }]);
+      },
+    );
+  });
+
   it("requires matching revision identity kinds and immutable payloads", async () => {
     await inRollbackTransaction("revision-kind", async (client, fixtures) => {
       const revisionId = fixtures.id("revision");
@@ -305,6 +358,58 @@ describe("persistence foundations", () => {
         ),
       ).rejects.toMatchObject({ code: "23503" });
     });
+  });
+
+  it("rejects candidate profiles that do not match the concrete machine", async () => {
+    await inRollbackTransaction(
+      "candidate-nozzle-mismatch",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        await client.query(
+          'UPDATE "machines" SET "installed_nozzle_micrometers" = $2 WHERE "id" = $1',
+          [foundation.machineId, 600],
+        );
+
+        await expect(
+          fixtures.planProduction(foundation, "wrong-nozzle"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_compatibility_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-capability-mismatch",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const otherCapabilityId = fixtures.id("other-capability");
+        await client.query(
+          'INSERT INTO "machine_capabilities" ("id", "capability_key", "manufacturer", "model", "build_volume_x_micrometers", "build_volume_y_micrometers", "build_volume_z_micrometers", "supported_nozzle_micrometers", "supported_materials") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+          [
+            otherCapabilityId,
+            `other-${otherCapabilityId}`,
+            "Other manufacturer",
+            "Other model",
+            200_000,
+            200_000,
+            200_000,
+            [400],
+            ["PLA"],
+          ],
+        );
+        await client.query(
+          'UPDATE "machines" SET "machine_capability_id" = $2 WHERE "id" = $1',
+          [foundation.machineId, otherCapabilityId],
+        );
+
+        await expect(
+          fixtures.planProduction(foundation, "wrong-capability"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_compatibility_check",
+        });
+      },
+    );
   });
 
   it("allows adjacent capacity reservations but rejects active overlaps", async () => {
@@ -494,6 +599,28 @@ describe("persistence foundations", () => {
       }
       setup.release();
     }
+  });
+
+  it("rejects direct writes to the maintained inventory reservation counter", async () => {
+    await inRollbackTransaction(
+      "inventory-counter-write",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        await client.query(
+          'UPDATE "inventories" SET "reserved_milligrams" = 1 WHERE "id" = $1',
+          [foundation.inventoryId],
+        );
+
+        await expect(
+          client.query(
+            'SET CONSTRAINTS "inventories_reserved_counter_matches_reservations" IMMEDIATE',
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "inventory_reserved_counter_matches_reservations_check",
+        });
+      },
+    );
   });
 
   it("cannot reserve a multi-plate candidate until every interval is reserved", async () => {

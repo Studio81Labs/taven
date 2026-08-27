@@ -90,7 +90,7 @@ export class PersistenceFactory {
         200_000,
         200_000,
         200_000,
-        [400],
+        [400, 600],
         ["PLA"],
       ],
     );
@@ -172,7 +172,7 @@ export class PersistenceFactory {
     );
     await this.createRevisionIdentity(machineProfileId, "MACHINE_PROFILE");
     await this.sql.query(
-      'INSERT INTO "machine_profiles" ("id", "machine_capability_id", "reference_profile_id", "material", "quality", "nozzle_diameter_micrometers", "slicer_engine", "slicer_version", "settings") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)',
+      'INSERT INTO "machine_profiles" ("id", "machine_capability_id", "reference_profile_id", "material", "quality", "nozzle_diameter_micrometers", "slicer_engine", "slicer_version", "settings", "state", "activated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)',
       [
         machineProfileId,
         capabilityId,
@@ -183,6 +183,8 @@ export class PersistenceFactory {
         "orca",
         "test",
         JSON.stringify({}),
+        "ACTIVE",
+        createdAt,
       ],
     );
     await this.createRevisionIdentity(
@@ -190,7 +192,7 @@ export class PersistenceFactory {
       "MACHINE_CALIBRATION",
     );
     await this.sql.query(
-      'INSERT INTO "machine_calibrations" ("id", "node_id", "machine_id", "flow_ratio_parts_per_million", "xy_compensation_micrometers", "elephant_foot_compensation_micrometers", "settings") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)',
+      'INSERT INTO "machine_calibrations" ("id", "node_id", "machine_id", "flow_ratio_parts_per_million", "xy_compensation_micrometers", "elephant_foot_compensation_micrometers", "settings", "state", "activated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)',
       [
         machineCalibrationId,
         nodeId,
@@ -199,6 +201,8 @@ export class PersistenceFactory {
         0,
         0,
         JSON.stringify({}),
+        "ACTIVE",
+        createdAt,
       ],
     );
     await this.sql.query(

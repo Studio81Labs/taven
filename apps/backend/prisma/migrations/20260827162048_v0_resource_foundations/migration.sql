@@ -500,7 +500,7 @@ CREATE INDEX "model_files_source_delete_after_retention_hold_deleted_at_idx" ON 
 CREATE UNIQUE INDEX "model_geometries_canonical_object_key_key" ON "model_geometries"("canonical_object_key");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "model_geometries_geometry_hash_key" ON "model_geometries"("geometry_hash");
+CREATE INDEX "model_geometries_geometry_hash_idx" ON "model_geometries"("geometry_hash");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "model_geometries_id_source_model_file_id_key" ON "model_geometries"("id", "source_model_file_id");
@@ -1254,14 +1254,27 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1
         FROM "machine_profiles" machine_profile
+        JOIN "machines" machine
+          ON machine."id" = NEW."machine_id"
+         AND machine."node_id" = NEW."node_id"
         JOIN "inventories" inventory
           ON inventory."id" = NEW."inventory_id"
          AND inventory."node_id" = NEW."node_id"
          AND inventory."machine_id" = NEW."machine_id"
+        JOIN "machine_calibrations" calibration
+          ON calibration."id" = NEW."machine_calibration_id"
+         AND calibration."node_id" = NEW."node_id"
+         AND calibration."machine_id" = NEW."machine_id"
         WHERE machine_profile."id" = NEW."machine_profile_id"
+          AND machine_profile."machine_capability_id" = machine."machine_capability_id"
+          AND machine_profile."nozzle_diameter_micrometers" = machine."installed_nozzle_micrometers"
           AND machine_profile."material" = inventory."material"
+          AND machine_profile."state" = 'ACTIVE'
+          AND calibration."state" = 'ACTIVE'
+          AND machine."status" = 'ACTIVE'
+          AND inventory."status" = 'AVAILABLE'
     ) THEN
-        RAISE EXCEPTION 'candidate profile and concrete machine inventory are incompatible'
+        RAISE EXCEPTION 'candidate profile, calibration, machine, or inventory is incompatible or inactive'
             USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_compatibility_check';
     END IF;
 
@@ -1767,6 +1780,38 @@ $$;
 CREATE TRIGGER "inventory_reservations_accounting"
     BEFORE INSERT OR UPDATE OR DELETE ON "inventory_reservations"
     FOR EACH ROW EXECUTE FUNCTION taven_account_inventory_reservation();
+
+CREATE FUNCTION taven_validate_inventory_reserved_counter()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_inventory_id uuid := NEW."id";
+    stored_reserved bigint;
+    calculated_reserved bigint;
+BEGIN
+    SELECT "reserved_milligrams" INTO stored_reserved
+    FROM "inventories"
+    WHERE "id" = target_inventory_id;
+
+    SELECT COALESCE(sum("reserved_milligrams"), 0) INTO calculated_reserved
+    FROM "inventory_reservations"
+    WHERE "inventory_id" = target_inventory_id
+      AND taven_inventory_reservation_is_active("status");
+
+    IF stored_reserved IS DISTINCT FROM calculated_reserved THEN
+        RAISE EXCEPTION 'inventory % reserved counter does not match active reservations', target_inventory_id
+            USING ERRCODE = '23514', CONSTRAINT = 'inventory_reserved_counter_matches_reservations_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "inventories_reserved_counter_matches_reservations"
+    AFTER INSERT OR UPDATE ON "inventories"
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION taven_validate_inventory_reserved_counter();
 
 CREATE FUNCTION taven_validate_phase_reservation_set(set_id uuid)
 RETURNS void

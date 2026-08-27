@@ -49,6 +49,9 @@ and production input snapshots.
 `ModelGeometry` must reference its source `ModelFile`; the foreign key is
 required and cannot be replaced by a hash-only association. Source-derived
 records carry the source-file identity needed to enforce the same lineage.
+Geometry hashes are indexed for cache lookup but are not globally unique,
+because identical bodies uploaded as distinct source files retain distinct
+lineage and retention records.
 Row checks require an upload timestamp and a deletion deadline, with the
 deadline no earlier than the upload/creation instant. An upload cannot become
 persisted without its initial deadline.
@@ -86,7 +89,9 @@ released. The trigger rejects an operation when the resulting reserved amount
 would exceed available stock. The maintained counter, rather than a deferred
 aggregate `SUM`, is the invariant used for concurrency-safe anti-
 oversubscription; reservation state transitions and the counter update happen
-in the same transaction.
+in the same transaction. A deferred reconciliation trigger also compares the
+stored counter with all active reservation rows, so a direct counter update
+cannot manufacture availability.
 
 Capacity reservations are node- and machine-scoped and store a non-empty,
 half-open time interval. Install PostgreSQL's `btree_gist` extension and use a
