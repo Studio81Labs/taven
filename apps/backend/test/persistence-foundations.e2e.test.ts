@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool, type PoolClient } from "pg";
 import {
   PersistenceFactory,
+  testTimes,
   type PersistenceFoundation,
   type ProductionReservationFixture,
   type SourceRetention,
@@ -59,9 +60,9 @@ async function createCompleteSingleReservationGraph(
       production.productionReservationId,
       foundation.inventoryId,
       60,
-      new Date("2030-08-27T12:00:00.000Z"),
-      new Date("2026-08-27T12:00:00.000Z"),
-      new Date("2026-08-27T12:00:00.000Z"),
+      testTimes.expiresAt,
+      testTimes.createdAt,
+      testTimes.createdAt,
     ],
   );
   await client.query(
@@ -74,9 +75,9 @@ async function createCompleteSingleReservationGraph(
       foundation.machineId,
       interval.startsAt,
       interval.endsAt,
-      new Date("2030-08-27T12:00:00.000Z"),
-      new Date("2026-08-27T12:00:00.000Z"),
-      new Date("2026-08-27T12:00:00.000Z"),
+      testTimes.expiresAt,
+      testTimes.createdAt,
+      testTimes.createdAt,
     ],
   );
   return { foundation, production };
@@ -274,8 +275,8 @@ describe("persistence foundations", () => {
               `models/${fixtures.id("file")}`,
               "b".repeat(64),
               1,
-              new Date("2026-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T11:59:59.000Z"),
+              testTimes.createdAt,
+              testTimes.beforeCreatedAt,
             ],
           ),
         ).rejects.toMatchObject({ code: "23514" });
@@ -294,8 +295,8 @@ describe("persistence foundations", () => {
             "c".repeat(64),
             "image/png",
             1,
-            new Date("2026-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T11:59:59.000Z"),
+            testTimes.createdAt,
+            testTimes.beforeCreatedAt,
           ],
         ),
       ).rejects.toMatchObject({ code: "23514" });
@@ -382,8 +383,8 @@ describe("persistence foundations", () => {
             `models/${secondFileId}`,
             "f".repeat(64),
             1,
-            new Date("2026-08-27T12:00:00.000Z"),
-            new Date("2030-08-27T12:00:00.000Z"),
+            testTimes.createdAt,
+            testTimes.expiresAt,
           ],
         );
         await client.query(
@@ -563,7 +564,7 @@ describe("persistence foundations", () => {
             "test",
             JSON.stringify({}),
             "ACTIVE",
-            new Date("2026-08-27T12:00:00.000Z"),
+            testTimes.createdAt,
           ],
         );
 
@@ -658,8 +659,8 @@ describe("persistence foundations", () => {
           `other-${fixtures.id("other-node").slice(0, 24)}`,
           "Other node",
           "UTC",
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await fixtures.createRevisionIdentity(
@@ -790,7 +791,7 @@ describe("persistence foundations", () => {
       "candidate-capacity-short",
       async (_client, fixtures) => {
         const foundation = await fixtures.createFoundation();
-        const startsAt = new Date("2027-01-01T10:00:00.000Z");
+        const startsAt = testTimes.capacityStart;
         const production = await fixtures.planProduction(
           foundation,
           "short-capacity",
@@ -813,7 +814,7 @@ describe("persistence foundations", () => {
       "candidate-capacity-overlap",
       async (_client, fixtures) => {
         const foundation = await fixtures.createFoundation();
-        const startsAt = new Date("2027-01-01T10:00:00.000Z");
+        const startsAt = testTimes.capacityStart;
         const production = await fixtures.planProduction(
           foundation,
           "overlapping-capacity",
@@ -844,12 +845,12 @@ describe("persistence foundations", () => {
         const foundation = await fixtures.createFoundation();
         const productions = [
           await fixtures.planProduction(foundation, "first-plan-candidate", {
-            startsAt: new Date("2027-01-01T10:00:00.000Z"),
-            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
           }),
           await fixtures.planProduction(foundation, "second-plan-candidate", {
-            startsAt: new Date("2027-01-01T10:30:00.000Z"),
-            endsAt: new Date("2027-01-01T11:30:00.000Z"),
+            startsAt: testTimes.capacityHalfHour,
+            endsAt: testTimes.capacityOneAndHalfHours,
           }),
         ];
 
@@ -866,7 +867,7 @@ describe("persistence foundations", () => {
       "candidate-capacity-exact",
       async (_client, fixtures) => {
         const foundation = await fixtures.createFoundation();
-        const startsAt = new Date("2027-01-01T10:00:00.000Z");
+        const startsAt = testTimes.capacityStart;
         const production = await fixtures.planProduction(
           foundation,
           "exact-capacity",
@@ -885,15 +886,15 @@ describe("persistence foundations", () => {
 
   it("allows adjacent capacity reservations but rejects active overlaps", async () => {
     await inRollbackTransaction("capacity", async (client, fixtures) => {
-      const startsAt = new Date("2027-01-01T10:00:00.000Z");
-      const endsAt = new Date("2027-01-01T11:00:00.000Z");
+      const startsAt = testTimes.capacityStart;
+      const endsAt = testTimes.capacityEnd;
       const { foundation, productions } = await fixtures.createReservationGraph(
         "capacity",
         [
           { startsAt, endsAt },
           {
             startsAt: endsAt,
-            endsAt: new Date("2027-01-01T12:00:00.000Z"),
+            endsAt: testTimes.capacityTwoHours,
           },
         ],
       );
@@ -913,9 +914,9 @@ describe("persistence foundations", () => {
           foundation.machineId,
           startsAt,
           endsAt,
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -927,10 +928,10 @@ describe("persistence foundations", () => {
           adjacent.candidateCapacityIntervalId,
           foundation.machineId,
           endsAt,
-          new Date("2027-01-01T12:00:00.000Z"),
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.capacityTwoHours,
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
     });
@@ -940,12 +941,12 @@ describe("persistence foundations", () => {
         const foundation = await fixtures.createFoundation();
         const intervals = [
           {
-            startsAt: new Date("2027-01-01T10:00:00.000Z"),
-            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
           },
           {
-            startsAt: new Date("2027-01-01T10:30:00.000Z"),
-            endsAt: new Date("2027-01-01T11:30:00.000Z"),
+            startsAt: testTimes.capacityHalfHour,
+            endsAt: testTimes.capacityOneAndHalfHours,
           },
         ];
         const plans: Array<{
@@ -985,11 +986,11 @@ describe("persistence foundations", () => {
             first.production.productionReservationId,
             first.production.candidateCapacityIntervalId,
             first.foundation.machineId,
-            new Date("2027-01-01T10:00:00.000Z"),
-            new Date("2027-01-01T11:00:00.000Z"),
-            new Date("2030-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
+            testTimes.capacityStart,
+            testTimes.capacityEnd,
+            testTimes.expiresAt,
+            testTimes.createdAt,
+            testTimes.createdAt,
           ],
         );
         await expect(
@@ -1001,11 +1002,11 @@ describe("persistence foundations", () => {
               overlapping.production.productionReservationId,
               overlapping.production.candidateCapacityIntervalId,
               overlapping.foundation.machineId,
-              new Date("2027-01-01T10:30:00.000Z"),
-              new Date("2027-01-01T11:30:00.000Z"),
-              new Date("2030-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
+              testTimes.capacityHalfHour,
+              testTimes.capacityOneAndHalfHours,
+              testTimes.expiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
             ],
           ),
         ).rejects.toMatchObject({
@@ -1026,12 +1027,12 @@ describe("persistence foundations", () => {
       );
       const intervals = [
         {
-          startsAt: new Date("2027-01-01T10:00:00.000Z"),
-          endsAt: new Date("2027-01-01T11:00:00.000Z"),
+          startsAt: testTimes.capacityStart,
+          endsAt: testTimes.capacityEnd,
         },
         {
-          startsAt: new Date("2027-01-01T11:00:00.000Z"),
-          endsAt: new Date("2027-01-01T12:00:00.000Z"),
+          startsAt: testTimes.capacityEnd,
+          endsAt: testTimes.capacityTwoHours,
         },
       ];
       const plans: Array<{
@@ -1081,9 +1082,9 @@ describe("persistence foundations", () => {
               plan.production.productionReservationId,
               plan.foundation.inventoryId,
               60,
-              new Date("2030-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
+              testTimes.expiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
             ],
           );
           await client.query(
@@ -1096,9 +1097,9 @@ describe("persistence foundations", () => {
               plan.foundation.machineId,
               plan.interval.startsAt,
               plan.interval.endsAt,
-              new Date("2030-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
+              testTimes.expiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
             ],
           );
           await client.query(
@@ -1200,12 +1201,12 @@ describe("persistence foundations", () => {
         "multi-production",
         [
           {
-            startsAt: new Date("2027-01-01T10:00:00.000Z"),
-            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
           },
           {
-            startsAt: new Date("2027-01-01T11:00:00.000Z"),
-            endsAt: new Date("2027-01-01T12:00:00.000Z"),
+            startsAt: testTimes.capacityEnd,
+            endsAt: testTimes.capacityTwoHours,
           },
         ],
       );
@@ -1220,9 +1221,9 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           60,
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       const firstIntervalId = production.candidateCapacityIntervalIds[0];
@@ -1239,11 +1240,11 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           firstIntervalId,
           foundation.machineId,
-          new Date("2027-01-01T10:00:00.000Z"),
-          new Date("2027-01-01T11:00:00.000Z"),
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.capacityStart,
+          testTimes.capacityEnd,
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -1375,7 +1376,7 @@ describe("persistence foundations", () => {
         await expect(
           fixtures.createPhaseReservationSet(
             foundation,
-            new Date("2030-08-27T12:00:01.000Z"),
+            testTimes.afterExpiresAt,
           ),
         ).rejects.toMatchObject({
           code: "23514",
@@ -1420,8 +1421,8 @@ describe("persistence foundations", () => {
           fixtures,
           "mutable-resource-confirmation",
           {
-            startsAt: new Date("2027-01-01T10:00:00.000Z"),
-            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
           },
         );
         await client.query(
@@ -1450,8 +1451,8 @@ describe("persistence foundations", () => {
           fixtures,
           "resource-snapshot-confirmation",
           {
-            startsAt: new Date("2027-01-01T10:00:00.000Z"),
-            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
           },
           { inventoryRemainingMilligrams: 99 },
         );
@@ -1477,8 +1478,8 @@ describe("persistence foundations", () => {
           fixtures,
           "geometry-source-confirmation",
           {
-            startsAt: new Date("2027-01-01T10:00:00.000Z"),
-            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
           },
           {},
           {
@@ -1528,9 +1529,9 @@ describe("persistence foundations", () => {
               production.productionReservationId,
               foundation.inventoryId,
               60,
-              new Date("2030-08-27T11:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
+              testTimes.beforeExpiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
             ],
           ),
         ).rejects.toMatchObject({
@@ -1560,11 +1561,11 @@ describe("persistence foundations", () => {
               production.productionReservationId,
               production.candidateCapacityIntervalId,
               foundation.machineId,
-              new Date("2027-01-01T10:00:00.000Z"),
-              new Date("2027-01-01T11:00:00.000Z"),
-              new Date("2030-08-27T11:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
+              testTimes.capacityStart,
+              testTimes.capacityEnd,
+              testTimes.beforeExpiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
             ],
           ),
         ).rejects.toMatchObject({
@@ -1615,9 +1616,9 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           60,
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -1628,11 +1629,11 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           production.candidateCapacityIntervalId,
           foundation.machineId,
-          new Date("2027-01-01T10:00:00.000Z"),
-          new Date("2027-01-01T11:00:00.000Z"),
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.capacityStart,
+          testTimes.capacityEnd,
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -1690,8 +1691,8 @@ describe("persistence foundations", () => {
       "released-set-retry",
       async (client, fixtures) => {
         const interval = {
-          startsAt: new Date("2027-01-01T10:00:00.000Z"),
-          endsAt: new Date("2027-01-01T11:00:00.000Z"),
+          startsAt: testTimes.capacityStart,
+          endsAt: testTimes.capacityEnd,
         };
         const { foundation, production } =
           await createCompleteSingleReservationGraph(
@@ -1751,9 +1752,9 @@ describe("persistence foundations", () => {
             retryProduction.productionReservationId,
             retryFoundation.inventoryId,
             60,
-            new Date("2030-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
+            testTimes.expiresAt,
+            testTimes.createdAt,
+            testTimes.createdAt,
           ],
         );
         await client.query(
@@ -1766,9 +1767,9 @@ describe("persistence foundations", () => {
             retryFoundation.machineId,
             interval.startsAt,
             interval.endsAt,
-            new Date("2030-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
+            testTimes.expiresAt,
+            testTimes.createdAt,
+            testTimes.createdAt,
           ],
         );
         await client.query(
@@ -1805,9 +1806,9 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           60,
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -1818,11 +1819,11 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           production.candidateCapacityIntervalId,
           foundation.machineId,
-          new Date("2027-01-01T10:00:00.000Z"),
-          new Date("2027-01-01T11:00:00.000Z"),
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.capacityStart,
+          testTimes.capacityEnd,
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -1891,9 +1892,9 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           60,
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -1904,11 +1905,11 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           production.candidateCapacityIntervalId,
           foundation.machineId,
-          new Date("2027-01-01T10:00:00.000Z"),
-          new Date("2027-01-01T11:00:00.000Z"),
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.capacityStart,
+          testTimes.capacityEnd,
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -1987,12 +1988,12 @@ describe("persistence foundations", () => {
     const fixtures = factory(client, "mixed-held-groups");
     const intervals = [
       {
-        startsAt: new Date("2027-01-01T10:00:00.000Z"),
-        endsAt: new Date("2027-01-01T11:00:00.000Z"),
+        startsAt: testTimes.capacityStart,
+        endsAt: testTimes.capacityEnd,
       },
       {
-        startsAt: new Date("2027-01-01T11:00:00.000Z"),
-        endsAt: new Date("2027-01-01T12:00:00.000Z"),
+        startsAt: testTimes.capacityEnd,
+        endsAt: testTimes.capacityTwoHours,
       },
     ];
     const capacityReservationIds = intervals.map((_, index) =>
@@ -2026,9 +2027,9 @@ describe("persistence foundations", () => {
             production.productionReservationId,
             graph.foundation.inventoryId,
             60,
-            new Date("2030-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
+            testTimes.expiresAt,
+            testTimes.createdAt,
+            testTimes.createdAt,
           ],
         );
         await client.query(
@@ -2041,9 +2042,9 @@ describe("persistence foundations", () => {
             graph.foundation.machineId,
             interval.startsAt,
             interval.endsAt,
-            new Date("2030-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
-            new Date("2026-08-27T12:00:00.000Z"),
+            testTimes.expiresAt,
+            testTimes.createdAt,
+            testTimes.createdAt,
           ],
         );
       }
@@ -2155,7 +2156,7 @@ describe("persistence foundations", () => {
         await expect(
           fixtures.createPhaseReservationSet(
             foundation,
-            new Date("2030-08-27T12:00:00.000Z"),
+            testTimes.expiresAt,
             "HELD",
           ),
         ).rejects.toMatchObject({
@@ -2212,12 +2213,12 @@ describe("persistence foundations", () => {
               production.productionReservationId,
               production.candidateCapacityIntervalId,
               foundation.machineId,
-              new Date("2027-01-01T10:00:00.000Z"),
-              new Date("2027-01-01T11:00:00.000Z"),
+              testTimes.capacityStart,
+              testTimes.capacityEnd,
               "PRINTING",
-              new Date("2030-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
-              new Date("2026-08-27T12:00:00.000Z"),
+              testTimes.expiresAt,
+              testTimes.createdAt,
+              testTimes.createdAt,
             ],
           ),
         ).rejects.toMatchObject({
@@ -2244,9 +2245,9 @@ describe("persistence foundations", () => {
           "COMPLETED",
           201,
           JSON.stringify({ result: "original" }),
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       return id;
@@ -2315,9 +2316,9 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           60,
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
       await client.query(
@@ -2328,11 +2329,11 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           production.candidateCapacityIntervalId,
           foundation.machineId,
-          new Date("2027-01-01T10:00:00.000Z"),
-          new Date("2027-01-01T11:00:00.000Z"),
-          new Date("2030-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
-          new Date("2026-08-27T12:00:00.000Z"),
+          testTimes.capacityStart,
+          testTimes.capacityEnd,
+          testTimes.expiresAt,
+          testTimes.createdAt,
+          testTimes.createdAt,
         ],
       );
 

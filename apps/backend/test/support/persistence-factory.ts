@@ -38,8 +38,33 @@ export type SourceRetention = {
   hold?: "NONE" | "ACTIVE_ORDER" | "ACTIVE_CLAIM" | "LEGAL";
 };
 
-const createdAt = new Date("2026-08-27T12:00:00.000Z");
-const expiresAt = new Date("2030-08-27T12:00:00.000Z");
+const hourInMilliseconds = 60 * 60 * 1_000;
+const dayInMilliseconds = 24 * hourInMilliseconds;
+const testRunStartedAt = Date.now();
+export const testTimes = Object.freeze({
+  beforeCreatedAt: new Date(testRunStartedAt - dayInMilliseconds - 1_000),
+  createdAt: new Date(testRunStartedAt - dayInMilliseconds),
+  capacityStart: new Date(testRunStartedAt + 7 * dayInMilliseconds),
+  capacityHalfHour: new Date(
+    testRunStartedAt + 7 * dayInMilliseconds + hourInMilliseconds / 2,
+  ),
+  capacityEnd: new Date(
+    testRunStartedAt + 7 * dayInMilliseconds + hourInMilliseconds,
+  ),
+  capacityOneAndHalfHours: new Date(
+    testRunStartedAt + 7 * dayInMilliseconds + 1.5 * hourInMilliseconds,
+  ),
+  capacityTwoHours: new Date(
+    testRunStartedAt + 7 * dayInMilliseconds + 2 * hourInMilliseconds,
+  ),
+  beforeExpiresAt: new Date(
+    testRunStartedAt + 365 * dayInMilliseconds - hourInMilliseconds,
+  ),
+  expiresAt: new Date(testRunStartedAt + 365 * dayInMilliseconds),
+  afterExpiresAt: new Date(testRunStartedAt + 365 * dayInMilliseconds + 1_000),
+});
+const createdAt = testTimes.createdAt;
+const expiresAt = testTimes.expiresAt;
 const digest = "a".repeat(64);
 
 /**
@@ -255,8 +280,8 @@ export class PersistenceFactory {
     foundation: PersistenceFoundation,
     name: string,
     intervalOrIntervals: CapacityInterval | CapacityInterval[] = {
-      startsAt: new Date("2027-01-01T10:00:00.000Z"),
-      endsAt: new Date("2027-01-01T11:00:00.000Z"),
+      startsAt: testTimes.capacityStart,
+      endsAt: testTimes.capacityEnd,
     },
     requiredMachineSeconds = 60,
   ): Promise<ProductionReservationFixture> {
@@ -453,8 +478,8 @@ export class PersistenceFactory {
     name: string,
     intervals = [
       {
-        startsAt: new Date("2027-01-01T10:00:00.000Z"),
-        endsAt: new Date("2027-01-01T11:00:00.000Z"),
+        startsAt: testTimes.capacityStart,
+        endsAt: testTimes.capacityEnd,
       },
     ],
     resourceSnapshot: unknown = {},
