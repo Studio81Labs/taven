@@ -129,6 +129,12 @@ seconds, and intervals must not overlap within a candidate or across candidates
 assigned to the same machine in one plan. This keeps every accepted plan
 representable by the active-capacity exclusion constraint.
 
+Candidate material and machine-time totals cannot fall below the selected
+production slice multiplied by `ceil(quantity / parts_per_plate)`. Larger
+values are allowed for explicit buffers. This is conservative for a final
+partially occupied plate; its exact machine-specific arrangement remains in the
+candidate snapshot until candidate-to-slice plate children are introduced.
+
 A deferred constraint trigger compares the reservation children with the
 authoritative plan. Every required planned key must have exactly one complete
 production/inventory reservation and a matching active capacity reservation

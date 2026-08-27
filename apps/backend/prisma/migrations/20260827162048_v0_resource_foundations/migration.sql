@@ -1039,6 +1039,39 @@ ALTER TABLE "candidate_resource_estimates"
         "expires_at" > "calculated_at"
     );
 
+CREATE FUNCTION taven_validate_candidate_resource_quantities()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "slice_results" selected_slice
+        WHERE selected_slice."id" = NEW."slice_result_id"
+          AND selected_slice."kind" = 'PRODUCTION'
+          AND selected_slice."model_geometry_id" = NEW."model_geometry_id"
+          AND selected_slice."print_config_revision_id" = NEW."print_config_revision_id"
+          AND selected_slice."machine_profile_id" = NEW."machine_profile_id"
+          AND selected_slice."machine_calibration_id" = NEW."machine_calibration_id"
+          AND NEW."required_material_milligrams"::numeric >=
+              selected_slice."estimated_material_milligrams"::numeric *
+              ceil(NEW."quantity"::numeric / selected_slice."parts_per_plate"::numeric)
+          AND NEW."required_machine_seconds"::numeric >=
+              selected_slice."estimated_print_seconds"::numeric *
+              ceil(NEW."quantity"::numeric / selected_slice."parts_per_plate"::numeric)
+    ) THEN
+        RAISE EXCEPTION 'candidate aggregate quantities understate the selected production slice'
+            USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "candidate_resource_estimates_quantities"
+    BEFORE INSERT ON "candidate_resource_estimates"
+    FOR EACH ROW EXECUTE FUNCTION taven_validate_candidate_resource_quantities();
+
 ALTER TABLE "candidate_capacity_intervals"
     ADD CONSTRAINT "candidate_capacity_intervals_values_check" CHECK (
         "interval_index" >= 0 AND

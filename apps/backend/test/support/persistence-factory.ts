@@ -42,6 +42,11 @@ export type GeometryBounds = {
   yMicrometers: number;
   zMicrometers: number;
 };
+export type SliceMetrics = {
+  partsPerPlate: number;
+  estimatedPrintSeconds: number;
+  estimatedMaterialMilligrams: number;
+};
 
 const defaultGeometryBounds: GeometryBounds = {
   xMicrometers: 1,
@@ -52,6 +57,11 @@ const defaultBuildVolume: GeometryBounds = {
   xMicrometers: 200_000,
   yMicrometers: 200_000,
   zMicrometers: 200_000,
+};
+const defaultSliceMetrics: SliceMetrics = {
+  partsPerPlate: 1,
+  estimatedPrintSeconds: 60,
+  estimatedMaterialMilligrams: 60,
 };
 
 const hourInMilliseconds = 60 * 60 * 1_000;
@@ -106,6 +116,7 @@ export class PersistenceFactory {
     sourceRetention: SourceRetention = {},
     geometryBounds: GeometryBounds = defaultGeometryBounds,
     buildVolume: GeometryBounds = defaultBuildVolume,
+    sliceMetrics: SliceMetrics = defaultSliceMetrics,
   ): Promise<PersistenceFoundation> {
     const nodeId = this.id(`${name}:node`);
     const capabilityId = this.id(`${name}:capability`);
@@ -269,11 +280,11 @@ export class PersistenceFactory {
         printConfigRevisionId,
         machineProfileId,
         machineCalibrationId,
-        1,
+        sliceMetrics.partsPerPlate,
         `slices/${this.scope}/${name}`,
         this.hash(`${name}:slice`),
-        60,
-        60,
+        sliceMetrics.estimatedPrintSeconds,
+        sliceMetrics.estimatedMaterialMilligrams,
         "orca",
         "test",
       ],
@@ -302,6 +313,8 @@ export class PersistenceFactory {
       endsAt: testTimes.capacityEnd,
     },
     requiredMachineSeconds = 60,
+    requiredMaterialMilligrams = 60,
+    quantity = 1,
   ): Promise<ProductionReservationFixture> {
     const candidateId = this.id(`${name}:candidate`);
     const capacityIntervals = Array.isArray(intervalOrIntervals)
@@ -335,8 +348,8 @@ export class PersistenceFactory {
         foundation.inventoryId,
         this.id(`${name}:future-shipment-plan`),
         this.id(`${name}:future-arrangement-revision`),
-        1,
-        60,
+        quantity,
+        requiredMaterialMilligrams,
         requiredMachineSeconds,
         JSON.stringify({}),
         createdAt,

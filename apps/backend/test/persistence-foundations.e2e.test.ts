@@ -852,6 +852,121 @@ describe("persistence foundations", () => {
     );
   });
 
+  it("prevents candidate quantities from understating the selected slice", async () => {
+    const createQuantityFoundation = (
+      fixtures: PersistenceFactory,
+      name: string,
+    ) =>
+      fixtures.createFoundation(name, {}, undefined, undefined, {
+        partsPerPlate: 4,
+        estimatedPrintSeconds: 120,
+        estimatedMaterialMilligrams: 40,
+      });
+    const twoPlateIntervals = [
+      {
+        startsAt: testTimes.capacityStart,
+        endsAt: new Date(testTimes.capacityStart.getTime() + 120_000),
+      },
+      {
+        startsAt: new Date(testTimes.capacityStart.getTime() + 120_000),
+        endsAt: new Date(testTimes.capacityStart.getTime() + 240_000),
+      },
+    ];
+
+    await inRollbackTransaction(
+      "candidate-quantity-exact",
+      async (_client, fixtures) => {
+        const foundation = await createQuantityFoundation(fixtures, "exact");
+        const production = await fixtures.planProduction(
+          foundation,
+          "exact",
+          twoPlateIntervals,
+          240,
+          80,
+          5,
+        );
+
+        await expect(
+          fixtures.createResourcePlan(foundation, [production]),
+        ).resolves.toBeUndefined();
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-time-understatement",
+      async (_client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "time-understatement",
+        );
+
+        await expect(
+          fixtures.planProduction(
+            foundation,
+            "time-understatement",
+            twoPlateIntervals,
+            239,
+            80,
+            5,
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_quantity_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-material-understatement",
+      async (_client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "material-understatement",
+        );
+
+        await expect(
+          fixtures.planProduction(
+            foundation,
+            "material-understatement",
+            twoPlateIntervals,
+            240,
+            79,
+            5,
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_quantity_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-conservative-overestimate",
+      async (_client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "conservative-overestimate",
+        );
+        const bufferedIntervals = [
+          twoPlateIntervals[0]!,
+          {
+            startsAt: twoPlateIntervals[1]!.startsAt,
+            endsAt: new Date(testTimes.capacityStart.getTime() + 241_000),
+          },
+        ];
+        const production = await fixtures.planProduction(
+          foundation,
+          "conservative-overestimate",
+          bufferedIntervals,
+          241,
+          81,
+          5,
+        );
+
+        await expect(
+          fixtures.createResourcePlan(foundation, [production]),
+        ).resolves.toBeUndefined();
+      },
+    );
+  });
+
   it("requires sufficient non-overlapping candidate capacity", async () => {
     await inRollbackTransaction(
       "candidate-capacity-short",
