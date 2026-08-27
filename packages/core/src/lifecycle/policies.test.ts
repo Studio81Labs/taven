@@ -824,6 +824,158 @@ const permittedContext = {
   inventoryReservationReleased: true,
   capacityReservationReleased: true,
   labelCancellationBarrierCompleted: true,
+  jobCancellationResultId: "job-cancellation-result-1",
+  jobCancellationPreviousJobResultId: "job-accepted-result-1",
+  jobCancellationPreviousReservationResultId: "reservation-scheduled-result-1",
+  jobCancellationCurrentStateCommandKey: "job-accepted-command-1",
+  jobCancellationJobId: "job-1",
+  jobCancellationOrderId: "order-1",
+  jobCancellationPhaseId: "phase-1",
+  jobCancellationProductionReservationId: "production-reservation-1",
+  jobCancellationPreviousStatus: "accepted",
+  jobCancellationTargetStatus: "cancelled",
+  jobCancellationReason: "order_cancelled",
+  jobCancellationAuthoritativeScopeId: "job-cancellation-scope-1",
+  jobCancellationExpectedScopeId: "job-cancellation-scope-1",
+  jobCancellationScopeResultId: "job-shipment-scope-result-1",
+  jobCancellationExpectedJob: {
+    id: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    shipmentScopeId: "job-cancellation-scope-1",
+    status: "accepted",
+    resultId: "job-accepted-result-1",
+    currentStateCommandKey: "job-accepted-command-1",
+    immutable: true,
+  },
+  jobCancellationReservationId: "production-reservation-1",
+  jobCancellationReservationPreviousStatus: "scheduled",
+  jobCancellationReservationTargetStatus: "released",
+  jobCancellationExpectedReservation: {
+    id: "production-reservation-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "scheduled",
+    resultId: "reservation-scheduled-result-1",
+    immutable: true,
+  },
+  jobCancellationReservationResultId: "job-cancellation-result-1",
+  jobCancellationExpectedShipmentIds: ["shipment-1"],
+  jobCancellationExpectedCarrierLabelIds: ["label-1"],
+  jobCancellationExpectedContributorJobIds: ["job-1"],
+  jobCancellationExpectedContributorReservationIds: [
+    "production-reservation-1",
+  ],
+  jobCancellationAuthoritativeScope: {
+    id: "job-cancellation-scope-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    shipmentIds: ["shipment-1"],
+    carrierLabelIds: ["label-1"],
+    contributorJobIds: ["job-1"],
+    contributorReservationIds: ["production-reservation-1"],
+    shipments: [
+      {
+        id: "shipment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        currentLineageLeaf: true,
+        status: "label_created",
+        carrierLabelIds: ["label-1"],
+        contributorLinks: [
+          {
+            jobId: "job-1",
+            productionReservationId: "production-reservation-1",
+            orderId: "order-1",
+            phaseId: "phase-1",
+            currentJobLineageLeaf: true,
+            immutable: true,
+          },
+        ],
+        immutable: true,
+      },
+    ],
+    carrierLabels: [
+      {
+        id: "label-1",
+        shipmentId: "shipment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "usable",
+        immutable: true,
+      },
+    ],
+    resultId: "job-shipment-scope-result-1",
+    immutable: true,
+  },
+  jobCancellationShipments: [
+    {
+      id: "shipment-1",
+      jobId: "job-1",
+      productionReservationId: "production-reservation-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      previousStatus: "label_created",
+      targetStatus: "cancelled",
+      barrierOutcome: "cancelled",
+      currentLineageLeaf: true,
+      contributorJobIds: ["job-1"],
+      contributorReservationIds: ["production-reservation-1"],
+      remainingContributorJobIds: [],
+      remainingContributorReservationIds: [],
+      carrierLabelIds: ["label-1"],
+      resultId: "job-cancellation-result-1",
+    },
+  ],
+  jobCancellationCarrierLabels: [
+    {
+      id: "label-1",
+      shipmentId: "shipment-1",
+      jobId: "job-1",
+      productionReservationId: "production-reservation-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      previousStatus: "usable",
+      targetStatus: "invalidated",
+      barrierOutcome: "invalidated",
+      providerVoidOutboxId: "job-cancellation-void-outbox-1",
+      providerVoidOutboxShipmentId: "shipment-1",
+      providerVoidOutboxLabelId: "label-1",
+      providerVoidIdempotencyKey: "void_carrier_label:shipment-1:label-1",
+      providerVoidAction: "void_carrier_label",
+      providerVoidOutboxPreviousStatus: "pending",
+      providerVoidOutboxTargetStatus: "succeeded",
+      providerVoidOutboxResultId: "job-cancellation-result-1",
+      providerEventId: "job-cancellation-void-event-1",
+      providerEventOutboxId: "job-cancellation-void-outbox-1",
+      providerEventShipmentId: "shipment-1",
+      providerEventLabelId: "label-1",
+      providerTransactionId: "job-cancellation-void-transaction-1",
+      providerEventTransactionId: "job-cancellation-void-transaction-1",
+      providerEventResultId: "job-cancellation-result-1",
+      providerTransactionShipmentId: "shipment-1",
+      providerTransactionLabelId: "label-1",
+      providerTransactionOutboxId: "job-cancellation-void-outbox-1",
+      providerTransactionResultId: "job-cancellation-result-1",
+      providerEventStatus: "succeeded",
+      providerTransactionStatus: "succeeded",
+      providerEventAuthenticated: true,
+      providerEventVerified: true,
+      providerVoidStatus: "succeeded",
+      resultId: "job-cancellation-result-1",
+    },
+  ],
+  jobCancellationJobResultId: "job-cancellation-result-1",
+  jobCancellationResourceSettlementResultId: "job-cancellation-result-1",
+  jobCancellationShipmentResultId: "job-cancellation-result-1",
+  jobCancellationCarrierLabelResultId: "job-cancellation-result-1",
+  jobCancellationBarrierResultId: "job-cancellation-result-1",
+  jobCancellationCompleted: true,
+  jobCancellationAtomic: true,
   failureStage: "machine",
   failureReason: "machine fault",
   replacementRequestCreated: true,
@@ -1006,7 +1158,7 @@ const permittedContext = {
     status: "stored",
     retentionDeadlineAt: Instant.parse("2026-03-01T00:00:00.000Z"),
     submissionResultId: "photo-submission-result-1",
-    resultId: "qc-decision-result-1",
+    resultId: "photo-submission-result-1",
     immutable: true,
   },
   qcDecisionReviewer: {
@@ -1030,7 +1182,7 @@ const permittedContext = {
     immutable: true,
   },
   qcDecisionJobResultId: "qc-decision-result-1",
-  qcDecisionPhotoAssetResultId: "qc-decision-result-1",
+  qcDecisionPhotoAssetResultId: "photo-submission-result-1",
   qcDecisionReviewerResultId: "qc-decision-result-1",
   qcDecisionRecordResultId: "qc-decision-result-1",
   qcDecisionCompleted: true,
@@ -2155,8 +2307,47 @@ function contextForTransition(target: string, current?: string) {
       : current === "accepted" || current === "gcode_ready"
         ? "zero_pre_print"
         : "actual_recorded";
+  const postAcceptanceJobCancellation =
+    target === "cancelled" &&
+    current !== undefined &&
+    [
+      "accepted",
+      "gcode_ready",
+      "printing",
+      "printed",
+      "photo_submitted",
+      "qc_approved",
+      "packed",
+    ].includes(current);
+  const jobCancellationState = postAcceptanceJobCancellation
+    ? current
+    : "accepted";
+  const jobCancellationReservationState =
+    jobCancellationState === "accepted" ||
+    jobCancellationState === "gcode_ready"
+      ? "scheduled"
+      : "printing";
+  const jobCancellationReservationTarget =
+    jobCancellationReservationState === "scheduled" ? "released" : "settled";
   return {
     ...permittedContext,
+    jobCancellationPreviousJobResultId: `job-${jobCancellationState}-result-1`,
+    jobCancellationPreviousReservationResultId: `reservation-${jobCancellationReservationState}-result-1`,
+    jobCancellationCurrentStateCommandKey: `job-${jobCancellationState}-command-1`,
+    jobCancellationPreviousStatus: jobCancellationState,
+    jobCancellationExpectedJob: {
+      ...permittedContext.jobCancellationExpectedJob,
+      status: jobCancellationState,
+      resultId: `job-${jobCancellationState}-result-1`,
+      currentStateCommandKey: `job-${jobCancellationState}-command-1`,
+    },
+    jobCancellationReservationPreviousStatus: jobCancellationReservationState,
+    jobCancellationReservationTargetStatus: jobCancellationReservationTarget,
+    jobCancellationExpectedReservation: {
+      ...permittedContext.jobCancellationExpectedReservation,
+      status: jobCancellationReservationState,
+      resultId: `reservation-${jobCancellationReservationState}-result-1`,
+    },
     qcDecisionTargetJobStatus:
       target === "qc_rejected"
         ? "qc_rejected"
@@ -2392,6 +2583,16 @@ function commandAnchors(
     return {
       aggregateId: "job-1",
       currentStateCommandKey: "photo-submission-command-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
+    target === "cancelled" &&
+    current !== "created"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: `job-${current}-command-1`,
     };
   }
   return {};
@@ -10352,6 +10553,239 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("preserves a shared Shipment and label for exact sibling contributors", () => {
+    const context = contextForTransition("cancelled", "accepted");
+    expect(
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-accepted-command-1",
+        current: "accepted",
+        target: "cancelled",
+        idempotencyKey: "job-cancellation-shared-shipment",
+        context: {
+          ...context,
+          jobCancellationExpectedContributorJobIds: ["job-1", "job-2"],
+          jobCancellationExpectedContributorReservationIds: [
+            "production-reservation-1",
+            "production-reservation-2",
+          ],
+          jobCancellationAuthoritativeScope: {
+            ...context.jobCancellationAuthoritativeScope,
+            contributorJobIds: ["job-1", "job-2"],
+            contributorReservationIds: [
+              "production-reservation-1",
+              "production-reservation-2",
+            ],
+            shipments: [
+              {
+                ...context.jobCancellationAuthoritativeScope.shipments[0],
+                contributorLinks: [
+                  ...context.jobCancellationAuthoritativeScope.shipments[0]
+                    .contributorLinks,
+                  {
+                    jobId: "job-2",
+                    productionReservationId: "production-reservation-2",
+                    orderId: "order-1",
+                    phaseId: "phase-1",
+                    currentJobLineageLeaf: true,
+                    immutable: true,
+                  },
+                ],
+              },
+            ],
+          },
+          jobCancellationShipments: [
+            {
+              ...context.jobCancellationShipments[0],
+              targetStatus: "label_created",
+              barrierOutcome: "preserved_for_siblings",
+              contributorJobIds: ["job-1", "job-2"],
+              contributorReservationIds: [
+                "production-reservation-1",
+                "production-reservation-2",
+              ],
+              remainingContributorJobIds: ["job-2"],
+              remainingContributorReservationIds: ["production-reservation-2"],
+            },
+          ],
+          jobCancellationCarrierLabels: [
+            {
+              ...context.jobCancellationCarrierLabels[0],
+              targetStatus: "usable",
+              barrierOutcome: "preserved_for_siblings",
+              providerVoidOutboxId: null,
+              providerVoidOutboxShipmentId: null,
+              providerVoidOutboxLabelId: null,
+              providerVoidIdempotencyKey: null,
+              providerVoidAction: null,
+              providerVoidOutboxPreviousStatus: null,
+              providerVoidOutboxTargetStatus: null,
+              providerVoidOutboxResultId: null,
+              providerEventId: null,
+              providerEventOutboxId: null,
+              providerEventShipmentId: null,
+              providerEventLabelId: null,
+              providerTransactionId: null,
+              providerEventTransactionId: null,
+              providerEventResultId: null,
+              providerTransactionShipmentId: null,
+              providerTransactionLabelId: null,
+              providerTransactionOutboxId: null,
+              providerTransactionResultId: null,
+              providerEventStatus: null,
+              providerTransactionStatus: null,
+              providerEventAuthenticated: false,
+              providerEventVerified: false,
+              providerVoidStatus: "not_required",
+            },
+          ],
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "accepted", current: "cancelled" });
+  });
+
+  it("rejects a planned Shipment that already carries a label", () => {
+    const context = contextForTransition("cancelled", "accepted");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-accepted-command-1",
+        current: "accepted",
+        target: "cancelled",
+        idempotencyKey: "job-cancellation-planned-with-label",
+        context: {
+          ...context,
+          jobCancellationAuthoritativeScope: {
+            ...context.jobCancellationAuthoritativeScope,
+            shipments: [
+              {
+                ...context.jobCancellationAuthoritativeScope.shipments[0],
+                status: "planned",
+              },
+            ],
+          },
+          jobCancellationShipments: [
+            {
+              ...context.jobCancellationShipments[0],
+              previousStatus: "planned",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("cancels a planned Shipment directly when no label exists", () => {
+    const context = contextForTransition("cancelled", "accepted");
+    expect(
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-accepted-command-1",
+        current: "accepted",
+        target: "cancelled",
+        idempotencyKey: "job-cancellation-planned-without-label",
+        context: {
+          ...context,
+          jobCancellationExpectedCarrierLabelIds: [],
+          jobCancellationAuthoritativeScope: {
+            ...context.jobCancellationAuthoritativeScope,
+            carrierLabelIds: [],
+            shipments: [
+              {
+                ...context.jobCancellationAuthoritativeScope.shipments[0],
+                status: "planned",
+                carrierLabelIds: [],
+              },
+            ],
+            carrierLabels: [],
+          },
+          jobCancellationShipments: [
+            {
+              ...context.jobCancellationShipments[0],
+              previousStatus: "planned",
+              carrierLabelIds: [],
+            },
+          ],
+          jobCancellationCarrierLabels: [],
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "accepted", current: "cancelled" });
+  });
+
+  it("rejects one carrier label claimed by multiple scoped Shipments", () => {
+    const context = contextForTransition("cancelled", "accepted");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-accepted-command-1",
+        current: "accepted",
+        target: "cancelled",
+        idempotencyKey: "job-cancellation-shared-label-alias",
+        context: {
+          ...context,
+          jobCancellationExpectedShipmentIds: ["shipment-1", "shipment-2"],
+          jobCancellationAuthoritativeScope: {
+            ...context.jobCancellationAuthoritativeScope,
+            shipmentIds: ["shipment-1", "shipment-2"],
+            shipments: [
+              ...context.jobCancellationAuthoritativeScope.shipments,
+              {
+                ...context.jobCancellationAuthoritativeScope.shipments[0],
+                id: "shipment-2",
+              },
+            ],
+          },
+          jobCancellationShipments: [
+            ...context.jobCancellationShipments,
+            {
+              ...context.jobCancellationShipments[0],
+              id: "shipment-2",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects one selected Job contributor across multiple scoped Shipments", () => {
+    const context = contextForTransition("cancelled", "accepted");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-accepted-command-1",
+        current: "accepted",
+        target: "cancelled",
+        idempotencyKey: "job-cancellation-duplicate-contributor",
+        context: {
+          ...context,
+          jobCancellationExpectedShipmentIds: ["shipment-1", "shipment-2"],
+          jobCancellationAuthoritativeScope: {
+            ...context.jobCancellationAuthoritativeScope,
+            shipmentIds: ["shipment-1", "shipment-2"],
+            shipments: [
+              ...context.jobCancellationAuthoritativeScope.shipments,
+              {
+                ...context.jobCancellationAuthoritativeScope.shipments[0],
+                id: "shipment-2",
+                status: "planned",
+                carrierLabelIds: [],
+              },
+            ],
+          },
+          jobCancellationShipments: [
+            ...context.jobCancellationShipments,
+            {
+              ...context.jobCancellationShipments[0],
+              id: "shipment-2",
+              previousStatus: "planned",
+              carrierLabelIds: [],
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it.each([
     ["id", "another-job"],
     ["kind", "ordinary"],
@@ -12155,7 +12589,7 @@ describe("v0 lifecycle policy tables", () => {
             orderId: "foreign-order",
             phaseId: "foreign-phase",
             submissionResultId: "foreign-submission-result",
-            resultId: "foreign-qc-result",
+            resultId: "foreign-submission-result",
           },
           qcDecisionReviewer: {
             ...context.qcDecisionReviewer,
@@ -12174,7 +12608,7 @@ describe("v0 lifecycle policy tables", () => {
             sourceStateCommandKey: "foreign-submission-command",
           },
           qcDecisionJobResultId: "foreign-qc-result",
-          qcDecisionPhotoAssetResultId: "foreign-qc-result",
+          qcDecisionPhotoAssetResultId: "foreign-submission-result",
           qcDecisionReviewerResultId: "foreign-qc-result",
           qcDecisionRecordResultId: "foreign-qc-result",
         },
@@ -12219,6 +12653,78 @@ describe("v0 lifecycle policy tables", () => {
         },
       }),
     ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["qcDecisionPhotoAssetResultId", "qc-decision-result-1"],
+    ["qcDecisionJobResultId", "photo-submission-result-1"],
+    ["qcDecisionReviewerResultId", "photo-submission-result-1"],
+    ["qcDecisionRecordResultId", "photo-submission-result-1"],
+  ] as const)(
+    "keeps QC submission and decision result roles separate (%s)",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "photo-submission-command-1",
+          current: "photo_submitted",
+          target: "qc_approved",
+          idempotencyKey: `qc-result-role-${field}`,
+          context: {
+            ...contextForTransition("qc_approved", "photo_submitted"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects rewriting the immutable PhotoAsset with the QC decision result", () => {
+    const context = contextForTransition("qc_approved", "photo_submitted");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "photo-submission-command-1",
+        current: "photo_submitted",
+        target: "qc_approved",
+        idempotencyKey: "qc-result-role-photo-rewrite",
+        context: {
+          ...context,
+          qcDecisionPhotoAsset: {
+            ...context.qcDecisionPhotoAsset,
+            resultId: "qc-decision-result-1",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("accepts a new consistent QC result without rewriting the PhotoAsset result", () => {
+    const context = contextForTransition("qc_approved", "photo_submitted");
+    expect(
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "photo-submission-command-1",
+        current: "photo_submitted",
+        target: "qc_approved",
+        idempotencyKey: "qc-result-role-consistent-decision",
+        context: {
+          ...context,
+          qcDecisionResultId: "another-qc-result",
+          qcDecision: {
+            ...context.qcDecision,
+            resultId: "another-qc-result",
+          },
+          qcDecisionJobResultId: "another-qc-result",
+          qcDecisionReviewerResultId: "another-qc-result",
+          qcDecisionRecordResultId: "another-qc-result",
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "photo_submitted",
+      current: "qc_approved",
+    });
   });
 
   it.each([
@@ -12288,6 +12794,7 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(jobPolicy, {
+            ...commandAnchors(jobPolicy, current, "cancelled"),
             current,
             target: "cancelled",
             idempotencyKey: `job-cancellation-${current}-${flag}`,
@@ -12301,6 +12808,7 @@ describe("v0 lifecycle policy tables", () => {
 
       expect(
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, current, "cancelled"),
           current,
           target: "cancelled",
           idempotencyKey: `job-cancellation-complete-${current}`,
@@ -12312,6 +12820,536 @@ describe("v0 lifecycle policy tables", () => {
       ).toEqual({ kind: "changed", previous: current, current: "cancelled" });
     },
   );
+
+  it.each([
+    ["jobId", "another-job"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
+    ["productionReservationId", "another-reservation"],
+    ["jobCancellationResultId", " "],
+    ["jobCancellationPreviousJobResultId", "another-result"],
+    ["jobCancellationPreviousReservationResultId", "another-result"],
+    ["jobCancellationCurrentStateCommandKey", "another-command"],
+    ["jobCancellationJobId", "another-job"],
+    ["jobCancellationOrderId", "another-order"],
+    ["jobCancellationPhaseId", "another-phase"],
+    ["jobCancellationProductionReservationId", "another-reservation"],
+    ["jobCancellationPreviousStatus", "created"],
+    ["jobCancellationTargetStatus", "failed"],
+    ["jobCancellationReason", "claim_withdrawn"],
+    ["jobCancellationAuthoritativeScopeId", "another-scope"],
+    ["jobCancellationExpectedScopeId", "another-scope"],
+    ["jobCancellationScopeResultId", "another-result"],
+    ["jobCancellationReservationId", "another-reservation"],
+    ["jobCancellationReservationPreviousStatus", "held"],
+    ["jobCancellationReservationTargetStatus", "settled"],
+    ["jobCancellationReservationResultId", "another-result"],
+    ["jobCancellationJobResultId", "another-result"],
+    ["jobCancellationResourceSettlementResultId", "another-result"],
+    ["jobCancellationShipmentResultId", "another-result"],
+    ["jobCancellationCarrierLabelResultId", "another-result"],
+    ["jobCancellationBarrierResultId", "another-result"],
+    ["jobCancellationCompleted", false],
+    ["jobCancellationAtomic", false],
+  ] as const)(
+    "rejects post-acceptance Job cancellation with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-accepted-command-1",
+          current: "accepted",
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-invalid-${field}`,
+          context: {
+            ...contextForTransition("cancelled", "accepted"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["jobCancellationExpectedJob", "id", "another-job"],
+    ["jobCancellationExpectedJob", "orderId", "another-order"],
+    ["jobCancellationExpectedJob", "phaseId", "another-phase"],
+    [
+      "jobCancellationExpectedJob",
+      "productionReservationId",
+      "another-reservation",
+    ],
+    ["jobCancellationExpectedJob", "shipmentScopeId", "another-scope"],
+    ["jobCancellationExpectedJob", "status", "printing"],
+    ["jobCancellationExpectedJob", "resultId", "another-result"],
+    ["jobCancellationExpectedJob", "currentStateCommandKey", "another-command"],
+    ["jobCancellationExpectedJob", "immutable", false],
+    ["jobCancellationExpectedReservation", "id", "another-reservation"],
+    ["jobCancellationExpectedReservation", "jobId", "another-job"],
+    ["jobCancellationExpectedReservation", "orderId", "another-order"],
+    ["jobCancellationExpectedReservation", "phaseId", "another-phase"],
+    ["jobCancellationExpectedReservation", "status", "held"],
+    ["jobCancellationExpectedReservation", "resultId", "another-result"],
+    ["jobCancellationExpectedReservation", "immutable", false],
+    ["jobCancellationAuthoritativeScope", "id", "another-scope"],
+    ["jobCancellationAuthoritativeScope", "jobId", "another-job"],
+    ["jobCancellationAuthoritativeScope", "orderId", "another-order"],
+    ["jobCancellationAuthoritativeScope", "phaseId", "another-phase"],
+    [
+      "jobCancellationAuthoritativeScope",
+      "productionReservationId",
+      "another-reservation",
+    ],
+    ["jobCancellationAuthoritativeScope", "shipmentIds", []],
+    ["jobCancellationAuthoritativeScope", "carrierLabelIds", []],
+    ["jobCancellationAuthoritativeScope", "contributorJobIds", []],
+    ["jobCancellationAuthoritativeScope", "contributorReservationIds", []],
+    ["jobCancellationAuthoritativeScope", "resultId", "another-result"],
+    ["jobCancellationAuthoritativeScope", "immutable", false],
+  ] as const)(
+    "rejects post-acceptance Job cancellation with invalid %s.%s",
+    (recordName, field, value) => {
+      const context = contextForTransition("cancelled", "accepted");
+      const evidence = context[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-accepted-command-1",
+          current: "accepted",
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-invalid-${recordName}-${field}`,
+          context: {
+            ...context,
+            [recordName]: { ...evidence, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["shipments", "id", "another-shipment"],
+    ["shipments", "orderId", "another-order"],
+    ["shipments", "phaseId", "another-phase"],
+    ["shipments", "currentLineageLeaf", false],
+    ["shipments", "status", "handed_over"],
+    ["shipments", "carrierLabelIds", ["another-label"]],
+    ["shipments", "immutable", false],
+    ["carrierLabels", "id", "another-label"],
+    ["carrierLabels", "shipmentId", "another-shipment"],
+    ["carrierLabels", "orderId", "another-order"],
+    ["carrierLabels", "phaseId", "another-phase"],
+    ["carrierLabels", "status", "invalidated"],
+    ["carrierLabels", "immutable", false],
+  ] as const)(
+    "rejects post-acceptance Job cancellation with invalid scope %s.%s",
+    (collectionName, field, value) => {
+      const context = contextForTransition("cancelled", "accepted");
+      const scope = context.jobCancellationAuthoritativeScope;
+      const collection = scope[collectionName];
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-accepted-command-1",
+          current: "accepted",
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-invalid-scope-${collectionName}-${field}`,
+          context: {
+            ...context,
+            jobCancellationAuthoritativeScope: {
+              ...scope,
+              [collectionName]: [{ ...collection[0], [field]: value }],
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["jobCancellationShipments", "id", "another-shipment"],
+    [
+      "jobCancellationShipments",
+      "productionReservationId",
+      "another-reservation",
+    ],
+    ["jobCancellationShipments", "jobId", "another-job"],
+    ["jobCancellationShipments", "orderId", "another-order"],
+    ["jobCancellationShipments", "phaseId", "another-phase"],
+    ["jobCancellationShipments", "previousStatus", "planned"],
+    ["jobCancellationShipments", "targetStatus", "handed_over"],
+    ["jobCancellationShipments", "barrierOutcome", "preserved_for_siblings"],
+    ["jobCancellationShipments", "currentLineageLeaf", false],
+    ["jobCancellationShipments", "carrierLabelIds", []],
+    ["jobCancellationShipments", "contributorJobIds", ["another-job"]],
+    [
+      "jobCancellationShipments",
+      "contributorReservationIds",
+      ["another-reservation"],
+    ],
+    ["jobCancellationShipments", "remainingContributorJobIds", ["job-2"]],
+    [
+      "jobCancellationShipments",
+      "remainingContributorReservationIds",
+      ["reservation-2"],
+    ],
+    ["jobCancellationShipments", "resultId", "another-result"],
+    ["jobCancellationCarrierLabels", "id", "another-label"],
+    ["jobCancellationCarrierLabels", "shipmentId", "another-shipment"],
+    ["jobCancellationCarrierLabels", "jobId", "another-job"],
+    [
+      "jobCancellationCarrierLabels",
+      "productionReservationId",
+      "another-reservation",
+    ],
+    ["jobCancellationCarrierLabels", "orderId", "another-order"],
+    ["jobCancellationCarrierLabels", "phaseId", "another-phase"],
+    ["jobCancellationCarrierLabels", "previousStatus", "invalidated"],
+    ["jobCancellationCarrierLabels", "targetStatus", "usable"],
+    [
+      "jobCancellationCarrierLabels",
+      "barrierOutcome",
+      "preserved_for_siblings",
+    ],
+    ["jobCancellationCarrierLabels", "providerVoidOutboxId", " "],
+    [
+      "jobCancellationCarrierLabels",
+      "providerVoidOutboxShipmentId",
+      "another-shipment",
+    ],
+    [
+      "jobCancellationCarrierLabels",
+      "providerVoidOutboxLabelId",
+      "another-label",
+    ],
+    ["jobCancellationCarrierLabels", "providerVoidIdempotencyKey", "wrong"],
+    ["jobCancellationCarrierLabels", "providerVoidAction", "create_label"],
+    [
+      "jobCancellationCarrierLabels",
+      "providerVoidOutboxPreviousStatus",
+      "failed",
+    ],
+    [
+      "jobCancellationCarrierLabels",
+      "providerVoidOutboxTargetStatus",
+      "pending",
+    ],
+    [
+      "jobCancellationCarrierLabels",
+      "providerVoidOutboxResultId",
+      "another-result",
+    ],
+    ["jobCancellationCarrierLabels", "providerEventId", " "],
+    ["jobCancellationCarrierLabels", "providerEventOutboxId", "another-outbox"],
+    [
+      "jobCancellationCarrierLabels",
+      "providerEventShipmentId",
+      "another-shipment",
+    ],
+    ["jobCancellationCarrierLabels", "providerEventLabelId", "another-label"],
+    ["jobCancellationCarrierLabels", "providerTransactionId", " "],
+    [
+      "jobCancellationCarrierLabels",
+      "providerEventTransactionId",
+      "another-transaction",
+    ],
+    ["jobCancellationCarrierLabels", "providerEventResultId", "another-result"],
+    [
+      "jobCancellationCarrierLabels",
+      "providerTransactionShipmentId",
+      "another-shipment",
+    ],
+    [
+      "jobCancellationCarrierLabels",
+      "providerTransactionLabelId",
+      "another-label",
+    ],
+    [
+      "jobCancellationCarrierLabels",
+      "providerTransactionOutboxId",
+      "another-outbox",
+    ],
+    [
+      "jobCancellationCarrierLabels",
+      "providerTransactionResultId",
+      "another-result",
+    ],
+    ["jobCancellationCarrierLabels", "providerEventStatus", "pending"],
+    ["jobCancellationCarrierLabels", "providerTransactionStatus", "pending"],
+    ["jobCancellationCarrierLabels", "providerEventAuthenticated", false],
+    ["jobCancellationCarrierLabels", "providerEventVerified", false],
+    ["jobCancellationCarrierLabels", "providerVoidStatus", "pending"],
+    ["jobCancellationCarrierLabels", "resultId", "another-result"],
+  ] as const)(
+    "rejects post-acceptance Job cancellation with invalid %s[0].%s",
+    (collectionName, field, value) => {
+      const context = contextForTransition("cancelled", "accepted");
+      const collection = context[collectionName];
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-accepted-command-1",
+          current: "accepted",
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-invalid-${collectionName}-${field}`,
+          context: {
+            ...context,
+            [collectionName]: [{ ...collection[0], [field]: value }],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["jobId", "another-job"],
+    ["productionReservationId", "another-reservation"],
+    ["orderId", "another-order"],
+    ["phaseId", "another-phase"],
+    ["currentJobLineageLeaf", false],
+    ["immutable", false],
+  ] as const)(
+    "rejects post-acceptance Job cancellation with invalid contributor %s",
+    (field, value) => {
+      const context = contextForTransition("cancelled", "accepted");
+      const scope = context.jobCancellationAuthoritativeScope;
+      const shipment = scope.shipments[0];
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-accepted-command-1",
+          current: "accepted",
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-invalid-contributor-${field}`,
+          context: {
+            ...context,
+            jobCancellationAuthoritativeScope: {
+              ...scope,
+              shipments: [
+                {
+                  ...shipment,
+                  contributorLinks: [
+                    { ...shipment.contributorLinks[0], [field]: value },
+                  ],
+                },
+              ],
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["another-job", "job-accepted-command-1"],
+    ["job-1", "another-command"],
+  ] as const)(
+    "rejects post-acceptance Job cancellation outside its command anchor (%s, %s)",
+    (aggregateId, currentStateCommandKey) => {
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId,
+          currentStateCommandKey,
+          current: "accepted",
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-command-anchor-${aggregateId}-${currentStateCommandKey}`,
+          context: contextForTransition("cancelled", "accepted"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["jobCancellationExpectedShipmentIds", []],
+    ["jobCancellationExpectedShipmentIds", ["shipment-1", "shipment-1"]],
+    ["jobCancellationExpectedCarrierLabelIds", []],
+    ["jobCancellationExpectedCarrierLabelIds", ["label-1", "label-1"]],
+    ["jobCancellationExpectedContributorJobIds", []],
+    ["jobCancellationExpectedContributorJobIds", ["job-1", "job-1"]],
+    ["jobCancellationExpectedContributorReservationIds", []],
+    [
+      "jobCancellationExpectedContributorReservationIds",
+      ["production-reservation-1", "production-reservation-1"],
+    ],
+    ["jobCancellationShipments", []],
+    [
+      "jobCancellationShipments",
+      [
+        ...permittedContext.jobCancellationShipments,
+        ...permittedContext.jobCancellationShipments,
+      ],
+    ],
+    ["jobCancellationCarrierLabels", []],
+    [
+      "jobCancellationCarrierLabels",
+      [
+        ...permittedContext.jobCancellationCarrierLabels,
+        ...permittedContext.jobCancellationCarrierLabels,
+      ],
+    ],
+  ] as const)(
+    "rejects incomplete or duplicate Job cancellation scope %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-accepted-command-1",
+          current: "accepted",
+          target: "cancelled",
+          idempotencyKey: `job-cancellation-incomplete-${field}`,
+          context: {
+            ...contextForTransition("cancelled", "accepted"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign Job cancellation substitution", () => {
+    const context = contextForTransition("cancelled", "accepted");
+    expect(() =>
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-accepted-command-1",
+        current: "accepted",
+        target: "cancelled",
+        idempotencyKey: "job-cancellation-foreign-substitution",
+        context: {
+          ...context,
+          jobId: "foreign-job",
+          orderId: "foreign-order",
+          phaseId: "foreign-phase",
+          productionReservationId: "foreign-reservation",
+          productionReservationJobId: "foreign-job",
+          jobResourceSettlementJobId: "foreign-job",
+          jobResourceSettlementProductionReservationId: "foreign-reservation",
+          jobCancellationResultId: "foreign-cancellation-result",
+          jobCancellationPreviousJobResultId: "foreign-job-result",
+          jobCancellationPreviousReservationResultId:
+            "foreign-reservation-result",
+          jobCancellationCurrentStateCommandKey: "foreign-state-command",
+          jobCancellationJobId: "foreign-job",
+          jobCancellationOrderId: "foreign-order",
+          jobCancellationPhaseId: "foreign-phase",
+          jobCancellationProductionReservationId: "foreign-reservation",
+          jobCancellationAuthoritativeScopeId: "foreign-scope",
+          jobCancellationExpectedScopeId: "foreign-scope",
+          jobCancellationScopeResultId: "foreign-scope-result",
+          jobCancellationExpectedJob: {
+            ...context.jobCancellationExpectedJob,
+            id: "foreign-job",
+            orderId: "foreign-order",
+            phaseId: "foreign-phase",
+            productionReservationId: "foreign-reservation",
+            shipmentScopeId: "foreign-scope",
+            resultId: "foreign-job-result",
+            currentStateCommandKey: "foreign-state-command",
+          },
+          jobCancellationReservationId: "foreign-reservation",
+          jobCancellationExpectedReservation: {
+            ...context.jobCancellationExpectedReservation,
+            id: "foreign-reservation",
+            jobId: "foreign-job",
+            orderId: "foreign-order",
+            phaseId: "foreign-phase",
+            resultId: "foreign-reservation-result",
+          },
+          jobCancellationExpectedShipmentIds: ["foreign-shipment"],
+          jobCancellationExpectedCarrierLabelIds: ["foreign-label"],
+          jobCancellationExpectedContributorJobIds: ["foreign-job"],
+          jobCancellationExpectedContributorReservationIds: [
+            "foreign-reservation",
+          ],
+          jobCancellationAuthoritativeScope: {
+            ...context.jobCancellationAuthoritativeScope,
+            id: "foreign-scope",
+            jobId: "foreign-job",
+            orderId: "foreign-order",
+            phaseId: "foreign-phase",
+            productionReservationId: "foreign-reservation",
+            shipmentIds: ["foreign-shipment"],
+            carrierLabelIds: ["foreign-label"],
+            contributorJobIds: ["foreign-job"],
+            contributorReservationIds: ["foreign-reservation"],
+            shipments: [
+              {
+                ...context.jobCancellationAuthoritativeScope.shipments[0],
+                id: "foreign-shipment",
+                orderId: "foreign-order",
+                phaseId: "foreign-phase",
+                carrierLabelIds: ["foreign-label"],
+                contributorLinks: [
+                  {
+                    ...context.jobCancellationAuthoritativeScope.shipments[0]
+                      .contributorLinks[0],
+                    jobId: "foreign-job",
+                    productionReservationId: "foreign-reservation",
+                    orderId: "foreign-order",
+                    phaseId: "foreign-phase",
+                  },
+                ],
+              },
+            ],
+            carrierLabels: [
+              {
+                ...context.jobCancellationAuthoritativeScope.carrierLabels[0],
+                id: "foreign-label",
+                shipmentId: "foreign-shipment",
+                orderId: "foreign-order",
+                phaseId: "foreign-phase",
+              },
+            ],
+            resultId: "foreign-scope-result",
+          },
+          jobCancellationShipments: [
+            {
+              ...context.jobCancellationShipments[0],
+              id: "foreign-shipment",
+              jobId: "foreign-job",
+              productionReservationId: "foreign-reservation",
+              orderId: "foreign-order",
+              phaseId: "foreign-phase",
+              carrierLabelIds: ["foreign-label"],
+              contributorJobIds: ["foreign-job"],
+              contributorReservationIds: ["foreign-reservation"],
+              resultId: "foreign-cancellation-result",
+            },
+          ],
+          jobCancellationCarrierLabels: [
+            {
+              ...context.jobCancellationCarrierLabels[0],
+              id: "foreign-label",
+              shipmentId: "foreign-shipment",
+              jobId: "foreign-job",
+              productionReservationId: "foreign-reservation",
+              orderId: "foreign-order",
+              phaseId: "foreign-phase",
+              providerVoidOutboxShipmentId: "foreign-shipment",
+              providerVoidOutboxLabelId: "foreign-label",
+              providerVoidIdempotencyKey:
+                "void_carrier_label:foreign-shipment:foreign-label",
+              providerVoidOutboxResultId: "foreign-cancellation-result",
+              providerEventShipmentId: "foreign-shipment",
+              providerEventLabelId: "foreign-label",
+              providerEventResultId: "foreign-cancellation-result",
+              providerTransactionShipmentId: "foreign-shipment",
+              providerTransactionLabelId: "foreign-label",
+              providerTransactionResultId: "foreign-cancellation-result",
+              resultId: "foreign-cancellation-result",
+            },
+          ],
+          jobCancellationReservationResultId: "foreign-cancellation-result",
+          jobCancellationJobResultId: "foreign-cancellation-result",
+          jobCancellationResourceSettlementResultId:
+            "foreign-cancellation-result",
+          jobCancellationShipmentResultId: "foreign-cancellation-result",
+          jobCancellationCarrierLabelResultId: "foreign-cancellation-result",
+          jobCancellationBarrierResultId: "foreign-cancellation-result",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each([
     ["created", "phase_cancelled"],

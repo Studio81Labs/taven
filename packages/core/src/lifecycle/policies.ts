@@ -2134,6 +2134,494 @@ function requireJobResourceSettlement<S extends string>(
   );
 }
 
+function requireExactPostAcceptanceJobCancellation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const exactStringSet = (actual: unknown, expected: unknown): boolean => {
+    if (!Array.isArray(actual) || !Array.isArray(expected)) return false;
+    const left = actual.filter(nonBlank);
+    const right = expected.filter(nonBlank);
+    return (
+      left.length === actual.length &&
+      right.length === expected.length &&
+      new Set(left).size === left.length &&
+      new Set(right).size === right.length &&
+      left.length === right.length &&
+      left.every((id) => right.includes(id))
+    );
+  };
+  const jobId = context?.jobId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const reservationId = context?.productionReservationId;
+  const resultId = context?.jobCancellationResultId;
+  const previousJobResultId = context?.jobCancellationPreviousJobResultId;
+  const previousReservationResultId =
+    context?.jobCancellationPreviousReservationResultId;
+  const currentStateCommandKey = command.currentStateCommandKey;
+  const scopeId = context?.jobCancellationAuthoritativeScopeId;
+  const scopeResultId = context?.jobCancellationScopeResultId;
+  const expectedJob = record(context?.jobCancellationExpectedJob);
+  const expectedReservation = record(
+    context?.jobCancellationExpectedReservation,
+  );
+  const scope = record(context?.jobCancellationAuthoritativeScope);
+  if (
+    !nonBlank(jobId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(reservationId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(previousJobResultId) ||
+    !nonBlank(previousReservationResultId) ||
+    !nonBlank(currentStateCommandKey) ||
+    !nonBlank(scopeId) ||
+    !nonBlank(scopeResultId) ||
+    command.aggregateId !== jobId ||
+    context?.jobCancellationCurrentStateCommandKey !== currentStateCommandKey ||
+    context?.jobCancellationJobId !== jobId ||
+    context?.jobCancellationOrderId !== orderId ||
+    context?.jobCancellationPhaseId !== phaseId ||
+    context?.jobCancellationProductionReservationId !== reservationId ||
+    context?.jobCancellationPreviousStatus !== command.current ||
+    context?.jobCancellationTargetStatus !== "cancelled" ||
+    context?.jobCancellationReason !== context?.cancellationReason ||
+    expectedJob?.id !== jobId ||
+    expectedJob.orderId !== orderId ||
+    expectedJob.phaseId !== phaseId ||
+    expectedJob.productionReservationId !== reservationId ||
+    expectedJob.shipmentScopeId !== scopeId ||
+    expectedJob.status !== command.current ||
+    expectedJob.resultId !== previousJobResultId ||
+    expectedJob.currentStateCommandKey !== currentStateCommandKey ||
+    expectedJob.immutable !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "post-acceptance cancellation must bind the selected immutable Job and current state",
+    );
+  }
+
+  const zeroPrePrint =
+    command.current === "accepted" || command.current === "gcode_ready";
+  const expectedReservationStatus = zeroPrePrint ? "scheduled" : "printing";
+  const expectedReservationTarget = zeroPrePrint ? "released" : "settled";
+  if (
+    context?.jobCancellationReservationId !== reservationId ||
+    context?.jobCancellationReservationPreviousStatus !==
+      expectedReservationStatus ||
+    context?.jobCancellationReservationTargetStatus !==
+      expectedReservationTarget ||
+    expectedReservation?.id !== reservationId ||
+    expectedReservation.jobId !== jobId ||
+    expectedReservation.orderId !== orderId ||
+    expectedReservation.phaseId !== phaseId ||
+    expectedReservation.status !== expectedReservationStatus ||
+    expectedReservation.resultId !== previousReservationResultId ||
+    expectedReservation.immutable !== true ||
+    context?.jobCancellationReservationResultId !== resultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job cancellation must settle its exact immutable ProductionReservation",
+    );
+  }
+
+  const expectedShipmentIds = context?.jobCancellationExpectedShipmentIds;
+  const expectedLabelIds = context?.jobCancellationExpectedCarrierLabelIds;
+  const expectedContributorJobIds =
+    context?.jobCancellationExpectedContributorJobIds;
+  const expectedContributorReservationIds =
+    context?.jobCancellationExpectedContributorReservationIds;
+  const scopeShipments = scope?.shipments;
+  const scopeLabels = scope?.carrierLabels;
+  if (
+    context?.jobCancellationExpectedScopeId !== scopeId ||
+    scope?.id !== scopeId ||
+    scope.jobId !== jobId ||
+    scope.orderId !== orderId ||
+    scope.phaseId !== phaseId ||
+    scope.productionReservationId !== reservationId ||
+    scope.resultId !== scopeResultId ||
+    scope.immutable !== true ||
+    !exactStringSet(scope.shipmentIds, expectedShipmentIds) ||
+    !exactStringSet(scope.carrierLabelIds, expectedLabelIds) ||
+    !exactStringSet(scope.contributorJobIds, expectedContributorJobIds) ||
+    !exactStringSet(
+      scope.contributorReservationIds,
+      expectedContributorReservationIds,
+    ) ||
+    !Array.isArray(scopeShipments) ||
+    scopeShipments.length === 0 ||
+    !Array.isArray(scopeLabels) ||
+    scopeLabels.length !== (expectedLabelIds as unknown[]).length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job cancellation requires its immutable complete Shipment and carrier-label scope",
+    );
+  }
+  const scopedShipments = new Map<string, Readonly<Record<string, unknown>>>();
+  const scopedShipmentLabelIds = new Set<string>();
+  const scopedContributors = new Map<string, string>();
+  for (const value of scopeShipments) {
+    const shipment = record(value);
+    const contributorLinks = shipment?.contributorLinks;
+    if (
+      shipment === undefined ||
+      !nonBlank(shipment.id) ||
+      scopedShipments.has(shipment.id) ||
+      !(expectedShipmentIds as unknown[]).includes(shipment.id) ||
+      shipment.orderId !== orderId ||
+      shipment.phaseId !== phaseId ||
+      shipment.currentLineageLeaf !== true ||
+      (shipment.status !== "planned" &&
+        shipment.status !== "label_created" &&
+        shipment.status !== "cancellation_pending") ||
+      shipment.immutable !== true ||
+      !Array.isArray(shipment.carrierLabelIds) ||
+      !exactStringSet(shipment.carrierLabelIds, shipment.carrierLabelIds) ||
+      (shipment.status === "planned"
+        ? shipment.carrierLabelIds.length !== 0
+        : shipment.carrierLabelIds.length === 0) ||
+      !Array.isArray(contributorLinks) ||
+      contributorLinks.length === 0
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Job cancellation Shipment scope must contain exact current lineage records",
+      );
+    }
+    let selectedContributorCount = 0;
+    const shipmentContributorJobIds = new Set<string>();
+    for (const value of contributorLinks) {
+      const contributor = record(value);
+      if (
+        contributor === undefined ||
+        !nonBlank(contributor.jobId) ||
+        !nonBlank(contributor.productionReservationId) ||
+        shipmentContributorJobIds.has(contributor.jobId) ||
+        scopedContributors.has(contributor.jobId) ||
+        contributor.orderId !== orderId ||
+        contributor.phaseId !== phaseId ||
+        contributor.currentJobLineageLeaf !== true ||
+        contributor.immutable !== true
+      ) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          "Job cancellation Shipment scope requires the complete contributor topology",
+        );
+      }
+      shipmentContributorJobIds.add(contributor.jobId);
+      if (contributor.jobId === jobId) {
+        if (contributor.productionReservationId !== reservationId) {
+          throw new TransitionGuardError(
+            lifecycle,
+            command.current,
+            command.target,
+            "selected Job cancellation must use its exact contributor reservation",
+          );
+        }
+        selectedContributorCount += 1;
+      }
+      scopedContributors.set(
+        contributor.jobId,
+        contributor.productionReservationId,
+      );
+    }
+    if (selectedContributorCount !== 1) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "every scoped Shipment must contain the selected Job exactly once",
+      );
+    }
+    scopedShipments.set(shipment.id, shipment);
+    for (const labelId of shipment.carrierLabelIds as string[]) {
+      if (scopedShipmentLabelIds.has(labelId)) {
+        throw new TransitionGuardError(
+          lifecycle,
+          command.current,
+          command.target,
+          "a carrier label cannot belong to multiple scoped Shipments",
+        );
+      }
+      scopedShipmentLabelIds.add(labelId);
+    }
+  }
+  if (
+    scopedShipments.size !== (expectedShipmentIds as unknown[]).length ||
+    !exactStringSet([...scopedShipmentLabelIds], expectedLabelIds) ||
+    !exactStringSet(
+      [...scopedContributors.keys()],
+      expectedContributorJobIds,
+    ) ||
+    !exactStringSet(
+      [...scopedContributors.values()],
+      expectedContributorReservationIds,
+    )
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job cancellation cannot omit a scoped Shipment",
+    );
+  }
+  const scopedLabels = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const value of scopeLabels) {
+    const label = record(value);
+    const shipment =
+      label !== undefined && nonBlank(label.shipmentId)
+        ? scopedShipments.get(label.shipmentId)
+        : undefined;
+    if (
+      label === undefined ||
+      !nonBlank(label.id) ||
+      scopedLabels.has(label.id) ||
+      !(expectedLabelIds as unknown[]).includes(label.id) ||
+      shipment === undefined ||
+      label.orderId !== orderId ||
+      label.phaseId !== phaseId ||
+      label.status !== "usable" ||
+      label.immutable !== true ||
+      !Array.isArray(shipment.carrierLabelIds) ||
+      !shipment.carrierLabelIds.includes(label.id)
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Job cancellation carrier-label scope must belong to its exact Shipment",
+      );
+    }
+    scopedLabels.set(label.id, label);
+  }
+
+  const shipmentCancellations = context?.jobCancellationShipments;
+  const labelCancellations = context?.jobCancellationCarrierLabels;
+  if (
+    !Array.isArray(shipmentCancellations) ||
+    shipmentCancellations.length !== scopedShipments.size ||
+    !Array.isArray(labelCancellations) ||
+    labelCancellations.length !== scopedLabels.size
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job cancellation must complete the exact Shipment and label scope",
+    );
+  }
+  const cancelledShipmentIds = new Set<string>();
+  for (const value of shipmentCancellations) {
+    const cancellation = record(value);
+    const expected =
+      cancellation !== undefined && nonBlank(cancellation.id)
+        ? scopedShipments.get(cancellation.id)
+        : undefined;
+    const contributorLinks = Array.isArray(expected?.contributorLinks)
+      ? expected.contributorLinks
+      : [];
+    const contributorJobIds = contributorLinks.map((value) =>
+      String((value as Readonly<Record<string, unknown>>).jobId),
+    );
+    const contributorReservationIds = contributorLinks.map((value) =>
+      String(
+        (value as Readonly<Record<string, unknown>>).productionReservationId,
+      ),
+    );
+    const remainingContributorJobIds = contributorJobIds.filter(
+      (id) => id !== jobId,
+    );
+    const remainingContributorReservationIds = contributorLinks
+      .filter(
+        (value) => (value as Readonly<Record<string, unknown>>).jobId !== jobId,
+      )
+      .map((value) =>
+        String(
+          (value as Readonly<Record<string, unknown>>).productionReservationId,
+        ),
+      );
+    const sharedShipment = remainingContributorJobIds.length > 0;
+    if (
+      cancellation === undefined ||
+      expected === undefined ||
+      cancelledShipmentIds.has(cancellation.id as string) ||
+      cancellation.jobId !== jobId ||
+      cancellation.productionReservationId !== reservationId ||
+      cancellation.orderId !== orderId ||
+      cancellation.phaseId !== phaseId ||
+      cancellation.previousStatus !== expected.status ||
+      cancellation.targetStatus !==
+        (sharedShipment ? expected.status : "cancelled") ||
+      cancellation.barrierOutcome !==
+        (sharedShipment ? "preserved_for_siblings" : "cancelled") ||
+      cancellation.currentLineageLeaf !== true ||
+      !exactStringSet(cancellation.contributorJobIds, contributorJobIds) ||
+      !exactStringSet(
+        cancellation.contributorReservationIds,
+        contributorReservationIds,
+      ) ||
+      !exactStringSet(
+        cancellation.remainingContributorJobIds,
+        remainingContributorJobIds,
+      ) ||
+      !exactStringSet(
+        cancellation.remainingContributorReservationIds,
+        remainingContributorReservationIds,
+      ) ||
+      !exactStringSet(cancellation.carrierLabelIds, expected.carrierLabelIds) ||
+      cancellation.resultId !== resultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Job cancellation must cancel every exact scoped Shipment",
+      );
+    }
+    cancelledShipmentIds.add(cancellation.id as string);
+  }
+  const cancelledLabelIds = new Set<string>();
+  for (const value of labelCancellations) {
+    const cancellation = record(value);
+    const expected =
+      cancellation !== undefined && nonBlank(cancellation.id)
+        ? scopedLabels.get(cancellation.id)
+        : undefined;
+    const expectedShipment =
+      expected !== undefined && nonBlank(expected.shipmentId)
+        ? scopedShipments.get(expected.shipmentId)
+        : undefined;
+    const contributorLinks = Array.isArray(expectedShipment?.contributorLinks)
+      ? expectedShipment.contributorLinks
+      : [];
+    const sharedShipment =
+      contributorLinks.filter(
+        (value) => (value as Readonly<Record<string, unknown>>).jobId !== jobId,
+      ).length > 0;
+    const providerOutcomeValid = sharedShipment
+      ? cancellation?.barrierOutcome === "preserved_for_siblings" &&
+        cancellation.targetStatus === "usable" &&
+        cancellation.providerVoidOutboxId === null &&
+        cancellation.providerVoidOutboxShipmentId === null &&
+        cancellation.providerVoidOutboxLabelId === null &&
+        cancellation.providerVoidIdempotencyKey === null &&
+        cancellation.providerVoidAction === null &&
+        cancellation.providerVoidOutboxPreviousStatus === null &&
+        cancellation.providerVoidOutboxTargetStatus === null &&
+        cancellation.providerVoidOutboxResultId === null &&
+        cancellation.providerEventId === null &&
+        cancellation.providerEventOutboxId === null &&
+        cancellation.providerEventShipmentId === null &&
+        cancellation.providerEventLabelId === null &&
+        cancellation.providerEventTransactionId === null &&
+        cancellation.providerEventResultId === null &&
+        cancellation.providerTransactionId === null &&
+        cancellation.providerTransactionShipmentId === null &&
+        cancellation.providerTransactionLabelId === null &&
+        cancellation.providerTransactionOutboxId === null &&
+        cancellation.providerTransactionResultId === null &&
+        cancellation.providerEventStatus === null &&
+        cancellation.providerTransactionStatus === null &&
+        cancellation.providerEventAuthenticated === false &&
+        cancellation.providerEventVerified === false &&
+        cancellation.providerVoidStatus === "not_required"
+      : cancellation?.barrierOutcome === "invalidated" &&
+        cancellation.targetStatus === "invalidated" &&
+        nonBlank(cancellation.providerVoidOutboxId) &&
+        cancellation.providerVoidOutboxShipmentId === expected?.shipmentId &&
+        cancellation.providerVoidOutboxLabelId === cancellation.id &&
+        cancellation.providerVoidIdempotencyKey ===
+          `void_carrier_label:${String(expected?.shipmentId)}:${String(cancellation.id)}` &&
+        cancellation.providerVoidAction === "void_carrier_label" &&
+        cancellation.providerVoidOutboxPreviousStatus === "pending" &&
+        cancellation.providerVoidOutboxTargetStatus === "succeeded" &&
+        cancellation.providerVoidOutboxResultId === cancellation.resultId &&
+        nonBlank(cancellation.providerEventId) &&
+        cancellation.providerEventOutboxId ===
+          cancellation.providerVoidOutboxId &&
+        cancellation.providerEventShipmentId === expected?.shipmentId &&
+        cancellation.providerEventLabelId === cancellation.id &&
+        nonBlank(cancellation.providerTransactionId) &&
+        cancellation.providerEventTransactionId ===
+          cancellation.providerTransactionId &&
+        cancellation.providerEventResultId === cancellation.resultId &&
+        cancellation.providerTransactionShipmentId === expected?.shipmentId &&
+        cancellation.providerTransactionLabelId === cancellation.id &&
+        cancellation.providerTransactionOutboxId ===
+          cancellation.providerVoidOutboxId &&
+        cancellation.providerTransactionResultId === cancellation.resultId &&
+        cancellation.providerEventStatus === "succeeded" &&
+        cancellation.providerTransactionStatus === "succeeded" &&
+        cancellation.providerEventAuthenticated === true &&
+        cancellation.providerEventVerified === true &&
+        cancellation.providerVoidStatus === "succeeded";
+    if (
+      cancellation === undefined ||
+      expected === undefined ||
+      expectedShipment === undefined ||
+      cancelledLabelIds.has(cancellation.id as string) ||
+      cancellation.shipmentId !== expected.shipmentId ||
+      cancellation.jobId !== jobId ||
+      cancellation.productionReservationId !== reservationId ||
+      cancellation.orderId !== orderId ||
+      cancellation.phaseId !== phaseId ||
+      cancellation.previousStatus !== "usable" ||
+      !providerOutcomeValid ||
+      cancellation.resultId !== resultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Job cancellation must invalidate every exact carrier label",
+      );
+    }
+    cancelledLabelIds.add(cancellation.id as string);
+  }
+  if (
+    cancelledShipmentIds.size !== scopedShipments.size ||
+    cancelledLabelIds.size !== scopedLabels.size ||
+    context?.jobCancellationJobResultId !== resultId ||
+    context?.jobCancellationResourceSettlementResultId !== resultId ||
+    context?.jobCancellationShipmentResultId !== resultId ||
+    context?.jobCancellationCarrierLabelResultId !== resultId ||
+    context?.jobCancellationBarrierResultId !== resultId ||
+    context?.jobCancellationCompleted !== true ||
+    context?.jobCancellationAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job cancellation requires one complete atomic result",
+    );
+  }
+}
+
 function requirePrintingReservationCommit<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2611,7 +3099,7 @@ function requireExactQcDecision<S extends string>(
     photoAsset.status !== "stored" ||
     !(photoAsset.retentionDeadlineAt instanceof Instant) ||
     photoAsset.submissionResultId !== submittedResultId ||
-    photoAsset.resultId !== resultId ||
+    photoAsset.resultId !== submittedResultId ||
     photoAsset.immutable !== true ||
     reviewer?.id !== reviewerId ||
     reviewer.active !== true ||
@@ -2639,7 +3127,7 @@ function requireExactQcDecision<S extends string>(
     decision.sourceStateCommandKey !== currentStateCommandKey ||
     decision.immutable !== true ||
     context?.qcDecisionJobResultId !== resultId ||
-    context?.qcDecisionPhotoAssetResultId !== resultId ||
+    context?.qcDecisionPhotoAssetResultId !== submittedResultId ||
     context?.qcDecisionReviewerResultId !== resultId ||
     context?.qcDecisionRecordResultId !== resultId ||
     context?.qcDecisionCompleted !== true ||
@@ -4828,6 +5316,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
           "labelCancellationBarrierCompleted",
           "cancellation requires every carrier label cancellation barrier to complete",
         );
+        requireExactPostAcceptanceJobCancellation("Job", command);
       }
     }
     if (command.current === "created" && command.target === "accepted") {
