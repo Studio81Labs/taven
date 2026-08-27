@@ -1294,14 +1294,63 @@ CREATE TRIGGER "inventories_resource_compatibility"
     BEFORE INSERT OR UPDATE ON "inventories"
     FOR EACH ROW EXECUTE FUNCTION taven_assert_inventory_machine_compatibility();
 
+CREATE FUNCTION taven_geometry_fits_machine_capability(
+    requested_geometry_id uuid,
+    requested_capability_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE((
+        SELECT
+            (
+                geometry."bounds_x_micrometers" <= capability."build_volume_x_micrometers" AND
+                geometry."bounds_y_micrometers" <= capability."build_volume_y_micrometers" AND
+                geometry."bounds_z_micrometers" <= capability."build_volume_z_micrometers"
+            ) OR (
+                geometry."bounds_x_micrometers" <= capability."build_volume_x_micrometers" AND
+                geometry."bounds_y_micrometers" <= capability."build_volume_z_micrometers" AND
+                geometry."bounds_z_micrometers" <= capability."build_volume_y_micrometers"
+            ) OR (
+                geometry."bounds_x_micrometers" <= capability."build_volume_y_micrometers" AND
+                geometry."bounds_y_micrometers" <= capability."build_volume_x_micrometers" AND
+                geometry."bounds_z_micrometers" <= capability."build_volume_z_micrometers"
+            ) OR (
+                geometry."bounds_x_micrometers" <= capability."build_volume_y_micrometers" AND
+                geometry."bounds_y_micrometers" <= capability."build_volume_z_micrometers" AND
+                geometry."bounds_z_micrometers" <= capability."build_volume_x_micrometers"
+            ) OR (
+                geometry."bounds_x_micrometers" <= capability."build_volume_z_micrometers" AND
+                geometry."bounds_y_micrometers" <= capability."build_volume_x_micrometers" AND
+                geometry."bounds_z_micrometers" <= capability."build_volume_y_micrometers"
+            ) OR (
+                geometry."bounds_x_micrometers" <= capability."build_volume_z_micrometers" AND
+                geometry."bounds_y_micrometers" <= capability."build_volume_y_micrometers" AND
+                geometry."bounds_z_micrometers" <= capability."build_volume_x_micrometers"
+            )
+        FROM "model_geometries" geometry
+        CROSS JOIN "machine_capabilities" capability
+        WHERE geometry."id" = requested_geometry_id
+          AND capability."id" = requested_capability_id
+    ), false);
+$$;
+
 CREATE FUNCTION taven_assert_candidate_resource_compatibility()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM 1
+    FROM "nodes"
+    WHERE "id" = NEW."node_id"
+    FOR SHARE;
+
     IF NOT EXISTS (
         SELECT 1
-        FROM "machine_profiles" machine_profile
+        FROM "nodes" node
+        JOIN "machine_profiles" machine_profile
+          ON true
         JOIN "machines" machine
           ON machine."id" = NEW."machine_id"
          AND machine."node_id" = NEW."node_id"
@@ -1315,11 +1364,17 @@ BEGIN
          AND calibration."machine_id" = NEW."machine_id"
         JOIN "print_config_revisions" print_config
           ON print_config."id" = NEW."print_config_revision_id"
-        WHERE machine_profile."id" = NEW."machine_profile_id"
+        WHERE node."id" = NEW."node_id"
+          AND node."active"
+          AND machine_profile."id" = NEW."machine_profile_id"
           AND machine_profile."machine_capability_id" = machine."machine_capability_id"
           AND machine_profile."nozzle_diameter_micrometers" = machine."installed_nozzle_micrometers"
           AND machine_profile."material" = inventory."material"
           AND machine_profile."quality" = print_config."quality"
+          AND taven_geometry_fits_machine_capability(
+              NEW."model_geometry_id",
+              machine."machine_capability_id"
+          )
           AND machine_profile."state" = 'ACTIVE'
           AND calibration."state" = 'ACTIVE'
           AND machine."status" = 'ACTIVE'
@@ -1692,6 +1747,11 @@ BEGIN
        OR NEW."status" NOT IN ('RESERVED', 'HELD') THEN
         RETURN NEW;
     END IF;
+
+    PERFORM 1
+    FROM "nodes"
+    WHERE "id" = NEW."node_id"
+    FOR SHARE;
 
     PERFORM 1
     FROM "model_files" source
@@ -2532,7 +2592,9 @@ BEGIN
         WHERE production."phase_reservation_set_id" = target_set."id"
           AND NOT EXISTS (
               SELECT 1
-              FROM "machine_profiles" machine_profile
+              FROM "nodes" node
+              JOIN "machine_profiles" machine_profile
+                ON true
               JOIN "machines" machine
                 ON machine."id" = production."machine_id"
                AND machine."node_id" = production."node_id"
@@ -2546,11 +2608,19 @@ BEGIN
                AND calibration."machine_id" = production."machine_id"
               JOIN "print_config_revisions" print_config
                 ON print_config."id" = production."print_config_revision_id"
-              WHERE machine_profile."id" = production."machine_profile_id"
+              JOIN "slice_results" selected_slice
+                ON selected_slice."id" = production."slice_result_id"
+              WHERE node."id" = production."node_id"
+                AND node."active"
+                AND machine_profile."id" = production."machine_profile_id"
                 AND machine_profile."machine_capability_id" = machine."machine_capability_id"
                 AND machine_profile."nozzle_diameter_micrometers" = machine."installed_nozzle_micrometers"
                 AND machine_profile."material" = inventory."material"
                 AND machine_profile."quality" = print_config."quality"
+                AND taven_geometry_fits_machine_capability(
+                    selected_slice."model_geometry_id",
+                    machine."machine_capability_id"
+                )
                 AND machine_profile."state" = 'ACTIVE'
                 AND calibration."state" = 'ACTIVE'
                 AND machine."status" = 'ACTIVE'

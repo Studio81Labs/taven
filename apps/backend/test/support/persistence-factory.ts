@@ -37,6 +37,22 @@ export type SourceRetention = {
   deleteAfter?: Date;
   hold?: "NONE" | "ACTIVE_ORDER" | "ACTIVE_CLAIM" | "LEGAL";
 };
+export type GeometryBounds = {
+  xMicrometers: number;
+  yMicrometers: number;
+  zMicrometers: number;
+};
+
+const defaultGeometryBounds: GeometryBounds = {
+  xMicrometers: 1,
+  yMicrometers: 1,
+  zMicrometers: 1,
+};
+const defaultBuildVolume: GeometryBounds = {
+  xMicrometers: 200_000,
+  yMicrometers: 200_000,
+  zMicrometers: 200_000,
+};
 
 const hourInMilliseconds = 60 * 60 * 1_000;
 const dayInMilliseconds = 24 * hourInMilliseconds;
@@ -88,6 +104,8 @@ export class PersistenceFactory {
   async createFoundation(
     name = "foundation",
     sourceRetention: SourceRetention = {},
+    geometryBounds: GeometryBounds = defaultGeometryBounds,
+    buildVolume: GeometryBounds = defaultBuildVolume,
   ): Promise<PersistenceFoundation> {
     const nodeId = this.id(`${name}:node`);
     const capabilityId = this.id(`${name}:capability`);
@@ -122,9 +140,9 @@ export class PersistenceFactory {
         `capability-${this.hash(`${name}:capability-key`).slice(0, 32)}`,
         "Test manufacturer",
         "Test model",
-        200_000,
-        200_000,
-        200_000,
+        buildVolume.xMicrometers,
+        buildVolume.yMicrometers,
+        buildVolume.zMicrometers,
         [400, 600],
         ["PLA"],
       ],
@@ -182,9 +200,9 @@ export class PersistenceFactory {
         this.hash(`${name}:geometry`),
         "test-canonicalizer",
         1,
-        1,
-        1,
-        1,
+        geometryBounds.xMicrometers,
+        geometryBounds.yMicrometers,
+        geometryBounds.zMicrometers,
         1,
       ],
     );

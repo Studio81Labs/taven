@@ -119,7 +119,11 @@ reservation set per plan. Terminal sets retain their immutable history without
 preventing a later set from retrying the same planned jobs. Reference slices
 lock and require an active reference profile whose quality matches their
 immutable print configuration; candidate creation enforces the equivalent
-production-profile match. Before planning,
+production-profile match, requires an active service node, and verifies that
+the geometry fits the selected machine capability in at least one axis
+orientation. This is the hard dimension prefilter; exact orientation and
+printer-specific clearance remain sealed in the machine-specific slice and
+candidate snapshot. Before planning,
 the union of a candidate's capacity intervals must cover its declared machine
 seconds, and intervals must not overlap within a candidate or across candidates
 assigned to the same machine in one plan. This keeps every accepted plan
@@ -145,7 +149,7 @@ survive commit. A reserved set requires every child to remain reserved; a held
 set may mix fully live and fully terminal job-resource groups while at least
 one group remains live. A held set remains valid after its checkout TTL because
 it is then governed by the active phase's operational deadline. Confirmation
-locks and revalidates the selected geometry source, machine, profile,
+locks and revalidates the selected geometry source, node, machine, profile,
 calibration, and inventory, requires every live capacity interval to remain in
 the future, and compares each copied resource snapshot with its candidate
 estimate. Deferral permits one

@@ -687,6 +687,72 @@ describe("persistence foundations", () => {
 
   it("rejects candidate resources that do not match the concrete machine", async () => {
     await inRollbackTransaction(
+      "candidate-build-volume-rotation",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "rotated-geometry",
+          {},
+          {
+            xMicrometers: 350_000,
+            yMicrometers: 250_000,
+            zMicrometers: 150_000,
+          },
+          {
+            xMicrometers: 200_000,
+            yMicrometers: 300_000,
+            zMicrometers: 400_000,
+          },
+        );
+
+        await expect(
+          fixtures.planProduction(foundation, "rotated-geometry"),
+        ).resolves.toBeDefined();
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-build-volume-mismatch",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "oversized-geometry",
+          {},
+          {
+            xMicrometers: 350_000,
+            yMicrometers: 310_000,
+            zMicrometers: 150_000,
+          },
+          {
+            xMicrometers: 200_000,
+            yMicrometers: 300_000,
+            zMicrometers: 400_000,
+          },
+        );
+
+        await expect(
+          fixtures.planProduction(foundation, "oversized-geometry"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_compatibility_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-inactive-node",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        await client.query(
+          'UPDATE "nodes" SET "active" = false WHERE "id" = $1',
+          [foundation.nodeId],
+        );
+
+        await expect(
+          fixtures.planProduction(foundation, "inactive-node"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_compatibility_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
       "candidate-nozzle-mismatch",
       async (client, fixtures) => {
         const foundation = await fixtures.createFoundation();
@@ -1444,6 +1510,36 @@ describe("persistence foundations", () => {
     );
 
     await inRollbackTransaction(
+      "inactive-node-confirmation",
+      async (client, fixtures) => {
+        const { foundation } = await createCompleteSingleReservationGraph(
+          client,
+          fixtures,
+          "inactive-node-confirmation",
+          {
+            startsAt: testTimes.capacityStart,
+            endsAt: testTimes.capacityEnd,
+          },
+        );
+        await client.query(
+          'UPDATE "nodes" SET "active" = false WHERE "id" = $1',
+          [foundation.nodeId],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+
+        await expect(
+          client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_reservation_set_resource_compatibility_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
       "resource-snapshot-confirmation",
       async (client, fixtures) => {
         const { foundation } = await createCompleteSingleReservationGraph(
@@ -1505,6 +1601,97 @@ describe("persistence foundations", () => {
         });
       },
     );
+  });
+
+  it("serializes node deactivation with reservation confirmation", async () => {
+    const setup = await pool.connect();
+    const confirming = await pool.connect();
+    const disabling = await pool.connect();
+    let foundation: PersistenceFoundation | undefined;
+    let production: ProductionReservationFixture | undefined;
+    let cleanupError: unknown;
+    try {
+      const fixtures = factory(setup, "node-deactivation-concurrency");
+      await setup.query("BEGIN");
+      const graph = await createCompleteSingleReservationGraph(
+        setup,
+        fixtures,
+        "node-deactivation-concurrency",
+        {
+          startsAt: testTimes.capacityStart,
+          endsAt: testTimes.capacityEnd,
+        },
+      );
+      foundation = graph.foundation;
+      production = graph.production;
+      await setup.query(
+        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+        [foundation.phaseReservationSetId, "RESERVED"],
+      );
+      await setup.query("COMMIT");
+
+      await confirming.query("BEGIN");
+      await confirming.query(
+        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+        [production.productionReservationId, "HELD"],
+      );
+      await confirming.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+        [production.productionReservationId, "HELD"],
+      );
+      await confirming.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [production.productionReservationId, "HELD"],
+      );
+      await confirming.query(
+        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+        [foundation.phaseReservationSetId, "HELD"],
+      );
+
+      await disabling.query("BEGIN");
+      await disabling.query("SET LOCAL lock_timeout = '100ms'");
+      await expect(
+        disabling.query('UPDATE "nodes" SET "active" = false WHERE "id" = $1', [
+          foundation.nodeId,
+        ]),
+      ).rejects.toMatchObject({ code: "55P03" });
+    } finally {
+      await confirming.query("ROLLBACK").catch(() => undefined);
+      await disabling.query("ROLLBACK").catch(() => undefined);
+
+      if (foundation && production) {
+        await setup.query("BEGIN");
+        try {
+          await setup.query(
+            'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+            [production.productionReservationId, "RELEASED"],
+          );
+          await setup.query(
+            'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+            [production.productionReservationId, "RELEASED"],
+          );
+          await setup.query(
+            'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+            [production.productionReservationId, "RELEASED"],
+          );
+          await setup.query(
+            'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+            [foundation.phaseReservationSetId, "RELEASED"],
+          );
+          await setup.query("COMMIT");
+        } catch (error) {
+          await setup.query("ROLLBACK").catch(() => undefined);
+          cleanupError = error;
+        }
+      }
+
+      setup.release();
+      confirming.release();
+      disabling.release();
+    }
+    if (cleanupError) {
+      throw cleanupError;
+    }
   });
 
   it("requires resource children to share the production expiry", async () => {
