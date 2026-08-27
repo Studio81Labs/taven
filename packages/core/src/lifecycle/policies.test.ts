@@ -54,10 +54,28 @@ const permittedContext = {
   captureAuthorizationDisabled: true,
   refundWebhookPaymentId: "payment-1",
   refundTransactionId: "refund-1",
+  priceAdjustmentId: "price-adjustment-1",
+  ordinaryRefundPaymentId: "payment-1",
+  ordinaryRefundOrderId: "order-1",
+  ordinaryRefundCaptureTransactionId: "provider-transaction-1",
+  ordinaryRefundPriceAdjustmentId: "price-adjustment-1",
+  priceAdjustmentOrderId: "order-1",
+  priceAdjustmentPaymentId: "payment-1",
+  priceAdjustmentStatus: "active",
+  ordinaryRefundTransactionId: "refund-1",
+  refundTransactionPaymentId: "payment-1",
+  refundTransactionOrderId: "order-1",
+  refundTransactionPriceAdjustmentId: "price-adjustment-1",
+  ordinaryRefundAmountMinor: 1_000n,
+  priceAdjustmentRefundAmountMinor: 1_000n,
+  refundTransactionAmountMinor: 1_000n,
+  ordinaryRefundAtomic: true,
   refundWebhookRefundTransactionId: "refund-1",
   refundWebhookAuthenticated: true,
   refundWebhookVerified: true,
   refundWebhookStatus: "succeeded",
+  refundProviderEventId: "refund-provider-event-1",
+  refundWebhookAmountMinor: 1_000n,
   captureWindowClosed: true,
   captureCutoffSet: true,
   providerVoidOutboxCreated: true,
@@ -229,6 +247,42 @@ const permittedContext = {
   verifiedProviderVoid: true,
   contextHandoffCompleted: true,
   jobId: "job-1",
+  jobSettlementJobId: "job-1",
+  jobSettlementShipmentId: "shipment-1",
+  jobSettlementShipmentJobId: "job-1",
+  jobSettlementOrderId: "order-1",
+  jobSettlementPhaseId: "phase-1",
+  currentJobShipmentLineageLeafId: "shipment-lineage-leaf-1",
+  jobSettlementLineageLeafId: "shipment-lineage-leaf-1",
+  jobSettlementLineageShipmentId: "shipment-1",
+  jobSettlementLineageOrderId: "order-1",
+  jobSettlementLineagePhaseId: "phase-1",
+  jobSettlementLineageStatus: "delivered",
+  jobSettlementEvaluatedAt: Instant.parse("2026-03-02T00:00:00.000Z"),
+  expectedJobSettlementSlotIds: ["slot-1"],
+  jobSettlementSlots: [
+    {
+      id: "slot-1",
+      jobId: "job-1",
+      shipmentId: "shipment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      claimUntil: Instant.parse("2026-03-01T00:00:00.000Z"),
+      resolvedClaimId: null,
+      resolvedClaimStatus: null,
+      resolvedClaimSlotId: null,
+      resolvedClaimShipmentId: null,
+      resolvedClaimOrderId: null,
+      resolvedClaimPhaseId: null,
+      resolvedClaimPreviousActiveClaimId: null,
+      resolvedClaimTargetActiveClaimId: null,
+      activeClaimId: null,
+      claimRetentionHoldReleased: true,
+    },
+  ],
+  jobSettlementSlotSetComplete: true,
+  jobSettlementCompleted: true,
+  jobSettlementAtomic: true,
   phaseId: "phase-1",
   phaseKind: "single",
   phaseCancellationOrderId: "order-1",
@@ -267,6 +321,25 @@ const permittedContext = {
   qcCompletionPhaseTargetStatus: "qc_passed",
   qcCompletionCompleted: true,
   qcCompletionAtomic: true,
+  qcSlotSetOrderId: "order-1",
+  qcSlotSetPhaseId: "phase-1",
+  expectedQcFulfilmentSlotIds: ["slot-1"],
+  qcFulfilmentSlots: [
+    {
+      id: "slot-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      currentJobId: "job-1",
+      currentJobOrderId: "order-1",
+      currentJobPhaseId: "phase-1",
+      currentJobSlotId: "slot-1",
+      currentJobLineageLeaf: true,
+      currentJobStatus: "qc_approved",
+      openReplacementRequestId: null,
+      recoveryBlocked: false,
+    },
+  ],
+  qcSlotSetComplete: true,
   orderTerminalPhaseOrderId: "order-1",
   orderTerminalPhaseOwnerOrderId: "order-1",
   orderTerminalPhaseId: "phase-1",
@@ -351,6 +424,16 @@ const permittedContext = {
   freshQcPassed: true,
   cleanPostDeliveryQualityClaim: true,
   claimId: "claim-1",
+  claimSlotResolutionId: "claim-resolution-1",
+  claimSlotId: "claim-slot-1",
+  claimRefundResolutionId: "claim-resolution-1",
+  claimRefundClaimId: "claim-1",
+  claimRefundSlotId: "claim-slot-1",
+  claimRefundPaymentId: "payment-1",
+  claimRefundTransactionId: "refund-1",
+  claimRefundProviderEventId: "refund-provider-event-1",
+  claimRefundExpectedAmountMinor: 1_000n,
+  claimRefundCompletionAtomic: true,
   claimResolutionSetClaimId: "claim-1",
   expectedClaimSlotResolutionIds: ["claim-resolution-1"],
   expectedClaimSlotIds: ["claim-slot-1"],
@@ -449,6 +532,11 @@ const permittedContext = {
   shipmentIncidentRouted: true,
   shipmentIncidentRoutingAtomic: true,
   providerEventShipmentId: "shipment-1",
+  shipmentProviderTransactionId: "shipment-provider-transaction-1",
+  providerEventTransactionId: "shipment-provider-transaction-1",
+  providerEventId: "shipment-provider-event-1",
+  shipmentProviderScanEventId: "shipment-provider-event-1",
+  providerEventKind: "acceptance_scan",
   providerEventAuthenticated: true,
   providerEventVerified: true,
   currentRemedyShipmentLineageLeafId: "shipment-1",
@@ -637,6 +725,14 @@ function contextForTransition(target: string, current?: string) {
     ...resolutionEvidence,
     financialTerminalTarget: target,
     completionProjectedTarget: target,
+    qcCompletionOrderPreviousStatus:
+      target === "qc_passed"
+        ? current
+        : permittedContext.qcCompletionOrderPreviousStatus,
+    qcCompletionPhasePreviousStatus:
+      target === "qc_passed"
+        ? current
+        : permittedContext.qcCompletionPhasePreviousStatus,
     phaseCancellationOrderPreviousStatus: current,
     phaseCancellationPhasePreviousStatus: cancellationPhaseDisposition.previous,
     phaseCancellationPhaseTargetStatus: cancellationPhaseDisposition.target,
@@ -771,6 +867,7 @@ describe("v0 lifecycle policy tables", () => {
     [jobPolicy, "created", "accepted"],
     [jobPolicy, "gcode_ready", "printing"],
     [jobPolicy, "packed", "handed_over"],
+    [jobPolicy, "handed_over", "settled"],
     [shipmentPolicy, "label_created", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "cancelled"],
@@ -800,6 +897,76 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("rejects an incomplete or duplicate multi-slot QC projection", () => {
+    const secondSlot = {
+      ...permittedContext.qcFulfilmentSlots[0],
+      id: "slot-2",
+      currentJobId: "job-2",
+      currentJobSlotId: "slot-2",
+    };
+    const baseContext = {
+      ...contextForTransition("qc_passed", "in_production"),
+      expectedQcFulfilmentSlotIds: ["slot-1", "slot-2"],
+      qcFulfilmentSlots: [permittedContext.qcFulfilmentSlots[0], secondSlot],
+    };
+    for (const policy of [orderPolicy, singleOrderPhasePolicy] as const) {
+      for (const current of ["in_production", "recovery_pending"] as const) {
+        const context = {
+          ...baseContext,
+          ...contextForTransition("qc_passed", current),
+          expectedQcFulfilmentSlotIds: ["slot-1", "slot-2"],
+          qcFulfilmentSlots: [
+            permittedContext.qcFulfilmentSlots[0],
+            secondSlot,
+          ],
+        };
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-omission-${policy.name}-${current}`,
+            context: {
+              ...context,
+              qcFulfilmentSlots: [permittedContext.qcFulfilmentSlots[0]],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-duplicate-${policy.name}-${current}`,
+            context: {
+              ...context,
+              qcFulfilmentSlots: [
+                permittedContext.qcFulfilmentSlots[0],
+                permittedContext.qcFulfilmentSlots[0],
+              ],
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+        expect(
+          transition(policy, {
+            current,
+            target: "qc_passed",
+            idempotencyKey: `qc-slot-reordered-${policy.name}-${current}`,
+            context: {
+              ...context,
+              qcFulfilmentSlots: [
+                secondSlot,
+                permittedContext.qcFulfilmentSlots[0],
+              ],
+            },
+          }),
+        ).toEqual({
+          kind: "changed",
+          previous: current,
+          current: "qc_passed",
+        });
+      }
+    }
+  });
+
   it.each([
     ["orderId", " "],
     ["qcCompletionOrderId", "another-order"],
@@ -814,21 +981,68 @@ describe("v0 lifecycle policy tables", () => {
     ["verifiedQcReadiness", false],
     ["qcCompletionCompleted", false],
     ["qcCompletionAtomic", false],
+    ["qcSlotSetOrderId", "another-order"],
+    ["qcSlotSetPhaseId", "another-phase"],
+    ["expectedQcFulfilmentSlotIds", []],
+    ["qcFulfilmentSlots", []],
+    [
+      "qcFulfilmentSlots",
+      [
+        {
+          ...permittedContext.qcFulfilmentSlots[0],
+          id: "another-slot",
+        },
+      ],
+    ],
+    [
+      "qcFulfilmentSlots",
+      [
+        {
+          ...permittedContext.qcFulfilmentSlots[0],
+          currentJobStatus: "failed",
+        },
+      ],
+    ],
+    [
+      "qcFulfilmentSlots",
+      [
+        {
+          ...permittedContext.qcFulfilmentSlots[0],
+          currentJobLineageLeaf: false,
+        },
+      ],
+    ],
+    [
+      "qcFulfilmentSlots",
+      [
+        {
+          ...permittedContext.qcFulfilmentSlots[0],
+          openReplacementRequestId: "replacement-1",
+        },
+      ],
+    ],
+    [
+      "qcFulfilmentSlots",
+      [{ ...permittedContext.qcFulfilmentSlots[0], recoveryBlocked: true }],
+    ],
+    ["qcSlotSetComplete", false],
   ] as const)(
     "rejects atomic QC completion with invalid %s",
     (field, value) => {
       for (const policy of [orderPolicy, singleOrderPhasePolicy] as const) {
-        expect(() =>
-          transition(policy, {
-            current: "in_production",
-            target: "qc_passed",
-            idempotencyKey: `qc-completion-${policy.name}-${field}`,
-            context: {
-              ...contextForTransition("qc_passed", "in_production"),
-              [field]: value,
-            },
-          }),
-        ).toThrow(TransitionGuardError);
+        for (const current of ["in_production", "recovery_pending"] as const) {
+          expect(() =>
+            transition(policy, {
+              current,
+              target: "qc_passed",
+              idempotencyKey: `qc-completion-${policy.name}-${current}-${field}`,
+              context: {
+                ...contextForTransition("qc_passed", current),
+                [field]: value,
+              },
+            }),
+          ).toThrow(TransitionGuardError);
+        }
       }
     },
   );
@@ -1125,6 +1339,50 @@ describe("v0 lifecycle policy tables", () => {
           },
         }),
       ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["paymentId", " "],
+    ["ordinaryRefundPaymentId", "another-payment"],
+    ["orderId", " "],
+    ["ordinaryRefundOrderId", "another-order"],
+    ["providerPaymentTransactionId", " "],
+    ["ordinaryRefundCaptureTransactionId", "another-capture"],
+    ["priceAdjustmentId", " "],
+    ["ordinaryRefundPriceAdjustmentId", "another-adjustment"],
+    ["priceAdjustmentOrderId", "another-order"],
+    ["priceAdjustmentPaymentId", "another-payment"],
+    ["priceAdjustmentStatus", "draft"],
+    ["refundTransactionId", " "],
+    ["ordinaryRefundTransactionId", "another-refund"],
+    ["refundTransactionPaymentId", "another-payment"],
+    ["refundTransactionOrderId", "another-order"],
+    ["refundTransactionPriceAdjustmentId", "another-adjustment"],
+    ["ordinaryRefundAmountMinor", 0n],
+    ["ordinaryRefundAmountMinor", -1n],
+    ["priceAdjustmentRefundAmountMinor", 999n],
+    ["refundTransactionAmountMinor", 999n],
+    ["scopedRefundTransactionCreated", false],
+    ["refundPriceAdjustmentActivated", false],
+    ["ordinaryRefundAtomic", false],
+  ] as const)(
+    "rejects ordinary refund setup with invalid %s",
+    (field, value) => {
+      for (const current of ["captured", "partially_refunded"] as const) {
+        expect(() =>
+          transition(paymentPolicy, {
+            current,
+            target: "refund_pending",
+            idempotencyKey: `ordinary-refund-${current}-${field}`,
+            context: {
+              ...contextForTransition("refund_pending", current),
+              paymentCaptureKind: "settlement",
+              [field]: value,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
     },
   );
 
@@ -1769,6 +2027,51 @@ describe("v0 lifecycle policy tables", () => {
     });
   });
 
+  it.each([
+    ["shipmentId", " "],
+    ["providerEventShipmentId", "another-shipment"],
+    ["shipmentProviderTransactionId", " "],
+    ["providerEventTransactionId", "another-transaction"],
+    ["providerEventId", " "],
+    ["shipmentProviderScanEventId", "another-event"],
+    ["providerEventKind", "label_created"],
+    ["providerEventStatus", "cancelled"],
+    ["providerEventAuthenticated", false],
+    ["providerEventVerified", false],
+    ["verifiedProviderScan", false],
+    ["contextHandoffCompleted", false],
+  ] as const)(
+    "rejects cancellation-race handoff with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          current: "cancellation_pending",
+          target: "handed_over",
+          idempotencyKey: `cancellation-race-scan-${field}`,
+          context: {
+            ...contextForTransition("handed_over", "cancellation_pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("does not reuse one Shipment scan to win another cancellation race", () => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        current: "cancellation_pending",
+        target: "handed_over",
+        idempotencyKey: "cancellation-race-foreign-scan",
+        context: {
+          ...contextForTransition("handed_over", "cancellation_pending"),
+          shipmentId: "shipment-2",
+          providerEventShipmentId: "shipment-1",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
   it("requires a verified provider void before cancelling a pending shipment", () => {
     expect(() =>
       transition(shipmentPolicy, {
@@ -1832,7 +2135,7 @@ describe("v0 lifecycle policy tables", () => {
           current: "recovery_pending",
           target: "qc_passed",
           idempotencyKey: "recovery-qc-readiness-verified",
-          context: { verifiedQcReadiness: true },
+          context: contextForTransition("qc_passed", "recovery_pending"),
         }),
       ).toEqual({
         kind: "changed",
@@ -2458,8 +2761,7 @@ describe("v0 lifecycle policy tables", () => {
     "refundPaymentWebhookVerified",
   ] as const)("requires %s before completing a claim refund", (missingFlag) => {
     const context = {
-      scopedRefundTransactionSucceeded: true,
-      refundPaymentWebhookVerified: true,
+      ...contextForTransition("refunded", "refund_pending"),
       [missingFlag]: false,
     };
     expect(() =>
@@ -2478,10 +2780,7 @@ describe("v0 lifecycle policy tables", () => {
         current: "refund_pending",
         target: "refunded",
         idempotencyKey: "claim-refund-completion",
-        context: {
-          scopedRefundTransactionSucceeded: true,
-          refundPaymentWebhookVerified: true,
-        },
+        context: contextForTransition("refunded", "refund_pending"),
       }),
     ).toEqual({
       kind: "changed",
@@ -2489,6 +2788,47 @@ describe("v0 lifecycle policy tables", () => {
       current: "refunded",
     });
   });
+
+  it.each([
+    ["claimSlotResolutionId", " "],
+    ["claimRefundResolutionId", "another-resolution"],
+    ["claimId", " "],
+    ["claimRefundClaimId", "another-claim"],
+    ["claimSlotId", " "],
+    ["claimRefundSlotId", "another-slot"],
+    ["paymentId", " "],
+    ["claimRefundPaymentId", "another-payment"],
+    ["refundWebhookPaymentId", "another-payment"],
+    ["refundTransactionId", " "],
+    ["claimRefundTransactionId", "another-refund"],
+    ["refundWebhookRefundTransactionId", "another-refund"],
+    ["refundProviderEventId", " "],
+    ["claimRefundProviderEventId", "another-event"],
+    ["refundWebhookAmountMinor", 0n],
+    ["claimRefundExpectedAmountMinor", 999n],
+    ["refundWebhookAuthenticated", false],
+    ["refundWebhookVerified", false],
+    ["refundWebhookStatus", "failed"],
+    ["refundWebhookProjectedTarget", "partially_refunded"],
+    ["scopedRefundTransactionSucceeded", false],
+    ["refundPaymentWebhookVerified", false],
+    ["claimRefundCompletionAtomic", false],
+  ] as const)(
+    "rejects claim refund completion with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(claimSlotResolutionPolicy, {
+          current: "refund_pending",
+          target: "refunded",
+          idempotencyKey: `claim-refund-exact-${field}`,
+          context: {
+            ...contextForTransition("refunded", "refund_pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each([
     ["pending", "lost"],
@@ -2737,6 +3077,133 @@ describe("v0 lifecycle policy tables", () => {
       }),
     ).toEqual({ kind: "changed", previous: "packed", current: "handed_over" });
   });
+
+  it.each([
+    ["jobId", " "],
+    ["jobSettlementJobId", "another-job"],
+    ["shipmentId", " "],
+    ["jobSettlementShipmentId", "another-shipment"],
+    ["jobSettlementShipmentJobId", "another-job"],
+    ["jobSettlementOrderId", "another-order"],
+    ["jobSettlementPhaseId", "another-phase"],
+    ["currentJobShipmentLineageLeafId", " "],
+    ["jobSettlementLineageLeafId", "another-leaf"],
+    ["jobSettlementLineageShipmentId", "another-shipment"],
+    ["jobSettlementLineageOrderId", "another-order"],
+    ["jobSettlementLineagePhaseId", "another-phase"],
+    ["jobSettlementLineageStatus", "in_transit"],
+    ["jobSettlementEvaluatedAt", "not-an-instant"],
+    ["expectedJobSettlementSlotIds", []],
+    ["jobSettlementSlots", []],
+    [
+      "jobSettlementSlots",
+      [
+        {
+          ...permittedContext.jobSettlementSlots[0],
+          claimUntil: Instant.parse("2026-03-03T00:00:00.000Z"),
+        },
+      ],
+    ],
+    [
+      "jobSettlementSlots",
+      [
+        {
+          ...permittedContext.jobSettlementSlots[0],
+          activeClaimId: "claim-1",
+        },
+      ],
+    ],
+    [
+      "jobSettlementSlots",
+      [
+        {
+          ...permittedContext.jobSettlementSlots[0],
+          claimRetentionHoldReleased: false,
+        },
+      ],
+    ],
+    ["jobSettlementSlotSetComplete", false],
+    ["jobSettlementCompleted", false],
+    ["jobSettlementAtomic", false],
+  ] as const)("rejects Job settlement with invalid %s", (field, value) => {
+    expect(() =>
+      transition(jobPolicy, {
+        current: "handed_over",
+        target: "settled",
+        idempotencyKey: `job-settlement-${field}`,
+        context: {
+          ...contextForTransition("settled", "handed_over"),
+          [field]: value,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("settles a delivered Job after an exact Claim resolution before the window ends", () => {
+    expect(
+      transition(jobPolicy, {
+        current: "handed_over",
+        target: "settled",
+        idempotencyKey: "job-settlement-resolved-claim",
+        context: {
+          ...contextForTransition("settled", "handed_over"),
+          jobSettlementEvaluatedAt: Instant.parse("2026-02-28T00:00:00.000Z"),
+          jobSettlementSlots: [
+            {
+              ...permittedContext.jobSettlementSlots[0],
+              resolvedClaimId: "claim-1",
+              resolvedClaimStatus: "resolved_refund",
+              resolvedClaimSlotId: "slot-1",
+              resolvedClaimShipmentId: "shipment-1",
+              resolvedClaimOrderId: "order-1",
+              resolvedClaimPhaseId: "phase-1",
+              resolvedClaimPreviousActiveClaimId: "claim-1",
+              resolvedClaimTargetActiveClaimId: null,
+            },
+          ],
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "handed_over", current: "settled" });
+  });
+
+  it.each([
+    ["resolvedClaimSlotId", "another-slot"],
+    ["resolvedClaimShipmentId", "another-shipment"],
+    ["resolvedClaimOrderId", "another-order"],
+    ["resolvedClaimPhaseId", "another-phase"],
+    ["resolvedClaimPreviousActiveClaimId", "another-claim"],
+    ["resolvedClaimTargetActiveClaimId", "claim-1"],
+    ["resolvedClaimStatus", "active"],
+  ] as const)(
+    "rejects Job settlement with foreign resolved Claim field %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          current: "handed_over",
+          target: "settled",
+          idempotencyKey: `job-settlement-foreign-claim-${field}`,
+          context: {
+            ...contextForTransition("settled", "handed_over"),
+            jobSettlementEvaluatedAt: Instant.parse("2026-02-28T00:00:00.000Z"),
+            jobSettlementSlots: [
+              {
+                ...permittedContext.jobSettlementSlots[0],
+                resolvedClaimId: "claim-1",
+                resolvedClaimStatus: "resolved_refund",
+                resolvedClaimSlotId: "slot-1",
+                resolvedClaimShipmentId: "shipment-1",
+                resolvedClaimOrderId: "order-1",
+                resolvedClaimPhaseId: "phase-1",
+                resolvedClaimPreviousActiveClaimId: "claim-1",
+                resolvedClaimTargetActiveClaimId: null,
+                [field]: value,
+              },
+            ],
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each([
     ["providerEventAuthenticated", false],

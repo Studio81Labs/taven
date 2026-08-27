@@ -525,10 +525,105 @@ function requireAtomicOrderPhaseProductionStart<S extends string>(
   );
 }
 
+const qcReadyJobStatuses = new Set([
+  "qc_approved",
+  "packed",
+  "handed_over",
+  "settled",
+]);
+
+function requireCompleteQcSlotSet<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  orderId: string,
+  phaseId: string,
+): void {
+  const expectedIdsValue = command.context?.expectedQcFulfilmentSlotIds;
+  const slotsValue = command.context?.qcFulfilmentSlots;
+  const expectedIds = Array.isArray(expectedIdsValue)
+    ? [...expectedIdsValue]
+    : undefined;
+  const slots = Array.isArray(slotsValue) ? [...slotsValue] : undefined;
+  if (
+    command.context?.qcSlotSetOrderId !== orderId ||
+    command.context?.qcSlotSetPhaseId !== phaseId ||
+    expectedIds === undefined ||
+    expectedIds.length === 0 ||
+    expectedIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(expectedIds).size !== expectedIds.length ||
+    slots === undefined ||
+    slots.length !== expectedIds.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "QC completion requires the authoritative complete fulfilment slot set",
+    );
+  }
+  const authoritativeIds = expectedIds as string[];
+  const projectedIds = new Set<string>();
+  for (const value of slots) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "QC readiness requires exact slot and current Job records",
+      );
+    }
+    const slot = value as Readonly<Record<string, unknown>>;
+    const id = slot.id;
+    const currentJobId = slot.currentJobId;
+    if (
+      typeof id !== "string" ||
+      id.trim().length === 0 ||
+      projectedIds.has(id) ||
+      !authoritativeIds.includes(id) ||
+      slot.orderId !== orderId ||
+      slot.phaseId !== phaseId ||
+      typeof currentJobId !== "string" ||
+      currentJobId.trim().length === 0 ||
+      slot.currentJobOrderId !== orderId ||
+      slot.currentJobPhaseId !== phaseId ||
+      slot.currentJobSlotId !== id ||
+      slot.currentJobLineageLeaf !== true ||
+      !qcReadyJobStatuses.has(slot.currentJobStatus as string) ||
+      slot.openReplacementRequestId !== null ||
+      slot.recoveryBlocked !== false
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "every exact fulfilment slot must have one QC-ready current Job leaf and no open replacement",
+      );
+    }
+    projectedIds.add(id);
+  }
+  if (authoritativeIds.some((id) => !projectedIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "QC readiness cannot omit a required fulfilment slot",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "qcSlotSetComplete",
+    "QC completion requires the complete locked fulfilment slot set",
+  );
+}
+
 function requireAtomicOrderPhaseQcCompletion<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const previousStatus = command.current;
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
   if (
@@ -548,10 +643,12 @@ function requireAtomicOrderPhaseQcCompletion<S extends string>(
     );
   }
   if (
+    (previousStatus !== "in_production" &&
+      previousStatus !== "recovery_pending") ||
     command.context?.phaseKind !== "single" ||
-    command.context?.qcCompletionOrderPreviousStatus !== "in_production" ||
+    command.context?.qcCompletionOrderPreviousStatus !== previousStatus ||
     command.context?.qcCompletionOrderTargetStatus !== "qc_passed" ||
-    command.context?.qcCompletionPhasePreviousStatus !== "in_production" ||
+    command.context?.qcCompletionPhasePreviousStatus !== previousStatus ||
     command.context?.qcCompletionPhaseTargetStatus !== "qc_passed"
   ) {
     throw new TransitionGuardError(
@@ -567,6 +664,7 @@ function requireAtomicOrderPhaseQcCompletion<S extends string>(
     "verifiedQcReadiness",
     "QC completion requires the complete projected slot readiness result",
   );
+  requireCompleteQcSlotSet(lifecycle, command, orderId, phaseId);
   requireFlag(
     lifecycle,
     command,
@@ -2379,6 +2477,71 @@ function requireRoleSpecificPaymentVoidClosure<S extends string>(
   );
 }
 
+function requireExactOrdinaryRefundSetup<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const paymentId = command.context?.paymentId;
+  const orderId = command.context?.orderId;
+  const providerTransactionId = command.context?.providerPaymentTransactionId;
+  const priceAdjustmentId = command.context?.priceAdjustmentId;
+  const refundTransactionId = command.context?.refundTransactionId;
+  const amountMinor = command.context?.ordinaryRefundAmountMinor;
+  if (
+    typeof paymentId !== "string" ||
+    paymentId.trim().length === 0 ||
+    command.context?.ordinaryRefundPaymentId !== paymentId ||
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.ordinaryRefundOrderId !== orderId ||
+    typeof providerTransactionId !== "string" ||
+    providerTransactionId.trim().length === 0 ||
+    command.context?.ordinaryRefundCaptureTransactionId !==
+      providerTransactionId ||
+    typeof priceAdjustmentId !== "string" ||
+    priceAdjustmentId.trim().length === 0 ||
+    command.context?.ordinaryRefundPriceAdjustmentId !== priceAdjustmentId ||
+    command.context?.priceAdjustmentOrderId !== orderId ||
+    command.context?.priceAdjustmentPaymentId !== paymentId ||
+    command.context?.priceAdjustmentStatus !== "active" ||
+    typeof refundTransactionId !== "string" ||
+    refundTransactionId.trim().length === 0 ||
+    command.context?.ordinaryRefundTransactionId !== refundTransactionId ||
+    command.context?.refundTransactionPaymentId !== paymentId ||
+    command.context?.refundTransactionOrderId !== orderId ||
+    command.context?.refundTransactionPriceAdjustmentId !== priceAdjustmentId ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    command.context?.priceAdjustmentRefundAmountMinor !== amountMinor ||
+    command.context?.refundTransactionAmountMinor !== amountMinor
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "ordinary refund must bind one exact Payment, capture, adjustment, transaction, and amount",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "scopedRefundTransactionCreated",
+    "ordinary refund requires its exact scoped RefundTransaction",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "refundPriceAdjustmentActivated",
+    "ordinary refund requires its exact active price adjustment",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "ordinaryRefundAtomic",
+    "price adjustment, RefundTransaction, and Payment transition must be atomic",
+  );
+}
+
 export type PaymentStatus =
   | "created"
   | "pending"
@@ -2451,18 +2614,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
           "ordinary refund requires a settlement Payment",
         );
       }
-      requireFlag(
-        "Payment",
-        command,
-        "scopedRefundTransactionCreated",
-        "refund pending requires its scoped refund transaction",
-      );
-      requireFlag(
-        "Payment",
-        command,
-        "refundPriceAdjustmentActivated",
-        "refund pending requires its price adjustment to be activated",
-      );
+      requireExactOrdinaryRefundSetup("Payment", command);
     }
     if (
       command.current === "partially_refunded" &&
@@ -2483,18 +2635,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
         }
         requireCompensationRefundRetry("Payment", command);
       } else if (captureKind === "settlement") {
-        requireFlag(
-          "Payment",
-          command,
-          "scopedRefundTransactionCreated",
-          "refund pending requires its scoped refund transaction",
-        );
-        requireFlag(
-          "Payment",
-          command,
-          "refundPriceAdjustmentActivated",
-          "refund pending requires its price adjustment to be activated",
-        );
+        requireExactOrdinaryRefundSetup("Payment", command);
       } else {
         throw new TransitionGuardError(
           "Payment",
@@ -2618,19 +2759,12 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
         requireInitialCaptureWindowClosed("Order", command);
       }
     }
-    if (command.current === "in_production" && command.target === "qc_passed") {
-      requireAtomicOrderPhaseQcCompletion("Order", command);
-    }
     if (
-      command.current === "recovery_pending" &&
+      (command.current === "in_production" ||
+        command.current === "recovery_pending") &&
       command.target === "qc_passed"
     ) {
-      requireFlag(
-        "Order",
-        command,
-        "verifiedQcReadiness",
-        "quality control requires a complete projected slot readiness result",
-      );
+      requireAtomicOrderPhaseQcCompletion("Order", command);
     }
     if (
       command.current === "qc_passed" &&
@@ -2808,21 +2942,11 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         requireAtomicOrderPhaseProductionStart("OrderPhase(single)", command);
       }
       if (
-        command.current === "in_production" &&
+        (command.current === "in_production" ||
+          command.current === "recovery_pending") &&
         command.target === "qc_passed"
       ) {
         requireAtomicOrderPhaseQcCompletion("OrderPhase(single)", command);
-      }
-      if (
-        command.current === "recovery_pending" &&
-        command.target === "qc_passed"
-      ) {
-        requireFlag(
-          "OrderPhase(single)",
-          command,
-          "verifiedQcReadiness",
-          "quality control requires a complete projected slot readiness result",
-        );
       }
       if (
         command.current === "qc_passed" &&
@@ -2924,6 +3048,158 @@ export type JobCancellationReason =
   | "order_cancelled"
   | "phase_cancelled"
   | "claim_withdrawn";
+
+const terminalClaimStatuses = new Set([
+  "resolved_rejected",
+  "resolved_reprint",
+  "resolved_reship",
+  "resolved_refund",
+  "resolved_mixed",
+  "withdrawn",
+]);
+
+function requireDeliveredJobSettlement<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const jobId = command.context?.jobId;
+  const shipmentId = command.context?.shipmentId;
+  const orderId = command.context?.orderId;
+  const phaseId = command.context?.phaseId;
+  const lineageLeafId = command.context?.currentJobShipmentLineageLeafId;
+  const evaluatedAt = command.context?.jobSettlementEvaluatedAt;
+  const expectedSlotIdsValue = command.context?.expectedJobSettlementSlotIds;
+  const slotsValue = command.context?.jobSettlementSlots;
+  const expectedSlotIds = Array.isArray(expectedSlotIdsValue)
+    ? [...expectedSlotIdsValue]
+    : undefined;
+  const slots = Array.isArray(slotsValue) ? [...slotsValue] : undefined;
+  if (
+    typeof jobId !== "string" ||
+    jobId.trim().length === 0 ||
+    command.context?.jobSettlementJobId !== jobId ||
+    typeof shipmentId !== "string" ||
+    shipmentId.trim().length === 0 ||
+    command.context?.jobSettlementShipmentId !== shipmentId ||
+    command.context?.jobSettlementShipmentJobId !== jobId ||
+    typeof orderId !== "string" ||
+    orderId.trim().length === 0 ||
+    command.context?.jobSettlementOrderId !== orderId ||
+    typeof phaseId !== "string" ||
+    phaseId.trim().length === 0 ||
+    command.context?.jobSettlementPhaseId !== phaseId ||
+    typeof lineageLeafId !== "string" ||
+    lineageLeafId.trim().length === 0 ||
+    command.context?.jobSettlementLineageLeafId !== lineageLeafId ||
+    command.context?.jobSettlementLineageShipmentId !== shipmentId ||
+    command.context?.jobSettlementLineageOrderId !== orderId ||
+    command.context?.jobSettlementLineagePhaseId !== phaseId ||
+    command.context?.jobSettlementLineageStatus !== "delivered" ||
+    !(evaluatedAt instanceof Instant) ||
+    expectedSlotIds === undefined ||
+    expectedSlotIds.length === 0 ||
+    expectedSlotIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(expectedSlotIds).size !== expectedSlotIds.length ||
+    slots === undefined ||
+    slots.length !== expectedSlotIds.length
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job settlement requires its exact delivered Shipment lineage and complete slot set",
+    );
+  }
+  const authoritativeSlotIds = expectedSlotIds as string[];
+  const projectedSlotIds = new Set<string>();
+  for (const value of slots) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "Job settlement slots require exact claim-window records",
+      );
+    }
+    const slot = value as Readonly<Record<string, unknown>>;
+    const id = slot.id;
+    const claimUntil = slot.claimUntil;
+    const resolvedClaimId = slot.resolvedClaimId;
+    const resolvedClaimStatus = slot.resolvedClaimStatus;
+    const claimWindowElapsed =
+      claimUntil instanceof Instant && evaluatedAt.compare(claimUntil) >= 0;
+    const claimResolved =
+      typeof resolvedClaimId === "string" &&
+      resolvedClaimId.trim().length > 0 &&
+      terminalClaimStatuses.has(resolvedClaimStatus as string) &&
+      slot.resolvedClaimSlotId === id &&
+      slot.resolvedClaimShipmentId === shipmentId &&
+      slot.resolvedClaimOrderId === orderId &&
+      slot.resolvedClaimPhaseId === phaseId &&
+      slot.resolvedClaimPreviousActiveClaimId === resolvedClaimId &&
+      slot.resolvedClaimTargetActiveClaimId === null;
+    const noClaim =
+      resolvedClaimId === null &&
+      resolvedClaimStatus === null &&
+      slot.resolvedClaimSlotId === null &&
+      slot.resolvedClaimShipmentId === null &&
+      slot.resolvedClaimOrderId === null &&
+      slot.resolvedClaimPhaseId === null &&
+      slot.resolvedClaimPreviousActiveClaimId === null &&
+      slot.resolvedClaimTargetActiveClaimId === null;
+    if (
+      typeof id !== "string" ||
+      id.trim().length === 0 ||
+      projectedSlotIds.has(id) ||
+      !authoritativeSlotIds.includes(id) ||
+      slot.jobId !== jobId ||
+      slot.shipmentId !== shipmentId ||
+      slot.orderId !== orderId ||
+      slot.phaseId !== phaseId ||
+      !(claimUntil instanceof Instant) ||
+      (!claimWindowElapsed && !claimResolved) ||
+      (!noClaim && !claimResolved) ||
+      slot.activeClaimId !== null ||
+      slot.claimRetentionHoldReleased !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "every Job slot must have an elapsed claim window or an exact resolved Claim with its hold released",
+      );
+    }
+    projectedSlotIds.add(id);
+  }
+  if (authoritativeSlotIds.some((id) => !projectedSlotIds.has(id))) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job settlement cannot omit an affected fulfilment slot",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "jobSettlementSlotSetComplete",
+    "Job settlement requires the authoritative complete slot set",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "jobSettlementCompleted",
+    "Job settlement requires its durable settlement result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "jobSettlementAtomic",
+    "Job settlement and hold release must be atomic",
+  );
+}
 
 export const jobPolicy: TransitionPolicy<JobStatus> = {
   name: "Job",
@@ -3093,6 +3369,9 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
         "contextHandoffCompleted",
         "handoff requires its complete context-specific transaction",
       );
+    }
+    if (command.current === "handed_over" && command.target === "settled") {
+      requireDeliveredJobSettlement("Job", command);
     }
   },
 };
@@ -3385,6 +3664,53 @@ function requireAtomicShipmentIncidentRouting<S extends string>(
   );
 }
 
+function requireVerifiedMatchingCancellationRaceScan<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const shipmentId = command.context?.shipmentId;
+  const providerTransactionId = command.context?.shipmentProviderTransactionId;
+  const providerEventId = command.context?.providerEventId;
+  if (
+    typeof shipmentId !== "string" ||
+    shipmentId.trim().length === 0 ||
+    command.context?.providerEventShipmentId !== shipmentId ||
+    typeof providerTransactionId !== "string" ||
+    providerTransactionId.trim().length === 0 ||
+    command.context?.providerEventTransactionId !== providerTransactionId ||
+    typeof providerEventId !== "string" ||
+    providerEventId.trim().length === 0 ||
+    command.context?.shipmentProviderScanEventId !== providerEventId ||
+    command.context?.providerEventKind !== "acceptance_scan" ||
+    command.context?.providerEventStatus !== "handed_over"
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "cancellation-race scan must identify the exact Shipment, transaction, and physical acceptance event",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "providerEventAuthenticated",
+    "cancellation-race scan must be authenticated",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "providerEventVerified",
+    "cancellation-race scan must be verified",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "verifiedProviderScan",
+    "the exact custody scan must be persisted and consumed",
+  );
+}
+
 export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
   name: "Shipment",
   initial: ["planned"],
@@ -3430,12 +3756,7 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
       command.current === "cancellation_pending" &&
       command.target === "handed_over"
     ) {
-      requireFlag(
-        "Shipment",
-        command,
-        "verifiedProviderScan",
-        "a verified provider custody scan must win the cancellation race",
-      );
+      requireVerifiedMatchingCancellationRaceScan("Shipment", command);
     }
     if (
       command.current === "cancellation_pending" &&
@@ -3815,6 +4136,92 @@ export type ClaimSlotResolutionStatus =
   | "recovery_pending"
   | "withdrawn";
 
+function requireExactClaimRefundCompletion<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const resolutionId = command.context?.claimSlotResolutionId;
+  const claimId = command.context?.claimId;
+  const slotId = command.context?.claimSlotId;
+  const paymentId = command.context?.paymentId;
+  const refundTransactionId = command.context?.refundTransactionId;
+  const providerEventId = command.context?.refundProviderEventId;
+  const refundAmountMinor = command.context?.refundWebhookAmountMinor;
+  if (
+    typeof resolutionId !== "string" ||
+    resolutionId.trim().length === 0 ||
+    command.context?.claimRefundResolutionId !== resolutionId ||
+    typeof claimId !== "string" ||
+    claimId.trim().length === 0 ||
+    command.context?.claimRefundClaimId !== claimId ||
+    typeof slotId !== "string" ||
+    slotId.trim().length === 0 ||
+    command.context?.claimRefundSlotId !== slotId ||
+    typeof paymentId !== "string" ||
+    paymentId.trim().length === 0 ||
+    command.context?.claimRefundPaymentId !== paymentId ||
+    command.context?.refundWebhookPaymentId !== paymentId ||
+    typeof refundTransactionId !== "string" ||
+    refundTransactionId.trim().length === 0 ||
+    command.context?.claimRefundTransactionId !== refundTransactionId ||
+    command.context?.refundWebhookRefundTransactionId !== refundTransactionId ||
+    typeof providerEventId !== "string" ||
+    providerEventId.trim().length === 0 ||
+    command.context?.claimRefundProviderEventId !== providerEventId ||
+    typeof refundAmountMinor !== "bigint" ||
+    refundAmountMinor <= 0n ||
+    command.context?.claimRefundExpectedAmountMinor !== refundAmountMinor
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "claim refund completion must bind the exact child, slot, Payment, transaction, event, and amount",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "refundWebhookAuthenticated",
+    "claim refund completion requires an authenticated provider event",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "refundWebhookVerified",
+    "claim refund completion requires a verified provider event",
+  );
+  if (
+    command.context?.refundWebhookStatus !== "succeeded" ||
+    command.context?.refundWebhookProjectedTarget !== command.target
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "claim refund provider result must succeed and project this exact target",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "scopedRefundTransactionSucceeded",
+    "claim refund completion requires its scoped RefundTransaction success",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "refundPaymentWebhookVerified",
+    "claim refund completion requires its matching Payment webhook result",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "claimRefundCompletionAtomic",
+    "claim child refund completion and provider-event consumption must be atomic",
+  );
+}
+
 export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStatus> =
   {
     name: "ClaimSlotResolution",
@@ -3964,18 +4371,7 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
         command.current === "refund_pending" &&
         command.target === "refunded"
       ) {
-        requireFlag(
-          "ClaimSlotResolution",
-          command,
-          "scopedRefundTransactionSucceeded",
-          "refund completion requires a successful scoped RefundTransaction",
-        );
-        requireFlag(
-          "ClaimSlotResolution",
-          command,
-          "refundPaymentWebhookVerified",
-          "refund completion requires the matching verified payment webhook result",
-        );
+        requireExactClaimRefundCompletion("ClaimSlotResolution", command);
       }
       if (
         command.current === "replacement_in_production" &&
