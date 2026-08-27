@@ -1478,6 +1478,115 @@ function requireVerifiedMatchingProviderPaymentEvent<S extends string>(
   }
 }
 
+function requireExactPendingCaptureWindow<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  expectedOutcome: "within_window" | "expired",
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const windowId = context?.paymentCaptureWindowId;
+  const windowResultId = context?.paymentCaptureWindowResultId;
+  const evaluationResultId = context?.captureEvaluationResultId;
+  const evaluatedAt = context?.captureEvaluatedAt;
+  const windowValue = context?.paymentCaptureWindow;
+  const window =
+    typeof windowValue === "object" &&
+    windowValue !== null &&
+    !Array.isArray(windowValue)
+      ? (windowValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const eventValue = context?.captureProviderEvent;
+  const event =
+    typeof eventValue === "object" &&
+    eventValue !== null &&
+    !Array.isArray(eventValue)
+      ? (eventValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const opensAt = window?.opensAt;
+  const cutoffAt = window?.cutoffAt;
+  const providerEventId = context?.captureProviderEventId;
+  const providerTransactionId = context?.providerPaymentTransactionId;
+  const windowKind = role === "balance" ? "balance_deadline" : "checkout";
+  const persistedCutoff =
+    role === "balance"
+      ? context?.balanceDueAt
+      : context?.checkoutCaptureExpiresAt;
+  const inWindow =
+    opensAt instanceof Instant &&
+    cutoffAt instanceof Instant &&
+    evaluatedAt instanceof Instant &&
+    evaluatedAt.compare(opensAt) >= 0 &&
+    evaluatedAt.compare(cutoffAt) < 0;
+  const expired =
+    cutoffAt instanceof Instant &&
+    evaluatedAt instanceof Instant &&
+    evaluatedAt.compare(cutoffAt) >= 0;
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(windowId) ||
+    !nonBlank(windowResultId) ||
+    !nonBlank(evaluationResultId) ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(providerTransactionId) ||
+    !(opensAt instanceof Instant) ||
+    !(cutoffAt instanceof Instant) ||
+    !(evaluatedAt instanceof Instant) ||
+    !(persistedCutoff instanceof Instant) ||
+    opensAt.compare(cutoffAt) >= 0 ||
+    !cutoffAt.equals(persistedCutoff) ||
+    window?.id !== windowId ||
+    window.paymentId !== paymentId ||
+    window.orderId !== orderId ||
+    window.phaseId !== phaseId ||
+    window.role !== role ||
+    window.kind !== windowKind ||
+    window.immutable !== true ||
+    window.resultId !== windowResultId ||
+    context?.captureEvaluationPaymentId !== paymentId ||
+    context?.captureEvaluationOrderId !== orderId ||
+    context?.captureEvaluationPhaseId !== phaseId ||
+    context?.captureEvaluationWindowId !== windowId ||
+    context?.captureEvaluationWindowResultId !== windowResultId ||
+    context?.captureEvaluationOutcome !== expectedOutcome ||
+    event?.id !== providerEventId ||
+    event.paymentId !== paymentId ||
+    event.transactionId !== providerTransactionId ||
+    event.status !== "captured" ||
+    !(event.occurredAt instanceof Instant) ||
+    !event.occurredAt.equals(evaluatedAt) ||
+    event.authenticated !== true ||
+    event.verified !== true ||
+    event.resultId !== evaluationResultId ||
+    context?.captureEvaluationPaymentResultId !== evaluationResultId ||
+    context?.captureEvaluationProviderEventResultId !== evaluationResultId ||
+    context?.captureEvaluationActivationResultId !== evaluationResultId ||
+    context?.captureEvaluationCompleted !== true ||
+    context?.captureEvaluationAtomic !== true ||
+    (expectedOutcome === "within_window" ? !inWindow : !expired)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      expectedOutcome === "within_window"
+        ? "capture must bind the exact immutable Payment window and occur before its cutoff"
+        : "late capture compensation must bind the exact expired Payment window",
+    );
+  }
+  if (role === "balance") {
+    requireBalancePaymentDeadlineSetup(lifecycle, command);
+  }
+}
+
 function requireVerifiedLateCaptureCompensation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -3566,6 +3675,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
           "ordinary capture requires a settlement Payment",
         );
       }
+      requireExactPendingCaptureWindow("Payment", command, "within_window");
       requireFlag(
         "Payment",
         command,
@@ -3576,15 +3686,20 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       requireInitialSettlementCaptureActivation("Payment", command);
     }
     if (command.current === "pending" && command.target === "refund_pending") {
-      if (command.context?.initialPaymentStatus !== "refund_pending") {
-        throw new TransitionGuardError(
-          "Payment",
-          command.current,
-          command.target,
-          "capacity compensation must persist the Payment as refund pending",
-        );
+      if (command.context?.paymentCaptureKind === "late_capture") {
+        requireExactPendingCaptureWindow("Payment", command, "expired");
+        requireVerifiedLateCaptureCompensation("Payment", command);
+      } else {
+        if (command.context?.initialPaymentStatus !== "refund_pending") {
+          throw new TransitionGuardError(
+            "Payment",
+            command.current,
+            command.target,
+            "capacity compensation must persist the Payment as refund pending",
+          );
+        }
+        requireInitialCapacityCaptureCompensation("Payment", command);
       }
-      requireInitialCapacityCaptureCompensation("Payment", command);
     }
     if (command.current === "voided" && command.target === "refund_pending") {
       requireVerifiedLateCaptureCompensation("Payment", command);
@@ -4162,6 +4277,153 @@ function requireDeliveredJobSettlement<S extends string>(
   );
 }
 
+function requireExactJobHandoff<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const kind = context?.jobHandoffKind;
+  const jobId = context?.jobId;
+  const expectedValue = context?.jobHandoffExpectedJob;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    !nonBlank(jobId) ||
+    expected?.id !== jobId ||
+    expected.kind !== kind ||
+    expected.status !== "packed" ||
+    expected.currentLineageLeaf !== true ||
+    expected.immutable !== true ||
+    context?.jobHandoffJobId !== jobId ||
+    context?.jobHandoffPreviousStatus !== "packed" ||
+    context?.jobHandoffTargetStatus !== "handed_over" ||
+    context?.jobHandoffCompleted !== true ||
+    context?.jobHandoffAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job handoff must bind the exact current packed Job and result",
+    );
+  }
+  if (kind === "ordinary") {
+    if (
+      expected.shipmentId !== context?.shipmentId ||
+      expected.claimId !== null ||
+      expected.resolutionId !== null ||
+      expected.replacementSetId !== null ||
+      context?.jobHandoffClaimId !== null ||
+      context?.jobHandoffResolutionId !== null ||
+      context?.jobHandoffReplacementSetId !== null ||
+      context?.jobHandoffResultId !== context?.handoffResultId ||
+      context?.jobHandoffJobResultId !== context?.handoffResultId
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "ordinary Job handoff cannot carry Claim-replacement provenance",
+      );
+    }
+    requireAtomicOrdinaryHandoff(lifecycle, command, {
+      shipmentPrevious: "label_created",
+      orderPrevious: "ready_to_ship",
+      phasePrevious: "qc_passed",
+      allowLaterParcel: true,
+    });
+    return;
+  }
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const replacementSetId = context?.replacementSetId;
+  const shipmentId = context?.jobHandoffShipmentId;
+  const resultId = context?.replacementHandoffResultId;
+  if (
+    kind !== "replacement" ||
+    !nonBlank(claimId) ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(replacementSetId) ||
+    !nonBlank(shipmentId) ||
+    !nonBlank(resultId) ||
+    context?.jobHandoffClaimId !== claimId ||
+    context?.jobHandoffResolutionId !== resolutionId ||
+    context?.jobHandoffReplacementSetId !== replacementSetId ||
+    context?.jobHandoffResultId !== resultId ||
+    context?.jobHandoffJobResultId !== resultId ||
+    expected.shipmentId !== shipmentId ||
+    expected.claimId !== claimId ||
+    expected.resolutionId !== resolutionId ||
+    expected.replacementSetId !== replacementSetId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement Job handoff must select its exact Claim child, replacement set, Shipment, and result",
+    );
+  }
+  requireAtomicCompleteReplacementHandoff(lifecycle, command);
+  const independentTopology = Array.isArray(
+    context?.replacementRequiredRequests,
+  );
+  const authoritativeJobs = independentTopology
+    ? Array.isArray(context?.replacementHandoffJobs)
+      ? context.replacementHandoffJobs
+      : []
+    : Array.isArray(context?.replacementHandoffResourceGroups)
+      ? context.replacementHandoffResourceGroups
+      : [];
+  const selected = authoritativeJobs.filter((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      return false;
+    const record = value as Readonly<Record<string, unknown>>;
+    return record.currentReplacementJobId === jobId || record.id === jobId;
+  });
+  if (selected.length !== 1) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "replacement Job handoff must contain the selected Job exactly once",
+    );
+  }
+  const record = selected[0] as Readonly<Record<string, unknown>>;
+  const groupedRecord = record.currentReplacementJobId === jobId;
+  if (
+    (groupedRecord
+      ? record.currentReplacementJobClaimId !== claimId ||
+        record.currentReplacementJobResolutionId !== resolutionId ||
+        record.currentReplacementJobSetId !== replacementSetId ||
+        record.currentReplacementJobShipmentId !== shipmentId ||
+        record.currentReplacementJobPreviousStatus !== "packed" ||
+        record.currentReplacementJobTargetStatus !== "handed_over" ||
+        record.currentReplacementJobResultId !== resultId
+      : record.claimId !== claimId ||
+        record.resolutionId !== resolutionId ||
+        record.replacementSetId !== replacementSetId ||
+        !Array.isArray(record.replacementShipmentIds) ||
+        !record.replacementShipmentIds.includes(shipmentId) ||
+        record.previousStatus !== "packed" ||
+        record.targetStatus !== "handed_over" ||
+        record.resultId !== resultId) ||
+    record.currentReplacementJobLineageLeaf !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "selected replacement Job must preserve its exact Shipment backlinks and shared handoff result",
+    );
+  }
+}
+
 export const jobPolicy: TransitionPolicy<JobStatus> = {
   name: "Job",
   initial: ["created"],
@@ -4324,12 +4586,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
       requireJobReplacementObligation("Job", command);
     }
     if (command.current === "packed" && command.target === "handed_over") {
-      requireAtomicOrdinaryHandoff("Job", command, {
-        shipmentPrevious: "label_created",
-        orderPrevious: "ready_to_ship",
-        phasePrevious: "qc_passed",
-        allowLaterParcel: true,
-      });
+      requireExactJobHandoff("Job", command);
     }
     if (command.current === "handed_over" && command.target === "settled") {
       requireDeliveredJobSettlement("Job", command);
@@ -4348,6 +4605,119 @@ export type ShipmentStatus =
   | "lost"
   | "returned"
   | "recovered";
+
+function requireAtomicShipmentLabelCreation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const shipmentId = context?.shipmentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const planId = context?.shipmentPlanId;
+  const labelId = context?.carrierLabelId;
+  const resultId = context?.shipmentLabelCreationResultId;
+  const providerEventId = context?.shipmentLabelCreationProviderEventId;
+  const providerTransactionId =
+    context?.shipmentLabelCreationProviderTransactionId;
+  const expectedValue = context?.shipmentLabelCreationExpectedShipment;
+  const expected =
+    typeof expectedValue === "object" &&
+    expectedValue !== null &&
+    !Array.isArray(expectedValue)
+      ? (expectedValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const labelValue = context?.shipmentLabelCreationCarrierLabel;
+  const label =
+    typeof labelValue === "object" &&
+    labelValue !== null &&
+    !Array.isArray(labelValue)
+      ? (labelValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const outboxValue = context?.shipmentLabelCreationOutbox;
+  const outbox =
+    typeof outboxValue === "object" &&
+    outboxValue !== null &&
+    !Array.isArray(outboxValue)
+      ? (outboxValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const eventValue = context?.shipmentLabelCreationProviderEvent;
+  const event =
+    typeof eventValue === "object" &&
+    eventValue !== null &&
+    !Array.isArray(eventValue)
+      ? (eventValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const expectedKey =
+    nonBlank(shipmentId) && nonBlank(planId)
+      ? `create_carrier_label:${shipmentId}:${planId}`
+      : undefined;
+  if (
+    !nonBlank(shipmentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(planId) ||
+    !nonBlank(labelId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(providerTransactionId) ||
+    expected?.id !== shipmentId ||
+    expected.orderId !== orderId ||
+    expected.phaseId !== phaseId ||
+    expected.planId !== planId ||
+    expected.status !== "planned" ||
+    expected.immutable !== true ||
+    context?.shipmentLabelCreationShipmentId !== shipmentId ||
+    context?.shipmentLabelCreationOrderId !== orderId ||
+    context?.shipmentLabelCreationPhaseId !== phaseId ||
+    context?.shipmentLabelCreationPlanId !== planId ||
+    context?.shipmentLabelCreationPreviousStatus !== "planned" ||
+    context?.shipmentLabelCreationTargetStatus !== "label_created" ||
+    context?.shipmentLabelCreationCarrierLabelId !== labelId ||
+    label?.id !== labelId ||
+    label.shipmentId !== shipmentId ||
+    label.orderId !== orderId ||
+    label.phaseId !== phaseId ||
+    label.planId !== planId ||
+    !nonBlank(label.carrierId) ||
+    label.status !== "usable" ||
+    label.immutable !== true ||
+    label.resultId !== resultId ||
+    !nonBlank(outbox?.id) ||
+    outbox.shipmentId !== shipmentId ||
+    outbox.planId !== planId ||
+    outbox.carrierLabelId !== labelId ||
+    outbox.idempotencyKey !== expectedKey ||
+    outbox.action !== "create_carrier_label" ||
+    outbox.previousStatus !== "pending" ||
+    outbox.targetStatus !== "succeeded" ||
+    outbox.resultId !== resultId ||
+    event?.id !== providerEventId ||
+    event.outboxId !== outbox.id ||
+    event.shipmentId !== shipmentId ||
+    event.carrierLabelId !== labelId ||
+    event.transactionId !== providerTransactionId ||
+    event.status !== "succeeded" ||
+    event.authenticated !== true ||
+    event.verified !== true ||
+    event.resultId !== resultId ||
+    context?.shipmentLabelCreationShipmentResultId !== resultId ||
+    context?.shipmentLabelCreationLabelResultId !== resultId ||
+    context?.shipmentLabelCreationOutboxResultId !== resultId ||
+    context?.shipmentLabelCreationProviderEventResultId !== resultId ||
+    context?.shipmentLabelCreationCompleted !== true ||
+    context?.shipmentLabelCreationAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "label creation must atomically bind the exact planned Shipment, usable carrier label, outbox, and verified provider result",
+    );
+  }
+}
 
 function requireAtomicShipmentIncidentRouting<S extends string>(
   lifecycle: string,
@@ -5433,6 +5803,9 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
     lost: ["recovered"],
   },
   guard: (command) => {
+    if (command.current === "planned" && command.target === "label_created") {
+      requireAtomicShipmentLabelCreation("Shipment", command);
+    }
     if (command.current === "planned" && command.target === "cancelled") {
       requireAtomicPlannedShipmentCancellation("Shipment", command);
     }

@@ -82,6 +82,45 @@ const permittedContext = {
   paymentId: "payment-1",
   paymentRole: "full",
   paymentCaptureKind: "settlement",
+  checkoutCaptureExpiresAt: Instant.parse("2026-01-01T01:00:00.000Z"),
+  paymentCaptureWindowId: "capture-window-1",
+  paymentCaptureWindowResultId: "capture-window-result-1",
+  paymentCaptureWindow: {
+    id: "capture-window-1",
+    paymentId: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    kind: "checkout",
+    opensAt: Instant.parse("2026-01-01T00:00:00.000Z"),
+    cutoffAt: Instant.parse("2026-01-01T01:00:00.000Z"),
+    immutable: true,
+    resultId: "capture-window-result-1",
+  },
+  captureEvaluatedAt: Instant.parse("2026-01-01T00:30:00.000Z"),
+  captureEvaluationResultId: "capture-evaluation-result-1",
+  captureEvaluationPaymentId: "payment-1",
+  captureEvaluationOrderId: "order-1",
+  captureEvaluationPhaseId: "phase-1",
+  captureEvaluationWindowId: "capture-window-1",
+  captureEvaluationWindowResultId: "capture-window-result-1",
+  captureEvaluationOutcome: "within_window",
+  captureProviderEventId: "capture-event-1",
+  captureProviderEvent: {
+    id: "capture-event-1",
+    paymentId: "payment-1",
+    transactionId: "provider-transaction-1",
+    status: "captured",
+    occurredAt: Instant.parse("2026-01-01T00:30:00.000Z"),
+    authenticated: true,
+    verified: true,
+    resultId: "capture-evaluation-result-1",
+  },
+  captureEvaluationPaymentResultId: "capture-evaluation-result-1",
+  captureEvaluationProviderEventResultId: "capture-evaluation-result-1",
+  captureEvaluationActivationResultId: "capture-evaluation-result-1",
+  captureEvaluationCompleted: true,
+  captureEvaluationAtomic: true,
   providerEventPaymentId: "payment-1",
   providerPaymentTransactionId: "provider-transaction-1",
   providerPaymentEventAuthenticated: true,
@@ -534,7 +573,65 @@ const permittedContext = {
   },
   plannedShipmentCancellationCompleted: true,
   plannedShipmentCancellationAtomic: true,
+  shipmentPlanId: "shipment-plan-1",
   carrierLabelId: "label-1",
+  shipmentLabelCreationResultId: "label-creation-result-1",
+  shipmentLabelCreationShipmentId: "shipment-1",
+  shipmentLabelCreationOrderId: "order-1",
+  shipmentLabelCreationPhaseId: "phase-1",
+  shipmentLabelCreationPlanId: "shipment-plan-1",
+  shipmentLabelCreationPreviousStatus: "planned",
+  shipmentLabelCreationTargetStatus: "label_created",
+  shipmentLabelCreationCarrierLabelId: "label-1",
+  shipmentLabelCreationExpectedShipment: {
+    id: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    planId: "shipment-plan-1",
+    status: "planned",
+    immutable: true,
+  },
+  shipmentLabelCreationCarrierLabel: {
+    id: "label-1",
+    shipmentId: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    planId: "shipment-plan-1",
+    carrierId: "carrier-1",
+    status: "usable",
+    immutable: true,
+    resultId: "label-creation-result-1",
+  },
+  shipmentLabelCreationOutbox: {
+    id: "label-outbox-1",
+    shipmentId: "shipment-1",
+    planId: "shipment-plan-1",
+    carrierLabelId: "label-1",
+    idempotencyKey: "create_carrier_label:shipment-1:shipment-plan-1",
+    action: "create_carrier_label",
+    previousStatus: "pending",
+    targetStatus: "succeeded",
+    resultId: "label-creation-result-1",
+  },
+  shipmentLabelCreationProviderEventId: "label-event-1",
+  shipmentLabelCreationProviderTransactionId: "label-transaction-1",
+  shipmentLabelCreationProviderEvent: {
+    id: "label-event-1",
+    outboxId: "label-outbox-1",
+    shipmentId: "shipment-1",
+    carrierLabelId: "label-1",
+    transactionId: "label-transaction-1",
+    status: "succeeded",
+    authenticated: true,
+    verified: true,
+    resultId: "label-creation-result-1",
+  },
+  shipmentLabelCreationShipmentResultId: "label-creation-result-1",
+  shipmentLabelCreationLabelResultId: "label-creation-result-1",
+  shipmentLabelCreationOutboxResultId: "label-creation-result-1",
+  shipmentLabelCreationProviderEventResultId: "label-creation-result-1",
+  shipmentLabelCreationCompleted: true,
+  shipmentLabelCreationAtomic: true,
   shipmentCancellationExpectedShipmentId: "shipment-1",
   shipmentCancellationExpectedCarrierLabelId: "label-1",
   shipmentCancellationShipmentId: "shipment-1",
@@ -1382,6 +1479,29 @@ const permittedContext = {
   handoffResultCustodyConfirmed: true,
   handoffResultCompleted: true,
   handoffResultAtomic: true,
+  jobHandoffKind: "ordinary",
+  jobHandoffJobId: "job-1",
+  jobHandoffExpectedJob: {
+    id: "job-1",
+    kind: "ordinary",
+    shipmentId: "shipment-1",
+    claimId: null,
+    resolutionId: null,
+    replacementSetId: null,
+    status: "packed",
+    currentLineageLeaf: true,
+    immutable: true,
+  },
+  jobHandoffShipmentId: "shipment-1",
+  jobHandoffClaimId: null,
+  jobHandoffResolutionId: null,
+  jobHandoffReplacementSetId: null,
+  jobHandoffResultId: "handoff-result-1",
+  jobHandoffJobResultId: "handoff-result-1",
+  jobHandoffPreviousStatus: "packed",
+  jobHandoffTargetStatus: "handed_over",
+  jobHandoffCompleted: true,
+  jobHandoffAtomic: true,
   labelledHandoffKind: "ordinary",
   labelledHandoffResultKind: "ordinary",
   labelledHandoffShipmentId: "shipment-1",
@@ -3617,6 +3737,10 @@ describe("v0 lifecycle policy tables", () => {
             ...contextForTransition("captured", "pending"),
             paymentRole,
             initialPaymentRole: paymentRole,
+            paymentCaptureWindow: {
+              ...permittedContext.paymentCaptureWindow,
+              role: paymentRole,
+            },
           },
         }),
       ).toEqual({
@@ -3661,6 +3785,12 @@ describe("v0 lifecycle policy tables", () => {
           ...contextForTransition("captured", "pending"),
           paymentRole: "balance",
           balancePaymentRole: "balance",
+          paymentCaptureWindow: {
+            ...permittedContext.paymentCaptureWindow,
+            role: "balance",
+            kind: "balance_deadline",
+            cutoffAt: permittedContext.balanceDueAt,
+          },
           confirmationActivationAtomic: false,
           initialCaptureConfirmationAtomic: false,
         },
@@ -3669,6 +3799,153 @@ describe("v0 lifecycle policy tables", () => {
       kind: "changed",
       previous: "pending",
       current: "captured",
+    });
+  });
+
+  it.each([
+    Instant.parse("2026-01-01T00:00:00.000Z"),
+    Instant.parse("2026-01-01T00:59:59.999Z"),
+  ])("captures only within the exact immutable window at %s", (evaluatedAt) => {
+    const base = contextForTransition("captured", "pending");
+    expect(
+      transition(paymentPolicy, {
+        current: "pending",
+        target: "captured",
+        idempotencyKey: `capture-window-${evaluatedAt.toISOString()}`,
+        context: {
+          ...base,
+          captureEvaluatedAt: evaluatedAt,
+          captureProviderEvent: {
+            ...base.captureProviderEvent,
+            occurredAt: evaluatedAt,
+          },
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "pending", current: "captured" });
+  });
+
+  it.each([
+    Instant.parse("2025-12-31T23:59:59.999Z"),
+    Instant.parse("2026-01-01T01:00:00.000Z"),
+    Instant.parse("2026-01-01T01:00:00.001Z"),
+  ])(
+    "rejects ordinary capture outside its exact window at %s",
+    (evaluatedAt) => {
+      const base = contextForTransition("captured", "pending");
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "captured",
+          idempotencyKey: `capture-window-rejected-${evaluatedAt.toISOString()}`,
+          context: {
+            ...base,
+            captureEvaluatedAt: evaluatedAt,
+            captureProviderEvent: {
+              ...base.captureProviderEvent,
+              occurredAt: evaluatedAt,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["paymentCaptureWindowId", " "],
+    ["paymentCaptureWindowResultId", " "],
+    ["captureEvaluationResultId", " "],
+    ["captureEvaluatedAt", "2026-01-01T00:30:00.000Z"],
+    ["captureEvaluationPaymentId", "another-payment"],
+    ["captureEvaluationOrderId", "another-order"],
+    ["captureEvaluationPhaseId", "another-phase"],
+    ["captureEvaluationWindowId", "another-window"],
+    ["captureEvaluationWindowResultId", "another-result"],
+    ["captureEvaluationOutcome", "expired"],
+    ["captureProviderEventId", " "],
+    ["captureEvaluationPaymentResultId", "another-result"],
+    ["captureEvaluationProviderEventResultId", "another-result"],
+    ["captureEvaluationActivationResultId", "another-result"],
+    ["captureEvaluationCompleted", false],
+    ["captureEvaluationAtomic", false],
+  ] as const)(
+    "rejects capture-window evidence with invalid %s",
+    (field, value) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "captured",
+          idempotencyKey: `capture-window-invalid-${field}`,
+          context: {
+            ...contextForTransition("captured", "pending"),
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["paymentCaptureWindow", "id", "another-window"],
+    ["paymentCaptureWindow", "paymentId", "another-payment"],
+    ["paymentCaptureWindow", "orderId", "another-order"],
+    ["paymentCaptureWindow", "phaseId", "another-phase"],
+    ["paymentCaptureWindow", "role", "deposit"],
+    ["paymentCaptureWindow", "kind", "balance_deadline"],
+    ["paymentCaptureWindow", "immutable", false],
+    ["paymentCaptureWindow", "resultId", "another-result"],
+    ["captureProviderEvent", "id", "another-event"],
+    ["captureProviderEvent", "paymentId", "another-payment"],
+    ["captureProviderEvent", "transactionId", "another-transaction"],
+    ["captureProviderEvent", "status", "failed"],
+    [
+      "captureProviderEvent",
+      "occurredAt",
+      Instant.parse("2026-01-01T00:29:59.999Z"),
+    ],
+    ["captureProviderEvent", "authenticated", false],
+    ["captureProviderEvent", "verified", false],
+    ["captureProviderEvent", "resultId", "another-result"],
+  ] as const)(
+    "rejects capture-window evidence with invalid %s.%s",
+    (recordField, field, value) => {
+      const base = contextForTransition("captured", "pending");
+      const record = base[recordField] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          current: "pending",
+          target: "captured",
+          idempotencyKey: `capture-window-invalid-${recordField}-${field}`,
+          context: {
+            ...base,
+            [recordField]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("routes an exact at-cutoff pending capture to late compensation", () => {
+    const base = contextForTransition("refund_pending", "voided");
+    const evaluatedAt = permittedContext.checkoutCaptureExpiresAt;
+    expect(
+      transition(paymentPolicy, {
+        current: "pending",
+        target: "refund_pending",
+        idempotencyKey: "pending-late-capture-compensation",
+        context: {
+          ...base,
+          captureEvaluatedAt: evaluatedAt,
+          captureEvaluationOutcome: "expired",
+          captureProviderEvent: {
+            ...base.captureProviderEvent,
+            occurredAt: evaluatedAt,
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "pending",
+      current: "refund_pending",
     });
   });
 
@@ -4654,6 +4931,137 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("creates a usable carrier label for the exact planned Shipment atomically", () => {
+    expect(
+      transition(shipmentPolicy, {
+        current: "planned",
+        target: "label_created",
+        idempotencyKey: "shipment-label-creation-complete",
+        context: contextForTransition("label_created", "planned"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "planned",
+      current: "label_created",
+    });
+  });
+
+  it.each([
+    ["shipmentId", " "],
+    ["orderId", " "],
+    ["phaseId", " "],
+    ["shipmentPlanId", " "],
+    ["carrierLabelId", " "],
+    ["shipmentLabelCreationResultId", " "],
+    ["shipmentLabelCreationShipmentId", "another-shipment"],
+    ["shipmentLabelCreationOrderId", "another-order"],
+    ["shipmentLabelCreationPhaseId", "another-phase"],
+    ["shipmentLabelCreationPlanId", "another-plan"],
+    ["shipmentLabelCreationPreviousStatus", "cancelled"],
+    ["shipmentLabelCreationTargetStatus", "planned"],
+    ["shipmentLabelCreationCarrierLabelId", "another-label"],
+    ["shipmentLabelCreationProviderEventId", " "],
+    ["shipmentLabelCreationProviderTransactionId", " "],
+    ["shipmentLabelCreationShipmentResultId", "another-result"],
+    ["shipmentLabelCreationLabelResultId", "another-result"],
+    ["shipmentLabelCreationOutboxResultId", "another-result"],
+    ["shipmentLabelCreationProviderEventResultId", "another-result"],
+    ["shipmentLabelCreationCompleted", false],
+    ["shipmentLabelCreationAtomic", false],
+  ] as const)("rejects label creation with invalid %s", (field, value) => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        current: "planned",
+        target: "label_created",
+        idempotencyKey: `shipment-label-creation-${field}`,
+        context: {
+          ...contextForTransition("label_created", "planned"),
+          [field]: value,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["shipmentLabelCreationExpectedShipment", "immutable", false],
+    ["shipmentLabelCreationExpectedShipment", "id", "another-shipment"],
+    ["shipmentLabelCreationExpectedShipment", "status", "label_created"],
+    ["shipmentLabelCreationCarrierLabel", "id", "another-label"],
+    ["shipmentLabelCreationCarrierLabel", "shipmentId", "another-shipment"],
+    ["shipmentLabelCreationCarrierLabel", "carrierId", " "],
+    ["shipmentLabelCreationCarrierLabel", "status", "pending"],
+    ["shipmentLabelCreationCarrierLabel", "immutable", false],
+    ["shipmentLabelCreationCarrierLabel", "resultId", "another-result"],
+    ["shipmentLabelCreationOutbox", "id", " "],
+    ["shipmentLabelCreationOutbox", "shipmentId", "another-shipment"],
+    ["shipmentLabelCreationOutbox", "idempotencyKey", "wrong-key"],
+    ["shipmentLabelCreationOutbox", "action", "void_carrier_label"],
+    ["shipmentLabelCreationOutbox", "targetStatus", "failed"],
+    ["shipmentLabelCreationOutbox", "resultId", "another-result"],
+    ["shipmentLabelCreationProviderEvent", "id", "another-event"],
+    ["shipmentLabelCreationProviderEvent", "outboxId", "another-outbox"],
+    [
+      "shipmentLabelCreationProviderEvent",
+      "transactionId",
+      "another-transaction",
+    ],
+    ["shipmentLabelCreationProviderEvent", "status", "failed"],
+    ["shipmentLabelCreationProviderEvent", "authenticated", false],
+    ["shipmentLabelCreationProviderEvent", "verified", false],
+    ["shipmentLabelCreationProviderEvent", "resultId", "another-result"],
+  ] as const)(
+    "rejects label creation with invalid %s.%s",
+    (recordField, field, value) => {
+      const base = contextForTransition("label_created", "planned");
+      const record = base[recordField] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(shipmentPolicy, {
+          current: "planned",
+          target: "label_created",
+          idempotencyKey: `shipment-label-creation-${recordField}-${field}`,
+          context: {
+            ...base,
+            [recordField]: { ...record, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated foreign Shipment and label substitution against the expected plan", () => {
+    const base = contextForTransition("label_created", "planned");
+    expect(() =>
+      transition(shipmentPolicy, {
+        current: "planned",
+        target: "label_created",
+        idempotencyKey: "shipment-label-creation-foreign-substitution",
+        context: {
+          ...base,
+          shipmentId: "shipment-2",
+          carrierLabelId: "label-2",
+          shipmentLabelCreationShipmentId: "shipment-2",
+          shipmentLabelCreationCarrierLabelId: "label-2",
+          shipmentLabelCreationCarrierLabel: {
+            ...base.shipmentLabelCreationCarrierLabel,
+            id: "label-2",
+            shipmentId: "shipment-2",
+          },
+          shipmentLabelCreationOutbox: {
+            ...base.shipmentLabelCreationOutbox,
+            shipmentId: "shipment-2",
+            carrierLabelId: "label-2",
+            idempotencyKey: "create_carrier_label:shipment-2:shipment-plan-1",
+          },
+          shipmentLabelCreationProviderEvent: {
+            ...base.shipmentLabelCreationProviderEvent,
+            shipmentId: "shipment-2",
+            carrierLabelId: "label-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it("cancels a planned Shipment with its exact reordered resource set", () => {
     const context = contextForTransition("cancelled", "planned");
@@ -9528,6 +9936,268 @@ describe("v0 lifecycle policy tables", () => {
       previous: "packed",
       current: "handed_over",
     });
+  });
+
+  it("dispatches a replacement Job through its exact Claim-scoped handoff", () => {
+    const base = contextForTransition("handed_over", "packed");
+    expect(
+      transition(jobPolicy, {
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "replacement-job-handoff",
+        context: {
+          ...base,
+          jobId: "replacement-job-1",
+          jobHandoffKind: "replacement",
+          jobHandoffJobId: "replacement-job-1",
+          jobHandoffExpectedJob: {
+            id: "replacement-job-1",
+            kind: "replacement",
+            shipmentId: "replacement-shipment-1",
+            claimId: "claim-1",
+            resolutionId: "claim-resolution-1",
+            replacementSetId: "replacement-set-1",
+            status: "packed",
+            currentLineageLeaf: true,
+            immutable: true,
+          },
+          jobHandoffShipmentId: "replacement-shipment-1",
+          jobHandoffClaimId: "claim-1",
+          jobHandoffResolutionId: "claim-resolution-1",
+          jobHandoffReplacementSetId: "replacement-set-1",
+          jobHandoffResultId: "replacement-handoff-result-1",
+          jobHandoffJobResultId: "replacement-handoff-result-1",
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "packed", current: "handed_over" });
+  });
+
+  const independentJobHandoffContext = () => {
+    const setup = independentReplacementContext([
+      {
+        slotId: "claim-slot-1",
+        request: "request-1",
+        reservation: "reservation-1",
+        shipment: "shipment-1",
+        job: "job-1",
+      },
+    ]);
+    return {
+      ...setup,
+      jobId: "job-1",
+      jobHandoffKind: "replacement",
+      jobHandoffJobId: "job-1",
+      jobHandoffExpectedJob: {
+        id: "job-1",
+        kind: "replacement",
+        shipmentId: "shipment-1",
+        claimId: setup.claimId,
+        resolutionId: setup.claimSlotResolutionId,
+        replacementSetId: setup.replacementSetId,
+        status: "packed",
+        currentLineageLeaf: true,
+        immutable: true,
+      },
+      jobHandoffShipmentId: "shipment-1",
+      jobHandoffClaimId: setup.claimId,
+      jobHandoffResolutionId: setup.claimSlotResolutionId,
+      jobHandoffReplacementSetId: setup.replacementSetId,
+      jobHandoffResultId: setup.replacementHandoffResultId,
+      jobHandoffJobResultId: setup.replacementHandoffResultId,
+      jobHandoffPreviousStatus: "packed",
+      jobHandoffTargetStatus: "handed_over",
+      jobHandoffCompleted: true,
+      jobHandoffAtomic: true,
+      replacementAuthorizationShipmentId: "shipment-1",
+      replacementHandoffShipmentId: "shipment-1",
+      replacementAuthorizationSlotIds: ["claim-slot-1"],
+      replacementAuthorizationShipmentIds: ["shipment-1"],
+      replacementHandoffSlotIds: ["claim-slot-1"],
+      replacementHandoffSlotBindings: setup.replacementRequiredSlotBindings,
+      replacementHandoffShipments: setup.replacementRequiredShipments.map(
+        (record) => ({
+          ...record,
+          previousStatus: "label_created",
+          targetStatus: "handed_over",
+        }),
+      ),
+      replacementHandoffJobs: setup.replacementRequiredJobs.map((record) => ({
+        ...record,
+        previousStatus: "packed",
+        targetStatus: "handed_over",
+        resultId: setup.replacementHandoffResultId,
+      })),
+    };
+  };
+
+  it("dispatches an independent-topology replacement Job through its exact set", () => {
+    expect(
+      transition(jobPolicy, {
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "independent-replacement-job-handoff",
+        context: independentJobHandoffContext(),
+      }),
+    ).toEqual({ kind: "changed", previous: "packed", current: "handed_over" });
+  });
+
+  it("rejects an unanchored grouped Job mixed into independent replacement proof", () => {
+    const context = independentJobHandoffContext();
+    expect(() =>
+      transition(jobPolicy, {
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "mixed-topology-replacement-job-handoff",
+        context: {
+          ...context,
+          jobId: "synthetic-job",
+          jobHandoffJobId: "synthetic-job",
+          jobHandoffExpectedJob: {
+            ...context.jobHandoffExpectedJob,
+            id: "synthetic-job",
+          },
+          replacementHandoffResourceGroups: [
+            {
+              ...permittedContext.replacementHandoffResourceGroups[0],
+              currentReplacementJobId: "synthetic-job",
+              currentReplacementJobShipmentId: "shipment-1",
+            },
+          ],
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["jobId", "another-job"],
+    ["jobHandoffKind", "reship"],
+    ["jobHandoffJobId", "another-job"],
+    ["jobHandoffShipmentId", "another-shipment"],
+    ["jobHandoffClaimId", "sibling-claim"],
+    ["jobHandoffResolutionId", "sibling-resolution"],
+    ["jobHandoffReplacementSetId", "another-set"],
+    ["jobHandoffResultId", "another-result"],
+    ["jobHandoffJobResultId", "another-result"],
+    ["jobHandoffPreviousStatus", "printing"],
+    ["jobHandoffTargetStatus", "packed"],
+    ["jobHandoffCompleted", false],
+    ["jobHandoffAtomic", false],
+  ] as const)(
+    "rejects replacement Job handoff with invalid %s",
+    (field, value) => {
+      const base = contextForTransition("handed_over", "packed");
+      expect(() =>
+        transition(jobPolicy, {
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `replacement-job-handoff-${field}`,
+          context: {
+            ...base,
+            jobId: "replacement-job-1",
+            jobHandoffKind: "replacement",
+            jobHandoffJobId: "replacement-job-1",
+            jobHandoffExpectedJob: {
+              id: "replacement-job-1",
+              kind: "replacement",
+              shipmentId: "replacement-shipment-1",
+              claimId: "claim-1",
+              resolutionId: "claim-resolution-1",
+              replacementSetId: "replacement-set-1",
+              status: "packed",
+              currentLineageLeaf: true,
+              immutable: true,
+            },
+            jobHandoffShipmentId: "replacement-shipment-1",
+            jobHandoffClaimId: "claim-1",
+            jobHandoffResolutionId: "claim-resolution-1",
+            jobHandoffReplacementSetId: "replacement-set-1",
+            jobHandoffResultId: "replacement-handoff-result-1",
+            jobHandoffJobResultId: "replacement-handoff-result-1",
+            [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "another-job"],
+    ["kind", "ordinary"],
+    ["shipmentId", "another-shipment"],
+    ["claimId", "sibling-claim"],
+    ["resolutionId", "sibling-resolution"],
+    ["replacementSetId", "another-set"],
+    ["status", "printing"],
+    ["currentLineageLeaf", false],
+    ["immutable", false],
+  ] as const)(
+    "rejects replacement Job handoff with invalid expected origin %s",
+    (field, value) => {
+      const base = contextForTransition("handed_over", "packed");
+      expect(() =>
+        transition(jobPolicy, {
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `replacement-job-origin-${field}`,
+          context: {
+            ...base,
+            jobId: "replacement-job-1",
+            jobHandoffKind: "replacement",
+            jobHandoffJobId: "replacement-job-1",
+            jobHandoffExpectedJob: {
+              id: "replacement-job-1",
+              kind: "replacement",
+              shipmentId: "replacement-shipment-1",
+              claimId: "claim-1",
+              resolutionId: "claim-resolution-1",
+              replacementSetId: "replacement-set-1",
+              status: "packed",
+              currentLineageLeaf: true,
+              immutable: true,
+              [field]: value,
+            },
+            jobHandoffShipmentId: "replacement-shipment-1",
+            jobHandoffClaimId: "claim-1",
+            jobHandoffResolutionId: "claim-resolution-1",
+            jobHandoffReplacementSetId: "replacement-set-1",
+            jobHandoffResultId: "replacement-handoff-result-1",
+            jobHandoffJobResultId: "replacement-handoff-result-1",
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects replacement-origin Job handoff with ordinary proof", () => {
+    expect(() =>
+      transition(jobPolicy, {
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "replacement-job-ordinary-proof",
+        context: {
+          ...contextForTransition("handed_over", "packed"),
+          jobId: "replacement-job-1",
+          jobHandoffJobId: "replacement-job-1",
+          jobHandoffClaimId: "claim-1",
+          jobHandoffResolutionId: "claim-resolution-1",
+          jobHandoffReplacementSetId: "replacement-set-1",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects ordinary-origin Job handoff with replacement proof", () => {
+    expect(() =>
+      transition(jobPolicy, {
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "ordinary-job-replacement-proof",
+        context: {
+          ...contextForTransition("handed_over", "packed"),
+          jobHandoffKind: "replacement",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it.each([
