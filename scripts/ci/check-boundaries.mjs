@@ -183,6 +183,7 @@ function lineCommentEnd(source, start) {
 function findTemplateExpressionEnd(source, start) {
   let depth = 1;
   let lineTerminatorSinceToken = false;
+  let separatedSinceToken = false;
   const tokens = [];
   const braces = [];
   for (let index = start; index < source.length;) {
@@ -190,44 +191,57 @@ function findTemplateExpressionEnd(source, start) {
     const identifier = readIdentifier(source, index);
     if (/\s/.test(character)) {
       lineTerminatorSinceToken ||= /[\n\r\u2028\u2029]/u.test(character);
+      separatedSinceToken = true;
       index += 1;
     } else if (character === "/" && source[index + 1] === "/") {
+      separatedSinceToken = true;
       index = lineCommentEnd(source, index + 2);
       if (index === source.length) return source.length;
     } else if (character === "/" && source[index + 1] === "*") {
+      separatedSinceToken = true;
       const end = source.indexOf("*/", index + 2);
       lineTerminatorSinceToken ||=
         end !== -1 && /[\n\r\u2028\u2029]/u.test(source.slice(index + 2, end));
       index = end === -1 ? source.length : end + 2;
     } else if (character === '"' || character === "'") {
       index = readQuotedLiteral(source, index, character).end;
-      tokens.push({ kind: "literal", value: "" });
+      tokens.push({ kind: "literal", separatedSinceToken, value: "" });
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else if (character === "`") {
       index = readTemplateLiteral(source, index).end;
-      tokens.push({ kind: "template", value: "" });
+      tokens.push({ kind: "template", separatedSinceToken, value: "" });
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else if (
       character === "/" &&
       isRegexStart(tokens, lineTerminatorSinceToken)
     ) {
       index = skipRegexLiteral(source, index);
-      tokens.push({ kind: "regex", value: "" });
+      tokens.push({ kind: "regex", separatedSinceToken, value: "" });
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else if (identifier !== undefined) {
       tokens.push({
         kind: "identifier",
+        separatedSinceToken,
         value: identifier.value,
         escaped: identifier.escaped,
       });
       index = identifier.end;
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else if (/[0-9]/.test(character)) {
       let end = index + 1;
       while (/[A-Za-z0-9._]/.test(source[end] ?? "")) end += 1;
-      tokens.push({ kind: "number", value: source.slice(index, end) });
+      tokens.push({
+        kind: "number",
+        separatedSinceToken,
+        value: source.slice(index, end),
+      });
       index = end;
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else {
       if (character === "{") {
         const statementBlock = opensStatementBlock(tokens);
@@ -235,11 +249,13 @@ function findTemplateExpressionEnd(source, start) {
         depth += 1;
         tokens.push({
           kind: "punctuation",
+          separatedSinceToken,
           value: "{",
           statementBlock,
         });
         index += 1;
         lineTerminatorSinceToken = false;
+        separatedSinceToken = false;
         continue;
       }
       if (character === "}") {
@@ -248,17 +264,20 @@ function findTemplateExpressionEnd(source, start) {
         if (depth === 0) return index;
         tokens.push({
           kind: "punctuation",
+          separatedSinceToken,
           value: "}",
           expressionEnding: kind === "object",
         });
         index += 1;
         lineTerminatorSinceToken = false;
+        separatedSinceToken = false;
         continue;
       }
       const value = punctuationAt(source, index);
-      tokens.push({ kind: "punctuation", value });
+      tokens.push({ kind: "punctuation", separatedSinceToken, value });
       index += value.length;
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     }
   }
   return source.length;
@@ -411,8 +430,26 @@ function tokenEndsExpression(tokens, index) {
     open !== undefined &&
     open + 1 < index &&
     balancedTypeArgumentDelimiters(tokens, open, index) &&
+    looksLikeTypeArgumentList(tokens, open, index) &&
     tokenEndsExpression(tokens, open - 1)
   );
+}
+
+function looksLikeTypeArgumentList(tokens, open, close) {
+  if (
+    tokens[open].separatedSinceToken !== true ||
+    tokens[open + 1].separatedSinceToken !== true ||
+    tokens[close].separatedSinceToken !== true
+  ) {
+    return true;
+  }
+  return tokens
+    .slice(open + 1, close)
+    .some(
+      (token) =>
+        token.kind === "punctuation" &&
+        new Set(["&", "=>", "[", "{", "|", ",", "<"]).has(token.value),
+    );
 }
 
 function balancedTypeArgumentDelimiters(tokens, open, close) {
@@ -670,6 +707,7 @@ function punctuationAt(source, index) {
 
 function lexicalTokens(source) {
   let lineTerminatorSinceToken = false;
+  let separatedSinceToken = false;
   const tokens = [];
   const braces = [];
   for (let index = 0; index < source.length;) {
@@ -677,11 +715,14 @@ function lexicalTokens(source) {
     const identifier = readIdentifier(source, index);
     if (/\s/.test(character)) {
       lineTerminatorSinceToken ||= /[\n\r\u2028\u2029]/u.test(character);
+      separatedSinceToken = true;
       index += 1;
     } else if (character === "/" && source[index + 1] === "/") {
+      separatedSinceToken = true;
       index = lineCommentEnd(source, index + 2);
       if (index === source.length) break;
     } else if (character === "/" && source[index + 1] === "*") {
+      separatedSinceToken = true;
       const end = source.indexOf("*/", index + 2);
       lineTerminatorSinceToken ||=
         end !== -1 && /[\n\r\u2028\u2029]/u.test(source.slice(index + 2, end));
@@ -689,59 +730,84 @@ function lexicalTokens(source) {
     } else if (character === '"' || character === "'") {
       const literal = readQuotedLiteral(source, index, character);
       if (literal.value !== undefined) {
-        tokens.push({ kind: "literal", value: literal.value });
+        tokens.push({
+          kind: "literal",
+          separatedSinceToken,
+          value: literal.value,
+        });
       }
       index = literal.end;
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else if (character === "`") {
       const literal = readTemplateLiteral(source, index);
       if (literal.value !== undefined && literal.expressions.length === 0) {
-        tokens.push({ kind: "template", value: literal.value });
+        tokens.push({
+          kind: "template",
+          separatedSinceToken,
+          value: literal.value,
+        });
       }
       for (const expression of literal.expressions) {
         tokens.push(...lexicalTokens(expression));
       }
       index = literal.end;
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else if (
       character === "/" &&
       isRegexStart(tokens, lineTerminatorSinceToken)
     ) {
       index = skipRegexLiteral(source, index);
-      tokens.push({ kind: "regex", value: "" });
+      tokens.push({ kind: "regex", separatedSinceToken, value: "" });
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else if (identifier !== undefined) {
       tokens.push({
         kind: "identifier",
+        separatedSinceToken,
         value: identifier.value,
         escaped: identifier.escaped,
       });
       index = identifier.end;
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else if (/[0-9]/.test(character)) {
       let end = index + 1;
       while (/[A-Za-z0-9._]/.test(source[end] ?? "")) end += 1;
-      tokens.push({ kind: "number", value: source.slice(index, end) });
+      tokens.push({
+        kind: "number",
+        separatedSinceToken,
+        value: source.slice(index, end),
+      });
       index = end;
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     } else {
       const value = punctuationAt(source, index);
       if (value === "{") {
         const statementBlock = opensStatementBlock(tokens);
         braces.push(statementBlock ? "block" : "object");
-        tokens.push({ kind: "punctuation", value, statementBlock });
+        tokens.push({
+          kind: "punctuation",
+          separatedSinceToken,
+          statementBlock,
+          value,
+        });
       } else if (value === "}") {
         const kind = braces.pop();
         tokens.push({
           kind: "punctuation",
+          separatedSinceToken,
           value,
           expressionEnding: kind === "object",
         });
       } else {
-        tokens.push({ kind: "punctuation", value });
+        tokens.push({ kind: "punctuation", separatedSinceToken, value });
       }
       index += value.length;
       lineTerminatorSinceToken = false;
+      separatedSinceToken = false;
     }
   }
   return tokens;
