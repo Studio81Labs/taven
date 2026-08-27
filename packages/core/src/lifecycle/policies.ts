@@ -4751,12 +4751,23 @@ function requireAtomicWholeClaimWithdrawal<S extends string>(
   )
     ? [...context.claimWithdrawalCancellationSlotIds]
     : undefined;
+  const cancellationShipmentIds = Array.isArray(
+    context?.claimWithdrawalCancellationShipmentIds,
+  )
+    ? [...context.claimWithdrawalCancellationShipmentIds]
+    : undefined;
+  const cancellationShipments = Array.isArray(
+    context?.claimWithdrawalCancellationShipments,
+  )
+    ? [...context.claimWithdrawalCancellationShipments]
+    : undefined;
   const exactSet = (
     expected: readonly unknown[] | undefined,
     actual: readonly unknown[] | undefined,
+    allowEmpty = false,
   ): actual is string[] =>
     expected !== undefined &&
-    expected.length > 0 &&
+    (allowEmpty || expected.length > 0) &&
     actual !== undefined &&
     actual.length === expected.length &&
     expected.every((id) => typeof id === "string" && id.trim().length > 0) &&
@@ -4767,13 +4778,251 @@ function requireAtomicWholeClaimWithdrawal<S extends string>(
     ) &&
     new Set(actual).size === actual.length;
 
+  const expectedResolutionToSlot = new Map<string, string>();
+  const expectedBindings = Array.isArray(context?.expectedClaimResolutionSlots)
+    ? context.expectedClaimResolutionSlots
+    : undefined;
+  if (expectedBindings !== undefined) {
+    for (const value of expectedBindings) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        continue;
+      }
+      const binding = value as Readonly<Record<string, unknown>>;
+      if (
+        typeof binding.resolutionId === "string" &&
+        typeof binding.slotId === "string"
+      ) {
+        expectedResolutionToSlot.set(binding.resolutionId, binding.slotId);
+      }
+    }
+  }
+  const authoritativeShipmentIds = Array.isArray(
+    context?.claimWithdrawalExpectedRemedyShipmentIds,
+  )
+    ? [...context.claimWithdrawalExpectedRemedyShipmentIds]
+    : undefined;
+  const authoritativeShipments = Array.isArray(
+    context?.claimWithdrawalExpectedRemedyShipments,
+  )
+    ? [...context.claimWithdrawalExpectedRemedyShipments]
+    : undefined;
+  const authoritativeShipmentsById = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  const authoritativeResolutionIds = new Set<string>();
+  const authoritativeSlotIds = new Set<string>();
+  let authoritativeSetValid =
+    authoritativeShipmentIds !== undefined &&
+    authoritativeShipments !== undefined &&
+    authoritativeShipmentIds.length === authoritativeShipments.length;
+  if (authoritativeSetValid) {
+    for (const value of authoritativeShipments ?? []) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        authoritativeSetValid = false;
+        break;
+      }
+      const shipment = value as Readonly<Record<string, unknown>>;
+      const shipmentId = shipment.shipmentId;
+      const lineageLeafId = shipment.lineageLeafId;
+      const currentStatus = shipment.currentStatus;
+      const resolutionIds = Array.isArray(shipment.resolutionIds)
+        ? [...shipment.resolutionIds]
+        : undefined;
+      const slotIds = Array.isArray(shipment.slotIds)
+        ? [...shipment.slotIds]
+        : undefined;
+      const validResolutionIds =
+        resolutionIds !== undefined &&
+        resolutionIds.length > 0 &&
+        resolutionIds.every(
+          (id) =>
+            typeof id === "string" &&
+            id.trim().length > 0 &&
+            expectedResolutionIds?.includes(id) === true &&
+            !authoritativeResolutionIds.has(id),
+        ) &&
+        new Set(resolutionIds).size === resolutionIds.length;
+      const validSlotIds =
+        slotIds !== undefined &&
+        slotIds.length > 0 &&
+        slotIds.every(
+          (id) =>
+            typeof id === "string" &&
+            id.trim().length > 0 &&
+            expectedSlotIds?.includes(id) === true &&
+            !authoritativeSlotIds.has(id),
+        ) &&
+        new Set(slotIds).size === slotIds.length;
+      const exactMembership =
+        validResolutionIds &&
+        validSlotIds &&
+        (resolutionIds as string[]).every(
+          (resolutionId) =>
+            expectedResolutionToSlot.get(resolutionId) !== undefined &&
+            (slotIds as string[]).includes(
+              expectedResolutionToSlot.get(resolutionId) as string,
+            ),
+        ) &&
+        (slotIds as string[]).every((slotId) =>
+          (resolutionIds as string[]).some(
+            (resolutionId) =>
+              expectedResolutionToSlot.get(resolutionId) === slotId,
+          ),
+        );
+      if (
+        typeof shipmentId !== "string" ||
+        shipmentId.trim().length === 0 ||
+        authoritativeShipmentsById.has(shipmentId) ||
+        !authoritativeShipmentIds?.includes(shipmentId) ||
+        lineageLeafId !== shipmentId ||
+        shipment.claimId !== claimId ||
+        shipment.currentLineageLeaf !== true ||
+        (currentStatus !== "planned" &&
+          currentStatus !== "label_created" &&
+          currentStatus !== "cancellation_pending") ||
+        !exactMembership
+      ) {
+        authoritativeSetValid = false;
+        break;
+      }
+      authoritativeShipmentsById.set(shipmentId, shipment);
+      for (const resolutionId of resolutionIds as string[]) {
+        authoritativeResolutionIds.add(resolutionId);
+      }
+      for (const slotId of slotIds as string[]) {
+        authoritativeSlotIds.add(slotId);
+      }
+    }
+  }
+  const coveredResolutionIds = new Set<string>();
+  const coveredSlotIds = new Set<string>();
+  const projectedShipmentIds = new Set<string>();
+  let shipmentEvidenceValid =
+    cancellationShipments !== undefined &&
+    cancellationShipmentIds !== undefined &&
+    cancellationShipments.length === cancellationShipmentIds.length;
+  if (shipmentEvidenceValid) {
+    for (const value of cancellationShipments ?? []) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        shipmentEvidenceValid = false;
+        break;
+      }
+      const shipment = value as Readonly<Record<string, unknown>>;
+      const shipmentId = shipment.shipmentId;
+      const lineageLeafId = shipment.lineageLeafId;
+      const resolutionIds = Array.isArray(shipment.resolutionIds)
+        ? [...shipment.resolutionIds]
+        : undefined;
+      const slotIds = Array.isArray(shipment.slotIds)
+        ? [...shipment.slotIds]
+        : undefined;
+      const authoritative =
+        typeof shipmentId === "string"
+          ? authoritativeShipmentsById.get(shipmentId)
+          : undefined;
+      const authoritativeResolutionMembership = Array.isArray(
+        authoritative?.resolutionIds,
+      )
+        ? [...authoritative.resolutionIds]
+        : undefined;
+      const authoritativeSlotMembership = Array.isArray(authoritative?.slotIds)
+        ? [...authoritative.slotIds]
+        : undefined;
+      const previousStatus = shipment.previousStatus;
+      const providerVoidRequired =
+        previousStatus === "label_created" ||
+        previousStatus === "cancellation_pending";
+      const validPreviousStatus =
+        previousStatus === "planned" ||
+        previousStatus === "label_created" ||
+        previousStatus === "cancellation_pending";
+      const validResolutionIds =
+        resolutionIds !== undefined &&
+        resolutionIds.length > 0 &&
+        resolutionIds.every(
+          (id) =>
+            typeof id === "string" &&
+            id.trim().length > 0 &&
+            expectedResolutionIds?.includes(id) === true &&
+            !coveredResolutionIds.has(id),
+        ) &&
+        new Set(resolutionIds).size === resolutionIds.length;
+      const validSlotIds =
+        slotIds !== undefined &&
+        slotIds.length > 0 &&
+        slotIds.every(
+          (id) =>
+            typeof id === "string" &&
+            id.trim().length > 0 &&
+            expectedSlotIds?.includes(id) === true &&
+            !coveredSlotIds.has(id),
+        ) &&
+        new Set(slotIds).size === slotIds.length;
+      const exactMembership =
+        validResolutionIds &&
+        validSlotIds &&
+        (resolutionIds as string[]).every(
+          (resolutionId) =>
+            expectedResolutionToSlot.get(resolutionId) !== undefined &&
+            (slotIds as string[]).includes(
+              expectedResolutionToSlot.get(resolutionId) as string,
+            ),
+        ) &&
+        (slotIds as string[]).every((slotId) => {
+          const resolutionId = (resolutionIds as string[]).find(
+            (candidate) => expectedResolutionToSlot.get(candidate) === slotId,
+          );
+          return resolutionId !== undefined;
+        });
+      if (
+        typeof shipmentId !== "string" ||
+        shipmentId.trim().length === 0 ||
+        projectedShipmentIds.has(shipmentId) ||
+        lineageLeafId !== shipmentId ||
+        shipment.claimId !== claimId ||
+        authoritative === undefined ||
+        authoritative.lineageLeafId !== lineageLeafId ||
+        authoritative.claimId !== shipment.claimId ||
+        authoritative.currentLineageLeaf !== shipment.currentLineageLeaf ||
+        authoritative.currentStatus !== previousStatus ||
+        !exactSet(authoritativeResolutionMembership, resolutionIds) ||
+        !exactSet(authoritativeSlotMembership, slotIds) ||
+        shipment.resultId !== resultId ||
+        shipment.currentLineageLeaf !== true ||
+        !validPreviousStatus ||
+        shipment.targetStatus !== "cancelled" ||
+        (providerVoidRequired
+          ? shipment.providerVoidStatus !== "succeeded" ||
+            shipment.providerVoidConfirmed !== true
+          : shipment.providerVoidStatus !== "not_required" ||
+            shipment.providerVoidConfirmed !== false) ||
+        !exactMembership
+      ) {
+        shipmentEvidenceValid = false;
+        break;
+      }
+      projectedShipmentIds.add(shipmentId);
+      for (const resolutionId of resolutionIds as string[]) {
+        coveredResolutionIds.add(resolutionId);
+      }
+      for (const slotId of slotIds as string[]) {
+        coveredSlotIds.add(slotId);
+      }
+    }
+  }
   if (
     typeof cancellationResultId !== "string" ||
     cancellationResultId.trim().length === 0 ||
     cancellationResultId !== resultId ||
     context?.claimWithdrawalCancellationClaimId !== claimId ||
-    !exactSet(expectedResolutionIds, cancellationResolutionIds) ||
-    !exactSet(expectedSlotIds, cancellationSlotIds) ||
+    authoritativeSetValid !== true ||
+    !exactSet(authoritativeShipmentIds, cancellationShipmentIds, true) ||
+    !exactSet(authoritativeShipmentIds, [...projectedShipmentIds], true) ||
+    !exactSet(cancellationResolutionIds, [...coveredResolutionIds], true) ||
+    !exactSet(cancellationSlotIds, [...coveredSlotIds], true) ||
+    !exactSet(cancellationShipmentIds, [...projectedShipmentIds], true) ||
+    !shipmentEvidenceValid ||
     context?.claimWithdrawalCancellationShipmentResultId !== resultId ||
     context?.claimWithdrawalCancellationRequestResultId !== resultId ||
     context?.claimWithdrawalCancellationJobResultId !== resultId ||
@@ -5725,8 +5974,6 @@ function requireIndependentReplacementHandoff<S extends string>(
 ): void {
   requireIndependentReplacementResourceSet(lifecycle, command);
   const context = command.context;
-  const expected =
-    context?.expectedReplacementRequiredSlotIds as readonly string[];
   const nonBlank = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
   const exact = (
@@ -5741,6 +5988,7 @@ function requireIndependentReplacementHandoff<S extends string>(
   const resolutionId = context?.claimSlotResolutionId;
   const replacementSetId = context?.replacementSetId;
   const authorizationId = context?.replacementFulfilmentAuthorizationId;
+  const selectedShipmentId = context?.replacementAuthorizationShipmentId;
   const setupShipments = Array.isArray(context?.replacementRequiredShipments)
     ? context.replacementRequiredShipments
     : [];
@@ -5772,11 +6020,38 @@ function requireIndependentReplacementHandoff<S extends string>(
       )
       .map((record) => [record.id, record]),
   );
+  const setupLinks = new Map(
+    (context?.replacementRequiredSlotBindings as readonly unknown[])
+      .filter(
+        (value): value is Readonly<Record<string, unknown>> =>
+          typeof value === "object" && value !== null && !Array.isArray(value),
+      )
+      .map((link) => [link.slotId, link]),
+  );
+  const selectedShipment = shipmentMap.get(selectedShipmentId);
+  const selectedSlots = Array.isArray(selectedShipment?.slotIds)
+    ? (selectedShipment.slotIds as string[])
+    : undefined;
+  const selectedJobIds = selectedSlots
+    ? [
+        ...new Set(
+          selectedSlots
+            .map((slotId) => setupLinks.get(slotId)?.currentReplacementJobId)
+            .filter(nonBlank),
+        ),
+      ]
+    : undefined;
   if (
     !nonBlank(claimId) ||
     !nonBlank(resolutionId) ||
     !nonBlank(replacementSetId) ||
     !nonBlank(authorizationId) ||
+    !nonBlank(selectedShipmentId) ||
+    context?.replacementHandoffShipmentId !== selectedShipmentId ||
+    selectedSlots === undefined ||
+    selectedSlots.length === 0 ||
+    selectedJobIds === undefined ||
+    selectedJobIds.length === 0 ||
     context?.replacementAuthorizationClaimId !== claimId ||
     context?.replacementAuthorizationResolutionId !== resolutionId ||
     context?.replacementAuthorizationSetId !== replacementSetId ||
@@ -5787,12 +6062,16 @@ function requireIndependentReplacementHandoff<S extends string>(
     context?.replacementAuthorizationStatusBefore !== "issued" ||
     context?.replacementAuthorizationStatusAfter !== "consumed" ||
     context?.replacementHandoffAuthorizationId !== authorizationId ||
-    !exact(expected, context?.replacementHandoffSlotIds) ||
-    !exact(expected, context?.replacementAuthorizationSlotIds) ||
+    !exact(selectedSlots, context?.replacementHandoffSlotIds) ||
+    !exact(selectedSlots, context?.replacementAuthorizationSlotIds) ||
+    !exact(
+      [selectedShipmentId],
+      context?.replacementAuthorizationShipmentIds,
+    ) ||
     !Array.isArray(handoffShipments) ||
     !Array.isArray(handoffJobs) ||
     !Array.isArray(handoffLinks) ||
-    handoffLinks.length !== expected.length
+    handoffLinks.length !== selectedSlots.length
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -5804,6 +6083,8 @@ function requireIndependentReplacementHandoff<S extends string>(
   const verify = (
     records: readonly unknown[],
     setup: Map<unknown, Readonly<Record<string, unknown>>>,
+    requiredIds: readonly string[],
+    requiredSlots: readonly string[],
     label: string,
     job = false,
   ) => {
@@ -5847,10 +6128,7 @@ function requireIndependentReplacementHandoff<S extends string>(
       ids.add(id);
       for (const slotId of record.slotIds as string[]) covered.add(slotId);
     }
-    if (
-      !exact([...setup.keys()].filter(nonBlank), [...ids]) ||
-      !exact(expected, [...covered])
-    )
+    if (!exact(requiredIds, [...ids]) || !exact(requiredSlots, [...covered]))
       throw new TransitionGuardError(
         lifecycle,
         command.current,
@@ -5859,8 +6137,21 @@ function requireIndependentReplacementHandoff<S extends string>(
       );
     return ids;
   };
-  const shipmentIds = verify(handoffShipments, shipmentMap, "Shipment");
-  verify(handoffJobs, jobMap, "Job", true);
+  const shipmentIds = verify(
+    handoffShipments,
+    shipmentMap,
+    [selectedShipmentId],
+    selectedSlots,
+    "Shipment",
+  );
+  const handedOffJobIds = verify(
+    handoffJobs,
+    jobMap,
+    selectedJobIds,
+    selectedSlots,
+    "Job",
+    true,
+  );
   if (
     !exact([...shipmentIds], context?.replacementAuthorizationShipmentIds) ||
     (cancellationRaceShipmentId !== undefined &&
@@ -5872,14 +6163,6 @@ function requireIndependentReplacementHandoff<S extends string>(
       command.target,
       "replacement handoff authorization must include its exact Shipment set",
     );
-  const setupLinks = new Map(
-    (context?.replacementRequiredSlotBindings as readonly unknown[])
-      .filter(
-        (value): value is Readonly<Record<string, unknown>> =>
-          typeof value === "object" && value !== null && !Array.isArray(value),
-      )
-      .map((link) => [link.slotId, link]),
-  );
   const linked = new Set<string>();
   for (const value of handoffLinks) {
     if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -5894,14 +6177,14 @@ function requireIndependentReplacementHandoff<S extends string>(
     if (
       !nonBlank(link.slotId) ||
       linked.has(link.slotId) ||
-      !expected.includes(link.slotId) ||
+      !selectedSlots.includes(link.slotId) ||
       setup === undefined ||
       setup.replacementRequestId !== link.replacementRequestId ||
       setup.replacementReservationId !== link.replacementReservationId ||
       setup.replacementShipmentId !== link.replacementShipmentId ||
       setup.currentReplacementJobId !== link.currentReplacementJobId ||
       !shipmentIds.has(link.replacementShipmentId as string) ||
-      !jobMap.has(link.currentReplacementJobId)
+      !handedOffJobIds.has(link.currentReplacementJobId as string)
     )
       throw new TransitionGuardError(
         lifecycle,
@@ -5911,7 +6194,7 @@ function requireIndependentReplacementHandoff<S extends string>(
       );
     linked.add(link.slotId);
   }
-  if (!exact(expected, [...linked]))
+  if (!exact(selectedSlots, [...linked]))
     throw new TransitionGuardError(
       lifecycle,
       command.current,

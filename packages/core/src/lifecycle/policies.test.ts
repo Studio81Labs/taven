@@ -1054,16 +1054,53 @@ function contextForTransition(target: string, current?: string) {
           ...(withdrawalChildSource === "pending"
             ? {}
             : {
+                claimWithdrawalExpectedRemedyShipmentIds: [
+                  "withdrawal-shipment-1",
+                ],
+                claimWithdrawalExpectedRemedyShipments: [
+                  {
+                    shipmentId: "withdrawal-shipment-1",
+                    lineageLeafId: "withdrawal-shipment-1",
+                    claimId: "claim-1",
+                    resolutionIds: ["claim-resolution-1"],
+                    slotIds: ["claim-slot-1"],
+                    currentLineageLeaf: true,
+                    currentStatus:
+                      current === "recovery_pending"
+                        ? "planned"
+                        : "cancellation_pending",
+                  },
+                ],
                 claimWithdrawalCancellationResultId: claimWithdrawalResultId,
                 claimWithdrawalCancellationClaimId: "claim-1",
-                claimWithdrawalCancellationResolutionIds:
-                  resolutionEvidence.claimSlotResolutions.map(
-                    (resolution) => resolution.id,
-                  ),
-                claimWithdrawalCancellationSlotIds:
-                  resolutionEvidence.claimSlotResolutions.map(
-                    (resolution) => resolution.slotId,
-                  ),
+                claimWithdrawalCancellationResolutionIds: [
+                  "claim-resolution-1",
+                ],
+                claimWithdrawalCancellationSlotIds: ["claim-slot-1"],
+                claimWithdrawalCancellationShipmentIds: [
+                  "withdrawal-shipment-1",
+                ],
+                claimWithdrawalCancellationShipments: [
+                  {
+                    shipmentId: "withdrawal-shipment-1",
+                    lineageLeafId: "withdrawal-shipment-1",
+                    claimId: "claim-1",
+                    resultId: claimWithdrawalResultId,
+                    resolutionIds: ["claim-resolution-1"],
+                    slotIds: ["claim-slot-1"],
+                    currentLineageLeaf: true,
+                    previousStatus:
+                      current === "recovery_pending"
+                        ? "planned"
+                        : "cancellation_pending",
+                    targetStatus: "cancelled",
+                    providerVoidStatus:
+                      current === "recovery_pending"
+                        ? "not_required"
+                        : "succeeded",
+                    providerVoidConfirmed: current !== "recovery_pending",
+                  },
+                ],
                 claimWithdrawalCancellationShipmentResultId:
                   claimWithdrawalResultId,
                 claimWithdrawalCancellationRequestResultId:
@@ -1460,6 +1497,102 @@ describe("v0 lifecycle policy tables", () => {
           ).toThrow(TransitionGuardError);
         }
       }
+    },
+  );
+
+  it.each([
+    [
+      "selected scanned parcel",
+      "shipment-1",
+      "shipment-1",
+      "cancellation_pending",
+      false,
+    ],
+    [
+      "scanned parcel differs",
+      "shipment-1",
+      "shipment-2",
+      "cancellation_pending",
+      true,
+    ],
+    [
+      "selected parcel is label-created",
+      "shipment-1",
+      "shipment-1",
+      "label_created",
+      true,
+    ],
+  ] as const)(
+    "handles independent replacement cancellation race: %s",
+    (_case, scannedShipmentId, selectedShipmentId, previousStatus, rejects) => {
+      const setup = independentReplacementContext([
+        {
+          slotId: "claim-slot-1",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+        {
+          slotId: "claim-slot-2",
+          request: "request-2",
+          reservation: "reservation-2",
+          shipment: "shipment-2",
+          job: "job-2",
+        },
+      ]);
+      const context = {
+        ...contextForTransition("handed_over", "cancellation_pending"),
+        ...setup,
+        shipmentId: scannedShipmentId,
+        providerEventShipmentId: scannedShipmentId,
+        cancellationRaceResultShipmentId: scannedShipmentId,
+        cancellationRaceHandoffKind: "replacement",
+        cancellationRaceResultKind: "replacement",
+        cancellationRaceAggregateResultStatus: "replacement_child_shipped",
+        cancellationRaceFinancialResultStatus: "claim_remedy_no_charge",
+        cancellationRaceAuthorizationResultStatus:
+          "replacement_authorization_consumed",
+        cancellationRaceJobResultStatus:
+          "complete_replacement_job_set_handed_over",
+        replacementAuthorizationShipmentId: selectedShipmentId,
+        replacementHandoffShipmentId: selectedShipmentId,
+        replacementAuthorizationSlotIds: ["claim-slot-1"],
+        replacementAuthorizationShipmentIds: [selectedShipmentId],
+        replacementHandoffSlotIds: ["claim-slot-1"],
+        replacementHandoffSlotBindings:
+          setup.replacementRequiredSlotBindings.filter(
+            (link) => link.slotId === "claim-slot-1",
+          ),
+        replacementHandoffShipments: setup.replacementRequiredShipments
+          .filter((record) => record.id === selectedShipmentId)
+          .map((record) => ({
+            ...record,
+            previousStatus,
+            targetStatus: "handed_over",
+          })),
+        replacementHandoffJobs: setup.replacementRequiredJobs
+          .filter((record) => record.id === "job-1")
+          .map((record) => ({
+            ...record,
+            previousStatus: "packed",
+            targetStatus: "handed_over",
+          })),
+      };
+      const run = () =>
+        transition(shipmentPolicy, {
+          current: "cancellation_pending",
+          target: "handed_over",
+          idempotencyKey: `independent-race-${_case}`,
+          context,
+        });
+      if (rejects) expect(run).toThrow(TransitionGuardError);
+      else
+        expect(run()).toEqual({
+          kind: "changed",
+          previous: "cancellation_pending",
+          current: "handed_over",
+        });
     },
   );
 
@@ -3051,15 +3184,37 @@ describe("v0 lifecycle policy tables", () => {
       cleanPostDeliveryQualityClaim: true,
       ...(hasRemedyChild
         ? {
+            claimWithdrawalExpectedRemedyShipmentIds: ["withdrawal-shipment-1"],
+            claimWithdrawalExpectedRemedyShipments: [
+              {
+                shipmentId: "withdrawal-shipment-1",
+                lineageLeafId: "withdrawal-shipment-1",
+                claimId: "claim-1",
+                resolutionIds: ["claim-resolution-2"],
+                slotIds: ["claim-slot-2"],
+                currentLineageLeaf: true,
+                currentStatus: "cancellation_pending",
+              },
+            ],
             claimWithdrawalCancellationResultId: resultId,
             claimWithdrawalCancellationClaimId: "claim-1",
-            claimWithdrawalCancellationResolutionIds: [
-              "claim-resolution-1",
-              "claim-resolution-2",
-            ],
-            claimWithdrawalCancellationSlotIds: [
-              "claim-slot-1",
-              "claim-slot-2",
+            claimWithdrawalCancellationResolutionIds: ["claim-resolution-2"],
+            claimWithdrawalCancellationSlotIds: ["claim-slot-2"],
+            claimWithdrawalCancellationShipmentIds: ["withdrawal-shipment-1"],
+            claimWithdrawalCancellationShipments: [
+              {
+                shipmentId: "withdrawal-shipment-1",
+                lineageLeafId: "withdrawal-shipment-1",
+                claimId: "claim-1",
+                resultId,
+                resolutionIds: ["claim-resolution-2"],
+                slotIds: ["claim-slot-2"],
+                currentLineageLeaf: true,
+                previousStatus: "cancellation_pending",
+                targetStatus: "cancelled",
+                providerVoidStatus: "succeeded",
+                providerVoidConfirmed: true,
+              },
             ],
             claimWithdrawalCancellationShipmentResultId: resultId,
             claimWithdrawalCancellationRequestResultId: resultId,
@@ -3117,6 +3272,75 @@ describe("v0 lifecycle policy tables", () => {
       });
     },
   );
+
+  it("accepts grouped remedy Shipment membership and leaves another child without a Shipment", () => {
+    const context = completeWholeClaimWithdrawal("active");
+    const shipment = (
+      context.claimWithdrawalCancellationShipments as ReadonlyArray<
+        Record<string, unknown>
+      >
+    )[0];
+    expect(
+      transition(claimPolicy, {
+        current: "active",
+        target: "withdrawn",
+        idempotencyKey: "claim-withdrawal-grouped-shipment",
+        context: {
+          ...context,
+          claimWithdrawalExpectedRemedyShipmentIds: ["withdrawal-shipment-1"],
+          claimWithdrawalExpectedRemedyShipments: [
+            {
+              ...shipment,
+              currentStatus: "label_created",
+              resolutionIds: ["claim-resolution-1", "claim-resolution-2"],
+              slotIds: ["claim-slot-1", "claim-slot-2"],
+            },
+          ],
+          claimWithdrawalCancellationResolutionIds: [
+            "claim-resolution-1",
+            "claim-resolution-2",
+          ],
+          claimWithdrawalCancellationSlotIds: ["claim-slot-1", "claim-slot-2"],
+          claimWithdrawalCancellationShipmentIds: ["withdrawal-shipment-1"],
+          claimWithdrawalCancellationShipments: [
+            {
+              ...shipment,
+              resolutionIds: ["claim-resolution-1", "claim-resolution-2"],
+              slotIds: ["claim-slot-1", "claim-slot-2"],
+              previousStatus: "label_created",
+            },
+          ],
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "active", current: "withdrawn" });
+  });
+
+  it("accepts a non-pending child set with no applicable Shipment leaves", () => {
+    const context = completeWholeClaimWithdrawal("active");
+    expect(
+      transition(claimPolicy, {
+        current: "active",
+        target: "withdrawn",
+        idempotencyKey: "claim-withdrawal-no-shipment-leaves",
+        context: {
+          ...context,
+          claimSlotResolutions: context.claimSlotResolutions.map(
+            (resolution) => ({
+              ...resolution,
+              statusBefore: "reship_pending",
+            }),
+          ),
+          claimWithdrawalChildStatusBefore: "reship_pending",
+          claimWithdrawalExpectedRemedyShipmentIds: [],
+          claimWithdrawalExpectedRemedyShipments: [],
+          claimWithdrawalCancellationResolutionIds: [],
+          claimWithdrawalCancellationSlotIds: [],
+          claimWithdrawalCancellationShipmentIds: [],
+          claimWithdrawalCancellationShipments: [],
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "active", current: "withdrawn" });
+  });
 
   it.each([
     [
@@ -3246,9 +3470,7 @@ describe("v0 lifecycle policy tables", () => {
     [
       "cancellation omission",
       (context: Record<string, unknown>) => {
-        context.claimWithdrawalCancellationResolutionIds = [
-          "claim-resolution-1",
-        ];
+        context.claimWithdrawalCancellationResolutionIds = [];
       },
     ],
     [
@@ -3257,6 +3479,150 @@ describe("v0 lifecycle policy tables", () => {
         context.claimWithdrawalCancellationResolutionIds = [
           "claim-resolution-1",
           "foreign-resolution",
+        ];
+      },
+    ],
+    [
+      "duplicate Shipment",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationShipmentIds = [
+          "withdrawal-shipment-1",
+          "withdrawal-shipment-1",
+        ];
+      },
+    ],
+    [
+      "foreign Shipment Claim",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationShipments = [
+          {
+            ...(
+              context.claimWithdrawalCancellationShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            claimId: "another-claim",
+          },
+        ];
+      },
+    ],
+    [
+      "coordinated foreign Shipment substitution",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationShipmentIds = ["foreign-shipment"];
+        context.claimWithdrawalCancellationShipments = [
+          {
+            ...(
+              context.claimWithdrawalCancellationShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            shipmentId: "foreign-shipment",
+            lineageLeafId: "foreign-shipment",
+          },
+        ];
+      },
+    ],
+    [
+      "Shipment membership mismatch",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationShipments = [
+          {
+            ...(
+              context.claimWithdrawalCancellationShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            resolutionIds: ["claim-resolution-1"],
+            slotIds: ["claim-slot-1"],
+          },
+        ];
+      },
+    ],
+    [
+      "non-leaf Shipment",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationShipments = [
+          {
+            ...(
+              context.claimWithdrawalCancellationShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            currentLineageLeaf: false,
+          },
+        ];
+      },
+    ],
+    [
+      "cancellation pending after",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationShipments = [
+          {
+            ...(
+              context.claimWithdrawalCancellationShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            targetStatus: "cancellation_pending",
+          },
+        ];
+      },
+    ],
+    [
+      "handed-over live Shipment",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationShipments = [
+          {
+            ...(
+              context.claimWithdrawalCancellationShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            previousStatus: "handed_over",
+          },
+        ];
+      },
+    ],
+    [
+      "unconfirmed provider void",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalCancellationShipments = [
+          {
+            ...(
+              context.claimWithdrawalCancellationShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            providerVoidConfirmed: false,
+          },
+        ];
+      },
+    ],
+    [
+      "current label downgraded to planned cancellation",
+      (context: Record<string, unknown>) => {
+        context.claimWithdrawalExpectedRemedyShipments = [
+          {
+            ...(
+              context.claimWithdrawalExpectedRemedyShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            currentStatus: "label_created",
+          },
+        ];
+        context.claimWithdrawalCancellationShipments = [
+          {
+            ...(
+              context.claimWithdrawalCancellationShipments as ReadonlyArray<
+                Record<string, unknown>
+              >
+            )[0],
+            previousStatus: "planned",
+            providerVoidStatus: "not_required",
+            providerVoidConfirmed: false,
+          },
         ];
       },
     ],
@@ -4955,6 +5321,8 @@ describe("v0 lifecycle policy tables", () => {
         idempotencyKey: "independent-replacement-handoff",
         context: {
           ...setup,
+          replacementAuthorizationShipmentId: "shipment-1",
+          replacementHandoffShipmentId: "shipment-1",
           replacementAuthorizationSlotIds: ["claim-slot-1", "claim-slot-2"],
           replacementAuthorizationShipmentIds: ["shipment-1"],
           replacementHandoffSlotIds: ["claim-slot-1", "claim-slot-2"],
@@ -4981,6 +5349,68 @@ describe("v0 lifecycle policy tables", () => {
       current: "replacement_shipped",
     });
   });
+
+  it.each([
+    ["shipment-1", "claim-slot-1", "job-1"],
+    ["shipment-2", "claim-slot-2", "job-2"],
+  ] as const)(
+    "hands over only the selected independent replacement parcel %s",
+    (shipmentId, slotId, jobId) => {
+      const setup = independentReplacementContext([
+        {
+          slotId: "claim-slot-1",
+          request: "request-1",
+          reservation: "reservation-1",
+          shipment: "shipment-1",
+          job: "job-1",
+        },
+        {
+          slotId: "claim-slot-2",
+          request: "request-2",
+          reservation: "reservation-2",
+          shipment: "shipment-2",
+          job: "job-2",
+        },
+      ]);
+      expect(
+        transition(claimSlotResolutionPolicy, {
+          current: "replacement_in_production",
+          target: "replacement_shipped",
+          idempotencyKey: `independent-parcel-${shipmentId}`,
+          context: {
+            ...setup,
+            replacementAuthorizationShipmentId: shipmentId,
+            replacementHandoffShipmentId: shipmentId,
+            replacementAuthorizationSlotIds: [slotId],
+            replacementAuthorizationShipmentIds: [shipmentId],
+            replacementHandoffSlotIds: [slotId],
+            replacementHandoffSlotBindings:
+              setup.replacementRequiredSlotBindings.filter(
+                (link) => link.slotId === slotId,
+              ),
+            replacementHandoffShipments: setup.replacementRequiredShipments
+              .filter((record) => record.id === shipmentId)
+              .map((record) => ({
+                ...record,
+                previousStatus: "label_created",
+                targetStatus: "handed_over",
+              })),
+            replacementHandoffJobs: setup.replacementRequiredJobs
+              .filter((record) => record.id === jobId)
+              .map((record) => ({
+                ...record,
+                previousStatus: "packed",
+                targetStatus: "handed_over",
+              })),
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "replacement_in_production",
+        current: "replacement_shipped",
+      });
+    },
+  );
 
   it.each([
     [
