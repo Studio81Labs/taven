@@ -307,21 +307,49 @@ function isStatementStart(tokens, index) {
 }
 
 function functionDeclarationBody(tokens) {
-  let depth = 0;
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    if (tokens[index].value === ")") depth += 1;
-    if (tokens[index].value === "(") {
-      depth -= 1;
-      if (depth !== 0) continue;
-      let functionIndex = index - 1;
-      if (tokens[functionIndex]?.value !== "function") functionIndex -= 1;
-      if (tokens[functionIndex]?.value === "*") functionIndex -= 1;
-      const functionToken = tokens[functionIndex];
-      if (functionToken?.value !== "function") return false;
-      return isStatementStart(tokens, functionIndex - 1);
+  const head = statementHeadIndex(tokens);
+  const functionIndex = tokens.findIndex(
+    (token, index) => index >= head && rawIdentifier(token, "function"),
+  );
+  if (functionIndex === -1 || !isStatementStart(tokens, functionIndex - 1)) {
+    return false;
+  }
+  let angleDepth = 0;
+  let parameterStart = -1;
+  for (let index = functionIndex + 1; index < tokens.length; index += 1) {
+    const value = tokens[index].value;
+    if (value === "<") angleDepth += 1;
+    if (value === ">" && angleDepth > 0) angleDepth -= 1;
+    if (value === "(" && angleDepth === 0) {
+      parameterStart = index;
+      break;
     }
   }
-  return false;
+  if (parameterStart === -1) return false;
+  let parameterDepth = 0;
+  let parameterEnd = -1;
+  for (let index = parameterStart; index < tokens.length; index += 1) {
+    if (tokens[index].value === "(") parameterDepth += 1;
+    if (tokens[index].value === ")") {
+      parameterDepth -= 1;
+      if (parameterDepth === 0) {
+        parameterEnd = index;
+        break;
+      }
+    }
+  }
+  if (parameterEnd === -1) return false;
+  const tail = tokens.slice(parameterEnd + 1);
+  if (tail.length === 0) return true;
+  if (tail[0]?.value !== ":") return true;
+  const returnType = tail.slice(1);
+  if (returnType.length === 0) return false;
+  const header = balancedDeclarationHeader(returnType, 0);
+  const previous = returnType.at(-1)?.value;
+  return (
+    header.balanced &&
+    !new Set(["&", ",", ":", "=", "=>", "?", "|"]).has(previous)
+  );
 }
 
 function classDeclarationBody(tokens) {
@@ -335,6 +363,92 @@ function classDeclarationBody(tokens) {
     }
   }
   return false;
+}
+
+function statementHeadIndex(tokens) {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (
+      token.value === ";" ||
+      (token.value === "{" && token.statementBlock === true) ||
+      (token.value === "}" && token.expressionEnding === false)
+    ) {
+      return index + 1;
+    }
+  }
+  return 0;
+}
+
+function rawIdentifier(token, value) {
+  return (
+    token?.kind === "identifier" &&
+    token.escaped !== true &&
+    token.value === value
+  );
+}
+
+function balancedDeclarationHeader(tokens, start) {
+  let angleDepth = 0;
+  let parenthesisDepth = 0;
+  let bracketDepth = 0;
+  let topLevelAssignment = false;
+  for (let index = start; index < tokens.length; index += 1) {
+    const value = tokens[index].value;
+    if (value === "<") angleDepth += 1;
+    if (value === ">" && angleDepth > 0) angleDepth -= 1;
+    if (value === "(") parenthesisDepth += 1;
+    if (value === ")" && parenthesisDepth > 0) parenthesisDepth -= 1;
+    if (value === "[") bracketDepth += 1;
+    if (value === "]" && bracketDepth > 0) bracketDepth -= 1;
+    if (
+      value === "=" &&
+      angleDepth === 0 &&
+      parenthesisDepth === 0 &&
+      bracketDepth === 0
+    ) {
+      topLevelAssignment = true;
+    }
+  }
+  return {
+    balanced: angleDepth === 0 && parenthesisDepth === 0 && bracketDepth === 0,
+    topLevelAssignment,
+  };
+}
+
+function typescriptDeclarationBody(tokens) {
+  let cursor = statementHeadIndex(tokens);
+  let declared = false;
+  while (
+    ["abstract", "async", "declare", "default", "export"].some((value) =>
+      rawIdentifier(tokens[cursor], value),
+    )
+  ) {
+    declared ||= rawIdentifier(tokens[cursor], "declare");
+    cursor += 1;
+  }
+  if (
+    rawIdentifier(tokens[cursor], "const") &&
+    rawIdentifier(tokens[cursor + 1], "enum")
+  ) {
+    cursor += 1;
+  }
+  const keyword = tokens[cursor];
+  const header = balancedDeclarationHeader(tokens, cursor + 1);
+  if (!header.balanced) return false;
+  if (rawIdentifier(keyword, "global")) {
+    return declared && cursor === tokens.length - 1;
+  }
+  if (rawIdentifier(keyword, "type")) {
+    return (
+      tokens[cursor + 1]?.kind === "identifier" && header.topLevelAssignment
+    );
+  }
+  return (
+    !header.topLevelAssignment &&
+    ["enum", "interface", "module", "namespace"].some((value) =>
+      rawIdentifier(keyword, value),
+    )
+  );
 }
 
 function labelledStatementBlock(tokens) {
@@ -354,7 +468,12 @@ function opensStatementBlock(tokens) {
   if (previous.value === ")") {
     return closesControlCondition(tokens) || functionDeclarationBody(tokens);
   }
-  if (classDeclarationBody(tokens) || labelledStatementBlock(tokens))
+  if (
+    functionDeclarationBody(tokens) ||
+    classDeclarationBody(tokens) ||
+    typescriptDeclarationBody(tokens) ||
+    labelledStatementBlock(tokens)
+  )
     return true;
   if (previous.value === "}" && previous.expressionEnding === false) {
     return true;
