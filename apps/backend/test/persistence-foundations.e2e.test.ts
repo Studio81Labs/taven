@@ -271,6 +271,40 @@ describe("persistence foundations", () => {
       ).rejects.toMatchObject({ code: "23514" });
     });
     await inRollbackTransaction(
+      "early-source-deletion",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        await expect(
+          client.query(
+            'UPDATE "model_files" SET "deleted_at" = "source_delete_after" WHERE "id" = $1',
+            [foundation.modelFileId],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "asset_deletion_eligibility_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "held-source-deletion",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation("held-source", {
+          uploadedAt: new Date(Date.now() - 120_000),
+          deleteAfter: new Date(Date.now() - 60_000),
+          hold: "ACTIVE_ORDER",
+        });
+        await expect(
+          client.query(
+            'UPDATE "model_files" SET "deleted_at" = clock_timestamp() WHERE "id" = $1',
+            [foundation.modelFileId],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "asset_deletion_eligibility_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
       "geometry-lineage",
       async (client, fixtures) => {
         await expect(
@@ -347,6 +381,109 @@ describe("persistence foundations", () => {
     );
   });
 
+  it("expires retained geometry with its source and blocks new use", async () => {
+    const expiredSource = {
+      uploadedAt: new Date(Date.now() - 120_000),
+      deleteAfter: new Date(Date.now() - 60_000),
+      hold: "ACTIVE_ORDER" as const,
+    };
+
+    await inRollbackTransaction(
+      "expired-geometry-slice",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "expired-geometry-slice",
+          expiredSource,
+        );
+        await client.query(
+          'UPDATE "model_files" SET "retention_hold" = $2 WHERE "id" = $1',
+          [foundation.modelFileId, "NONE"],
+        );
+
+        await expect(
+          client.query(
+            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+            [
+              fixtures.id("expired-slice"),
+              "PRODUCTION",
+              `expired-${fixtures.id("expired-slice")}`,
+              foundation.modelGeometryId,
+              foundation.printConfigRevisionId,
+              foundation.machineProfileId,
+              foundation.machineCalibrationId,
+              1,
+              `slices/${fixtures.id("expired-slice")}`,
+              "7".repeat(64),
+              60,
+              60,
+              "orca",
+              "test",
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "model_geometry_source_available_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "expired-geometry-candidate",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "expired-geometry-candidate",
+          expiredSource,
+        );
+        await client.query(
+          'UPDATE "model_files" SET "retention_hold" = $2 WHERE "id" = $1',
+          [foundation.modelFileId, "NONE"],
+        );
+
+        await expect(
+          fixtures.planProduction(foundation, "expired-candidate"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "model_geometry_source_available_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "geometry-deletion-marker",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "geometry-deletion-marker",
+          expiredSource,
+        );
+        await client.query(
+          'UPDATE "model_files" SET "retention_hold" = $2, "deleted_at" = clock_timestamp() WHERE "id" = $1',
+          [foundation.modelFileId, "NONE"],
+        );
+
+        const deletion = await client.query<{
+          source_deleted_at: Date;
+          geometry_deleted_at: Date;
+        }>(
+          'SELECT source."deleted_at" AS source_deleted_at, geometry."deleted_at" AS geometry_deleted_at FROM "model_files" source JOIN "model_geometries" geometry ON geometry."source_model_file_id" = source."id" WHERE source."id" = $1',
+          [foundation.modelFileId],
+        );
+        expect(deletion.rows[0]?.geometry_deleted_at).toEqual(
+          deletion.rows[0]?.source_deleted_at,
+        );
+
+        await expect(
+          client.query(
+            'UPDATE "model_geometries" SET "deleted_at" = NULL WHERE "id" = $1',
+            [foundation.modelGeometryId],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "model_geometry_deletion_binding_check",
+        });
+      },
+    );
+  });
+
   it("requires matching revision identity kinds and immutable payloads", async () => {
     await inRollbackTransaction("revision-kind", async (client, fixtures) => {
       const revisionId = fixtures.id("revision");
@@ -414,7 +551,7 @@ describe("persistence foundations", () => {
     });
   });
 
-  it("rejects candidate profiles that do not match the concrete machine", async () => {
+  it("rejects candidate resources that do not match the concrete machine", async () => {
     await inRollbackTransaction(
       "candidate-nozzle-mismatch",
       async (client, fixtures) => {
@@ -462,6 +599,130 @@ describe("persistence foundations", () => {
           code: "23514",
           constraint: "candidate_resource_compatibility_check",
         });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quality-mismatch",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const printConfigRevisionId = fixtures.id("fine-print-config");
+        const sliceResultId = fixtures.id("fine-slice");
+        await fixtures.createRevisionIdentity(
+          printConfigRevisionId,
+          "PRINT_CONFIG",
+        );
+        await client.query(
+          'INSERT INTO "print_config_revisions" ("id", "quality", "infill_percent", "layer_height_micrometers", "settings") VALUES ($1, $2, $3, $4, $5::jsonb)',
+          [printConfigRevisionId, "FINE", 20, 200, JSON.stringify({})],
+        );
+        await client.query(
+          'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+          [
+            sliceResultId,
+            "PRODUCTION",
+            `fine-${sliceResultId}`,
+            foundation.modelGeometryId,
+            printConfigRevisionId,
+            foundation.machineProfileId,
+            foundation.machineCalibrationId,
+            1,
+            `slices/${sliceResultId}`,
+            "8".repeat(64),
+            60,
+            60,
+            "orca",
+            "test",
+          ],
+        );
+
+        await expect(
+          fixtures.planProduction(
+            {
+              ...foundation,
+              printConfigRevisionId,
+              sliceResultId,
+            },
+            "wrong-quality",
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_compatibility_check",
+        });
+      },
+    );
+  });
+
+  it("requires normalized capacity to cover declared machine time", async () => {
+    await inRollbackTransaction(
+      "candidate-capacity-short",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const startsAt = new Date("2027-01-01T10:00:00.000Z");
+        const production = await fixtures.planProduction(
+          foundation,
+          "short-capacity",
+          {
+            startsAt,
+            endsAt: new Date(startsAt.getTime() + 59_000),
+          },
+        );
+
+        await expect(
+          fixtures.createResourcePlan(foundation, [production]),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_resource_plan_candidate_capacity_coverage_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "candidate-capacity-overlap",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const startsAt = new Date("2027-01-01T10:00:00.000Z");
+        const production = await fixtures.planProduction(
+          foundation,
+          "overlapping-capacity",
+          [
+            {
+              startsAt,
+              endsAt: new Date(startsAt.getTime() + 40_000),
+            },
+            {
+              startsAt: new Date(startsAt.getTime() + 20_000),
+              endsAt: new Date(startsAt.getTime() + 60_000),
+            },
+          ],
+          70,
+        );
+
+        await expect(
+          fixtures.createResourcePlan(foundation, [production]),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_resource_plan_candidate_capacity_coverage_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "candidate-capacity-exact",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const startsAt = new Date("2027-01-01T10:00:00.000Z");
+        const production = await fixtures.planProduction(
+          foundation,
+          "exact-capacity",
+          {
+            startsAt,
+            endsAt: new Date(startsAt.getTime() + 60_000),
+          },
+        );
+
+        await expect(
+          fixtures.createResourcePlan(foundation, [production]),
+        ).resolves.toBeUndefined();
       },
     );
   });

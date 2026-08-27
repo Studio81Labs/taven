@@ -92,6 +92,7 @@ CREATE TABLE "model_geometries" (
     "bounds_y_micrometers" BIGINT NOT NULL,
     "bounds_z_micrometers" BIGINT NOT NULL,
     "triangle_count" INTEGER NOT NULL,
+    "deleted_at" TIMESTAMPTZ(3),
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "model_geometries_pkey" PRIMARY KEY ("id")
@@ -1265,10 +1266,13 @@ BEGIN
           ON calibration."id" = NEW."machine_calibration_id"
          AND calibration."node_id" = NEW."node_id"
          AND calibration."machine_id" = NEW."machine_id"
+        JOIN "print_config_revisions" print_config
+          ON print_config."id" = NEW."print_config_revision_id"
         WHERE machine_profile."id" = NEW."machine_profile_id"
           AND machine_profile."machine_capability_id" = machine."machine_capability_id"
           AND machine_profile."nozzle_diameter_micrometers" = machine."installed_nozzle_micrometers"
           AND machine_profile."material" = inventory."material"
+          AND machine_profile."quality" = print_config."quality"
           AND machine_profile."state" = 'ACTIVE'
           AND calibration."state" = 'ACTIVE'
           AND machine."status" = 'ACTIVE'
@@ -1285,6 +1289,154 @@ $$;
 CREATE TRIGGER "candidate_resource_estimates_compatibility"
     BEFORE INSERT ON "candidate_resource_estimates"
     FOR EACH ROW EXECUTE FUNCTION taven_assert_candidate_resource_compatibility();
+
+CREATE FUNCTION taven_assert_model_geometry_source_available()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    source_deadline timestamptz;
+    source_hold "retention_hold";
+    source_deleted_at timestamptz;
+BEGIN
+    SELECT
+        source."source_delete_after",
+        source."retention_hold",
+        source."deleted_at"
+    INTO source_deadline, source_hold, source_deleted_at
+    FROM "model_files" source
+    WHERE source."id" = NEW."source_model_file_id"
+    FOR SHARE;
+
+    IF NOT FOUND THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW."deleted_at" IS NOT NULL
+       OR source_deleted_at IS NOT NULL
+       OR (source_hold = 'NONE' AND source_deadline <= clock_timestamp()) THEN
+        RAISE EXCEPTION 'model geometry % cannot use expired or deleted source %', NEW."id", NEW."source_model_file_id"
+            USING ERRCODE = '23514', CONSTRAINT = 'model_geometry_source_available_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "model_geometries_source_available"
+    BEFORE INSERT ON "model_geometries"
+    FOR EACH ROW EXECUTE FUNCTION taven_assert_model_geometry_source_available();
+
+CREATE FUNCTION taven_assert_geometry_usage_available()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    source_id uuid;
+    source_deadline timestamptz;
+    source_hold "retention_hold";
+    source_deleted_at timestamptz;
+    geometry_deleted_at timestamptz;
+BEGIN
+    SELECT geometry."source_model_file_id"
+    INTO source_id
+    FROM "model_geometries" geometry
+    WHERE geometry."id" = NEW."model_geometry_id";
+
+    IF NOT FOUND THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT
+        source."source_delete_after",
+        source."retention_hold",
+        source."deleted_at"
+    INTO source_deadline, source_hold, source_deleted_at
+    FROM "model_files" source
+    WHERE source."id" = source_id
+    FOR SHARE;
+
+    IF NOT FOUND THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT geometry."deleted_at"
+    INTO geometry_deleted_at
+    FROM "model_geometries" geometry
+    WHERE geometry."id" = NEW."model_geometry_id"
+    FOR SHARE;
+
+    IF source_deleted_at IS NOT NULL
+       OR geometry_deleted_at IS NOT NULL
+       OR (source_hold = 'NONE' AND source_deadline <= clock_timestamp()) THEN
+        RAISE EXCEPTION '% cannot use geometry % after source % expires or is deleted', TG_TABLE_NAME, NEW."model_geometry_id", source_id
+            USING ERRCODE = '23514', CONSTRAINT = 'model_geometry_source_available_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "slice_results_geometry_source_available"
+    BEFORE INSERT ON "slice_results"
+    FOR EACH ROW EXECUTE FUNCTION taven_assert_geometry_usage_available();
+CREATE TRIGGER "candidate_resource_estimates_geometry_source_available"
+    BEFORE INSERT ON "candidate_resource_estimates"
+    FOR EACH ROW EXECUTE FUNCTION taven_assert_geometry_usage_available();
+
+CREATE FUNCTION taven_validate_model_geometry_deletion()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    source_deleted_at timestamptz;
+BEGIN
+    IF NEW."deleted_at" IS NOT DISTINCT FROM OLD."deleted_at" THEN
+        RETURN NEW;
+    END IF;
+
+    IF OLD."deleted_at" IS NOT NULL OR NEW."deleted_at" IS NULL THEN
+        RAISE EXCEPTION 'model geometry deletion marker is immutable once set'
+            USING ERRCODE = '23514', CONSTRAINT = 'model_geometry_deletion_binding_check';
+    END IF;
+
+    SELECT source."deleted_at"
+    INTO source_deleted_at
+    FROM "model_files" source
+    WHERE source."id" = NEW."source_model_file_id";
+
+    IF source_deleted_at IS NULL OR NEW."deleted_at" IS DISTINCT FROM source_deleted_at THEN
+        RAISE EXCEPTION 'model geometry deletion must match its source deletion'
+            USING ERRCODE = '23514', CONSTRAINT = 'model_geometry_deletion_binding_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "model_geometries_deletion_binding"
+    BEFORE UPDATE ON "model_geometries"
+    FOR EACH ROW EXECUTE FUNCTION taven_validate_model_geometry_deletion();
+
+CREATE FUNCTION taven_propagate_model_file_deletion()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD."deleted_at" IS NULL AND NEW."deleted_at" IS NOT NULL THEN
+        UPDATE "model_geometries"
+        SET "deleted_at" = NEW."deleted_at"
+        WHERE "source_model_file_id" = NEW."id"
+          AND "deleted_at" IS NULL;
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "model_files_propagate_deletion"
+    AFTER UPDATE OF "deleted_at" ON "model_files"
+    FOR EACH ROW EXECUTE FUNCTION taven_propagate_model_file_deletion();
 
 CREATE FUNCTION taven_assert_phase_plan_snapshot_expiry()
 RETURNS trigger
@@ -1337,7 +1489,7 @@ CREATE TRIGGER "revision_identities_immutable"
     FOR EACH ROW EXECUTE FUNCTION taven_protect_row_payload('');
 CREATE TRIGGER "model_geometries_immutable"
     BEFORE UPDATE OR DELETE ON "model_geometries"
-    FOR EACH ROW EXECUTE FUNCTION taven_protect_row_payload('');
+    FOR EACH ROW EXECUTE FUNCTION taven_protect_row_payload('deleted_at');
 CREATE TRIGGER "print_config_revisions_immutable"
     BEFORE UPDATE OR DELETE ON "print_config_revisions"
     FOR EACH ROW EXECUTE FUNCTION taven_protect_row_payload('');
@@ -1719,8 +1871,12 @@ CREATE FUNCTION taven_require_candidate_intervals_before_planning()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    required_seconds bigint;
+    covered_seconds numeric;
 BEGIN
-    PERFORM 1
+    SELECT "required_machine_seconds"
+    INTO required_seconds
     FROM "candidate_resource_estimates"
     WHERE "id" = NEW."candidate_resource_estimate_id"
       AND "node_id" = NEW."node_id"
@@ -1744,14 +1900,21 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_candidate_eligibility_check';
     END IF;
 
-    IF NOT EXISTS (
-        SELECT 1
+    SELECT COALESCE(
+        SUM(EXTRACT(EPOCH FROM upper(covered_range) - lower(covered_range))),
+        0
+    )
+    INTO covered_seconds
+    FROM (
+        SELECT unnest(range_agg(tstzrange("starts_at", "ends_at", '[)'))) AS covered_range
         FROM "candidate_capacity_intervals"
         WHERE "candidate_resource_estimate_id" = NEW."candidate_resource_estimate_id"
           AND "node_id" = NEW."node_id"
-    ) THEN
-        RAISE EXCEPTION 'planned candidate must define at least one capacity interval'
-            USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_candidate_intervals_check';
+    ) normalized_intervals;
+
+    IF covered_seconds < required_seconds THEN
+        RAISE EXCEPTION 'planned candidate capacity covers % seconds but requires %', covered_seconds, required_seconds
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_candidate_capacity_coverage_check';
     END IF;
 
     RETURN NEW;
@@ -1799,6 +1962,7 @@ DECLARE
     deadline_column text := TG_ARGV[0];
     old_deadline timestamptz;
     new_deadline timestamptz;
+    checked_at timestamptz := clock_timestamp();
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION '% metadata is retained after object deletion', TG_TABLE_NAME
@@ -1818,6 +1982,20 @@ BEGIN
     IF new_deadline < old_deadline THEN
         RAISE EXCEPTION '% deletion deadline cannot be shortened', TG_TABLE_NAME
             USING ERRCODE = '23514', CONSTRAINT = 'asset_deadline_monotonic_check';
+    END IF;
+
+    IF OLD."deleted_at" IS NULL
+       AND NEW."deleted_at" IS NOT NULL
+       AND (
+           NEW."retention_hold" <> 'NONE'
+           OR new_deadline > checked_at
+       ) THEN
+        RAISE EXCEPTION '% cannot be marked deleted before its deadline or while retained', TG_TABLE_NAME
+            USING ERRCODE = '23514', CONSTRAINT = 'asset_deletion_eligibility_check';
+    END IF;
+
+    IF OLD."deleted_at" IS NULL AND NEW."deleted_at" IS NOT NULL THEN
+        NEW."deleted_at" := checked_at;
     END IF;
 
     IF OLD."deleted_at" IS NOT NULL AND NEW."deleted_at" IS DISTINCT FROM OLD."deleted_at" THEN
@@ -2231,10 +2409,13 @@ BEGIN
                 ON calibration."id" = production."machine_calibration_id"
                AND calibration."node_id" = production."node_id"
                AND calibration."machine_id" = production."machine_id"
+              JOIN "print_config_revisions" print_config
+                ON print_config."id" = production."print_config_revision_id"
               WHERE machine_profile."id" = production."machine_profile_id"
                 AND machine_profile."machine_capability_id" = machine."machine_capability_id"
                 AND machine_profile."nozzle_diameter_micrometers" = machine."installed_nozzle_micrometers"
                 AND machine_profile."material" = inventory."material"
+                AND machine_profile."quality" = print_config."quality"
                 AND machine_profile."state" = 'ACTIVE'
                 AND calibration."state" = 'ACTIVE'
                 AND machine."status" = 'ACTIVE'

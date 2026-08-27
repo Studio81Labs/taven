@@ -199,18 +199,19 @@ model ModelFile {
 }
 
 model ModelGeometry {
-  id                     String   @id @default(uuid()) @db.Uuid
-  sourceModelFileId      String   @map("source_model_file_id") @db.Uuid
-  sourceSelector         String?  @map("source_selector") @db.Text
-  canonicalObjectKey     String   @unique @map("canonical_object_key") @db.Text
-  geometryHash           String   @map("geometry_hash") @db.VarChar(64)
-  canonicalizerRevision  String   @map("canonicalizer_revision") @db.VarChar(64)
-  volumeCubicMicrometers BigInt   @map("volume_cubic_micrometers")
-  boundsXMicrometers     BigInt   @map("bounds_x_micrometers")
-  boundsYMicrometers     BigInt   @map("bounds_y_micrometers")
-  boundsZMicrometers     BigInt   @map("bounds_z_micrometers")
-  triangleCount          Int      @map("triangle_count")
-  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                     String    @id @default(uuid()) @db.Uuid
+  sourceModelFileId      String    @map("source_model_file_id") @db.Uuid
+  sourceSelector         String?   @map("source_selector") @db.Text
+  canonicalObjectKey     String    @unique @map("canonical_object_key") @db.Text
+  geometryHash           String    @map("geometry_hash") @db.VarChar(64)
+  canonicalizerRevision  String    @map("canonicalizer_revision") @db.VarChar(64)
+  volumeCubicMicrometers BigInt    @map("volume_cubic_micrometers")
+  boundsXMicrometers     BigInt    @map("bounds_x_micrometers")
+  boundsYMicrometers     BigInt    @map("bounds_y_micrometers")
+  boundsZMicrometers     BigInt    @map("bounds_z_micrometers")
+  triangleCount          Int       @map("triangle_count")
+  deletedAt              DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   sourceModelFile    ModelFile                   @relation(fields: [sourceModelFileId], references: [id], onDelete: Restrict)
   preflightFindings  PreflightFinding[]

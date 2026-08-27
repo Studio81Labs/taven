@@ -7,6 +7,7 @@ export type PersistenceFoundation = {
   nodeId: string;
   machineId: string;
   inventoryId: string;
+  modelFileId: string;
   modelGeometryId: string;
   sliceResultId: string;
   printConfigRevisionId: string;
@@ -27,9 +28,15 @@ export type ProductionReservationFixture = {
   inventoryReservationId: string;
   candidateCapacityIntervalId: string;
   candidateCapacityIntervalIds: string[];
+  requiredMachineSeconds: number;
 };
 
 type CapacityInterval = { startsAt: Date; endsAt: Date };
+type SourceRetention = {
+  uploadedAt?: Date;
+  deleteAfter?: Date;
+  hold?: "NONE" | "ACTIVE_ORDER" | "ACTIVE_CLAIM" | "LEGAL";
+};
 
 const createdAt = new Date("2026-08-27T12:00:00.000Z");
 const expiresAt = new Date("2030-08-27T12:00:00.000Z");
@@ -53,7 +60,10 @@ export class PersistenceFactory {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
   }
 
-  async createFoundation(name = "foundation"): Promise<PersistenceFoundation> {
+  async createFoundation(
+    name = "foundation",
+    sourceRetention: SourceRetention = {},
+  ): Promise<PersistenceFoundation> {
     const nodeId = this.id(`${name}:node`);
     const capabilityId = this.id(`${name}:capability`);
     const machineId = this.id(`${name}:machine`);
@@ -125,7 +135,7 @@ export class PersistenceFactory {
       ],
     );
     await this.sql.query(
-      'INSERT INTO "model_files" ("id", "format", "original_filename", "storage_object_key", "content_hash", "size_bytes", "uploaded_at", "source_delete_after") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+      'INSERT INTO "model_files" ("id", "format", "original_filename", "storage_object_key", "content_hash", "size_bytes", "uploaded_at", "source_delete_after", "retention_hold") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
       [
         modelFileId,
         "STL",
@@ -133,8 +143,9 @@ export class PersistenceFactory {
         `models/${this.scope}/${name}.stl`,
         digest,
         1,
-        createdAt,
-        expiresAt,
+        sourceRetention.uploadedAt ?? createdAt,
+        sourceRetention.deleteAfter ?? expiresAt,
+        sourceRetention.hold ?? "NONE",
       ],
     );
     await this.sql.query(
@@ -228,6 +239,7 @@ export class PersistenceFactory {
       nodeId,
       machineId,
       inventoryId,
+      modelFileId,
       modelGeometryId: geometryId,
       sliceResultId,
       printConfigRevisionId,
@@ -246,6 +258,7 @@ export class PersistenceFactory {
       startsAt: new Date("2027-01-01T10:00:00.000Z"),
       endsAt: new Date("2027-01-01T11:00:00.000Z"),
     },
+    requiredMachineSeconds = 60,
   ): Promise<ProductionReservationFixture> {
     const candidateId = this.id(`${name}:candidate`);
     const capacityIntervals = Array.isArray(intervalOrIntervals)
@@ -281,7 +294,7 @@ export class PersistenceFactory {
         this.id(`${name}:future-arrangement-revision`),
         1,
         60,
-        60,
+        requiredMachineSeconds,
         JSON.stringify({}),
         createdAt,
         expiresAt,
@@ -317,6 +330,7 @@ export class PersistenceFactory {
       inventoryReservationId,
       candidateCapacityIntervalId,
       candidateCapacityIntervalIds,
+      requiredMachineSeconds,
     };
   }
 
@@ -424,7 +438,7 @@ export class PersistenceFactory {
         foundation.machineProfileId,
         foundation.machineCalibrationId,
         60,
-        60,
+        planned.requiredMachineSeconds,
         JSON.stringify(resourceSnapshot),
         status,
         expiresAt,

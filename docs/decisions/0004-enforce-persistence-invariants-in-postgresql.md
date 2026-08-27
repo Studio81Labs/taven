@@ -51,7 +51,11 @@ required and cannot be replaced by a hash-only association. Source-derived
 records carry the source-file identity needed to enforce the same lineage.
 Geometry hashes are indexed for cache lookup but are not globally unique,
 because identical bodies uploaded as distinct source files retain distinct
-lineage and retention records.
+lineage and retention records. A geometry can be created or used by a new
+slice/estimate only while its source deadline is in the future or an explicit
+retention hold is active. Source cleanup propagates the source deletion
+timestamp to an immutable geometry deletion marker, retaining hashes and
+lineage for audit while preventing further reconstructed use.
 Row checks require an upload timestamp and a deletion deadline, with the
 deadline no earlier than the upload/creation instant. An upload cannot become
 persisted without its initial deadline.
@@ -111,7 +115,10 @@ snapshots. Production, inventory, and one-or-more capacity reservation rows
 copy and protect those selections. Composite foreign keys prove set, plan,
 machine, and node ownership; unique indexes allow each planned key and slot
 only once within its scope, and a partial unique index allows only one active
-reservation set per plan.
+reservation set per plan. Candidate creation requires the immutable print
+configuration and machine profile to select the same quality. Before planning,
+the union of a candidate's capacity intervals must cover its declared machine
+seconds, so overlapping intervals cannot double-count capacity.
 
 A deferred constraint trigger compares the reservation children with the
 authoritative plan. Every required planned key must have exactly one complete
