@@ -505,7 +505,31 @@ function requireAtomicConfirmationActivation<S extends string>(
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
   const phaseReservationSetId = command.context?.phaseReservationSetId;
+  const orderPreviousResultId =
+    command.context?.confirmationOrderPreviousResultId;
+  const phasePreviousResultId =
+    command.context?.confirmationPhasePreviousResultId;
+  const orderStateKey =
+    command.context?.confirmationOrderCurrentStateCommandKey;
+  const phaseStateKey =
+    command.context?.confirmationPhaseCurrentStateCommandKey;
+  const expectedOrderValue = command.context?.confirmationExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const expectedPhaseValue = command.context?.confirmationExpectedPhase;
+  const expectedPhase =
+    typeof expectedPhaseValue === "object" &&
+    expectedPhaseValue !== null &&
+    !Array.isArray(expectedPhaseValue)
+      ? (expectedPhaseValue as Readonly<Record<string, unknown>>)
+      : undefined;
   if (
+    (lifecycle === "Order" && command.aggregateId !== orderId) ||
+    (lifecycle === "OrderPhase(single)" && command.aggregateId !== phaseId) ||
     typeof paymentId !== "string" ||
     paymentId.trim().length === 0 ||
     command.context?.confirmationActivationPaymentId !== paymentId ||
@@ -526,7 +550,31 @@ function requireAtomicConfirmationActivation<S extends string>(
     typeof phaseReservationSetId !== "string" ||
     phaseReservationSetId.trim().length === 0 ||
     command.context?.confirmationActivationPhaseReservationSetId !==
-      phaseReservationSetId
+      phaseReservationSetId ||
+    typeof orderPreviousResultId !== "string" ||
+    orderPreviousResultId.trim().length === 0 ||
+    typeof phasePreviousResultId !== "string" ||
+    phasePreviousResultId.trim().length === 0 ||
+    typeof orderStateKey !== "string" ||
+    orderStateKey.trim().length === 0 ||
+    typeof phaseStateKey !== "string" ||
+    phaseStateKey.trim().length === 0 ||
+    (lifecycle === "Order" &&
+      command.currentStateCommandKey !== orderStateKey) ||
+    (lifecycle === "OrderPhase(single)" &&
+      command.currentStateCommandKey !== phaseStateKey) ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.phaseId !== phaseId ||
+    expectedOrder.status !== "quoted" ||
+    expectedOrder.resultId !== orderPreviousResultId ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    expectedOrder.immutable !== true ||
+    expectedPhase?.id !== phaseId ||
+    expectedPhase.orderId !== orderId ||
+    expectedPhase.status !== "quoted" ||
+    expectedPhase.resultId !== phasePreviousResultId ||
+    expectedPhase.currentStateCommandKey !== phaseStateKey ||
+    expectedPhase.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -1041,6 +1089,8 @@ function requireAtomicOrderPhaseQcCompletion<S extends string>(
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
   if (
+    (lifecycle === "Order" && command.aggregateId !== orderId) ||
+    (lifecycle === "OrderPhase(single)" && command.aggregateId !== phaseId) ||
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
     command.context?.qcCompletionOrderId !== orderId ||
@@ -1773,7 +1823,17 @@ function requireExactPendingCaptureWindow<S extends string>(
   const windowId = context?.paymentCaptureWindowId;
   const windowResultId = context?.paymentCaptureWindowResultId;
   const evaluationResultId = context?.captureEvaluationResultId;
+  const previousPaymentResultId =
+    context?.captureEvaluationPreviousPaymentResultId;
+  const stateKey = context?.captureEvaluationCurrentStateCommandKey;
   const evaluatedAt = context?.captureEvaluatedAt;
+  const expectedPaymentValue = context?.captureEvaluationExpectedPayment;
+  const expectedPayment =
+    typeof expectedPaymentValue === "object" &&
+    expectedPaymentValue !== null &&
+    !Array.isArray(expectedPaymentValue)
+      ? (expectedPaymentValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const windowValue = context?.paymentCaptureWindow;
   const window =
     typeof windowValue === "object" &&
@@ -1815,6 +1875,8 @@ function requireExactPendingCaptureWindow<S extends string>(
     !nonBlank(windowId) ||
     !nonBlank(windowResultId) ||
     !nonBlank(evaluationResultId) ||
+    !nonBlank(previousPaymentResultId) ||
+    !nonBlank(stateKey) ||
     !nonBlank(providerEventId) ||
     !nonBlank(providerTransactionId) ||
     !(opensAt instanceof Instant) ||
@@ -1823,6 +1885,16 @@ function requireExactPendingCaptureWindow<S extends string>(
     !(persistedCutoff instanceof Instant) ||
     opensAt.compare(cutoffAt) >= 0 ||
     !cutoffAt.equals(persistedCutoff) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedPayment?.id !== paymentId ||
+    expectedPayment.orderId !== orderId ||
+    expectedPayment.phaseId !== phaseId ||
+    expectedPayment.role !== role ||
+    expectedPayment.status !== "pending" ||
+    expectedPayment.resultId !== previousPaymentResultId ||
+    expectedPayment.currentStateCommandKey !== stateKey ||
+    expectedPayment.immutable !== true ||
     window?.id !== windowId ||
     window.paymentId !== paymentId ||
     window.orderId !== orderId ||
@@ -1845,6 +1917,7 @@ function requireExactPendingCaptureWindow<S extends string>(
     !event.occurredAt.equals(evaluatedAt) ||
     event.authenticated !== true ||
     event.verified !== true ||
+    event.immutable !== true ||
     event.resultId !== evaluationResultId ||
     context?.captureEvaluationPaymentResultId !== evaluationResultId ||
     context?.captureEvaluationProviderEventResultId !== evaluationResultId ||

@@ -99,6 +99,18 @@ const permittedContext = {
   },
   captureEvaluatedAt: Instant.parse("2026-01-01T00:30:00.000Z"),
   captureEvaluationResultId: "capture-evaluation-result-1",
+  captureEvaluationPreviousPaymentResultId: "payment-pending-result-1",
+  captureEvaluationCurrentStateCommandKey: "payment-pending-command-1",
+  captureEvaluationExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "pending",
+    resultId: "payment-pending-result-1",
+    currentStateCommandKey: "payment-pending-command-1",
+    immutable: true,
+  },
   captureEvaluationPaymentId: "payment-1",
   captureEvaluationOrderId: "order-1",
   captureEvaluationPhaseId: "phase-1",
@@ -114,6 +126,7 @@ const permittedContext = {
     occurredAt: Instant.parse("2026-01-01T00:30:00.000Z"),
     authenticated: true,
     verified: true,
+    immutable: true,
     resultId: "capture-evaluation-result-1",
   },
   captureEvaluationPaymentResultId: "capture-evaluation-result-1",
@@ -361,6 +374,26 @@ const permittedContext = {
   confirmationOrderTargetStatus: "confirmed",
   confirmationPhasePreviousStatus: "quoted",
   confirmationPhaseTargetStatus: "active",
+  confirmationOrderPreviousResultId: "order-quoted-result-1",
+  confirmationPhasePreviousResultId: "phase-quoted-result-1",
+  confirmationOrderCurrentStateCommandKey: "order-quoted-command-1",
+  confirmationPhaseCurrentStateCommandKey: "phase-quoted-command-1",
+  confirmationExpectedOrder: {
+    id: "order-1",
+    phaseId: "phase-1",
+    status: "quoted",
+    resultId: "order-quoted-result-1",
+    currentStateCommandKey: "order-quoted-command-1",
+    immutable: true,
+  },
+  confirmationExpectedPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    status: "quoted",
+    resultId: "phase-quoted-result-1",
+    currentStateCommandKey: "phase-quoted-command-1",
+    immutable: true,
+  },
   confirmationActivationAtomic: true,
   initialCaptureConfirmationAtomic: true,
   phaseReservationSetPlannedJobKeys: ["planned-job-1", "planned-job-2"],
@@ -2871,6 +2904,32 @@ function commandAnchors(
 ): Readonly<{ aggregateId?: string; currentStateCommandKey?: string }> {
   if (
     policy.name === "Order" &&
+    ((current === "quoted" && target === "confirmed") ||
+      ((current === "in_production" || current === "recovery_pending") &&
+        target === "qc_passed"))
+  ) {
+    return {
+      aggregateId: "order-1",
+      ...(current === "quoted" && target === "confirmed"
+        ? { currentStateCommandKey: "order-quoted-command-1" }
+        : {}),
+    };
+  }
+  if (
+    policy.name === "OrderPhase(single)" &&
+    ((current === "quoted" && target === "active") ||
+      ((current === "in_production" || current === "recovery_pending") &&
+        target === "qc_passed"))
+  ) {
+    return {
+      aggregateId: "phase-1",
+      ...(current === "quoted" && target === "active"
+        ? { currentStateCommandKey: "phase-quoted-command-1" }
+        : {}),
+    };
+  }
+  if (
+    policy.name === "Order" &&
     (target === "completed" ||
       target === "partially_fulfilled" ||
       target === "refunded" ||
@@ -2886,6 +2945,16 @@ function commandAnchors(
       target === "cancelled_settled")
   ) {
     return { aggregateId: "phase-1" };
+  }
+  if (
+    policy.name === "Payment" &&
+    current === "pending" &&
+    target === "captured"
+  ) {
+    return {
+      aggregateId: "payment-1",
+      currentStateCommandKey: "payment-pending-command-1",
+    };
   }
   if (
     policy.name === "Payment" &&
@@ -3961,6 +4030,7 @@ describe("v0 lifecycle policy tables", () => {
             current,
             target: "qc_passed",
             idempotencyKey: `qc-slot-coordinated-subset-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
             context: {
               ...context,
               expectedQcFulfilmentSlotIds: ["slot-1"],
@@ -3973,6 +4043,7 @@ describe("v0 lifecycle policy tables", () => {
             current,
             target: "qc_passed",
             idempotencyKey: `qc-slot-omission-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
             context: {
               ...context,
               qcFulfilmentSlots: [permittedContext.qcFulfilmentSlots[0]],
@@ -3984,6 +4055,7 @@ describe("v0 lifecycle policy tables", () => {
             current,
             target: "qc_passed",
             idempotencyKey: `qc-slot-coordinated-set-substitution-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
             context: {
               ...context,
               qcAuthoritativeFulfilmentSlotSetId: "qc-slot-set-2",
@@ -4013,6 +4085,7 @@ describe("v0 lifecycle policy tables", () => {
             current,
             target: "qc_passed",
             idempotencyKey: `qc-slot-duplicate-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
             context: {
               ...context,
               qcFulfilmentSlots: [
@@ -4027,6 +4100,7 @@ describe("v0 lifecycle policy tables", () => {
             current,
             target: "qc_passed",
             idempotencyKey: `qc-slot-reordered-${policy.name}-${current}`,
+            ...commandAnchors(policy, current, "qc_passed"),
             context: {
               ...context,
               qcFulfilmentSlots: [
@@ -4575,6 +4649,10 @@ describe("v0 lifecycle policy tables", () => {
     ["confirmationOrderTargetStatus", "quoted"],
     ["confirmationPhasePreviousStatus", "active"],
     ["confirmationPhaseTargetStatus", "quoted"],
+    ["confirmationOrderPreviousResultId", "another-result"],
+    ["confirmationPhasePreviousResultId", "another-result"],
+    ["confirmationOrderCurrentStateCommandKey", "another-command"],
+    ["confirmationPhaseCurrentStateCommandKey", "another-command"],
     ["completeReservationCaptured", false],
     ["confirmationActivationAtomic", false],
     ["phaseReservationSetPlannedJobKeys", []],
@@ -4607,6 +4685,7 @@ describe("v0 lifecycle policy tables", () => {
     (paymentRole) => {
       expect(
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "captured"),
           current: "pending",
           target: "captured",
           idempotencyKey: `initial-capture-activation-${paymentRole}`,
@@ -4614,6 +4693,10 @@ describe("v0 lifecycle policy tables", () => {
             ...contextForTransition("captured", "pending"),
             paymentRole,
             initialPaymentRole: paymentRole,
+            captureEvaluationExpectedPayment: {
+              ...permittedContext.captureEvaluationExpectedPayment,
+              role: paymentRole,
+            },
             paymentCaptureWindow: {
               ...permittedContext.paymentCaptureWindow,
               role: paymentRole,
@@ -4640,6 +4723,7 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "captured"),
           current: "pending",
           target: "captured",
           idempotencyKey: `initial-capture-activation-${field}`,
@@ -4655,6 +4739,7 @@ describe("v0 lifecycle policy tables", () => {
   it("captures a balance Payment without reactivating initial checkout", () => {
     expect(
       transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "captured"),
         current: "pending",
         target: "captured",
         idempotencyKey: "balance-capture-without-checkout-activation",
@@ -4662,6 +4747,10 @@ describe("v0 lifecycle policy tables", () => {
           ...contextForTransition("captured", "pending"),
           paymentRole: "balance",
           balancePaymentRole: "balance",
+          captureEvaluationExpectedPayment: {
+            ...permittedContext.captureEvaluationExpectedPayment,
+            role: "balance",
+          },
           paymentCaptureWindow: {
             ...permittedContext.paymentCaptureWindow,
             role: "balance",
@@ -4686,6 +4775,7 @@ describe("v0 lifecycle policy tables", () => {
     const base = contextForTransition("captured", "pending");
     expect(
       transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "captured"),
         current: "pending",
         target: "captured",
         idempotencyKey: `capture-window-${evaluatedAt.toISOString()}`,
@@ -4711,6 +4801,7 @@ describe("v0 lifecycle policy tables", () => {
       const base = contextForTransition("captured", "pending");
       expect(() =>
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "captured"),
           current: "pending",
           target: "captured",
           idempotencyKey: `capture-window-rejected-${evaluatedAt.toISOString()}`,
@@ -4731,6 +4822,8 @@ describe("v0 lifecycle policy tables", () => {
     ["paymentCaptureWindowId", " "],
     ["paymentCaptureWindowResultId", " "],
     ["captureEvaluationResultId", " "],
+    ["captureEvaluationPreviousPaymentResultId", "another-result"],
+    ["captureEvaluationCurrentStateCommandKey", "another-command"],
     ["captureEvaluatedAt", "2026-01-01T00:30:00.000Z"],
     ["captureEvaluationPaymentId", "another-payment"],
     ["captureEvaluationOrderId", "another-order"],
@@ -4749,6 +4842,7 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "captured"),
           current: "pending",
           target: "captured",
           idempotencyKey: `capture-window-invalid-${field}`,
@@ -4781,6 +4875,7 @@ describe("v0 lifecycle policy tables", () => {
     ],
     ["captureProviderEvent", "authenticated", false],
     ["captureProviderEvent", "verified", false],
+    ["captureProviderEvent", "immutable", false],
     ["captureProviderEvent", "resultId", "another-result"],
   ] as const)(
     "rejects capture-window evidence with invalid %s.%s",
@@ -4789,6 +4884,7 @@ describe("v0 lifecycle policy tables", () => {
       const record = base[recordField] as Readonly<Record<string, unknown>>;
       expect(() =>
         transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "captured"),
           current: "pending",
           target: "captured",
           idempotencyKey: `capture-window-invalid-${recordField}-${field}`,
@@ -4806,6 +4902,8 @@ describe("v0 lifecycle policy tables", () => {
     const evaluatedAt = permittedContext.checkoutCaptureExpiresAt;
     expect(
       transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        currentStateCommandKey: "payment-pending-command-1",
         current: "pending",
         target: "refund_pending",
         idempotencyKey: "pending-late-capture-compensation",
@@ -7013,6 +7111,7 @@ describe("v0 lifecycle policy tables", () => {
     (_lifecycle, policy) => {
       expect(() =>
         transition(policy, {
+          ...commandAnchors(policy, "recovery_pending", "qc_passed"),
           current: "recovery_pending",
           target: "qc_passed",
           idempotencyKey: "recovery-qc-readiness-missing",
@@ -7042,6 +7141,7 @@ describe("v0 lifecycle policy tables", () => {
           current: "recovery_pending",
           target: "qc_passed",
           idempotencyKey: "recovery-qc-readiness-verified",
+          ...commandAnchors(policy, "recovery_pending", "qc_passed"),
           context: contextForTransition("qc_passed", "recovery_pending"),
         }),
       ).toEqual({
@@ -8319,6 +8419,405 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it.each([
+    [orderPolicy, "quoted", "confirmed", "order-1", "order-2"],
+    [singleOrderPhasePolicy, "quoted", "active", "phase-1", "phase-2"],
+  ] as const)(
+    "binds %s confirmation activation to the selected aggregate and state",
+    (policy, current, target, aggregateId, foreignAggregateId) => {
+      const context = contextForTransition(target, current);
+      const anchors = commandAnchors(policy, current, target);
+      const command = {
+        current,
+        target,
+        idempotencyKey: `confirmation-selected-${policy.name}`,
+        context,
+      };
+      expect(() =>
+        transition(policy, {
+          ...command,
+          currentStateCommandKey: anchors.currentStateCommandKey,
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(policy, {
+          ...command,
+          aggregateId: foreignAggregateId,
+          currentStateCommandKey: anchors.currentStateCommandKey,
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(policy, {
+          ...command,
+          aggregateId,
+          currentStateCommandKey: "foreign-command",
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(transition(policy, { ...command, ...anchors })).toEqual({
+        kind: "changed",
+        previous: current,
+        current: target,
+      });
+    },
+  );
+
+  it.each([
+    [orderPolicy, "quoted", "confirmed", "confirmationExpectedOrder"],
+    [singleOrderPhasePolicy, "quoted", "active", "confirmationExpectedPhase"],
+  ] as const)(
+    "rejects %s confirmation with a stale immutable current-state snapshot",
+    (policy, current, target, recordField) => {
+      const context = contextForTransition(target, current);
+      const record = context[recordField] as Readonly<Record<string, unknown>>;
+      for (const [field, value] of [
+        ["id", "foreign-id"],
+        [
+          recordField === "confirmationExpectedOrder" ? "phaseId" : "orderId",
+          "foreign-owner",
+        ],
+        ["status", "active"],
+        ["resultId", "foreign-result"],
+        ["currentStateCommandKey", "foreign-command"],
+        ["immutable", false],
+      ] as const) {
+        expect(() =>
+          transition(policy, {
+            ...commandAnchors(policy, current, target),
+            current,
+            target,
+            idempotencyKey: `confirmation-snapshot-${policy.name}-${field}`,
+            context: {
+              ...context,
+              [recordField]: { ...record, [field]: value },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+    },
+  );
+
+  it("rejects coordinated foreign Order confirmation evidence", () => {
+    const context = contextForTransition("confirmed", "quoted");
+    expect(() =>
+      transition(orderPolicy, {
+        aggregateId: "order-1",
+        currentStateCommandKey: "order-quoted-command-1",
+        current: "quoted",
+        target: "confirmed",
+        idempotencyKey: "confirmation-foreign-order-context",
+        context: {
+          ...context,
+          orderId: "order-2",
+          initialPaymentOrderId: "order-2",
+          confirmationActivationOrderId: "order-2",
+          confirmationExpectedOrder: {
+            ...context.confirmationExpectedOrder,
+            id: "order-2",
+          },
+          confirmationExpectedPhase: {
+            ...context.confirmationExpectedPhase,
+            orderId: "order-2",
+          },
+          confirmationReservationJobLinks:
+            context.confirmationReservationJobLinks.map((link) => ({
+              ...link,
+              reservationOrderId: "order-2",
+              jobOrderId: "order-2",
+            })),
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects coordinated foreign phase activation evidence", () => {
+    const context = contextForTransition("active", "quoted");
+    expect(() =>
+      transition(singleOrderPhasePolicy, {
+        aggregateId: "phase-1",
+        currentStateCommandKey: "phase-quoted-command-1",
+        current: "quoted",
+        target: "active",
+        idempotencyKey: "confirmation-foreign-phase-context",
+        context: {
+          ...context,
+          phaseId: "phase-2",
+          confirmationActivationPhaseId: "phase-2",
+          confirmationExpectedOrder: {
+            ...context.confirmationExpectedOrder,
+            phaseId: "phase-2",
+          },
+          confirmationExpectedPhase: {
+            ...context.confirmationExpectedPhase,
+            id: "phase-2",
+          },
+          confirmationReservationJobLinks:
+            context.confirmationReservationJobLinks.map((link) => ({
+              ...link,
+              reservationPhaseId: "phase-2",
+              jobPhaseId: "phase-2",
+            })),
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    [orderPolicy, "in_production", "order-1", "order-2"],
+    [orderPolicy, "recovery_pending", "order-1", "order-2"],
+    [singleOrderPhasePolicy, "in_production", "phase-1", "phase-2"],
+    [singleOrderPhasePolicy, "recovery_pending", "phase-1", "phase-2"],
+  ] as const)(
+    "binds %s %s QC completion to aggregate %s",
+    (policy, current, aggregateId, foreignAggregateId) => {
+      const command = {
+        current,
+        target: "qc_passed" as const,
+        idempotencyKey: `qc-selected-${policy.name}-${current}`,
+        context: contextForTransition("qc_passed", current),
+      };
+      expect(() => transition(policy, command)).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(policy, { ...command, aggregateId: foreignAggregateId }),
+      ).toThrow(TransitionGuardError);
+      expect(transition(policy, { ...command, aggregateId })).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "qc_passed",
+      });
+    },
+  );
+
+  it.each(["full", "deposit", "balance"] as const)(
+    "binds %s capture evaluation to the selected pending Payment",
+    (paymentRole) => {
+      const base = contextForTransition("captured", "pending");
+      const context = {
+        ...base,
+        paymentRole,
+        ...(paymentRole === "balance"
+          ? {
+              balancePaymentRole: "balance",
+              confirmationActivationAtomic: false,
+              initialCaptureConfirmationAtomic: false,
+            }
+          : { initialPaymentRole: paymentRole }),
+        captureEvaluationExpectedPayment: {
+          ...base.captureEvaluationExpectedPayment,
+          role: paymentRole,
+        },
+        paymentCaptureWindow: {
+          ...base.paymentCaptureWindow,
+          role: paymentRole,
+          kind: paymentRole === "balance" ? "balance_deadline" : "checkout",
+          cutoffAt:
+            paymentRole === "balance"
+              ? permittedContext.balanceDueAt
+              : permittedContext.checkoutCaptureExpiresAt,
+        },
+      };
+      const command = {
+        current: "pending" as const,
+        target: "captured" as const,
+        idempotencyKey: `capture-selected-${paymentRole}`,
+        context,
+      };
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          currentStateCommandKey: "payment-pending-command-1",
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          aggregateId: "payment-2",
+          currentStateCommandKey: "payment-pending-command-1",
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          aggregateId: "payment-1",
+          currentStateCommandKey: "foreign-command",
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(
+        transition(paymentPolicy, {
+          ...command,
+          ...commandAnchors(paymentPolicy, "pending", "captured"),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "pending",
+        current: "captured",
+      });
+    },
+  );
+
+  it.each([
+    ["id", "payment-2"],
+    ["orderId", "order-2"],
+    ["phaseId", "phase-2"],
+    ["role", "deposit"],
+    ["status", "captured"],
+    ["resultId", "foreign-result"],
+    ["currentStateCommandKey", "foreign-command"],
+    ["immutable", false],
+  ] as const)(
+    "rejects capture with invalid immutable pending Payment %s",
+    (field, value) => {
+      const context = contextForTransition("captured", "pending");
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "pending", "captured"),
+          current: "pending",
+          target: "captured",
+          idempotencyKey: `capture-expected-payment-${field}`,
+          context: {
+            ...context,
+            captureEvaluationExpectedPayment: {
+              ...context.captureEvaluationExpectedPayment,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects coordinated foreign initial-Payment capture evidence", () => {
+    const context = contextForTransition("captured", "pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        currentStateCommandKey: "payment-pending-command-1",
+        current: "pending",
+        target: "captured",
+        idempotencyKey: "capture-coordinated-foreign-payment",
+        context: {
+          ...context,
+          paymentId: "payment-2",
+          initialPaymentId: "payment-2",
+          confirmationActivationPaymentId: "payment-2",
+          captureEvaluationPaymentId: "payment-2",
+          providerEventPaymentId: "payment-2",
+          captureEvaluationExpectedPayment: {
+            ...context.captureEvaluationExpectedPayment,
+            id: "payment-2",
+          },
+          paymentCaptureWindow: {
+            ...context.paymentCaptureWindow,
+            paymentId: "payment-2",
+          },
+          captureProviderEvent: {
+            ...context.captureProviderEvent,
+            paymentId: "payment-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects coordinated foreign balance-Payment capture evidence", () => {
+    const base = contextForTransition("captured", "pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        currentStateCommandKey: "payment-pending-command-1",
+        current: "pending",
+        target: "captured",
+        idempotencyKey: "balance-capture-coordinated-foreign-payment",
+        context: {
+          ...base,
+          paymentId: "payment-2",
+          balancePaymentId: "payment-2",
+          paymentRole: "balance",
+          balancePaymentRole: "balance",
+          captureEvaluationPaymentId: "payment-2",
+          providerEventPaymentId: "payment-2",
+          captureEvaluationExpectedPayment: {
+            ...base.captureEvaluationExpectedPayment,
+            id: "payment-2",
+            role: "balance",
+          },
+          paymentCaptureWindow: {
+            ...base.paymentCaptureWindow,
+            paymentId: "payment-2",
+            role: "balance",
+            kind: "balance_deadline",
+            cutoffAt: base.balanceDueAt,
+          },
+          captureProviderEvent: {
+            ...base.captureProviderEvent,
+            paymentId: "payment-2",
+          },
+          balanceDeadlineSetupPaymentId: "payment-2",
+          balanceDeadlineSetupOrder: {
+            ...base.balanceDeadlineSetupOrder,
+            balancePaymentId: "payment-2",
+          },
+          balanceDeadlineSetupPayment: {
+            ...base.balanceDeadlineSetupPayment,
+            id: "payment-2",
+          },
+          balanceDeadlineSetupSchedule: {
+            ...base.balanceDeadlineSetupSchedule,
+            paymentId: "payment-2",
+          },
+          balanceDeadlineSetupDeadline: {
+            ...base.balanceDeadlineSetupDeadline,
+            paymentId: "payment-2",
+          },
+          confirmationActivationAtomic: false,
+          initialCaptureConfirmationAtomic: false,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("binds expired capture evaluation to the selected pending Payment", () => {
+    const base = contextForTransition("refund_pending", "voided");
+    const evaluatedAt = permittedContext.checkoutCaptureExpiresAt;
+    const command = {
+      current: "pending" as const,
+      target: "refund_pending" as const,
+      idempotencyKey: "late-capture-selected-payment",
+      context: {
+        ...base,
+        captureEvaluatedAt: evaluatedAt,
+        captureEvaluationOutcome: "expired",
+        captureProviderEvent: {
+          ...base.captureProviderEvent,
+          occurredAt: evaluatedAt,
+        },
+      },
+    };
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        currentStateCommandKey: "payment-pending-command-1",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        aggregateId: "payment-2",
+        currentStateCommandKey: "payment-pending-command-1",
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(
+      transition(paymentPolicy, {
+        ...command,
+        aggregateId: "payment-1",
+        currentStateCommandKey: "payment-pending-command-1",
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "pending",
+      current: "refund_pending",
+    });
+  });
+
   it.each(["pending", "recovery_pending"] as const)(
     "allows direct claim refund from %s once its scoped credit is active",
     (current) => {
@@ -9245,6 +9744,7 @@ describe("v0 lifecycle policy tables", () => {
     (_lifecycle, policy) => {
       expect(() =>
         transition(policy, {
+          ...commandAnchors(policy, "in_production", "qc_passed"),
           current: "in_production",
           target: "qc_passed",
           idempotencyKey: "qc-readiness-missing",
@@ -9255,6 +9755,7 @@ describe("v0 lifecycle policy tables", () => {
           current: "in_production",
           target: "qc_passed",
           idempotencyKey: "qc-readiness-complete",
+          ...commandAnchors(policy, "in_production", "qc_passed"),
           context: contextForTransition("qc_passed", "in_production"),
         }),
       ).toEqual({
