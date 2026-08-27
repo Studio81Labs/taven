@@ -771,12 +771,11 @@ function exactRequireExpression(tokens, start, end, requireIndex) {
   let previous;
   do {
     previous = expression;
-    while (
-      expression.end > expression.start &&
-      tokens[expression.end - 1]?.value === "!"
-    ) {
-      expression = { ...expression, end: expression.end - 1 };
-    }
+    expression = stripTrailingCallModifiers(
+      tokens,
+      expression.start,
+      expression.end,
+    );
     expression = finalSequenceOperand(tokens, expression.start, expression.end);
   } while (
     expression.start !== previous.start ||
@@ -787,27 +786,88 @@ function exactRequireExpression(tokens, start, end, requireIndex) {
   );
 }
 
+function matchingOpenTypeArgument(tokens, start, closeIndex) {
+  let depth = 0;
+  for (let index = closeIndex; index >= start; index -= 1) {
+    const token = tokens[index];
+    if (token.kind !== "punctuation") continue;
+    if (token.value === ">") depth += 1;
+    if (token.value === "<") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+function stripTrailingCallModifiers(tokens, start, end) {
+  let previousEnd;
+  do {
+    previousEnd = end;
+    while (end > start && tokens[end - 1]?.value === "!") end -= 1;
+    if (
+      end > start &&
+      tokens[end - 1]?.kind === "punctuation" &&
+      tokens[end - 1]?.value === ">"
+    ) {
+      const open = matchingOpenTypeArgument(tokens, start, end - 1);
+      if (open !== undefined && open < end - 1) end = open;
+    }
+  } while (end !== previousEnd);
+  return { end, start };
+}
+
 function skipNonNullAssertions(tokens, index) {
   while (tokens[index]?.value === "!") index += 1;
   return index;
 }
 
+function skipTypeArguments(tokens, index) {
+  if (tokens[index]?.kind !== "punctuation" || tokens[index]?.value !== "<") {
+    return index;
+  }
+  let depth = 0;
+  for (let cursor = index; cursor < tokens.length; cursor += 1) {
+    const token = tokens[cursor];
+    if (token.kind !== "punctuation") continue;
+    if (token.value === "<") depth += 1;
+    if (token.value === ">") {
+      depth -= 1;
+      if (depth === 0) return cursor === index + 1 ? index : cursor + 1;
+    }
+  }
+  return index;
+}
+
+function skipTypeAndNonNullAssertions(tokens, index) {
+  let previous;
+  do {
+    previous = index;
+    index = skipNonNullAssertions(tokens, index);
+    index = skipTypeArguments(tokens, index);
+  } while (index !== previous);
+  return index;
+}
+
 function callOpening(tokens, index) {
-  index = skipNonNullAssertions(tokens, index);
-  if (tokens[index]?.value === "(") return index;
-  return tokens[index]?.value === "?." && tokens[index + 1]?.value === "("
-    ? index + 1
-    : undefined;
+  let previous;
+  do {
+    previous = index;
+    index = skipNonNullAssertions(tokens, index);
+    if (tokens[index]?.value === "?.") index += 1;
+    index = skipTypeArguments(tokens, index);
+  } while (index !== previous);
+  return tokens[index]?.value === "(" ? index : undefined;
 }
 
 function requireCallOpening(tokens, requireIndex) {
   const direct = callOpening(tokens, requireIndex + 1);
   if (direct !== undefined) return direct;
-  let cursor = skipNonNullAssertions(tokens, requireIndex + 1);
+  let cursor = skipTypeAndNonNullAssertions(tokens, requireIndex + 1);
   let closeIndex;
   while (tokens[cursor]?.value === ")") {
     closeIndex = cursor;
-    cursor = skipNonNullAssertions(tokens, cursor + 1);
+    cursor = skipTypeAndNonNullAssertions(tokens, cursor + 1);
   }
   if (closeIndex === undefined) return undefined;
   const call = callOpening(tokens, cursor);
