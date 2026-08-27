@@ -84,6 +84,7 @@ function requireCompleteShipmentReadiness<S extends string>(
     !nonBlank(orderId) ||
     !nonBlank(phaseId) ||
     !nonBlank(resultId) ||
+    command.aggregateId !== orderId ||
     context?.shipmentReadinessOrderId !== orderId ||
     context?.shipmentReadinessPhaseId !== phaseId ||
     context?.shipmentReadinessOrderResultId !== resultId ||
@@ -1552,6 +1553,7 @@ function requireExactPaymentRefundCompletion<S extends string>(
 function requireBalancePaymentDeadlineSetup<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
+  bindCommandToOrder = false,
 ): void {
   const context = command.context;
   const nonBlank = (value: unknown): value is string =>
@@ -1604,6 +1606,7 @@ function requireBalancePaymentDeadlineSetup<S extends string>(
   const deadlineDueAt = deadline?.dueAt;
   if (
     !nonBlank(orderId) ||
+    (bindCommandToOrder && command.aggregateId !== orderId) ||
     !nonBlank(phaseId) ||
     !nonBlank(paymentId) ||
     !nonBlank(scheduleId) ||
@@ -5592,7 +5595,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       command.current === "qc_passed" &&
       command.target === "awaiting_balance"
     ) {
-      requireBalancePaymentDeadlineSetup("Order", command);
+      requireBalancePaymentDeadlineSetup("Order", command, true);
     }
     if (
       (command.current === "qc_passed" ||

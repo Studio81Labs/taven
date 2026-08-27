@@ -94,6 +94,17 @@ describe("payment projection", () => {
       [
         {
           id: "p",
+          status: "refund_pending",
+          captured: czk(100n),
+          refunded: czk(99n),
+        },
+      ],
+      "partially_refunded",
+    ],
+    [
+      [
+        {
+          id: "p",
           status: "refunded",
           captured: czk(100n),
           refunded: czk(100n),
@@ -103,6 +114,50 @@ describe("payment projection", () => {
     ],
   ] as const)("derives %s", (payments, expected) => {
     expect(projectPayments(czk(100n), payments).paymentStatus).toBe(expected);
+  });
+
+  it("does not project a refund_pending Payment as completed before the webhook", () => {
+    expect(() =>
+      projectPayments(czk(100n), [
+        {
+          id: "pending-equal",
+          status: "refund_pending",
+          captured: czk(100n),
+          refunded: czk(100n),
+        },
+      ]),
+    ).toThrow("inconsistent capture, refund, and status data");
+
+    expect(
+      errorCode(() =>
+        projectPayments(czk(100n), [
+          {
+            id: "pending-over",
+            status: "refund_pending",
+            captured: czk(100n),
+            refunded: czk(101n),
+          },
+        ]),
+      ),
+    ).toBe("OVER_REFUND");
+  });
+
+  it("allows a completed refunded Payment to equal its captured amount", () => {
+    expect(
+      projectPayments(czk(100n), [
+        {
+          id: "completed-refund",
+          status: "refunded",
+          captured: czk(100n),
+          refunded: czk(100n),
+        },
+      ]),
+    ).toMatchObject({
+      paymentStatus: "refunded",
+      capturedTotal: czk(100n),
+      refundedTotal: czk(100n),
+      netCaptured: czk(0n),
+    });
   });
 
   it("rejects mixed currencies and over-refunds", () => {

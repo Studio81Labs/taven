@@ -89,6 +89,8 @@ export function projectPayments(
       (payment.status === "partially_refunded" &&
         (refunded.minorUnits === 0n ||
           refunded.compare(payment.captured) >= 0)) ||
+      (payment.status === "refund_pending" &&
+        refunded.compare(payment.captured) >= 0) ||
       (payment.status === "captured" && refunded.minorUnits > 0n)
     ) {
       throw new DomainError(

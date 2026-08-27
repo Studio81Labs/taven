@@ -3208,7 +3208,8 @@ function commandAnchors(
     policy.name === "Order" &&
     ((current === "quoted" && target === "confirmed") ||
       ((current === "in_production" || current === "recovery_pending") &&
-        target === "qc_passed"))
+        target === "qc_passed") ||
+      (current === "qc_passed" && target === "awaiting_balance"))
   ) {
     return {
       aggregateId: "order-1",
@@ -3229,6 +3230,13 @@ function commandAnchors(
         ? { currentStateCommandKey: "phase-quoted-command-1" }
         : {}),
     };
+  }
+  if (
+    policy.name === "Order" &&
+    (current === "qc_passed" || current === "awaiting_balance") &&
+    target === "ready_to_ship"
+  ) {
+    return { aggregateId: "order-1" };
   }
   if (
     policy.name === "Order" &&
@@ -7549,6 +7557,7 @@ describe("v0 lifecycle policy tables", () => {
     (amountDueMinor, refundableBalanceMinor) => {
       expect(() =>
         transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, "qc_passed", "ready_to_ship"),
           current: "qc_passed",
           target: "ready_to_ship",
           idempotencyKey: `qc-ready-${amountDueMinor}-${refundableBalanceMinor}`,
@@ -7561,6 +7570,7 @@ describe("v0 lifecycle policy tables", () => {
   it("allows Order qc_passed -> ready_to_ship only with cleared balances", () => {
     expect(
       transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "qc_passed", "ready_to_ship"),
         current: "qc_passed",
         target: "ready_to_ship",
         idempotencyKey: "qc-ready-cleared",
@@ -7583,6 +7593,7 @@ describe("v0 lifecycle policy tables", () => {
       const context = contextForTransition("ready_to_ship", current);
       expect(
         transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, current, "ready_to_ship"),
           current,
           target: "ready_to_ship",
           idempotencyKey: `shipment-readiness-complete-${current}`,
@@ -7598,6 +7609,48 @@ describe("v0 lifecycle policy tables", () => {
         previous: current,
         current: "ready_to_ship",
       });
+    },
+  );
+
+  it.each(["qc_passed", "awaiting_balance"] as const)(
+    "binds Shipment readiness from %s to the selected Order",
+    (current) => {
+      const context = contextForTransition("ready_to_ship", current);
+      for (const aggregateId of [undefined, " ", "order-2"] as const) {
+        expect(() =>
+          transition(orderPolicy, {
+            ...(aggregateId === undefined ? {} : { aggregateId }),
+            current,
+            target: "ready_to_ship",
+            idempotencyKey: `shipment-readiness-anchor-${current}-${aggregateId ?? "missing"}`,
+            context,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+
+      expect(() =>
+        transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, current, "ready_to_ship"),
+          current,
+          target: "ready_to_ship",
+          idempotencyKey: `shipment-readiness-coordinated-order-${current}`,
+          context: {
+            ...context,
+            orderId: "order-2",
+            shipmentReadinessOrderId: "order-2",
+            shipmentReadinessAuthoritativeShipmentSet: {
+              ...context.shipmentReadinessAuthoritativeShipmentSet,
+              orderId: "order-2",
+            },
+            shipmentReadinessShipments: context.shipmentReadinessShipments.map(
+              (shipment) => ({
+                ...shipment,
+                orderId: "order-2",
+              }),
+            ),
+          },
+        }),
+      ).toThrow(TransitionGuardError);
     },
   );
 
@@ -7704,6 +7757,7 @@ describe("v0 lifecycle policy tables", () => {
       for (const current of ["qc_passed", "awaiting_balance"] as const) {
         expect(() =>
           transition(orderPolicy, {
+            ...commandAnchors(orderPolicy, current, "ready_to_ship"),
             current,
             target: "ready_to_ship",
             idempotencyKey: `shipment-readiness-invalid-${current}-${_case}`,
@@ -12356,6 +12410,7 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, "qc_passed", "awaiting_balance"),
           current: "qc_passed",
           target: "awaiting_balance",
           idempotencyKey: `balance-setup-invalid-${field}`,
@@ -12416,6 +12471,7 @@ describe("v0 lifecycle policy tables", () => {
       const record = base[recordField] as Readonly<Record<string, unknown>>;
       expect(() =>
         transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, "qc_passed", "awaiting_balance"),
           current: "qc_passed",
           target: "awaiting_balance",
           idempotencyKey: `balance-setup-invalid-${recordField}-${field}`,
@@ -12433,6 +12489,7 @@ describe("v0 lifecycle policy tables", () => {
     const dueAt = base.balanceDeadlineSetupCreatedAt;
     expect(() =>
       transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "qc_passed", "awaiting_balance"),
         current: "qc_passed",
         target: "awaiting_balance",
         idempotencyKey: "balance-setup-non-future-deadline",
@@ -12457,6 +12514,7 @@ describe("v0 lifecycle policy tables", () => {
     const dueAt = Instant.parse("2026-01-03T00:00:00.000Z");
     expect(() =>
       transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "qc_passed", "awaiting_balance"),
         current: "qc_passed",
         target: "awaiting_balance",
         idempotencyKey: "balance-setup-wrong-derived-deadline",
@@ -12480,6 +12538,7 @@ describe("v0 lifecycle policy tables", () => {
     const base = contextForTransition("awaiting_balance", "qc_passed");
     expect(() =>
       transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "qc_passed", "awaiting_balance"),
         current: "qc_passed",
         target: "awaiting_balance",
         idempotencyKey: "balance-setup-foreign-payment-schedule",
@@ -12510,6 +12569,7 @@ describe("v0 lifecycle policy tables", () => {
   it("enters awaiting_balance only after the exact balance Payment and deadline are atomically set", () => {
     expect(
       transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "qc_passed", "awaiting_balance"),
         current: "qc_passed",
         target: "awaiting_balance",
         idempotencyKey: "balance-setup-complete",
@@ -12520,6 +12580,72 @@ describe("v0 lifecycle policy tables", () => {
       previous: "qc_passed",
       current: "awaiting_balance",
     });
+  });
+
+  it("binds balance deadline setup to the command-selected Order", () => {
+    const context = contextForTransition("awaiting_balance", "qc_passed");
+    const command = {
+      current: "qc_passed" as const,
+      target: "awaiting_balance" as const,
+      idempotencyKey: "balance-setup-selected-order",
+      context,
+    };
+    expect(() => transition(orderPolicy, command)).toThrow(
+      TransitionGuardError,
+    );
+    expect(() =>
+      transition(orderPolicy, { ...command, aggregateId: "order-2" }),
+    ).toThrow(TransitionGuardError);
+    expect(
+      transition(orderPolicy, {
+        ...command,
+        ...commandAnchors(orderPolicy, "qc_passed", "awaiting_balance"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "qc_passed",
+      current: "awaiting_balance",
+    });
+
+    expect(() =>
+      transition(orderPolicy, {
+        ...command,
+        ...commandAnchors(orderPolicy, "qc_passed", "awaiting_balance"),
+        idempotencyKey: "balance-setup-coordinated-foreign-order",
+        context: {
+          ...context,
+          orderId: "order-2",
+          phaseId: "phase-2",
+          balanceDeadlineSetupOrderId: "order-2",
+          balanceDeadlineSetupPhaseId: "phase-2",
+          balanceDeadlineSetupOrder: {
+            ...context.balanceDeadlineSetupOrder,
+            id: "order-2",
+            phaseId: "phase-2",
+          },
+          balanceDeadlineSetupPhase: {
+            ...context.balanceDeadlineSetupPhase,
+            id: "phase-2",
+            orderId: "order-2",
+          },
+          balanceDeadlineSetupPayment: {
+            ...context.balanceDeadlineSetupPayment,
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+          balanceDeadlineSetupSchedule: {
+            ...context.balanceDeadlineSetupSchedule,
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+          balanceDeadlineSetupDeadline: {
+            ...context.balanceDeadlineSetupDeadline,
+            orderId: "order-2",
+            phaseId: "phase-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it("requires the complete shipment handoff transaction before a packed Job is handed over", () => {
