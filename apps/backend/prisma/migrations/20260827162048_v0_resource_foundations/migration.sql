@@ -1525,11 +1525,36 @@ CREATE TRIGGER "production_reservations_set_expiry"
     BEFORE INSERT ON "production_reservations"
     FOR EACH ROW EXECUTE FUNCTION taven_validate_production_set_expiry();
 
+CREATE FUNCTION taven_lock_plan_before_reservation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "phase_resource_plans"
+    WHERE "id" = NEW."phase_resource_plan_id"
+      AND "node_id" = NEW."node_id"
+    FOR UPDATE;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "phase_reservation_sets_lock_plan"
+    BEFORE INSERT ON "phase_reservation_sets"
+    FOR EACH ROW EXECUTE FUNCTION taven_lock_plan_before_reservation();
+
 CREATE FUNCTION taven_freeze_plan_membership_after_reservation()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM 1
+    FROM "phase_resource_plans"
+    WHERE "id" = NEW."phase_resource_plan_id"
+      AND "node_id" = NEW."node_id"
+    FOR UPDATE;
+
     IF EXISTS (
         SELECT 1
         FROM "phase_reservation_sets"
@@ -1555,6 +1580,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM 1
+    FROM "candidate_resource_estimates"
+    WHERE "id" = NEW."candidate_resource_estimate_id"
+      AND "node_id" = NEW."node_id"
+    FOR UPDATE;
+
     IF NOT EXISTS (
         SELECT 1
         FROM "phase_resource_plans" plan
@@ -1596,6 +1627,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM 1
+    FROM "candidate_resource_estimates"
+    WHERE "id" = NEW."candidate_resource_estimate_id"
+      AND "node_id" = NEW."node_id"
+    FOR UPDATE;
+
     IF EXISTS (
         SELECT 1
         FROM "phase_resource_plan_jobs"
@@ -1992,7 +2029,7 @@ BEGIN
 
     IF EXISTS (
         SELECT 1 FROM "phase_reservation_sets"
-        WHERE "id" = set_id AND "status" = 'RESERVED'
+        WHERE "id" = set_id AND "status" IN ('RESERVED', 'HELD')
     ) THEN
         PERFORM taven_validate_phase_reservation_set(set_id);
     END IF;
@@ -2019,7 +2056,7 @@ BEGIN
     WHERE "id" = production_id;
     IF EXISTS (
         SELECT 1 FROM "phase_reservation_sets"
-        WHERE "id" = set_id AND "status" = 'RESERVED'
+        WHERE "id" = set_id AND "status" IN ('RESERVED', 'HELD')
     ) THEN
         PERFORM taven_validate_phase_reservation_set(set_id);
     END IF;

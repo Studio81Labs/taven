@@ -118,10 +118,14 @@ authoritative plan. Every required planned key must have exactly one complete
 production/inventory reservation and a matching active capacity reservation
 for every candidate plate interval; every required fulfilment slot must be
 assigned exactly once, and no extra key or interval is allowed. Plan and
-candidate-interval membership freeze when reservation/planning begins. The set
-cannot become held or active while that comparison fails. Deferral permits one
-confirming transaction to insert the set and all children together; it does
-not make a partial set valid across transactions.
+candidate-interval membership freeze when reservation/planning begins. Writers
+lock the shared plan or candidate row before either side of each membership
+boundary changes, serializing reservation creation against concurrent plan
+members and planning against concurrent candidate intervals. The set cannot
+become held or active while the completeness comparison fails, and later child
+changes revalidate both reserved and held sets. Deferral permits one confirming
+transaction to insert the set and all children together; it does not make a
+partial set valid across transactions.
 
 ### Immutable inputs and snapshots
 
