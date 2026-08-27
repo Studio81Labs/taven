@@ -115,11 +115,14 @@ snapshots. Production, inventory, and one-or-more capacity reservation rows
 copy and protect those selections. Composite foreign keys prove set, plan,
 machine, and node ownership; unique indexes allow each planned key and slot
 only once within its scope, and a partial unique index allows only one active
-reservation set per plan. Candidate creation requires the immutable print
+reservation set per plan. Terminal sets retain their immutable history without
+preventing a later set from retrying the same planned jobs. Candidate creation
+requires the immutable print
 configuration and machine profile to select the same quality. Before planning,
 the union of a candidate's capacity intervals must cover its declared machine
-seconds, and the intervals themselves must not overlap. This keeps every
-accepted plan representable by the active-capacity exclusion constraint.
+seconds, and intervals must not overlap within a candidate or across candidates
+assigned to the same machine in one plan. This keeps every accepted plan
+representable by the active-capacity exclusion constraint.
 
 A deferred constraint trigger compares the reservation children with the
 authoritative plan. Every required planned key must have exactly one complete
@@ -141,9 +144,10 @@ survive commit. A reserved set requires every child to remain reserved; a held
 set may mix fully live and fully terminal job-resource groups while at least
 one group remains live. A held set remains valid after its checkout TTL because
 it is then governed by the active phase's operational deadline. Confirmation
-locks and revalidates the selected machine, profile, calibration, and inventory,
-requires every live capacity interval to remain in the future, and compares
-each copied resource snapshot with its candidate estimate. Deferral permits one
+locks and revalidates the selected geometry source, machine, profile,
+calibration, and inventory, requires every live capacity interval to remain in
+the future, and compares each copied resource snapshot with its candidate
+estimate. Deferral permits one
 confirming transaction to insert the set and all children together; it does not
 make a partial set valid across transactions.
 

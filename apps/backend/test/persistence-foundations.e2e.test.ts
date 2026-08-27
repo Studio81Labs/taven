@@ -5,6 +5,7 @@ import {
   PersistenceFactory,
   type PersistenceFoundation,
   type ProductionReservationFixture,
+  type SourceRetention,
 } from "./support/persistence-factory";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -35,6 +36,7 @@ async function createCompleteSingleReservationGraph(
   name: string,
   interval: { startsAt: Date; endsAt: Date },
   resourceSnapshot: unknown = {},
+  sourceRetention: SourceRetention = {},
 ): Promise<{
   foundation: PersistenceFoundation;
   production: ProductionReservationFixture;
@@ -43,6 +45,7 @@ async function createCompleteSingleReservationGraph(
     name,
     [interval],
     resourceSnapshot,
+    sourceRetention,
   );
   const production = productions[0];
   if (!production) {
@@ -706,6 +709,30 @@ describe("persistence foundations", () => {
     );
 
     await inRollbackTransaction(
+      "plan-machine-capacity-overlap",
+      async (_client, fixtures) => {
+        const foundation = await fixtures.createFoundation();
+        const productions = [
+          await fixtures.planProduction(foundation, "first-plan-candidate", {
+            startsAt: new Date("2027-01-01T10:00:00.000Z"),
+            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+          }),
+          await fixtures.planProduction(foundation, "second-plan-candidate", {
+            startsAt: new Date("2027-01-01T10:30:00.000Z"),
+            endsAt: new Date("2027-01-01T11:30:00.000Z"),
+          }),
+        ];
+
+        await expect(
+          fixtures.createResourcePlan(foundation, productions),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "phase_resource_plan_machine_capacity_overlap_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
       "candidate-capacity-exact",
       async (_client, fixtures) => {
         const foundation = await fixtures.createFoundation();
@@ -780,30 +807,54 @@ describe("persistence foundations", () => {
     await inRollbackTransaction(
       "capacity-overlap",
       async (client, fixtures) => {
-        const startsAt = new Date("2027-01-01T10:00:00.000Z");
-        const endsAt = new Date("2027-01-01T11:00:00.000Z");
-        const { foundation, productions } =
-          await fixtures.createReservationGraph("capacity-overlap", [
-            { startsAt, endsAt },
-            {
-              startsAt: new Date("2027-01-01T10:30:00.000Z"),
-              endsAt: new Date("2027-01-01T11:30:00.000Z"),
-            },
-          ]);
-        const [first, overlapping] = productions;
-        if (!first || !overlapping) {
-          throw new Error(
-            "capacity graph did not create both production fixtures",
+        const foundation = await fixtures.createFoundation();
+        const intervals = [
+          {
+            startsAt: new Date("2027-01-01T10:00:00.000Z"),
+            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+          },
+          {
+            startsAt: new Date("2027-01-01T10:30:00.000Z"),
+            endsAt: new Date("2027-01-01T11:30:00.000Z"),
+          },
+        ];
+        const plans: Array<{
+          foundation: PersistenceFoundation;
+          production: ProductionReservationFixture;
+        }> = [];
+        for (const [index, interval] of intervals.entries()) {
+          const planFoundation = {
+            ...foundation,
+            eligibilitySnapshotId: fixtures.id(`overlap-${index}:snapshot`),
+            phaseResourcePlanId: fixtures.id(`overlap-${index}:plan`),
+            phaseReservationSetId: fixtures.id(`overlap-${index}:set`),
+          };
+          const production = await fixtures.planProduction(
+            planFoundation,
+            `overlap-${index}:production`,
+            interval,
           );
+          await fixtures.createResourcePlan(planFoundation, [production]);
+          const planFixtures = factory(client, `capacity-overlap-${index}`);
+          await planFixtures.createPhaseReservationSet(planFoundation);
+          await planFixtures.createProductionReservation(
+            planFoundation,
+            production,
+          );
+          plans.push({ foundation: planFoundation, production });
+        }
+        const [first, overlapping] = plans;
+        if (!first || !overlapping) {
+          throw new Error("capacity setup did not create both plans");
         }
         await client.query(
           'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
           [
             fixtures.id("first-capacity"),
-            foundation.nodeId,
-            first.productionReservationId,
-            first.candidateCapacityIntervalId,
-            foundation.machineId,
+            first.foundation.nodeId,
+            first.production.productionReservationId,
+            first.production.candidateCapacityIntervalId,
+            first.foundation.machineId,
             new Date("2027-01-01T10:00:00.000Z"),
             new Date("2027-01-01T11:00:00.000Z"),
             new Date("2030-08-27T12:00:00.000Z"),
@@ -816,10 +867,10 @@ describe("persistence foundations", () => {
             'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
             [
               fixtures.id("overlapping-capacity"),
-              foundation.nodeId,
-              overlapping.productionReservationId,
-              overlapping.candidateCapacityIntervalId,
-              foundation.machineId,
+              overlapping.foundation.nodeId,
+              overlapping.production.productionReservationId,
+              overlapping.production.candidateCapacityIntervalId,
+              overlapping.foundation.machineId,
               new Date("2027-01-01T10:30:00.000Z"),
               new Date("2027-01-01T11:30:00.000Z"),
               new Date("2030-08-27T12:00:00.000Z"),
@@ -1204,7 +1255,7 @@ describe("persistence foundations", () => {
     );
   });
 
-  it("revalidates capacity, mutable resources, and snapshots at confirmation", async () => {
+  it("revalidates capacity, geometry, resources, and snapshots at confirmation", async () => {
     await inRollbackTransaction(
       "past-capacity-confirmation",
       async (client, fixtures) => {
@@ -1284,6 +1335,42 @@ describe("persistence foundations", () => {
         ).rejects.toMatchObject({
           code: "23514",
           constraint: "phase_reservation_set_complete_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "geometry-source-confirmation",
+      async (client, fixtures) => {
+        const { foundation } = await createCompleteSingleReservationGraph(
+          client,
+          fixtures,
+          "geometry-source-confirmation",
+          {
+            startsAt: new Date("2027-01-01T10:00:00.000Z"),
+            endsAt: new Date("2027-01-01T11:00:00.000Z"),
+          },
+          {},
+          {
+            uploadedAt: new Date(Date.now() - 120_000),
+            deleteAfter: new Date(Date.now() - 60_000),
+            hold: "ACTIVE_ORDER",
+          },
+        );
+        await client.query(
+          'UPDATE "model_files" SET "retention_hold" = $2 WHERE "id" = $1',
+          [foundation.modelFileId, "NONE"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+
+        await expect(
+          client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "model_geometry_source_available_check",
         });
       },
     );
@@ -1466,6 +1553,104 @@ describe("persistence foundations", () => {
       await client.query("ROLLBACK").catch(() => undefined);
       client.release();
     }
+  });
+
+  it("allows retrying a plan after its reservation set is released", async () => {
+    await inRollbackTransaction(
+      "released-set-retry",
+      async (client, fixtures) => {
+        const interval = {
+          startsAt: new Date("2027-01-01T10:00:00.000Z"),
+          endsAt: new Date("2027-01-01T11:00:00.000Z"),
+        };
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "released-set-retry",
+            interval,
+          );
+
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "RELEASED"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RELEASED"],
+        );
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+
+        const retryFixtures = factory(client, "released-set-retry-attempt-2");
+        const retryFoundation = {
+          ...foundation,
+          phaseReservationSetId: retryFixtures.id("phase-reservation-set"),
+        };
+        const retryProduction = {
+          ...production,
+          jobId: retryFixtures.id("future-job"),
+          productionReservationId: retryFixtures.id("production-reservation"),
+          inventoryReservationId: retryFixtures.id("inventory-reservation"),
+        };
+        await retryFixtures.createPhaseReservationSet(retryFoundation);
+        await retryFixtures.createProductionReservation(
+          retryFoundation,
+          retryProduction,
+        );
+        await client.query(
+          'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+          [
+            retryProduction.inventoryReservationId,
+            retryFoundation.nodeId,
+            retryProduction.productionReservationId,
+            retryFoundation.inventoryId,
+            60,
+            new Date("2030-08-27T12:00:00.000Z"),
+            new Date("2026-08-27T12:00:00.000Z"),
+            new Date("2026-08-27T12:00:00.000Z"),
+          ],
+        );
+        await client.query(
+          'INSERT INTO "capacity_reservations" ("id", "node_id", "production_reservation_id", "candidate_capacity_interval_id", "machine_id", "starts_at", "ends_at", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+          [
+            retryFixtures.id("capacity-reservation"),
+            retryFoundation.nodeId,
+            retryProduction.productionReservationId,
+            retryProduction.candidateCapacityIntervalId,
+            retryFoundation.machineId,
+            interval.startsAt,
+            interval.endsAt,
+            new Date("2030-08-27T12:00:00.000Z"),
+            new Date("2026-08-27T12:00:00.000Z"),
+            new Date("2026-08-27T12:00:00.000Z"),
+          ],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [retryFoundation.phaseReservationSetId, "RESERVED"],
+        );
+
+        await expect(
+          client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+        ).resolves.toBeDefined();
+      },
+    );
   });
 
   it("cannot commit an inconsistent HELD phase reservation set", async () => {

@@ -32,7 +32,7 @@ export type ProductionReservationFixture = {
 };
 
 type CapacityInterval = { startsAt: Date; endsAt: Date };
-type SourceRetention = {
+export type SourceRetention = {
   uploadedAt?: Date;
   deleteAfter?: Date;
   hold?: "NONE" | "ACTIVE_ORDER" | "ACTIVE_CLAIM" | "LEGAL";
@@ -458,11 +458,12 @@ export class PersistenceFactory {
       },
     ],
     resourceSnapshot: unknown = {},
+    sourceRetention: SourceRetention = {},
   ): Promise<{
     foundation: PersistenceFoundation;
     productions: ProductionReservationFixture[];
   }> {
-    const foundation = await this.createFoundation(name);
+    const foundation = await this.createFoundation(name, sourceRetention);
     const productions: ProductionReservationFixture[] = [];
     for (const [index, interval] of intervals.entries()) {
       productions.push(

@@ -689,7 +689,6 @@ model ProductionReservation {
   @@unique([id, nodeId, machineId])
   @@unique([phaseReservationSetId, phaseResourcePlanJobId])
   @@unique([phaseReservationSetId, plannedJobKey])
-  @@unique([phaseResourcePlanId, plannedJobKey])
   @@index([nodeId, status, expiresAt])
   @@index([machineId])
   @@index([inventoryId])

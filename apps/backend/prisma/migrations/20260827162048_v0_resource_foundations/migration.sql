@@ -714,9 +714,6 @@ CREATE UNIQUE INDEX "production_reservations_phase_reservation_set_id_phase_reso
 CREATE UNIQUE INDEX "production_reservations_phase_reservation_set_id_planned_jo_key" ON "production_reservations"("phase_reservation_set_id", "planned_job_key");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "production_reservations_phase_resource_plan_id_planned_job__key" ON "production_reservations"("phase_resource_plan_id", "planned_job_key");
-
--- CreateIndex
 CREATE INDEX "inventory_reservations_node_id_inventory_id_status_expires__idx" ON "inventory_reservations"("node_id", "inventory_id", "status", "expires_at");
 
 -- CreateIndex
@@ -1647,6 +1644,32 @@ BEGIN
     END IF;
 
     PERFORM 1
+    FROM "model_files" source
+    WHERE source."id" IN (
+        SELECT geometry."source_model_file_id"
+        FROM "production_reservations" production
+        JOIN "slice_results" slice_result
+          ON slice_result."id" = production."slice_result_id"
+        JOIN "model_geometries" geometry
+          ON geometry."id" = slice_result."model_geometry_id"
+        WHERE production."phase_reservation_set_id" = NEW."id"
+    )
+    ORDER BY source."id"
+    FOR SHARE;
+
+    PERFORM 1
+    FROM "model_geometries" geometry
+    WHERE geometry."id" IN (
+        SELECT slice_result."model_geometry_id"
+        FROM "production_reservations" production
+        JOIN "slice_results" slice_result
+          ON slice_result."id" = production."slice_result_id"
+        WHERE production."phase_reservation_set_id" = NEW."id"
+    )
+    ORDER BY geometry."id"
+    FOR SHARE;
+
+    PERFORM 1
     FROM "machine_profiles"
     WHERE "id" IN (
         SELECT "machine_profile_id"
@@ -1874,9 +1897,10 @@ AS $$
 DECLARE
     required_seconds bigint;
     covered_seconds numeric;
+    candidate_machine_id uuid;
 BEGIN
-    SELECT "required_machine_seconds"
-    INTO required_seconds
+    SELECT "required_machine_seconds", "machine_id"
+    INTO required_seconds, candidate_machine_id
     FROM "candidate_resource_estimates"
     WHERE "id" = NEW."candidate_resource_estimate_id"
       AND "node_id" = NEW."node_id"
@@ -1931,6 +1955,28 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'planned candidate capacity intervals must not overlap'
             USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_candidate_capacity_overlap_check';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "candidate_capacity_intervals" new_interval
+        JOIN "phase_resource_plan_jobs" existing_job
+          ON existing_job."phase_resource_plan_id" = NEW."phase_resource_plan_id"
+         AND existing_job."node_id" = NEW."node_id"
+        JOIN "candidate_resource_estimates" existing_candidate
+          ON existing_candidate."id" = existing_job."candidate_resource_estimate_id"
+         AND existing_candidate."node_id" = existing_job."node_id"
+         AND existing_candidate."machine_id" = candidate_machine_id
+        JOIN "candidate_capacity_intervals" existing_interval
+          ON existing_interval."candidate_resource_estimate_id" = existing_candidate."id"
+         AND existing_interval."node_id" = existing_candidate."node_id"
+         AND tstzrange(existing_interval."starts_at", existing_interval."ends_at", '[)')
+             && tstzrange(new_interval."starts_at", new_interval."ends_at", '[)')
+        WHERE new_interval."candidate_resource_estimate_id" = NEW."candidate_resource_estimate_id"
+          AND new_interval."node_id" = NEW."node_id"
+    ) THEN
+        RAISE EXCEPTION 'phase resource plan candidates overlap on machine %', candidate_machine_id
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_machine_capacity_overlap_check';
     END IF;
 
     RETURN NEW;
@@ -2405,6 +2451,29 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'reserved phase reservation set % contains capacity that has already started', target_set."id"
             USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_capacity_window_check';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "production_reservations" production
+        JOIN "slice_results" slice_result
+          ON slice_result."id" = production."slice_result_id"
+        JOIN "model_geometries" geometry
+          ON geometry."id" = slice_result."model_geometry_id"
+        JOIN "model_files" source
+          ON source."id" = geometry."source_model_file_id"
+        WHERE production."phase_reservation_set_id" = target_set."id"
+          AND (
+              geometry."deleted_at" IS NOT NULL
+              OR source."deleted_at" IS NOT NULL
+              OR (
+                  source."retention_hold" = 'NONE'
+                  AND source."source_delete_after" <= clock_timestamp()
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION 'phase reservation set % uses expired or deleted model geometry', target_set."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'model_geometry_source_available_check';
     END IF;
 
     IF EXISTS (
