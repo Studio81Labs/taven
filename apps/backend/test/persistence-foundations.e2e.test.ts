@@ -2928,6 +2928,48 @@ describe("persistence foundations", () => {
       if (!terminalProduction) {
         throw new Error("terminal reservation group fixture is missing");
       }
+      await client.query("SAVEPOINT mismatched_consumed_group");
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.productionReservationId, "SCHEDULED"],
+      );
+      await client.query(
+        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.inventoryReservationId, "ALLOCATED"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [capacityReservationIds[0], "SCHEDULED"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.productionReservationId, "PRINTING"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [capacityReservationIds[0], "PRINTING"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.productionReservationId, "CONSUMED"],
+      );
+      await client.query(
+        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.inventoryReservationId, "RELEASED"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [capacityReservationIds[0], "COMPLETED"],
+      );
+      await expect(
+        client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "phase_reservation_set_child_status_check",
+      });
+      await client.query("ROLLBACK TO SAVEPOINT mismatched_consumed_group");
+      await client.query("SET CONSTRAINTS ALL DEFERRED");
+
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
         [terminalProduction.productionReservationId, "RELEASED"],

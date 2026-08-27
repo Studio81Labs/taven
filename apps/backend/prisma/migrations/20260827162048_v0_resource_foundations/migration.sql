@@ -2638,7 +2638,26 @@ BEGIN
                                 AND capacity_reservation."status" NOT IN ('HELD', 'SCHEDULED', 'PRINTING')
                           )
                       ) OR (
-                          production."status" IN ('CONSUMED', 'RELEASED', 'EXPIRED')
+                          production."status" = 'CONSUMED'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM "inventory_reservations" inventory_reservation
+                              WHERE inventory_reservation."production_reservation_id" = production."id"
+                                AND inventory_reservation."status" = 'CONSUMED'
+                          )
+                          AND EXISTS (
+                              SELECT 1
+                              FROM "capacity_reservations" capacity_reservation
+                              WHERE capacity_reservation."production_reservation_id" = production."id"
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM "capacity_reservations" capacity_reservation
+                              WHERE capacity_reservation."production_reservation_id" = production."id"
+                                AND capacity_reservation."status" <> 'COMPLETED'
+                          )
+                      ) OR (
+                          production."status" IN ('RELEASED', 'EXPIRED')
                           AND EXISTS (
                               SELECT 1
                               FROM "inventory_reservations" inventory_reservation
