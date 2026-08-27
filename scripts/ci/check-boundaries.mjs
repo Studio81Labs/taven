@@ -135,30 +135,45 @@ function readQuotedLiteral(source, start, quote) {
   return { end: source.length, value: undefined };
 }
 
+function lineCommentEnd(source, start) {
+  const match = /[\n\r\u2028\u2029]/u.exec(source.slice(start));
+  return match === null ? source.length : start + match.index;
+}
+
 function findTemplateExpressionEnd(source, start) {
   let depth = 1;
+  let lineTerminatorSinceToken = false;
   const tokens = [];
   const braces = [];
   for (let index = start; index < source.length;) {
     const character = source[index];
     const identifier = readIdentifier(source, index);
     if (/\s/.test(character)) {
+      lineTerminatorSinceToken ||= /[\n\r\u2028\u2029]/u.test(character);
       index += 1;
     } else if (character === "/" && source[index + 1] === "/") {
-      index = source.indexOf("\n", index + 2);
-      if (index === -1) return source.length;
+      index = lineCommentEnd(source, index + 2);
+      if (index === source.length) return source.length;
     } else if (character === "/" && source[index + 1] === "*") {
       const end = source.indexOf("*/", index + 2);
+      lineTerminatorSinceToken ||=
+        end !== -1 && /[\n\r\u2028\u2029]/u.test(source.slice(index + 2, end));
       index = end === -1 ? source.length : end + 2;
     } else if (character === '"' || character === "'") {
       index = readQuotedLiteral(source, index, character).end;
       tokens.push({ kind: "literal", value: "" });
+      lineTerminatorSinceToken = false;
     } else if (character === "`") {
       index = readTemplateLiteral(source, index).end;
       tokens.push({ kind: "template", value: "" });
-    } else if (character === "/" && isRegexStart(tokens)) {
+      lineTerminatorSinceToken = false;
+    } else if (
+      character === "/" &&
+      isRegexStart(tokens, lineTerminatorSinceToken)
+    ) {
       index = skipRegexLiteral(source, index);
       tokens.push({ kind: "regex", value: "" });
+      lineTerminatorSinceToken = false;
     } else if (identifier !== undefined) {
       tokens.push({
         kind: "identifier",
@@ -166,11 +181,13 @@ function findTemplateExpressionEnd(source, start) {
         escaped: identifier.escaped,
       });
       index = identifier.end;
+      lineTerminatorSinceToken = false;
     } else if (/[0-9]/.test(character)) {
       let end = index + 1;
       while (/[A-Za-z0-9._]/.test(source[end] ?? "")) end += 1;
       tokens.push({ kind: "number", value: source.slice(index, end) });
       index = end;
+      lineTerminatorSinceToken = false;
     } else {
       if (character === "{") {
         const statementBlock = opensStatementBlock(tokens);
@@ -182,6 +199,7 @@ function findTemplateExpressionEnd(source, start) {
           statementBlock,
         });
         index += 1;
+        lineTerminatorSinceToken = false;
         continue;
       }
       if (character === "}") {
@@ -194,12 +212,14 @@ function findTemplateExpressionEnd(source, start) {
           expressionEnding: kind === "object",
         });
         index += 1;
+        lineTerminatorSinceToken = false;
         continue;
       }
       const pair = source.slice(index, index + 2);
       const value = pair === "=>" || pair === "?." ? pair : character;
       tokens.push({ kind: "punctuation", value });
       index += value.length;
+      lineTerminatorSinceToken = false;
     }
   }
   return source.length;
@@ -251,9 +271,26 @@ function closesControlCondition(tokens) {
   return false;
 }
 
-function isRegexStart(tokens) {
+function followsLineTerminatedStatement(tokens, lineTerminatorBefore) {
+  if (!lineTerminatorBefore) return false;
+  const previous = tokens.at(-1);
+  if (
+    ["break", "continue", "debugger"].some((value) =>
+      rawIdentifier(previous, value),
+    )
+  ) {
+    return true;
+  }
+  return (
+    previous?.kind === "identifier" &&
+    ["break", "continue"].some((value) => rawIdentifier(tokens.at(-2), value))
+  );
+}
+
+function isRegexStart(tokens, lineTerminatorBefore) {
   const previous = tokens[tokens.length - 1];
   if (previous === undefined) return true;
+  if (followsLineTerminatedStatement(tokens, lineTerminatorBefore)) return true;
   if (previous.kind === "identifier") {
     return new Set([
       "await",
@@ -503,18 +540,22 @@ function skipRegexLiteral(source, start) {
 }
 
 function lexicalTokens(source) {
+  let lineTerminatorSinceToken = false;
   const tokens = [];
   const braces = [];
   for (let index = 0; index < source.length;) {
     const character = source[index];
     const identifier = readIdentifier(source, index);
     if (/\s/.test(character)) {
+      lineTerminatorSinceToken ||= /[\n\r\u2028\u2029]/u.test(character);
       index += 1;
     } else if (character === "/" && source[index + 1] === "/") {
-      index = source.indexOf("\n", index + 2);
-      if (index === -1) break;
+      index = lineCommentEnd(source, index + 2);
+      if (index === source.length) break;
     } else if (character === "/" && source[index + 1] === "*") {
       const end = source.indexOf("*/", index + 2);
+      lineTerminatorSinceToken ||=
+        end !== -1 && /[\n\r\u2028\u2029]/u.test(source.slice(index + 2, end));
       index = end === -1 ? source.length : end + 2;
     } else if (character === '"' || character === "'") {
       const literal = readQuotedLiteral(source, index, character);
@@ -522,6 +563,7 @@ function lexicalTokens(source) {
         tokens.push({ kind: "literal", value: literal.value });
       }
       index = literal.end;
+      lineTerminatorSinceToken = false;
     } else if (character === "`") {
       const literal = readTemplateLiteral(source, index);
       if (literal.value !== undefined && literal.expressions.length === 0) {
@@ -531,9 +573,14 @@ function lexicalTokens(source) {
         tokens.push(...lexicalTokens(expression));
       }
       index = literal.end;
-    } else if (character === "/" && isRegexStart(tokens)) {
+      lineTerminatorSinceToken = false;
+    } else if (
+      character === "/" &&
+      isRegexStart(tokens, lineTerminatorSinceToken)
+    ) {
       index = skipRegexLiteral(source, index);
       tokens.push({ kind: "regex", value: "" });
+      lineTerminatorSinceToken = false;
     } else if (identifier !== undefined) {
       tokens.push({
         kind: "identifier",
@@ -541,11 +588,13 @@ function lexicalTokens(source) {
         escaped: identifier.escaped,
       });
       index = identifier.end;
+      lineTerminatorSinceToken = false;
     } else if (/[0-9]/.test(character)) {
       let end = index + 1;
       while (/[A-Za-z0-9._]/.test(source[end] ?? "")) end += 1;
       tokens.push({ kind: "number", value: source.slice(index, end) });
       index = end;
+      lineTerminatorSinceToken = false;
     } else {
       const pair = source.slice(index, index + 2);
       const value = pair === "=>" || pair === "?." ? pair : character;
@@ -564,6 +613,7 @@ function lexicalTokens(source) {
         tokens.push({ kind: "punctuation", value });
       }
       index += value.length;
+      lineTerminatorSinceToken = false;
     }
   }
   return tokens;
