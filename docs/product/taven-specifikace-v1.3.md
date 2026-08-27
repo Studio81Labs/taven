@@ -399,13 +399,14 @@ Arrangement i množstevní efekt se počítají samostatně pro každý `OrderIt
 
 Bounding box počítá preflight, ale kategorie se nesmí určit jen z jednoho dílu ani z jednoho `OrderItem`. Před závaznou cenou vznikne deterministický `ShipmentPlan` nad **všemi výrobními položkami a celým množstvím každé fáze**:
 
-1. každý jednotlivý vyráběný díl ze všech `OrderItem` se musí vejít do rozměrů zvolené kategorie po přidání obalové rezervy; agregovaný packing tuto podmínku nesmí obejít
-2. odhad zabraného objemu je sjednocený packing volume `Σ(bbox_volume × qty) / koeficient_plnění_krabice`; zvolená kategorie současně kontroluje konzervativní výsledný bbox zásilky
-3. odhad hmotnosti je agregovaná hmotnost všech výrobních položek + hmotnost obalu
-4. kusy všech `OrderItem` se deterministicky rozdělí do nejmenší kategorie, která nepřekročí objem ani hmotnost; při překročení vznikne další plánovaná zásilka
-5. na hraně se zaokrouhluje nahoru; co se nevejde do žádné podporované kategorie, jde do individuální nabídky
+1. pro každý kus vznikne ochranný `packing_part_bbox`, který ke každé straně zdrojového bboxu přidá obalovou rezervu; tyto obálky se při skládání nesmějí překrývat a každý kus se musí do vnějších rozměrů kategorie vejít alespoň v jedné ze šesti osových rotací
+2. kusy se seřadí sestupně podle nejdelší hrany, pak bbox objemu a nakonec stabilního `FulfilmentSlot.id`
+3. dimension-aware first-fit drží pro každou rozpracovanou zásilku skutečně realizovatelný `packing_bbox`: u prázdné zásilky jej založí rotovaným `packing_part_bbox` prvního kusu; další ochrannou obálku zkusí ve všech osových rotacích přiložit vedle dosavadního bboxu podél každé ze tří os, přičemž na zvolené ose se rozměry sečtou a na zbývajících vezme maximum
+4. kandidát smí zůstat v zásilce jen tehdy, když nepřekročí vnější rozměry kategorie, konzervativní objemovou proxy `Σ(bbox_volume) / koeficient_plnění_krabice` ani agregovanou hmotnost dílů + obalu; z platných kandidátů se deterministicky vybere nejmenší výsledný bbox objem, potom lexikograficky rozměry, rotace a osa
+5. pokud neexistuje platný kandidát, vznikne další plánovaná zásilka; její snapshot uloží výsledný `packing_bbox` ochranných obálek, objemovou proxy a hmotnost
+6. na hraně se zaokrouhluje nahoru; co se nevejde do žádné podporované kategorie, jde do individuální nabídky
 
-Vlastní přesný 3D bin packing **nestav** — pro hrubé přepravní kategorie stačí konzervativní first-fit nad bbox objemem a hmotností. `ShipmentPlan` je součást cenového snapshotu; fázovaná objednávka plánuje sample a batch odděleně a revize modelu přepočítá jen zbývající zásilky.
+Vlastní přesný 3D bin packing **nestav**. Popsaný axis-aligned first-fit může vytvořit více zásilek než optimální packing, ale každý přijatý krok reprezentuje platné nepřekrývající se umístění, takže samotný součet objemů nikdy nesmí podcenit počet balíků. `ShipmentPlan` je součást cenového snapshotu; fázovaná objednávka plánuje sample a batch odděleně a revize modelu přepočítá jen zbývající zásilky.
 
 Každý plán zároveň deterministicky rozdělí `FulfilmentSlot` všech naceněných kusů právě do jedné plánované zásilky; skutečný `Shipment` tuto množinu snapshotuje. Cenový snapshot každému slotu přiřadí `settlement_amount` a každé zásilce vlastní účtovanou dopravu/handling tak, aby jejich součet přesně odpovídal ceně fáze; refund ztracené parcely proto má předem danou částku bez zpětného přepočtu doručených kusů. Jednotlivé složky včetně expresního příplatku mají deterministickou alokaci ke slotům a každý `PriceAdjustment` ukládá, kterou dosud nekreditovanou alokaci spotřeboval. `remaining_contract_value` slotu proto nikdy neklesne pod nulu a claim, SLA credit ani jejich opačné pořadí nemohou stejnou hodnotu odečíst dvakrát. Fáze je `delivered` až tehdy, když je doručený každý aktuální list všech povinných shipment lineage. Pokud je alespoň jeden slot doručený a všechny ostatní jsou buď doručené, nebo po incidentu finančně vypořádané jako `cancelled_refunded`, fáze i objednávka skončí `partially_fulfilled`. První z více balíků tedy nikdy nedokončí celou fázi a ztráta druhého nikdy nevynutí refund už doručených kusů.
 
