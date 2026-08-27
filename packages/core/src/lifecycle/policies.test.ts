@@ -580,6 +580,65 @@ const permittedContext = {
   reshipmentHandoffCompleted: true,
   reshipmentAuthorizationCreated: true,
   reshipmentAuthorizationSetupAtomic: true,
+  reshipmentSetupResultId: "reship-setup-result-1",
+  reshipmentSetupAllocationId: "shipment-allocation-1",
+  reshipmentSetupExpectedClaimId: "claim-1",
+  reshipmentSetupExpectedResolutionId: "claim-resolution-1",
+  reshipmentSetupExpectedSlotId: "claim-slot-1",
+  reshipmentSetupExpectedOrderId: "order-1",
+  reshipmentSetupExpectedPhaseId: "phase-1",
+  reshipmentSetupExpectedOriginalShipmentId: "shipment-1",
+  reshipmentSetupClaimId: "claim-1",
+  reshipmentSetupResolutionId: "claim-resolution-1",
+  reshipmentSetupSlotId: "claim-slot-1",
+  reshipmentSetupOrderId: "order-1",
+  reshipmentSetupPhaseId: "phase-1",
+  reshipmentSetupResolutionPreviousStatus: "pending",
+  reshipmentSetupResolutionTargetStatus: "reship_pending",
+  reshipmentSetupOriginalShipmentId: "shipment-1",
+  reshipmentSetupOriginalShipmentClaimId: "claim-1",
+  reshipmentSetupOriginalShipmentResolutionId: "claim-resolution-1",
+  reshipmentSetupOriginalShipmentSlotId: "claim-slot-1",
+  reshipmentSetupOriginalShipmentOrderId: "order-1",
+  reshipmentSetupOriginalShipmentPhaseId: "phase-1",
+  reshipmentSetupOriginalShipmentStatus: "returned",
+  reshipmentSetupOriginalShipmentCurrentLineageLeaf: true,
+  reshipmentSetupOriginalShipmentAllocationId: "shipment-allocation-1",
+  reshipmentSetupCustodyShipmentId: "shipment-1",
+  reshipmentSetupCustodyClaimId: "claim-1",
+  reshipmentSetupCustodyResolutionId: "claim-resolution-1",
+  reshipmentSetupCustodyStatus: "returned",
+  reshipmentSetupCustodyConfirmedAt: Instant.parse("2026-02-03T00:00:00.000Z"),
+  reshipmentSetupQcShipmentId: "shipment-1",
+  reshipmentSetupQcClaimId: "claim-1",
+  reshipmentSetupQcResolutionId: "claim-resolution-1",
+  reshipmentSetupFreshQcPassedAt: Instant.parse("2026-02-04T00:00:00.000Z"),
+  reshipmentSetupNewShipmentId: "reship-shipment-1",
+  reshipmentSetupNewShipmentClaimId: "claim-1",
+  reshipmentSetupNewShipmentResolutionId: "claim-resolution-1",
+  reshipmentSetupNewShipmentSlotId: "claim-slot-1",
+  reshipmentSetupNewShipmentOrderId: "order-1",
+  reshipmentSetupNewShipmentPhaseId: "phase-1",
+  reshipmentSetupNewShipmentReplacesShipmentId: "shipment-1",
+  reshipmentSetupNewShipmentAllocationId: "shipment-allocation-1",
+  reshipmentSetupNewShipmentOriginClaimId: "claim-1",
+  reshipmentSetupNewShipmentStatus: "planned",
+  reshipmentSetupNewShipmentCurrentLineageLeaf: true,
+  reshipmentSetupAuthorizationId: "reship-authorization-1",
+  reshipmentSetupAuthorizationClaimId: "claim-1",
+  reshipmentSetupAuthorizationResolutionId: "claim-resolution-1",
+  reshipmentSetupAuthorizationSlotId: "claim-slot-1",
+  reshipmentSetupAuthorizationOrderId: "order-1",
+  reshipmentSetupAuthorizationPhaseId: "phase-1",
+  reshipmentSetupAuthorizationOriginalShipmentId: "shipment-1",
+  reshipmentSetupAuthorizationNewShipmentId: "reship-shipment-1",
+  reshipmentSetupAuthorizationStatus: "issued",
+  reshipmentSetupAuthorizationAmountDueMinor: 0n,
+  reshipmentSetupAuthorizationResultId: "reship-setup-result-1",
+  reshipmentSetupResolutionResultId: "reship-setup-result-1",
+  reshipmentSetupNewShipmentResultId: "reship-setup-result-1",
+  reshipmentSetupCustodyResultId: "reship-setup-result-1",
+  reshipmentSetupQcResultId: "reship-setup-result-1",
   reshipmentResolutionClaimId: "claim-1",
   reshipmentResolutionId: "claim-resolution-1",
   reshipmentResolutionSlotId: "claim-slot-1",
@@ -787,6 +846,38 @@ const permittedContext = {
   ],
   handoffCompleted: true,
   handoffAtomic: true,
+  handoffResultId: "handoff-result-1",
+  handoffResultShipmentResultId: "handoff-result-1",
+  handoffResultOrderResultId: "handoff-result-1",
+  handoffResultPhaseResultId: "handoff-result-1",
+  handoffResultSlotSetResultId: "handoff-result-1",
+  handoffResultJobSetResultId: "handoff-result-1",
+  handoffResultProviderScanResultId: "handoff-result-1",
+  handoffResultCustodyResultId: "handoff-result-1",
+  handoffResultShipmentId: "shipment-1",
+  handoffResultOrderId: "order-1",
+  handoffResultPhaseId: "phase-1",
+  handoffResultSlotIds: ["slot-1", "slot-2"],
+  handoffResultJobIds: ["job-1", "job-2"],
+  handoffResultOrderPreviousStatus: "ready_to_ship",
+  handoffResultOrderTargetStatus: "shipped",
+  handoffResultPhasePreviousStatus: "qc_passed",
+  handoffResultPhaseTargetStatus: "shipped",
+  handoffResultShipmentPreviousStatus: "label_created",
+  handoffResultShipmentTargetStatus: "handed_over",
+  handoffResultJobPreviousStatus: "packed",
+  handoffResultJobTargetStatus: "handed_over",
+  handoffResultProviderScanId: "handoff-provider-scan-1",
+  handoffResultProviderScanShipmentId: "shipment-1",
+  handoffResultProviderScanOrderId: "order-1",
+  handoffResultProviderScanPhaseId: "phase-1",
+  handoffResultProviderTransactionId: "handoff-provider-transaction-1",
+  handoffResultProviderScanStatus: "accepted",
+  handoffResultProviderScanAuthenticated: true,
+  handoffResultProviderScanVerified: true,
+  handoffResultCustodyConfirmed: true,
+  handoffResultCompleted: true,
+  handoffResultAtomic: true,
   cancellationRaceHandoffKind: "ordinary",
   cancellationRaceHandoffResultId: "cancellation-race-result-1",
   cancellationRaceResultKind: "ordinary",
@@ -956,6 +1047,12 @@ function orderCancellationPhaseDisposition(current?: string): {
   readonly previous: string;
   readonly target: string;
 } {
+  if (current === "quoted") {
+    return { previous: "quoted", target: "cancelled" };
+  }
+  if (current === "active") {
+    return { previous: "active", target: "cancelled" };
+  }
   if (current === "confirmed") {
     return { previous: "active", target: "cancelled" };
   }
@@ -1184,6 +1281,37 @@ function contextForTransition(target: string, current?: string) {
         : "actual_recorded";
   return {
     ...permittedContext,
+    expectedCompletionFulfilmentSlotIds:
+      target === "partially_fulfilled" ? ["slot-1", "slot-2"] : ["slot-1"],
+    completionFulfilmentSlotOutcomes:
+      target === "partially_fulfilled"
+        ? [
+            {
+              slotId: "slot-1",
+              orderId: "order-1",
+              phaseId: "phase-1",
+              status: "delivered",
+            },
+            {
+              slotId: "slot-2",
+              orderId: "order-1",
+              phaseId: "phase-1",
+              status: "cancelled_refunded",
+            },
+          ]
+        : [
+            {
+              slotId: "slot-1",
+              orderId: "order-1",
+              phaseId: "phase-1",
+              status:
+                target === "completed"
+                  ? "delivered"
+                  : target === "refunded" || target === "cancelled_refunded"
+                    ? "cancelled_refunded"
+                    : "cancelled_settled",
+            },
+          ],
     failureStage,
     materialConsumptionMode,
     initialPaymentStatus: capacityCaptureCompensation
@@ -1214,6 +1342,10 @@ function contextForTransition(target: string, current?: string) {
       current === "cancellation_pending" && target === "handed_over"
         ? "cancellation_pending"
         : permittedContext.handoffShipmentPreviousStatus,
+    reshipmentSetupResolutionPreviousStatus:
+      target === "reship_pending"
+        ? current
+        : permittedContext.reshipmentSetupResolutionPreviousStatus,
     claimSlotResolutionStatuses,
     ...resolutionEvidence,
     ...claimRejectionEvidence,
@@ -1229,7 +1361,8 @@ function contextForTransition(target: string, current?: string) {
       target === "qc_passed"
         ? current
         : permittedContext.qcCompletionPhasePreviousStatus,
-    phaseCancellationOrderPreviousStatus: current,
+    phaseCancellationOrderPreviousStatus:
+      current === "active" ? "confirmed" : current,
     phaseCancellationPhasePreviousStatus: cancellationPhaseDisposition.previous,
     phaseCancellationPhaseTargetStatus: cancellationPhaseDisposition.target,
     orderTerminalPhaseOrderPreviousStatus: current,
@@ -1390,6 +1523,69 @@ describe("v0 lifecycle policy tables", () => {
       expect(() =>
         transition(policy, { current, target, idempotencyKey: "guarded" }),
       ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["Order", orderPolicy, "ready_to_ship"],
+    ["OrderPhase(single)", singleOrderPhasePolicy, "qc_passed"],
+  ] as const)(
+    "accepts %s first-parcel shipment handoff only with its exact aggregate result",
+    (_name, policy, current) => {
+      expect(
+        transition(policy, {
+          current,
+          target: "shipped",
+          idempotencyKey: `aggregate-handoff-${_name}`,
+          context: contextForTransition("shipped", current),
+        }),
+      ).toEqual({ kind: "changed", previous: current, current: "shipped" });
+    },
+  );
+
+  it.each([
+    ["foreign Shipment", { handoffResultShipmentId: "another-shipment" }],
+    [
+      "foreign provider scan Shipment",
+      { handoffResultProviderScanShipmentId: "another-shipment" },
+    ],
+    ["wrong Order source", { handoffResultOrderPreviousStatus: "qc_passed" }],
+    ["stranded Shipment", { handoffShipmentTargetStatus: "in_transit" }],
+    ["stranded Job", { handoffJobTargetStatus: "packed" }],
+    ["incomplete slot result", { handoffResultSlotIds: ["slot-1"] }],
+    ["incomplete Job result", { handoffResultJobIds: ["job-1"] }],
+    [
+      "component result substitution",
+      { handoffResultJobSetResultId: "another-result" },
+    ],
+    [
+      "component status substitution",
+      { handoffResultJobTargetStatus: "packed" },
+    ],
+    [
+      "unaccepted provider scan",
+      { handoffResultProviderScanStatus: "pending" },
+    ],
+    ["non-atomic result", { handoffResultAtomic: false }],
+  ] as const)(
+    "rejects first-parcel aggregate handoff with %s evidence",
+    (_case, invalid) => {
+      for (const [policy, current] of [
+        [orderPolicy, "ready_to_ship"],
+        [singleOrderPhasePolicy, "qc_passed"],
+      ] as const) {
+        expect(() =>
+          transition(policy, {
+            current,
+            target: "shipped",
+            idempotencyKey: `aggregate-handoff-invalid-${policy.name}-${_case}`,
+            context: {
+              ...contextForTransition("shipped", current),
+              ...invalid,
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
     },
   );
 
@@ -2494,6 +2690,7 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it.each([
+    ["quoted", "quoted", "cancelled"],
     ["confirmed", "active", "cancelled"],
     ["in_production", "in_production", "cancelled"],
     ["qc_passed", "qc_passed", "cancelled"],
@@ -2521,6 +2718,21 @@ describe("v0 lifecycle policy tables", () => {
       }
     },
   );
+
+  it("rejects quoted Order cancellation with a mismatched quoted phase result", () => {
+    expect(() =>
+      transition(orderPolicy, {
+        current: "quoted",
+        target: "cancelled",
+        idempotencyKey: "quoted-order-cancellation-wrong-phase",
+        context: {
+          ...contextForTransition("cancelled", "quoted"),
+          paymentStatus: "unpaid",
+          phaseCancellationPhasePreviousStatus: "active",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each([
     ["confirmed", "active", "cancelled"],
@@ -2591,6 +2803,69 @@ describe("v0 lifecycle policy tables", () => {
             completionProjectedTarget: "cancelled_refunded",
             amountDueMinor: 0n,
             refundableBalanceMinor: 0n,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["quoted", "quoted"],
+    ["active", "confirmed"],
+    ["in_production", "in_production"],
+    ["qc_passed", "qc_passed"],
+    ["qc_passed", "awaiting_balance"],
+    ["qc_passed", "ready_to_ship"],
+  ] as const)(
+    "atomically cancels single phase %s with its exact parent %s",
+    (phasePreviousStatus, orderPreviousStatus) => {
+      expect(
+        transition(singleOrderPhasePolicy, {
+          current: phasePreviousStatus,
+          target: "cancelled",
+          idempotencyKey: `single-phase-cancellation-${phasePreviousStatus}-${orderPreviousStatus}`,
+          context: {
+            ...contextForTransition("cancelled", phasePreviousStatus),
+            phaseCancellationOrderPreviousStatus: orderPreviousStatus,
+            phaseCancellationPhasePreviousStatus: phasePreviousStatus,
+            phaseCancellationPhaseTargetStatus: "cancelled",
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: phasePreviousStatus,
+        current: "cancelled",
+      });
+    },
+  );
+
+  it.each([
+    ["order identity", "orderId", "another-order"],
+    ["parent cancellation Order", "phaseCancellationOrderId", "another-order"],
+    [
+      "phase cancellation Order",
+      "phaseCancellationPhaseOrderId",
+      "another-order",
+    ],
+    ["phase identity", "phaseCancellationPhaseId", "another-phase"],
+    ["phase kind", "phaseKind", "sample"],
+    ["parent source", "phaseCancellationOrderPreviousStatus", "quoted"],
+    ["parent target", "phaseCancellationOrderTargetStatus", "confirmed"],
+    ["phase source", "phaseCancellationPhasePreviousStatus", "quoted"],
+    ["phase target", "phaseCancellationPhaseTargetStatus", "active"],
+    ["missing result", "phaseCancellationCompleted", false],
+    ["non-atomic result", "phaseCancellationAtomic", false],
+  ] as const)(
+    "rejects direct single phase cancellation with a mismatched %s",
+    (_case, field, value) => {
+      expect(() =>
+        transition(singleOrderPhasePolicy, {
+          current: "active",
+          target: "cancelled",
+          idempotencyKey: `single-phase-cancellation-invalid-${field}`,
+          context: {
+            ...contextForTransition("cancelled", "active"),
+            [field]: value,
           },
         }),
       ).toThrow(TransitionGuardError);
@@ -3406,6 +3681,141 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  const multiSlotPartialCompletion = () => ({
+    ...contextForTransition("partially_fulfilled", "shipped"),
+    expectedCompletionFulfilmentSlotIds: ["slot-1", "slot-2"],
+    completionFulfilmentSlotOutcomes: [
+      {
+        slotId: "slot-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "delivered",
+      },
+      {
+        slotId: "slot-2",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "cancelled_refunded",
+      },
+    ],
+  });
+
+  it.each([
+    ["Order", orderPolicy],
+    ["OrderPhase(single)", singleOrderPhasePolicy],
+  ] as const)(
+    "accepts a reordered complete mixed-slot projection for %s",
+    (_lifecycle, policy) => {
+      const context = multiSlotPartialCompletion();
+      expect(
+        transition(policy, {
+          current: "shipped",
+          target: "partially_fulfilled",
+          idempotencyKey: `completion-complete-reordered-${_lifecycle}`,
+          context: {
+            ...context,
+            completionFulfilmentSlotOutcomes: [
+              ...context.completionFulfilmentSlotOutcomes,
+            ].reverse(),
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "shipped",
+        current: "partially_fulfilled",
+      });
+    },
+  );
+
+  it.each([
+    [
+      "omitted slot",
+      (context: ReturnType<typeof multiSlotPartialCompletion>) => {
+        context.completionFulfilmentSlotOutcomes =
+          context.completionFulfilmentSlotOutcomes.slice(0, 1);
+      },
+    ],
+    [
+      "duplicate slot",
+      (context: ReturnType<typeof multiSlotPartialCompletion>) => {
+        context.completionFulfilmentSlotOutcomes = [
+          context.completionFulfilmentSlotOutcomes[0],
+          {
+            ...context.completionFulfilmentSlotOutcomes[1],
+            slotId: "slot-1",
+          },
+        ];
+      },
+    ],
+    [
+      "foreign slot",
+      (context: ReturnType<typeof multiSlotPartialCompletion>) => {
+        context.completionFulfilmentSlotOutcomes = [
+          context.completionFulfilmentSlotOutcomes[0],
+          {
+            ...context.completionFulfilmentSlotOutcomes[1],
+            slotId: "slot-3",
+          },
+        ];
+      },
+    ],
+    [
+      "foreign Order",
+      (context: ReturnType<typeof multiSlotPartialCompletion>) => {
+        context.completionFulfilmentSlotOutcomes = [
+          context.completionFulfilmentSlotOutcomes[0],
+          {
+            ...context.completionFulfilmentSlotOutcomes[1],
+            orderId: "another-order",
+          },
+        ];
+      },
+    ],
+    [
+      "foreign phase",
+      (context: ReturnType<typeof multiSlotPartialCompletion>) => {
+        context.completionFulfilmentSlotOutcomes = [
+          context.completionFulfilmentSlotOutcomes[0],
+          {
+            ...context.completionFulfilmentSlotOutcomes[1],
+            phaseId: "another-phase",
+          },
+        ];
+      },
+    ],
+    [
+      "all delivered outcomes",
+      (context: ReturnType<typeof multiSlotPartialCompletion>) => {
+        context.completionFulfilmentSlotOutcomes =
+          context.completionFulfilmentSlotOutcomes.map((outcome) => ({
+            ...outcome,
+            status: "delivered",
+          }));
+      },
+    ],
+    [
+      "all cancelled-refunded outcomes",
+      (context: ReturnType<typeof multiSlotPartialCompletion>) => {
+        context.completionFulfilmentSlotOutcomes =
+          context.completionFulfilmentSlotOutcomes.map((outcome) => ({
+            ...outcome,
+            status: "cancelled_refunded",
+          }));
+      },
+    ],
+  ] as const)("rejects terminal projection with %s", (_case, mutate) => {
+    const context = multiSlotPartialCompletion();
+    mutate(context);
+    expect(() =>
+      transition(orderPolicy, {
+        current: "shipped",
+        target: "partially_fulfilled",
+        idempotencyKey: `completion-invalid-${_case}`,
+        context,
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   const completeWholeClaimWithdrawal = (
     parentPreviousStatus: "opened" | "investigating" | "active" = "active",
@@ -6364,6 +6774,7 @@ describe("v0 lifecycle policy tables", () => {
           target: "reship_pending",
           idempotencyKey: "reship-lost",
           context: {
+            ...contextForTransition("reship_pending", current),
             shipmentStatus,
             custodyConfirmed: true,
             freshQcPassed: true,
@@ -6379,7 +6790,10 @@ describe("v0 lifecycle policy tables", () => {
     "requires %s before selecting a reship",
     (missingFlag) => {
       const context = {
+        ...contextForTransition("reship_pending", "recovery_pending"),
         shipmentStatus: "recovered",
+        reshipmentSetupOriginalShipmentStatus: "recovered",
+        reshipmentSetupCustodyStatus: "recovered",
         custodyConfirmed: true,
         freshQcPassed: true,
         reshipmentAuthorizationCreated: true,
@@ -6411,7 +6825,10 @@ describe("v0 lifecycle policy tables", () => {
           target: "reship_pending",
           idempotencyKey: `reship-${current}-${shipmentStatus}`,
           context: {
+            ...contextForTransition("reship_pending", current),
             shipmentStatus,
+            reshipmentSetupOriginalShipmentStatus: shipmentStatus,
+            reshipmentSetupCustodyStatus: shipmentStatus,
             custodyConfirmed: true,
             freshQcPassed: true,
             reshipmentAuthorizationCreated: true,
@@ -6425,6 +6842,76 @@ describe("v0 lifecycle policy tables", () => {
       });
     },
   );
+
+  it.each([
+    ["reshipmentSetupExpectedClaimId", "another-claim"],
+    ["reshipmentSetupExpectedResolutionId", "another-resolution"],
+    ["reshipmentSetupExpectedSlotId", "another-slot"],
+    ["reshipmentSetupExpectedOriginalShipmentId", "another-shipment"],
+    ["reshipmentSetupResolutionId", "another-resolution"],
+    ["reshipmentSetupResolutionPreviousStatus", "reprint_pending"],
+    ["reshipmentSetupOriginalShipmentId", "another-shipment"],
+    ["reshipmentSetupOriginalShipmentCurrentLineageLeaf", false],
+    ["reshipmentSetupOriginalShipmentAllocationId", "another-allocation"],
+    ["reshipmentSetupCustodyClaimId", "another-claim"],
+    ["reshipmentSetupQcResolutionId", "another-resolution"],
+    ["reshipmentSetupNewShipmentId", "another-new-shipment"],
+    ["reshipmentSetupNewShipmentReplacesShipmentId", "another-shipment"],
+    ["reshipmentSetupNewShipmentAllocationId", "another-allocation"],
+    ["reshipmentSetupNewShipmentCurrentLineageLeaf", false],
+    ["reshipmentSetupAuthorizationId", "another-authorization"],
+    ["reshipmentSetupAuthorizationResolutionId", "another-resolution"],
+    ["reshipmentSetupAuthorizationAmountDueMinor", 1n],
+    ["reshipmentSetupAuthorizationResultId", "another-result"],
+    ["reshipmentSetupResolutionResultId", "another-result"],
+    ["reshipmentSetupCustodyResultId", "another-result"],
+    ["reshipmentSetupQcResultId", "another-result"],
+    ["reshipmentAuthorizationSetupAtomic", false],
+  ] as const)("rejects reship setup with invalid %s", (field, value) => {
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "recovery_pending",
+        target: "reship_pending",
+        idempotencyKey: `reship-setup-invalid-${field}`,
+        context: {
+          ...contextForTransition("reship_pending", "recovery_pending"),
+          [field]: value,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects reship setup when fresh QC predates custody", () => {
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "pending",
+        target: "reship_pending",
+        idempotencyKey: "reship-setup-stale-qc",
+        context: {
+          ...contextForTransition("reship_pending", "pending"),
+          reshipmentSetupFreshQcPassedAt: Instant.parse(
+            "2026-02-02T00:00:00.000Z",
+          ),
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects reship setup when fresh QC has the custody timestamp", () => {
+    const context = contextForTransition("reship_pending", "pending");
+    expect(() =>
+      transition(claimSlotResolutionPolicy, {
+        current: "pending",
+        target: "reship_pending",
+        idempotencyKey: "reship-setup-same-time-qc",
+        context: {
+          ...context,
+          reshipmentSetupFreshQcPassedAt:
+            context.reshipmentSetupCustodyConfirmedAt,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each(["refundWebhookAuthenticated", "refundWebhookVerified"] as const)(
     "requires %s before a Payment can record a refund webhook result",
@@ -8071,7 +8558,12 @@ describe("v0 lifecycle policy tables", () => {
   );
 
   it("atomically closes the quoted Order for a capacity-compensated capture", () => {
-    const capacityContext = contextForTransition("refund_pending", "pending");
+    const capacityContext = {
+      ...contextForTransition("refund_pending", "pending"),
+      phaseCancellationOrderPreviousStatus: "quoted",
+      phaseCancellationPhasePreviousStatus: "quoted",
+      phaseCancellationPhaseTargetStatus: "cancelled",
+    };
     expect(
       transition(orderPolicy, {
         current: "quoted",

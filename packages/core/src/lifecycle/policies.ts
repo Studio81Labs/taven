@@ -90,7 +90,53 @@ function requireProjectedCompletionTarget<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  if (command.context?.completionProjectedTarget !== command.target) {
+  const context = command.context;
+  const expected = context?.expectedCompletionFulfilmentSlotIds;
+  const outcomes = context?.completionFulfilmentSlotOutcomes;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const expectedStatus =
+    command.target === "completed"
+      ? "delivered"
+      : command.target === "partially_fulfilled"
+        ? "mixed"
+        : command.target === "refunded" ||
+            command.target === "cancelled_refunded"
+          ? "cancelled_refunded"
+          : "cancelled_settled";
+  const ids = new Set<string>();
+  let hasDeliveredOutcome = false;
+  let hasCancelledRefundedOutcome = false;
+  const valid =
+    Array.isArray(expected) &&
+    expected.length > 0 &&
+    new Set(expected).size === expected.length &&
+    expected.every(nonBlank) &&
+    Array.isArray(outcomes) &&
+    outcomes.length === expected.length &&
+    outcomes.every((value) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value))
+        return false;
+      const outcome = value as Readonly<Record<string, unknown>>;
+      const status = outcome.status;
+      if (status === "delivered") hasDeliveredOutcome = true;
+      if (status === "cancelled_refunded") hasCancelledRefundedOutcome = true;
+      return (
+        nonBlank(outcome.slotId) &&
+        !ids.has(outcome.slotId) &&
+        expected.includes(outcome.slotId) &&
+        outcome.orderId === context?.orderId &&
+        outcome.phaseId === context?.phaseId &&
+        (expectedStatus === "mixed"
+          ? status === "delivered" || status === "cancelled_refunded"
+          : status === expectedStatus) &&
+        (ids.add(outcome.slotId), true)
+      );
+    }) &&
+    expected.every((id) => ids.has(id)) &&
+    (expectedStatus !== "mixed" ||
+      (hasDeliveredOutcome && hasCancelledRefundedOutcome));
+  if (context?.completionProjectedTarget !== command.target || !valid) {
     throw new TransitionGuardError(
       lifecycle,
       command.current,
@@ -333,7 +379,9 @@ function requireInitialSettlementCaptureActivation<S extends string>(
 
 function expectedOrderCancellationPhaseDisposition(orderStatus: string):
   | {
+      readonly orderPreviousStatuses: readonly string[];
       readonly previous:
+        | "quoted"
         | "active"
         | "in_production"
         | "qc_passed"
@@ -342,24 +390,51 @@ function expectedOrderCancellationPhaseDisposition(orderStatus: string):
       readonly target: "cancelled" | "cancelled_refunded";
     }
   | undefined {
+  if (orderStatus === "quoted") {
+    return {
+      orderPreviousStatuses: ["quoted"],
+      previous: "quoted",
+      target: "cancelled",
+    };
+  }
   if (orderStatus === "confirmed") {
-    return { previous: "active", target: "cancelled" };
+    return {
+      orderPreviousStatuses: ["confirmed"],
+      previous: "active",
+      target: "cancelled",
+    };
   }
   if (orderStatus === "in_production") {
-    return { previous: "in_production", target: "cancelled" };
+    return {
+      orderPreviousStatuses: ["in_production"],
+      previous: "in_production",
+      target: "cancelled",
+    };
   }
   if (
     orderStatus === "qc_passed" ||
     orderStatus === "awaiting_balance" ||
     orderStatus === "ready_to_ship"
   ) {
-    return { previous: "qc_passed", target: "cancelled" };
+    return {
+      orderPreviousStatuses: [orderStatus],
+      previous: "qc_passed",
+      target: "cancelled",
+    };
   }
   if (orderStatus === "shipped") {
-    return { previous: "shipped", target: "cancelled_refunded" };
+    return {
+      orderPreviousStatuses: ["shipped"],
+      previous: "shipped",
+      target: "cancelled_refunded",
+    };
   }
   if (orderStatus === "recovery_pending") {
-    return { previous: "recovery_pending", target: "cancelled_refunded" };
+    return {
+      orderPreviousStatuses: ["recovery_pending"],
+      previous: "recovery_pending",
+      target: "cancelled_refunded",
+    };
   }
   return undefined;
 }
@@ -368,12 +443,11 @@ function requireAtomicOrderPhaseCancellation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  const expectedPhaseDisposition = expectedOrderCancellationPhaseDisposition(
-    command.current,
-  );
-  if (expectedPhaseDisposition === undefined) {
-    return;
-  }
+  const isPhaseEntry = lifecycle === "OrderPhase(single)";
+  const expectedPhaseDisposition = isPhaseEntry
+    ? expectedSinglePhaseCancellationDisposition(command.current)
+    : expectedOrderCancellationPhaseDisposition(command.current);
+  if (expectedPhaseDisposition === undefined) return;
   const orderId = command.context?.orderId;
   const phaseId = command.context?.phaseId;
   if (
@@ -394,7 +468,9 @@ function requireAtomicOrderPhaseCancellation<S extends string>(
   }
   if (
     command.context?.phaseKind !== "single" ||
-    command.context?.phaseCancellationOrderPreviousStatus !== command.current ||
+    !expectedPhaseDisposition.orderPreviousStatuses.includes(
+      command.context?.phaseCancellationOrderPreviousStatus as string,
+    ) ||
     command.context?.phaseCancellationOrderTargetStatus !== "cancelled" ||
     command.context?.phaseCancellationPhasePreviousStatus !==
       expectedPhaseDisposition.previous ||
@@ -423,6 +499,44 @@ function requireAtomicOrderPhaseCancellation<S extends string>(
   if (expectedPhaseDisposition.target === "cancelled_refunded") {
     requireZeroBalances(lifecycle, command);
   }
+}
+
+function expectedSinglePhaseCancellationDisposition(phaseStatus: string):
+  | {
+      readonly orderPreviousStatuses: readonly string[];
+      readonly previous: string;
+      readonly target: "cancelled";
+    }
+  | undefined {
+  if (phaseStatus === "quoted") {
+    return {
+      orderPreviousStatuses: ["quoted"],
+      previous: "quoted",
+      target: "cancelled",
+    };
+  }
+  if (phaseStatus === "active") {
+    return {
+      orderPreviousStatuses: ["confirmed"],
+      previous: "active",
+      target: "cancelled",
+    };
+  }
+  if (phaseStatus === "in_production") {
+    return {
+      orderPreviousStatuses: ["in_production"],
+      previous: "in_production",
+      target: "cancelled",
+    };
+  }
+  if (phaseStatus === "qc_passed") {
+    return {
+      orderPreviousStatuses: ["qc_passed", "awaiting_balance", "ready_to_ship"],
+      previous: "qc_passed",
+      target: "cancelled",
+    };
+  }
+  return undefined;
 }
 
 function requireAtomicOrderPhaseCompletion<S extends string>(
@@ -2851,12 +2965,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       requireRecoveryObligation("Order", command);
     }
     if (command.current === "ready_to_ship" && command.target === "shipped") {
-      requireFlag(
-        "Order",
-        command,
-        "shipmentHandoffAuthorized",
-        "the complete shipment handoff guard must pass",
-      );
+      requireAtomicOrdinaryHandoff("Order", command);
       requireZeroBalances("Order", command);
     }
     if (
@@ -3025,12 +3134,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         requireRecoveryObligation("OrderPhase(single)", command);
       }
       if (command.current === "qc_passed" && command.target === "shipped") {
-        requireFlag(
-          "OrderPhase(single)",
-          command,
-          "shipmentHandoffAuthorized",
-          "the complete shipment handoff guard must pass",
-        );
+        requireAtomicOrdinaryHandoff("OrderPhase(single)", command);
         requireZeroBalances("OrderPhase(single)", command);
       }
       if (command.current === "shipped" && command.target === "delivered") {
@@ -3051,6 +3155,9 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
           "preHandoffShipmentCancellationsCompleted",
           "all pre-handoff shipment cancellations must complete before cancellation",
         );
+      }
+      if (command.target === "cancelled") {
+        requireAtomicOrderPhaseCancellation("OrderPhase(single)", command);
       }
       if (
         (command.current === "shipped" ||
@@ -4026,6 +4133,69 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       command.target,
       "ordinary handoff cannot omit a contributing Job",
     );
+  }
+  if (lifecycle === "Order" || lifecycle === "OrderPhase(single)") {
+    const resultId = command.context?.handoffResultId;
+    const resultSlotIds = command.context?.handoffResultSlotIds;
+    const resultJobIds = command.context?.handoffResultJobIds;
+    const scanId = command.context?.handoffResultProviderScanId;
+    const scanTransactionId =
+      command.context?.handoffResultProviderTransactionId;
+    const aggregateSourceMatches =
+      lifecycle === "Order"
+        ? command.context?.handoffOrderPreviousStatus === command.current
+        : command.context?.handoffPhasePreviousStatus === command.current;
+    if (
+      typeof resultId !== "string" ||
+      resultId.trim().length === 0 ||
+      command.context?.handoffResultShipmentResultId !== resultId ||
+      command.context?.handoffResultOrderResultId !== resultId ||
+      command.context?.handoffResultPhaseResultId !== resultId ||
+      command.context?.handoffResultSlotSetResultId !== resultId ||
+      command.context?.handoffResultJobSetResultId !== resultId ||
+      command.context?.handoffResultProviderScanResultId !== resultId ||
+      command.context?.handoffResultCustodyResultId !== resultId ||
+      typeof scanId !== "string" ||
+      scanId.trim().length === 0 ||
+      typeof scanTransactionId !== "string" ||
+      scanTransactionId.trim().length === 0 ||
+      !aggregateSourceMatches ||
+      command.context?.handoffResultShipmentId !== shipmentId ||
+      command.context?.handoffResultOrderId !== orderId ||
+      command.context?.handoffResultPhaseId !== phaseId ||
+      !hasSameNonEmptyStringSet(resultSlotIds, expectedSlotIds) ||
+      !hasSameNonEmptyStringSet(resultJobIds, expectedJobIds) ||
+      command.context?.handoffResultOrderPreviousStatus !==
+        expectedStatuses.orderPrevious ||
+      command.context?.handoffResultOrderTargetStatus !== "shipped" ||
+      command.context?.handoffResultPhasePreviousStatus !== "qc_passed" ||
+      command.context?.handoffResultPhaseTargetStatus !== "shipped" ||
+      command.context?.handoffResultShipmentPreviousStatus !==
+        expectedStatuses.shipmentPrevious ||
+      command.context?.handoffResultShipmentTargetStatus !== "handed_over" ||
+      command.context?.handoffResultJobPreviousStatus !== "packed" ||
+      command.context?.handoffResultJobTargetStatus !== "handed_over" ||
+      command.context?.handoffResultProviderScanId !== scanId ||
+      command.context?.handoffResultProviderScanShipmentId !== shipmentId ||
+      command.context?.handoffResultProviderScanOrderId !== orderId ||
+      command.context?.handoffResultProviderScanPhaseId !== phaseId ||
+      command.context?.handoffResultProviderTransactionId !==
+        scanTransactionId ||
+      command.context?.handoffResultProviderScanStatus !== "accepted" ||
+      command.context?.handoffResultProviderScanAuthenticated !== true ||
+      command.context?.handoffResultProviderScanVerified !== true ||
+      command.context?.handoffResultCustodyConfirmed !== true ||
+      command.context?.handoffResultCompleted !== true ||
+      command.context?.handoffResultAtomic !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "aggregate handoff requires the exact atomic Shipment, Order, phase, slot, Job, and provider-scan result",
+      );
+    }
+    return;
   }
   if (
     lifecycle === "Job" &&
@@ -6336,6 +6506,148 @@ function requireIndependentReplacementHandoff<S extends string>(
   );
 }
 
+function requireExactReshipmentSetup<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const claimId = context?.claimId;
+  const resolutionId = context?.claimSlotResolutionId;
+  const slotId = context?.claimSlotId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const originalShipmentId = context?.shipmentId;
+  const expectedClaimId = context?.reshipmentSetupExpectedClaimId;
+  const expectedResolutionId = context?.reshipmentSetupExpectedResolutionId;
+  const expectedSlotId = context?.reshipmentSetupExpectedSlotId;
+  const expectedOrderId = context?.reshipmentSetupExpectedOrderId;
+  const expectedPhaseId = context?.reshipmentSetupExpectedPhaseId;
+  const expectedOriginalShipmentId =
+    context?.reshipmentSetupExpectedOriginalShipmentId;
+  const newShipmentId = context?.reshipmentShipmentId;
+  const authorizationId = context?.reshipmentAuthorizationId;
+  const setupResultId = context?.reshipmentSetupResultId;
+  const allocationId = context?.reshipmentSetupAllocationId;
+  const shipmentStatus = context?.shipmentStatus;
+  const custodyConfirmedAt = context?.reshipmentSetupCustodyConfirmedAt;
+  const freshQcPassedAt = context?.reshipmentSetupFreshQcPassedAt;
+
+  if (
+    !nonBlank(claimId) ||
+    !nonBlank(resolutionId) ||
+    !nonBlank(slotId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(originalShipmentId) ||
+    !nonBlank(expectedClaimId) ||
+    claimId !== expectedClaimId ||
+    !nonBlank(expectedResolutionId) ||
+    resolutionId !== expectedResolutionId ||
+    !nonBlank(expectedSlotId) ||
+    slotId !== expectedSlotId ||
+    !nonBlank(expectedOrderId) ||
+    orderId !== expectedOrderId ||
+    !nonBlank(expectedPhaseId) ||
+    phaseId !== expectedPhaseId ||
+    !nonBlank(expectedOriginalShipmentId) ||
+    originalShipmentId !== expectedOriginalShipmentId ||
+    !nonBlank(newShipmentId) ||
+    originalShipmentId === newShipmentId ||
+    !nonBlank(authorizationId) ||
+    !nonBlank(setupResultId) ||
+    !nonBlank(allocationId) ||
+    (shipmentStatus !== "returned" && shipmentStatus !== "recovered") ||
+    !(custodyConfirmedAt instanceof Instant) ||
+    !(freshQcPassedAt instanceof Instant) ||
+    freshQcPassedAt.compare(custodyConfirmedAt) <= 0 ||
+    context?.reshipmentSetupClaimId !== claimId ||
+    context?.reshipmentSetupResolutionId !== resolutionId ||
+    context?.reshipmentSetupSlotId !== slotId ||
+    context?.reshipmentSetupOrderId !== orderId ||
+    context?.reshipmentSetupPhaseId !== phaseId ||
+    context?.reshipmentSetupResolutionPreviousStatus !== command.current ||
+    context?.reshipmentSetupResolutionTargetStatus !== "reship_pending" ||
+    context?.reshipmentSetupOriginalShipmentId !== originalShipmentId ||
+    context?.reshipmentSetupOriginalShipmentClaimId !== claimId ||
+    context?.reshipmentSetupOriginalShipmentResolutionId !== resolutionId ||
+    context?.reshipmentSetupOriginalShipmentSlotId !== slotId ||
+    context?.reshipmentSetupOriginalShipmentOrderId !== orderId ||
+    context?.reshipmentSetupOriginalShipmentPhaseId !== phaseId ||
+    context?.reshipmentSetupOriginalShipmentStatus !== shipmentStatus ||
+    context?.reshipmentSetupOriginalShipmentCurrentLineageLeaf !== true ||
+    context?.reshipmentSetupOriginalShipmentAllocationId !== allocationId ||
+    context?.reshipmentSetupCustodyShipmentId !== originalShipmentId ||
+    context?.reshipmentSetupCustodyClaimId !== claimId ||
+    context?.reshipmentSetupCustodyResolutionId !== resolutionId ||
+    context?.reshipmentSetupCustodyStatus !== shipmentStatus ||
+    context?.reshipmentSetupQcShipmentId !== originalShipmentId ||
+    context?.reshipmentSetupQcClaimId !== claimId ||
+    context?.reshipmentSetupQcResolutionId !== resolutionId ||
+    context?.reshipmentSetupNewShipmentId !== newShipmentId ||
+    context?.reshipmentSetupNewShipmentClaimId !== claimId ||
+    context?.reshipmentSetupNewShipmentResolutionId !== resolutionId ||
+    context?.reshipmentSetupNewShipmentSlotId !== slotId ||
+    context?.reshipmentSetupNewShipmentOrderId !== orderId ||
+    context?.reshipmentSetupNewShipmentPhaseId !== phaseId ||
+    context?.reshipmentSetupNewShipmentReplacesShipmentId !==
+      originalShipmentId ||
+    context?.reshipmentSetupNewShipmentAllocationId !== allocationId ||
+    context?.reshipmentSetupNewShipmentOriginClaimId !== claimId ||
+    context?.reshipmentSetupNewShipmentStatus !== "planned" ||
+    context?.reshipmentSetupNewShipmentCurrentLineageLeaf !== true ||
+    context?.reshipmentSetupAuthorizationId !== authorizationId ||
+    context?.reshipmentCustodyAuthorizationId !== authorizationId ||
+    context?.reshipmentSetupAuthorizationClaimId !== claimId ||
+    context?.reshipmentSetupAuthorizationResolutionId !== resolutionId ||
+    context?.reshipmentSetupAuthorizationSlotId !== slotId ||
+    context?.reshipmentSetupAuthorizationOrderId !== orderId ||
+    context?.reshipmentSetupAuthorizationPhaseId !== phaseId ||
+    context?.reshipmentSetupAuthorizationOriginalShipmentId !==
+      originalShipmentId ||
+    context?.reshipmentSetupAuthorizationNewShipmentId !== newShipmentId ||
+    context?.reshipmentSetupAuthorizationStatus !== "issued" ||
+    context?.reshipmentSetupAuthorizationAmountDueMinor !== 0n ||
+    context?.reshipmentSetupAuthorizationResultId !== setupResultId ||
+    context?.reshipmentSetupResolutionResultId !== setupResultId ||
+    context?.reshipmentSetupNewShipmentResultId !== setupResultId ||
+    context?.reshipmentSetupCustodyResultId !== setupResultId ||
+    context?.reshipmentSetupQcResultId !== setupResultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "reship selection requires the exact custody-backed Claim child, Shipment, allocation, and authorization setup result",
+    );
+  }
+  requireFlag(
+    lifecycle,
+    command,
+    "custodyConfirmed",
+    "reship selection requires confirmed custody of the exact original Shipment",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "freshQcPassed",
+    "reship selection requires fresh quality control for the exact original Shipment",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "reshipmentAuthorizationCreated",
+    "reship selection requires its exact custody-backed authorization",
+  );
+  requireFlag(
+    lifecycle,
+    command,
+    "reshipmentAuthorizationSetupAtomic",
+    "reship authorization, new Shipment, and child selection must be persisted atomically",
+  );
+}
+
 function requireExactReshipmentHandoff<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -7136,39 +7448,7 @@ export const claimSlotResolutionPolicy: TransitionPolicy<ClaimSlotResolutionStat
           command.current === "recovery_pending") &&
         command.target === "reship_pending"
       ) {
-        const shipmentStatus = command.context?.shipmentStatus;
-        if (shipmentStatus !== "returned" && shipmentStatus !== "recovered") {
-          throw new TransitionGuardError(
-            "ClaimSlotResolution",
-            command.current,
-            command.target,
-            "reship selection requires the original shipment to be returned or recovered",
-          );
-        }
-        requireFlag(
-          "ClaimSlotResolution",
-          command,
-          "custodyConfirmed",
-          "reship selection requires confirmed custody of the original shipment",
-        );
-        requireFlag(
-          "ClaimSlotResolution",
-          command,
-          "freshQcPassed",
-          "reship selection requires fresh quality control after recovery",
-        );
-        requireFlag(
-          "ClaimSlotResolution",
-          command,
-          "reshipmentAuthorizationCreated",
-          "reship selection requires its custody-backed authorization",
-        );
-        requireFlag(
-          "ClaimSlotResolution",
-          command,
-          "reshipmentAuthorizationSetupAtomic",
-          "reship authorization must be created atomically with the reship setup",
-        );
+        requireExactReshipmentSetup("ClaimSlotResolution", command);
       }
       if (command.target === "withdrawn") {
         requireAtomicWholeClaimWithdrawal("ClaimSlotResolution", command);
