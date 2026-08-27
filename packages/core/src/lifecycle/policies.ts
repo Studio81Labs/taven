@@ -847,8 +847,32 @@ function requireAtomicOrderPhaseCancellation<S extends string>(
     ? expectedSinglePhaseCancellationDisposition(command.current)
     : expectedOrderCancellationPhaseDisposition(command.current);
   if (expectedPhaseDisposition === undefined) return;
-  const orderId = command.context?.orderId;
-  const phaseId = command.context?.phaseId;
+  const context = command.context;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const orderPreviousResultId = context?.phaseCancellationOrderPreviousResultId;
+  const phasePreviousResultId = context?.phaseCancellationPhasePreviousResultId;
+  const orderStateKey = context?.phaseCancellationOrderCurrentStateCommandKey;
+  const phaseStateKey = context?.phaseCancellationPhaseCurrentStateCommandKey;
+  const expectedOrderValue = context?.phaseCancellationExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const expectedPhaseValue = context?.phaseCancellationExpectedPhase;
+  const expectedPhase =
+    typeof expectedPhaseValue === "object" &&
+    expectedPhaseValue !== null &&
+    !Array.isArray(expectedPhaseValue)
+      ? (expectedPhaseValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const selectedAggregateId = isPhaseEntry ? phaseId : orderId;
+  const selectedPreviousResultId = isPhaseEntry
+    ? phasePreviousResultId
+    : orderPreviousResultId;
+  const selectedStateKey = isPhaseEntry ? phaseStateKey : orderStateKey;
   if (
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
@@ -856,7 +880,30 @@ function requireAtomicOrderPhaseCancellation<S extends string>(
     command.context?.phaseCancellationPhaseOrderId !== orderId ||
     typeof phaseId !== "string" ||
     phaseId.trim().length === 0 ||
-    command.context?.phaseCancellationPhaseId !== phaseId
+    command.context?.phaseCancellationPhaseId !== phaseId ||
+    typeof orderPreviousResultId !== "string" ||
+    orderPreviousResultId.trim().length === 0 ||
+    typeof phasePreviousResultId !== "string" ||
+    phasePreviousResultId.trim().length === 0 ||
+    typeof orderStateKey !== "string" ||
+    orderStateKey.trim().length === 0 ||
+    typeof phaseStateKey !== "string" ||
+    phaseStateKey.trim().length === 0 ||
+    command.aggregateId !== selectedAggregateId ||
+    command.currentStateResultId !== selectedPreviousResultId ||
+    command.currentStateCommandKey !== selectedStateKey ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.phaseId !== phaseId ||
+    expectedOrder.status !== context?.phaseCancellationOrderPreviousStatus ||
+    expectedOrder.resultId !== orderPreviousResultId ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    expectedOrder.immutable !== true ||
+    expectedPhase?.id !== phaseId ||
+    expectedPhase.orderId !== orderId ||
+    expectedPhase.status !== expectedPhaseDisposition.previous ||
+    expectedPhase.resultId !== phasePreviousResultId ||
+    expectedPhase.currentStateCommandKey !== phaseStateKey ||
+    expectedPhase.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -994,8 +1041,33 @@ function requireAtomicOrderPhaseProductionStart<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
-  const orderId = command.context?.orderId;
-  const phaseId = command.context?.phaseId;
+  const context = command.context;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const orderPreviousResultId = context?.productionStartOrderPreviousResultId;
+  const phasePreviousResultId = context?.productionStartPhasePreviousResultId;
+  const orderStateKey = context?.productionStartOrderCurrentStateCommandKey;
+  const phaseStateKey = context?.productionStartPhaseCurrentStateCommandKey;
+  const expectedOrderValue = context?.productionStartExpectedOrder;
+  const expectedOrder =
+    typeof expectedOrderValue === "object" &&
+    expectedOrderValue !== null &&
+    !Array.isArray(expectedOrderValue)
+      ? (expectedOrderValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const expectedPhaseValue = context?.productionStartExpectedPhase;
+  const expectedPhase =
+    typeof expectedPhaseValue === "object" &&
+    expectedPhaseValue !== null &&
+    !Array.isArray(expectedPhaseValue)
+      ? (expectedPhaseValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const isPhaseEntry = lifecycle === "OrderPhase(single)";
+  const selectedAggregateId = isPhaseEntry ? phaseId : orderId;
+  const selectedPreviousResultId = isPhaseEntry
+    ? phasePreviousResultId
+    : orderPreviousResultId;
+  const selectedStateKey = isPhaseEntry ? phaseStateKey : orderStateKey;
   if (
     typeof orderId !== "string" ||
     orderId.trim().length === 0 ||
@@ -1003,7 +1075,30 @@ function requireAtomicOrderPhaseProductionStart<S extends string>(
     command.context?.productionStartPhaseOrderId !== orderId ||
     typeof phaseId !== "string" ||
     phaseId.trim().length === 0 ||
-    command.context?.productionStartPhaseId !== phaseId
+    command.context?.productionStartPhaseId !== phaseId ||
+    typeof orderPreviousResultId !== "string" ||
+    orderPreviousResultId.trim().length === 0 ||
+    typeof phasePreviousResultId !== "string" ||
+    phasePreviousResultId.trim().length === 0 ||
+    typeof orderStateKey !== "string" ||
+    orderStateKey.trim().length === 0 ||
+    typeof phaseStateKey !== "string" ||
+    phaseStateKey.trim().length === 0 ||
+    command.aggregateId !== selectedAggregateId ||
+    command.currentStateResultId !== selectedPreviousResultId ||
+    command.currentStateCommandKey !== selectedStateKey ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.phaseId !== phaseId ||
+    expectedOrder.status !== "confirmed" ||
+    expectedOrder.resultId !== orderPreviousResultId ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    expectedOrder.immutable !== true ||
+    expectedPhase?.id !== phaseId ||
+    expectedPhase.orderId !== orderId ||
+    expectedPhase.status !== "active" ||
+    expectedPhase.resultId !== phasePreviousResultId ||
+    expectedPhase.currentStateCommandKey !== phaseStateKey ||
+    expectedPhase.immutable !== true
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -2596,6 +2691,98 @@ function requireJobResourceSettlement<S extends string>(
   );
 }
 
+function requireAtomicJobFailureSettlement<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobId = context?.jobId;
+  const reservationId = context?.productionReservationId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const resultId = context?.jobFailureResultId;
+  const previousJobResultId = context?.jobFailurePreviousJobResultId;
+  const stateKey = context?.jobFailureCurrentStateCommandKey;
+  const replacementRequestId = context?.jobFailureReplacementRequestId;
+  const expectedJob = record(context?.jobFailureExpectedJob);
+  const expectedReservation = record(context?.jobFailureExpectedReservation);
+  const expectedReplacement = record(context?.jobFailureExpectedReplacement);
+  const expectedReservationStatus =
+    command.current === "accepted" || command.current === "gcode_ready"
+      ? "scheduled"
+      : "printing";
+  const expectedStage = isJobFailureStageForCurrent(
+    command.current,
+    context?.failureStage,
+  );
+  if (
+    lifecycle !== "Job" ||
+    !nonBlank(jobId) ||
+    !nonBlank(reservationId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(previousJobResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(replacementRequestId) ||
+    command.aggregateId !== jobId ||
+    command.currentStateCommandKey !== stateKey ||
+    command.currentStateResultId !== previousJobResultId ||
+    context?.jobFailureJobId !== jobId ||
+    context?.jobFailureProductionReservationId !== reservationId ||
+    context?.jobFailureOrderId !== orderId ||
+    context?.jobFailurePhaseId !== phaseId ||
+    context?.jobFailurePreviousStatus !== command.current ||
+    context?.jobFailureTargetStatus !== "failed" ||
+    context?.jobFailureFailureStage !== context?.failureStage ||
+    !expectedStage ||
+    typeof context?.failureReason !== "string" ||
+    context.failureReason.trim().length === 0 ||
+    context?.jobFailureFailureReason !== context.failureReason ||
+    expectedJob?.id !== jobId ||
+    expectedJob.orderId !== orderId ||
+    expectedJob.phaseId !== phaseId ||
+    expectedJob.productionReservationId !== reservationId ||
+    expectedJob.status !== command.current ||
+    expectedJob.resultId !== previousJobResultId ||
+    expectedJob.currentStateCommandKey !== stateKey ||
+    expectedJob.immutable !== true ||
+    expectedReservation?.id !== reservationId ||
+    expectedReservation.jobId !== jobId ||
+    expectedReservation.orderId !== orderId ||
+    expectedReservation.phaseId !== phaseId ||
+    expectedReservation.status !== expectedReservationStatus ||
+    expectedReservation.resultId !== resultId ||
+    expectedReservation.immutable !== true ||
+    expectedReplacement?.id !== replacementRequestId ||
+    expectedReplacement?.jobId !== jobId ||
+    expectedReplacement?.orderId !== orderId ||
+    expectedReplacement?.phaseId !== phaseId ||
+    expectedReplacement?.resultId !== resultId ||
+    expectedReplacement?.immutable !== true ||
+    context?.jobFailureJobResultId !== resultId ||
+    context?.jobFailureResourceSettlementResultId !== resultId ||
+    context?.jobFailureReplacementResultId !== resultId ||
+    context?.jobFailureCompleted !== true ||
+    context?.jobFailureAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Job failure must bind the selected immutable Job, resources, replacement, and atomic result",
+    );
+  }
+}
+
 function requireExactPostAcceptanceJobCancellation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -4063,12 +4250,23 @@ function requireAtomicPlannedShipmentCancellation<S extends string>(
   const orderId = context?.orderId;
   const phaseId = context?.phaseId;
   const resultId = context?.plannedShipmentCancellationResultId;
+  const previousShipmentResultId =
+    context?.plannedShipmentCancellationPreviousShipmentResultId;
+  const stateKey = context?.plannedShipmentCancellationCurrentStateCommandKey;
   const shipmentValue = context?.plannedShipmentCancellationShipment;
   const shipment =
     typeof shipmentValue === "object" &&
     shipmentValue !== null &&
     !Array.isArray(shipmentValue)
       ? (shipmentValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const expectedShipmentValue =
+    context?.plannedShipmentCancellationExpectedShipment;
+  const expectedShipment =
+    typeof expectedShipmentValue === "object" &&
+    expectedShipmentValue !== null &&
+    !Array.isArray(expectedShipmentValue)
+      ? (expectedShipmentValue as Readonly<Record<string, unknown>>)
       : undefined;
   const resourceSetId =
     context?.plannedShipmentCancellationAuthoritativeResourceSetId;
@@ -4104,6 +4302,11 @@ function requireAtomicPlannedShipmentCancellation<S extends string>(
     !nonBlank(orderId) ||
     !nonBlank(phaseId) ||
     !nonBlank(resultId) ||
+    command.aggregateId !== shipmentId ||
+    !nonBlank(command.currentStateCommandKey) ||
+    command.currentStateCommandKey !== stateKey ||
+    !nonBlank(command.currentStateResultId) ||
+    command.currentStateResultId !== previousShipmentResultId ||
     context?.plannedShipmentCancellationExpectedShipmentId !== shipmentId ||
     context?.plannedShipmentCancellationExpectedOrderId !== orderId ||
     context?.plannedShipmentCancellationExpectedPhaseId !== phaseId ||
@@ -4113,6 +4316,13 @@ function requireAtomicPlannedShipmentCancellation<S extends string>(
     shipment.previousStatus !== "planned" ||
     shipment.targetStatus !== "cancelled" ||
     shipment.resultId !== resultId ||
+    expectedShipment?.id !== shipmentId ||
+    expectedShipment.orderId !== orderId ||
+    expectedShipment.phaseId !== phaseId ||
+    expectedShipment.status !== "planned" ||
+    expectedShipment.resultId !== previousShipmentResultId ||
+    expectedShipment.currentStateCommandKey !== stateKey ||
+    expectedShipment.immutable !== true ||
     !nonBlank(resourceSetId) ||
     context?.plannedShipmentCancellationExpectedResourceSetId !==
       resourceSetId ||
@@ -6509,6 +6719,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
           "failure requires a non-blank failure reason",
         );
       }
+      requireAtomicJobFailureSettlement("Job", command);
       requireJobResourceSettlement("Job", command);
       requireFlag(
         "Job",

@@ -766,6 +766,10 @@ const permittedContext = {
   verifiedProviderVoid: true,
   shipmentId: "shipment-1",
   plannedShipmentCancellationResultId: "planned-cancellation-result-1",
+  plannedShipmentCancellationPreviousShipmentResultId:
+    "shipment-planned-result-1",
+  plannedShipmentCancellationCurrentStateCommandKey:
+    "shipment-planned-command-1",
   plannedShipmentCancellationExpectedShipmentId: "shipment-1",
   plannedShipmentCancellationExpectedOrderId: "order-1",
   plannedShipmentCancellationExpectedPhaseId: "phase-1",
@@ -776,6 +780,15 @@ const permittedContext = {
     previousStatus: "planned",
     targetStatus: "cancelled",
     resultId: "planned-cancellation-result-1",
+  },
+  plannedShipmentCancellationExpectedShipment: {
+    id: "shipment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "planned",
+    resultId: "shipment-planned-result-1",
+    currentStateCommandKey: "shipment-planned-command-1",
+    immutable: true,
   },
   plannedShipmentCancellationAuthoritativeResourceSetId:
     "planned-resource-set-1",
@@ -1016,6 +1029,26 @@ const permittedContext = {
   phaseCancellationOrderTargetStatus: "cancelled",
   phaseCancellationPhasePreviousStatus: "active",
   phaseCancellationPhaseTargetStatus: "cancelled",
+  phaseCancellationOrderPreviousResultId: "order-confirmed-result-1",
+  phaseCancellationPhasePreviousResultId: "phase-active-result-1",
+  phaseCancellationOrderCurrentStateCommandKey: "order-confirmed-command-1",
+  phaseCancellationPhaseCurrentStateCommandKey: "phase-active-command-1",
+  phaseCancellationExpectedOrder: {
+    id: "order-1",
+    phaseId: "phase-1",
+    status: "confirmed",
+    resultId: "order-confirmed-result-1",
+    currentStateCommandKey: "order-confirmed-command-1",
+    immutable: true,
+  },
+  phaseCancellationExpectedPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    status: "active",
+    resultId: "phase-active-result-1",
+    currentStateCommandKey: "phase-active-command-1",
+    immutable: true,
+  },
   phaseCancellationCompleted: true,
   phaseCancellationAtomic: true,
   orderCompletionOrderId: "order-1",
@@ -1058,6 +1091,26 @@ const permittedContext = {
   productionStartOrderTargetStatus: "in_production",
   productionStartPhasePreviousStatus: "active",
   productionStartPhaseTargetStatus: "in_production",
+  productionStartOrderPreviousResultId: "order-confirmed-result-1",
+  productionStartPhasePreviousResultId: "phase-active-result-1",
+  productionStartOrderCurrentStateCommandKey: "order-confirmed-command-1",
+  productionStartPhaseCurrentStateCommandKey: "phase-active-command-1",
+  productionStartExpectedOrder: {
+    id: "order-1",
+    phaseId: "phase-1",
+    status: "confirmed",
+    resultId: "order-confirmed-result-1",
+    currentStateCommandKey: "order-confirmed-command-1",
+    immutable: true,
+  },
+  productionStartExpectedPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    status: "active",
+    resultId: "phase-active-result-1",
+    currentStateCommandKey: "phase-active-command-1",
+    immutable: true,
+  },
   productionStartCompleted: true,
   productionStartAtomic: true,
   qcCompletionOrderId: "order-1",
@@ -1447,6 +1500,50 @@ const permittedContext = {
   jobCancellationAtomic: true,
   failureStage: "machine",
   failureReason: "machine fault",
+  jobFailureResultId: "job-failure-result-1",
+  jobFailurePreviousJobResultId: "job-printing-result-1",
+  jobFailureCurrentStateCommandKey: "job-printing-command-1",
+  jobFailureJobId: "job-1",
+  jobFailureProductionReservationId: "production-reservation-1",
+  jobFailureOrderId: "order-1",
+  jobFailurePhaseId: "phase-1",
+  jobFailurePreviousStatus: "printing",
+  jobFailureTargetStatus: "failed",
+  jobFailureFailureStage: "printing",
+  jobFailureFailureReason: "machine fault",
+  jobFailureExpectedJob: {
+    id: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    productionReservationId: "production-reservation-1",
+    status: "printing",
+    resultId: "job-printing-result-1",
+    currentStateCommandKey: "job-printing-command-1",
+    immutable: true,
+  },
+  jobFailureExpectedReservation: {
+    id: "production-reservation-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    status: "printing",
+    resultId: "job-failure-result-1",
+    immutable: true,
+  },
+  jobFailureReplacementRequestId: "replacement-request-1",
+  jobFailureExpectedReplacement: {
+    id: "replacement-request-1",
+    jobId: "job-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    resultId: "job-failure-result-1",
+    immutable: true,
+  },
+  jobFailureJobResultId: "job-failure-result-1",
+  jobFailureResourceSettlementResultId: "job-failure-result-1",
+  jobFailureReplacementResultId: "job-failure-result-1",
+  jobFailureCompleted: true,
+  jobFailureAtomic: true,
   replacementRequestCreated: true,
   replacementDeadlineSet: true,
   postQcFailureJobId: "job-1",
@@ -2885,6 +2982,13 @@ function contextForTransition(target: string, current?: string) {
       : current;
   const completionOrderStateKey = `order-${current ?? "delivered"}-command-1`;
   const completionPhaseStateKey = `phase-${current ?? "delivered"}-command-1`;
+  const cancellationOrderPreviousStatus =
+    current === "active" ? "confirmed" : (current ?? "confirmed");
+  const cancellationPhasePreviousStatus = cancellationPhaseDisposition.previous;
+  const cancellationOrderPreviousResultId = `order-${cancellationOrderPreviousStatus}-result-1`;
+  const cancellationPhasePreviousResultId = `phase-${cancellationPhasePreviousStatus}-result-1`;
+  const cancellationOrderStateKey = `order-${cancellationOrderPreviousStatus}-command-1`;
+  const cancellationPhaseStateKey = `phase-${cancellationPhasePreviousStatus}-command-1`;
   const claimRefundScopeChildren =
     target === "refund_pending"
       ? permittedContext.claimRefundScopeChildren.map((child, index) =>
@@ -3060,6 +3164,16 @@ function contextForTransition(target: string, current?: string) {
           : current === "packed"
             ? "packing"
             : "machine";
+  const jobFailureReservationStatus =
+    current === "accepted" || current === "gcode_ready"
+      ? "scheduled"
+      : "printing";
+  const jobFailurePreviousJobResultId = `job-${current ?? "printing"}-result-1`;
+  const jobFailureCurrentStateCommandKey = `job-${current ?? "printing"}-command-1`;
+  const jobFailureResultId =
+    current === "printing"
+      ? "job-failure-result-1"
+      : `job-failure-${current ?? "printing"}-result-1`;
   const materialConsumptionMode =
     current === "gcode_ready" && target === "printing"
       ? "actual_recorded"
@@ -3264,6 +3378,37 @@ function contextForTransition(target: string, current?: string) {
       (current === "qc_approved" || current === "packed") && target === "failed"
         ? current
         : permittedContext.postQcFailureJobPreviousStatus,
+    jobFailureResultId,
+    jobFailurePreviousJobResultId,
+    jobFailureCurrentStateCommandKey,
+    jobFailureJobId: "job-1",
+    jobFailureProductionReservationId: "production-reservation-1",
+    jobFailureOrderId: "order-1",
+    jobFailurePhaseId: "phase-1",
+    jobFailurePreviousStatus: current,
+    jobFailureTargetStatus: "failed",
+    jobFailureFailureStage: failureStage,
+    jobFailureFailureReason: "machine fault",
+    jobFailureExpectedJob: {
+      ...permittedContext.jobFailureExpectedJob,
+      status: current,
+      resultId: jobFailurePreviousJobResultId,
+      currentStateCommandKey: jobFailureCurrentStateCommandKey,
+    },
+    jobFailureExpectedReservation: {
+      ...permittedContext.jobFailureExpectedReservation,
+      status: jobFailureReservationStatus,
+      resultId: jobFailureResultId,
+    },
+    jobFailureExpectedReplacement: {
+      ...permittedContext.jobFailureExpectedReplacement,
+      resultId: jobFailureResultId,
+    },
+    jobFailureJobResultId: jobFailureResultId,
+    jobFailureResourceSettlementResultId: jobFailureResultId,
+    jobFailureReplacementResultId: jobFailureResultId,
+    jobFailureCompleted: true,
+    jobFailureAtomic: true,
     postQcFailureFailureStage:
       (current === "qc_approved" || current === "packed") && target === "failed"
         ? failureStage
@@ -3393,10 +3538,25 @@ function contextForTransition(target: string, current?: string) {
           ? (current ?? permittedContext.qcExpectedPhaseTopology.status)
           : permittedContext.qcExpectedPhaseTopology.status,
     },
-    phaseCancellationOrderPreviousStatus:
-      current === "active" ? "confirmed" : current,
-    phaseCancellationPhasePreviousStatus: cancellationPhaseDisposition.previous,
+    phaseCancellationOrderPreviousStatus: cancellationOrderPreviousStatus,
+    phaseCancellationPhasePreviousStatus: cancellationPhasePreviousStatus,
     phaseCancellationPhaseTargetStatus: cancellationPhaseDisposition.target,
+    phaseCancellationOrderPreviousResultId: cancellationOrderPreviousResultId,
+    phaseCancellationPhasePreviousResultId: cancellationPhasePreviousResultId,
+    phaseCancellationOrderCurrentStateCommandKey: cancellationOrderStateKey,
+    phaseCancellationPhaseCurrentStateCommandKey: cancellationPhaseStateKey,
+    phaseCancellationExpectedOrder: {
+      ...permittedContext.phaseCancellationExpectedOrder,
+      status: cancellationOrderPreviousStatus,
+      resultId: cancellationOrderPreviousResultId,
+      currentStateCommandKey: cancellationOrderStateKey,
+    },
+    phaseCancellationExpectedPhase: {
+      ...permittedContext.phaseCancellationExpectedPhase,
+      status: cancellationPhasePreviousStatus,
+      resultId: cancellationPhasePreviousResultId,
+      currentStateCommandKey: cancellationPhaseStateKey,
+    },
     orderTerminalPhaseOrderPreviousStatus: current,
     orderTerminalPhaseOrderTargetStatus: target,
     orderTerminalPhasePreviousStatus: terminalPhaseDisposition.previous,
@@ -3458,9 +3618,11 @@ function commandAnchors(
     policy.name === "Order" &&
     ((current === "draft" && target === "quoted") ||
       (current === "quoted" && target === "confirmed") ||
+      (current === "confirmed" && target === "in_production") ||
       ((current === "in_production" || current === "recovery_pending") &&
         target === "qc_passed") ||
-      (current === "qc_passed" && target === "awaiting_balance"))
+      (current === "qc_passed" && target === "awaiting_balance") ||
+      target === "cancelled")
   ) {
     return {
       aggregateId: "order-1",
@@ -3468,20 +3630,42 @@ function commandAnchors(
         ? { currentStateCommandKey: "order-draft-command-1" }
         : current === "quoted" && target === "confirmed"
           ? { currentStateCommandKey: "order-quoted-command-1" }
-          : {}),
+          : current === "confirmed" && target === "in_production"
+            ? {
+                currentStateCommandKey: "order-confirmed-command-1",
+                currentStateResultId: "order-confirmed-result-1",
+              }
+            : target === "cancelled"
+              ? {
+                  currentStateCommandKey: `order-${current}-command-1`,
+                  currentStateResultId: `order-${current}-result-1`,
+                }
+              : {}),
     };
   }
   if (
     policy.name === "OrderPhase(single)" &&
     ((current === "quoted" && target === "active") ||
+      (current === "active" && target === "in_production") ||
       ((current === "in_production" || current === "recovery_pending") &&
-        target === "qc_passed"))
+        target === "qc_passed") ||
+      target === "cancelled")
   ) {
     return {
       aggregateId: "phase-1",
       ...(current === "quoted" && target === "active"
         ? { currentStateCommandKey: "phase-quoted-command-1" }
-        : {}),
+        : current === "active" && target === "in_production"
+          ? {
+              currentStateCommandKey: "phase-active-command-1",
+              currentStateResultId: "phase-active-result-1",
+            }
+          : target === "cancelled"
+            ? {
+                currentStateCommandKey: `phase-${current}-command-1`,
+                currentStateResultId: `phase-${current}-result-1`,
+              }
+            : {}),
     };
   }
   if (
@@ -3599,6 +3783,17 @@ function commandAnchors(
       currentStateCommandKey: "shipment-planned-command-1",
     };
   }
+  if (
+    policy.name === "Shipment" &&
+    current === "planned" &&
+    target === "cancelled"
+  ) {
+    return {
+      aggregateId: "shipment-1",
+      currentStateCommandKey: "shipment-planned-command-1",
+      currentStateResultId: "shipment-planned-result-1",
+    };
+  }
   if (policy.name === "Job" && current === "created" && target === "accepted") {
     return {
       aggregateId: "job-1",
@@ -3633,6 +3828,25 @@ function commandAnchors(
     return {
       aggregateId: "job-1",
       currentStateCommandKey: "job-handed-over-command-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
+    target === "failed" &&
+    [
+      "accepted",
+      "gcode_ready",
+      "printing",
+      "printed",
+      "photo_submitted",
+      "qc_approved",
+      "packed",
+    ].includes(current)
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: `job-${current}-command-1`,
+      currentStateResultId: `job-${current}-result-1`,
     };
   }
   if (
@@ -5020,6 +5234,163 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     [
+      "Order",
+      orderPolicy,
+      "confirmed",
+      "order-2",
+      "phase-2",
+      "order-confirmed-result-2",
+      "phase-active-result-2",
+      "order-confirmed-command-2",
+      "phase-active-command-2",
+    ],
+    [
+      "OrderPhase(single)",
+      singleOrderPhasePolicy,
+      "active",
+      "order-2",
+      "phase-2",
+      "order-confirmed-result-2",
+      "phase-active-result-2",
+      "order-confirmed-command-2",
+      "phase-active-command-2",
+    ],
+  ] as const)(
+    "binds atomic production start to the selected %s source and immutable topology",
+    (
+      _lifecycle,
+      policy,
+      current,
+      foreignOrderId,
+      foreignPhaseId,
+      foreignOrderResultId,
+      foreignPhaseResultId,
+      foreignOrderCommandKey,
+      foreignPhaseCommandKey,
+    ) => {
+      const anchors = commandAnchors(policy, current, "in_production");
+      const validContext = contextForTransition("in_production", current);
+      for (const invalidCommand of [
+        { aggregateId: undefined },
+        { aggregateId: " " },
+        {
+          aggregateId: policy === orderPolicy ? foreignOrderId : foreignPhaseId,
+        },
+        { currentStateResultId: undefined },
+        { currentStateResultId: " " },
+        {
+          currentStateResultId:
+            policy === orderPolicy
+              ? foreignOrderResultId
+              : foreignPhaseResultId,
+        },
+        { currentStateCommandKey: undefined },
+        { currentStateCommandKey: " " },
+        {
+          currentStateCommandKey:
+            policy === orderPolicy
+              ? foreignOrderCommandKey
+              : foreignPhaseCommandKey,
+        },
+      ]) {
+        expect(() =>
+          transition(policy, {
+            ...anchors,
+            ...invalidCommand,
+            current,
+            target: "in_production",
+            idempotencyKey: `production-start-source-${policy.name}-${JSON.stringify(invalidCommand)}`,
+            context: validContext,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+      for (const invalidContext of [
+        {
+          productionStartExpectedOrder: {
+            ...validContext.productionStartExpectedOrder,
+            id: foreignOrderId,
+          },
+        },
+        {
+          productionStartExpectedOrder: {
+            ...validContext.productionStartExpectedOrder,
+            phaseId: foreignPhaseId,
+          },
+        },
+        {
+          productionStartExpectedPhase: {
+            ...validContext.productionStartExpectedPhase,
+            id: foreignPhaseId,
+          },
+        },
+        {
+          productionStartExpectedPhase: {
+            ...validContext.productionStartExpectedPhase,
+            orderId: foreignOrderId,
+          },
+        },
+        {
+          productionStartExpectedOrder: {
+            ...validContext.productionStartExpectedOrder,
+            immutable: false,
+          },
+        },
+        {
+          productionStartExpectedPhase: {
+            ...validContext.productionStartExpectedPhase,
+            immutable: false,
+          },
+        },
+      ]) {
+        expect(() =>
+          transition(policy, {
+            ...anchors,
+            current,
+            target: "in_production",
+            idempotencyKey: `production-start-snapshot-${policy.name}-${JSON.stringify(invalidContext)}`,
+            context: { ...validContext, ...invalidContext },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+      expect(() =>
+        transition(policy, {
+          ...anchors,
+          current,
+          target: "in_production",
+          idempotencyKey: `production-start-coordinated-${policy.name}`,
+          context: {
+            ...validContext,
+            orderId: foreignOrderId,
+            phaseId: foreignPhaseId,
+            productionStartOrderId: foreignOrderId,
+            productionStartPhaseOrderId: foreignOrderId,
+            productionStartPhaseId: foreignPhaseId,
+            productionStartOrderPreviousResultId: foreignOrderResultId,
+            productionStartPhasePreviousResultId: foreignPhaseResultId,
+            productionStartOrderCurrentStateCommandKey: foreignOrderCommandKey,
+            productionStartPhaseCurrentStateCommandKey: foreignPhaseCommandKey,
+            productionStartExpectedOrder: {
+              ...validContext.productionStartExpectedOrder,
+              id: foreignOrderId,
+              phaseId: foreignPhaseId,
+              resultId: foreignOrderResultId,
+              currentStateCommandKey: foreignOrderCommandKey,
+            },
+            productionStartExpectedPhase: {
+              ...validContext.productionStartExpectedPhase,
+              id: foreignPhaseId,
+              orderId: foreignOrderId,
+              resultId: foreignPhaseResultId,
+              currentStateCommandKey: foreignPhaseCommandKey,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
       "selected scanned parcel",
       "shipment-1",
       "shipment-1",
@@ -6234,6 +6605,7 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(policy, {
+            ...commandAnchors(policy, current, "in_production"),
             current,
             target: "in_production",
             idempotencyKey: `production-start-${policy.name}-${field}`,
@@ -6283,6 +6655,7 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(orderPolicy, {
+            ...commandAnchors(orderPolicy, current, "cancelled"),
             current,
             target,
             idempotencyKey: `order-terminal-phase-${current}-${target}-${field}`,
@@ -6669,6 +7042,7 @@ describe("v0 lifecycle policy tables", () => {
       for (const paymentStatus of ["unpaid", "paid"] as const) {
         expect(
           transition(orderPolicy, {
+            ...commandAnchors(orderPolicy, current, "cancelled"),
             current,
             target: "cancelled",
             idempotencyKey: `phase-parent-cancellation-${current}-${paymentStatus}`,
@@ -6732,6 +7106,7 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(orderPolicy, {
+            ...commandAnchors(orderPolicy, current, "cancelled"),
             current,
             target: "cancelled",
             idempotencyKey: `phase-parent-cancellation-${current}-${field}`,
@@ -6786,6 +7161,11 @@ describe("v0 lifecycle policy tables", () => {
     (phasePreviousStatus, orderPreviousStatus) => {
       expect(
         transition(singleOrderPhasePolicy, {
+          ...commandAnchors(
+            singleOrderPhasePolicy,
+            phasePreviousStatus,
+            "cancelled",
+          ),
           current: phasePreviousStatus,
           target: "cancelled",
           idempotencyKey: `single-phase-cancellation-${phasePreviousStatus}-${orderPreviousStatus}`,
@@ -6794,6 +7174,22 @@ describe("v0 lifecycle policy tables", () => {
             phaseCancellationOrderPreviousStatus: orderPreviousStatus,
             phaseCancellationPhasePreviousStatus: phasePreviousStatus,
             phaseCancellationPhaseTargetStatus: "cancelled",
+            phaseCancellationOrderPreviousResultId: `order-${orderPreviousStatus}-result-1`,
+            phaseCancellationPhasePreviousResultId: `phase-${phasePreviousStatus}-result-1`,
+            phaseCancellationOrderCurrentStateCommandKey: `order-${orderPreviousStatus}-command-1`,
+            phaseCancellationPhaseCurrentStateCommandKey: `phase-${phasePreviousStatus}-command-1`,
+            phaseCancellationExpectedOrder: {
+              ...permittedContext.phaseCancellationExpectedOrder,
+              status: orderPreviousStatus,
+              resultId: `order-${orderPreviousStatus}-result-1`,
+              currentStateCommandKey: `order-${orderPreviousStatus}-command-1`,
+            },
+            phaseCancellationExpectedPhase: {
+              ...permittedContext.phaseCancellationExpectedPhase,
+              status: phasePreviousStatus,
+              resultId: `phase-${phasePreviousStatus}-result-1`,
+              currentStateCommandKey: `phase-${phasePreviousStatus}-command-1`,
+            },
           },
         }),
       ).toEqual({
@@ -6825,12 +7221,172 @@ describe("v0 lifecycle policy tables", () => {
     (_case, field, value) => {
       expect(() =>
         transition(singleOrderPhasePolicy, {
+          ...commandAnchors(singleOrderPhasePolicy, "active", "cancelled"),
           current: "active",
           target: "cancelled",
           idempotencyKey: `single-phase-cancellation-invalid-${field}`,
           context: {
             ...contextForTransition("cancelled", "active"),
             [field]: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "Order",
+      orderPolicy,
+      "confirmed",
+      "order-2",
+      "phase-2",
+      "order-confirmed-result-2",
+      "phase-active-result-2",
+      "order-confirmed-command-2",
+      "phase-active-command-2",
+    ],
+    [
+      "OrderPhase(single)",
+      singleOrderPhasePolicy,
+      "active",
+      "order-2",
+      "phase-2",
+      "order-confirmed-result-2",
+      "phase-active-result-2",
+      "order-confirmed-command-2",
+      "phase-active-command-2",
+    ],
+  ] as const)(
+    "binds cancellation to the selected %s source and immutable Order/phase snapshots",
+    (
+      _lifecycle,
+      policy,
+      current,
+      foreignOrderId,
+      foreignPhaseId,
+      foreignOrderResultId,
+      foreignPhaseResultId,
+      foreignOrderCommandKey,
+      foreignPhaseCommandKey,
+    ) => {
+      const anchors = commandAnchors(policy, current, "cancelled");
+      const validContext = contextForTransition("cancelled", current);
+      for (const invalidCommand of [
+        { aggregateId: undefined },
+        { aggregateId: " " },
+        {
+          aggregateId: policy === orderPolicy ? foreignOrderId : foreignPhaseId,
+        },
+        { currentStateResultId: undefined },
+        { currentStateResultId: " " },
+        {
+          currentStateResultId:
+            policy === orderPolicy
+              ? foreignOrderResultId
+              : foreignPhaseResultId,
+        },
+        { currentStateCommandKey: undefined },
+        { currentStateCommandKey: " " },
+        {
+          currentStateCommandKey:
+            policy === orderPolicy
+              ? foreignOrderCommandKey
+              : foreignPhaseCommandKey,
+        },
+      ]) {
+        expect(() =>
+          transition(policy, {
+            ...anchors,
+            ...invalidCommand,
+            current,
+            target: "cancelled",
+            idempotencyKey: `cancellation-source-${policy.name}-${JSON.stringify(invalidCommand)}`,
+            context: validContext,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+      for (const invalidContext of [
+        {
+          phaseCancellationExpectedOrder: {
+            ...validContext.phaseCancellationExpectedOrder,
+            id: foreignOrderId,
+          },
+        },
+        {
+          phaseCancellationExpectedOrder: {
+            ...validContext.phaseCancellationExpectedOrder,
+            phaseId: foreignPhaseId,
+          },
+        },
+        {
+          phaseCancellationExpectedPhase: {
+            ...validContext.phaseCancellationExpectedPhase,
+            id: foreignPhaseId,
+          },
+        },
+        {
+          phaseCancellationExpectedPhase: {
+            ...validContext.phaseCancellationExpectedPhase,
+            orderId: foreignOrderId,
+          },
+        },
+        {
+          phaseCancellationExpectedOrder: {
+            ...validContext.phaseCancellationExpectedOrder,
+            immutable: false,
+          },
+        },
+        {
+          phaseCancellationExpectedPhase: {
+            ...validContext.phaseCancellationExpectedPhase,
+            immutable: false,
+          },
+        },
+      ]) {
+        expect(() =>
+          transition(policy, {
+            ...anchors,
+            current,
+            target: "cancelled",
+            idempotencyKey: `cancellation-snapshot-${policy.name}-${JSON.stringify(invalidContext)}`,
+            context: { ...validContext, ...invalidContext },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+      expect(() =>
+        transition(policy, {
+          ...anchors,
+          current,
+          target: "cancelled",
+          idempotencyKey: `cancellation-coordinated-${policy.name}`,
+          context: {
+            ...validContext,
+            orderId: foreignOrderId,
+            phaseId: foreignPhaseId,
+            phaseCancellationOrderId: foreignOrderId,
+            phaseCancellationPhaseOrderId: foreignOrderId,
+            phaseCancellationPhaseId: foreignPhaseId,
+            phaseCancellationOrderPreviousResultId: foreignOrderResultId,
+            phaseCancellationPhasePreviousResultId: foreignPhaseResultId,
+            phaseCancellationOrderCurrentStateCommandKey:
+              foreignOrderCommandKey,
+            phaseCancellationPhaseCurrentStateCommandKey:
+              foreignPhaseCommandKey,
+            phaseCancellationExpectedOrder: {
+              ...validContext.phaseCancellationExpectedOrder,
+              id: foreignOrderId,
+              phaseId: foreignPhaseId,
+              resultId: foreignOrderResultId,
+              currentStateCommandKey: foreignOrderCommandKey,
+            },
+            phaseCancellationExpectedPhase: {
+              ...validContext.phaseCancellationExpectedPhase,
+              id: foreignPhaseId,
+              orderId: foreignOrderId,
+              resultId: foreignPhaseResultId,
+              currentStateCommandKey: foreignPhaseCommandKey,
+            },
           },
         }),
       ).toThrow(TransitionGuardError);
@@ -7027,6 +7583,7 @@ describe("v0 lifecycle policy tables", () => {
     const context = contextForTransition("cancelled", "planned");
     expect(
       transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "planned", "cancelled"),
         current: "planned",
         target: "cancelled",
         idempotencyKey: "planned-shipment-cancellation-complete",
@@ -7041,6 +7598,159 @@ describe("v0 lifecycle policy tables", () => {
         },
       }),
     ).toEqual({ kind: "changed", previous: "planned", current: "cancelled" });
+  });
+
+  it.each([
+    ["missing aggregate", { aggregateId: undefined }],
+    ["foreign aggregate", { aggregateId: "shipment-2" }],
+    ["blank state key", { currentStateCommandKey: " " }],
+    [
+      "foreign state key",
+      { currentStateCommandKey: "shipment-planned-command-2" },
+    ],
+    ["missing state result", { currentStateResultId: undefined }],
+    ["blank state result", { currentStateResultId: " " }],
+    [
+      "foreign state result",
+      { currentStateResultId: "shipment-planned-result-2" },
+    ],
+  ] as const)(
+    "rejects planned Shipment cancellation with %s command anchor",
+    (_case, invalid) => {
+      expect(() =>
+        transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "planned", "cancelled"),
+          ...invalid,
+          current: "planned",
+          target: "cancelled",
+          idempotencyKey: `planned-shipment-cancellation-anchor-${_case}`,
+          context: contextForTransition("cancelled", "planned"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["missing snapshot", undefined],
+    ["foreign snapshot id", { id: "shipment-2" }],
+    ["stale snapshot status", { status: "label_created" }],
+    ["stale snapshot result", { resultId: "shipment-planned-result-2" }],
+    [
+      "stale snapshot command key",
+      { currentStateCommandKey: "shipment-planned-command-2" },
+    ],
+    ["mutable snapshot", { immutable: false }],
+  ] as const)(
+    "rejects planned Shipment cancellation with %s snapshot",
+    (_case, snapshot) => {
+      const context = contextForTransition("cancelled", "planned");
+      expect(() =>
+        transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "planned", "cancelled"),
+          current: "planned",
+          target: "cancelled",
+          idempotencyKey: `planned-shipment-cancellation-snapshot-${_case}`,
+          context: {
+            ...context,
+            plannedShipmentCancellationExpectedShipment:
+              snapshot === undefined
+                ? undefined
+                : {
+                    ...context.plannedShipmentCancellationExpectedShipment,
+                    ...snapshot,
+                  },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a coordinated planned Shipment B cancellation with fixed Shipment A command anchors", () => {
+    const context = contextForTransition("cancelled", "planned");
+    const resultId = "planned-cancellation-result-2";
+    const previousShipmentResultId = "shipment-planned-result-2";
+    const stateKey = "shipment-planned-command-2";
+    const jobIds = ["planned-job-3", "planned-job-4"];
+    const reservationIds = ["planned-reservation-3", "planned-reservation-4"];
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "planned", "cancelled"),
+        current: "planned",
+        target: "cancelled",
+        idempotencyKey: "planned-shipment-cancellation-coordinated-b",
+        context: {
+          ...context,
+          shipmentId: "shipment-2",
+          orderId: "order-2",
+          phaseId: "phase-2",
+          plannedShipmentCancellationResultId: resultId,
+          plannedShipmentCancellationPreviousShipmentResultId:
+            previousShipmentResultId,
+          plannedShipmentCancellationCurrentStateCommandKey: stateKey,
+          plannedShipmentCancellationExpectedShipmentId: "shipment-2",
+          plannedShipmentCancellationExpectedOrderId: "order-2",
+          plannedShipmentCancellationExpectedPhaseId: "phase-2",
+          plannedShipmentCancellationShipment: {
+            ...context.plannedShipmentCancellationShipment,
+            id: "shipment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+            resultId,
+          },
+          plannedShipmentCancellationExpectedShipment: {
+            ...context.plannedShipmentCancellationExpectedShipment,
+            id: "shipment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+            resultId: previousShipmentResultId,
+            currentStateCommandKey: stateKey,
+          },
+          plannedShipmentCancellationAuthoritativeResourceSetId:
+            "planned-resource-set-2",
+          plannedShipmentCancellationExpectedResourceSetId:
+            "planned-resource-set-2",
+          plannedShipmentCancellationAuthoritativeResourceSet: {
+            ...context.plannedShipmentCancellationAuthoritativeResourceSet,
+            id: "planned-resource-set-2",
+            shipmentId: "shipment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+            jobIds,
+            reservationIds,
+            resultId,
+          },
+          plannedShipmentCancellationJobs:
+            context.plannedShipmentCancellationJobs.map((job, index) => ({
+              ...job,
+              id: jobIds[index],
+              reservationId: reservationIds[index],
+              shipmentId: "shipment-2",
+              orderId: "order-2",
+              phaseId: "phase-2",
+              resultId,
+            })),
+          plannedShipmentCancellationReservations:
+            context.plannedShipmentCancellationReservations.map(
+              (reservation, index) => ({
+                ...reservation,
+                id: reservationIds[index],
+                jobId: jobIds[index],
+                shipmentId: "shipment-2",
+                orderId: "order-2",
+                phaseId: "phase-2",
+                resultId,
+              }),
+            ),
+          plannedShipmentCancellationParentBarrier: {
+            ...context.plannedShipmentCancellationParentBarrier,
+            shipmentId: "shipment-2",
+            orderId: "order-2",
+            phaseId: "phase-2",
+            resultId,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it.each([
@@ -7150,6 +7860,7 @@ describe("v0 lifecycle policy tables", () => {
     (_case, invalid) => {
       expect(() =>
         transition(shipmentPolicy, {
+          ...commandAnchors(shipmentPolicy, "planned", "cancelled"),
           current: "planned",
           target: "cancelled",
           idempotencyKey: `planned-shipment-cancellation-invalid-${_case}`,
@@ -11842,6 +12553,7 @@ describe("v0 lifecycle policy tables", () => {
       );
       expect(
         transition(policy, {
+          ...commandAnchors(policy, current, "cancelled"),
           current,
           target: "cancelled",
           idempotencyKey: "captured-cancellation",
@@ -17073,6 +17785,7 @@ describe("v0 lifecycle policy tables", () => {
       ] as const) {
         expect(() =>
           transition(jobPolicy, {
+            ...commandAnchors(jobPolicy, current, "failed"),
             current,
             target: "failed",
             idempotencyKey: `job-failure-settlement-${current}-${flag}`,
@@ -17095,6 +17808,7 @@ describe("v0 lifecycle policy tables", () => {
     (field, value) => {
       expect(() =>
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "printing", "failed"),
           current: "printing",
           target: "failed",
           idempotencyKey: `job-failure-identity-${field}`,
@@ -17119,15 +17833,141 @@ describe("v0 lifecycle policy tables", () => {
   ] as const)("accepts %s -> failed with stage %s", (current, failureStage) => {
     expect(
       transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, current, "failed"),
         current,
         target: "failed",
         idempotencyKey: `job-failure-stage-valid-${current}-${failureStage}`,
         context: {
           ...contextForTransition("failed", current),
           failureStage,
+          jobFailureFailureStage: failureStage,
         },
       }),
     ).toEqual({ kind: "changed", previous: current, current: "failed" });
+  });
+
+  it.each([
+    ["missing aggregate", "aggregateId", undefined],
+    ["blank aggregate", "aggregateId", "  "],
+    ["foreign aggregate", "aggregateId", "job-2"],
+    ["missing state key", "currentStateCommandKey", undefined],
+    ["blank state key", "currentStateCommandKey", "  "],
+    ["foreign state key", "currentStateCommandKey", "job-printing-command-2"],
+    ["missing state result", "currentStateResultId", undefined],
+    ["blank state result", "currentStateResultId", "  "],
+    ["foreign state result", "currentStateResultId", "job-printing-result-2"],
+  ] as const)(
+    "rejects Job failed transition with %s command anchor",
+    (_label, field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "printing", "failed"),
+          current: "printing",
+          target: "failed",
+          idempotencyKey: `job-failure-command-anchor-${field}-${String(value)}`,
+          [field]: value,
+          context: contextForTransition("failed", "printing"),
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["missing", undefined],
+    ["blank", "  "],
+    ["foreign", "replacement-request-2"],
+  ] as const)(
+    "rejects Job failure with %s replacement identity",
+    (_label, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "printing", "failed"),
+          current: "printing",
+          target: "failed",
+          idempotencyKey: `job-failure-replacement-${String(value)}`,
+          context: {
+            ...contextForTransition("failed", "printing"),
+            jobFailureReplacementRequestId: value,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "job-2"],
+    ["orderId", "order-2"],
+    ["phaseId", "phase-2"],
+    ["productionReservationId", "production-reservation-2"],
+    ["status", "packed"],
+    ["resultId", "job-printing-result-2"],
+    ["currentStateCommandKey", "job-printing-command-2"],
+    ["immutable", false],
+  ] as const)(
+    "rejects stale immutable Job failure snapshot %s",
+    (field, value) => {
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "printing", "failed"),
+          current: "printing",
+          target: "failed",
+          idempotencyKey: `job-failure-snapshot-${field}`,
+          context: {
+            ...contextForTransition("failed", "printing"),
+            jobFailureExpectedJob: {
+              ...contextForTransition("failed", "printing")
+                .jobFailureExpectedJob,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects coordinated Job B substitution behind Job A failure command", () => {
+    const context = contextForTransition("failed", "printing");
+    expect(() =>
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "printing", "failed"),
+        current: "printing",
+        target: "failed",
+        idempotencyKey: "job-failure-coordinated-job-b",
+        context: {
+          ...context,
+          jobId: "job-2",
+          productionReservationId: "production-reservation-2",
+          jobFailureResultId: "job-failure-result-2",
+          jobFailurePreviousJobResultId: "job-printing-result-2",
+          jobFailureCurrentStateCommandKey: "job-printing-command-2",
+          jobFailureJobId: "job-2",
+          jobFailureProductionReservationId: "production-reservation-2",
+          jobFailureExpectedJob: {
+            ...context.jobFailureExpectedJob,
+            id: "job-2",
+            productionReservationId: "production-reservation-2",
+            resultId: "job-printing-result-2",
+            currentStateCommandKey: "job-printing-command-2",
+          },
+          jobFailureExpectedReservation: {
+            ...context.jobFailureExpectedReservation,
+            id: "production-reservation-2",
+            jobId: "job-2",
+            resultId: "job-failure-result-2",
+          },
+          jobFailureReplacementRequestId: "replacement-request-2",
+          jobFailureExpectedReplacement: {
+            ...context.jobFailureExpectedReplacement,
+            id: "replacement-request-2",
+            jobId: "job-2",
+            resultId: "job-failure-result-2",
+          },
+          jobFailureJobResultId: "job-failure-result-2",
+          jobFailureResourceSettlementResultId: "job-failure-result-2",
+          jobFailureReplacementResultId: "job-failure-result-2",
+        },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it.each([
@@ -17164,6 +18004,7 @@ describe("v0 lifecycle policy tables", () => {
     (current, materialConsumptionMode) => {
       expect(() =>
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, current, "failed"),
           current,
           target: "failed",
           idempotencyKey: `job-failure-material-mode-${current}`,
@@ -17185,6 +18026,7 @@ describe("v0 lifecycle policy tables", () => {
     (current, postQcFailureOrderPreviousStatus, balanceDeadlineResult) => {
       expect(
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, current, "failed"),
           current,
           target: "failed",
           idempotencyKey: `post-qc-pre-handoff-${current}-${postQcFailureOrderPreviousStatus}`,
@@ -17331,6 +18173,7 @@ describe("v0 lifecycle policy tables", () => {
     (current, postQcFailureOrderTargetStatus) => {
       expect(
         transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, current, "failed"),
           current,
           target: "failed",
           idempotencyKey: `post-qc-post-handoff-${current}`,
@@ -17434,9 +18277,26 @@ describe("v0 lifecycle policy tables", () => {
       phaseCancellationOrderPreviousStatus: "quoted",
       phaseCancellationPhasePreviousStatus: "quoted",
       phaseCancellationPhaseTargetStatus: "cancelled",
+      phaseCancellationOrderPreviousResultId: "order-quoted-result-1",
+      phaseCancellationPhasePreviousResultId: "phase-quoted-result-1",
+      phaseCancellationOrderCurrentStateCommandKey: "order-quoted-command-1",
+      phaseCancellationPhaseCurrentStateCommandKey: "phase-quoted-command-1",
+      phaseCancellationExpectedOrder: {
+        ...permittedContext.phaseCancellationExpectedOrder,
+        status: "quoted",
+        resultId: "order-quoted-result-1",
+        currentStateCommandKey: "order-quoted-command-1",
+      },
+      phaseCancellationExpectedPhase: {
+        ...permittedContext.phaseCancellationExpectedPhase,
+        status: "quoted",
+        resultId: "phase-quoted-result-1",
+        currentStateCommandKey: "phase-quoted-command-1",
+      },
     };
     expect(
       transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "quoted", "cancelled"),
         current: "quoted",
         target: "cancelled",
         idempotencyKey: "initial-capacity-order-close",
@@ -17554,6 +18414,7 @@ describe("v0 lifecycle policy tables", () => {
     (target, initialPaymentRole) => {
       expect(
         transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, "quoted", target),
           current: "quoted",
           target,
           idempotencyKey: `initial-capture-close-${target}-${initialPaymentRole}`,
