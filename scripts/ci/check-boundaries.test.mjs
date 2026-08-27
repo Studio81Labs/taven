@@ -90,4 +90,111 @@ describe("checkBoundaries", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("ignores import-looking comments, strings, and template literal text", async () => {
+    const root = await fixture();
+    try {
+      await writeFile(
+        path.join(root, "packages/core/package.json"),
+        JSON.stringify({}),
+      );
+      await writeFile(
+        path.join(root, "packages/core/src/comment-fixture.ts"),
+        [
+          '// import { PrismaClient } from "@prisma/client";',
+          '/* export * from "@nestjs/common"; void import("bullmq"); */',
+          'const importExample = "require(\\"redis\\")";',
+          'const templateExample = `import("@taven/backend") from text`;',
+          'const nestedTemplate = `${"export * from \\"vue\\""}`;',
+          'const regexpExample = /import\\("@prisma\\/client"\\)/;',
+          'const moduleName = "@prisma/client";',
+          "void import(moduleName);",
+          "void require(moduleName);",
+        ].join("\n"),
+      );
+      await writeFile(
+        path.join(root, "packages/core/src/component.vue"),
+        [
+          '<template>{{ `import("@prisma/client")` }}</template>',
+          '<!-- <script>import "@prisma/client";</script> -->',
+        ].join("\n"),
+      );
+
+      expect(await checkBoundaries(root)).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects real import forms in TypeScript and Vue scripts", async () => {
+    const root = await fixture();
+    try {
+      await writeFile(
+        path.join(root, "packages/core/package.json"),
+        JSON.stringify({}),
+      );
+      await writeFile(
+        path.join(root, "packages/core/src/imports.ts"),
+        [
+          'import {} from "@prisma/client";',
+          'export {} from "@nestjs/common";',
+          'void import("bullmq");',
+          'void require("redis");',
+          'type Prisma = import("prisma").Prisma;',
+        ].join("\n"),
+      );
+      await writeFile(
+        path.join(root, "packages/core/src/component.vue"),
+        [
+          "<template>require('redis')</template>",
+          '<script setup lang="ts">',
+          'import {} from "vue";',
+          "</script>",
+        ].join("\n"),
+      );
+
+      expect(await checkBoundaries(root)).toEqual(
+        expect.arrayContaining([
+          "packages/core/src/imports.ts imports forbidden '@prisma/client'",
+          "packages/core/src/imports.ts imports forbidden '@nestjs/common'",
+          "packages/core/src/imports.ts imports forbidden 'bullmq'",
+          "packages/core/src/imports.ts imports forbidden 'redis'",
+          "packages/core/src/imports.ts imports forbidden 'prisma'",
+          "packages/core/src/component.vue imports forbidden 'vue'",
+        ]),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("parses slicer-contract imports without matching documentation text", async () => {
+    const root = await fixture();
+    try {
+      await writeFile(
+        path.join(root, "packages/core/package.json"),
+        JSON.stringify({}),
+      );
+      await writeFile(
+        path.join(root, "packages/slicer-contracts/src/examples.ts"),
+        [
+          '// Do not import("@taven/backend") here.',
+          'const example = "require(\\"@taven/slicer-worker\\")";',
+        ].join("\n"),
+      );
+
+      expect(await checkBoundaries(root)).toEqual([]);
+
+      await writeFile(
+        path.join(root, "packages/slicer-contracts/src/forbidden.ts"),
+        'export type { AppModule } from "@taven/backend";\n',
+      );
+
+      expect(await checkBoundaries(root)).toContain(
+        "packages/slicer-contracts/src/forbidden.ts imports an application implementation",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

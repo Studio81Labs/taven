@@ -2,6 +2,80 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
+
+function scriptKindFor(file) {
+  if (file.endsWith(".tsx") || file.endsWith(".jsx") || file.endsWith(".vue")) {
+    return ts.ScriptKind.TSX;
+  }
+  if (file.endsWith(".js") || file.endsWith(".mjs")) {
+    return ts.ScriptKind.JS;
+  }
+  return ts.ScriptKind.TS;
+}
+
+function vueScripts(source) {
+  const withoutHtmlComments = source.replace(/<!--[\s\S]*?-->/g, "");
+  return Array.from(
+    withoutHtmlComments.matchAll(
+      /<script(?:\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi,
+    ),
+    (match) => match[1],
+  );
+}
+
+function literalSpecifier(node) {
+  return node !== undefined &&
+    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ? node.text
+    : undefined;
+}
+
+function importSpecifiers(source, file) {
+  const specifiers = [];
+  const scripts = file.endsWith(".vue") ? vueScripts(source) : [source];
+  for (const script of scripts) {
+    const parsed = ts.createSourceFile(
+      file,
+      script,
+      ts.ScriptTarget.Latest,
+      false,
+      scriptKindFor(file),
+    );
+    const visit = (node) => {
+      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+        const specifier = literalSpecifier(node.moduleSpecifier);
+        if (specifier !== undefined) specifiers.push(specifier);
+      } else if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference)
+      ) {
+        const specifier = literalSpecifier(node.moduleReference.expression);
+        if (specifier !== undefined) specifiers.push(specifier);
+      } else if (
+        ts.isImportTypeNode(node) &&
+        ts.isLiteralTypeNode(node.argument)
+      ) {
+        const specifier = literalSpecifier(node.argument.literal);
+        if (specifier !== undefined) specifiers.push(specifier);
+      } else if (ts.isCallExpression(node)) {
+        const [argument] = node.arguments;
+        const isDynamicImport =
+          node.expression.kind === ts.SyntaxKind.ImportKeyword;
+        const isRequire =
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "require";
+        const specifier = literalSpecifier(argument);
+        if ((isDynamicImport || isRequire) && specifier !== undefined) {
+          specifiers.push(specifier);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+  }
+  return specifiers;
+}
 
 export async function checkBoundaries(repoRoot = process.cwd()) {
   const violations = [];
@@ -47,14 +121,11 @@ export async function checkBoundaries(repoRoot = process.cwd()) {
     /(?:^|\/)apps\/(?:backend|web|admin|slicer-worker)(?:\/|$)/,
     /(?:^|\/)storage(?:\/|$)/,
   ];
-  const imports =
-    /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)(['"])([^'"\n]+)\1/g;
   for (const file of await sourceFiles(
     path.join(repoRoot, "packages/core/src"),
   )) {
     const source = await readFile(file, "utf8");
-    for (const match of source.matchAll(imports)) {
-      const specifier = match[2];
+    for (const specifier of importSpecifiers(source, file)) {
       const candidates = [specifier];
       if (specifier.startsWith(".")) {
         candidates.push(
@@ -85,15 +156,30 @@ export async function checkBoundaries(repoRoot = process.cwd()) {
   const slicerFiles = await sourceFiles(
     path.join(repoRoot, "packages/slicer-contracts/src"),
   );
+  const forbiddenSlicerImplementation = [
+    /^@taven\/(?:backend|slicer-worker)(?:\/|$)/,
+    /(?:^|\/)apps\/(?:backend|slicer-worker)(?:\/|$)/,
+  ];
   for (const file of slicerFiles) {
     const source = await readFile(file, "utf8");
-    if (
-      source.includes("@taven/backend") ||
-      source.includes("@taven/slicer-worker")
-    ) {
-      violations.push(
-        `${path.relative(repoRoot, file)} imports an application implementation`,
-      );
+    for (const specifier of importSpecifiers(source, file)) {
+      const candidates = [specifier];
+      if (specifier.startsWith(".")) {
+        candidates.push(
+          path.relative(repoRoot, path.resolve(path.dirname(file), specifier)),
+        );
+      }
+      if (
+        candidates.some((candidate) =>
+          forbiddenSlicerImplementation.some((pattern) =>
+            pattern.test(candidate),
+          ),
+        )
+      ) {
+        violations.push(
+          `${path.relative(repoRoot, file)} imports an application implementation`,
+        );
+      }
     }
   }
 
