@@ -151,10 +151,13 @@ async function createSiblingMachineFoundation(
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
   name: string,
+  sourceRetention: SourceRetention = {},
 ): Promise<PersistenceFoundation> {
   const machineId = fixtures.id(`${name}:machine`);
   const inventoryId = fixtures.id(`${name}:inventory`);
   const calibrationId = fixtures.id(`${name}:calibration`);
+  const modelFileId = fixtures.id(`${name}:model-file`);
+  const geometryId = fixtures.id(`${name}:geometry`);
   const sliceResultId = fixtures.id(`${name}:slice-result`);
   const capability = await client.query<{ machine_capability_id: string }>(
     'SELECT "machine_capability_id" FROM "machines" WHERE "id" = $1',
@@ -195,6 +198,35 @@ async function createSiblingMachineFoundation(
       testTimes.createdAt,
     ],
   );
+  await client.query(
+    'INSERT INTO "model_files" ("id", "format", "original_filename", "storage_object_key", "content_hash", "size_bytes", "uploaded_at", "source_delete_after", "retention_hold") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+    [
+      modelFileId,
+      "STL",
+      `${name}.stl`,
+      `models/${modelFileId}.stl`,
+      "4".repeat(64),
+      1,
+      sourceRetention.uploadedAt ?? testTimes.createdAt,
+      sourceRetention.deleteAfter ?? testTimes.expiresAt,
+      sourceRetention.hold ?? "NONE",
+    ],
+  );
+  await client.query(
+    'INSERT INTO "model_geometries" ("id", "source_model_file_id", "canonical_object_key", "geometry_hash", "canonicalizer_revision", "volume_cubic_micrometers", "bounds_x_micrometers", "bounds_y_micrometers", "bounds_z_micrometers", "triangle_count") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+    [
+      geometryId,
+      modelFileId,
+      `canonical/${geometryId}`,
+      "3".repeat(64),
+      "test",
+      1,
+      1,
+      1,
+      1,
+      1,
+    ],
+  );
   await fixtures.createRevisionIdentity(calibrationId, "MACHINE_CALIBRATION");
   await client.query(
     'INSERT INTO "machine_calibrations" ("id", "node_id", "machine_id", "flow_ratio_parts_per_million", "xy_compensation_micrometers", "elephant_foot_compensation_micrometers", "settings", "state", "activated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)',
@@ -216,7 +248,7 @@ async function createSiblingMachineFoundation(
       sliceResultId,
       "PRODUCTION",
       `sibling-${fixtures.id(`${name}:cache-key`)}`,
-      foundation.modelGeometryId,
+      geometryId,
       foundation.printConfigRevisionId,
       foundation.machineProfileId,
       calibrationId,
@@ -234,6 +266,8 @@ async function createSiblingMachineFoundation(
     ...foundation,
     machineId,
     inventoryId,
+    modelFileId,
+    modelGeometryId: geometryId,
     machineCalibrationId: calibrationId,
     sliceResultId,
   };
@@ -388,6 +422,101 @@ describe("persistence foundations", () => {
         ),
       ).rejects.toMatchObject({ code: "55000" });
     });
+  });
+
+  it("requires eligibility snapshot arrays to be canonical UUID sets", async () => {
+    const insertSnapshot = async (
+      client: PoolClient,
+      fixtures: PersistenceFactory,
+      name: string,
+      requiredSlotIds: unknown[],
+      eligibleCandidateIds: unknown[],
+    ) => {
+      const foundation = await fixtures.createFoundation();
+      await client.query(
+        'INSERT INTO "eligibility_snapshots" ("id", "node_id", "order_phase_id", "required_fulfilment_slot_ids", "eligible_candidate_estimate_ids", "snapshot_hash", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8)',
+        [
+          fixtures.id(`${name}:snapshot`),
+          foundation.nodeId,
+          fixtures.id(`${name}:order-phase`),
+          JSON.stringify(requiredSlotIds),
+          JSON.stringify(eligibleCandidateIds),
+          "f".repeat(64),
+          testTimes.createdAt,
+          testTimes.expiresAt,
+        ],
+      );
+    };
+
+    await inRollbackTransaction(
+      "eligibility-uuid-set-control",
+      async (client, fixtures) => {
+        await expect(
+          insertSnapshot(
+            client,
+            fixtures,
+            "control",
+            [fixtures.id("slot-one"), fixtures.id("slot-two")],
+            [fixtures.id("candidate-one"), fixtures.id("candidate-two")],
+          ),
+        ).resolves.toBeUndefined();
+      },
+    );
+
+    for (const testCase of [
+      {
+        name: "duplicate-required-slots",
+        requiredSlotIds: ["slot", "slot"] as const,
+        eligibleCandidateIds: ["candidate"] as const,
+        constraint: "eligibility_snapshots_required_slots_uuid_set_check",
+      },
+      {
+        name: "duplicate-eligible-candidates",
+        requiredSlotIds: ["slot"] as const,
+        eligibleCandidateIds: ["candidate", "candidate"] as const,
+        constraint: "eligibility_snapshots_eligible_candidates_uuid_set_check",
+      },
+      {
+        name: "non-string-required-slot",
+        requiredSlotIds: [42] as const,
+        eligibleCandidateIds: ["candidate"] as const,
+        constraint: "eligibility_snapshots_required_slots_uuid_set_check",
+      },
+      {
+        name: "noncanonical-eligible-candidate",
+        requiredSlotIds: ["slot"] as const,
+        eligibleCandidateIds: ["candidate"] as const,
+        uppercaseEligibleCandidate: true,
+        constraint: "eligibility_snapshots_eligible_candidates_uuid_set_check",
+      },
+    ] as const) {
+      await inRollbackTransaction(testCase.name, async (client, fixtures) => {
+        const requiredSlotIds = testCase.requiredSlotIds.map((value) =>
+          value === "slot" ? fixtures.id("slot") : value,
+        );
+        const eligibleCandidateIds = testCase.eligibleCandidateIds.map(
+          (value) => (value === "candidate" ? fixtures.id("candidate") : value),
+        );
+        if ("uppercaseEligibleCandidate" in testCase) {
+          eligibleCandidateIds[0] = String(
+            eligibleCandidateIds[0],
+          ).toUpperCase();
+        }
+
+        await expect(
+          insertSnapshot(
+            client,
+            fixtures,
+            testCase.name,
+            requiredSlotIds,
+            eligibleCandidateIds,
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: testCase.constraint,
+        });
+      });
+    }
   });
 
   it("enforces asset deadline checks and geometry source lineage", async () => {
@@ -2862,9 +2991,14 @@ describe("persistence foundations", () => {
     }
   });
 
-  it("revalidates mutable resources only for live jobs in a HELD set", async () => {
+  it("revalidates mutable resources and sources only for live jobs in a HELD set", async () => {
     const client = await pool.connect();
     const fixtures = factory(client, "held-live-resource-eligibility");
+    const expiredHeldSource = {
+      uploadedAt: new Date(Date.now() - 120_000),
+      deleteAfter: new Date(Date.now() - 60_000),
+      hold: "ACTIVE_ORDER" as const,
+    };
     let foundation: PersistenceFoundation | null = null;
     let liveFoundation: PersistenceFoundation | null = null;
     let terminalProduction: ProductionReservationFixture;
@@ -2874,12 +3008,16 @@ describe("persistence foundations", () => {
     const liveCapacityId = fixtures.id("live-capacity");
     try {
       await client.query("BEGIN");
-      foundation = await fixtures.createFoundation("terminal-machine");
+      foundation = await fixtures.createFoundation(
+        "terminal-machine",
+        expiredHeldSource,
+      );
       liveFoundation = await createSiblingMachineFoundation(
         client,
         fixtures,
         foundation,
         "live-machine",
+        expiredHeldSource,
       );
       terminalProduction = await fixtures.planProduction(
         foundation,
@@ -2992,6 +3130,10 @@ describe("persistence foundations", () => {
         [foundation.machineId, "DISABLED"],
       );
       await client.query(
+        'UPDATE "model_files" SET "retention_hold" = $2, "deleted_at" = clock_timestamp() WHERE "id" = $1',
+        [foundation.modelFileId, "NONE"],
+      );
+      await client.query(
         'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
         [liveProduction.productionReservationId, "SCHEDULED"],
       );
@@ -3004,6 +3146,25 @@ describe("persistence foundations", () => {
         [liveCapacityId, "SCHEDULED"],
       );
       await expect(client.query("COMMIT")).resolves.toBeDefined();
+
+      await client.query("BEGIN");
+      await client.query(
+        'UPDATE "model_files" SET "retention_hold" = $2, "deleted_at" = clock_timestamp() WHERE "id" = $1',
+        [liveFoundation.modelFileId, "NONE"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveProduction.productionReservationId, "PRINTING"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveCapacityId, "PRINTING"],
+      );
+      await expect(client.query("COMMIT")).rejects.toMatchObject({
+        code: "23514",
+        constraint: "model_geometry_source_available_check",
+      });
+      await client.query("ROLLBACK");
 
       await client.query("BEGIN");
       await client.query(

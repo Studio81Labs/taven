@@ -1095,12 +1095,34 @@ ALTER TABLE "candidate_capacity_intervals"
         "ends_at" > "starts_at"
     );
 
+CREATE FUNCTION taven_is_uuid_string_set(payload jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN jsonb_typeof(payload) IS DISTINCT FROM 'array' THEN false
+        ELSE
+            NOT EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(payload) element
+                WHERE jsonb_typeof(element) <> 'string'
+                   OR element #>> '{}' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            )
+            AND jsonb_array_length(payload) = (
+                SELECT count(DISTINCT element #>> '{}')
+                FROM jsonb_array_elements(payload) element
+            )
+    END;
+$$;
+
 ALTER TABLE "eligibility_snapshots"
     ADD CONSTRAINT "eligibility_snapshots_hash_check" CHECK ("snapshot_hash" ~ '^[0-9a-f]{64}$'),
-    ADD CONSTRAINT "eligibility_snapshots_arrays_check" CHECK (
-        jsonb_typeof("required_fulfilment_slot_ids") = 'array' AND
-        jsonb_typeof("eligible_candidate_estimate_ids") = 'array'
-    ),
+    ADD CONSTRAINT "eligibility_snapshots_required_slots_uuid_set_check"
+        CHECK (taven_is_uuid_string_set("required_fulfilment_slot_ids")),
+    ADD CONSTRAINT "eligibility_snapshots_eligible_candidates_uuid_set_check"
+        CHECK (taven_is_uuid_string_set("eligible_candidate_estimate_ids")),
     ADD CONSTRAINT "eligibility_snapshots_expiry_check" CHECK ("expires_at" > "calculated_at");
 
 ALTER TABLE "phase_resource_plans"
@@ -2685,6 +2707,7 @@ BEGIN
         JOIN "model_files" source
           ON source."id" = geometry."source_model_file_id"
         WHERE production."phase_reservation_set_id" = target_set."id"
+          AND production."status" IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
           AND (
               geometry."deleted_at" IS NOT NULL
               OR source."deleted_at" IS NOT NULL

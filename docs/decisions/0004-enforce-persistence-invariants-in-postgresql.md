@@ -83,10 +83,13 @@ node scope is invalid; it never means “all nodes”.
 
 Use `CHECK` constraints for row-local facts such as non-negative quantities,
 positive durations, valid interval bounds, and required/forbidden nullable
-columns. Use partial unique indexes for active planned keys and other
-conditional cardinality rules while retaining historical rows. Phase, Job,
-and Shipment IDs are intentionally treated as opaque UUID foreign-key targets
-until issue #16 defines their domain topology.
+columns. Eligibility snapshot identifier arrays are canonical lowercase UUID
+sets: non-string, malformed, noncanonical, or duplicate elements are rejected
+before an immutable snapshot can make plan completeness impossible. Use partial
+unique indexes for active planned keys and other conditional cardinality rules
+while retaining historical rows. Phase, Job, and Shipment IDs are intentionally
+treated as opaque UUID foreign-key targets until issue #16 defines their domain
+topology.
 
 ### Inventory and capacity
 
@@ -165,9 +168,10 @@ it is then governed by the active phase's operational deadline. Confirmation
 locks and revalidates the selected geometry source, node, machine, profile,
 calibration, and inventory, requires every live capacity interval to remain in
 the future, and compares each copied resource snapshot with its candidate
-estimate. Later validation applies mutable resource eligibility only to live
-job groups; terminal groups remain part of completeness and history but cannot
-wedge unrelated live work after their resources retire. Deferral permits one
+estimate. Later validation applies mutable resource and retained-source
+eligibility only to live job groups; terminal groups remain part of completeness
+and history but cannot wedge unrelated live work after their resources retire
+or their source artifacts are cleaned up. Deferral permits one
 confirming transaction to insert the set and all children together; it does not
 make a partial set valid across transactions.
 
