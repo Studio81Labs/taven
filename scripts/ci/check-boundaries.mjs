@@ -4,12 +4,51 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 function vueScripts(source) {
-  return Array.from(
-    source.matchAll(
-      /<!--[\s\S]*?-->|<script(?:\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi,
-    ),
-    (match) => match[1],
-  ).filter((script) => script !== undefined);
+  const scripts = [];
+  const closingScript = /<\/script\s*>/gi;
+  for (let index = 0; index < source.length;) {
+    if (source.startsWith("<!--", index)) {
+      const end = source.indexOf("-->", index + 4);
+      if (end === -1) break;
+      index = end + 3;
+      continue;
+    }
+    if (
+      source[index] !== "<" ||
+      source.slice(index, index + 7).toLowerCase() !== "<script" ||
+      !/[\s/>]/.test(source[index + 7] ?? "")
+    ) {
+      index += 1;
+      continue;
+    }
+    const openingEnd = htmlTagEnd(source, index + 7);
+    if (openingEnd === undefined) break;
+    if (/\/\s*>$/.test(source.slice(index, openingEnd + 1))) {
+      index = openingEnd + 1;
+      continue;
+    }
+    closingScript.lastIndex = openingEnd + 1;
+    const closing = closingScript.exec(source);
+    if (closing === null) break;
+    scripts.push(source.slice(openingEnd + 1, closing.index));
+    index = closingScript.lastIndex;
+  }
+  return scripts;
+}
+
+function htmlTagEnd(source, start) {
+  let quote;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote !== undefined) {
+      if (character === quote) quote = undefined;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return undefined;
 }
 
 const identifierStartPattern = /^[$_\p{ID_Start}]$/u;

@@ -212,7 +212,7 @@ describe("checkBoundaries", () => {
         path.join(root, "packages/core/src/component.vue"),
         [
           '<!-- <script>import "@prisma/commented";</script> -->',
-          '<script setup lang="ts">',
+          '<script setup lang="ts" generic="T extends { value: string }">',
           'const literalStart = "<!--";',
           'import "@prisma/client";',
           'const literalEnd = "-->";',
@@ -224,7 +224,7 @@ describe("checkBoundaries", () => {
           "const templateEnd = `-->`;",
           "</script>",
           "<!-- an actual SFC comment between script blocks -->",
-          "<script>",
+          "<script data-note='left > right'>",
           'export * from "@nestjs/common";',
           "</script>",
         ].join("\n"),
