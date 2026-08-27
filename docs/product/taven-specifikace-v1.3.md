@@ -81,7 +81,7 @@ Meze automatu jsou v v0 **čistě geometrické**, bez AI — nejen levnější, 
 
 Staví se **jen pokud v0 splnila kritéria**.
 
-Přidává: produkční flow v systému (stavy, G-code přes podepsané URL, povinná fotodokumentace, štítek, podání), sledování pro zákazníka, plnou administraci, notifikace, verzovaný ceník, profilovou matici s testovacím slicem, fázovanou objednávku se zkušebním kusem.
+Přidává: produkční flow v systému (stavy, G-code přes podepsané URL, povinná fotodokumentace, štítek, podání), sledování pro zákazníka, plnou administraci, notifikace, verzovaný ceník, profilovou matici s testovacím slicem, fázovanou objednávku se zkušebním kusem a volitelný zákaznický účet s historií objednávek a funkcí `Objednat znovu` podle §7.10. Checkout ani tokenizované sledování účet nadále nevyžadují.
 
 Makerské funkce jsou **logicky definované, fyzicky součástí administrace**.
 
@@ -259,6 +259,12 @@ U přijaté objednávky vzniká zvlášť šifrovaný `ReproductionArtifact` s k
 
 Claim vybírá sealed verzi skutečně doručeného jobu/fáze jako důkaz výsledku a cestu ke kanonické geometrii i zákaznické konfiguraci, ne jako production snapshot pro další stroj. Po smazání zdrojového STEP nebo 3MF tak stále reprodukuje správný obsah, zatímco každý reroutovaný reprint odvodí nové machine-specific vstupy až z čerstvé eligibility a rezervace. Dokud je objednávka neterminální, `reproduction_delete_after` se nenastaví. Při každém terminálním přechodu se ale nastaví vždy: bez doručeného slotu na `terminal_at + undelivered_reproduction_retention_days`; s doručením na nejpozdější z `claim_until` všech doručených slotů a, existuje-li nedoručená verze, `terminal_at + undelivered_reproduction_retention_days`. Aktivní incident zásilky, reklamace nebo právní hold termín prodlouží. Po odpadnutí poslední překážky mazací job odstraní artefakt i jeho produkční verze a ponechá jen auditní metadata a hash, nikoli rekonstruovatelnou geometrii; refund před doručením tak nikdy nenechá rekonstruovatelný artefakt bez data smazání.
 
+#### Retence a opakování objednávky
+
+Standardní retence zákaznického modelu zůstává 90 dní a existence zákaznického účtu ji automaticky neprodlužuje. `Objednat znovu` je dostupné jen tehdy, pokud jsou stále dostupné všechny zdrojové artefakty nutné k novému preflightu, slicingu, eligibility a výrobě. `ReproductionArtifact` držený kvůli reklamaci je účelově omezený na nápravu původní objednávky a nesmí se použít jako skrytá dlouhodobá archivace pro novou objednávku.
+
+Po vypršení retence zůstávají obchodní a auditní data historické objednávky v účtu viditelná, ale systém z nich nesmí automaticky vytvořit výrobně způsobilou kopii. Zákazník znovu nahraje model a systém smí z historie předvyplnit jen stále platnou konfiguraci. Případná dlouhodobá archivace výrobních souborů je samostatné budoucí rozhodnutí.
+
 ### 3.8 Právní kontrola
 
 §3.3–§3.7 a obchodní podmínky ověřit s poradcem před spuštěním. Konkurenční VOP použít jako **strukturu a checklist, nikoli jako text**.
@@ -274,15 +280,15 @@ material    = gramáž_g × sazba_materiálu
 machine     = čas_h × sazba_stroj_h          ← čas ze slice zvoleného ReferenceProfile
 handling    = sazba_prace_h × (
                 handling_order_fix
-              + handling_plate × podložek
-              + handling_piece × qty          (degresivní)
+              + Σ_i(handling_plate × podložek_i
+                  + handling_piece × qty_i     (degresivní)
+                  + postprocessing_i)
               + handling_pack × počet_plánovaných_zásilek
-              + Σ(shipping_trip / shipping_trip_pricing_divisor)
-              + postprocessing )
-handling_pretisk = sazba_prace_h × (
-                    handling_plate × podložek
-                  + handling_piece × qty       (degresivní)
-                  + postprocessing )
+              + Σ(shipping_trip / shipping_trip_pricing_divisor) )
+handling_pretisk = sazba_prace_h × Σ_i(
+                    handling_plate × podložek_i
+                  + handling_piece × qty_i     (degresivní)
+                  + postprocessing_i )
 amortizace  = cena_stroje / návratnost_h × čas_h
 obal        = Σ obalový_materiál(zásilka_i)
 dopravni_naklad = Σ skutečný_náklad_dopravce(zásilka_i)
@@ -301,6 +307,27 @@ cena_celkem         = nejmenší x, pro které
                       x − Σ poplatek_platebni_brany(payment_i(x)) ≥ mezisoucet
                       a Σ payment_i(x) = x pro celý PaymentSchedule
 ```
+
+#### Hranice `OrderItem` / `Order`
+
+Pricing má dvě závazné úrovně:
+
+- `OrderItem` nese náklady a pravidla vznikající z jedné výrobní konfigurace: vybranou geometrii/tělesa, materiál, barvu, kvalitu, `PrintConfigRevision`, množství a z nich odvozené arrangement/podložky, spotřebu materiálu, strojový čas, item-level handling, post-processing, amortizaci a rezervu přetisku.
+- `Order` nese náklady a pravidla sdílená celou objednávkou: jedno `handling_order_fix`, administrativu, plán zásilek, balení, `handling_pack`, `shipping_trip`, dopravu, platební poplatky, `min_print_price`, `small_order_surcharge` a express eligibility/příplatek.
+
+Agregovaný výrobní pricing nejprve sečte výrobní příspěvky všech položek a jednou přidá sdílené order-level náklady. Více samostatně konfigurovaných `OrderItem` proto nesmí násobit minimum, přirážku malé objednávky ani fixní náklady celé objednávky.
+
+```
+cena_tisku_order = max(min_print_price, agregovaný výrobní pricing položek)
+```
+
+`min_print_price` se aplikuje **jednou na objednávku**, ne na každý `OrderItem`. Chrání především `handling_order_fix`, balení, administrativu a předání zásilky / `shipping_trip`.
+
+`small_order_surcharge` se rovněž aplikuje **jednou na objednávku**. Spouštěčem ve v0 je `sum(print_weight všech OrderItem) < 100 g`; hranice zůstává dočasnou obchodní proxy sledovanou podle parametrů §7.
+
+Množstevní sleva se naproti tomu vyhodnocuje **na úrovni `OrderItem`**, protože výrobní efekt vzniká opakováním stejného dílu se stejnou konfigurací a jeho rozložením na podložce. Množství různých položek se pro tuto slevu nesčítá.
+
+`postprocessing_i` je celkový nadstandardní post-processing požadovaný konkrétním `OrderItem` pro naceněné množství a fázi; bez něj je 0. Ve vzorci se proto sčítá jednou přes itemy, ne jednou za celý Order ani znovu za každý kus mimo itemový odhad. Stejný item-level rozsah používá `handling_pretisk` pro očekávané opakování výroby.
 
 **Žádný `koef_kvality`.** Kvalita mění výšku vrstvy, tedy čas — a ten dává slicer přímo. Násobit přesně spočítaných 6 h 12 min ručním koeficientem znamená zahodit přesně tu výhodu, kvůli které se slicuje. Pokud má u jemné kvality existovat obchodní přirážka, ať se jmenuje přirážka a stojí vedle, ne v čase.
 
@@ -368,21 +395,26 @@ qty > 1   → slicer-native arrange + slice
 
 Orca má vlastní arrangement se svými omezeními a psát k němu paralelní 2D packing je v nulté verzi práce navíc bez odpovídajícího přínosu. Vlastní algoritmus až tehdy, když se ukáže, že nativní arrange systematicky plýtvá plochou.
 
+Arrangement i množstevní efekt se počítají samostatně pro každý `OrderItem`. Například kryt × 5 a víčko × 4 jsou dvě nezávislá vyhodnocení; devět kusů ve dvou různých konfiguracích automaticky neznamená slevu pro 9 ks.
+
 ### 4.6 Přepravní kategorie
 
-Bounding box počítá preflight, ale kategorie se nesmí určit jen z jednoho dílu. Před závaznou cenou vznikne deterministický `ShipmentPlan` pro **celé množství každé fáze**:
+Bounding box počítá preflight, ale kategorie se nesmí určit jen z jednoho dílu ani z jednoho `OrderItem`. Před závaznou cenou musí mít Order vybraný jeden `delivery_destination` včetně provider capability snapshotu; deterministický `ShipmentPlan` pak vznikne nad **všemi výrobními položkami a celým množstvím každé fáze** a všechny jeho parcely míří do tohoto jediného endpointu:
 
-1. největší jednotlivý díl se musí vejít do rozměrů zvolené kategorie po přidání obalové rezervy
-2. odhad zabraného objemu je `Σ(bbox_volume × qty) / koeficient_plnění_krabice`
-3. odhad hmotnosti je materiál všech kusů + hmotnost obalu
-4. kusy se deterministicky rozdělí do nejmenší kategorie, která nepřekročí objem ani hmotnost; při překročení vznikne další plánovaná zásilka
-5. na hraně se zaokrouhluje nahoru; co se nevejde do žádné podporované kategorie, jde do individuální nabídky
+1. pro každý kus vznikne ochranný `packing_part_bbox`, který ke každé straně zdrojového bboxu přidá obalovou rezervu; tyto obálky se při skládání nesmějí překrývat a každý kus se musí do vnějších rozměrů kategorie vejít alespoň v jedné ze šesti osových rotací
+2. podporované kategorie mají ve `PriceList` verzované `shipping_category_priority`; v v0 je pořadí `Z-BOX → výdejní místo → nadrozměrná`, ale před packingem se seznam omezí jen na kategorie podporované zvoleným `delivery_destination` a jeho snapshotovanými provider limity
+3. ještě před vznikem slotů dostane každý plánovaný kus stabilní `packing_unit_key = (order_item_id, phase_kind, quantity_ordinal)`, kde ordinal je souvisle `1..phase_quantity` uvnitř itemu; kusy se seřadí sestupně podle nejdelší hrany, pak bbox objemu a nakonec lexikograficky podle tohoto klíče, nikdy podle dosud neexistujícího `FulfilmentSlot.id`
+4. dimension-aware first-fit zkouší existující zásilky v pořadí jejich vzniku a pro každou drží skutečně realizovatelný `packing_bbox`: další ochrannou obálku zkusí ve všech unikátních osových rotacích seřazených lexikograficky podle orientovaného `(x, y, z)` a přiloží ji podél os v pořadí `X → Y → Z`; na zvolené ose se rozměry sečtou a na zbývajících vezme maximum
+5. kandidát smí zůstat v právě zkoušené zásilce jen tehdy, když nepřekročí rozměrové limity její kategorie, agregovanou hmotnost dílů + obalu ani `volume_proxy = Σ(packing_part_bbox_volume) / packing_fill_coefficient`; proxy se porovnává výhradně s verzovaným `shipping_category.max_parcel_volume_cm3`, nikoli s objemem právě realizovaného `packing_bbox`, a v0 používá `packing_fill_coefficient = 0,55` i category ceilings z parametrů §6. Ze všech platných umístění v první způsobilé existující zásilce se vybere minimum tuple `(výsledný bbox objem, nejdelší výsledná hrana, výsledné x, y, z, orientované x, y, z kusu, axis_order)`; přesně tento kandidát se uloží jako nový `packing_bbox` před zpracováním dalšího kusu
+6. pokud nevyhoví žádná existující zásilka, zkusí se prázdný `packing_bbox` ve filtrovaném pořadí `shipping_category_priority` a nový balík vznikne v první způsobilé kategorii; jeho snapshot uloží stejný `delivery_destination_id`, kategorii, výsledný bbox ochranných obálek, objemovou proxy a hmotnost
+7. pokud některý kus neprojde žádnou kategorií kompatibilní se zvoleným endpointem, závazný plán nevznikne: UI nabídne jiný společný endpoint/service a po změně vytvoří nový quote; co se nevejde ani potom, jde do individuální nabídky
+8. na hraně se zaokrouhluje nahoru
 
-Vlastní přesný 3D bin packing **nestav** — pro hrubé přepravní kategorie stačí konzervativní first-fit nad bbox objemem a hmotností. `ShipmentPlan` je součást cenového snapshotu; fázovaná objednávka plánuje sample a batch odděleně a revize modelu přepočítá jen zbývající zásilky.
+Vlastní přesný 3D bin packing **nestav**. Popsaný axis-aligned first-fit může vytvořit více zásilek než optimální packing, ale každý přijatý krok reprezentuje platné nepřekrývající se umístění, takže samotný součet objemů nikdy nesmí podcenit počet balíků. Změna priority kategorií vytváří novou `PriceList`; změna endpointu nebo jeho capability snapshotu před platbou invaliduje dosavadní `ShipmentPlan` a vyžádá nový závazný quote. Přijatý cenový snapshot se nikdy zpětně nepřecení. `ShipmentPlan` je součást cenového snapshotu; fázovaná objednávka plánuje sample a batch odděleně a revize modelu přepočítá jen zbývající zásilky se stejným endpointem, dokud zákazník výslovně nepřijme jeho změnu a novou cenu.
 
-Každý plán zároveň deterministicky rozdělí `FulfilmentSlot` všech naceněných kusů právě do jedné plánované zásilky; skutečný `Shipment` tuto množinu snapshotuje. Cenový snapshot každému slotu přiřadí `settlement_amount` a každé zásilce vlastní účtovanou dopravu/handling tak, aby jejich součet přesně odpovídal ceně fáze; refund ztracené parcely proto má předem danou částku bez zpětného přepočtu doručených kusů. Jednotlivé složky včetně expresního příplatku mají deterministickou alokaci ke slotům a každý `PriceAdjustment` ukládá, kterou dosud nekreditovanou alokaci spotřeboval. `remaining_contract_value` slotu proto nikdy neklesne pod nulu a claim, SLA credit ani jejich opačné pořadí nemohou stejnou hodnotu odečíst dvakrát. Fáze je `delivered` až tehdy, když je doručený každý aktuální list všech povinných shipment lineage. Pokud je alespoň jeden slot doručený a všechny ostatní jsou buď doručené, nebo po incidentu finančně vypořádané jako `cancelled_refunded`, fáze i objednávka skončí `partially_fulfilled`. První z více balíků tedy nikdy nedokončí celou fázi a ztráta druhého nikdy nevynutí refund už doručených kusů.
+Pre-quote výsledek rozdělí každý `packing_unit_key` právě do jedné plánované zásilky. Transakce `Order.draft → quoted` potom pro každý klíč vytvoří právě jeden `FulfilmentSlot`, klíč na něm immutable snapshotuje a atomicky přepíše parcel allocations plánu na vzniklá slot ID; po přechodu nesmí zůstat klíč bez slotu ani slot bez právě jedné alokace. Skutečný `Shipment` tuto množinu snapshotuje. Cenový snapshot každému slotu přiřadí `settlement_amount` a každé zásilce vlastní účtovanou dopravu/handling tak, aby jejich součet přesně odpovídal ceně fáze; refund ztracené parcely proto má předem danou částku bez zpětného přepočtu doručených kusů. Jednotlivé složky včetně expresního příplatku mají deterministickou alokaci ke slotům a každý `PriceAdjustment` ukládá, kterou dosud nekreditovanou alokaci spotřeboval. `remaining_contract_value` slotu proto nikdy neklesne pod nulu a claim, SLA credit ani jejich opačné pořadí nemohou stejnou hodnotu odečíst dvakrát. Fáze je `delivered` až tehdy, když je doručený každý aktuální list všech povinných shipment lineage. Pokud je alespoň jeden slot doručený a všechny ostatní jsou buď doručené, nebo po incidentu finančně vypořádané jako `cancelled_refunded`, fáze i objednávka skončí `partially_fulfilled`. První z více balíků tedy nikdy nedokončí celou fázi a ztráta druhého nikdy nevynutí refund už doručených kusů.
 
-Tvrdá podmínka: **největší jednotlivý díl** se musí vejít do rozměrů krabice.
+Tvrdá podmínka: **každý jednotlivý vyráběný díl** se musí vejít do rozměrů zvolené přepravní kategorie; výsledné rozdělení zásilky zároveň musí splnit její objemové, rozměrové i hmotnostní limity.
 
 **Strukturální napětí, vědomě přijaté:** diferenciace vůči hobbistovi s P1S je velký build plate, ale přesně ty zakázky vypadávají z levné boxové sítě.
 
@@ -399,6 +431,8 @@ Expres se nabízí jen objednávce s právě jednou `OrderPhase(kind = single)`.
 Pro způsobilou single-phase objednávku se garance vypořádává idempotentní událostí `ExpressSlaBreach`, když její jediná fáze nedosáhne `qc_passed_at` do `express_due_at = confirmed_at + 24 h`. Událost pod zámkem cenových alokací odvodí `express_credit_amount` jako dosud žádným jiným `PriceAdjustment` nekreditovanou část `express_priplatek`, vytvoří novou immutable revizi aktuálního cenového snapshotu s `contract_total' = contract_total − express_credit_amount` a aktivuje ji jako `PriceAdjustment(kind = express_sla_credit)`; původní snapshot se nemění. Teprve proti takto snížené smluvní ceně přepočítá `refundable_balance = max(0, net_captured − contract_total')` a pod stejným zámkem Payment i aktivních refundů vytvoří `RefundTransaction` na dosud nevrácenou a žádným pending refundem nealokovanou část příplatku s klíčem `order_id + express_due_at + price_snapshot_id`. Pokud příplatek už zahrnul jiný úplný refund nebo settlement, částka je nulová a druhý refund nevznikne. Clock worker i `handoff_shipment` vyhodnotí po `express_due_at` tutéž událost pod zámkem; předání proto nemůže předběhnout dosud nezapsaný SLA credit. Úspěšný webhook vrátí `refundable_balance` na nulu; retry a alert pokračují do vypořádání a pre-handoff zásilka zůstává mezitím blokovaná. Refund tedy nikdy nevytvoří falešný doplatek základní objednávky a opakované vyhodnocení SLA nevrátí příplatek dvakrát.
 
 **Kapacitní brána — default zapnuto, měří zásahy obsluhy, ne hodiny.** Jeden dvacetihodinový tisk přes noc je v pořádku, pět čtyřhodinových podložek ne, protože mezi nimi musí někdo sejmout díly. Podmínky v parametrech §10. Když padnou, volba se **nezobrazí**.
+
+Způsobilost se vyhodnocuje nad **celou objednávkou**: do brány vstupují všechny `OrderItem`, jejich množství a všechny potřebné podložky. Limit dvou podložek je společný pro celý order, stejně jako požadavek na dostupný materiál/barvu, nulový nadstandardní post-processing a dostatečné výrobní okno. Pokud jediná položka nebo společný plán podmínky nesplní, express se nenabídne vůbec. Jedna objednávka nesmí kombinovat standardní a expresní položky.
 
 ### 4.8 Meze automatu
 
@@ -452,7 +486,7 @@ V v0 i v1 obě fáze splynou (jeden stroj), ale **šev tam musí být**.
 
 **STEP není blocker v0.** Produktově je to silný diferenciátor — zákazník s CADem a bez vyexportovaného meshe je přesně ta lepší cílovka — ale implementačně přináší tesselaci s deterministickou tolerancí, jednotky, sestavy, náhled a novou plochu na selhání. Úkolem v0 je ověřit instant quote, ne pokrýt formáty. Když by STEP brzdil vydání, pusť **STL + 3MF** a STEP přidej hned poté.
 
-**STEP může obsahovat sestavu.** Když soubor obsahuje víc těles, ukaž je jako seznam a nech zákazníka vybrat, které se tisknou; každé naceň jako samostatný `OrderItem`. Nad práh → individuální nabídka. U STL tenhle případ neexistuje.
+**STEP může obsahovat sestavu.** Když STEP nebo podporovaný 3MF obsahuje víc těles, ukaž je jako seznam a nech zákazníka vybrat, která se tisknou. Vybraná tělesa se shodnou úplnou výrobní konfigurací — materiálem, barvou, kvalitou, `PrintConfigRevision` a množstvím celé vybrané sady — smí tvořit jeden `OrderItem`; odlišná konfigurace vždy vytváří samostatnou položku. Každý `OrderItem` odkazuje na immutable `ModelGeometry` přesně svého tělesa nebo podmnožiny těl a naceňuje se samostatně. Nad práh → individuální nabídka. U STL s jediným tělesem tenhle grouping nevzniká.
 
 Cache nikdy neidentifikuje vstup jen hashem celého uploadu. Každý `OrderItem` odkazuje na immutable `ModelGeometry`: u STL/3MF je to kanonická tisknutelná geometrie, u STEP deterministicky extrahované vybrané těleso nebo podmnožina těl po tesselaci s verzovanou tolerancí. `geometry_hash = sha256(canonical_geometry_bytes)`; dvě tělesa jednoho STEP souboru tak mají rozdílný klíč, geometricky totožné výstupy mohou cache bezpečně sdílet.
 
@@ -497,9 +531,10 @@ Klíč reference slice je `geometry_hash + reference_profile_revision_id + print
 ### 5.7 Async a UX ceny
 
 1. **Hrubý odhad z objemu meshe a bboxu okamžitě** (±20 %, milisekundy) → číslo do 200 ms, což je ten konverzní efekt
-2. **Skutečný slice na pozadí** → cena se upřesní a **stává se závaznou**, pokud jsou splněny meze §4.8
+2. **Skutečný slice na pozadí** → zpřesní výrobní mezisoučet, ale dokud zákazník nevybral doručovací endpoint, zůstává zobrazená cena výslovně **nezávazná**
+3. **Výběr `delivery_destination`** → jeho capability snapshot omezí kategorie a deterministický `ShipmentPlan` dopočítá všechny parcely, dopravu, balení a order-level pricing; teprve pokud jsou zároveň splněny meze §4.8, vznikne immutable cenový snapshot, `Order.draft → quoted`, phase/slot topology a závazná cena s expirací
 
-Právně čisté: hrubý odhad je výslovně nezávazný, závazná cena vzniká až po reálném slice a preflightu.
+Právně čisté: hrubý odhad i sliced mezisoučet před volbou dopravy jsou výslovně nezávazné. Závazná cena vzniká až po reálném slice, preflightu a endpoint-bound `ShipmentPlan`; samotné dokončení background slice nesmí vytvořit `quoted` Order ani spustit expiraci závazné nabídky. Teprve nad stabilními phase/slot ID quoted objednávky vznikne `EligibilitySnapshot`; bez jeho kompletního plánu se nevytvoří Payment intent ani capture.
 
 ### 5.8 AI — pravidlo teď, implementace později
 
@@ -543,18 +578,18 @@ První tři popisují **svět**, `MachineCalibration` a `Inventory` **tenhle kon
 
 | Entita | v0 | v1 | Poznámka |
 |---|---|---|---|
-| `Customer` | ✓ | ✓ | bez povinné registrace |
-| `Order` / `OrderItem` | ✓ | ✓ | fulfilment objednávky; Payment, ShipmentPlan a Shipment jsou kolekce potomků od v0 |
+| `Customer` | ✓ | ✓ | bez povinné registrace; volitelný účet v1 nesmí být podmínkou checkoutu ani sledování |
+| `Order` / `OrderItem` | ✓ | ✓ | `OrderItem` je samostatná výrobní konfigurace; jeden `ModelFile` může přes výběr geometrií zdrojovat více položek; Payment, ShipmentPlan a Shipment jsou kolekce potomků Orderu od v0 |
 | `Payment` | ✓ | ✓ | více transakcí na objednávku; role `full` / `deposit` / `balance`, capture cutoff + refundace |
 | `PaymentSchedule` | ✓ | ✓ | immutable plán všech capture a fee sazeb použitý pro gross-up cenového snapshotu |
 | `OrderSettlement` | ✓ | ✓ | earned/refund/write-off snapshot pro zrušení po vzniklých nákladech, opuštěném doplatku nebo neautorizovaném fyzickém handoffu |
 | `HandoffReconciliation` | ✓ | ✓ | immutable vazba ověřeného carrier scanu, odmítnutého cancellation requestu a `OrderSettlement(kind = unauthorized_handoff)`; nikdy nenahrazuje běžnou autorizaci |
 | `LateCaptureCompensation` | ✓ | ✓ | `initial_checkout_expired`, `initial_checkout_cancelled`, `initial_checkout_capacity`, `revision_capacity`, `unauthorized_handoff_balance`, `balance_settlement`, `sample_confirmation_expired` nebo `revision_rejected`; plná refundace provider capture bez znovuotevření fulfilmentu |
 | `PriceAdjustment` | ✓ | ✓ | immutable následník cenového snapshotu; `express_sla_credit`, `claim_slot_credit`, `recovery_slot_credit` nebo `batch_cancellation_credit` před refundem |
-| `OrderPhase` | ✓ | ✓ | v0 právě jedna pre-capture `single`; v1 `single` nebo `sample` / `batch`; vzniká se sloty už pod `Order.quoted`, před rezervací a capture |
-| `OrderRevision` | — | ✓ | nový model, reslice, cenový rozdíl, fee-aware `PaymentSchedule`, přijetí a `revision_amount_due` |
+| `OrderPhase` | ✓ | ✓ | v0 právě jedna pre-capture `single`; v1 `single` nebo `sample` / `batch`; vzniká s immutable per-item množstvím a sloty už pod `Order.quoted`, před rezervací a capture |
+| `OrderRevision` | — | ✓ | explicitní množina dotčených `OrderItem`, jejich náhradní geometrie/konfigurace, reslice, cenový rozdíl, fee-aware `PaymentSchedule`, přijetí a `revision_amount_due` |
 | `FulfilmentSlot` | ✓ | ✓ | stabilní pre-capture ID naceněného kusu s hodnotou/credits, jednou parcel allocation a nejvýše jedním `active_claim_id` |
-| `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem; `source_delete_after` už při uploadu + auditovaný hold/prodloužení |
+| `ModelFile` | ✓ | ✓ | immutable, adresovaný hashem a nezávislý na `OrderItem`; `source_delete_after` už při uploadu + auditovaný hold/prodloužení |
 | `PhotoAsset` | ✓ | ✓ | `quote_reference` nebo `qc`; `photo_delete_after` už při uploadu, aktivní Order/Claim a legal hold jen auditovaně odkládají smazání |
 | `ModelGeometry` | ✓ | ✓ | kanonická geometrie tělesa/podmnožiny; vlastní `geometry_hash` |
 | `ReproductionArtifact` / `Version` | ✓ | ✓ | draft při acceptance, sealed s production slice při `gcode_ready`; claim volí skutečně doručenou |
@@ -712,15 +747,24 @@ Aktivní práci zachycuje samostatný `HandlingSession`: `component`, `started_a
 
 **Fázovaná objednávka (v1)**
 ```
-quote → sample (1 ks) → zákazník potvrdí fit
+quote → sample (1 ks každého OrderItem) → zákazník potvrdí fit celé sady
       nebo nahraje revidovaný model
-      → dávka (N ks)
+      → dávka (zbývající množství každého OrderItem)
 ```
-Cena obou fází pro **původní `ModelFile`** se zamkne už při nacenění, takže zákazník od začátku ví celkovou částku. Při počátečním capture vznikne `PhaseReservationSet` jen pro celý sample plan; batch zůstává cenově zamčený, ale bez blokované gramáže nebo strojových intervalů po celou výrobu, přepravu a případnou náhradu vzorku. Potvrzení fitu beze změny modelu cenu nemění, ale před aktivací vytvoří čerstvý `EligibilitySnapshot` a atomicky získá nový kompletní batch `PhaseReservationSet`; prošlý či kolidující interval se nikdy nepovažuje za kapacitu.
+
+Fázování je ve v1 vlastnost **celé objednávky**, ne přepínač jednotlivé položky, a má precondition `ordered_quantity_i ≥ 2` pro každý zahrnutý `OrderItem`. Při přechodu do `quoted` se proto pro každý item immutable odvodí `sample_quantity_i = 1` a kladné `batch_quantity_i = ordered_quantity_i − 1`. Sample fáze obsahuje právě jeden `FulfilmentSlot` každé samostatné výrobní konfigurace; u `OrderItem` seskupujícího více těles znamená jeden kus celou vybranou sadu těles. Batch fáze obsahuje zbývající sloty každé položky. Položka s množstvím 1 patří do samostatného `single` Orderu nebo zákazník množství zvýší; API ani UI ji nesmí přijmout do sample/batch Orderu, takže každou nevyhovující sample konfiguraci lze opravit jejími existujícími batch sloty.
+
+Zákazník potvrzuje nebo odmítá fit dodané sample sady atomicky za celou objednávku. Částečné potvrzení jen některých položek ani kombinace `single` a `sample/batch` položek v jednom Orderu se ve v1 nepodporuje; chce-li zákazník vzorek jen pro podmnožinu košíku, vytvoří pro ni samostatný Order. Toto členství a počty se po quote nemění a každý sample i batch slot odkazuje původní `order_item_id`, takže pricing, rezervace, výroba, zásilky i settlement používají stejnou množinu.
+
+Cena obou fází pro všechny původní `OrderItem` se zamkne už při nacenění, takže zákazník od začátku ví celkovou částku. Při počátečním capture vznikne `PhaseReservationSet` jen pro celý sample plan; batch zůstává cenově zamčený, ale bez blokované gramáže nebo strojových intervalů po celou výrobu, přepravu a případnou náhradu vzorku. Potvrzení fitu beze změny modelu cenu nemění, ale před aktivací vytvoří čerstvý `EligibilitySnapshot` a atomicky získá nový kompletní batch `PhaseReservationSet`; prošlý či kolidující interval se nikdy nepovažuje za kapacitu.
 
 `CancelUnactivatedBatch(reason)` je jediná finanční cesta z batch `locked | awaiting_revision | awaiting_capacity` do storna. Pod společným zámkem fáze, všech jejích slotů a component allocations, aktivního cenového snapshotu, revision Payment, ostatních Payment a aktivních refundů nejdřív zavře případné revision capture window a teprve potom zruší batch a uvolní jeho krátkou rezervaci. Odvodí `batch_credit_amount = Σ remaining_contract_value` všech batch slotů, vytvoří a aktivuje právě jeden immutable `PriceAdjustment(kind = batch_cancellation_credit)` s unikátním klíčem `order_id + batch_phase_id + batch_cancellation_credit` a sníží `contract_total` před přepočtem `refundable_balance`; `reason` ukládá jen jako auditní příčinu, ne jako část unikátní identity. Teprve proti novému snapshotu vytvoří refundy dosud nevrácené a žádným pending refundem nealokované batch hodnoty. Unikátní spotřeba component allocations i idempotency klíč zabrání druhému creditu při závodu timeoutu, odmítnutí revize a sample abortu; až úspěch všech refund webhooků nastaví batch sloty a fázi na `cancelled_refunded`. Příkaz používá `reason = confirmation_expired | revision_rejected | sample_prerequisite_abort`.
 
-Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision`, nový preflight a referenční slice, přepočítají se obsazenosti podložek, `required_material_g`, požadované strojové intervaly i kategorie všech zbývajících zásilek a zákazník přijme nový cenový rozdíl přes tokenizovaný odkaz. Příkaz přijetí revize vždy vytvoří čerstvý `EligibilitySnapshot` a atomicky získá nový batch `PhaseReservationSet` pro všechny přepočtené itemy, gramáž a kapacitu. Dokud to nelze, přijetí se necommitne, revize zůstává `awaiting_capacity` a batch se neaktivuje.
+Nahrání revidovaného `ModelFile` původní cenu batch fáze ruší: vznikne `OrderRevision` s neprázdnou explicitní množinou `affected_order_item_ids` a mapováním každé dotčené položky na náhradní výběr `ModelGeometry` a případnou novou `PrintConfigRevision`. Revize nahrazuje pouze dosud nevyrobené batch sloty uvedených položek; doručené sample sloty i geometrie, konfigurace, množství a sloty ostatních `OrderItem` zůstávají immutable. Hranice nového uploadu sama nerozhoduje, které položky se mění, ani když původní `ModelFile` používalo více položek.
+
+Nový preflight a referenční slice se provedou pro každou dotčenou položku. Revidovaný cenový snapshot se nesmí ocenit jako nová samostatná batch objednávka: vychází z immutable výrobních/phase allocations a print weight už dodané sample fáze, nahradí příspěvky dotčených batch slotů a přidá nezměněné příspěvky ostatních batch slotů. Nad tímto celým Orderem znovu vyhodnotí `min_print_price`, gramážní hranici i jediný `small_order_surcharge` právě jednou; předchozí order-level minimum ani surcharge se k výsledku nepřičítají jako druhá zamčená sample položka, ale jejich komponenty nahradí tento jediný nový výsledek. Už dodaná sample doprava, balení a jejich allocations zůstávají beze změny; nový endpoint-bound `ShipmentPlan` se sestaví pouze pro **celý zbývající batch** včetně nezměněných položek. Cenový rozdíl se alokuje jen k dosud nevyrobeným batch slotům, takže settlement amounts dodaného sample zůstávají immutable, a zákazník přijme výsledný rozdíl celkové smluvní ceny přes tokenizovaný odkaz.
+
+Příkaz přijetí revize vždy vytvoří čerstvý `EligibilitySnapshot` a atomicky získá kompletní batch `PhaseReservationSet` pro všechny zbývající sloty, gramáž a kapacitu, přestože náhradní geometrie se týká jen `affected_order_item_ids`. Dokud to nelze, přijetí se necommitne, revize zůstává `awaiting_capacity` a batch se neaktivuje. Sample se tedy podruhé neplánuje, nerezervuje ani neúčtuje, ale jeho zamčené příspěvky zůstávají součástí jediného order-level pricing základu.
 
 Zvýšení ceny vytvoří `balance` Payment navázaný na revizi a `revision_amount_due`; jeho capture smí začít až po novém setu rezervací. Batch se aktivuje teprve po přijetí revize, `revision_amount_due = 0` **a** celém `PhaseReservationSet` ve stavu `held`. Původní záloha tedy nestačí k výrobě zdražené geometrie. Pokud krátká rezervace vyprší a capture webhook před `confirmation_deadline_at` nedokáže atomicky získat nový kompletní batch set, pod společným Payment/revision/phase/resource zámkem nastaví tomuto pokusu `capture_authorized = false`, `capture_cutoff_at = now`, ponechá revizi i batch v `awaiting_capacity`, vyloučí kompenzovaný capture z `revision_amount_due`, přepne Payment do `refund_pending` a vytvoří plnou `LateCaptureCompensation(kind = revision_capacity)` s klíčem `revision_capacity + provider_transaction_id`. Až její refund uspěje, smí zákazník před confirmation deadlinem vytvořit nový balance Payment pokus, ale jen po novém kompletním setu; timeout/rejection pod stejnými zámky retry zakáže a použije svůj terminální flow. Souběh tedy nikdy neaktivuje batch ze starého capture ani jej nevrátí podruhé.
 
@@ -841,6 +885,16 @@ new → in_review → quoted → accepted → (vytvoří Order)
 68. Ověřený scan běžné parcely v `cancellation_pending`, která nesplňuje jen finanční/aggregate handoff guard, musí atomicky vytvořit `HandoffReconciliation`, zaznamenat faktickou custody/Job transitions, zavřít balance captures, vytvořit `OrderSettlement(kind = unauthorized_handoff)` a teprve potom výjimečně posunout phase/Order do `shipped`; nesmí se vydávat za autorizovaný handoff ani dovolit původnímu stornu/refundu dokončit.
 69. `Order` má vztah 1:N k `ShipmentPlan` i `Shipment` už v v0: jedna `single` fáze smí vytvořit více parcel a replacement/reship lineage zachovává původní Shipment vedle aktuálního leaf; implementace nesmí použít singulární `order.shipment_id`.
 70. `ClaimSlotResolution.recovery_pending` smí přejít do `withdrawn` jen u čistého `post_delivery_quality` rodiče bez incident-backed child a po dokončení všech pre-handoff cancellation barriers; recovery vzniklou z `lost | returned` incidentu stáhnout nelze.
+71. `ModelFile` a `OrderItem` jsou nezávislé koncepty: jeden upload může být zdrojem více položek s odlišným výběrem těles, materiálem, barvou, kvalitou nebo množstvím; hranice uploadu nesmí vynutit hranici výrobní konfigurace.
+72. `Objednat znovu` vždy vytvoří nový draft a smí převzít jen znovu použitelnou konfiguraci včetně výběru těles a přijaté `PrintConfigRevision` (výplň a další zákaznické toolpath volby), pokud jsou stále podporované. Musí použít aktuální `PriceList`, aktuální způsobilý `ReferenceProfile`, nový slice/quote a novou závaznou cenu; historický Quote, PriceListVersion, sleva, item price ani order total se nekopírují.
+73. Zákaznický účet neprodlužuje 90denní zdrojovou retenci. Po smazání potřebného zdroje je automatické opakování zakázané, reklamační `ReproductionArtifact` se k němu nesmí znovu použít a nový draft smí pokračovat až po novém uploadu.
+74. `min_print_price` a `small_order_surcharge` se vyhodnocují jednou nad celým Orderem, zatímco množstevní sleva a plate arrangement se vyhodnocují samostatně pro každý `OrderItem`; počty různých položek se pro item-level slevu nesčítají.
+75. Shipment planning, přepravní kategorie a express eligibility pokrývají všechny `OrderItem` objednávky. Každý jednotlivý díl musí splnit limit kategorie, každá zásilka současně rozměrový i hmotnostní limit a express musí splnit celý order bez kombinace standardních a expresních položek.
+76. Závazný `ShipmentPlan` smí vzniknout až po výběru jediného order-level `delivery_destination`; každá jeho parcela musí snapshotovat tentýž endpoint a kategorii kompatibilní s jeho provider capabilities. Background slice před touto volbou dává jen nezávazný mezisoučet a nesmí vytvořit `quoted` Order. Změna endpointu před platbou invaliduje plán i cenu a per-parcel destinace se v v0 nepodporuje.
+77. Fázovaná v1 objednávka smí obsahovat jen `OrderItem` s `ordered_quantity ≥ 2` a pro každý musí immutable alokovat jeden sample slot a `ordered_quantity − 1` kladných batch slotů; fit se potvrzuje za celou sample sadu. `OrderRevision` smí nahradit jen batch sloty explicitních `affected_order_item_ids`; order-level policies přepočítá jednou z frozen sample allocations a celého revidovaného batch, zatímco zásilky a resource plan znovu vytvoří jen pro celý zbývající batch.
+78. Parcel `volume_proxy` musí dělit součet ochranných `packing_part_bbox` objemů verzovaným `packing_fill_coefficient` a porovnat výsledek s verzovaným `shipping_category.max_parcel_volume_cm3`; realizovaný `packing_bbox` slouží samostatné rozměrové kontrole a nesmí být implicitním objemovým stropem.
+79. Nadstandardní `postprocessing_i` je item-level čas pro celé množství daného `OrderItem` a fázi. Hlavní handling i `handling_pretisk` jej sčítají přes itemy právě jednou; globální order-level `postprocessing` ani další násobení počtem kusů mimo itemový odhad neexistuje.
+80. Pre-quote packing musí identifikovat kus tuplem `(order_item_id, phase_kind, quantity_ordinal)` a pro každé vložení vybrat minimum úplného placement tuple; `FulfilmentSlot.id` vzniká až při atomickém finalizování quoted plánu a nesmí ovlivnit pořadí ani počet zásilek.
 
 ### 6.5 Švy pro síť
 
@@ -870,15 +924,15 @@ Nejsou to dvě větve jednoho trychtýře, jsou to dvě cílovky. Obsah: hodnoto
 
 ### 7.2 Konfigurátor
 
-**Krok 1 — nahrání.** Drag & drop. Okamžitě náhled, rozměry, hrubý odhad ceny, indikátor „počítám přesnou cenu".
+**Krok 1 — nahrání.** Drag & drop. Okamžitě náhled, rozměry, seznam těles, hrubý odhad ceny, indikátor „počítám přesnou cenu". Zákazník může tělesa sdílející konfiguraci seskupit do jednoho `OrderItem` nebo je rozdělit do více položek; jeden `ModelFile` proto není automaticky jeden `OrderItem`.
 
-**Krok 2 — parametry.** Čtyři, zbytek odvozený: materiál, barva, kvalita (návrhová / standardní / jemná), počet kusů. **Výplň není slider**, jen tři pojmenované stupně. Trysku, teploty, styl podpěr a orientaci nezobrazovat.
+**Krok 2 — parametry.** Pro každý `OrderItem` samostatně: materiál, barva, kvalita (návrhová / standardní / jemná), počet kusů. **Výplň není slider**, jen tři pojmenované stupně. Trysku, teploty, styl podpěr a orientaci nezobrazovat.
 
 Plus jeden příznak: **„díl musí do něčeho zapadnout / má lícované rozměry"** — geometricky se to spolehlivě nedetekuje, tak se zeptej. Otevře cestu ke zkušebnímu kusu nebo do individuální nabídky.
 
 **Krok 3 — nálezy preflightu.** Risk checkboxy (§7.5).
 
-**Krok 4 — cena.** Transparentní rozpad: cena tisku, množstevní sleva, doprava, expres. **Celková částka vizuálně dominantní, rozpad pod ní jako detail** — vedle konkurenta s „dopravou zdarma" vypadá rozpad opticky dráž.
+**Krok 4 — cena.** Transparentní rozpad: cena tisku, množstevní sleva, doprava, expres. Dokud zákazník nevybere společný delivery endpoint v prvním kroku checkoutu, doprava i celková částka jsou výslovně provizorní; teprve kompatibilní `ShipmentPlan` nad vybraným endpointem vydá závazný total. **Celková závazná částka je vizuálně dominantní, rozpad pod ní jako detail** — vedle konkurenta s „dopravou zdarma" vypadá rozpad opticky dráž.
 
 **Tichá úniková cesta** k individuální nabídce jako odkaz, ne rovnocenné tlačítko. Kdyby byly stejně velké, značná část lidí zvolí konzultaci i bez potřeby. Cestu **povyšuje systém**, když preflight něco najde.
 
@@ -894,7 +948,7 @@ Výsledek ukládá do krátce platného `EligibilitySnapshot` alternativní komp
 
 ### 7.4 Množstevní varianty
 
-Cena za 1 / 5 / 20 kusů vedle sebe. Nejlevnější upsell — handling a doprava se rozpustí.
+Cena za 1 / 5 / 20 kusů vedle sebe pro právě upravovaný `OrderItem`. Nejlevnější upsell — item-level handling a doprava se rozpustí. Počty různých položek se pro množstevní slevu nesčítají: kryt × 5 a víčko × 4 nejsou množstevní varianta 9 ks.
 
 ### 7.5 Risk checkboxy
 
@@ -916,7 +970,9 @@ Pole: popis, účel dílu, fotky (u překreslení ze tří stran s referenčním
 
 ### 7.7 Checkout
 
-Rekapitulace s rozpadem ceny; widget Zásilkovny pro **výběr výdejního místa** (v checkoutu, ne u makera); fakturační údaje **bez povinné registrace**; souhlas s podmínkami a **výslovné potvrzení výjimky z odstoupení**; checkbox souhlasu se zveřejněním fotek; platba kartou i **bankovním tlačítkem**. V0 ani síť zatím nenabízí osobní odběr — vyžadoval by samostatný anonymizovaný předávací workflow, který není součástí scope.
+První krok checkoutu je widget Zásilkovny pro **výběr jednoho výdejního místa / Z-BOXu pro celý Order** (nikdy u makera). Teprve jeho provider ID, typ endpointu a capability snapshot omezí kompatibilní přepravní kategorie, vytvoří finální `ShipmentPlan` a zobrazí rekapitulaci s novou závaznou cenou. Změna endpointu před platbou starý plan/quote invaliduje; payment intent nesmí vzniknout, dokud zákazník znovu nepotvrdí aktuální total. Jeden Order v v0 nevybírá různé endpointy per parcel.
+
+Následují fakturační údaje **bez povinné registrace**; souhlas s podmínkami a **výslovné potvrzení výjimky z odstoupení**; checkbox souhlasu se zveřejněním fotek; platba kartou i **bankovním tlačítkem**. V0 ani síť zatím nenabízí osobní odběr — vyžadoval by samostatný anonymizovaný předávací workflow, který není součástí scope.
 
 ### 7.8 Sledování
 
@@ -927,6 +983,30 @@ Fotka jako zákaznický touchpoint není režie navíc — db3D to už dělá, t
 ### 7.9 Statické stránky
 
 Ceník, jak to funguje, portfolio, kontakt, VOP, reklamační řád, zásady zpracování osobních údajů.
+
+### 7.10 Historie a opakování objednávky
+
+Volitelný účet v1 zobrazuje dlouhodobou historii obchodních dat objednávky. `Objednat znovu` ale nekopíruje historickou objednávku ani její cenu. Vytvoří nový rozpracovaný Order a z původních `OrderItem` převezme pouze znovu použitelnou konfiguraci:
+
+- zdrojový model, pokud je stále dostupný,
+- výběr těles,
+- materiál,
+- barvu, pokud je stále dostupná,
+- kvalitu,
+- přijatou `PrintConfigRevision` včetně pojmenované výplně a dalších znovu použitelných toolpath voleb, pokud jsou stále podporované,
+- množství.
+
+Nový draft vždy projde aktuálním pricing flow:
+
+`aktuální PriceList → aktuální Profile → nový slice/quote → nová závazná cena`
+
+Historický `Quote`, `PriceListVersion`, cena položky, sleva ani výsledná cena objednávky se nepřebírají. UI musí před potvrzením ukázat novou závaznou cenu; rozdíl proti historické ceně není chyba ani `PriceAdjustment`, ale cena nové objednávky podle aktuálních podmínek.
+
+Akce je dostupná jen při existenci všech potřebných zdrojových artefaktů. Po vypršení retence objednávka v historii zůstává, ale UI místo automatické kopie nabídne například:
+
+> Původní výrobní soubor už neuchováváme. Nahraj ho znovu a předchozí konfiguraci doplníme za tebe.
+
+V první verzi účtu se standardní retence kvůli účtu neprodlužuje. Dlouhodobá archivace výrobních souborů zůstává samostatným budoucím rozhodnutím.
 
 ---
 

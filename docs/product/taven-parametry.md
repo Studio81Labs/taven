@@ -2,7 +2,7 @@
 
 **Frekvence změn:** týdně, bez ceremonie.
 **Pravidlo:** změna čísla v této tabulce nevyžaduje zápis do rozhodovacího logu. Změna *struktury* výpočtu ano.
-**Aktualizováno:** 2026-08-24
+**Aktualizováno:** 2026-08-27
 
 > Hodnoty označené ⚠ jsou dosud neověřené odhady. Hodnoty označené ✓ vycházejí z vlastního měření nebo z tržní rešerše.
 
@@ -76,7 +76,9 @@ Vzorec: `cena stroje / požadovaná doba návratnosti v hodinách`
 | `handling_pack` | zásilka | ne | ⚠ balení, štítek |
 | `shipping_trip` | **cesta**, ne zásilka | **ano** | ⚠ cesta k Z-BOXu |
 | **`shipping_trip_pricing_divisor`** | závazná cena | — | **1 v v0/hobby**; verzovaný očekávaný počet zásilek na cestu |
-| `postprocessing` | zakázka | ne | ⚠ nad rámec začištění; jinak 0 |
+| `postprocessing_i` | `OrderItem` / fáze | ne | ⚠ celkový čas nad rámec začištění pro naceněné množství itemu; jinak 0 |
+
+`handling_order_fix` se účtuje jednou na `Order`. `handling_plate`, `handling_piece` a `postprocessing_i` vznikají z konkrétního `OrderItem` a jeho arrangementu; post-processing je už celkový itemový čas pro jeho naceněné množství a fázi, takže se dál nenásobí počtem kusů. `handling_pack` vzniká jednou pro každou skutečně plánovanou zásilku a `shipping_trip` se do závazné ceny alokuje podle order-level shipment plánu. Více `OrderItem` samo o sobě nesmí násobit order-level fixní práci.
 
 **Pozor na `shipping_trip` při nízkém objemu.** Do závazné ceny vstupuje jen verzovaný `shipping_trip_pricing_divisor`; při 1–2 objednávkách měsíčně je 1, tedy **plný náklad, nikoli domnělá budoucí alokace**. Skutečný počet zásilek sdílejících cestu se zapisuje až do `HandlingSession` pro realizovanou CM. Divisor ceníku lze zvýšit teprve podle naměřených cest od několika zásilek týdně a nikdy se zpětně nepřepočítává do přijatých nabídek.
 
@@ -95,9 +97,9 @@ Stavový automat měří průchod zakázky a SLA, **ne aktivní práci** — int
 
 ```
 handling_pretisk = sazba_prace_h × (
-                    handling_plate × podložek
-                  + handling_piece × qty       (degresivní)
-                  + postprocessing )
+                    Σ_i(handling_plate × podložek_i
+                      + handling_piece × qty_i (degresivní)
+                      + postprocessing_i) )
 rezerva_pretisk = mira_zmetku × (
                     material + machine + handling_pretisk + amortizace )
 ```
@@ -114,20 +116,25 @@ rezerva_pretisk = mira_zmetku × (
 | Obalový materiál | ⚠ 15 Kč |
 | Poplatek brány | ⚠ ~9 Kč (1,5 % + 3 Kč) |
 | Obalová rezerva k bboxu | +4 cm na stranu |
-| Koeficient plnění krabice | 0,55–0,65 |
+| **`packing_fill_coefficient`** | **0,55 ve v0**; verzovaný v `PriceList`, naměřeně lze později zvýšit nejvýše na 0,65 |
 | Hmotnost obalu | 150–250 g |
+| **`shipping_category_priority`** | **Z-BOX → výdejní místo → nadrozměrná**; verzované v `PriceList`, první způsobilá kategorie při založení nového balíku |
 
 U fázované objednávky se doprava, obal a `handling_pack` počítají pro každou plánovanou zásilku zvlášť; sample a batch se neposílají současně a nelze je sloučit do jedné sazby. Práh dopravy zdarma se vyhodnotí jednou nad `cena_tisku_pred_subvenci` a případně nuluje zákaznický součet dopravy, nikoli skutečné náklady v CM. Neúčtovaná část skutečného nákladu dopravce vstupuje do nákladové báze před marží a checkout se hrubuje o součet poplatků všech capture v `PaymentSchedule`; individuální `deposit` + `balance` proto nesou fixní složku dvakrát.
 
-`ShipmentPlan` počítá celé množství, ne jen největší díl: potřebný objem je `Σ(bbox_volume × qty) / koeficient_plnění_krabice`, hmotnost zahrnuje materiál všech kusů a obal. Překročení objemu nebo hmotnosti vytvoří další plánovanou zásilku a tím další sazbu dopravy, obal i balicí handling.
+`ShipmentPlan` počítá celé množství všech `OrderItem`, ne jen největší díl nebo jednu položku. Každý kus dostane nepřekrývající se ochranný bbox rozšířený o obalovou rezervu na každé straně a musí se v některé osové rotaci vejít do rozměrů kategorie. Deterministický dimension-aware first-fit podle specifikace §4.6 skládá realizovatelný výsledný bbox těchto ochranných obálek; `volume_proxy = Σ(packing_part_bbox_volume) / packing_fill_coefficient` se porovnává s `max_parcel_volume_cm3` kategorie a hmotnost všech kusů + obalu s jejím hmotnostním limitem. Jsou to další společné limity, nikoli náhrada rozměrové kontroly. Překročení kteréhokoli limitu vytvoří další plánovanou zásilku a tím další sazbu dopravy, obal i balicí handling; split shipment nikdy nepřebírá cenu jediné zásilky.
 
 **Limity přepravních kategorií**
 
-| Kategorie | Limity |
-|---|---|
-| Z-BOX | max 60 × 43 × 35 cm, do 15 kg |
-| Výdejní místo | nejdelší strana ≤ 60 cm, součet ≤ 120 cm, do 5 kg |
-| Nadrozměrná | součet ≤ 150 cm, nejdelší ≤ 120 cm; do Z-BOXu nelze |
+| Kategorie | Rozměrové a hmotnostní limity | `max_parcel_volume_cm3` v0 |
+|---|---|---:|
+| Z-BOX | max 60 × 43 × 35 cm, do 15 kg | 90 300 |
+| Výdejní místo | nejdelší strana ≤ 60 cm, součet ≤ 120 cm, do 5 kg | 64 000 |
+| Nadrozměrná | součet ≤ 150 cm, nejdelší ≤ 120 cm; do Z-BOXu nelze | 125 000 |
+
+Objemové stropy jsou verzované atributy přepravních kategorií v `PriceList`; v0 odpovídají největšímu kvádru povolenému uvedenými rozměrovými pravidly. Změna limitu nebo `packing_fill_coefficient` vytváří novou verzi ceníku a nikdy zpětně nemění přijatý quote.
+
+**Kompatibilita endpointu je order-level guard.** Zvolený Z-BOX připouští jen kategorii `Z-BOX`; obsluhované výdejní místo připouští `výdejní místo` a pouze tehdy `nadrozměrná`, když ji podporuje snapshot konkrétního provider endpointu. Každá parcela jednoho Orderu používá stejné `delivery_destination_id`. Bez výběru endpointu je doprava jen provizorní a změna výběru před platbou vyžaduje nový `ShipmentPlan` i závazný quote.
 
 ---
 
@@ -136,13 +143,13 @@ U fázované objednávky se doprava, obal a `handling_pack` počítají pro kaž
 | Parametr | Hodnota | Poznámka |
 |---|---|---|
 | `marže` | ⚠ dopočítat proti stropu | |
-| **`min_print_price`** | **250 Kč** | ✓ trh: alvipek 200, M3Dtisk 250 |
-| **`small_order_surcharge`** | **50 Kč** u zakázek do 100 g | ✓ trh: studio3dtisk |
+| **`min_print_price`** | **250 Kč jednou za Order** | ✓ trh: alvipek 200, M3Dtisk 250 |
+| **`small_order_surcharge`** | **50 Kč jednou za Order**, pokud `Σ print_weight` všech položek < 100 g | ✓ trh: studio3dtisk |
 | **`prah_doprava_zdarma`** | **⚠ 1 000 Kč** | start; revize po 50 objednávkách. Počítá se z `cena_tisku_pred_subvenci` před dotovanou dopravou, bránou a expresním příplatkem |
 | **`koef_express`** | **×2,0** | ✓ trh: Bakuralab +100 %; jen Order s jedinou `OrderPhase(kind = single)`, nikdy sample/batch |
 | Výplň | 10 / 20 / 40 % | dekorativní / běžná / pevná |
 
-**`min_print_price` se vztahuje na `cena_tisku`, ne na částku u pokladny.** Bez tohoto rozlišení bude někdo za rok číst „minimální objednávka 250 Kč" jako nejnižší možný účet.
+**`min_print_price` se vztahuje na `cena_tisku`, ne na částku u pokladny, a aplikuje se jednou nad agregovaným výrobním pricingem celého Orderu.** Bez tohoto rozlišení bude někdo za rok číst „minimální objednávka 250 Kč" jako nejnižší možný účet nebo minimum chybně vynásobí počtem `OrderItem`.
 
 ```
 min_print_price   = 250 Kč
@@ -153,9 +160,11 @@ mezisoučet                           = 335–385 Kč
 checkout floor                       ≈ 343–394 Kč
 ```
 
-**`small_order_surcharge` je obchodní přirážka, ne úhrada přípravy.** Příprava je už zahrnutá v `cena_tisku` přes `handling_*`. Původní název „poplatek za přípravu" tvrdil zákazníkovi opak a účetně to bylo dvojí účtování.
+**`small_order_surcharge` je jedna order-level obchodní přirážka, ne úhrada přípravy.** Příprava je už zahrnutá v `cena_tisku` přes `handling_*`. Původní název „poplatek za přípravu" tvrdil zákazníkovi opak a účetně to bylo dvojí účtování.
 
-**Spouštěč „do 100 g" je prozatímní, ne posvátný.** Gramáž je proxy převzatá z trhu, ale dokument sám říká, že materiál tvoří jen malou část nákladu — takže se může ukázat, že správným spouštěčem je spíš `cena_tisku < X` nebo `handling / cena_tisku > Y`. Pro v0 nech 100 g a **sleduj to jako metriku**: kolik objednávek přirážku dostane a jaká je u nich skutečná CM proti těm bez ní.
+**Spouštěč „pod 100 g" je prozatímní, ne posvátný.** Gramáž je proxy převzatá z trhu, ale dokument sám říká, že materiál tvoří jen malou část nákladu — takže se může ukázat, že správným spouštěčem je spíš `cena_tisku < X` nebo `handling / cena_tisku > Y`. Pro v0 nech `< 100 g` a **sleduj to jako metriku**: kolik objednávek přirážku dostane a jaká je u nich skutečná CM proti těm bez ní.
+
+Množstevní sleva je naopak item-level: arrangement a slice se vyhodnocují zvlášť pro každou shodnou výrobní konfiguraci. Množství různých `OrderItem` se nesčítá do společného slevového pásma.
 
 `koef_kvality` **zrušen** — čas jemného profilu dává slicer přímo, viz §9.
 
@@ -164,7 +173,7 @@ checkout floor                       ≈ 343–394 Kč
 | Scénář | Podlaha |
 |---|---|
 | Zasílaná objednávka bez `small_order_surcharge` | **~343 Kč** |
-| Zasílaná objednávka do 100 g s `small_order_surcharge` | **~394 Kč** |
+| Zasílaná objednávka pod 100 g s `small_order_surcharge` | **~394 Kč** |
 
 Osobní odběr není součástí v0 ani ekonomiky sítě; checkout podporuje jen dopravce. Případné zavedení vyžaduje vlastní anonymizovaný předávací workflow a nový přepočet podlahy.
 
@@ -227,9 +236,11 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 
 **Kapacitní brána expresu**
 
+Brána se vyhodnotí jednou nad celým Orderem. Vstupují do ní všechny položky a všechny jejich podložky; jediná nezpůsobilá položka skryje express pro celou objednávku a standardní/expresní položky se v jednom Orderu nekombinují.
+
 | Podmínka | Hodnota |
 |---|---|
-| Max podložek | 2 |
+| Max podložek | 2 v součtu přes všechny `OrderItem` |
 | Materiál a barva | musí být právě nasazené |
 | Post-processing | žádný nad rámec začištění |
 | Časové okno | součet hodin ≤ zbývající okno − rezerva na balení |
