@@ -6304,6 +6304,175 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("bounds financial and Job lifecycle evidence by the database clock", async () => {
+    await rollback("future-commerce-evidence", async (client, fixtures) => {
+      const financial = await fixtures.createFoundation(
+        "future-financial-evidence",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, financial);
+
+      const jobs = await fixtures.createFoundation("future-job-evidence");
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        jobs,
+      );
+      await activateCurrentPlan(client, fixtures, jobs, productions);
+      await client.query(
+        `UPDATE jobs
+         SET status = 'ACCEPTED',
+             accepted_at = clock_timestamp() + interval '2 seconds',
+             payout_amount = 0, payout_currency = 'EUR',
+             updated_at = clock_timestamp()
+         WHERE order_id = $1`,
+        [jobs.orderId],
+      );
+
+      const futureJobEvidenceColumns = [
+        "accepted_at",
+        "gcode_ready_at",
+        "printing_at",
+        "printed_at",
+        "photo_submitted_at",
+        "qc_approved_at",
+        "qc_rejected_at",
+        "packed_at",
+        "handed_over_at",
+        "settled_at",
+        "failed_at",
+        "cancelled_at",
+      ] as const;
+      for (const column of futureJobEvidenceColumns) {
+        await expectQueryError(
+          client,
+          `future_job_${column}`,
+          () =>
+            client.query(
+              `UPDATE jobs
+               SET "${column}" = clock_timestamp() + interval '60 seconds',
+                   updated_at = clock_timestamp()
+               WHERE order_id = $1`,
+              [jobs.orderId],
+            ),
+          {
+            code: "23514",
+            constraint: "job_lifecycle_evidence_check",
+            message: "Job lifecycle evidence cannot be in the future",
+          },
+        );
+      }
+
+      await expectQueryError(
+        client,
+        "future_payment_capture",
+        () =>
+          client.query(
+            `UPDATE payments
+             SET status = 'CAPTURED',
+                 captured_amount_minor = requested_amount_minor,
+                 provider_capture_id = 'future-payment-capture',
+                 captured_at = clock_timestamp() + interval '60 seconds',
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [financial.paymentId],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_capture_evidence_check",
+        },
+      );
+      await client.query(
+        `UPDATE payments
+         SET status = 'CAPTURED',
+             captured_amount_minor = requested_amount_minor,
+             provider_capture_id = 'tolerated-payment-capture',
+             captured_at = clock_timestamp() + interval '2 seconds',
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [financial.paymentId],
+      );
+
+      await expectQueryError(
+        client,
+        "future_refund_insert",
+        () =>
+          client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, provider_refund_id,
+                amount_minor, reason, status, requested_at, completed_at,
+                created_at, updated_at)
+             VALUES ($1,$2,$3,$4,1,'PRODUCTION_FAILURE','SUCCEEDED',
+                     clock_timestamp(), clock_timestamp() + interval '60 seconds',
+                     clock_timestamp(), clock_timestamp())`,
+            [
+              fixtures.id("future-refund-insert"),
+              financial.paymentId,
+              "future-refund-insert",
+              "future-refund-insert",
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_completion_evidence_check",
+        },
+      );
+      await client.query(
+        `INSERT INTO refund_transactions
+           (id, payment_id, idempotency_key, provider_refund_id,
+            amount_minor, reason, status, requested_at, completed_at,
+            created_at, updated_at)
+         VALUES ($1,$2,$3,$4,1,'PRODUCTION_FAILURE','SUCCEEDED',
+                 clock_timestamp(), clock_timestamp() + interval '2 seconds',
+                 clock_timestamp(), clock_timestamp())`,
+        [
+          fixtures.id("tolerated-refund-insert"),
+          financial.paymentId,
+          "tolerated-refund-insert",
+          "tolerated-refund-insert",
+        ],
+      );
+      await client.query(
+        `INSERT INTO refund_transactions
+           (id, payment_id, idempotency_key, amount_minor, reason, status,
+            requested_at, created_at, updated_at)
+         VALUES ($1,$2,$3,1,'PRODUCTION_FAILURE','PENDING',
+                 clock_timestamp(), clock_timestamp(), clock_timestamp())`,
+        [
+          fixtures.id("pending-refund-completion"),
+          financial.paymentId,
+          "pending-refund-completion",
+        ],
+      );
+      await expectQueryError(
+        client,
+        "future_refund_update",
+        () =>
+          client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED',
+                 provider_refund_id = 'future-refund-update',
+                 completed_at = clock_timestamp() + interval '60 seconds',
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [fixtures.id("pending-refund-completion")],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_completion_evidence_check",
+        },
+      );
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED',
+             provider_refund_id = 'tolerated-refund-update',
+             completed_at = clock_timestamp() + interval '2 seconds',
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [fixtures.id("pending-refund-completion")],
+      );
+    });
+  });
+
   it("requires a current Shipment for every active ShipmentPlan before ready-to-ship", async () => {
     await rollback(
       "ready-to-ship-shipment-coverage",

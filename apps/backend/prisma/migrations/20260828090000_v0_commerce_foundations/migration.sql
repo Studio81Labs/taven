@@ -2483,6 +2483,8 @@ CREATE FUNCTION taven_protect_job_lifecycle()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    evidence_now timestamptz := clock_timestamp();
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'CREATED'
@@ -2515,6 +2517,16 @@ BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Jobs are stable production history and cannot be deleted'
             USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_immutable_check';
+    END IF;
+
+    IF greatest(
+        NEW."accepted_at", NEW."gcode_ready_at", NEW."printing_at",
+        NEW."printed_at", NEW."photo_submitted_at", NEW."qc_approved_at",
+        NEW."qc_rejected_at", NEW."packed_at", NEW."handed_over_at",
+        NEW."settled_at", NEW."failed_at", NEW."cancelled_at"
+    ) > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'Job lifecycle evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
     END IF;
 
     IF NEW."status" IS NOT DISTINCT FROM OLD."status"
@@ -5774,6 +5786,8 @@ CREATE FUNCTION taven_protect_payment_identity()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    evidence_now timestamptz := clock_timestamp();
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'payment transactions are append-only financial history'
@@ -5859,6 +5873,12 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'payment financial identity is immutable after assignment'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_identity_immutable_check';
+    END IF;
+
+    IF NEW."captured_at" IS NOT NULL
+       AND NEW."captured_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'payment capture evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_evidence_check';
     END IF;
 
     RETURN NEW;
@@ -6315,6 +6335,7 @@ DECLARE
     payment_capture_cutoff_at timestamptz;
     payment_captured_at timestamptz;
     target_order_status "order_status";
+    evidence_now timestamptz := clock_timestamp();
 BEGIN
     SELECT payment."captured_amount_minor", payment."capture_authorized",
            payment."capture_cutoff_at", payment."captured_at",
@@ -6329,6 +6350,12 @@ BEGIN
     IF captured_amount IS NULL OR captured_amount <= 0 THEN
         RAISE EXCEPTION 'refund requires a captured payment'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_captured_payment_check';
+    END IF;
+
+    IF NEW."completed_at" IS NOT NULL
+       AND NEW."completed_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'refund completion evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_completion_evidence_check';
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
@@ -6379,7 +6406,7 @@ END;
 $$;
 
 CREATE TRIGGER "refunds_cannot_exceed_capture"
-BEFORE INSERT OR UPDATE OF "payment_id", "amount_minor", "status" ON "refund_transactions"
+BEFORE INSERT OR UPDATE OF "payment_id", "amount_minor", "status", "completed_at" ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_refund_against_capture();
 
 CREATE FUNCTION taven_reconcile_shipment_plan_slot_terminal_state()
