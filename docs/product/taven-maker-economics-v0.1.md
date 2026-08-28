@@ -362,6 +362,12 @@ výsledný payable amount; uzavřením settlementu se tato množina i částky
 zamknou. Opakované vytvoření, překryv období ani pozdě způsobilý assignment
 tak nesmějí vést k dvojímu zahrnutí.
 
+Při vytvoření line se `gross_compensation` i `currency` kopírují přesně z
+`MakerCompensationSnapshot.(agreed_compensation, currency)` a guard vyžaduje
+jejich rovnost. Teprve potom se odvodí
+`payable_amount = gross_compensation + Σ approved adjustments`; odlišný
+ručně zadaný gross ani nevysvětlený rozdíl nesmí projít.
+
 Settlement, každý jeho line, odkazovaný assignment i compensation snapshot
 musejí mít stejné `maker_id`. Kompozitní referenční constraint tuto shodu
 vynucuje při vložení řádku; cizí plnění proto nelze připsat na self-billing
@@ -569,10 +575,10 @@ MakerSettlementLine
 - compensation_snapshot_id (unique mezi nevoidovanými settlements)
 - constraint `(compensation_snapshot_id, production_assignment_id, maker_id)`
   → `MakerCompensationSnapshot`
-- gross_compensation
+- gross_compensation (= snapshot.agreed_compensation)
 - currency
 - adjustment_source_refs (claim ID + explicit amount)
-- payable_amount
+- payable_amount (= gross_compensation + Σ approved adjustments)
 - created_at
 ```
 
@@ -758,6 +764,9 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 34. Compensation snapshot zamyká také měnu; jobový payout, settlement line,
     settlement, self-billing doklad a payout se s ní musejí shodovat a jeden
     settlement nesmí míchat měny.
+35. Settlement line přebírá gross compensation přesně z accepted snapshotu
+    a payable amount smí změnit jen součtem explicitních schválených
+    adjustments.
 
 ------------------------------------------------------------------------
 
