@@ -7281,6 +7281,44 @@ describe("commerce persistence foundations", () => {
       );
       await createCurrentPlanAndPayment(client, fixtures, financial);
 
+      expect(
+        (
+          await client.query<{ table_name: string }>(
+            `SELECT target.relname AS table_name
+             FROM pg_trigger trigger_definition
+             JOIN pg_class target ON target.oid = trigger_definition.tgrelid
+             WHERE trigger_definition.tgname = 'commerce_creation_evidence_bounded'
+               AND NOT trigger_definition.tgisinternal
+             ORDER BY target.relname`,
+          )
+        ).rows.map(({ table_name }) => table_name),
+      ).toEqual([
+        "jobs",
+        "order_phases",
+        "orders",
+        "payments",
+        "quote_requests",
+        "quote_sessions",
+        "quotes",
+        "refund_transactions",
+        "shipments",
+      ]);
+
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,clock_timestamp() + interval '1 hour',
+                    clock_timestamp() + interval '2 seconds',clock_timestamp()),
+                ($3,$4,clock_timestamp() + interval '1 hour',
+                    clock_timestamp() - interval '30 days',clock_timestamp())`,
+        [
+          fixtures.id("tolerated-creation-evidence"),
+          randomUUID().replaceAll("-", "").padEnd(64, "0"),
+          fixtures.id("historical-creation-evidence"),
+          randomUUID().replaceAll("-", "").padEnd(64, "0"),
+        ],
+      );
+
       await expectQueryError(
         client,
         "future_audit_event",
@@ -7318,6 +7356,33 @@ describe("commerce persistence foundations", () => {
         client,
         fixtures,
         jobs,
+      );
+      const futureJobProduction = productions[0];
+      if (!futureJobProduction) {
+        throw new Error(
+          "expected a planned production for future Job evidence",
+        );
+      }
+      await expectQueryError(
+        client,
+        "future_job_creation",
+        () =>
+          client.query(
+            `INSERT INTO jobs
+               (id, node_id, order_id, order_phase_id, shipment_plan_id,
+                phase_resource_plan_job_id, status, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,'CREATED',
+                     clock_timestamp() + interval '60 seconds',clock_timestamp())`,
+            [
+              fixtures.id("future-job-creation"),
+              jobs.nodeId,
+              jobs.orderId,
+              jobs.orderPhaseId,
+              futureJobProduction.shipmentPlanId,
+              futureJobProduction.phaseResourcePlanJobId,
+            ],
+          ),
+        { code: "23514", constraint: "jobs_creation_evidence_check" },
       );
       await activateCurrentPlan(client, fixtures, jobs, productions);
       await client.query(

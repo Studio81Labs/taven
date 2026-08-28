@@ -729,6 +729,51 @@ ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_identity_check" CH
     OR ("actor_kind" IN ('CUSTOMER', 'OPERATOR') AND "actor_id" IS NOT NULL)
 );
 
+-- Durable commerce creation evidence may be historical for delayed ingestion or
+-- backfills, but it cannot claim a time materially ahead of the database clock.
+CREATE FUNCTION taven_validate_commerce_creation_evidence()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."created_at" > clock_timestamp() + interval '5 seconds' THEN
+        RAISE EXCEPTION '% creation evidence cannot be in the future', TG_TABLE_NAME
+            USING ERRCODE = '23514',
+                  CONSTRAINT = TG_TABLE_NAME || '_creation_evidence_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "quote_sessions"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "quote_requests"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "quotes"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "order_phases"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "shipments"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "jobs"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "payments"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "refund_transactions"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+
 -- Immutable commercial snapshots and append-only audit rows.
 CREATE FUNCTION taven_prevent_commerce_row_mutation()
 RETURNS trigger
