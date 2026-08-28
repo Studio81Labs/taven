@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#203; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#204; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -333,9 +333,10 @@ Tyto pojmy se nesmějí zaměňovat:
 -   settlement period,
 -   immutable řádky dokončených a uznaných assignments,
 -   gross compensation,
--   approved adjustments,
--   deductions pouze podle explicitních pravidel,
--   payable amount,
+-   requested a skutečně applied adjustments,
+-   deductions pouze podle explicitních pravidel a nejvýše do nuly řádku,
+-   absorbed excess nesený Studio81 Labs,
+-   nezáporný payable amount,
 -   settlement status.
 
 Při přijetí assignmentu se do compensation snapshotu uloží také
@@ -377,8 +378,21 @@ tak nesmějí vést k dvojímu zahrnutí.
 Při vytvoření line se `gross_compensation` i `currency` kopírují přesně z
 `MakerCompensationSnapshot.(agreed_compensation, currency)` a guard vyžaduje
 jejich rovnost. Teprve potom se odvodí
-`payable_amount = gross_compensation + Σ approved adjustments`; odlišný
+`requested_adjustment_total = Σ approved adjustments`,
+`applied_adjustment_total = max(-gross_compensation,
+requested_adjustment_total)` a
+`payable_amount = gross_compensation + applied_adjustment_total`. Každý
+zdrojový adjustment uchovává požadovanou i skutečně aplikovanou částku.
+Záporný excess pod nulovou hranicí se uloží jako
+`absorbed_excess_amount = max(0, -(gross_compensation +
+requested_adjustment_total))`, nese jej Studio81 Labs a nesmí se převést jako
+dluh nebo offset do jiného assignmentu, období či budoucího payoutu. Odlišný
 ručně zadaný gross ani nevysvětlený rozdíl nesmí projít.
+
+Settlement přes své immutable lines přesně sčítá gross compensation,
+requested adjustments, applied adjustments, absorbed excess a payable amount;
+doklad snapshotuje stejné agregáty. Součet payable lines je proto vždy roven
+settlement i document `payable_amount` a nikdy neklesne pod nulu.
 
 Settlement, každý jeho line, odkazovaný assignment i compensation snapshot
 musejí mít stejné `maker_id`. Kompozitní referenční constraint tuto shodu
@@ -412,16 +426,19 @@ Přípustný provozní model:
 2.  Studio81 Labs v dohodnutém self-billing režimu vystaví makerovi
     settlement statement a účetní/daňový doklad.
 3.  Maker obdrží dokumenty a řeší případný spor před payoutem.
-4.  Taven pro settlement vytvoří nebo znovu použije právě jeden
+4.  Je-li po dispute guardu `payable_amount = 0`, jedna transakce přepne
+    settlement i doklad do `settled_zero`, uloží `settled_zero_at` a
+    `MakerPayout` vůbec nevytvoří.
+5.  Jen pro `payable_amount > 0` Taven vytvoří nebo znovu použije právě jeden
     `MakerPayout`; jeho částka se musí rovnat zamčenému `payable_amount` a
     každý pokus používá stejný idempotency key.
-5.  Ještě před otevřením bankovního rozhraní nebo odesláním příkazu jedna
+6.  Ještě před otevřením bankovního rozhraní nebo odesláním příkazu jedna
     lokální transakce zamkne payout, settlement a doklad, znovu ověří jejich
     aktivní stavy a uloží `MakerPayout.created | failed → initiated` spolu s
     novým audit-stable `MakerPayoutAttempt` a aktuálním `initiated_at`. Teprve po
     commitu smí následovat externí bankovní side effect se stejným parent
     `transfer_idempotency_key`.
-6.  Potvrzení banky v jedné transakci uloží unikátní bankovní referenci a
+7.  Potvrzení banky v jedné transakci uloží unikátní bankovní referenci a
     přepne `MakerPayout` z `initiated` do `paid`, jeho `MakerSettlement` z
     `payable` do `paid` a `MakerSelfBillingDocument` z `issued` do `paid`.
     Aktivní attempt uzavře jako `paid` se stejnou referencí.
@@ -429,7 +446,7 @@ Přípustný provozní model:
     převodů nikdy nesmí překročit `payable_amount`; payout zůstává spojený se
     settlementem a jeho self-billing dokladem. Retry stejného potvrzení je
     idempotentní, odlišná reference po `paid` se odmítne.
-7.  Timeout ponechá payout i otevřený attempt v `initiated` až do
+8.  Timeout ponechá payout i otevřený attempt v `initiated` až do
     reconciliation. Jen autoritativní potvrzení, že peníze neodešly, zavře
     attempt jako `failed_no_transfer` a přepne tentýž payout
     `initiated → failed`. Následující initiation transakce vrátí stejný řádek
@@ -441,9 +458,9 @@ Kompozitní reference `(self_billing_document_id, settlement_id)` vyžaduje
 doklad vystavený právě pro tento settlement. Vytvoření payoutu současně
 ověří, že součet immutable settlement lines odpovídá jeho zamčenému
 `payable_amount` i částce dokladu. Vystavení dokladu immutable uloží jeho
-měnu, gross compensation, adjustment total, payable amount a hash přesného
-payloadu; payout proto neparsuje ani nedůvěřuje později nahraditelnému
-artefaktu.
+měnu, gross compensation, applied adjustment total, absorbed excess,
+payable amount a hash přesného payloadu; payout proto neparsuje ani
+nedůvěřuje později nahraditelnému artefaktu.
 
 Vystavení dokladu nastaví settlement na `issued`, uloží stejné
 `dispute_deadline_at` na settlement i doklad a odvodí je jako
@@ -659,9 +676,13 @@ MakerSettlement
 - acknowledged_at (nullable)
 - currency
 - gross_compensation
-- adjustments
+- requested_adjustments
+- applied_adjustments
+- absorbed_excess_amount
 - payable_amount
-- status (`draft` | `issued` | `disputed` | `payable` | `voided` | `paid`)
+- settled_zero_at (nullable)
+- status (`draft` | `issued` | `disputed` | `payable` | `voided` |
+  `settled_zero` | `paid`)
 ```
 
 ### MakerDispute
@@ -695,8 +716,13 @@ MakerSettlementLine
   → `MakerCompensationSnapshot`
 - gross_compensation (= snapshot.agreed_compensation)
 - currency
-- adjustment_source_refs (claim ID + explicit amount)
-- payable_amount (= gross_compensation + Σ approved adjustments)
+- adjustment_source_refs (claim ID + requested a applied amount)
+- requested_adjustment_total (= Σ approved adjustments)
+- applied_adjustment_total (= max(-gross_compensation,
+  requested_adjustment_total))
+- absorbed_excess_amount (= max(0, -(gross_compensation +
+  requested_adjustment_total)))
+- payable_amount (= gross_compensation + applied_adjustment_total; vždy ≥ 0)
 - created_at
 ```
 
@@ -717,14 +743,16 @@ MakerSelfBillingDocument
   → `MakerDispute.(id, challenged_settlement_id, challenged_document_id)`
 - currency
 - gross_compensation
-- adjustment_total
+- adjustment_total (= settlement applied adjustments)
+- absorbed_excess_amount
 - payable_amount
 - payload_hash (immutable)
 - artifact_ref (immutable content-addressed)
 - issued_at
 - dispute_deadline_at (immutable; shodné se settlementem)
 - voided_at (nullable)
-- status (`issued` | `disputed` | `voided` | `paid`)
+- settled_zero_at (nullable)
+- status (`issued` | `disputed` | `voided` | `settled_zero` | `paid`)
 ```
 
 ### MakerPayout
@@ -738,7 +766,7 @@ MakerPayout
   → `MakerSelfBillingDocument`
 - transfer_idempotency_key (unique)
 - currency
-- amount
+- amount (> 0; přesně settlement payable amount)
 - payment_reference (unique; nullable do provedení převodu)
 - initiated_at (nullable; čas aktuálního pokusu uložený před side effectem)
 - attempt_count (začíná 0; zvýší se při každém vstupu do `initiated`)
@@ -917,8 +945,8 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     settlement, self-billing doklad a payout se s ní musejí shodovat a jeden
     settlement nesmí míchat měny.
 35. Settlement line přebírá gross compensation přesně z accepted snapshotu
-    a payable amount smí změnit jen součtem explicitních schválených
-    adjustments.
+    a payable amount smí změnit jen součtem explicitních schválených a do nuly
+    omezených adjustments.
 36. Assignment bez `delivered_at` je payout-eligible jen po ověřeném předání
     dopravci a terminálním non-maker-caused incidentu; eligibility basis i
     okamžik se nastaví jednou a plná accepted compensation zůstává zachována.
@@ -947,6 +975,10 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 44. Bankovní potvrzení atomicky přepne payout, jeho přesný settlement i doklad
     do `paid` a uzavře aktivní attempt se stejnou unikátní referencí; retry
     stejné události je idempotentní a konfliktní reference se odmítne.
+45. Payable amount assignment line, settlementu i dokladu je vždy nezáporný;
+    záporné adjustments se na line omezí nejvýše do jeho gross compensation,
+    excess nese Studio81 Labs bez carry-forward dluhu a nulový settlement se
+    uzavře jako `settled_zero` bez `MakerPayout`.
 
 ------------------------------------------------------------------------
 
@@ -955,7 +987,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#203.
+#184–#204.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav

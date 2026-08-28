@@ -1281,6 +1281,14 @@ jedné transakci přepne payout, jeho settlement i self-billing doklad do `paid`
 a uloží jednu unikátní bankovní referenci; opakování stejné události je
 idempotentní.
 
+Záporné maker adjustments se aplikují nejvýše do nuly každého assignment
+line: `payable_amount = max(0, gross_compensation + Σ approved adjustments)`.
+Případný excess se auditně uloží, ale nese jej Studio81 Labs a nepřechází jako
+makerův dluh ani offset do jiného assignmentu, období či payoutu. Settlement
+i self-billing doklad proto mají nezáporný payable amount. Je-li přesně nula,
+oba se po dispute guardu atomicky uzavřou jako `settled_zero` bez vytvoření
+`MakerPayout`; payout existuje jen pro kladnou částku.
+
 - **zavinění uzlu** → uzel nese materiál, platforma dopravu a přetisk
 - **nezaviněné** (vada modelu zákazníka, nereálná tolerance) → uzel dostane zaplaceno v plné výši
 
