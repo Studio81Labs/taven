@@ -83,6 +83,50 @@ async function createCompleteSingleReservationGraph(
   return { foundation, production };
 }
 
+async function activateReservationGraph(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  foundation: PersistenceFoundation,
+  productions: ProductionReservationFixture[],
+): Promise<void> {
+  for (const production of productions) {
+    await client.query(
+      'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+      [production.productionReservationId, "HELD"],
+    );
+    await client.query(
+      'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+      [production.productionReservationId, "HELD"],
+    );
+    await fixtures.createJob(foundation, production);
+    await client.query(
+      'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+      [production.productionReservationId, "HELD", production.jobId],
+    );
+  }
+  await client.query(
+    'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+    [foundation.phaseReservationSetId, "HELD"],
+  );
+  await fixtures.activatePayment(foundation);
+  await client.query(
+    `SET CONSTRAINTS
+       "payments_capture_activation_reconciled",
+       "orders_capture_activation_reconciled",
+       "order_phases_capture_activation_reconciled",
+       "phase_reservation_sets_capture_activation_reconciled",
+       "jobs_captured_reservation_reconciled" IMMEDIATE`,
+  );
+  await client.query(
+    `SET CONSTRAINTS
+       "payments_capture_activation_reconciled",
+       "orders_capture_activation_reconciled",
+       "order_phases_capture_activation_reconciled",
+       "phase_reservation_sets_capture_activation_reconciled",
+       "jobs_captured_reservation_reconciled" DEFERRED`,
+  );
+}
+
 async function createReferenceSlice(
   client: PoolClient,
   fixtures: PersistenceFactory,
@@ -2124,26 +2168,9 @@ describe("persistence foundations", () => {
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
           [foundation.phaseReservationSetId, "RESERVED"],
         );
-        await fixtures.capturePayment(foundation);
-        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-        await client.query("SET CONSTRAINTS ALL DEFERRED");
-        await fixtures.createJob(foundation, production);
-        await client.query(
-          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
-          [production.productionReservationId, "HELD", production.jobId],
-        );
-        await client.query(
-          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-          [production.inventoryReservationId, "HELD"],
-        );
-        await client.query(
-          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-          [production.productionReservationId, "HELD"],
-        );
-        await client.query(
-          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-          [foundation.phaseReservationSetId, "HELD"],
-        );
+        await activateReservationGraph(client, fixtures, foundation, [
+          production,
+        ]);
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
         await client.query("SET CONSTRAINTS ALL DEFERRED");
         await client.query(
@@ -2542,26 +2569,9 @@ describe("persistence foundations", () => {
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
           [foundation.phaseReservationSetId, "RESERVED"],
         );
-        await fixtures.capturePayment(foundation);
-        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-        await client.query("SET CONSTRAINTS ALL DEFERRED");
-        await fixtures.createJob(foundation, production);
-        await client.query(
-          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
-          [production.productionReservationId, "HELD", production.jobId],
-        );
-        await client.query(
-          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-          [production.productionReservationId, "HELD"],
-        );
-        await client.query(
-          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-          [production.productionReservationId, "HELD"],
-        );
-        await client.query(
-          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-          [foundation.phaseReservationSetId, "HELD"],
-        );
+        await activateReservationGraph(client, fixtures, foundation, [
+          production,
+        ]);
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
 
         await expect(
@@ -2609,23 +2619,11 @@ describe("persistence foundations", () => {
         confirming,
         "node-deactivation-concurrency",
       );
-      await confirmingFixtures.capturePayment(foundation);
-      await confirming.query(
-        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-        [production.productionReservationId, "HELD"],
-      );
-      await confirming.query(
-        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-        [production.productionReservationId, "HELD"],
-      );
-      await confirmingFixtures.createJob(foundation, production);
-      await confirming.query(
-        'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
-        [production.productionReservationId, "HELD", production.jobId],
-      );
-      await confirming.query(
-        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-        [foundation.phaseReservationSetId, "HELD"],
+      await activateReservationGraph(
+        confirming,
+        confirmingFixtures,
+        foundation,
+        [production],
       );
 
       await disabling.query("BEGIN");
@@ -2803,14 +2801,14 @@ describe("persistence foundations", () => {
           testTimes.createdAt,
         ],
       );
+      await client.query(
+        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+        [production.inventoryReservationId, "HELD"],
+      );
       await fixtures.createJob(foundation, production);
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
         [production.productionReservationId, "HELD", production.jobId],
-      );
-      await client.query(
-        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-        [production.inventoryReservationId, "HELD"],
       );
       await client.query(
         'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -2820,7 +2818,7 @@ describe("persistence foundations", () => {
         'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
         [foundation.phaseReservationSetId, "RESERVED"],
       );
-      await fixtures.capturePayment(foundation);
+      await fixtures.activatePayment(foundation);
 
       await expect(client.query("COMMIT")).rejects.toMatchObject({
         code: "23514",
@@ -2999,26 +2997,9 @@ describe("persistence foundations", () => {
         'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
         [foundation.phaseReservationSetId, "RESERVED"],
       );
-      await fixtures.capturePayment(foundation);
-      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-      await client.query("SET CONSTRAINTS ALL DEFERRED");
-      await fixtures.createJob(foundation, production);
-      await client.query(
-        'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
-        [production.productionReservationId, "HELD", production.jobId],
-      );
-      await client.query(
-        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-        [production.inventoryReservationId, "HELD"],
-      );
-      await client.query(
-        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-        [fixtures.id("held-capacity"), "HELD"],
-      );
-      await client.query(
-        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-        [foundation.phaseReservationSetId, "HELD"],
-      );
+      await activateReservationGraph(client, fixtures, foundation, [
+        production,
+      ]);
       await client.query(
         'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
         [fixtures.id("held-capacity"), "RELEASED"],
@@ -3087,26 +3068,9 @@ describe("persistence foundations", () => {
         'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
         [foundation.phaseReservationSetId, "RESERVED"],
       );
-      await fixtures.capturePayment(foundation);
-      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-      await client.query("SET CONSTRAINTS ALL DEFERRED");
-      await fixtures.createJob(foundation, production);
-      await client.query(
-        'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
-        [production.productionReservationId, "HELD", production.jobId],
-      );
-      await client.query(
-        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-        [production.inventoryReservationId, "HELD"],
-      );
-      await client.query(
-        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-        [capacityReservationId, "HELD"],
-      );
-      await client.query(
-        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-        [foundation.phaseReservationSetId, "HELD"],
-      );
+      await activateReservationGraph(client, fixtures, foundation, [
+        production,
+      ]);
       await client.query("COMMIT");
       heldCommitted = true;
 
@@ -3225,27 +3189,11 @@ describe("persistence foundations", () => {
         'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
         [graph.foundation.phaseReservationSetId, "RESERVED"],
       );
-      await fixtures.capturePayment(graph.foundation);
-      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-      await client.query("SET CONSTRAINTS ALL DEFERRED");
-      for (const [index, production] of graph.productions.entries()) {
-        await fixtures.createJob(graph.foundation, production);
-        await client.query(
-          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
-          [production.productionReservationId, "HELD", production.jobId],
-        );
-        await client.query(
-          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-          [production.inventoryReservationId, "HELD"],
-        );
-        await client.query(
-          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-          [capacityReservationIds[index], "HELD"],
-        );
-      }
-      await client.query(
-        'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-        [graph.foundation.phaseReservationSetId, "HELD"],
+      await activateReservationGraph(
+        client,
+        fixtures,
+        graph.foundation,
+        graph.productions,
       );
       await client.query(
         'SET CONSTRAINTS "jobs_captured_reservation_reconciled" IMMEDIATE',
@@ -3411,26 +3359,9 @@ describe("persistence foundations", () => {
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
           [foundation.phaseReservationSetId, "RESERVED"],
         );
-        await fixtures.capturePayment(foundation);
-        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-        await client.query("SET CONSTRAINTS ALL DEFERRED");
-        await fixtures.createJob(foundation, production);
-        await client.query(
-          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
-          [production.productionReservationId, "HELD", production.jobId],
-        );
-        await client.query(
-          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-          [production.productionReservationId, "HELD"],
-        );
-        await client.query(
-          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-          [production.productionReservationId, "HELD"],
-        );
-        await client.query(
-          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-          [foundation.phaseReservationSetId, "HELD"],
-        );
+        await activateReservationGraph(client, fixtures, foundation, [
+          production,
+        ]);
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
         await client.query("SET CONSTRAINTS ALL DEFERRED");
         await client.query(
@@ -3631,9 +3562,6 @@ describe("persistence foundations", () => {
         'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
         [foundation.phaseReservationSetId, "RESERVED"],
       );
-      await fixtures.capturePayment(foundation);
-      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-      await client.query("SET CONSTRAINTS ALL DEFERRED");
       for (const [resource, production, capacityId] of [
         [foundation, terminalProduction, terminalCapacityId],
         [activeLiveFoundation, liveProduction, liveCapacityId],
@@ -3656,8 +3584,14 @@ describe("persistence foundations", () => {
         'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
         [foundation.phaseReservationSetId, "HELD"],
       );
+      await fixtures.activatePayment(foundation);
       await client.query(
-        'SET CONSTRAINTS "jobs_captured_reservation_reconciled" IMMEDIATE',
+        `SET CONSTRAINTS
+           "payments_capture_activation_reconciled",
+           "orders_capture_activation_reconciled",
+           "order_phases_capture_activation_reconciled",
+           "phase_reservation_sets_capture_activation_reconciled",
+           "jobs_captured_reservation_reconciled" IMMEDIATE`,
       );
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -3995,26 +3929,9 @@ describe("persistence foundations", () => {
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
           [foundation.phaseReservationSetId, "RESERVED"],
         );
-        await fixtures.capturePayment(foundation);
-        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-        await client.query("SET CONSTRAINTS ALL DEFERRED");
-        await client.query(
-          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-          [production.productionReservationId, "HELD"],
-        );
-        await client.query(
-          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
-          [production.productionReservationId, "HELD"],
-        );
-        await fixtures.createJob(foundation, production);
-        await client.query(
-          'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
-          [production.productionReservationId, "HELD", production.jobId],
-        );
-        await client.query(
-          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-          [foundation.phaseReservationSetId, "HELD"],
-        );
+        await activateReservationGraph(client, fixtures, foundation, [
+          production,
+        ]);
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
 
         expect(

@@ -1111,6 +1111,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM 1
+    FROM "quote_requests" request
+    JOIN "quotes" quote ON quote."quote_request_id" = request."id"
+    WHERE quote."id" = NEW."quote_id"
+    FOR UPDATE OF request;
+
     IF NOT EXISTS (
         SELECT 1
         FROM "orders" target_order
@@ -1132,6 +1138,77 @@ $$;
 CREATE TRIGGER "individual_order_origins_owner"
 BEFORE INSERT ON "individual_order_origins"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_individual_order_origin();
+
+CREATE FUNCTION taven_reconcile_accepted_quote_order()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_request_id uuid;
+    target_status "quote_request_status";
+    origin_count integer;
+BEGIN
+    IF TG_TABLE_NAME = 'quote_requests' THEN
+        target_request_id := (to_jsonb(NEW) ->> 'id')::uuid;
+    ELSE
+        SELECT quote."quote_request_id"
+        INTO target_request_id
+        FROM "quotes" quote
+        WHERE quote."id" = (to_jsonb(NEW) ->> 'quote_id')::uuid;
+    END IF;
+
+    SELECT request."status"
+    INTO target_status
+    FROM "quote_requests" request
+    WHERE request."id" = target_request_id
+    FOR UPDATE;
+
+    SELECT count(*)
+    INTO origin_count
+    FROM "quotes" quote
+    JOIN "individual_order_origins" origin ON origin."quote_id" = quote."id"
+    WHERE quote."quote_request_id" = target_request_id;
+
+    PERFORM 1
+    FROM "quotes" quote
+    JOIN "individual_order_origins" origin ON origin."quote_id" = quote."id"
+    JOIN "orders" target_order ON target_order."id" = origin."order_id"
+    WHERE quote."quote_request_id" = target_request_id
+    ORDER BY target_order."id"
+    FOR UPDATE OF target_order;
+
+    IF target_status = 'ACCEPTED' THEN
+        IF origin_count <> 1 OR NOT EXISTS (
+            SELECT 1
+            FROM "quote_requests" request
+            JOIN "quotes" quote ON quote."quote_request_id" = request."id"
+            JOIN "individual_order_origins" origin ON origin."quote_id" = quote."id"
+            JOIN "orders" target_order ON target_order."id" = origin."order_id"
+            WHERE request."id" = target_request_id
+              AND target_order."status" = 'DRAFT'
+              AND request."customer_id" = quote."customer_id"
+              AND quote."customer_id" = target_order."customer_id"
+        ) THEN
+            RAISE EXCEPTION 'accepted quote request requires its exact individual draft order in the same transaction'
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_request_individual_order_atomic_check';
+        END IF;
+    ELSIF origin_count <> 0 THEN
+        RAISE EXCEPTION 'individual order origin requires its quote request to be accepted atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_individual_order_atomic_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "quote_requests_individual_order_reconciled"
+AFTER INSERT OR UPDATE OF "status" ON "quote_requests"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_accepted_quote_order();
+CREATE CONSTRAINT TRIGGER "individual_order_origins_request_reconciled"
+AFTER INSERT ON "individual_order_origins"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_accepted_quote_order();
 
 CREATE FUNCTION taven_prevent_order_origin_mutation()
 RETURNS trigger
@@ -1280,16 +1357,9 @@ BEGIN
            OR (OLD."status" = 'READY_TO_SHIP' AND NEW."status" IN ('SHIPPED', 'CANCELLED'))
            OR (OLD."status" = 'SHIPPED' AND NEW."status" IN ('DELIVERED', 'PARTIALLY_FULFILLED', 'CANCELLED'))
            OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
-           OR (
-               OLD."status" = 'CANCELLED'
-               AND NEW."status" IN ('REFUNDED', 'CANCELLED_SETTLED')
-               AND EXISTS (
-                   SELECT 1
-                   FROM "payments" payment
-                   WHERE payment."order_id" = OLD."id"
-                     AND coalesce(payment."captured_amount_minor", 0) > 0
-               )
-           )
+           -- CANCELLED_SETTLED stays unreachable until the deferred settlement
+           -- tranche persists the immutable OrderSettlement that proves it.
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'REFUNDED')
        ) THEN
         RAISE EXCEPTION 'order status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
@@ -1302,6 +1372,57 @@ $$;
 CREATE TRIGGER "orders_status_transitions_valid"
 BEFORE INSERT OR UPDATE OF "status" ON "orders"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_status_transition();
+
+CREATE FUNCTION taven_reconcile_refunded_order()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = NEW."id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "payments"
+    WHERE "order_id" = NEW."id"
+    ORDER BY "id"
+    FOR UPDATE;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "payments" payment
+        WHERE payment."order_id" = NEW."id"
+          AND payment."captured_amount_minor" > 0
+    ) OR EXISTS (
+        SELECT 1
+        FROM "payments" payment
+        WHERE payment."order_id" = NEW."id"
+          AND payment."captured_amount_minor" > 0
+          AND (
+              payment."status" <> 'REFUNDED'
+              OR payment."captured_amount_minor" <> (
+                  SELECT coalesce(sum(refund."amount_minor"), 0)
+                  FROM "refund_transactions" refund
+                  WHERE refund."payment_id" = payment."id"
+                    AND refund."status" = 'SUCCEEDED'
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION 'refunded order requires every captured payment to be fully refunded'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_refund_completion_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "orders_refund_completion_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status" AND NEW."status" = 'REFUNDED')
+EXECUTE FUNCTION taven_reconcile_refunded_order();
 
 CREATE FUNCTION taven_validate_order_price_binding()
 RETURNS trigger
@@ -1963,6 +2084,144 @@ AFTER INSERT ON "jobs"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_require_captured_reservation_for_job();
 
+CREATE FUNCTION taven_reconcile_payment_capture_activation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_payment_id uuid;
+BEGIN
+    CASE TG_TABLE_NAME
+        WHEN 'payments' THEN
+            target_order_id := (to_jsonb(NEW) ->> 'order_id')::uuid;
+            target_payment_id := (to_jsonb(NEW) ->> 'id')::uuid;
+        WHEN 'orders' THEN
+            target_order_id := (to_jsonb(NEW) ->> 'id')::uuid;
+        WHEN 'order_phases' THEN
+            target_order_id := (to_jsonb(NEW) ->> 'order_id')::uuid;
+        ELSE
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "phase_reservation_sets" reservation_set
+            JOIN "phase_resource_plans" plan
+              ON plan."id" = reservation_set."phase_resource_plan_id"
+             AND plan."node_id" = reservation_set."node_id"
+            JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+            WHERE reservation_set."id" = (to_jsonb(NEW) ->> 'id')::uuid;
+    END CASE;
+
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "payments"
+    WHERE "order_id" = target_order_id
+    ORDER BY "id"
+    FOR UPDATE;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "orders" target_order
+        JOIN "order_phases" phase
+          ON phase."order_id" = target_order."id"
+         AND phase."kind" = 'SINGLE'
+         AND phase."status" = 'ACTIVE'
+         AND phase."activated_at" IS NOT NULL
+        JOIN "payments" payment
+          ON payment."order_id" = target_order."id"
+         AND payment."status" = 'CAPTURED'
+         AND payment."role" = 'FULL'
+         AND payment."captured_amount_minor" = payment."requested_amount_minor"
+        JOIN "order_active_price_bindings" active_binding
+          ON active_binding."order_id" = target_order."id"
+         AND active_binding."order_price_binding_id" = payment."order_price_binding_id"
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."order_phase_id" = phase."id"
+         AND resource_plan."expires_at" > clock_timestamp()
+        JOIN "phase_reservation_sets" reservation_set
+          ON reservation_set."phase_resource_plan_id" = resource_plan."id"
+         AND reservation_set."node_id" = resource_plan."node_id"
+         AND reservation_set."status" = 'HELD'
+         AND reservation_set."expires_at" > clock_timestamp()
+        WHERE target_order."id" = target_order_id
+          AND target_order."status" = 'CONFIRMED'
+          AND target_order."confirmed_at" IS NOT NULL
+          AND (target_payment_id IS NULL OR payment."id" = target_payment_id)
+          AND (
+              SELECT count(*)
+              FROM "phase_reservation_sets" held_set
+              JOIN "phase_resource_plans" held_plan
+                ON held_plan."id" = held_set."phase_resource_plan_id"
+               AND held_plan."node_id" = held_set."node_id"
+              WHERE held_plan."order_phase_id" = phase."id"
+                AND held_set."status" = 'HELD'
+          ) = 1
+          AND EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
+              LEFT JOIN "production_reservations" production
+                ON production."phase_reservation_set_id" = reservation_set."id"
+               AND production."phase_resource_plan_job_id" = plan_job."id"
+               AND production."node_id" = plan_job."node_id"
+              LEFT JOIN "jobs" job
+                ON job."id" = production."job_id"
+               AND job."node_id" = production."node_id"
+               AND job."phase_resource_plan_job_id" = production."phase_resource_plan_job_id"
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+                AND (
+                    production."id" IS NULL
+                    OR production."status" <> 'HELD'
+                    OR production."job_id" IS NULL
+                    OR job."id" IS NULL
+                    OR job."order_id" <> target_order."id"
+                    OR job."order_phase_id" <> phase."id"
+                    OR job."status" <> 'CREATED'
+                )
+          )
+    ) THEN
+        RAISE EXCEPTION 'captured payment requires atomic order, phase, reservation, and Job activation'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_activation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "payments_capture_activation_reconciled"
+AFTER UPDATE OF "status" ON "payments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" = 'PENDING' AND NEW."status" = 'CAPTURED')
+EXECUTE FUNCTION taven_reconcile_payment_capture_activation();
+CREATE CONSTRAINT TRIGGER "orders_capture_activation_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" = 'QUOTED' AND NEW."status" = 'CONFIRMED')
+EXECUTE FUNCTION taven_reconcile_payment_capture_activation();
+CREATE CONSTRAINT TRIGGER "order_phases_capture_activation_reconciled"
+AFTER UPDATE OF "status" ON "order_phases"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" = 'QUOTED' AND NEW."status" = 'ACTIVE')
+EXECUTE FUNCTION taven_reconcile_payment_capture_activation();
+CREATE CONSTRAINT TRIGGER "phase_reservation_sets_capture_activation_reconciled"
+AFTER UPDATE OF "status" ON "phase_reservation_sets"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status" AND NEW."status" = 'HELD')
+EXECUTE FUNCTION taven_reconcile_payment_capture_activation();
+
 CREATE FUNCTION taven_extend_quote_source_retention()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2466,10 +2725,16 @@ BEGIN
     END IF;
 
     IF OLD."status" = 'PENDING'
-       AND NEW."status" = 'CAPTURED'
-       AND (NOT NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NOT NULL) THEN
-        RAISE EXCEPTION 'ordinary payment capture requires an open authorization window'
-            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+       AND NEW."status" = 'CAPTURED' THEN
+        PERFORM 1
+        FROM "orders"
+        WHERE "id" = NEW."order_id"
+        FOR UPDATE;
+
+        IF NOT NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NOT NULL THEN
+            RAISE EXCEPTION 'ordinary payment capture requires an open authorization window'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+        END IF;
     END IF;
 
     IF OLD."capture_cutoff_at" IS NULL

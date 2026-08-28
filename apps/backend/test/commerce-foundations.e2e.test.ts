@@ -51,7 +51,14 @@ async function createCurrentPlan(
   client: PoolClient,
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
-): Promise<void> {
+): Promise<
+  Array<
+    ProductionReservationFixture & {
+      endsAt: Date;
+      startsAt: Date;
+    }
+  >
+> {
   const productions: Array<
     ProductionReservationFixture & {
       endsAt: Date;
@@ -119,15 +126,71 @@ async function createCurrentPlan(
     `UPDATE phase_reservation_sets SET status = 'RESERVED' WHERE id = $1`,
     [foundation.phaseReservationSetId],
   );
+  return productions;
 }
 
 async function createCurrentPlanAndPayment(
   client: PoolClient,
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
-): Promise<void> {
-  await createCurrentPlan(client, fixtures, foundation);
+): Promise<
+  Array<
+    ProductionReservationFixture & {
+      endsAt: Date;
+      startsAt: Date;
+    }
+  >
+> {
+  const productions = await createCurrentPlan(client, fixtures, foundation);
   await fixtures.finalizePayment(foundation);
+  return productions;
+}
+
+async function activateCurrentPlan(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  foundation: PersistenceFoundation,
+  productions: ProductionReservationFixture[],
+): Promise<void> {
+  for (const production of productions) {
+    await client.query(
+      `UPDATE inventory_reservations SET status = 'HELD'
+       WHERE production_reservation_id = $1`,
+      [production.productionReservationId],
+    );
+    await client.query(
+      `UPDATE capacity_reservations SET status = 'HELD'
+       WHERE production_reservation_id = $1`,
+      [production.productionReservationId],
+    );
+    await fixtures.createJob(foundation, production);
+    await client.query(
+      `UPDATE production_reservations
+       SET status = 'HELD', job_id = $2 WHERE id = $1`,
+      [production.productionReservationId, production.jobId],
+    );
+  }
+  await client.query(
+    `UPDATE phase_reservation_sets SET status = 'HELD' WHERE id = $1`,
+    [foundation.phaseReservationSetId],
+  );
+  await fixtures.activatePayment(foundation);
+  await client.query(
+    `SET CONSTRAINTS
+       "payments_capture_activation_reconciled",
+       "orders_capture_activation_reconciled",
+       "order_phases_capture_activation_reconciled",
+       "phase_reservation_sets_capture_activation_reconciled",
+       "jobs_captured_reservation_reconciled" IMMEDIATE`,
+  );
+  await client.query(
+    `SET CONSTRAINTS
+       "payments_capture_activation_reconciled",
+       "orders_capture_activation_reconciled",
+       "order_phases_capture_activation_reconciled",
+       "phase_reservation_sets_capture_activation_reconciled",
+       "jobs_captured_reservation_reconciled" DEFERRED`,
+  );
 }
 
 async function advanceOrderToCompleted(
@@ -1586,6 +1649,21 @@ describe("commerce persistence foundations", () => {
       await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
       await client.query(`SET CONSTRAINTS ALL DEFERRED`);
 
+      await expectQueryError(
+        client,
+        "capture_without_activation",
+        async () => {
+          await fixtures.capturePayment(foundation);
+          await client.query(
+            `SET CONSTRAINTS "payments_capture_activation_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_capture_activation_check",
+        },
+      );
+
       const holdReservationAndCreateJob = async (): Promise<void> => {
         await client.query(
           `UPDATE inventory_reservations SET status = 'HELD' WHERE id = $1`,
@@ -1620,10 +1698,15 @@ describe("commerce persistence foundations", () => {
       );
 
       await holdReservationAndCreateJob();
-      await fixtures.capturePayment(foundation);
+      await fixtures.activatePayment(foundation);
       await expect(
         client.query(
-          `SET CONSTRAINTS "jobs_captured_reservation_reconciled" IMMEDIATE`,
+          `SET CONSTRAINTS
+             "payments_capture_activation_reconciled",
+             "orders_capture_activation_reconciled",
+             "order_phases_capture_activation_reconciled",
+             "phase_reservation_sets_capture_activation_reconciled",
+             "jobs_captured_reservation_reconciled" IMMEDIATE`,
         ),
       ).resolves.toBeDefined();
     });
@@ -1692,7 +1775,11 @@ describe("commerce persistence foundations", () => {
           ]),
         { code: "23514", constraint: "order_status_transition_check" },
       );
-      await createCurrentPlanAndPayment(client, fixtures, foundation);
+      const foundationProductions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
       await createCurrentPlanAndPayment(client, fixtures, other);
       await expectQueryError(
         client,
@@ -1807,6 +1894,28 @@ describe("commerce persistence foundations", () => {
       if (!capturedAmount || !providerIntentId) {
         throw new Error("fixture payment is missing");
       }
+      await expectQueryError(
+        client,
+        "duplicate_provider",
+        () =>
+          client.query(
+            `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
+                                  payment_schedule_id, role, provider, provider_intent_id,
+                                  requested_amount_minor, currency, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR',$8,$8)`,
+            [
+              fixtures.id("duplicate-payment"),
+              foundation.orderId,
+              foundation.priceSnapshotId,
+              foundation.orderPriceBindingId,
+              foundation.paymentScheduleId,
+              providerIntentId,
+              capturedAmount,
+              new Date(),
+            ],
+          ),
+        { code: "23505" },
+      );
       const remainingRefundAmount = Number(capturedAmount) - 600;
       if (remainingRefundAmount <= 0) {
         throw new Error("fixture payment cannot support a partial refund");
@@ -1821,17 +1930,11 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514", constraint: "payments_capture_facts_check" },
       );
-      await client.query(
-        `UPDATE payments
-         SET status = 'CAPTURED', captured_amount_minor = $2,
-             provider_capture_id = $3, captured_at = $4
-         WHERE id = $1`,
-        [
-          foundation.paymentId,
-          capturedAmount,
-          "capture-for-refund",
-          new Date(),
-        ],
+      await activateCurrentPlan(
+        client,
+        fixtures,
+        foundation,
+        foundationProductions,
       );
       await client.query(
         `INSERT INTO refund_transactions (id, payment_id, idempotency_key,
@@ -2140,28 +2243,6 @@ describe("commerce persistence foundations", () => {
           ]),
         { code: "23514", constraint: "payment_identity_immutable_check" },
       );
-      await expectQueryError(
-        client,
-        "duplicate_provider",
-        () =>
-          client.query(
-            `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
-                                  payment_schedule_id, role, provider, provider_intent_id,
-                                  requested_amount_minor, currency, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR',$8,$8)`,
-            [
-              fixtures.id("duplicate-payment"),
-              foundation.orderId,
-              foundation.priceSnapshotId,
-              foundation.orderPriceBindingId,
-              foundation.paymentScheduleId,
-              providerIntentId,
-              capturedAmount,
-              new Date(),
-            ],
-          ),
-        { code: "23505" },
-      );
     });
   });
 
@@ -2171,10 +2252,16 @@ describe("commerce persistence foundations", () => {
         deleteAfter: testTimes.capacityEnd,
         quoteExpiresAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000),
       });
-      await createCurrentPlanAndPayment(client, fixtures, completed);
-      await client.query(
-        `UPDATE orders SET status = 'CONFIRMED', confirmed_at = $2 WHERE id = $1`,
-        [completed.orderId, new Date()],
+      const completedProductions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        completed,
+      );
+      await activateCurrentPlan(
+        client,
+        fixtures,
+        completed,
+        completedProductions,
       );
       expect(
         (
@@ -2184,7 +2271,14 @@ describe("commerce persistence foundations", () => {
           )
         ).rows,
       ).toEqual([{ retention_hold: "ACTIVE_ORDER" }]);
-      const completedAt = new Date();
+      const completedAt = (
+        await client.query<{ completed_at: Date }>(
+          `SELECT clock_timestamp() AS completed_at`,
+        )
+      ).rows[0]?.completed_at;
+      if (!completedAt) {
+        throw new Error("database completion clock is unavailable");
+      }
       await advanceOrderToCompleted(client, completed.orderId);
       const releasedSource = await client.query<{
         retention_hold: string;
@@ -2211,7 +2305,11 @@ describe("commerce persistence foundations", () => {
       );
 
       const captured = await fixtures.createFoundation("captured-cancelled");
-      await createCurrentPlanAndPayment(client, fixtures, captured);
+      const capturedProductions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        captured,
+      );
       const capturedAmount = (
         await client.query<{ requested_amount_minor: string }>(
           `SELECT requested_amount_minor::text FROM payments WHERE id = $1`,
@@ -2221,16 +2319,11 @@ describe("commerce persistence foundations", () => {
       if (!capturedAmount) {
         throw new Error("captured retention fixture payment is missing");
       }
-      await client.query(
-        `UPDATE payments
-         SET status = 'CAPTURED', captured_amount_minor = $2,
-             provider_capture_id = $3, captured_at = $4
-         WHERE id = $1`,
-        [captured.paymentId, capturedAmount, "retention-capture", new Date()],
-      );
-      await client.query(
-        `UPDATE orders SET status = 'CONFIRMED', confirmed_at = $2 WHERE id = $1`,
-        [captured.orderId, new Date()],
+      await activateCurrentPlan(
+        client,
+        fixtures,
+        captured,
+        capturedProductions,
       );
       await client.query(
         `UPDATE orders SET status = 'CANCELLED' WHERE id = $1`,
@@ -2244,9 +2337,52 @@ describe("commerce persistence foundations", () => {
           )
         ).rows,
       ).toEqual([{ retention_hold: "ACTIVE_ORDER" }]);
+      await expectQueryError(
+        client,
+        "close_unrefunded_order",
+        async () => {
+          await client.query(
+            `UPDATE orders SET status = 'REFUNDED' WHERE id = $1`,
+            [captured.orderId],
+          );
+          await client.query(
+            `SET CONSTRAINTS "orders_refund_completion_reconciled" IMMEDIATE`,
+          );
+        },
+        { code: "23514", constraint: "order_refund_completion_check" },
+      );
+      await client.query(
+        `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+        [captured.paymentId],
+      );
+      await client.query(
+        `INSERT INTO refund_transactions
+         (id, payment_id, idempotency_key, provider_refund_id,
+          amount_minor, reason, status, requested_at, completed_at,
+          created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,'CUSTOMER_CANCELLATION','SUCCEEDED',$6,$6,$6,$6)`,
+        [
+          fixtures.id("retention-full-refund"),
+          captured.paymentId,
+          "retention-full-refund",
+          "retention-full-refund",
+          capturedAmount,
+          new Date(),
+        ],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,
+        [captured.paymentId],
+      );
       await client.query(
         `UPDATE orders SET status = 'REFUNDED' WHERE id = $1`,
         [captured.orderId],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "orders_refund_completion_reconciled" IMMEDIATE`,
       );
       expect(
         (
@@ -2258,11 +2394,12 @@ describe("commerce persistence foundations", () => {
       ).toEqual([{ retention_hold: "NONE" }]);
 
       const legal = await fixtures.createFoundation("legal-order");
-      await createCurrentPlanAndPayment(client, fixtures, legal);
-      await client.query(
-        `UPDATE orders SET status = 'CONFIRMED', confirmed_at = $2 WHERE id = $1`,
-        [legal.orderId, new Date()],
+      const legalProductions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        legal,
       );
+      await activateCurrentPlan(client, fixtures, legal, legalProductions);
       await client.query(
         `UPDATE model_files SET retention_hold = 'LEGAL' WHERE id = $1`,
         [legal.modelFileId],
@@ -2475,6 +2612,24 @@ describe("commerce persistence foundations", () => {
           constraint: "quote_item_price_binding_immutable_check",
         },
       );
+      await expectQueryError(
+        client,
+        "accept_quote_without_order",
+        async () => {
+          await client.query(
+            `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
+             WHERE id = $1`,
+            [quoteRequestId, now],
+          );
+          await client.query(
+            `SET CONSTRAINTS "quote_requests_individual_order_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "quote_request_individual_order_atomic_check",
+        },
+      );
       await client.query(
         `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1`,
         [quoteRequestId, now],
@@ -2664,7 +2819,9 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `SET CONSTRAINTS
            "order_price_bindings_individual_quote_snapshot_reconciled",
-           "individual_order_origins_quote_snapshot_reconciled" IMMEDIATE`,
+           "individual_order_origins_quote_snapshot_reconciled",
+           "quote_requests_individual_order_reconciled",
+           "individual_order_origins_request_reconciled" IMMEDIATE`,
       );
       expect(
         (

@@ -919,6 +919,36 @@ export class PersistenceFactory {
     );
   }
 
+  async activatePayment(foundation: PersistenceFoundation): Promise<void> {
+    const existing = await this.sql.query(
+      "SELECT 1 FROM payments WHERE id = $1",
+      [foundation.paymentId],
+    );
+    if (!existing.rows[0]) {
+      await this.finalizePayment(foundation);
+    }
+    await this.sql.query(
+      `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" IMMEDIATE`,
+    );
+    await this.sql.query(
+      `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" DEFERRED`,
+    );
+    const activatedAt = new Date();
+    await this.sql.query(
+      `UPDATE orders
+       SET status = 'CONFIRMED', confirmed_at = $2, updated_at = $2
+       WHERE id = $1`,
+      [foundation.orderId, activatedAt],
+    );
+    await this.sql.query(
+      `UPDATE order_phases
+       SET status = 'ACTIVE', activated_at = $2, updated_at = $2
+       WHERE id = $1`,
+      [foundation.orderPhaseId, activatedAt],
+    );
+    await this.capturePayment(foundation);
+  }
+
   async planProduction(
     foundation: PersistenceFoundation,
     name: string,
