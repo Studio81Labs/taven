@@ -723,6 +723,9 @@ ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_success_fa
     "status" <> 'SUCCEEDED'
     OR ("provider_refund_id" IS NOT NULL AND "completed_at" IS NOT NULL)
 );
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_completion_status_check" CHECK (
+    "completed_at" IS NULL OR "status" = 'SUCCEEDED'
+);
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_scope_check" CHECK ("quote_id" IS NOT NULL OR "order_id" IS NOT NULL OR "payment_id" IS NOT NULL OR "refund_transaction_id" IS NOT NULL);
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_identity_check" CHECK (
     ("actor_kind" = 'SYSTEM' AND "actor_id" IS NULL)

@@ -7730,6 +7730,50 @@ describe("commerce persistence foundations", () => {
       );
       await expectQueryError(
         client,
+        "complete_pending_refund",
+        () =>
+          client.query(
+            `UPDATE refund_transactions
+             SET completed_at = (
+                   SELECT captured_at FROM payments WHERE id = payment_id
+                 ),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [fixtures.id("pending-refund-completion")],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_transactions_completion_status_check",
+        },
+      );
+      for (const status of ["PENDING", "FAILED"] as const) {
+        await expectQueryError(
+          client,
+          `insert_completed_${status.toLowerCase()}_refund`,
+          () =>
+            client.query(
+              `INSERT INTO refund_transactions
+                 (id, payment_id, idempotency_key, amount_minor, reason, status,
+                  requested_at, completed_at, created_at, updated_at)
+               SELECT $1,$2,$3,1,'PRODUCTION_FAILURE',$4,
+                      captured_at,captured_at,
+                      clock_timestamp(),clock_timestamp()
+               FROM payments WHERE id = $2`,
+              [
+                fixtures.id(`completed-${status.toLowerCase()}-refund`),
+                financial.paymentId,
+                `completed-${status.toLowerCase()}-refund`,
+                status,
+              ],
+            ),
+          {
+            code: "23514",
+            constraint: "refund_transactions_completion_status_check",
+          },
+        );
+      }
+      await expectQueryError(
+        client,
         "future_refund_update",
         () =>
           client.query(
