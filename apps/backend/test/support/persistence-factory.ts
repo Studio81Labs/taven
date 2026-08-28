@@ -166,6 +166,7 @@ export class PersistenceFactory {
     finalOrderStatus: "DRAFT" | "QUOTED" = "QUOTED",
     beforeOrderPricing?: (foundation: PersistenceFoundation) => Promise<void>,
     pricing: CommercePricing = {},
+    orderOrigin: "AUTOMATIC" | "INDIVIDUAL" = "AUTOMATIC",
   ): Promise<PersistenceFoundation> {
     const items: CommerceItem[] =
       commerceItems ?? Array.from({ length: slotCount }, () => ({}));
@@ -518,6 +519,7 @@ export class PersistenceFactory {
         new Date(testRunStartedAt + hourInMilliseconds),
       finalOrderStatus,
       pricing,
+      orderOrigin,
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -556,6 +558,7 @@ export class PersistenceFactory {
     quoteExpiresAt: Date;
     finalOrderStatus: "DRAFT" | "QUOTED";
     pricing: CommercePricing;
+    orderOrigin: "AUTOMATIC" | "INDIVIDUAL";
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
@@ -671,10 +674,12 @@ export class PersistenceFactory {
         t,
       ],
     );
-    await this.sql.query(
-      "INSERT INTO automatic_order_origins (order_id, quote_session_id) VALUES ($1,$2)",
-      [input.orderId, input.quoteSessionId],
-    );
+    if (input.orderOrigin === "AUTOMATIC") {
+      await this.sql.query(
+        "INSERT INTO automatic_order_origins (order_id, quote_session_id) VALUES ($1,$2)",
+        [input.orderId, input.quoteSessionId],
+      );
+    }
     await this.sql.query(
       "INSERT INTO delivery_destinations (id, order_id, provider_endpoint_id, endpoint_type, address_snapshot, capability_snapshot, created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)",
       [
@@ -798,21 +803,39 @@ export class PersistenceFactory {
       const quantityComponentId = componentIds[itemIndex * 4 + 1]!;
       const postprocessingComponentId = componentIds[itemIndex * 4 + 2]!;
       const shipmentComponentId = componentIds[itemIndex * 4 + 3]!;
-      await this.sql.query(
-        "INSERT INTO price_snapshot_components (id, price_snapshot_id, kind, scope, order_item_id, amount_minor, allocation, created_at) VALUES ($1,$2,'ITEM_PRODUCTION','ORDER_ITEM',$3,$4,$5::jsonb,$6),($7,$2,'ITEM_QUANTITY','ORDER_ITEM',$3,$8,$5::jsonb,$6),($9,$2,'ITEM_POSTPROCESSING','ORDER_ITEM',$3,$10,$5::jsonb,$6)",
-        [
-          productionComponentId,
-          snapshotId,
-          input.orderItemIds[itemIndex],
-          componentAmounts[itemIndex]!.production,
-          JSON.stringify({}),
-          t,
-          quantityComponentId,
-          componentAmounts[itemIndex]!.quantity,
-          postprocessingComponentId,
-          componentAmounts[itemIndex]!.postprocessing,
-        ],
-      );
+      if (input.orderOrigin === "INDIVIDUAL") {
+        await this.sql.query(
+          "INSERT INTO price_snapshot_components (id, price_snapshot_id, kind, scope, quote_item_id, amount_minor, allocation, created_at) VALUES ($1,$2,'ITEM_PRODUCTION','QUOTE_ITEM',$3,$4,$5::jsonb,$6),($7,$2,'ITEM_QUANTITY','QUOTE_ITEM',$3,$8,$5::jsonb,$6),($9,$2,'ITEM_POSTPROCESSING','QUOTE_ITEM',$3,$10,$5::jsonb,$6)",
+          [
+            productionComponentId,
+            snapshotId,
+            input.quoteItemIds[itemIndex],
+            componentAmounts[itemIndex]!.production,
+            JSON.stringify({}),
+            t,
+            quantityComponentId,
+            componentAmounts[itemIndex]!.quantity,
+            postprocessingComponentId,
+            componentAmounts[itemIndex]!.postprocessing,
+          ],
+        );
+      } else {
+        await this.sql.query(
+          "INSERT INTO price_snapshot_components (id, price_snapshot_id, kind, scope, order_item_id, amount_minor, allocation, created_at) VALUES ($1,$2,'ITEM_PRODUCTION','ORDER_ITEM',$3,$4,$5::jsonb,$6),($7,$2,'ITEM_QUANTITY','ORDER_ITEM',$3,$8,$5::jsonb,$6),($9,$2,'ITEM_POSTPROCESSING','ORDER_ITEM',$3,$10,$5::jsonb,$6)",
+          [
+            productionComponentId,
+            snapshotId,
+            input.orderItemIds[itemIndex],
+            componentAmounts[itemIndex]!.production,
+            JSON.stringify({}),
+            t,
+            quantityComponentId,
+            componentAmounts[itemIndex]!.quantity,
+            postprocessingComponentId,
+            componentAmounts[itemIndex]!.postprocessing,
+          ],
+        );
+      }
       await this.sql.query(
         "INSERT INTO price_snapshot_components (id, price_snapshot_id, kind, scope, shipment_plan_id, amount_minor, allocation, created_at) VALUES ($1,$2,'SHIPMENT','SHIPMENT_PLAN',$3,$4,$5::jsonb,$6)",
         [
@@ -828,20 +851,22 @@ export class PersistenceFactory {
       if (!firstItemSlot) {
         throw new Error("commerce item did not receive a fulfilment slot");
       }
-      await this.sql.query(
-        "INSERT INTO price_component_fulfilment_allocations (price_snapshot_component_id, fulfilment_slot_id, amount_minor) VALUES ($1,$2,$3),($4,$2,$5),($6,$2,$7),($8,$2,$9)",
-        [
-          productionComponentId,
-          firstItemSlot,
-          componentAmounts[itemIndex]!.production,
-          quantityComponentId,
-          componentAmounts[itemIndex]!.quantity,
-          postprocessingComponentId,
-          componentAmounts[itemIndex]!.postprocessing,
-          shipmentComponentId,
-          componentAmounts[itemIndex]!.shipment,
-        ],
-      );
+      if (input.orderOrigin === "AUTOMATIC") {
+        await this.sql.query(
+          "INSERT INTO price_component_fulfilment_allocations (price_snapshot_component_id, fulfilment_slot_id, amount_minor) VALUES ($1,$2,$3),($4,$2,$5),($6,$2,$7),($8,$2,$9)",
+          [
+            productionComponentId,
+            firstItemSlot,
+            componentAmounts[itemIndex]!.production,
+            quantityComponentId,
+            componentAmounts[itemIndex]!.quantity,
+            postprocessingComponentId,
+            componentAmounts[itemIndex]!.postprocessing,
+            shipmentComponentId,
+            componentAmounts[itemIndex]!.shipment,
+          ],
+        );
+      }
     }
     await this.sql.query(
       "INSERT INTO price_snapshot_components (id, price_snapshot_id, kind, scope, amount_minor, allocation, created_at) VALUES ($1,$2,'ORDER_MIN_PRINT','ORDER',$3,$4::jsonb,$5),($6,$2,'ORDER_SMALL_SURCHARGE','ORDER',$7,$4::jsonb,$5)",
@@ -873,6 +898,50 @@ export class PersistenceFactory {
       "INSERT INTO payment_schedules (id, price_snapshot_id, sequence, role, gross_amount_minor, fee_rate_basis_points, fee_fixed_minor, provider_config, created_at) VALUES ($1,$2,0,'FULL',$3,0,0,$4::jsonb,$5)",
       [scheduleId, snapshotId, contractTotal, JSON.stringify({}), t],
     );
+    if (input.orderOrigin === "INDIVIDUAL") {
+      await this.sql.query(
+        "UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1",
+        [input.quoteRequestId, t],
+      );
+      await this.sql.query(
+        "INSERT INTO individual_order_origins (order_id, quote_id) VALUES ($1,$2)",
+        [input.orderId, input.quoteId],
+      );
+      for (const [index] of input.orderItemIds.entries()) {
+        await this.sql.query(
+          "INSERT INTO individual_order_item_sources (order_item_id, quote_item_id) VALUES ($1,$2)",
+          [input.orderItemIds[index], input.quoteItemIds[index]],
+        );
+      }
+      let individualSlotIndex = 0;
+      for (const [itemIndex, item] of input.resolvedItems.entries()) {
+        if (!item.priced) {
+          individualSlotIndex += item.quantity;
+          continue;
+        }
+        const firstItemSlot = input.fulfilmentSlotIds[individualSlotIndex];
+        if (!firstItemSlot) {
+          throw new Error(
+            "individual commerce item did not receive a fulfilment slot",
+          );
+        }
+        await this.sql.query(
+          "INSERT INTO price_component_fulfilment_allocations (price_snapshot_component_id, fulfilment_slot_id, amount_minor) VALUES ($1,$2,$3),($4,$2,$5),($6,$2,$7),($8,$2,$9)",
+          [
+            componentIds[itemIndex * 4],
+            firstItemSlot,
+            componentAmounts[itemIndex]!.production,
+            componentIds[itemIndex * 4 + 1],
+            componentAmounts[itemIndex]!.quantity,
+            componentIds[itemIndex * 4 + 2],
+            componentAmounts[itemIndex]!.postprocessing,
+            componentIds[itemIndex * 4 + 3],
+            componentAmounts[itemIndex]!.shipment,
+          ],
+        );
+        individualSlotIndex += item.quantity;
+      }
+    }
     if (input.finalOrderStatus === "QUOTED") {
       await this.sql.query(
         "UPDATE orders SET status = 'QUOTED', quoted_at = $2, updated_at = $2 WHERE id = $1",

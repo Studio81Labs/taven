@@ -928,6 +928,9 @@ CREATE FUNCTION taven_validate_audit_event_scope()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    matching_customer_owners integer;
+    mismatched_customer_owners integer;
 BEGIN
     IF NEW."quote_id" IS NOT NULL
        AND NEW."order_id" IS NOT NULL
@@ -1043,6 +1046,42 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'audit event refund must belong to its scoped order'
             USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
+    IF NEW."actor_kind" = 'CUSTOMER'::"audit_actor_kind"
+       AND NEW."actor_id" IS NOT NULL THEN
+        SELECT
+            count(*) FILTER (WHERE scoped_owner."customer_id" = NEW."actor_id"),
+            count(*) FILTER (
+                WHERE scoped_owner."customer_id" IS NOT NULL
+                  AND scoped_owner."customer_id" <> NEW."actor_id"
+            )
+        INTO matching_customer_owners, mismatched_customer_owners
+        FROM (
+            SELECT quote."customer_id"
+            FROM "quotes" quote
+            WHERE quote."id" = NEW."quote_id"
+            UNION ALL
+            SELECT target_order."customer_id"
+            FROM "orders" target_order
+            WHERE target_order."id" = NEW."order_id"
+            UNION ALL
+            SELECT target_order."customer_id"
+            FROM "payments" payment
+            JOIN "orders" target_order ON target_order."id" = payment."order_id"
+            WHERE payment."id" = NEW."payment_id"
+            UNION ALL
+            SELECT target_order."customer_id"
+            FROM "refund_transactions" refund
+            JOIN "payments" payment ON payment."id" = refund."payment_id"
+            JOIN "orders" target_order ON target_order."id" = payment."order_id"
+            WHERE refund."id" = NEW."refund_transaction_id"
+        ) scoped_owner;
+
+        IF matching_customer_owners = 0 OR mismatched_customer_owners > 0 THEN
+            RAISE EXCEPTION 'customer audit actor must match every non-null scoped commerce owner'
+                USING ERRCODE = '23514', CONSTRAINT = 'audit_event_customer_owner_check';
+        END IF;
     END IF;
 
     RETURN NEW;
@@ -2236,12 +2275,6 @@ BEGIN
     WHERE "id" = NEW."id"
     FOR UPDATE;
 
-    PERFORM 1
-    FROM "payments"
-    WHERE "order_id" = NEW."id"
-    ORDER BY "id"
-    FOR UPDATE;
-
     IF NOT EXISTS (
         SELECT 1
         FROM "payments" payment
@@ -2705,10 +2738,87 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF EXISTS (
-        SELECT 1
-        FROM "jobs" job
-        JOIN "orders" target_order ON target_order."id" = job."order_id"
-        WHERE job."qc_photo_asset_id" = NEW."id"
+            SELECT 1
+            FROM "jobs" job
+            JOIN "orders" target_order ON target_order."id" = job."order_id"
+            WHERE NEW."kind" = 'QC'::"photo_asset_kind"
+              AND NEW."scope_kind" = 'JOB'::"photo_scope_kind"
+              AND NEW."scope_id" = job."id"
+              AND job."qc_photo_asset_id" = NEW."id"
+              AND (
+                  target_order."status" IN (
+                      'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
+                      'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'
+                  )
+                  OR (
+                      target_order."status" = 'CANCELLED'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM "payments" payment
+                          WHERE payment."order_id" = target_order."id"
+                            AND coalesce(payment."captured_amount_minor", 0) > 0
+                      )
+                  )
+              )
+        ) AND (
+        NEW."deleted_at" IS NOT NULL
+        OR NEW."retention_hold" NOT IN ('ACTIVE_ORDER', 'ACTIVE_CLAIM', 'LEGAL')
+    ) THEN
+        RAISE EXCEPTION 'Order-bound QC PhotoAsset must remain retained throughout its active order'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_qc_photo_active_order_check';
+    END IF;
+
+    IF EXISTS (
+            SELECT 1
+            FROM "individual_order_origins" origin
+            JOIN "quotes" quote ON quote."id" = origin."quote_id"
+            JOIN "orders" target_order ON target_order."id" = origin."order_id"
+            WHERE NEW."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+              AND NEW."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+              AND NEW."scope_id" = quote."quote_request_id"
+              AND (
+                  target_order."status" IN (
+                      'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
+                      'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'
+                  )
+                  OR (
+                      target_order."status" = 'CANCELLED'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM "payments" payment
+                          WHERE payment."order_id" = target_order."id"
+                            AND coalesce(payment."captured_amount_minor", 0) > 0
+                      )
+                  )
+              )
+        ) AND (
+        NEW."deleted_at" IS NOT NULL
+        OR NEW."retention_hold" NOT IN ('ACTIVE_ORDER', 'ACTIVE_CLAIM', 'LEGAL')
+    ) THEN
+        RAISE EXCEPTION 'Order-bound quote-reference PhotoAsset must remain retained throughout its active order'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_reference_photo_active_order_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "photo_assets_active_order_qc_protected"
+BEFORE UPDATE OF "retention_hold", "deleted_at" ON "photo_assets"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_active_order_qc_photo();
+
+CREATE FUNCTION taven_hold_active_order_quote_reference()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+       AND NEW."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind" THEN
+        PERFORM 1
+        FROM "individual_order_origins" origin
+        JOIN "quotes" quote ON quote."id" = origin."quote_id"
+        JOIN "orders" target_order ON target_order."id" = origin."order_id"
+        WHERE NEW."scope_id" = quote."quote_request_id"
           AND (
               target_order."status" IN (
                   'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
@@ -2724,21 +2834,29 @@ BEGIN
                   )
               )
           )
-    ) AND (
-        NEW."deleted_at" IS NOT NULL
-        OR NEW."retention_hold" NOT IN ('ACTIVE_ORDER', 'ACTIVE_CLAIM', 'LEGAL')
-    ) THEN
-        RAISE EXCEPTION 'Job-bound QC photo must remain retained throughout its active order'
-            USING ERRCODE = '23514', CONSTRAINT = 'job_qc_photo_active_order_check';
+        ORDER BY target_order."id"
+        FOR UPDATE OF target_order;
+
+        IF FOUND THEN
+            IF NEW."deleted_at" IS NOT NULL THEN
+                RAISE EXCEPTION 'Active-order quote-reference PhotoAsset cannot be inserted deleted'
+                    USING ERRCODE = '23514', CONSTRAINT = 'quote_reference_photo_active_order_check';
+            END IF;
+
+            NEW."retention_hold" := CASE
+                WHEN NEW."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL') THEN NEW."retention_hold"
+                ELSE 'ACTIVE_ORDER'::"retention_hold"
+            END;
+        END IF;
     END IF;
 
     RETURN NEW;
 END;
 $$;
 
-CREATE TRIGGER "photo_assets_active_order_qc_protected"
-BEFORE UPDATE OF "retention_hold", "deleted_at" ON "photo_assets"
-FOR EACH ROW EXECUTE FUNCTION taven_protect_active_order_qc_photo();
+CREATE TRIGGER "photo_assets_hold_active_order_quote_reference"
+BEFORE INSERT ON "photo_assets"
+FOR EACH ROW EXECUTE FUNCTION taven_hold_active_order_quote_reference();
 
 CREATE FUNCTION taven_protect_active_order_source()
 RETURNS trigger
@@ -3011,12 +3129,44 @@ BEGIN
               AND ("status" <> 'PACKED' OR "packed_at" IS NULL)
         ) OR NOT EXISTS (
             SELECT 1
-            FROM "shipments" shipment
-            WHERE shipment."order_id" = target_order_id
+            FROM "shipment_plans" plan
+            JOIN "order_active_price_bindings" active_binding
+              ON active_binding."order_id" = plan."order_id"
+             AND active_binding."order_price_binding_id" = plan."order_price_binding_id"
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active_binding."order_price_binding_id"
+             AND binding."order_id" = plan."order_id"
+             AND binding."delivery_destination_id" = plan."delivery_destination_id"
+             AND binding."invalidated_at" IS NULL
+            WHERE plan."order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipment_plans" plan
+            JOIN "order_active_price_bindings" active_binding
+              ON active_binding."order_id" = plan."order_id"
+             AND active_binding."order_price_binding_id" = plan."order_price_binding_id"
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active_binding."order_price_binding_id"
+             AND binding."order_id" = plan."order_id"
+             AND binding."delivery_destination_id" = plan."delivery_destination_id"
+             AND binding."invalidated_at" IS NULL
+            WHERE plan."order_id" = target_order_id
               AND NOT EXISTS (
                   SELECT 1
-                  FROM "shipments" replacement
-                  WHERE replacement."replaces_shipment_id" = shipment."id"
+                  FROM "shipments" shipment
+                  WHERE shipment."order_id" = plan."order_id"
+                    AND shipment."order_phase_id" = plan."order_phase_id"
+                    AND shipment."shipment_plan_id" = plan."id"
+                    AND shipment."delivery_destination_id" = plan."delivery_destination_id"
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM "shipments" replacement
+                        WHERE replacement."replaces_shipment_id" = shipment."id"
+                          AND replacement."order_id" = shipment."order_id"
+                          AND replacement."order_phase_id" = shipment."order_phase_id"
+                          AND replacement."shipment_plan_id" = shipment."shipment_plan_id"
+                          AND replacement."delivery_destination_id" = shipment."delivery_destination_id"
+                    )
               )
         ) OR EXISTS (
             SELECT 1
@@ -3501,12 +3651,6 @@ BEGIN
     PERFORM 1
     FROM "orders"
     WHERE "id" = NEW."id"
-    FOR UPDATE;
-
-    PERFORM 1
-    FROM "payments"
-    WHERE "order_id" = NEW."id"
-    ORDER BY "id"
     FOR UPDATE;
 
     IF EXISTS (
@@ -4313,12 +4457,6 @@ BEGIN
     WHERE "id" = target_order_id
     FOR UPDATE;
 
-    PERFORM 1
-    FROM "payments"
-    WHERE "order_id" = target_order_id
-    ORDER BY "id"
-    FOR UPDATE;
-
     IF NOT EXISTS (
         SELECT 1
         FROM "orders" target_order
@@ -4965,6 +5103,18 @@ BEGIN
         FROM "order_items" item
         WHERE item."order_id" = NEW."id"
           AND source."id" = item."source_model_file_id";
+
+        UPDATE "photo_assets" photo
+        SET "retention_hold" = CASE
+            WHEN photo."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL') THEN photo."retention_hold"
+            ELSE 'ACTIVE_ORDER'::"retention_hold"
+        END
+        FROM "individual_order_origins" origin
+        JOIN "quotes" quote ON quote."id" = origin."quote_id"
+        WHERE origin."order_id" = NEW."id"
+          AND photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+          AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+          AND photo."scope_id" = quote."quote_request_id";
     END IF;
 
     IF NOT old_is_terminal AND new_is_terminal THEN
@@ -4980,8 +5130,30 @@ BEGIN
 
         PERFORM 1
         FROM "photo_assets" photo
-        JOIN "jobs" job ON job."qc_photo_asset_id" = photo."id"
-        WHERE job."order_id" = NEW."id"
+        WHERE (
+            (
+                photo."kind" = 'QC'::"photo_asset_kind"
+                AND photo."scope_kind" = 'JOB'::"photo_scope_kind"
+                AND EXISTS (
+                    SELECT 1
+                    FROM "jobs" job
+                    WHERE job."order_id" = NEW."id"
+                      AND job."qc_photo_asset_id" = photo."id"
+                      AND photo."scope_id" = job."id"
+                )
+            )
+            OR (
+                photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+                AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+                AND EXISTS (
+                    SELECT 1
+                    FROM "individual_order_origins" origin
+                    JOIN "quotes" quote ON quote."id" = origin."quote_id"
+                    WHERE origin."order_id" = NEW."id"
+                      AND photo."scope_id" = quote."quote_request_id"
+                )
+            )
+        )
         ORDER BY photo."id"
         FOR UPDATE OF photo;
 
@@ -5021,17 +5193,63 @@ BEGIN
           AND source."id" = item."source_model_file_id";
 
         UPDATE "photo_assets" photo
-        SET "photo_delete_after" = greatest(
+            SET "photo_delete_after" = greatest(
                 photo."photo_delete_after",
                 terminal_at + make_interval(days => photo."retention_days")
             ),
             "retention_hold" = CASE
                 WHEN photo."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL') THEN photo."retention_hold"
+                WHEN photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+                     AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+                     AND EXISTS (
+                         SELECT 1
+                         FROM "individual_order_origins" other_origin
+                         JOIN "quotes" other_quote ON other_quote."id" = other_origin."quote_id"
+                         JOIN "orders" other_order ON other_order."id" = other_origin."order_id"
+                         WHERE other_quote."quote_request_id" = photo."scope_id"
+                           AND other_order."id" <> NEW."id"
+                           AND (
+                               other_order."status" IN (
+                                   'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
+                                   'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'
+                               )
+                               OR (
+                                   other_order."status" = 'CANCELLED'
+                                   AND EXISTS (
+                                       SELECT 1
+                                       FROM "payments" other_payment
+                                       WHERE other_payment."order_id" = other_order."id"
+                                         AND coalesce(other_payment."captured_amount_minor", 0) > 0
+                                   )
+                               )
+                           )
+                     ) THEN 'ACTIVE_ORDER'::"retention_hold"
                 ELSE 'NONE'::"retention_hold"
             END
-        FROM "jobs" job
-        WHERE job."order_id" = NEW."id"
-          AND job."qc_photo_asset_id" = photo."id";
+        WHERE (
+            (
+                photo."kind" = 'QC'::"photo_asset_kind"
+                AND photo."scope_kind" = 'JOB'::"photo_scope_kind"
+                AND EXISTS (
+                    SELECT 1
+                    FROM "jobs" job
+                    WHERE job."order_id" = NEW."id"
+                      AND job."qc_photo_asset_id" = photo."id"
+                      AND photo."scope_id" = job."id"
+                )
+            )
+            OR (
+                photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+                AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+                AND EXISTS (
+                    SELECT 1
+                    FROM "individual_order_origins" origin
+                    JOIN "quotes" quote ON quote."id" = origin."quote_id"
+                    WHERE origin."order_id" = NEW."id"
+                      AND photo."scope_id" = quote."quote_request_id"
+                )
+            )
+        );
     END IF;
 
     RETURN NEW;
@@ -5200,7 +5418,21 @@ CREATE FUNCTION taven_protect_shipment_lifecycle()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    evidence_now timestamptz := clock_timestamp();
 BEGIN
+    IF (NEW."label_created_at" IS NOT NULL
+        AND NEW."label_created_at" > evidence_now + interval '5 seconds')
+       OR (NEW."handed_over_at" IS NOT NULL
+           AND NEW."handed_over_at" > evidence_now + interval '5 seconds')
+       OR (NEW."delivered_at" IS NOT NULL
+           AND NEW."delivered_at" > evidence_now + interval '5 seconds')
+       OR (NEW."cancelled_at" IS NOT NULL
+           AND NEW."cancelled_at" > evidence_now + interval '5 seconds') THEN
+        RAISE EXCEPTION 'Shipment lifecycle evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
+    END IF;
+
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'PLANNED'
            OR NEW."carrier" IS NOT NULL
@@ -5735,6 +5967,7 @@ AS $$
 DECLARE
     target_order_id uuid;
     target_order_status "order_status";
+    has_failed_job boolean;
 BEGIN
     IF TG_TABLE_NAME = 'orders' THEN
         target_order_id := NEW."id";
@@ -5750,7 +5983,16 @@ BEGIN
     SELECT target_order."status"
     INTO target_order_status
     FROM "orders" target_order
-    WHERE target_order."id" = target_order_id;
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM "jobs" job
+        WHERE job."order_id" = target_order_id
+          AND job."status" IN ('FAILED', 'QC_REJECTED')
+    )
+    INTO has_failed_job;
 
     IF target_order_status NOT IN ('CANCELLED', 'REFUNDED')
        AND EXISTS (
@@ -5766,6 +6008,50 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'order_customer_cancellation_refund_lifecycle_check';
     END IF;
 
+    IF target_order_status = 'CANCELLED'
+       AND NOT has_failed_job
+       AND EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           CROSS JOIN LATERAL (
+               SELECT coalesce(sum(refund."amount_minor") FILTER (
+                          WHERE refund."status" = 'SUCCEEDED'
+                      ), 0) AS succeeded_total,
+                      coalesce(sum(refund."amount_minor") FILTER (
+                          WHERE refund."reason" = 'CUSTOMER_CANCELLATION'
+                            AND refund."status" = 'PENDING'
+                      ), 0) AS customer_cancellation_pending
+               FROM "refund_transactions" refund
+               WHERE refund."payment_id" = payment."id"
+           ) refund_totals
+           WHERE payment."order_id" = target_order_id
+             AND payment."captured_amount_minor" IS NOT NULL
+             AND NOT (
+                 NOT payment."capture_authorized"
+                 AND payment."capture_cutoff_at" IS NOT NULL
+                 AND payment."captured_at" IS NOT NULL
+                 AND payment."captured_at" >= payment."capture_cutoff_at"
+             )
+             AND NOT (
+                 (
+                     payment."captured_amount_minor"
+                       - refund_totals.succeeded_total = 0
+                     AND payment."status" = 'REFUNDED'
+                 )
+                 OR (
+                     payment."captured_amount_minor"
+                       - refund_totals.succeeded_total > 0
+                     AND refund_totals.customer_cancellation_pending
+                       = payment."captured_amount_minor"
+                         - refund_totals.succeeded_total
+                     AND payment."status" = 'REFUND_PENDING'
+                 )
+             )
+       ) THEN
+        RAISE EXCEPTION 'ordinary cancelled orders require complete customer-cancellation refund work for every captured payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_customer_cancellation_refund_obligation_check';
+    END IF;
+
     RETURN NULL;
 END;
 $$;
@@ -5775,14 +6061,13 @@ AFTER UPDATE OF "status" ON "orders"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_reconcile_customer_cancellation_refund_order();
 CREATE CONSTRAINT TRIGGER "payments_customer_cancellation_refund_reconciled"
-AFTER UPDATE OF "status" ON "payments"
+AFTER UPDATE OF "status", "captured_amount_minor", "capture_authorized", "capture_cutoff_at", "captured_at" ON "payments"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_reconcile_customer_cancellation_refund_order();
 CREATE CONSTRAINT TRIGGER "refunds_customer_cancellation_order_reconciled"
-AFTER INSERT OR UPDATE OF "payment_id", "reason", "status" ON "refund_transactions"
+AFTER INSERT OR UPDATE OF "payment_id", "amount_minor", "reason", "status" ON "refund_transactions"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_reconcile_customer_cancellation_refund_order();
-
 CREATE FUNCTION taven_reconcile_production_failure_cancellation()
 RETURNS trigger
 LANGUAGE plpgsql

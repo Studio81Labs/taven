@@ -583,12 +583,22 @@ async function advanceOrderLifecycleStep(
   await forceOrderLifecycleConstraints(client);
 }
 
+type CustomerCancellationRefundWork =
+  | false
+  | ReadonlyArray<{
+      id: string;
+      idempotencyKey: string;
+      amountMinor: number;
+    }>;
+
 async function cancelOrderBeforeHandoff(
   client: PoolClient,
   orderId: string,
   closePayments = true,
   closeSlots = true,
   orderStatus: "CANCELLED" | "EXPIRED" = "CANCELLED",
+  customerCancellationRefundWork:
+    CustomerCancellationRefundWork | undefined = undefined,
 ): Promise<void> {
   const cancelledAt = new Date();
   if (closePayments) {
@@ -673,6 +683,88 @@ async function cancelOrderBeforeHandoff(
        AND status NOT IN ('FAILED', 'QC_REJECTED')`,
     [orderId, cancelledAt],
   );
+  if (orderStatus === "CANCELLED" && customerCancellationRefundWork !== false) {
+    const capturedPayments = await client.query<{
+      id: string;
+      remaining_amount_minor: string;
+    }>(
+      `SELECT payment.id,
+              (payment.captured_amount_minor
+               - coalesce(sum(refund.amount_minor) FILTER (
+                   WHERE refund.status = 'SUCCEEDED'
+                 ), 0))::text AS remaining_amount_minor
+       FROM payments payment
+       LEFT JOIN refund_transactions refund ON refund.payment_id = payment.id
+       WHERE payment.order_id = $1
+         AND payment.captured_amount_minor IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1
+           FROM jobs job
+           WHERE job.order_id = payment.order_id
+             AND job.status IN ('FAILED', 'QC_REJECTED')
+         )
+         AND NOT (
+           NOT payment.capture_authorized
+           AND payment.capture_cutoff_at IS NOT NULL
+           AND payment.captured_at IS NOT NULL
+           AND payment.captured_at >= payment.capture_cutoff_at
+         )
+       GROUP BY payment.id, payment.captured_amount_minor
+       ORDER BY payment.id`,
+      [orderId],
+    );
+    const refunds =
+      customerCancellationRefundWork === undefined
+        ? capturedPayments.rows
+            .filter(
+              ({ remaining_amount_minor }) => remaining_amount_minor !== "0",
+            )
+            .map(({ id, remaining_amount_minor }) => ({
+              id: randomUUID(),
+              idempotencyKey: `customer-cancellation:${randomUUID()}`,
+              amountMinor: Number(remaining_amount_minor),
+              paymentId: id,
+            }))
+        : customerCancellationRefundWork.map((refund) => ({
+            ...refund,
+            paymentId: capturedPayments.rows[0]?.id,
+          }));
+    if (
+      customerCancellationRefundWork !== undefined &&
+      capturedPayments.rows.length !== 1
+    ) {
+      throw new Error(
+        "custom cancellation refund work requires one captured payment",
+      );
+    }
+    for (const refund of refunds) {
+      if (!refund.paymentId) {
+        throw new Error("customer cancellation refund is missing its payment");
+      }
+      await client.query(
+        `INSERT INTO refund_transactions
+           (id, payment_id, idempotency_key, amount_minor, reason, status,
+            requested_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','PENDING',$5,$5,$5)`,
+        [
+          refund.id,
+          refund.paymentId,
+          refund.idempotencyKey,
+          refund.amountMinor,
+          cancelledAt,
+        ],
+      );
+    }
+    for (const payment of capturedPayments.rows) {
+      if (payment.remaining_amount_minor !== "0") {
+        await client.query(
+          `UPDATE payments SET status = 'REFUND_PENDING', updated_at = $2
+           WHERE id = $1`,
+          [payment.id, cancelledAt],
+        );
+      }
+    }
+  }
   await client.query(
     `UPDATE shipments
      SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
@@ -6104,6 +6196,225 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("rejects future evidence for every Shipment lifecycle timestamp", async () => {
+    await rollback("future-shipment-evidence", async (client, fixtures) => {
+      const toleratedFoundation = await fixtures.createFoundation(
+        "tolerated-future-shipment-evidence",
+      );
+      await client.query(
+        `UPDATE shipments
+         SET status = 'LABEL_CREATED', carrier = 'tolerated-carrier',
+             provider_shipment_id = 'tolerated-provider',
+             tracking_code = 'tolerated-tracking',
+             label_created_at = clock_timestamp() + interval '2 seconds',
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [toleratedFoundation.shipmentId],
+      );
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM shipments WHERE id = $1`,
+            [toleratedFoundation.shipmentId],
+          )
+        ).rows,
+      ).toEqual([{ status: "LABEL_CREATED" }]);
+
+      const foundation = await fixtures.createFoundation(
+        "future-shipment-evidence",
+      );
+      const shipmentId = foundation.shipmentId;
+      const futureEvidenceColumns = [
+        "label_created_at",
+        "handed_over_at",
+        "delivered_at",
+        "cancelled_at",
+      ] as const;
+
+      for (const column of futureEvidenceColumns) {
+        await expectQueryError(
+          client,
+          `future_${column}`,
+          async () => {
+            const past = new Date(Date.now() - 60_000);
+            const future = new Date(Date.now() + 60_000);
+            if (column === "label_created_at") {
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'LABEL_CREATED', carrier = 'future-carrier',
+                     provider_shipment_id = 'future-provider',
+                     tracking_code = 'future-tracking',
+                     label_created_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [shipmentId, future],
+              );
+            } else if (column === "handed_over_at") {
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'LABEL_CREATED', carrier = 'past-carrier',
+                     provider_shipment_id = 'past-provider',
+                     tracking_code = 'past-tracking',
+                     label_created_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [shipmentId, past],
+              );
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [shipmentId, future],
+              );
+            } else if (column === "delivered_at") {
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'LABEL_CREATED', carrier = 'delivered-carrier',
+                     provider_shipment_id = 'delivered-provider',
+                     tracking_code = 'delivered-tracking',
+                     label_created_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [shipmentId, past],
+              );
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [shipmentId, past],
+              );
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [shipmentId, future],
+              );
+            } else {
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [shipmentId, future],
+              );
+            }
+          },
+          {
+            code: "23514",
+            constraint: "shipment_lifecycle_evidence_check",
+          },
+        );
+      }
+    });
+  });
+
+  it("requires a current Shipment for every active ShipmentPlan before ready-to-ship", async () => {
+    await rollback(
+      "ready-to-ship-shipment-coverage",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "ready-to-ship-shipment-coverage",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          2,
+          [{}, {}],
+        );
+        const productions = await createCurrentPlanAndPayment(
+          client,
+          fixtures,
+          foundation,
+        );
+        await activateCurrentPlan(client, fixtures, foundation, productions);
+        await advanceOrderLifecycleStep(
+          client,
+          foundation.orderId,
+          "IN_PRODUCTION",
+        );
+        await advanceOrderLifecycleStep(
+          client,
+          foundation.orderId,
+          "QC_PASSED",
+        );
+        await forceOrderLifecycleConstraints(client);
+
+        const missingShipmentId = foundation.shipmentIds[1];
+        const retainedShipmentId = foundation.shipmentIds[0];
+        if (!missingShipmentId || !retainedShipmentId) {
+          throw new Error("two-plan shipment fixture is incomplete");
+        }
+        await client.query(
+          `ALTER TABLE shipments DISABLE TRIGGER "shipments_topology_protected"`,
+        );
+        await client.query(`DELETE FROM shipments WHERE id = $1`, [
+          missingShipmentId,
+        ]);
+        await client.query(
+          `ALTER TABLE shipments ENABLE TRIGGER "shipments_topology_protected"`,
+        );
+
+        const transitionedAt = new Date();
+        await client.query(
+          `UPDATE jobs
+         SET status = 'PACKED', packed_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+          [foundation.orderId, transitionedAt],
+        );
+        await client.query(
+          `UPDATE shipments
+         SET status = 'LABEL_CREATED', carrier = 'coverage-carrier',
+             provider_shipment_id = 'coverage-provider',
+             tracking_code = 'coverage-tracking',
+             label_created_at = $2, updated_at = $2
+         WHERE id = $1`,
+          [retainedShipmentId, transitionedAt],
+        );
+
+        await expectQueryError(
+          client,
+          "ready_without_every_plan_shipment",
+          async () => {
+            await client.query(
+              `UPDATE orders SET status = 'READY_TO_SHIP', updated_at = $2
+             WHERE id = $1`,
+              [foundation.orderId, transitionedAt],
+            );
+            await forceOrderLifecycleConstraints(client);
+          },
+          {
+            code: "23514",
+            constraint: "order_post_confirmation_lifecycle_check",
+          },
+        );
+
+        await client.query(`SET LOCAL session_replication_role = 'replica'`);
+        await client.query(
+          `UPDATE order_price_bindings
+           SET invalidated_at = $2
+           WHERE id = $1`,
+          [foundation.orderPriceBindingId, transitionedAt],
+        );
+        await client.query(`SET LOCAL session_replication_role = 'origin'`);
+        await expectQueryError(
+          client,
+          "ready_without_active_shipment_plan",
+          async () => {
+            await client.query(
+              `UPDATE orders SET status = 'READY_TO_SHIP', updated_at = $2
+               WHERE id = $1`,
+              [foundation.orderId, transitionedAt],
+            );
+            await client.query(
+              `SET CONSTRAINTS
+                 "orders_post_confirmation_lifecycle_reconciled" IMMEDIATE`,
+            );
+          },
+          {
+            code: "23514",
+            constraint: "order_post_confirmation_lifecycle_check",
+          },
+        );
+      },
+    );
+  });
+
   it("requires scoped payment topology and retains provider/refund identities", async () => {
     await rollback("scoped-identities", async (client, fixtures) => {
       await expectQueryError(
@@ -6648,6 +6959,26 @@ describe("commerce persistence foundations", () => {
       );
       await expectQueryError(
         client,
+        "customer_audit_with_wrong_owner",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, order_id, event_type, actor_kind, actor_id, payload, created_at)
+             VALUES ($1,$2,'audit.customer_wrong_owner','CUSTOMER',$3,'{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-customer-wrong-owner"),
+              foundation.orderId,
+              other.customerId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_customer_owner_check",
+        },
+      );
+      await expectQueryError(
+        client,
         "audit_order_payment_scope",
         () =>
           client.query(
@@ -6993,7 +7324,23 @@ describe("commerce persistence foundations", () => {
           constraint: "order_customer_cancellation_refund_lifecycle_check",
         },
       );
-      await cancelOrderBeforeHandoff(client, foundation.orderId);
+      await expectQueryError(
+        client,
+        "cancel_captured_without_customer_refund_work",
+        () =>
+          cancelOrderBeforeHandoff(
+            client,
+            foundation.orderId,
+            true,
+            true,
+            "CANCELLED",
+            false,
+          ),
+        {
+          code: "23514",
+          constraint: "order_customer_cancellation_refund_obligation_check",
+        },
+      );
       for (const [name, idempotencyKey] of [
         ["empty_refund_idempotency_key", ""],
         ["blank_refund_idempotency_key", "   "],
@@ -7021,15 +7368,23 @@ describe("commerce persistence foundations", () => {
           },
         );
       }
-      await client.query(
-        `INSERT INTO refund_transactions (id, payment_id, idempotency_key,
-                                         amount_minor, reason, status, created_at, updated_at)
-         VALUES ($1,$2,$3,600,'CUSTOMER_CANCELLATION','PENDING',$4,$4)`,
+      await cancelOrderBeforeHandoff(
+        client,
+        foundation.orderId,
+        true,
+        true,
+        "CANCELLED",
         [
-          fixtures.id("refund-first"),
-          foundation.paymentId,
-          "refund-first",
-          new Date(),
+          {
+            id: fixtures.id("refund-first"),
+            idempotencyKey: "refund-first",
+            amountMinor: 600,
+          },
+          {
+            id: fixtures.id("refund-remainder"),
+            idempotencyKey: "refund-remainder",
+            amountMinor: remainingRefundAmount,
+          },
         ],
       );
       await expectQueryError(
@@ -7095,16 +7450,43 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `INSERT INTO audit_events
          (id, quote_id, order_id, payment_id, refund_transaction_id,
-          event_type, payload, created_at)
-         VALUES ($1,$2,$3,$4,$5,'refund.scope_consistent','{}'::jsonb,$6)`,
+          event_type, actor_kind, actor_id, payload, created_at)
+         VALUES ($1,$2,$3,$4,$5,'refund.scope_consistent','CUSTOMER',$6,
+                 '{}'::jsonb,$7)`,
         [
           fixtures.id("audit-refund-scope-consistent"),
           foundation.quoteId,
           foundation.orderId,
           foundation.paymentId,
           fixtures.id("refund-first"),
+          foundation.customerId,
           new Date(),
         ],
+      );
+      await expectQueryError(
+        client,
+        "audit_refund_scope_wrong_customer",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, quote_id, order_id, payment_id, refund_transaction_id,
+              event_type, actor_kind, actor_id, payload, created_at)
+             VALUES ($1,$2,$3,$4,$5,'refund.scope_wrong_customer','CUSTOMER',$6,
+                     '{}'::jsonb,$7)`,
+            [
+              fixtures.id("audit-refund-scope-wrong-customer"),
+              foundation.quoteId,
+              foundation.orderId,
+              foundation.paymentId,
+              fixtures.id("refund-first"),
+              other.customerId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_customer_owner_check",
+        },
       );
       await expectQueryError(
         client,
@@ -7174,45 +7556,30 @@ describe("commerce persistence foundations", () => {
         },
       );
       const refundCompletedAt = new Date();
-      await expectQueryError(
-        client,
-        "succeed_refund_without_payment_status",
-        async () => {
-          await client.query(
-            `UPDATE refund_transactions
-             SET status = 'SUCCEEDED', provider_refund_id = $2,
-                 completed_at = $3, updated_at = $3
-             WHERE id = $1`,
-            [
-              fixtures.id("refund-first"),
-              "provider-refund-first",
-              refundCompletedAt,
-            ],
-          );
-          await client.query(
-            `SET CONSTRAINTS "refund_transactions_payment_status_reconciled" IMMEDIATE`,
-          );
-        },
-        {
-          code: "23514",
-          constraint: "payment_refund_status_reconciliation_check",
-        },
-      );
       await client.query(
-        `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
-        [foundation.paymentId],
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [
+          fixtures.id("refund-first"),
+          "provider-refund-first",
+          refundCompletedAt,
+        ],
       );
       await client.query(
         `SET CONSTRAINTS "payments_refund_status_reconciled",
-                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+                         "refund_transactions_payment_status_reconciled",
+                         "refunds_customer_cancellation_order_reconciled" IMMEDIATE`,
       );
       await client.query(
         `SET CONSTRAINTS "payments_refund_status_reconciled",
-                         "refund_transactions_payment_status_reconciled" DEFERRED`,
+                         "refund_transactions_payment_status_reconciled",
+                         "refunds_customer_cancellation_order_reconciled" DEFERRED`,
       );
       await expectQueryError(
         client,
-        "partial_status_without_successful_refund",
+        "partial_status_while_cancellation_work_pending",
         async () => {
           await client.query(
             `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,
@@ -7227,17 +7594,6 @@ describe("commerce persistence foundations", () => {
           constraint: "payment_refund_status_reconciliation_check",
         },
       );
-      await client.query(
-        `UPDATE refund_transactions
-         SET status = 'SUCCEEDED', provider_refund_id = $2,
-             completed_at = $3, updated_at = $3
-         WHERE id = $1`,
-        [
-          fixtures.id("refund-first"),
-          "provider-refund-first",
-          refundCompletedAt,
-        ],
-      );
       await expectQueryError(
         client,
         "replace_successful_provider_refund_with_blank",
@@ -7251,10 +7607,6 @@ describe("commerce persistence foundations", () => {
           code: "23514",
           constraint: "refund_transaction_identity_immutable_check",
         },
-      );
-      await client.query(
-        `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,
-        [foundation.paymentId],
       );
       await client.query(
         `SET CONSTRAINTS "payments_refund_status_reconciled",
@@ -7297,20 +7649,12 @@ describe("commerce persistence foundations", () => {
         },
       );
       await client.query(
-        `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
-        [foundation.paymentId],
-      );
-      await client.query(
-        `INSERT INTO refund_transactions (id, payment_id, idempotency_key,
-                                         amount_minor, reason, status,
-                                         provider_refund_id, requested_at,
-                                         completed_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','SUCCEEDED',$5,$6,$6,$6,$6)`,
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
         [
           fixtures.id("refund-remainder"),
-          foundation.paymentId,
-          "refund-remainder",
-          remainingRefundAmount,
           "provider-refund-remainder",
           new Date(),
         ],
@@ -7403,6 +7747,115 @@ describe("commerce persistence foundations", () => {
         { code: "23514", constraint: "payment_identity_immutable_check" },
       );
     });
+  });
+
+  it("serializes refunded order closure with concurrent refund completion without deadlocking", async () => {
+    const setup = await pool.connect();
+    const closing = await pool.connect();
+    const refunding = await pool.connect();
+    try {
+      const fixtures = new PersistenceFactory(
+        setup,
+        `${scope}:refund-completion-concurrency`,
+      );
+      await setup.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "refund-completion-concurrency",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        setup,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(setup, fixtures, foundation, productions);
+      await cancelOrderBeforeHandoff(setup, foundation.orderId);
+      const refundId = (
+        await setup.query<{ id: string }>(
+          `SELECT id
+           FROM refund_transactions
+           WHERE payment_id = $1
+             AND reason = 'CUSTOMER_CANCELLATION'
+             AND status = 'PENDING'`,
+          [foundation.paymentId],
+        )
+      ).rows[0]?.id;
+      if (!refundId) {
+        throw new Error("refund completion concurrency work is unavailable");
+      }
+      await setup.query("COMMIT");
+
+      await closing.query("BEGIN");
+      await closing.query("SET LOCAL lock_timeout = '500ms'");
+      await closing.query(
+        `UPDATE orders SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [foundation.orderId, new Date()],
+      );
+
+      await refunding.query("BEGIN");
+      await refunding.query("SET LOCAL statement_timeout = '2s'");
+      const refundingPid = (
+        await refunding.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`)
+      ).rows[0]?.pid;
+      if (!refundingPid) {
+        throw new Error("refund concurrency backend pid is unavailable");
+      }
+      const completedAt = new Date();
+      await refunding.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [refundId, "concurrent-provider-refund", completedAt],
+      );
+      await refunding.query(
+        `UPDATE payments SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [foundation.paymentId, completedAt],
+      );
+      const blockedRefundReconciliation = refunding.query(
+        `SET CONSTRAINTS
+           "refunds_customer_cancellation_order_reconciled" IMMEDIATE`,
+      );
+
+      let refundIsWaitingForOrder = false;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const activity = await setup.query<{ wait_event_type: string | null }>(
+          `SELECT wait_event_type
+           FROM pg_stat_activity
+           WHERE pid = $1`,
+          [refundingPid],
+        );
+        if (activity.rows[0]?.wait_event_type === "Lock") {
+          refundIsWaitingForOrder = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(refundIsWaitingForOrder).toBe(true);
+
+      await expect(
+        closing.query(
+          `SET CONSTRAINTS "orders_refund_completion_reconciled" IMMEDIATE`,
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "order_refund_completion_check",
+      });
+      await closing.query("ROLLBACK");
+      await expect(blockedRefundReconciliation).resolves.toBeDefined();
+      await refunding.query(
+        `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "payments_customer_cancellation_refund_reconciled" IMMEDIATE`,
+      );
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await closing.query("ROLLBACK").catch(() => undefined);
+      await refunding.query("ROLLBACK").catch(() => undefined);
+      setup.release();
+      closing.release();
+      refunding.release();
+    }
   });
 
   it("releases terminal order source holds without clearing financial or legal blockers", async () => {
@@ -7515,15 +7968,6 @@ describe("commerce persistence foundations", () => {
         fixtures,
         captured,
       );
-      const capturedAmount = (
-        await client.query<{ requested_amount_minor: string }>(
-          `SELECT requested_amount_minor::text FROM payments WHERE id = $1`,
-          [captured.paymentId],
-        )
-      ).rows[0]?.requested_amount_minor;
-      if (!capturedAmount) {
-        throw new Error("captured retention fixture payment is missing");
-      }
       await activateCurrentPlan(
         client,
         fixtures,
@@ -7554,23 +7998,13 @@ describe("commerce persistence foundations", () => {
         { code: "23514", constraint: "order_refund_completion_check" },
       );
       await client.query(
-        `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
-        [captured.paymentId],
-      );
-      await client.query(
-        `INSERT INTO refund_transactions
-         (id, payment_id, idempotency_key, provider_refund_id,
-          amount_minor, reason, status, requested_at, completed_at,
-          created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,'CUSTOMER_CANCELLATION','SUCCEEDED',$6,$6,$6,$6)`,
-        [
-          fixtures.id("retention-full-refund"),
-          captured.paymentId,
-          "retention-full-refund",
-          "retention-full-refund",
-          capturedAmount,
-          new Date(),
-        ],
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE payment_id = $1
+           AND reason = 'CUSTOMER_CANCELLATION'
+           AND status = 'PENDING'`,
+        [captured.paymentId, "retention-full-refund", new Date()],
       );
       await client.query(
         `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,
@@ -7666,6 +8100,186 @@ describe("commerce persistence foundations", () => {
         ).rows,
       ).toEqual([{ retention_hold: "LEGAL" }]);
     });
+  });
+
+  it("retains individual quote-reference photos through the order lifecycle", async () => {
+    await rollback(
+      "individual-quote-reference-retention",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "individual-quote-reference-retention",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          1,
+          undefined,
+          "QUOTED",
+          undefined,
+          {},
+          "INDIVIDUAL",
+        );
+        const uploadedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+        const initialPhotoId = fixtures.id(
+          "individual-quote-reference-initial",
+        );
+        await client.query(
+          `INSERT INTO photo_assets
+           (id, kind, scope_kind, scope_id, storage_object_key, content_hash,
+            media_type, size_bytes, uploaded_at, photo_delete_after,
+            retention_hold, created_at)
+         VALUES ($1,'QUOTE_REFERENCE','QUOTE_REQUEST',$2,$3,$4,'image/jpeg',1,$5,$6,'NONE',$5)`,
+          [
+            initialPhotoId,
+            foundation.quoteRequestId,
+            `quote-reference/${initialPhotoId}`,
+            "c".repeat(64),
+            uploadedAt,
+            new Date(Date.now() - 24 * 60 * 60 * 1_000),
+          ],
+        );
+        expect(
+          (
+            await client.query<{ retention_hold: string }>(
+              `SELECT retention_hold::text FROM photo_assets WHERE id = $1`,
+              [initialPhotoId],
+            )
+          ).rows,
+        ).toEqual([{ retention_hold: "NONE" }]);
+
+        const productions = await createCurrentPlanAndPayment(
+          client,
+          fixtures,
+          foundation,
+        );
+        await activateCurrentPlan(client, fixtures, foundation, productions);
+        expect(
+          (
+            await client.query<{ retention_hold: string }>(
+              `SELECT retention_hold::text FROM photo_assets WHERE id = $1`,
+              [initialPhotoId],
+            )
+          ).rows,
+        ).toEqual([{ retention_hold: "ACTIVE_ORDER" }]);
+        await expectQueryError(
+          client,
+          "release_active_order_quote_reference",
+          () =>
+            client.query(
+              `UPDATE photo_assets SET retention_hold = 'NONE' WHERE id = $1`,
+              [initialPhotoId],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_reference_photo_active_order_check",
+          },
+        );
+        await expectQueryError(
+          client,
+          "move_active_order_quote_reference_scope",
+          () =>
+            client.query(
+              `UPDATE photo_assets SET scope_id = $2 WHERE id = $1`,
+              [initialPhotoId, fixtures.id("unrelated-quote-reference-scope")],
+            ),
+          {
+            code: "55000",
+          },
+        );
+
+        const deletedPhotoId = fixtures.id(
+          "individual-quote-reference-deleted",
+        );
+        await expectQueryError(
+          client,
+          "insert_deleted_active_order_quote_reference",
+          () =>
+            client.query(
+              `INSERT INTO photo_assets
+               (id, kind, scope_kind, scope_id, storage_object_key, content_hash,
+                media_type, size_bytes, uploaded_at, photo_delete_after,
+                retention_hold, deleted_at, created_at)
+               VALUES ($1,'QUOTE_REFERENCE','QUOTE_REQUEST',$2,$3,$4,
+                       'image/jpeg',1,$5,$6,'NONE',$5,$5)`,
+              [
+                deletedPhotoId,
+                foundation.quoteRequestId,
+                `quote-reference/${deletedPhotoId}`,
+                "e".repeat(64),
+                uploadedAt,
+                new Date(Date.now() - 24 * 60 * 60 * 1_000),
+              ],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_reference_photo_active_order_check",
+          },
+        );
+
+        const latePhotoId = fixtures.id("individual-quote-reference-late");
+        await client.query(
+          `INSERT INTO photo_assets
+           (id, kind, scope_kind, scope_id, storage_object_key, content_hash,
+            media_type, size_bytes, uploaded_at, photo_delete_after,
+            retention_hold, created_at)
+         VALUES ($1,'QUOTE_REFERENCE','QUOTE_REQUEST',$2,$3,$4,'image/jpeg',1,$5,$6,'NONE',$5)`,
+          [
+            latePhotoId,
+            foundation.quoteRequestId,
+            `quote-reference/${latePhotoId}`,
+            "d".repeat(64),
+            uploadedAt,
+            new Date(Date.now() - 24 * 60 * 60 * 1_000),
+          ],
+        );
+        expect(
+          (
+            await client.query<{ retention_hold: string }>(
+              `SELECT retention_hold::text FROM photo_assets WHERE id = $1`,
+              [latePhotoId],
+            )
+          ).rows,
+        ).toEqual([{ retention_hold: "ACTIVE_ORDER" }]);
+
+        const terminalStartedAt = (
+          await client.query<{ terminal_started_at: Date }>(
+            `SELECT clock_timestamp() AS terminal_started_at`,
+          )
+        ).rows[0]?.terminal_started_at;
+        if (!terminalStartedAt) {
+          throw new Error("database terminal clock is unavailable");
+        }
+        for (const status of [
+          "IN_PRODUCTION",
+          "QC_PASSED",
+          "READY_TO_SHIP",
+          "SHIPPED",
+          "DELIVERED",
+          "COMPLETED",
+        ] as const) {
+          await advanceOrderLifecycleStep(client, foundation.orderId, status);
+        }
+        const releasedPhotos = await client.query<{
+          id: string;
+          retention_hold: string;
+          photo_delete_after: Date;
+        }>(
+          `SELECT id, retention_hold::text, photo_delete_after
+         FROM photo_assets
+         WHERE id IN ($1,$2)
+         ORDER BY id`,
+          [initialPhotoId, latePhotoId],
+        );
+        expect(
+          releasedPhotos.rows.map((photo) => photo.retention_hold),
+        ).toEqual(["NONE", "NONE"]);
+        for (const photo of releasedPhotos.rows) {
+          expect(photo.photo_delete_after.getTime()).toBeGreaterThanOrEqual(
+            terminalStartedAt.getTime() + 90 * 24 * 60 * 60 * 1_000,
+          );
+        }
+      },
+    );
   });
 
   it("enforces atomic quote issuance and terminal rejection", async () => {

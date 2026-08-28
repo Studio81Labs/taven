@@ -213,6 +213,28 @@ async function cancelConfirmedReservationOrder(
     [foundation.orderId, cancelledAt],
   );
   await client.query(
+    `INSERT INTO refund_transactions
+       (id, payment_id, idempotency_key, amount_minor, reason, status,
+        requested_at, created_at, updated_at)
+     SELECT $2, payment.id, $3, payment.captured_amount_minor,
+            'CUSTOMER_CANCELLATION', 'PENDING', $4, $4, $4
+     FROM payments payment
+     WHERE payment.order_id = $1
+       AND payment.captured_amount_minor IS NOT NULL`,
+    [
+      foundation.orderId,
+      randomUUID(),
+      `test-cancellation:${randomUUID()}`,
+      cancelledAt,
+    ],
+  );
+  await client.query(
+    `UPDATE payments
+     SET status = 'REFUND_PENDING', updated_at = $2
+     WHERE order_id = $1 AND captured_amount_minor IS NOT NULL`,
+    [foundation.orderId, cancelledAt],
+  );
+  await client.query(
     `UPDATE shipments
      SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
      WHERE order_id = $1`,
