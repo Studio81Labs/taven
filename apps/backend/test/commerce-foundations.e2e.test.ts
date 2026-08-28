@@ -1176,6 +1176,36 @@ describe("commerce persistence foundations", () => {
       );
       await expectQueryError(
         client,
+        "future_customer_first_seen",
+        () =>
+          client.query(
+            `INSERT INTO customers
+               (id, email, first_seen_at, created_at, updated_at)
+             VALUES ($1,$2,clock_timestamp() + interval '60 seconds',
+                     clock_timestamp(),clock_timestamp())`,
+            [
+              fixtures.id("future-customer-first-seen"),
+              `future-${randomUUID()}@example.test`,
+            ],
+          ),
+        { code: "23514", constraint: "customer_first_seen_evidence_check" },
+      );
+      for (const column of ["created_at", "first_seen_at"] as const) {
+        await expectQueryError(
+          client,
+          `rewrite_customer_${column}`,
+          () =>
+            client.query(
+              `UPDATE customers
+               SET "${column}" = "${column}" + interval '1 millisecond'
+               WHERE id = $1`,
+              [foundation.customerId],
+            ),
+          { code: "23514", constraint: "customer_chronology_immutable_check" },
+        );
+      }
+      await expectQueryError(
+        client,
         "rewrite_public_token_hash",
         () =>
           client.query(
@@ -3256,6 +3286,18 @@ describe("commerce persistence foundations", () => {
           foundation.printConfigRevisionId,
           mutableCreatedAt,
         ],
+      );
+      await expectQueryError(
+        client,
+        "rewrite_mutable_order_item_created_at",
+        () =>
+          client.query(
+            `UPDATE order_items
+             SET created_at = created_at + interval '1 millisecond'
+             WHERE id = $1`,
+            [mutableItemId],
+          ),
+        { code: "23514", constraint: "order_item_created_at_immutable_check" },
       );
       const expiredSourceId = fixtures.id("expired-update-source");
       const expiredGeometryId = fixtures.id("expired-update-geometry");
@@ -7293,14 +7335,24 @@ describe("commerce persistence foundations", () => {
           )
         ).rows.map(({ table_name }) => table_name),
       ).toEqual([
+        "customers",
+        "delivery_destinations",
+        "fulfilment_slots",
         "jobs",
+        "order_items",
         "order_phases",
+        "order_price_bindings",
         "orders",
+        "payment_schedules",
         "payments",
+        "price_snapshot_components",
+        "price_snapshots",
+        "quote_items",
         "quote_requests",
         "quote_sessions",
         "quotes",
         "refund_transactions",
+        "shipment_plans",
         "shipments",
       ]);
 
@@ -7317,6 +7369,26 @@ describe("commerce persistence foundations", () => {
           fixtures.id("historical-creation-evidence"),
           randomUUID().replaceAll("-", "").padEnd(64, "0"),
         ],
+      );
+      await expectQueryError(
+        client,
+        "future_price_snapshot_creation",
+        () =>
+          client.query(
+            `INSERT INTO price_snapshots
+               (id, currency, contract_total_minor, pricing_revision,
+                input_snapshot, snapshot_hash, created_at)
+             VALUES ($1,'EUR',0,'future-creation-evidence','{}'::jsonb,$2,
+                     clock_timestamp() + interval '60 seconds')`,
+            [
+              fixtures.id("future-price-snapshot-creation"),
+              randomUUID().replaceAll("-", "").padEnd(64, "0"),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "price_snapshots_creation_evidence_check",
+        },
       );
 
       await expectQueryError(

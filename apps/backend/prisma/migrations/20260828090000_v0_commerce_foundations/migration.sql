@@ -747,6 +747,9 @@ END;
 $$;
 
 CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "customers"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "quote_sessions"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 CREATE TRIGGER "commerce_creation_evidence_bounded"
@@ -756,10 +759,37 @@ CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "quotes"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "quote_items"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "price_snapshots"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "price_snapshot_components"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "payment_schedules"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "orders"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "order_items"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "order_price_bindings"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "delivery_destinations"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "order_phases"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "shipment_plans"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "fulfilment_slots"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "shipments"
@@ -773,6 +803,34 @@ FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+
+CREATE FUNCTION taven_protect_customer_chronology()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."first_seen_at" > clock_timestamp() + interval '5 seconds' THEN
+            RAISE EXCEPTION 'customer first-seen evidence cannot be in the future'
+                USING ERRCODE = '23514', CONSTRAINT = 'customer_first_seen_evidence_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
+    IF NEW."created_at" IS DISTINCT FROM OLD."created_at"
+       OR NEW."first_seen_at" IS DISTINCT FROM OLD."first_seen_at" THEN
+        RAISE EXCEPTION 'customer creation chronology is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'customer_chronology_immutable_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "customers_chronology_protected"
+BEFORE INSERT OR UPDATE OF "created_at", "first_seen_at" ON "customers"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_customer_chronology();
 
 -- Immutable commercial snapshots and append-only audit rows.
 CREATE FUNCTION taven_prevent_commerce_row_mutation()
@@ -2425,6 +2483,12 @@ BEGIN
     FROM "orders"
     WHERE "id" = target_order_id
     FOR UPDATE;
+
+    IF TG_OP = 'UPDATE'
+       AND NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
+        RAISE EXCEPTION 'order item creation evidence is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_item_created_at_immutable_check';
+    END IF;
 
     IF EXISTS (
         SELECT 1
