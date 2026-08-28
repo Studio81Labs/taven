@@ -35,7 +35,9 @@ Nejdůležitější obrazovka. Progresivní odkrývání na jedné stránce.
 
 **Nahrání** → náhled s kótami, rozměry, objem, **hrubý odhad do 200 ms** s viditelným indikátorem, že se počítá přesná cena.
 
-**Parametry — přesně čtyři:** materiál, barva (jen dostupné), kvalita ve třech pojmenovaných stupních, počet kusů s variantami 1 / 5 / 20.
+**Parametry každého `OrderItem` — přesně pět:** materiál, barva (jen dostupné), kvalita ve třech pojmenovaných stupních, výplň ve třech pojmenovaných stupních a počet kusů s variantami 1 / 5 / 20.
+
+Mimo parametry je jeden samostatný příznak: **„díl musí do něčeho zapadnout / má lícované rozměry“**. Otevírá cestu ke zkušebnímu kusu nebo individuální nabídce.
 
 Zakázáno: slider výplně, výběr trysky, teploty, styl podpěr, orientace.
 
@@ -43,7 +45,7 @@ Zakázáno: slider výplně, výběr trysky, teploty, styl podpěr, orientace.
 
 **Nálezy před tiskem** — nezaškrtnuté checkboxy, které musí zákazník aktivně potvrdit, max tři. Text v lidské řeči. Vizuálně klidné, ne alarmující.
 
-**Cena** — položkový rozpad, celková částka vizuálně dominantní. Přechod z orientační na závaznou cenu musí být vidět; to je celý produkt v jedné mikroanimaci.
+**Cena** — položkový rozpad, celková částka vizuálně dominantní. Po slicingu zůstává výrobní mezisoučet i celková částka provizorní, dokud zákazník v checkoutu nevybere výdejní místo a nevznikne endpoint-bound `ShipmentPlan`. Přechod z orientační na závaznou cenu se zobrazí až po tomto výběru; to je celý produkt v jedné mikroanimaci.
 
 ## 5. Checkout a sledování
 
@@ -139,7 +141,7 @@ Body, které se v první iteraci rozešly se specifikací nebo s parametry:
 |---|---|---|
 | 1 | **Vymyšlené kontaktní údaje** — jméno, IČO, adresa, telefon patřící neznámo komu | pouze skutečné údaje; v mockupu neškodné, v produkci žalovatelné, a placeholdery se přepisují do kódu nepovšimnuty |
 | 2 | **Cena nesedí s ceníkem** — 42,8 g za 206 Kč je 4,81 Kč/g proti inzerovaným „od 3,40" | dopočítat tak, aby „od X Kč/g" odpovídalo nejlevnějšímu reálnému případu; zákazník si to vynásobí |
-| 3 | **Chybí `min_print_price` a `small_order_surcharge`** | při 206 Kč tisku a 42,8 g má být účet 250 + 50 + doprava, ne 206 + doprava |
+| 3 | **Chybí `min_print_price` a `small_order_surcharge`** | při 206 Kč tisku, 42,8 g a dopravě 85 Kč má být účet přibližně 394 Kč: 250 Kč minimum + 50 Kč přirážka + 85 Kč doprava + gross-up brány 1,5 % + 3 Kč; ne 206 Kč + doprava |
 | 4 | **Procenta u kvality** (−18 % / +35 %) | zobrazit přepočtenou cenu, viz §4 |
 | 5 | **Stroj ve sledování** („Stroj 2 — Prusa MK4") | „Tiskne se, odhad dokončení 15:20" |
 | 6 | **Dvě primární barvy** — černá pro vybrané, modrá pro akci | sjednotit, viz identita §8 |
