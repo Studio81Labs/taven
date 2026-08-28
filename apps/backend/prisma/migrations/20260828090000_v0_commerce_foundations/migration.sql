@@ -670,6 +670,9 @@ ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (
     AND ("failure_reason" IS NULL OR "failure_reason" ~ '[^[:space:]]')
 );
 ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
+ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_authorization_pair_check" CHECK (
+    "capture_authorized" = ("capture_cutoff_at" IS NULL)
+);
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_intent_identity_check" CHECK (
     ("provider_intent_id" IS NOT NULL AND "provider_intent_id" ~ '[^[:space:]]')
     OR ("provider_intent_id" IS NULL AND "status" IN ('CREATED', 'VOIDED'))
@@ -5154,10 +5157,8 @@ BEGIN
         END IF;
     END IF;
 
-    IF OLD."capture_cutoff_at" IS NULL
-       AND NEW."capture_cutoff_at" IS NOT NULL
-       AND NEW."capture_authorized" THEN
-        RAISE EXCEPTION 'payment capture cutoff must close authorization atomically'
+    IF NEW."capture_authorized" IS DISTINCT FROM (NEW."capture_cutoff_at" IS NULL) THEN
+        RAISE EXCEPTION 'payment capture authorization and cutoff must change atomically'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
     END IF;
 
@@ -5502,6 +5503,12 @@ BEGIN
        AND NEW."status" IS DISTINCT FROM OLD."status" THEN
         RAISE EXCEPTION 'successful refund transactions are terminal'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_succeeded_immutable_check';
+    END IF;
+
+    IF OLD."status" = 'FAILED'
+       AND NEW."status" IS DISTINCT FROM OLD."status" THEN
+        RAISE EXCEPTION 'failed refund transactions are terminal attempts'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_failed_immutable_check';
     END IF;
 
     IF NEW."id" IS DISTINCT FROM OLD."id"

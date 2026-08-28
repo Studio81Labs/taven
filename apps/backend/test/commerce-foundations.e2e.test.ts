@@ -3305,6 +3305,22 @@ describe("commerce persistence foundations", () => {
         ).rows,
       ).toEqual([{ payment_status: "CAPTURED", refund_status: "FAILED" }]);
 
+      for (const status of ["PENDING", "SUCCEEDED"] as const) {
+        await expectQueryError(
+          client,
+          `reopen_failed_refund_${status.toLowerCase()}`,
+          () =>
+            client.query(
+              `UPDATE refund_transactions SET status = $2 WHERE id = $1`,
+              [refundId, status],
+            ),
+          {
+            code: "23514",
+            constraint: "refund_transaction_failed_immutable_check",
+          },
+        );
+      }
+
       await client.query(
         `SET CONSTRAINTS "payments_refund_status_reconciled",
                          "refund_transactions_payment_status_reconciled" DEFERRED`,
@@ -3397,9 +3413,21 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514", constraint: "payment_capture_window_check" },
       );
+      await expectQueryError(
+        client,
+        "disable_capture_without_cutoff",
+        () =>
+          client.query(
+            `UPDATE payments SET capture_authorized = false WHERE id = $1`,
+            [unauthorized.paymentId],
+          ),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
       await client.query(
-        `UPDATE payments SET capture_authorized = false WHERE id = $1`,
-        [unauthorized.paymentId],
+        `UPDATE payments
+         SET capture_authorized = false, capture_cutoff_at = $2
+         WHERE id = $1`,
+        [unauthorized.paymentId, new Date()],
       );
       await expectQueryError(
         client,
@@ -6156,7 +6184,9 @@ describe("commerce persistence foundations", () => {
         "reopen_capture_window",
         () =>
           client.query(
-            `UPDATE payments SET capture_authorized = true WHERE id = $1`,
+            `UPDATE payments
+             SET capture_authorized = true, capture_cutoff_at = NULL
+             WHERE id = $1`,
             [foundation.paymentId],
           ),
         { code: "23514", constraint: "payment_identity_immutable_check" },
