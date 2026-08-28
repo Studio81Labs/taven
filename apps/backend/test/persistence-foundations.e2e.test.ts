@@ -1996,6 +1996,11 @@ describe("persistence foundations", () => {
         undefined,
         undefined,
         2,
+        undefined,
+        "DRAFT",
+        undefined,
+        {},
+        "INDIVIDUAL",
       );
       const intervals = [
         {

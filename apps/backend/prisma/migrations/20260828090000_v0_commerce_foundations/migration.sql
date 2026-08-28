@@ -2037,6 +2037,7 @@ DECLARE
     session_status "quote_session_status";
     session_expires_at timestamptz;
     session_has_bound_order boolean;
+    session_has_checkout_payment boolean;
 BEGIN
     SELECT session."status", session."expires_at", (
         target_order."status" <> 'DRAFT'
@@ -2049,8 +2050,15 @@ BEGIN
             WHERE active."order_id" = target_order."id"
               AND binding."invalidated_at" IS NULL
         )
+    ), (
+        EXISTS (
+            SELECT 1
+            FROM "payments" payment
+            WHERE payment."order_id" = target_order."id"
+              AND payment."status" <> 'FAILED'
+        )
     )
-    INTO session_status, session_expires_at, session_has_bound_order
+    INTO session_status, session_expires_at, session_has_bound_order, session_has_checkout_payment
     FROM "automatic_order_origins" origin
     JOIN "quote_sessions" session ON session."id" = origin."quote_session_id"
     JOIN "orders" target_order ON target_order."id" = origin."order_id"
@@ -2060,10 +2068,13 @@ BEGIN
         RETURN;
     END IF;
 
-    -- A converted session cannot return to a cancellable state, so operations
-    -- on its binding order do not need to serialize on the session row. This
-    -- preserves normal parallel reservation accounting after checkout.
-    IF session_status = 'CONVERTED' AND session_has_bound_order THEN
+    -- Once checkout has a non-failed Payment, its immutable capture window
+    -- supersedes the configurator session deadline. Later operations no
+    -- longer need to serialize on the converted session row, preserving
+    -- normal parallel reservation accounting after checkout starts.
+    IF session_status = 'CONVERTED'
+       AND session_has_bound_order
+       AND session_has_checkout_payment THEN
         RETURN;
     END IF;
 
@@ -2078,8 +2089,15 @@ BEGIN
             WHERE active."order_id" = target_order."id"
               AND binding."invalidated_at" IS NULL
         )
+    ), (
+        EXISTS (
+            SELECT 1
+            FROM "payments" payment
+            WHERE payment."order_id" = target_order."id"
+              AND payment."status" <> 'FAILED'
+        )
     )
-    INTO session_status, session_expires_at, session_has_bound_order
+    INTO session_status, session_expires_at, session_has_bound_order, session_has_checkout_payment
     FROM "automatic_order_origins" origin
     JOIN "quote_sessions" session ON session."id" = origin."quote_session_id"
     JOIN "orders" target_order ON target_order."id" = origin."order_id"
@@ -2091,7 +2109,14 @@ BEGIN
     -- session is converted into a binding order.
     IF NOT (
         (session_status = 'OPEN' AND session_expires_at > clock_timestamp())
-        OR (session_status = 'CONVERTED' AND session_has_bound_order)
+        OR (
+            session_status = 'CONVERTED'
+            AND session_has_bound_order
+            AND (
+                session_has_checkout_payment
+                OR session_expires_at > clock_timestamp()
+            )
+        )
     ) THEN
         RAISE EXCEPTION 'automatic commerce requires an open or converted quote session'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_session_commerce_open_check';
@@ -4699,6 +4724,36 @@ CREATE TRIGGER "price_component_fulfilment_allocations_immutable"
 BEFORE UPDATE OR DELETE ON "price_component_fulfilment_allocations"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
 
+CREATE FUNCTION taven_assert_shipment_plan_price_components(target_snapshot_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "shipment_plans" plan
+        LEFT JOIN "price_snapshot_components" component
+          ON component."price_snapshot_id" = plan."price_snapshot_id"
+         AND component."shipment_plan_id" = plan."id"
+         AND component."kind" = 'SHIPMENT'
+         AND component."scope" = 'SHIPMENT_PLAN'
+        WHERE plan."price_snapshot_id" = target_snapshot_id
+        GROUP BY plan."id",
+                 plan."shipping_amount_minor",
+                 plan."packaging_amount_minor",
+                 plan."handling_amount_minor"
+        HAVING count(component."id") <> 1
+            OR coalesce(sum(component."amount_minor"::numeric), 0::numeric) <>
+               plan."shipping_amount_minor"::numeric
+               + plan."packaging_amount_minor"::numeric
+               + plan."handling_amount_minor"::numeric
+    ) THEN
+        RAISE EXCEPTION 'each shipment plan requires exactly one price component equal to its shipping, packaging, and handling charges'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_plan_price_component_reconciliation_check';
+    END IF;
+END;
+$$;
+
 CREATE FUNCTION taven_assert_order_fulfilment_money(target_order_id uuid)
 RETURNS void
 LANGUAGE plpgsql
@@ -4720,6 +4775,8 @@ BEGIN
     IF target_snapshot_id IS NULL THEN
         RETURN;
     END IF;
+
+    PERFORM taven_assert_shipment_plan_price_components(target_snapshot_id);
 
     IF EXISTS (
         SELECT 1
@@ -4890,6 +4947,16 @@ BEGIN
     FROM "price_snapshots"
     WHERE "id" = target_snapshot_id;
 
+    IF EXISTS (
+        SELECT 1
+        FROM "order_price_bindings" binding
+        JOIN "orders" target_order ON target_order."id" = binding."order_id"
+        WHERE binding."price_snapshot_id" = target_snapshot_id
+          AND target_order."status" <> 'DRAFT'
+    ) THEN
+        PERFORM taven_assert_shipment_plan_price_components(target_snapshot_id);
+    END IF;
+
     SELECT coalesce(sum("amount_minor"), 0)
     INTO component_total
     FROM "price_snapshot_components"
@@ -4949,6 +5016,10 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_price_snapshot_totals();
 CREATE CONSTRAINT TRIGGER "order_price_bindings_snapshot_sealed"
 AFTER INSERT ON "order_price_bindings"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_price_snapshot_totals();
+CREATE CONSTRAINT TRIGGER "shipment_plans_price_reconciled"
+AFTER INSERT ON "shipment_plans"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_price_snapshot_totals();
 

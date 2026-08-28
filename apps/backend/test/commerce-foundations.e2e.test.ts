@@ -2135,6 +2135,185 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("reconciles exactly one shipment price component with each plan", async () => {
+    await rollback(
+      "shipment-plan-price-components",
+      async (client, fixtures) => {
+        const reconciliationError = {
+          code: "23514",
+          constraint: "shipment_plan_price_component_reconciliation_check",
+        };
+        const forceReconciliation = () =>
+          client.query(
+            `SET CONSTRAINTS "shipment_plans_price_reconciled" IMMEDIATE`,
+          );
+        const quoteForReconciliation = (foundation: PersistenceFoundation) =>
+          client.query(
+            `UPDATE orders
+             SET status = 'QUOTED', quoted_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [foundation.orderId],
+          );
+
+        const mismatched = await fixtures.createFoundation(
+          "mismatched-shipment-price",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          1,
+          undefined,
+          "DRAFT",
+        );
+        await expectQueryError(
+          client,
+          "mismatched_shipment_price",
+          async () => {
+            await client.query(
+              `SET LOCAL session_replication_role = 'replica'`,
+            );
+            await client.query(
+              `UPDATE shipment_plans
+             SET packaging_amount_minor = packaging_amount_minor + 1
+             WHERE id = $1`,
+              [mismatched.shipmentPlanId],
+            );
+            await client.query(`SET LOCAL session_replication_role = 'origin'`);
+            await quoteForReconciliation(mismatched);
+            await forceReconciliation();
+          },
+          reconciliationError,
+        );
+
+        const missing = await fixtures.createFoundation(
+          "missing-shipment-price",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          1,
+          undefined,
+          "DRAFT",
+        );
+        await expectQueryError(
+          client,
+          "missing_shipment_price",
+          async () => {
+            await client.query(
+              `SET LOCAL session_replication_role = 'replica'`,
+            );
+            await client.query(
+              `DELETE FROM price_component_fulfilment_allocations
+             WHERE price_snapshot_component_id = $1`,
+              [missing.priceSnapshotComponentIds[3]],
+            );
+            await client.query(
+              `DELETE FROM price_snapshot_components WHERE id = $1`,
+              [missing.priceSnapshotComponentIds[3]],
+            );
+            await client.query(`SET LOCAL session_replication_role = 'origin'`);
+            await quoteForReconciliation(missing);
+            await forceReconciliation();
+          },
+          reconciliationError,
+        );
+
+        const duplicated = await fixtures.createFoundation(
+          "duplicate-shipment-price",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          1,
+          undefined,
+          "DRAFT",
+        );
+        await expectQueryError(
+          client,
+          "duplicate_shipment_price",
+          async () => {
+            await client.query(
+              `SET LOCAL session_replication_role = 'replica'`,
+            );
+            await client.query(
+              `INSERT INTO price_snapshot_components
+               (id, price_snapshot_id, kind, scope, shipment_plan_id,
+                amount_minor, allocation, created_at)
+             VALUES ($1,$2,'SHIPMENT','SHIPMENT_PLAN',$3,0,'{}'::jsonb,$4)`,
+              [
+                fixtures.id("duplicate-shipment-component"),
+                duplicated.priceSnapshotId,
+                duplicated.shipmentPlanId,
+                new Date(),
+              ],
+            );
+            await client.query(`SET LOCAL session_replication_role = 'origin'`);
+            await quoteForReconciliation(duplicated);
+            await forceReconciliation();
+          },
+          reconciliationError,
+        );
+
+        const netted = await fixtures.createFoundation(
+          "netted-shipment-prices",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          2,
+          [{}, {}],
+          "DRAFT",
+        );
+        await expectQueryError(
+          client,
+          "cross_plan_shipment_price_netting",
+          async () => {
+            await client.query(
+              `SET LOCAL session_replication_role = 'replica'`,
+            );
+            await client.query(
+              `UPDATE shipment_plans
+             SET shipping_amount_minor = CASE ordinal
+                   WHEN 0 THEN shipping_amount_minor - 10
+                   ELSE shipping_amount_minor + 10
+                 END
+             WHERE order_id = $1`,
+              [netted.orderId],
+            );
+            await client.query(`SET LOCAL session_replication_role = 'origin'`);
+            await quoteForReconciliation(netted);
+            await forceReconciliation();
+          },
+          reconciliationError,
+        );
+
+        const splitCharges = await fixtures.createFoundation(
+          "split-shipment-charges",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          1,
+          undefined,
+          "DRAFT",
+        );
+        await client.query(`SET LOCAL session_replication_role = 'replica'`);
+        await client.query(
+          `UPDATE shipment_plans
+         SET shipping_amount_minor = 20,
+             packaging_amount_minor = 15,
+             handling_amount_minor = 15
+         WHERE id = $1`,
+          [splitCharges.shipmentPlanId],
+        );
+        await client.query(`SET LOCAL session_replication_role = 'origin'`);
+        await quoteForReconciliation(splitCharges);
+        await expect(forceReconciliation()).resolves.toBeDefined();
+      },
+    );
+  });
+
   it("requires quote-ready shipment topology when moving an active binding", async () => {
     await rollback(
       "active-binding-quote-topology",
@@ -6569,6 +6748,118 @@ describe("commerce persistence foundations", () => {
         () => fixtures.finalizePayment(foundation),
         { code: "23514", constraint: "payment_fulfilment_topology_check" },
       );
+
+      const staleResourceQuote = await fixtures.createFoundation(
+        "stale-resource-quote",
+      );
+      const stalePaymentQuote = await fixtures.createFoundation(
+        "stale-payment-quote",
+      );
+      await createCurrentPlan(client, fixtures, stalePaymentQuote);
+      const activeCheckout = await fixtures.createFoundation(
+        "active-checkout-after-quote-expiry",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, activeCheckout);
+      const failedCheckout = await fixtures.createFoundation(
+        "failed-checkout-before-quote-expiry",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, failedCheckout);
+      const failedAt = new Date();
+      await client.query(
+        `UPDATE payments
+         SET status = 'FAILED', capture_authorized = false,
+             capture_cutoff_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [failedCheckout.paymentId, failedAt],
+      );
+      const sessionExpiry = (
+        await client.query<{ expires_at: Date }>(
+          `SELECT clock_timestamp() + interval '1 second' AS expires_at`,
+        )
+      ).rows[0]?.expires_at;
+      if (!sessionExpiry) {
+        throw new Error("quote session expiry fixture is missing");
+      }
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await client.query(
+        `UPDATE quote_sessions
+         SET expires_at = $1
+         WHERE id = ANY($2::uuid[])`,
+        [
+          sessionExpiry,
+          [
+            staleResourceQuote.quoteSessionId,
+            stalePaymentQuote.quoteSessionId,
+            activeCheckout.quoteSessionId,
+            failedCheckout.quoteSessionId,
+          ],
+        ],
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
+      await client.query(
+        `SELECT pg_sleep(
+           greatest(extract(epoch FROM $1::timestamptz - clock_timestamp()), 0)
+           + 0.05
+         )`,
+        [sessionExpiry],
+      );
+      expect(
+        (
+          await client.query<{
+            transaction_time_accepts: boolean;
+            wall_clock_expired: boolean;
+          }>(
+            `SELECT $1::timestamptz > CURRENT_TIMESTAMP AS transaction_time_accepts,
+                    $1::timestamptz <= clock_timestamp() AS wall_clock_expired`,
+            [sessionExpiry],
+          )
+        ).rows,
+      ).toEqual([{ transaction_time_accepts: true, wall_clock_expired: true }]);
+      await expectQueryError(
+        client,
+        "expired_quote_resource_plan",
+        () => createCurrentPlan(client, fixtures, staleResourceQuote),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expectQueryError(
+        client,
+        "expired_quote_payment",
+        () => fixtures.finalizePayment(stalePaymentQuote),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      const retryCreatedAt = new Date();
+      const retryExpiresAt = new Date(
+        retryCreatedAt.getTime() + 60 * 60 * 1_000,
+      );
+      await expectQueryError(
+        client,
+        "expired_quote_failed_payment_retry",
+        () =>
+          client.query(
+            `INSERT INTO payments
+               (id, order_id, price_snapshot_id, order_price_binding_id,
+                payment_schedule_id, role, provider, provider_intent_id,
+                requested_amount_minor, currency, status,
+                checkout_capture_expires_at, created_at, updated_at)
+             SELECT $1, order_id, price_snapshot_id, order_price_binding_id,
+                    payment_schedule_id, role, provider, $2,
+                    requested_amount_minor, currency, 'PENDING', $3, $4, $4
+             FROM payments WHERE id = $5`,
+            [
+              fixtures.id("expired-quote-payment-retry"),
+              "expired-quote-provider-retry",
+              retryExpiresAt,
+              retryCreatedAt,
+              failedCheckout.paymentId,
+            ],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expect(
+        client.query(`SELECT taven_lock_automatic_order_session($1)`, [
+          activeCheckout.orderId,
+        ]),
+      ).resolves.toBeDefined();
     });
   });
 
@@ -9369,7 +9660,16 @@ describe("commerce persistence foundations", () => {
          WHERE id = $1`,
         [order.orderId],
       );
-      await fixtures.acceptCheckoutTerms(order, new Date(Date.now() + 2_000));
+      const quotedAt = (
+        await client.query<{ quoted_at: Date }>(
+          `SELECT quoted_at FROM orders WHERE id = $1`,
+          [order.orderId],
+        )
+      ).rows[0]?.quoted_at;
+      if (!quotedAt) {
+        throw new Error("quoted lifecycle evidence fixture is missing");
+      }
+      await fixtures.acceptCheckoutTerms(order, quotedAt);
       await expectQueryError(
         client,
         "future_order_confirmed",
@@ -11436,7 +11736,7 @@ describe("commerce persistence foundations", () => {
         },
         {
           foundation: beforePayment,
-          expectsLockConflict: false,
+          expectsLockConflict: true,
           mutate: () => contenders.finalizePayment(beforePayment),
         },
         {
