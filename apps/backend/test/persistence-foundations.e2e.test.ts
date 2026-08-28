@@ -3511,6 +3511,8 @@ describe("persistence foundations", () => {
         undefined,
         undefined,
         2,
+        undefined,
+        "DRAFT",
       );
       liveFoundation = await createSiblingMachineFoundation(
         client,
@@ -3518,6 +3520,18 @@ describe("persistence foundations", () => {
         foundation,
         "live-machine",
         expiredHeldSource,
+      );
+      await client.query(
+        `UPDATE order_items
+         SET source_model_file_id = $2, model_geometry_id = $3,
+             print_config_revision_id = $4
+         WHERE id = $1`,
+        [
+          foundation.orderItemIds[1],
+          liveFoundation.modelFileId,
+          liveFoundation.modelGeometryId,
+          liveFoundation.printConfigRevisionId,
+        ],
       );
       terminalProduction = await fixtures.planProduction(
         foundation,

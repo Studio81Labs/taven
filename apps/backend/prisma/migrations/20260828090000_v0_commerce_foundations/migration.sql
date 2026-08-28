@@ -669,6 +669,43 @@ CREATE TRIGGER "quote_items_require_mutable_quote"
 BEFORE INSERT ON "quote_items"
 FOR EACH ROW EXECUTE FUNCTION taven_require_mutable_quote_for_item();
 
+CREATE FUNCTION taven_validate_item_reference_slice_inputs()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."reference_slice_result_id" IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    PERFORM 1
+    FROM "slice_results" slice_result
+    WHERE slice_result."id" = NEW."reference_slice_result_id"
+      AND slice_result."kind" = 'REFERENCE'
+      AND slice_result."model_geometry_id" = NEW."model_geometry_id"
+      AND slice_result."print_config_revision_id" = NEW."print_config_revision_id"
+    FOR KEY SHARE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION '% reference slice must be a REFERENCE slice for its exact geometry and print configuration', TG_TABLE_NAME
+            USING ERRCODE = '23514',
+                  CONSTRAINT = CASE TG_TABLE_NAME
+                      WHEN 'quote_items' THEN 'quote_item_reference_slice_input_check'
+                      ELSE 'order_item_reference_slice_input_check'
+                  END;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "quote_items_reference_slice_inputs"
+BEFORE INSERT ON "quote_items"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_item_reference_slice_inputs();
+CREATE TRIGGER "order_items_reference_slice_inputs"
+BEFORE INSERT OR UPDATE OF "reference_slice_result_id", "model_geometry_id", "print_config_revision_id" ON "order_items"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_item_reference_slice_inputs();
+
 CREATE TRIGGER "audit_events_append_only"
 BEFORE UPDATE OR DELETE ON "audit_events"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
@@ -686,6 +723,33 @@ $$;
 CREATE TRIGGER "quote_price_bindings_immutable"
 BEFORE UPDATE OR DELETE ON "quote_price_bindings"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_quote_price_binding_mutation();
+
+CREATE FUNCTION taven_require_quotable_request_for_price_binding()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    request_status "quote_request_status";
+BEGIN
+    SELECT request."status"
+    INTO request_status
+    FROM "quotes" quote
+    JOIN "quote_requests" request ON request."id" = quote."quote_request_id"
+    WHERE quote."id" = NEW."quote_id"
+    FOR UPDATE OF request;
+
+    IF request_status IS DISTINCT FROM 'QUOTED'::"quote_request_status" THEN
+        RAISE EXCEPTION 'quote price binding must be fixed before quote acceptance or closure'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_price_binding_acceptance_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "quote_price_bindings_require_quotable_request"
+BEFORE INSERT ON "quote_price_bindings"
+FOR EACH ROW EXECUTE FUNCTION taven_require_quotable_request_for_price_binding();
 
 -- A draft may be assembled incrementally. Once quoted, exactly one stable
 -- single phase is required; the immediate foreign key still requires Order
@@ -840,6 +904,36 @@ BEGIN
     ) AND NEW."status" NOT IN ('QUOTED', 'ACCEPTED', 'EXPIRED') THEN
         RAISE EXCEPTION 'an issued quote request cannot return to a pre-quote or rejected state'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_issued_quote_status_check';
+    END IF;
+
+    IF NEW."status" = 'ACCEPTED'
+       AND OLD."status" IS DISTINCT FROM NEW."status"
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "quotes" quote
+           JOIN "quote_price_bindings" binding ON binding."quote_id" = quote."id"
+           JOIN "price_snapshots" snapshot ON snapshot."id" = binding."price_snapshot_id"
+           WHERE quote."quote_request_id" = OLD."id"
+             AND (
+                 SELECT coalesce(sum(component."amount_minor"), 0)
+                 FROM "price_snapshot_components" component
+                 WHERE component."price_snapshot_id" = snapshot."id"
+             ) = snapshot."contract_total_minor"
+             AND (
+                 SELECT count(*)
+                 FROM "payment_schedules" schedule
+                 WHERE schedule."price_snapshot_id" = snapshot."id"
+                   AND schedule."role" = 'FULL'
+             ) = 1
+             AND (
+                 SELECT coalesce(sum(schedule."gross_amount_minor"), 0)
+                 FROM "payment_schedules" schedule
+                 WHERE schedule."price_snapshot_id" = snapshot."id"
+                   AND schedule."role" = 'FULL'
+             ) = snapshot."contract_total_minor"
+       ) THEN
+        RAISE EXCEPTION 'accepted quote request requires one complete immutable price binding'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_price_binding_acceptance_check';
     END IF;
 
     RETURN NEW;
@@ -1544,6 +1638,99 @@ CREATE TRIGGER "phase_resource_plan_jobs_shipment_scope"
 BEFORE INSERT OR UPDATE ON "phase_resource_plan_jobs"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_phase_plan_job_shipment_scope();
 
+CREATE FUNCTION taven_validate_phase_plan_slot_candidate_inputs()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "phase_resource_plan_jobs" plan_job
+        JOIN "candidate_resource_estimates" candidate
+          ON candidate."id" = plan_job."candidate_resource_estimate_id"
+         AND candidate."node_id" = plan_job."node_id"
+        JOIN "inventories" inventory
+          ON inventory."id" = candidate."inventory_id"
+         AND inventory."node_id" = candidate."node_id"
+        JOIN "fulfilment_slots" slot ON slot."id" = NEW."fulfilment_slot_id"
+        JOIN "order_items" item
+          ON item."id" = slot."order_item_id"
+         AND item."order_id" = slot."order_id"
+        JOIN "shipment_plan_fulfilment_slots" allocation
+          ON allocation."fulfilment_slot_id" = slot."id"
+         AND allocation."shipment_plan_id" = candidate."shipment_plan_id"
+        WHERE plan_job."id" = NEW."phase_resource_plan_job_id"
+          AND plan_job."node_id" = NEW."node_id"
+          AND plan_job."phase_resource_plan_id" = NEW."phase_resource_plan_id"
+          AND candidate."model_geometry_id" = item."model_geometry_id"
+          AND candidate."print_config_revision_id" = item."print_config_revision_id"
+          AND inventory."material" = item."material"
+    ) THEN
+        RAISE EXCEPTION 'planned slot must match its candidate geometry, print configuration, material, and shipment allocation'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_slot_candidate_input_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "phase_resource_plan_slots_candidate_inputs"
+BEFORE INSERT ON "phase_resource_plan_slots"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_phase_plan_slot_candidate_inputs();
+
+CREATE FUNCTION taven_validate_phase_plan_job_candidate_quantity()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_plan_job_id uuid;
+    candidate_quantity integer;
+    planned_slot_count integer;
+    planned_item_count integer;
+BEGIN
+    target_plan_job_id := CASE
+        WHEN TG_TABLE_NAME = 'phase_resource_plan_jobs'
+            THEN (to_jsonb(NEW) ->> 'id')::uuid
+        ELSE (to_jsonb(NEW) ->> 'phase_resource_plan_job_id')::uuid
+    END;
+
+    SELECT candidate."quantity"
+    INTO candidate_quantity
+    FROM "phase_resource_plan_jobs" plan_job
+    JOIN "candidate_resource_estimates" candidate
+      ON candidate."id" = plan_job."candidate_resource_estimate_id"
+     AND candidate."node_id" = plan_job."node_id"
+    WHERE plan_job."id" = target_plan_job_id;
+
+    SELECT count(*), count(DISTINCT slot."order_item_id")
+    INTO planned_slot_count, planned_item_count
+    FROM "phase_resource_plan_slots" plan_slot
+    JOIN "fulfilment_slots" slot ON slot."id" = plan_slot."fulfilment_slot_id"
+    WHERE plan_slot."phase_resource_plan_job_id" = target_plan_job_id;
+
+    IF candidate_quantity IS NULL OR planned_slot_count <> candidate_quantity THEN
+        RAISE EXCEPTION 'planned job slot count must equal its candidate quantity'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_slot_candidate_quantity_check';
+    END IF;
+
+    IF planned_item_count <> 1 THEN
+        RAISE EXCEPTION 'planned job slots must belong to one independently configured order item'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_slot_candidate_item_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "phase_resource_plan_jobs_candidate_quantity_reconciled"
+AFTER INSERT ON "phase_resource_plan_jobs"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_phase_plan_job_candidate_quantity();
+CREATE CONSTRAINT TRIGGER "phase_resource_plan_slots_candidate_quantity_reconciled"
+AFTER INSERT ON "phase_resource_plan_slots"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_phase_plan_job_candidate_quantity();
+
 CREATE FUNCTION taven_validate_job_planning_scope()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2113,33 +2300,63 @@ CREATE TRIGGER "payments_identity_protected"
 BEFORE UPDATE OR DELETE ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_identity();
 
-CREATE FUNCTION taven_validate_payment_refunded_total()
+CREATE FUNCTION taven_validate_payment_refund_status()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    target_payment_id uuid;
+    payment_status "payment_status";
+    captured_amount bigint;
     succeeded_refunds bigint;
 BEGIN
-    IF NEW."status" = 'REFUNDED' THEN
-        SELECT coalesce(sum("amount_minor"), 0)
-        INTO succeeded_refunds
-        FROM "refund_transactions"
-        WHERE "payment_id" = NEW."id"
-          AND "status" = 'SUCCEEDED';
+    target_payment_id := CASE
+        WHEN TG_TABLE_NAME = 'payments' THEN (to_jsonb(NEW) ->> 'id')::uuid
+        ELSE (to_jsonb(NEW) ->> 'payment_id')::uuid
+    END;
 
-        IF succeeded_refunds <> coalesce(NEW."captured_amount_minor", 0) THEN
-            RAISE EXCEPTION 'refunded payment requires successful refunds equal to its capture'
-                USING ERRCODE = '23514', CONSTRAINT = 'payment_refund_reconciliation_check';
-        END IF;
+    SELECT "status", "captured_amount_minor"
+    INTO payment_status, captured_amount
+    FROM "payments"
+    WHERE "id" = target_payment_id
+    FOR UPDATE;
+
+    SELECT coalesce(sum("amount_minor"), 0)
+    INTO succeeded_refunds
+    FROM "refund_transactions"
+    WHERE "payment_id" = target_payment_id
+      AND "status" = 'SUCCEEDED';
+
+    IF payment_status IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED', 'CAPTURED')
+       AND succeeded_refunds <> 0 THEN
+        RAISE EXCEPTION 'payment status cannot hide successful refunds'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_refund_status_reconciliation_check';
+    ELSIF payment_status = 'REFUND_PENDING'
+          AND (captured_amount IS NULL OR succeeded_refunds >= captured_amount) THEN
+        RAISE EXCEPTION 'refund-pending payment must remain below its captured amount'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_refund_status_reconciliation_check';
+    ELSIF payment_status = 'PARTIALLY_REFUNDED'
+          AND (captured_amount IS NULL OR succeeded_refunds <= 0 OR succeeded_refunds >= captured_amount) THEN
+        RAISE EXCEPTION 'partially refunded payment requires a positive refund below its capture'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_refund_status_reconciliation_check';
+    ELSIF payment_status = 'REFUNDED'
+          AND (captured_amount IS NULL OR succeeded_refunds <> captured_amount) THEN
+        RAISE EXCEPTION 'refunded payment requires successful refunds equal to its capture'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_refund_status_reconciliation_check';
     END IF;
 
-    RETURN NEW;
+    RETURN NULL;
 END;
 $$;
 
-CREATE TRIGGER "payments_refunded_total_validated"
-BEFORE INSERT OR UPDATE OF "status", "captured_amount_minor" ON "payments"
-FOR EACH ROW EXECUTE FUNCTION taven_validate_payment_refunded_total();
+CREATE CONSTRAINT TRIGGER "payments_refund_status_reconciled"
+AFTER INSERT OR UPDATE OF "status", "captured_amount_minor" ON "payments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_payment_refund_status();
+CREATE CONSTRAINT TRIGGER "refund_transactions_payment_status_reconciled"
+AFTER INSERT OR UPDATE OF "payment_id", "amount_minor", "status" ON "refund_transactions"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_payment_refund_status();
 
 CREATE FUNCTION taven_validate_payment_capture_against_refunds()
 RETURNS trigger

@@ -526,6 +526,391 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("binds item reference slices to their exact geometry and print configuration", async () => {
+    await rollback("reference-slice-inputs", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "reference-slice-inputs",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        [
+          {
+            geometryBounds: {
+              xMicrometers: 1,
+              yMicrometers: 2,
+              zMicrometers: 3,
+            },
+          },
+          {
+            geometryBounds: {
+              xMicrometers: 4,
+              yMicrometers: 5,
+              zMicrometers: 6,
+            },
+          },
+        ],
+        "DRAFT",
+      );
+      const matchingReferenceId = fixtures.id("matching-reference");
+      const wrongGeometryReferenceId = fixtures.id("wrong-geometry-reference");
+      const wrongConfigReferenceId = fixtures.id("wrong-config-reference");
+      const referenceInputs = [
+        {
+          id: matchingReferenceId,
+          geometryId: foundation.modelGeometryIds[0]!,
+          configId: foundation.printConfigRevisionIds[0]!,
+          name: "matching",
+        },
+        {
+          id: wrongGeometryReferenceId,
+          geometryId: foundation.modelGeometryIds[1]!,
+          configId: foundation.printConfigRevisionIds[0]!,
+          name: "wrong-geometry",
+        },
+        {
+          id: wrongConfigReferenceId,
+          geometryId: foundation.modelGeometryIds[0]!,
+          configId: foundation.printConfigRevisionIds[1]!,
+          name: "wrong-config",
+        },
+      ];
+      for (const reference of referenceInputs) {
+        await client.query(
+          `INSERT INTO slice_results (id, kind, cache_key, model_geometry_id,
+                                     print_config_revision_id, reference_profile_id,
+                                     parts_per_plate, artifact_object_key, artifact_hash,
+                                     estimated_print_seconds, estimated_material_milligrams,
+                                     slicer_engine, slicer_version, created_at)
+           SELECT $1, 'REFERENCE', $2, $3, $4, profile.reference_profile_id,
+                  production.parts_per_plate, $5, production.artifact_hash,
+                  production.estimated_print_seconds,
+                  production.estimated_material_milligrams,
+                  reference_profile.slicer_engine,
+                  reference_profile.slicer_version, $6
+           FROM slice_results production
+           JOIN machine_profiles profile ON profile.id = production.machine_profile_id
+           JOIN reference_profiles reference_profile
+             ON reference_profile.id = profile.reference_profile_id
+           WHERE production.id = $7`,
+          [
+            reference.id,
+            `reference-${reference.name}-${reference.id}`,
+            reference.geometryId,
+            reference.configId,
+            `reference/${reference.name}/${reference.id}`,
+            new Date(),
+            foundation.sliceResultId,
+          ],
+        );
+      }
+
+      for (const table of ["quote_items", "order_items"] as const) {
+        const parentColumn = table === "quote_items" ? "quote_id" : "order_id";
+        const parentId =
+          table === "quote_items" ? foundation.quoteId : foundation.orderId;
+        const constraint =
+          table === "quote_items"
+            ? "quote_item_reference_slice_input_check"
+            : "order_item_reference_slice_input_check";
+        const insertItem = (
+          id: string,
+          ordinal: number,
+          referenceSliceId: string,
+          geometryId = foundation.modelGeometryIds[0]!,
+          configId = foundation.printConfigRevisionIds[0]!,
+        ) =>
+          client.query(
+            `INSERT INTO ${table} (id, ${parentColumn}, ordinal,
+                                  source_model_file_id, model_geometry_id,
+                                  print_config_revision_id, reference_slice_result_id,
+                                  material, color, quantity, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'PLA','black',1,$8)`,
+            [
+              id,
+              parentId,
+              ordinal,
+              foundation.modelFileId,
+              geometryId,
+              configId,
+              referenceSliceId,
+              new Date(),
+            ],
+          );
+
+        await expect(
+          insertItem(
+            fixtures.id(`${table}:matching-reference-item`),
+            2,
+            matchingReferenceId,
+          ),
+        ).resolves.toBeDefined();
+        await expectQueryError(
+          client,
+          `${table}_production_reference`,
+          () =>
+            insertItem(
+              fixtures.id(`${table}:production-reference-item`),
+              3,
+              foundation.sliceResultId,
+            ),
+          { code: "23514", constraint },
+        );
+        await expectQueryError(
+          client,
+          `${table}_wrong_geometry_reference`,
+          () =>
+            insertItem(
+              fixtures.id(`${table}:wrong-geometry-reference-item`),
+              4,
+              wrongGeometryReferenceId,
+            ),
+          { code: "23514", constraint },
+        );
+        await expectQueryError(
+          client,
+          `${table}_wrong_config_reference`,
+          () =>
+            insertItem(
+              fixtures.id(`${table}:wrong-config-reference-item`),
+              5,
+              wrongConfigReferenceId,
+            ),
+          { code: "23514", constraint },
+        );
+        if (table === "order_items") {
+          await expectQueryError(
+            client,
+            "order_item_reference_update_bypass",
+            () =>
+              client.query(
+                `UPDATE order_items
+                 SET reference_slice_result_id = $2
+                 WHERE id = $1`,
+                [
+                  fixtures.id(`${table}:matching-reference-item`),
+                  foundation.sliceResultId,
+                ],
+              ),
+            { code: "23514", constraint },
+          );
+        }
+      }
+    });
+  });
+
+  it("binds every planned slot to compatible candidate inputs and quantity", async () => {
+    await rollback("planned-slot-inputs", async (client, fixtures) => {
+      const crossItem = await fixtures.createFoundation(
+        "cross-item-candidate",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        [
+          {
+            geometryBounds: {
+              xMicrometers: 1,
+              yMicrometers: 1,
+              zMicrometers: 1,
+            },
+          },
+          {
+            geometryBounds: {
+              xMicrometers: 2,
+              yMicrometers: 2,
+              zMicrometers: 2,
+            },
+          },
+        ],
+      );
+      const crossItemProduction = await fixtures.planProduction(
+        crossItem,
+        "cross-item-candidate",
+      );
+      await expectQueryError(
+        client,
+        "cross_item_candidate_slot",
+        () =>
+          fixtures.createResourcePlan(crossItem, [
+            {
+              ...crossItemProduction,
+              fulfilmentSlotId: crossItem.fulfilmentSlotIds[1]!,
+            },
+          ]),
+        {
+          code: "23514",
+          constraint: "phase_resource_plan_slot_candidate_input_check",
+        },
+      );
+
+      const underfilled = await fixtures.createFoundation(
+        "underfilled-candidate",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        [{ quantity: 2 }],
+      );
+      const underfilledProduction = await fixtures.planProduction(
+        underfilled,
+        "underfilled-candidate",
+        undefined,
+        120,
+        120,
+        2,
+      );
+      await expectQueryError(
+        client,
+        "underfilled_candidate_quantity",
+        async () => {
+          await fixtures.createResourcePlan(underfilled, [
+            underfilledProduction,
+          ]);
+          await client.query(
+            `SET CONSTRAINTS "phase_resource_plan_jobs_candidate_quantity_reconciled",
+                             "phase_resource_plan_slots_candidate_quantity_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "phase_resource_plan_slot_candidate_quantity_check",
+        },
+      );
+
+      const overfilled = await fixtures.createFoundation(
+        "overfilled-candidate",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        [{ quantity: 2 }],
+      );
+      const overfilledProduction = await fixtures.planProduction(
+        overfilled,
+        "overfilled-candidate",
+      );
+      await expectQueryError(
+        client,
+        "overfilled_candidate_quantity",
+        async () => {
+          await fixtures.createResourcePlan(overfilled, [overfilledProduction]);
+          await client.query(
+            `INSERT INTO phase_resource_plan_slots
+               (id, node_id, phase_resource_plan_id,
+                phase_resource_plan_job_id, fulfilment_slot_id)
+             VALUES ($1,$2,$3,$4,$5)`,
+            [
+              fixtures.id("overfilled-candidate:extra-plan-slot"),
+              overfilled.nodeId,
+              overfilled.phaseResourcePlanId,
+              overfilledProduction.phaseResourcePlanJobId,
+              overfilled.fulfilmentSlotIds[1],
+            ],
+          );
+          await client.query(
+            `SET CONSTRAINTS "phase_resource_plan_jobs_candidate_quantity_reconciled",
+                             "phase_resource_plan_slots_candidate_quantity_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "phase_resource_plan_slot_candidate_quantity_check",
+        },
+      );
+
+      const mixedItems = await fixtures.createFoundation(
+        "mixed-item-candidate",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      const secondItemId = fixtures.id("mixed-item-candidate:second-item");
+      const secondSlotId = fixtures.id("mixed-item-candidate:second-slot");
+      await client.query(
+        `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,
+                                 model_geometry_id, print_config_revision_id,
+                                 material, color, quantity, created_at)
+         VALUES ($1,$2,1,$3,$4,$5,'PLA','blue',1,$6)`,
+        [
+          secondItemId,
+          mixedItems.orderId,
+          mixedItems.modelFileId,
+          mixedItems.modelGeometryId,
+          mixedItems.printConfigRevisionId,
+          new Date(),
+        ],
+      );
+      await client.query(
+        `INSERT INTO fulfilment_slots (id, order_id, order_phase_id,
+                                      order_item_id, quantity_ordinal,
+                                      settlement_amount_minor, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,1,0,$5,$5)`,
+        [
+          secondSlotId,
+          mixedItems.orderId,
+          mixedItems.orderPhaseId,
+          secondItemId,
+          new Date(),
+        ],
+      );
+      await client.query(
+        `INSERT INTO shipment_plan_fulfilment_slots
+           (shipment_plan_id, order_price_binding_id, fulfilment_slot_id)
+         VALUES ($1,$2,$3)`,
+        [
+          mixedItems.shipmentPlanId,
+          mixedItems.orderPriceBindingId,
+          secondSlotId,
+        ],
+      );
+      const mixedItemProduction = await fixtures.planProduction(
+        mixedItems,
+        "mixed-item-candidate",
+        undefined,
+        120,
+        120,
+        2,
+      );
+      await expectQueryError(
+        client,
+        "mixed_item_candidate_membership",
+        async () => {
+          await fixtures.createResourcePlan(mixedItems, [mixedItemProduction]);
+          await client.query(
+            `INSERT INTO phase_resource_plan_slots
+               (id, node_id, phase_resource_plan_id,
+                phase_resource_plan_job_id, fulfilment_slot_id)
+             VALUES ($1,$2,$3,$4,$5)`,
+            [
+              fixtures.id("mixed-item-candidate:second-plan-slot"),
+              mixedItems.nodeId,
+              mixedItems.phaseResourcePlanId,
+              mixedItemProduction.phaseResourcePlanJobId,
+              secondSlotId,
+            ],
+          );
+          await client.query(
+            `SET CONSTRAINTS "phase_resource_plan_jobs_candidate_quantity_reconciled",
+                             "phase_resource_plan_slots_candidate_quantity_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "phase_resource_plan_slot_candidate_item_check",
+        },
+      );
+    });
+  });
+
   it("requires scoped payment topology and retains provider/refund identities", async () => {
     await rollback("scoped-identities", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -625,6 +1010,10 @@ describe("commerce persistence foundations", () => {
       if (!capturedAmount || !providerIntentId) {
         throw new Error("fixture payment is missing");
       }
+      const remainingRefundAmount = Number(capturedAmount) - 600;
+      if (remainingRefundAmount <= 0) {
+        throw new Error("fixture payment cannot support a partial refund");
+      }
       await expectQueryError(
         client,
         "capture_without_provider_facts",
@@ -689,6 +1078,59 @@ describe("commerce persistence foundations", () => {
         },
       );
       const refundCompletedAt = new Date();
+      await expectQueryError(
+        client,
+        "succeed_refund_without_payment_status",
+        async () => {
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED', provider_refund_id = $2,
+                 completed_at = $3, updated_at = $3
+             WHERE id = $1`,
+            [
+              fixtures.id("refund-first"),
+              "provider-refund-first",
+              refundCompletedAt,
+            ],
+          );
+          await client.query(
+            `SET CONSTRAINTS "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_refund_status_reconciliation_check",
+        },
+      );
+      await client.query(
+        `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+        [foundation.paymentId],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      await expectQueryError(
+        client,
+        "partial_status_without_successful_refund",
+        async () => {
+          await client.query(
+            `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await client.query(
+            `SET CONSTRAINTS "payments_refund_status_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_refund_status_reconciliation_check",
+        },
+      );
       await client.query(
         `UPDATE refund_transactions
          SET status = 'SUCCEEDED', provider_refund_id = $2,
@@ -699,6 +1141,18 @@ describe("commerce persistence foundations", () => {
           "provider-refund-first",
           refundCompletedAt,
         ],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,
+        [foundation.paymentId],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" DEFERRED`,
       );
       for (const status of ["PENDING", "FAILED"]) {
         await expectQueryError(
@@ -715,26 +1169,49 @@ describe("commerce persistence foundations", () => {
           },
         );
       }
+      await expectQueryError(
+        client,
+        "claim_full_refund_before_reconciliation",
+        async () => {
+          await client.query(
+            `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await client.query(
+            `SET CONSTRAINTS "payments_refund_status_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_refund_status_reconciliation_check",
+        },
+      );
       await client.query(
         `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
         [foundation.paymentId],
       );
-      await expectQueryError(
-        client,
-        "claim_full_refund_before_reconciliation",
-        () =>
-          client.query(
-            `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,
-            [foundation.paymentId],
-          ),
-        {
-          code: "23514",
-          constraint: "payment_refund_reconciliation_check",
-        },
+      await client.query(
+        `INSERT INTO refund_transactions (id, payment_id, idempotency_key,
+                                         amount_minor, reason, status,
+                                         provider_refund_id, requested_at,
+                                         completed_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','SUCCEEDED',$5,$6,$6,$6,$6)`,
+        [
+          fixtures.id("refund-remainder"),
+          foundation.paymentId,
+          "refund-remainder",
+          remainingRefundAmount,
+          "provider-refund-remainder",
+          new Date(),
+        ],
       );
       await client.query(
-        `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,
+        `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,
         [foundation.paymentId],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
       );
       await expectQueryError(
         client,
@@ -1012,6 +1489,19 @@ describe("commerce persistence foundations", () => {
          VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
         [scheduleId, snapshotId, now],
       );
+      await expectQueryError(
+        client,
+        "accept_quote_without_price_binding",
+        () =>
+          client.query(
+            `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1`,
+            [quoteRequestId, now],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_price_binding_acceptance_check",
+        },
+      );
       await client.query(
         `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id) VALUES ($1,$2)`,
         [quoteId, snapshotId],
@@ -1019,6 +1509,56 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1`,
         [quoteRequestId, now],
+      );
+      const closedRequestId = fixtures.id("closed-custom-request");
+      const closedQuoteId = fixtures.id("closed-custom-quote");
+      const closedSnapshotId = fixtures.id("closed-custom-snapshot");
+      await client.query(
+        `INSERT INTO quote_requests (id, customer_id, status, created_at, updated_at)
+         VALUES ($1,$2,'QUOTED',$3,$3)`,
+        [closedRequestId, foundation.customerId, now],
+      );
+      await client.query(
+        `INSERT INTO quotes (id, quote_request_id, customer_id, expires_at, issued_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          closedQuoteId,
+          closedRequestId,
+          foundation.customerId,
+          new Date(now.getTime() + 60 * 60 * 1_000),
+          now,
+        ],
+      );
+      await client.query(
+        `INSERT INTO price_snapshots (id, currency, contract_total_minor,
+                                     pricing_revision, input_snapshot,
+                                     snapshot_hash, created_at)
+         VALUES ($1,'EUR',0,'closed-v0','{}'::jsonb,$2,$3)`,
+        [closedSnapshotId, "c".repeat(64), now],
+      );
+      await client.query(
+        `INSERT INTO payment_schedules (id, price_snapshot_id, sequence, role,
+                                       gross_amount_minor, fee_rate_basis_points,
+                                       fee_fixed_minor, provider_config, created_at)
+         VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
+        [fixtures.id("closed-custom-schedule"), closedSnapshotId, now],
+      );
+      await client.query(
+        `UPDATE quote_requests SET status = 'EXPIRED', updated_at = $2 WHERE id = $1`,
+        [closedRequestId, now],
+      );
+      await expectQueryError(
+        client,
+        "bind_closed_quote",
+        () =>
+          client.query(
+            `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id) VALUES ($1,$2)`,
+            [closedQuoteId, closedSnapshotId],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_price_binding_acceptance_check",
+        },
       );
       await expectQueryError(
         client,
