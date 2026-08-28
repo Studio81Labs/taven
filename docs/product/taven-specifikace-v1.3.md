@@ -1275,7 +1275,8 @@ Architekturně tentýž problém jako FastyBird — discovery, stavový automat,
 | **Vlákno zpráv v portálu** | poptávek je tolik, že se e-mail přestane zvládat |
 | **Multicolor jednoho dílu** | opakovaná poptávka v individuálních nabídkách |
 | **Oddělení `/maker`** | první externí uzel |
-| **Certifikace, tiery, výplaty** | druhý až třetí externí uzel |
+| **Maker settlement, měsíční samofakturace a ruční výplaty** | první externí uzel |
+| **Certifikace a tiery** | druhý až třetí externí uzel |
 | **Nabídkové vlny (routing)** | ruční přiřazování přestane stačit, ~5 uzlů |
 | **Node agent** | ruční provoz je úzké hrdlo, > 10 uzlů |
 | **Druhý vlastní stroj** | brána §11 |

@@ -170,6 +170,7 @@ Snapshot obsahuje minimálně:
 -   `policy_version`,
 -   vstupní výrobní parametry,
 -   `base_compensation`,
+-   `performance_snapshot_id`,
 -   `performance_modifier`,
 -   explicitní surcharge/adjustments,
 -   `agreed_compensation`,
@@ -177,8 +178,9 @@ Snapshot obsahuje minimálně:
 -   `maker_claim_hold_days`,
 -   timestamp přijetí.
 
-Pozdější změna performance score nebo compensation policy nesmí zpětně
-změnit odměnu již přijatého jobu.
+`performance_snapshot_id` odkazuje přesné immutable metriky, ze kterých byl
+modifier odvozen. Pozdější změna performance score nebo compensation policy
+nesmí zpětně změnit odměnu již přijatého jobu.
 
 ------------------------------------------------------------------------
 
@@ -341,9 +343,13 @@ Přípustný provozní model:
 2.  Studio81 Labs v dohodnutém self-billing režimu vystaví makerovi
     settlement statement a účetní/daňový doklad.
 3.  Maker obdrží dokumenty a řeší případný spor před payoutem.
-4.  Studio81 Labs provede ruční bankovní platbu.
-5.  `MakerPayout` se označí jako dokončený a spojí se se settlementem a
-    self-billing dokladem.
+4.  Taven pro settlement vytvoří nebo znovu použije právě jeden
+    `MakerPayout`; jeho částka se musí rovnat zamčenému `payable_amount` a
+    každý pokus používá stejný idempotency key.
+5.  Studio81 Labs provede ruční bankovní platbu a uloží unikátní bankovní
+    referenci. Tentýž payout lze označit jako dokončený jen jednou a součet
+    úspěšných převodů nikdy nesmí překročit `payable_amount`; payout zůstává
+    spojený se settlementem a jeho self-billing dokladem.
 
 Budoucí síť může tento proces automatizovat, ale ekonomický model se
 nemění.
@@ -411,6 +417,7 @@ MakerCompensationSnapshot
 - id
 - production_assignment_id
 - policy_version
+- performance_snapshot_id
 - production_inputs (immutable material, time, plates, handling,
   post-processing, handoff and special-requirement inputs)
 - base_compensation
@@ -427,6 +434,7 @@ MakerCompensationSnapshot
 
 ``` text
 MakerPerformanceSnapshot
+- id
 - maker_id
 - period
 - sample_size
@@ -486,10 +494,11 @@ MakerSelfBillingDocument
 ``` text
 MakerPayout
 - id
-- settlement_id
-- self_billing_document_id
+- settlement_id (unique)
+- self_billing_document_id (unique)
+- transfer_idempotency_key (unique)
 - amount
-- payment_reference
+- payment_reference (unique; nullable do provedení převodu)
 - paid_at
 - status
 ```
@@ -594,6 +603,11 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     změní nebo expirují.
 18. Každý payout odkazuje přesný platformou vystavený self-billing doklad
     pro svůj settlement.
+19. Přijatá compensation odkazuje immutable performance snapshot, ze
+    kterého byl její modifier odvozen.
+20. Pro jeden settlement existuje nejvýše jeden payout se stabilním
+    idempotency key; jeho úspěšná částka se musí rovnat zamčenému
+    `payable_amount` a nesmí být převedena podruhé.
 
 ------------------------------------------------------------------------
 
