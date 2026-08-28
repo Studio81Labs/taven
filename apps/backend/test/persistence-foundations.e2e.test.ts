@@ -2690,7 +2690,7 @@ describe("persistence foundations", () => {
           ),
         ).rejects.toMatchObject({
           code: "23514",
-          constraint: "model_file_live_capacity_horizon_check",
+          constraint: "order_source_active_order_check",
         });
       },
     );
@@ -3783,9 +3783,21 @@ describe("persistence foundations", () => {
         'UPDATE "machines" SET "status" = $2 WHERE "id" = $1',
         [foundation.machineId, "DISABLED"],
       );
+      await expect(
+        client.query(
+          'UPDATE "model_files" SET "retention_hold" = $2, "deleted_at" = clock_timestamp() WHERE "id" = $1',
+          [foundation.modelFileId, "NONE"],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "order_source_active_order_check",
+      });
+      await client.query("ROLLBACK");
+
+      await client.query("BEGIN");
       await client.query(
-        'UPDATE "model_files" SET "retention_hold" = $2, "deleted_at" = clock_timestamp() WHERE "id" = $1',
-        [foundation.modelFileId, "NONE"],
+        'UPDATE "machines" SET "status" = $2 WHERE "id" = $1',
+        [foundation.machineId, "DISABLED"],
       );
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
@@ -3809,7 +3821,7 @@ describe("persistence foundations", () => {
         ),
       ).rejects.toMatchObject({
         code: "23514",
-        constraint: "model_file_live_capacity_horizon_check",
+        constraint: "order_source_active_order_check",
       });
       await client.query("ROLLBACK");
 

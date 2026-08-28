@@ -1121,6 +1121,54 @@ CREATE TRIGGER "quote_sessions_customer_ownership_protected"
 BEFORE UPDATE OF "customer_id" ON "quote_sessions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_session_customer_ownership();
 
+CREATE FUNCTION taven_protect_quote_session_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."status" <> 'OPEN' THEN
+            RAISE EXCEPTION 'quote sessions must begin open'
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_session_initial_status_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
+    IF NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
+        RAISE EXCEPTION 'quote session creation timestamp is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_session_created_at_immutable_check';
+    END IF;
+
+    IF NEW."expires_at" IS DISTINCT FROM OLD."expires_at" THEN
+        RAISE EXCEPTION 'quote session expiry is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_session_expiry_immutable_check';
+    END IF;
+
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           OLD."status" = 'OPEN'
+           AND NEW."status" IN ('EXPIRED', 'CONVERTED', 'CANCELLED')
+       ) THEN
+        RAISE EXCEPTION 'quote session status transition is not allowed'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_session_status_transition_check';
+    END IF;
+
+    IF OLD."status" = 'OPEN'
+       AND NEW."status" = 'EXPIRED'
+       AND OLD."expires_at" > clock_timestamp() THEN
+        RAISE EXCEPTION 'quote session can expire only after its immutable deadline'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_session_expiration_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "quote_sessions_lifecycle_protected"
+BEFORE INSERT OR UPDATE OF "status", "expires_at", "created_at" ON "quote_sessions"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_session_lifecycle();
+
 CREATE FUNCTION taven_assert_quote_request_session_owner(
     target_session_id uuid,
     target_customer_id uuid
@@ -2367,6 +2415,47 @@ $$;
 CREATE TRIGGER "photo_assets_active_order_qc_protected"
 BEFORE UPDATE OF "retention_hold", "deleted_at" ON "photo_assets"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_active_order_qc_photo();
+
+CREATE FUNCTION taven_protect_active_order_source()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "order_items" item
+        JOIN "orders" target_order ON target_order."id" = item."order_id"
+        WHERE item."source_model_file_id" = NEW."id"
+          AND (
+              target_order."status" IN (
+                  'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
+                  'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'
+              )
+              OR (
+                  target_order."status" = 'CANCELLED'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "payments" payment
+                      WHERE payment."order_id" = target_order."id"
+                        AND coalesce(payment."captured_amount_minor", 0) > 0
+                  )
+              )
+          )
+    ) AND (
+        NEW."deleted_at" IS NOT NULL
+        OR NEW."retention_hold" NOT IN ('ACTIVE_ORDER', 'ACTIVE_CLAIM', 'LEGAL')
+    ) THEN
+        RAISE EXCEPTION 'source ModelFile must remain retained throughout every active referencing order'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_source_active_order_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "model_files_active_order_protected"
+BEFORE UPDATE OF "retention_hold", "deleted_at" ON "model_files"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_active_order_source();
 
 CREATE FUNCTION taven_reconcile_order_post_confirmation_lifecycle()
 RETURNS trigger

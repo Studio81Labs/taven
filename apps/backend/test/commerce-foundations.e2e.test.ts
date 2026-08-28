@@ -247,22 +247,6 @@ async function activateCurrentPlan(
   );
 }
 
-async function advanceOrderToCompleted(
-  client: PoolClient,
-  orderId: string,
-): Promise<void> {
-  for (const status of [
-    "IN_PRODUCTION",
-    "QC_PASSED",
-    "READY_TO_SHIP",
-    "SHIPPED",
-    "DELIVERED",
-    "COMPLETED",
-  ] as const) {
-    await advanceOrderLifecycleStep(client, orderId, status);
-  }
-}
-
 async function forceOrderLifecycleConstraints(
   client: PoolClient,
 ): Promise<void> {
@@ -5113,12 +5097,20 @@ describe("commerce persistence foundations", () => {
         {
           name: "expired_state",
           status: "EXPIRED",
-          createdAt: ownershipCreatedAt,
-          expiresAt: new Date(ownershipCreatedAt.getTime() + 60 * 60 * 1_000),
+          createdAt: new Date(
+            ownershipCreatedAt.getTime() - 2 * 60 * 60 * 1_000,
+          ),
+          expiresAt: new Date(ownershipCreatedAt.getTime() - 60 * 60 * 1_000),
         },
         {
           name: "cancelled_state",
           status: "CANCELLED",
+          createdAt: ownershipCreatedAt,
+          expiresAt: new Date(ownershipCreatedAt.getTime() + 60 * 60 * 1_000),
+        },
+        {
+          name: "converted_state",
+          status: "CONVERTED",
           createdAt: ownershipCreatedAt,
           expiresAt: new Date(ownershipCreatedAt.getTime() + 60 * 60 * 1_000),
         },
@@ -5131,22 +5123,100 @@ describe("commerce persistence foundations", () => {
           expiresAt: new Date(ownershipCreatedAt.getTime() - 60 * 60 * 1_000),
         },
       ] as const;
+      await expectQueryError(
+        client,
+        "insert_closed_quote_session",
+        () =>
+          client.query(
+            `INSERT INTO quote_sessions
+             (id, customer_id, public_token_hash, status, expires_at,
+              created_at, updated_at)
+             VALUES ($1,$2,$3,'CANCELLED',$4,$5,$5)`,
+            [
+              fixtures.id("initially-closed-session"),
+              foundation.customerId,
+              randomUUID().replaceAll("-", "").padEnd(64, "a"),
+              new Date(ownershipCreatedAt.getTime() + 60 * 60 * 1_000),
+              ownershipCreatedAt,
+            ],
+          ),
+        { code: "23514", constraint: "quote_session_initial_status_check" },
+      );
+      const prematureExpirySessionId = fixtures.id("premature-expiry-session");
+      await client.query(
+        `INSERT INTO quote_sessions
+         (id, customer_id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          prematureExpirySessionId,
+          foundation.customerId,
+          randomUUID().replaceAll("-", "").padEnd(64, "b"),
+          new Date(ownershipCreatedAt.getTime() + 60 * 60 * 1_000),
+          ownershipCreatedAt,
+        ],
+      );
+      await expectQueryError(
+        client,
+        "expire_quote_session_before_deadline",
+        () =>
+          client.query(
+            `UPDATE quote_sessions SET status = 'EXPIRED', updated_at = $2
+             WHERE id = $1`,
+            [prematureExpirySessionId, ownershipCreatedAt],
+          ),
+        { code: "23514", constraint: "quote_session_expiration_check" },
+      );
       for (const closedSession of closedSessionCases) {
         const sessionId = fixtures.id(`closed-commerce-${closedSession.name}`);
         await client.query(
           `INSERT INTO quote_sessions
-           (id, customer_id, public_token_hash, status, expires_at,
-            created_at, updated_at)
-           VALUES ($1,$2,$3,$4::quote_session_status,$5,$6,$6)`,
+           (id, customer_id, public_token_hash, expires_at, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$5)`,
           [
             sessionId,
             foundation.customerId,
             randomUUID().replaceAll("-", "").padEnd(64, "f"),
-            closedSession.status,
             closedSession.expiresAt,
             closedSession.createdAt,
           ],
         );
+        if (closedSession.status !== "OPEN") {
+          await client.query(
+            `UPDATE quote_sessions
+             SET status = $2::quote_session_status, updated_at = $3
+             WHERE id = $1`,
+            [sessionId, closedSession.status, ownershipCreatedAt],
+          );
+          await expectQueryError(
+            client,
+            `reopen_session_${closedSession.name}`,
+            () =>
+              client.query(
+                `UPDATE quote_sessions SET status = 'OPEN', updated_at = $2
+                 WHERE id = $1`,
+                [sessionId, ownershipCreatedAt],
+              ),
+            {
+              code: "23514",
+              constraint: "quote_session_status_transition_check",
+            },
+          );
+          await expectQueryError(
+            client,
+            `extend_session_${closedSession.name}`,
+            () =>
+              client.query(
+                `UPDATE quote_sessions
+                 SET expires_at = expires_at + interval '1 hour', updated_at = $2
+                 WHERE id = $1`,
+                [sessionId, ownershipCreatedAt],
+              ),
+            {
+              code: "23514",
+              constraint: "quote_session_expiry_immutable_check",
+            },
+          );
+        }
         await expectQueryError(
           client,
           `attach_request_${closedSession.name}`,
@@ -6147,7 +6217,37 @@ describe("commerce persistence foundations", () => {
       if (!completedAt) {
         throw new Error("database completion clock is unavailable");
       }
-      await advanceOrderToCompleted(client, completed.orderId);
+      for (const status of ["IN_PRODUCTION", "QC_PASSED"] as const) {
+        await advanceOrderLifecycleStep(client, completed.orderId, status);
+      }
+      await expectQueryError(
+        client,
+        "release_active_order_source",
+        () =>
+          client.query(
+            `UPDATE model_files SET retention_hold = 'NONE' WHERE id = $1`,
+            [completed.modelFileId],
+          ),
+        { code: "23514", constraint: "order_source_active_order_check" },
+      );
+      await expectQueryError(
+        client,
+        "delete_active_order_source",
+        () =>
+          client.query(
+            `UPDATE model_files SET deleted_at = clock_timestamp() WHERE id = $1`,
+            [completed.modelFileId],
+          ),
+        { code: "23514", constraint: "order_source_active_order_check" },
+      );
+      for (const status of [
+        "READY_TO_SHIP",
+        "SHIPPED",
+        "DELIVERED",
+        "COMPLETED",
+      ] as const) {
+        await advanceOrderLifecycleStep(client, completed.orderId, status);
+      }
       const releasedSource = await client.query<{
         retention_hold: string;
         source_delete_after: Date;
