@@ -98,6 +98,8 @@ async function createCurrentPlan(
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
   reservationExpiresAt = testTimes.expiresAt,
+  planScope = foundation.orderId,
+  capacityOffsetHours = 0,
 ): Promise<
   Array<
     ProductionReservationFixture & {
@@ -114,12 +116,13 @@ async function createCurrentPlan(
   > = [];
   for (const [index] of foundation.fulfilmentSlotIds.entries()) {
     const startsAt = new Date(
-      testTimes.capacityStart.getTime() + index * 2 * 60 * 60 * 1_000,
+      testTimes.capacityStart.getTime() +
+        (capacityOffsetHours + index * 2) * 60 * 60 * 1_000,
     );
     const endsAt = new Date(startsAt.getTime() + 60 * 60 * 1_000);
     const production = await fixtures.planProduction(
       foundation,
-      `payment-plan-${foundation.orderId}-${index}`,
+      `payment-plan-${planScope}-${index}`,
       { startsAt, endsAt },
       60,
       60,
@@ -168,7 +171,7 @@ async function createCurrentPlan(
                                          starts_at, ends_at, expires_at, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
       [
-        fixtures.id(`payment-capacity-${foundation.orderId}-${index}`),
+        fixtures.id(`payment-capacity-${planScope}-${index}`),
         foundation.nodeId,
         production.productionReservationId,
         production.candidateCapacityIntervalId,
@@ -204,12 +207,11 @@ async function createCurrentPlanAndPayment(
   return productions;
 }
 
-async function activateCurrentPlan(
+async function holdCurrentPlan(
   client: PoolClient,
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
   productions: ProductionReservationFixture[],
-  providerCaptureId?: string,
 ): Promise<void> {
   for (const production of productions) {
     await client.query(
@@ -233,7 +235,11 @@ async function activateCurrentPlan(
     `UPDATE phase_reservation_sets SET status = 'HELD' WHERE id = $1`,
     [foundation.phaseReservationSetId],
   );
-  await fixtures.activatePayment(foundation, providerCaptureId);
+}
+
+async function forceCaptureActivationConstraints(
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `SET CONSTRAINTS
        "payments_capture_activation_reconciled",
@@ -250,6 +256,18 @@ async function activateCurrentPlan(
        "phase_reservation_sets_capture_activation_reconciled",
        "jobs_captured_reservation_reconciled" DEFERRED`,
   );
+}
+
+async function activateCurrentPlan(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  foundation: PersistenceFoundation,
+  productions: ProductionReservationFixture[],
+  providerCaptureId?: string,
+): Promise<void> {
+  await holdCurrentPlan(client, fixtures, foundation, productions);
+  await fixtures.activatePayment(foundation, providerCaptureId);
+  await forceCaptureActivationConstraints(client);
 }
 
 async function forceOrderLifecycleConstraints(
@@ -2037,9 +2055,15 @@ describe("commerce persistence foundations", () => {
         const createReplacement = async (
           name: string,
           includeShipmentPlan: boolean,
-        ): Promise<{ bindingId: string; planId: string | null }> => {
+        ): Promise<{
+          bindingId: string;
+          paymentScheduleId: string;
+          planId: string | null;
+          snapshotId: string;
+        }> => {
           const snapshotId = fixtures.id(`${name}:snapshot`);
           const bindingId = fixtures.id(`${name}:binding`);
+          const paymentScheduleId = fixtures.id(`${name}:payment-schedule`);
           const planId = includeShipmentPlan
             ? fixtures.id(`${name}:shipment-plan`)
             : null;
@@ -2067,7 +2091,7 @@ describe("commerce persistence foundations", () => {
                   fee_rate_basis_points, fee_fixed_minor, provider_config, $3
            FROM payment_schedules WHERE id = $4`,
             [
-              fixtures.id(`${name}:payment-schedule`),
+              paymentScheduleId,
               snapshotId,
               createdAt,
               foundation.paymentScheduleId,
@@ -2163,7 +2187,7 @@ describe("commerce persistence foundations", () => {
               ],
             );
           }
-          return { bindingId, planId };
+          return { bindingId, paymentScheduleId, planId, snapshotId };
         };
 
         const incomplete = await createReplacement("incomplete", false);
@@ -2184,6 +2208,11 @@ describe("commerce persistence foundations", () => {
            "payment_schedules_total_reconciled",
            "order_price_bindings_snapshot_sealed",
            "price_component_fulfilment_allocations_reconciled" DEFERRED`,
+        );
+        const staleProductions = await createCurrentPlan(
+          client,
+          fixtures,
+          foundation,
         );
         await client.query(
           `UPDATE orders
@@ -2378,6 +2407,187 @@ describe("commerce persistence foundations", () => {
           {
             active_binding_id: complete.bindingId,
             active_invalidated_at: null,
+          },
+        ]);
+
+        const currentFoundation: PersistenceFoundation = {
+          ...foundation,
+          eligibilitySnapshotId: fixtures.id(
+            "active-binding-current-eligibility",
+          ),
+          phaseResourcePlanId: fixtures.id(
+            "active-binding-current-resource-plan",
+          ),
+          phaseReservationSetId: fixtures.id(
+            "active-binding-current-reservation-set",
+          ),
+          priceSnapshotId: complete.snapshotId,
+          paymentScheduleId: complete.paymentScheduleId,
+          orderPriceBindingId: complete.bindingId,
+          shipmentPlanId: complete.planId,
+          shipmentPlanIds: [complete.planId],
+          fulfilmentSlotShipmentPlanIds: [complete.planId],
+        };
+        const currentProductions = await createCurrentPlan(
+          client,
+          fixtures,
+          currentFoundation,
+          testTimes.expiresAt,
+          complete.bindingId,
+          4,
+        );
+        await fixtures.finalizePayment(currentFoundation);
+        const releaseReservedPlan = async (
+          reservationSetId: string,
+          productions: ProductionReservationFixture[],
+        ): Promise<void> => {
+          for (const production of productions) {
+            await client.query(
+              `UPDATE inventory_reservations SET status = 'RELEASED'
+               WHERE production_reservation_id = $1`,
+              [production.productionReservationId],
+            );
+            await client.query(
+              `UPDATE capacity_reservations SET status = 'RELEASED'
+               WHERE production_reservation_id = $1`,
+              [production.productionReservationId],
+            );
+            await client.query(
+              `UPDATE production_reservations SET status = 'RELEASED'
+               WHERE id = $1`,
+              [production.productionReservationId],
+            );
+          }
+          await client.query(
+            `UPDATE phase_reservation_sets SET status = 'RELEASED'
+             WHERE id = $1`,
+            [reservationSetId],
+          );
+        };
+
+        await expectQueryError(
+          client,
+          "capture_stale_binding_reservation",
+          async () => {
+            await releaseReservedPlan(
+              currentFoundation.phaseReservationSetId,
+              currentProductions,
+            );
+            await activateCurrentPlan(
+              client,
+              fixtures,
+              foundation,
+              staleProductions,
+            );
+          },
+          {
+            code: "23514",
+            constraint: "payment_capture_activation_check",
+          },
+        );
+        await expectQueryError(
+          client,
+          "capture_with_unreleased_stale_reservation",
+          () =>
+            activateCurrentPlan(
+              client,
+              fixtures,
+              currentFoundation,
+              currentProductions,
+            ),
+          {
+            code: "23514",
+            constraint: "payment_capture_activation_check",
+          },
+        );
+        await expectQueryError(
+          client,
+          "capture_before_stale_binding_hold",
+          async () => {
+            await releaseReservedPlan(
+              currentFoundation.phaseReservationSetId,
+              currentProductions,
+            );
+            await fixtures.activatePayment(currentFoundation);
+            await holdCurrentPlan(
+              client,
+              fixtures,
+              foundation,
+              staleProductions,
+            );
+            await forceCaptureActivationConstraints(client);
+          },
+          {
+            code: "23514",
+            constraint: "payment_capture_activation_check",
+          },
+        );
+        expect(
+          (
+            await client.query<{
+              current_reservation_status: string;
+              order_status: string;
+              payment_status: string;
+              phase_status: string;
+              stale_reservation_status: string;
+            }>(
+              `SELECT target_order.status::text AS order_status,
+                      phase.status::text AS phase_status,
+                      payment.status::text AS payment_status,
+                      stale_set.status::text AS stale_reservation_status,
+                      current_set.status::text AS current_reservation_status
+               FROM orders target_order
+               JOIN order_phases phase ON phase.order_id = target_order.id
+               JOIN payments payment ON payment.order_id = target_order.id
+               JOIN phase_reservation_sets stale_set ON stale_set.id = $2
+               JOIN phase_reservation_sets current_set ON current_set.id = $3
+               WHERE target_order.id = $1`,
+              [
+                foundation.orderId,
+                foundation.phaseReservationSetId,
+                currentFoundation.phaseReservationSetId,
+              ],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            current_reservation_status: "RESERVED",
+            order_status: "QUOTED",
+            payment_status: "PENDING",
+            phase_status: "QUOTED",
+            stale_reservation_status: "RESERVED",
+          },
+        ]);
+
+        await releaseReservedPlan(
+          foundation.phaseReservationSetId,
+          staleProductions,
+        );
+        await activateCurrentPlan(
+          client,
+          fixtures,
+          currentFoundation,
+          currentProductions,
+        );
+        expect(
+          (
+            await client.query<{
+              job_binding_id: string;
+              stale_reservation_status: string;
+            }>(
+              `SELECT plan.order_price_binding_id AS job_binding_id,
+                      stale_set.status::text AS stale_reservation_status
+               FROM jobs job
+               JOIN shipment_plans plan ON plan.id = job.shipment_plan_id
+               JOIN phase_reservation_sets stale_set ON stale_set.id = $2
+               WHERE job.order_id = $1`,
+              [foundation.orderId, foundation.phaseReservationSetId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            job_binding_id: complete.bindingId,
+            stale_reservation_status: "RELEASED",
           },
         ]);
       },

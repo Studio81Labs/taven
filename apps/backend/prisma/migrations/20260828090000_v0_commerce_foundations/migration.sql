@@ -4910,6 +4910,28 @@ BEGIN
           AND NOT EXISTS (
               SELECT 1
               FROM "phase_resource_plan_jobs" plan_job
+              JOIN "candidate_resource_estimates" candidate
+                ON candidate."id" = plan_job."candidate_resource_estimate_id"
+               AND candidate."node_id" = plan_job."node_id"
+              JOIN "shipment_plans" candidate_plan
+                ON candidate_plan."id" = candidate."shipment_plan_id"
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+                AND candidate_plan."order_price_binding_id" IS DISTINCT FROM payment."order_price_binding_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_reservation_sets" competing_set
+              JOIN "phase_resource_plans" competing_plan
+                ON competing_plan."id" = competing_set."phase_resource_plan_id"
+               AND competing_plan."node_id" = competing_set."node_id"
+              WHERE competing_plan."order_phase_id" = phase."id"
+                AND competing_set."id" <> reservation_set."id"
+                AND competing_set."status" IN ('BUILDING', 'RESERVED', 'HELD')
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
               LEFT JOIN "production_reservations" production
                 ON production."phase_reservation_set_id" = reservation_set."id"
                AND production."phase_resource_plan_job_id" = plan_job."id"
@@ -5042,6 +5064,8 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1
         FROM "order_phases" phase
+        JOIN "order_active_price_bindings" active_binding
+          ON active_binding."order_id" = phase."order_id"
         JOIN "phase_resource_plans" resource_plan
           ON resource_plan."order_phase_id" = phase."id"
         JOIN "phase_reservation_sets" reservation_set
@@ -5066,6 +5090,28 @@ BEGIN
               FROM "phase_resource_plan_jobs" plan_job
               WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
                 AND plan_job."node_id" = resource_plan."node_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
+              JOIN "candidate_resource_estimates" candidate
+                ON candidate."id" = plan_job."candidate_resource_estimate_id"
+               AND candidate."node_id" = plan_job."node_id"
+              JOIN "shipment_plans" candidate_plan
+                ON candidate_plan."id" = candidate."shipment_plan_id"
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+                AND candidate_plan."order_price_binding_id" IS DISTINCT FROM active_binding."order_price_binding_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_reservation_sets" competing_set
+              JOIN "phase_resource_plans" competing_plan
+                ON competing_plan."id" = competing_set."phase_resource_plan_id"
+               AND competing_plan."node_id" = competing_set."node_id"
+              WHERE competing_plan."order_phase_id" = phase."id"
+                AND competing_set."id" <> reservation_set."id"
+                AND competing_set."status" IN ('BUILDING', 'RESERVED', 'HELD')
           )
           AND NOT EXISTS (
               SELECT 1
