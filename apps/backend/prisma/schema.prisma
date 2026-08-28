@@ -442,6 +442,7 @@ model PhotoAsset {
   mediaType        String         @map("media_type") @db.VarChar(100)
   sizeBytes        BigInt         @map("size_bytes")
   uploadedAt       DateTime       @map("uploaded_at") @db.Timestamptz(3)
+  retentionDays    Int            @default(90) @map("retention_days")
   photoDeleteAfter DateTime       @map("photo_delete_after") @db.Timestamptz(3)
   retentionHold    RetentionHold  @default(NONE) @map("retention_hold")
   deletedAt        DateTime?      @map("deleted_at") @db.Timestamptz(3)

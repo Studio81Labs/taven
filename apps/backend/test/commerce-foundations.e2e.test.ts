@@ -4948,6 +4948,25 @@ describe("commerce persistence foundations", () => {
             },
           );
         }
+        if (status === "QC_PASSED") {
+          await expectQueryError(
+            client,
+            "release_active_order_qc_photo",
+            () =>
+              client.query(
+                `UPDATE photo_assets photo
+                 SET retention_hold = 'NONE'
+                 FROM jobs job
+                 WHERE job.order_id = $1
+                   AND job.qc_photo_asset_id = photo.id`,
+                [foundation.orderId],
+              ),
+            {
+              code: "23514",
+              constraint: "job_qc_photo_active_order_check",
+            },
+          );
+        }
         if (status === "READY_TO_SHIP") {
           await expectQueryError(
             client,
@@ -5040,6 +5059,27 @@ describe("commerce persistence foundations", () => {
         1,
         undefined,
         "DRAFT",
+      );
+      await expectQueryError(
+        client,
+        "change_order_public_reference",
+        () =>
+          client.query(
+            `UPDATE orders SET public_reference = public_reference || '-changed'
+             WHERE id = $1`,
+            [foundation.orderId],
+          ),
+        { code: "23514", constraint: "order_identity_immutable_check" },
+      );
+      await expectQueryError(
+        client,
+        "change_order_id",
+        () =>
+          client.query(`UPDATE orders SET id = $2 WHERE id = $1`, [
+            foundation.orderId,
+            fixtures.id("changed-order-id"),
+          ]),
+        { code: "23514", constraint: "order_identity_immutable_check" },
       );
       await client.query(
         `UPDATE reference_profiles
@@ -6042,6 +6082,22 @@ describe("commerce persistence foundations", () => {
       ).toBeGreaterThanOrEqual(
         completedAt.getTime() + 90 * 24 * 60 * 60 * 1_000,
       );
+      const releasedPhoto = await client.query<{
+        retention_hold: string;
+        photo_delete_after: Date;
+      }>(
+        `SELECT photo.retention_hold::text, photo.photo_delete_after
+         FROM photo_assets photo
+         JOIN jobs job ON job.qc_photo_asset_id = photo.id
+         WHERE job.order_id = $1`,
+        [completed.orderId],
+      );
+      expect(releasedPhoto.rows[0]?.retention_hold).toBe("NONE");
+      expect(
+        releasedPhoto.rows[0]?.photo_delete_after.getTime(),
+      ).toBeGreaterThanOrEqual(
+        completedAt.getTime() + 90 * 24 * 60 * 60 * 1_000,
+      );
       await expectQueryError(
         client,
         "reopen_terminal_order",
@@ -6166,16 +6222,45 @@ describe("commerce persistence foundations", () => {
         legal,
       );
       await activateCurrentPlan(client, fixtures, legal, legalProductions);
+      for (const status of ["IN_PRODUCTION", "QC_PASSED"] as const) {
+        await advanceOrderLifecycleStep(client, legal.orderId, status);
+      }
       await client.query(
         `UPDATE model_files SET retention_hold = 'LEGAL' WHERE id = $1`,
         [legal.modelFileId],
       );
-      await advanceOrderToCompleted(client, legal.orderId);
+      await client.query(
+        `UPDATE photo_assets photo
+         SET retention_hold = 'LEGAL'
+         FROM jobs job
+         WHERE job.order_id = $1
+           AND job.qc_photo_asset_id = photo.id`,
+        [legal.orderId],
+      );
+      for (const status of [
+        "READY_TO_SHIP",
+        "SHIPPED",
+        "DELIVERED",
+        "COMPLETED",
+      ] as const) {
+        await advanceOrderLifecycleStep(client, legal.orderId, status);
+      }
       expect(
         (
           await client.query<{ retention_hold: string }>(
             `SELECT retention_hold::text FROM model_files WHERE id = $1`,
             [legal.modelFileId],
+          )
+        ).rows,
+      ).toEqual([{ retention_hold: "LEGAL" }]);
+      expect(
+        (
+          await client.query<{ retention_hold: string }>(
+            `SELECT photo.retention_hold::text
+             FROM photo_assets photo
+             JOIN jobs job ON job.qc_photo_asset_id = photo.id
+             WHERE job.order_id = $1`,
+            [legal.orderId],
           )
         ).rows,
       ).toEqual([{ retention_hold: "LEGAL" }]);

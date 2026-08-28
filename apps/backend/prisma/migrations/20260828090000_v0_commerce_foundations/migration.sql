@@ -1759,6 +1759,12 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    IF NEW."id" IS DISTINCT FROM OLD."id"
+       OR NEW."public_reference" IS DISTINCT FROM OLD."public_reference" THEN
+        RAISE EXCEPTION 'order identity is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_identity_immutable_check';
+    END IF;
+
     IF NEW."created_at" IS DISTINCT FROM OLD."created_at"
        OR (OLD."quoted_at" IS NOT NULL AND NEW."quoted_at" IS DISTINCT FROM OLD."quoted_at")
        OR (OLD."confirmed_at" IS NOT NULL AND NEW."confirmed_at" IS DISTINCT FROM OLD."confirmed_at") THEN
@@ -1817,7 +1823,7 @@ END;
 $$;
 
 CREATE TRIGGER "orders_status_transitions_valid"
-BEFORE INSERT OR UPDATE OF "status", "quoted_at", "confirmed_at", "created_at" ON "orders"
+BEFORE INSERT OR UPDATE OF "id", "public_reference", "status", "quoted_at", "confirmed_at", "created_at" ON "orders"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_status_transition();
 
 CREATE FUNCTION taven_reconcile_refunded_order()
@@ -2243,8 +2249,8 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'job_gcode_artifact_check';
     END IF;
 
-    IF NEW."status" = 'PHOTO_SUBMITTED' AND NOT EXISTS (
-        SELECT 1
+    IF NEW."status" = 'PHOTO_SUBMITTED' THEN
+        PERFORM 1
         FROM "photo_assets" photo
         WHERE photo."id" = NEW."qc_photo_asset_id"
           AND photo."kind" = 'QC'
@@ -2252,11 +2258,14 @@ BEGIN
           AND photo."scope_id" = NEW."id"
           AND photo."uploaded_at" <= NEW."photo_submitted_at"
           AND photo."photo_delete_after" > NEW."photo_submitted_at"
-          AND photo."retention_hold" = 'ACTIVE_ORDER'
+          AND photo."retention_hold" IN ('ACTIVE_ORDER', 'ACTIVE_CLAIM', 'LEGAL')
           AND photo."deleted_at" IS NULL
-    ) THEN
-        RAISE EXCEPTION 'photo submission requires an active retained QC PhotoAsset for the exact Job'
-            USING ERRCODE = '23514', CONSTRAINT = 'job_qc_photo_asset_check';
+        FOR UPDATE;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'photo submission requires an active retained QC PhotoAsset for the exact Job'
+                USING ERRCODE = '23514', CONSTRAINT = 'job_qc_photo_asset_check';
+        END IF;
     END IF;
 
     IF NEW."status" = 'FAILED' AND NOT (
@@ -2285,6 +2294,47 @@ $$;
 CREATE TRIGGER "jobs_lifecycle_protected"
 BEFORE INSERT OR UPDATE OR DELETE ON "jobs"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_job_lifecycle();
+
+CREATE FUNCTION taven_protect_active_order_qc_photo()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "jobs" job
+        JOIN "orders" target_order ON target_order."id" = job."order_id"
+        WHERE job."qc_photo_asset_id" = NEW."id"
+          AND (
+              target_order."status" IN (
+                  'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
+                  'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'
+              )
+              OR (
+                  target_order."status" = 'CANCELLED'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "payments" payment
+                      WHERE payment."order_id" = target_order."id"
+                        AND coalesce(payment."captured_amount_minor", 0) > 0
+                  )
+              )
+          )
+    ) AND (
+        NEW."deleted_at" IS NOT NULL
+        OR NEW."retention_hold" NOT IN ('ACTIVE_ORDER', 'ACTIVE_CLAIM', 'LEGAL')
+    ) THEN
+        RAISE EXCEPTION 'Job-bound QC photo must remain retained throughout its active order'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_qc_photo_active_order_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "photo_assets_active_order_qc_protected"
+BEFORE UPDATE OF "retention_hold", "deleted_at" ON "photo_assets"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_active_order_qc_photo();
 
 CREATE FUNCTION taven_reconcile_order_post_confirmation_lifecycle()
 RETURNS trigger
@@ -4390,6 +4440,13 @@ BEGIN
         ORDER BY source."id"
         FOR UPDATE;
 
+        PERFORM 1
+        FROM "photo_assets" photo
+        JOIN "jobs" job ON job."qc_photo_asset_id" = photo."id"
+        WHERE job."order_id" = NEW."id"
+        ORDER BY photo."id"
+        FOR UPDATE OF photo;
+
         UPDATE "model_files" source
         SET "source_delete_after" = greatest(
                 source."source_delete_after",
@@ -4424,6 +4481,19 @@ BEGIN
         FROM "order_items" item
         WHERE item."order_id" = NEW."id"
           AND source."id" = item."source_model_file_id";
+
+        UPDATE "photo_assets" photo
+        SET "photo_delete_after" = greatest(
+                photo."photo_delete_after",
+                terminal_at + make_interval(days => photo."retention_days")
+            ),
+            "retention_hold" = CASE
+                WHEN photo."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL') THEN photo."retention_hold"
+                ELSE 'NONE'::"retention_hold"
+            END
+        FROM "jobs" job
+        WHERE job."order_id" = NEW."id"
+          AND job."qc_photo_asset_id" = photo."id";
     END IF;
 
     RETURN NEW;
