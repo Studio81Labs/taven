@@ -262,12 +262,20 @@ enum FulfilmentSlotOutcome {
 enum ShipmentStatus {
   PLANNED
   LABEL_CREATED
+  CANCELLATION_PENDING
   HANDED_OVER
   IN_TRANSIT
   DELIVERED
   CANCELLED
 
   @@map("shipment_status")
+}
+
+enum ShipmentProviderEventKind {
+  LABEL_VOIDED
+  ACCEPTANCE_SCAN
+
+  @@map("shipment_provider_event_kind")
 }
 
 enum JobStatus {
@@ -964,6 +972,8 @@ model OutboxMessage {
   createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  shipmentProviderEvent ShipmentProviderEvent?
+
   @@index([status, availableAt])
   @@index([aggregateType, aggregateId])
   @@map("outbox_messages")
@@ -1417,36 +1427,67 @@ model ShipmentPlanFulfilmentSlot {
 }
 
 model Shipment {
-  id                    String         @id @default(uuid()) @db.Uuid
-  orderId               String         @map("order_id") @db.Uuid
-  orderPhaseId          String         @map("order_phase_id") @db.Uuid
-  shipmentPlanId        String         @map("shipment_plan_id") @db.Uuid
-  deliveryDestinationId String         @map("delivery_destination_id") @db.Uuid
-  replacesShipmentId    String?        @map("replaces_shipment_id") @db.Uuid
-  status                ShipmentStatus @default(PLANNED)
-  carrier               String?        @db.VarChar(100)
-  providerShipmentId    String?        @map("provider_shipment_id") @db.VarChar(255)
-  trackingCode          String?        @map("tracking_code") @db.VarChar(255)
-  labelCreatedAt        DateTime?      @map("label_created_at") @db.Timestamptz(3)
-  handedOverAt          DateTime?      @map("handed_over_at") @db.Timestamptz(3)
-  deliveredAt           DateTime?      @map("delivered_at") @db.Timestamptz(3)
-  cancelledAt           DateTime?      @map("cancelled_at") @db.Timestamptz(3)
-  createdAt             DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt             DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                       String         @id @default(uuid()) @db.Uuid
+  orderId                  String         @map("order_id") @db.Uuid
+  orderPhaseId             String         @map("order_phase_id") @db.Uuid
+  shipmentPlanId           String         @map("shipment_plan_id") @db.Uuid
+  deliveryDestinationId    String         @map("delivery_destination_id") @db.Uuid
+  replacesShipmentId       String?        @map("replaces_shipment_id") @db.Uuid
+  status                   ShipmentStatus @default(PLANNED)
+  carrier                  String?        @db.VarChar(100)
+  providerShipmentId       String?        @map("provider_shipment_id") @db.VarChar(255)
+  carrierLabelId           String?        @map("carrier_label_id") @db.VarChar(190)
+  trackingCode             String?        @map("tracking_code") @db.VarChar(255)
+  labelCreatedAt           DateTime?      @map("label_created_at") @db.Timestamptz(3)
+  cancellationRequestedAt  DateTime?      @map("cancellation_requested_at") @db.Timestamptz(3)
+  providerVoidId           String?        @map("provider_void_id") @db.VarChar(255)
+  providerVoidedAt         DateTime?      @map("provider_voided_at") @db.Timestamptz(3)
+  providerAcceptanceScanId String?        @map("provider_acceptance_scan_id") @db.VarChar(255)
+  handedOverAt             DateTime?      @map("handed_over_at") @db.Timestamptz(3)
+  deliveredAt              DateTime?      @map("delivered_at") @db.Timestamptz(3)
+  cancelledAt              DateTime?      @map("cancelled_at") @db.Timestamptz(3)
+  createdAt                DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order               Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderPhase          OrderPhase          @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
-  shipmentPlan        ShipmentPlan        @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
-  deliveryDestination DeliveryDestination @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
-  replacesShipment    Shipment?           @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
-  replacementShipment Shipment?           @relation("ShipmentReplacementLineage")
+  order               Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase          OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan        ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
+  deliveryDestination DeliveryDestination     @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  replacesShipment    Shipment?               @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
+  replacementShipment Shipment?               @relation("ShipmentReplacementLineage")
+  providerEvents      ShipmentProviderEvent[]
 
   @@unique([id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_lineage_scope_key")
   @@unique([carrier, providerShipmentId], map: "shipments_carrier_provider_shipment_id_key")
+  @@unique([carrier, carrierLabelId], map: "shipments_carrier_carrier_label_id_key")
+  @@unique([carrier, providerVoidId], map: "shipments_carrier_provider_void_id_key")
   @@unique([replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_replaces_shipment_id_key")
   @@index([orderId, status])
   @@index([shipmentPlanId, status])
   @@map("shipments")
+}
+
+model ShipmentProviderEvent {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  shipmentId            String                    @map("shipment_id") @db.Uuid
+  outboxMessageId       String?                   @unique @map("outbox_message_id") @db.Uuid
+  carrier               String                    @db.VarChar(100)
+  carrierLabelId        String                    @map("carrier_label_id") @db.VarChar(190)
+  providerEventId       String                    @map("provider_event_id") @db.VarChar(255)
+  providerTransactionId String                    @map("provider_transaction_id") @db.VarChar(255)
+  kind                  ShipmentProviderEventKind
+  occurredAt            DateTime                  @map("occurred_at") @db.Timestamptz(3)
+  authenticatedAt       DateTime                  @map("authenticated_at") @db.Timestamptz(3)
+  verifiedAt            DateTime                  @map("verified_at") @db.Timestamptz(3)
+  createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  shipment      Shipment       @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  outboxMessage OutboxMessage? @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
+
+  @@unique([carrier, providerEventId], map: "shipment_provider_events_carrier_provider_event_id_key")
+  @@unique([carrier, providerTransactionId], map: "shipment_provider_events_carrier_provider_transaction_id_key")
+  @@index([shipmentId, kind])
+  @@map("shipment_provider_events")
 }
 
 model Job {

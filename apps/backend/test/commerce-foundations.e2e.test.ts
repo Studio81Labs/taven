@@ -303,6 +303,8 @@ async function forceOrderLifecycleConstraints(
        "production_reservations_job_printing_reconciled",
        "inventory_reservations_job_printing_reconciled",
        "capacity_reservations_job_printing_reconciled",
+       "shipment_provider_events_consumed",
+       "shipments_label_void_outbox_reconciled",
        "shipments_parent_lifecycle_reconciled",
        "fulfilment_slots_parent_lifecycle_reconciled",
        "fulfilment_slots_shipment_plan_terminal_reconciled",
@@ -329,6 +331,8 @@ async function forceOrderLifecycleConstraints(
        "production_reservations_job_printing_reconciled",
        "inventory_reservations_job_printing_reconciled",
        "capacity_reservations_job_printing_reconciled",
+       "shipment_provider_events_consumed",
+       "shipments_label_void_outbox_reconciled",
        "shipments_parent_lifecycle_reconciled",
        "fulfilment_slots_parent_lifecycle_reconciled",
        "fulfilment_slots_shipment_plan_terminal_reconciled",
@@ -533,6 +537,7 @@ async function advanceOrderLifecycleStep(
       `UPDATE shipments
        SET status = 'LABEL_CREATED', carrier = 'test-carrier',
            provider_shipment_id = coalesce(provider_shipment_id, 'provider-' || id::text),
+           carrier_label_id = coalesce(carrier_label_id, 'label-' || id::text),
            tracking_code = coalesce(tracking_code, 'tracking-' || id::text),
            label_created_at = $2, updated_at = $2
        WHERE order_id = $1 AND status = 'PLANNED'`,
@@ -617,6 +622,99 @@ type CustomerCancellationRefundWork =
       idempotencyKey: string;
       amountMinor: number;
     }>;
+
+async function confirmCarrierLabelVoid(
+  client: PoolClient,
+  shipmentId: string,
+  providerEventId: string,
+): Promise<void> {
+  const evidence = (
+    await client.query<{
+      carrier: string;
+      carrier_label_id: string;
+      outbox_message_id: string;
+    }>(
+      `SELECT shipment.carrier, shipment.carrier_label_id,
+              message.id AS outbox_message_id
+       FROM shipments shipment
+       JOIN outbox_messages message
+         ON message.deduplication_key =
+            'void_carrier_label:' || shipment.id::text || ':' || shipment.carrier_label_id
+       WHERE shipment.id = $1`,
+      [shipmentId],
+    )
+  ).rows[0];
+  if (!evidence) {
+    throw new Error("shipment carrier-void evidence scope is unavailable");
+  }
+  await client.query(
+    `UPDATE outbox_messages
+     SET status = 'DELIVERED', delivered_at = clock_timestamp(),
+         updated_at = clock_timestamp()
+     WHERE id = $1`,
+    [evidence.outbox_message_id],
+  );
+  await client.query(
+    `INSERT INTO shipment_provider_events
+       (id, shipment_id, outbox_message_id, carrier, carrier_label_id,
+        provider_event_id, provider_transaction_id, kind, occurred_at,
+        authenticated_at, verified_at, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'LABEL_VOIDED',statement_timestamp(),
+             statement_timestamp(),statement_timestamp() + interval '1 millisecond',
+             statement_timestamp())`,
+    [
+      randomUUID(),
+      shipmentId,
+      evidence.outbox_message_id,
+      evidence.carrier,
+      evidence.carrier_label_id,
+      providerEventId,
+      `${providerEventId}:transaction`,
+    ],
+  );
+  await client.query(
+    `UPDATE shipments shipment
+     SET status = 'CANCELLED', provider_void_id = event.provider_event_id,
+         provider_voided_at = event.verified_at,
+         cancelled_at = clock_timestamp(), updated_at = clock_timestamp()
+     FROM shipment_provider_events event
+     WHERE shipment.id = $1
+       AND event.shipment_id = shipment.id
+       AND event.provider_event_id = $2`,
+    [shipmentId, providerEventId],
+  );
+}
+
+async function persistVerifiedAcceptanceScan(
+  client: PoolClient,
+  shipmentId: string,
+  providerEventId: string,
+): Promise<Date> {
+  const verifiedAt = (
+    await client.query<{ verified_at: Date }>(
+      `INSERT INTO shipment_provider_events
+       (id, shipment_id, carrier, carrier_label_id, provider_event_id,
+        provider_transaction_id, kind, occurred_at, authenticated_at,
+        verified_at, created_at)
+     SELECT $1, shipment.id, shipment.carrier, shipment.carrier_label_id,
+            $3, $4, 'ACCEPTANCE_SCAN', statement_timestamp(), statement_timestamp(),
+            statement_timestamp() + interval '1 millisecond', statement_timestamp()
+     FROM shipments shipment
+     WHERE shipment.id = $2
+     RETURNING verified_at`,
+      [
+        randomUUID(),
+        shipmentId,
+        providerEventId,
+        `${providerEventId}:transaction`,
+      ],
+    )
+  ).rows[0]?.verified_at;
+  if (!verifiedAt) {
+    throw new Error("verified carrier acceptance scan was not persisted");
+  }
+  return verifiedAt;
+}
 
 async function cancelOrderBeforeHandoff(
   client: PoolClient,
@@ -795,7 +893,7 @@ async function cancelOrderBeforeHandoff(
   await client.query(
     `UPDATE shipments
      SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
-     WHERE order_id = $1`,
+     WHERE order_id = $1 AND status = 'PLANNED'`,
     [orderId, cancelledAt],
   );
   if (closeSlots) {
@@ -3760,7 +3858,8 @@ describe("commerce persistence foundations", () => {
             client.query(
               `UPDATE shipments
                SET status = 'LABEL_CREATED', carrier = 'test-carrier',
-                   provider_shipment_id = $2, label_created_at = $3,
+                   provider_shipment_id = $2,
+                   carrier_label_id = 'label-' || id::text, label_created_at = $3,
                    updated_at = $3
                WHERE order_id = $1`,
               [foundation.orderId, providerShipmentId, changedAt],
@@ -3779,7 +3878,8 @@ describe("commerce persistence foundations", () => {
           await client.query(
             `UPDATE shipments
              SET status = 'LABEL_CREATED', carrier = 'test-carrier',
-                 provider_shipment_id = $2, label_created_at = $3,
+                 provider_shipment_id = $2,
+                 carrier_label_id = 'label-' || id::text, label_created_at = $3,
                  updated_at = $3
              WHERE order_id = $1`,
             [foundation.orderId, "premature-shipment-label", changedAt],
@@ -3826,7 +3926,8 @@ describe("commerce persistence foundations", () => {
           await client.query(
             `UPDATE shipments
              SET status = 'LABEL_CREATED', carrier = 'test-carrier',
-                 provider_shipment_id = $2, label_created_at = $3,
+                 provider_shipment_id = $2,
+                 carrier_label_id = 'label-' || id::text, label_created_at = $3,
                  updated_at = $3
              WHERE order_id = $1`,
             [foundation.orderId, "pre-capture-shipment-label", changedAt],
@@ -5044,6 +5145,7 @@ describe("commerce persistence foundations", () => {
             `UPDATE shipments
              SET status = 'LABEL_CREATED', carrier = $2,
                  provider_shipment_id = 'shared-provider-shipment',
+                 carrier_label_id = 'label-' || id::text,
                  label_created_at = $3, updated_at = $3
              WHERE id = $1`,
             [shipmentId, carrier, labelledAt],
@@ -6796,9 +6898,15 @@ describe("commerce persistence foundations", () => {
       const cancelledAt = new Date();
       await client.query(
         `UPDATE shipments
-         SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+         SET status = 'CANCELLATION_PENDING',
+             cancellation_requested_at = $2, updated_at = $2
          WHERE id = $1`,
         [replacedShipmentId, cancelledAt],
+      );
+      await confirmCarrierLabelVoid(
+        client,
+        replacedShipmentId,
+        "replacement-provider-void",
       );
       await client.query(
         `INSERT INTO shipments
@@ -6814,6 +6922,7 @@ describe("commerce persistence foundations", () => {
         `UPDATE shipments
          SET status = 'LABEL_CREATED', carrier = 'test-carrier',
              provider_shipment_id = 'provider-' || id::text,
+             carrier_label_id = 'label-' || id::text,
              tracking_code = 'tracking-' || id::text,
              label_created_at = $2, updated_at = $2
          WHERE id = $1`,
@@ -7243,6 +7352,7 @@ describe("commerce persistence foundations", () => {
             `UPDATE shipments
              SET status = 'LABEL_CREATED', carrier = 'test-carrier',
                  provider_shipment_id = 'premature-provider',
+                 carrier_label_id = 'premature-label',
                  label_created_at = $2, handed_over_at = $2, delivered_at = $2
              WHERE order_id = $1`,
             [foundation.orderId, prematureEvidenceAt],
@@ -7309,6 +7419,7 @@ describe("commerce persistence foundations", () => {
                 `UPDATE shipments
                  SET status = 'LABEL_CREATED', carrier = 'test-carrier',
                      provider_shipment_id = 'provider-premature-delivery',
+                     carrier_label_id = 'label-premature-delivery',
                      tracking_code = 'tracking-premature-delivery',
                      label_created_at = $2, updated_at = $2
                  WHERE order_id = $1`,
@@ -7386,7 +7497,7 @@ describe("commerce persistence foundations", () => {
         if (status === "READY_TO_SHIP") {
           await expectQueryError(
             client,
-            "shipment_cancellation_before_label",
+            "issued_label_direct_cancellation",
             () =>
               client.query(
                 `UPDATE shipments
@@ -7397,7 +7508,7 @@ describe("commerce persistence foundations", () => {
               ),
             {
               code: "23514",
-              constraint: "shipment_lifecycle_evidence_check",
+              constraint: "shipment_status_transition_check",
             },
           );
         }
@@ -7468,6 +7579,488 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("keeps issued-label cancellation pending until the carrier void is confirmed", async () => {
+    await rollback("shipment-label-void", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation("shipment-label-void");
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      await advanceOrderLifecycleStep(
+        client,
+        foundation.orderId,
+        "IN_PRODUCTION",
+      );
+      await advanceOrderLifecycleStep(client, foundation.orderId, "QC_PASSED");
+      await advanceOrderLifecycleStep(
+        client,
+        foundation.orderId,
+        "READY_TO_SHIP",
+      );
+
+      await expectQueryError(
+        client,
+        "cancel_issued_label_directly",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'CANCELLED', cancelled_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [foundation.shipmentId],
+          ),
+        { code: "23514", constraint: "shipment_status_transition_check" },
+      );
+
+      await expectQueryError(
+        client,
+        "future_label_void_request",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'CANCELLATION_PENDING',
+                 cancellation_requested_at = clock_timestamp() + interval '1 minute',
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [foundation.shipmentId],
+          ),
+        { code: "23514", constraint: "shipment_lifecycle_evidence_check" },
+      );
+
+      await client.query(
+        `UPDATE shipments
+         SET status = 'CANCELLATION_PENDING',
+             cancellation_requested_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [foundation.shipmentId],
+      );
+      await forceOrderLifecycleConstraints(client);
+
+      expect(
+        (
+          await client.query<{
+            job_status: string;
+            order_status: string;
+            outbox_key: string;
+            outbox_payload: Record<string, string>;
+            outbox_status: string;
+            payment_status: string;
+            phase_status: string;
+            refund_count: string;
+            reservation_status: string;
+            shipment_status: string;
+            slot_outcome: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    phase.status::text AS phase_status,
+                    job.status::text AS job_status,
+                    reservation_set.status::text AS reservation_status,
+                    shipment.status::text AS shipment_status,
+                    slot.outcome::text AS slot_outcome,
+                    message.deduplication_key AS outbox_key,
+                    message.payload AS outbox_payload,
+                    message.status::text AS outbox_status,
+                    payment.status::text AS payment_status,
+                    (SELECT count(*)::text
+                     FROM refund_transactions refund
+                     WHERE refund.payment_id = payment.id) AS refund_count
+             FROM orders target_order
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             JOIN jobs job ON job.order_phase_id = phase.id
+             JOIN phase_resource_plans resource_plan
+               ON resource_plan.order_phase_id = phase.id
+             JOIN phase_reservation_sets reservation_set
+               ON reservation_set.phase_resource_plan_id = resource_plan.id
+              AND reservation_set.node_id = resource_plan.node_id
+             JOIN shipments shipment ON shipment.order_id = target_order.id
+             JOIN fulfilment_slots slot ON slot.order_id = target_order.id
+             JOIN outbox_messages message
+               ON message.deduplication_key =
+                  'void_carrier_label:' || shipment.id::text || ':' || shipment.carrier_label_id
+             JOIN payments payment ON payment.order_id = target_order.id
+             WHERE target_order.id = $1`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "READY_TO_SHIP",
+          phase_status: "QC_PASSED",
+          job_status: "PACKED",
+          reservation_status: "HELD",
+          shipment_status: "CANCELLATION_PENDING",
+          slot_outcome: "PENDING",
+          outbox_key: `void_carrier_label:${foundation.shipmentId}:label-${foundation.shipmentId}`,
+          outbox_payload: {
+            shipmentId: foundation.shipmentId,
+            carrierLabelId: `label-${foundation.shipmentId}`,
+            action: "void_carrier_label",
+          },
+          outbox_status: "PENDING",
+          payment_status: "CAPTURED",
+          refund_count: "0",
+        },
+      ]);
+
+      await expectQueryError(
+        client,
+        "finish_parent_cancellation_before_label_void",
+        () => cancelOrderBeforeHandoff(client, foundation.orderId),
+        {
+          code: "23514",
+          constraint: "order_post_confirmation_lifecycle_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "cancel_without_provider_void",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'CANCELLED', cancelled_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [foundation.shipmentId],
+          ),
+        { code: "23514", constraint: "shipment_lifecycle_evidence_check" },
+      );
+      await expectQueryError(
+        client,
+        "cancel_with_blank_provider_void",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'CANCELLED', provider_void_id = '   ',
+                 provider_voided_at = clock_timestamp(),
+                 cancelled_at = clock_timestamp(), updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [foundation.shipmentId],
+          ),
+        { code: "23514", constraint: "shipment_lifecycle_evidence_check" },
+      );
+      await expectQueryError(
+        client,
+        "cancel_with_future_provider_void",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'CANCELLED', provider_void_id = 'future-void',
+                 provider_voided_at = clock_timestamp() + interval '1 minute',
+                 cancelled_at = clock_timestamp() + interval '1 minute',
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [foundation.shipmentId],
+          ),
+        { code: "23514", constraint: "shipment_lifecycle_evidence_check" },
+      );
+
+      await expectQueryError(
+        client,
+        "confirm_void_while_outbox_pending",
+        () =>
+          client.query(
+            `INSERT INTO shipment_provider_events
+               (id, shipment_id, outbox_message_id, carrier, carrier_label_id,
+                provider_event_id, provider_transaction_id, kind, occurred_at,
+                authenticated_at, verified_at, created_at)
+             SELECT $1, shipment.id, message.id, shipment.carrier,
+                    shipment.carrier_label_id, 'premature-provider-void',
+                    'premature-provider-void:transaction', 'LABEL_VOIDED',
+                    statement_timestamp(), statement_timestamp(),
+                    statement_timestamp(), statement_timestamp()
+             FROM shipments shipment
+             JOIN outbox_messages message
+               ON message.deduplication_key =
+                  'void_carrier_label:' || shipment.id::text || ':' || shipment.carrier_label_id
+             WHERE shipment.id = $2`,
+            [randomUUID(), foundation.shipmentId],
+          ),
+        {
+          code: "23514",
+          constraint: "shipment_provider_event_outbox_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "confirm_void_before_verification_time",
+        async () => {
+          await client.query(
+            `UPDATE outbox_messages
+             SET status = 'DELIVERED', delivered_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE deduplication_key =
+                   'void_carrier_label:' || $1::text || ':label-' || $1::text`,
+            [foundation.shipmentId],
+          );
+          await client.query(
+            `INSERT INTO shipment_provider_events
+               (id, shipment_id, outbox_message_id, carrier, carrier_label_id,
+                provider_event_id, provider_transaction_id, kind, occurred_at,
+                authenticated_at, verified_at, created_at)
+             SELECT $1, shipment.id, message.id, shipment.carrier,
+                    shipment.carrier_label_id, 'future-verification-void',
+                    'future-verification-void:transaction', 'LABEL_VOIDED',
+                    statement_timestamp(), statement_timestamp(),
+                    statement_timestamp() + interval '2 seconds',
+                    statement_timestamp()
+             FROM shipments shipment
+             JOIN outbox_messages message
+               ON message.deduplication_key =
+                  'void_carrier_label:' || shipment.id::text || ':' || shipment.carrier_label_id
+             WHERE shipment.id = $2`,
+            [randomUUID(), foundation.shipmentId],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_provider_event_evidence_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "cancel_with_unlinked_provider_void",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'CANCELLED', provider_void_id = 'unlinked-void',
+                 provider_voided_at = clock_timestamp(),
+                 cancelled_at = clock_timestamp(), updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [foundation.shipmentId],
+          ),
+        {
+          code: "23514",
+          constraint: "shipment_provider_void_confirmation_check",
+        },
+      );
+
+      await confirmCarrierLabelVoid(
+        client,
+        foundation.shipmentId,
+        "provider-void-confirmed",
+      );
+      await cancelOrderBeforeHandoff(client, foundation.orderId);
+
+      expect(
+        (
+          await client.query<{
+            job_status: string;
+            order_status: string;
+            provider_void_id: string;
+            reservation_status: string;
+            shipment_status: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    job.status::text AS job_status,
+                    reservation_set.status::text AS reservation_status,
+                    shipment.status::text AS shipment_status,
+                    shipment.provider_void_id
+             FROM orders target_order
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             JOIN jobs job ON job.order_phase_id = phase.id
+             JOIN phase_resource_plans resource_plan
+               ON resource_plan.order_phase_id = phase.id
+             JOIN phase_reservation_sets reservation_set
+               ON reservation_set.phase_resource_plan_id = resource_plan.id
+              AND reservation_set.node_id = resource_plan.node_id
+             JOIN shipments shipment ON shipment.order_id = target_order.id
+             WHERE target_order.id = $1`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "CANCELLED",
+          job_status: "CANCELLED",
+          reservation_status: "RELEASED",
+          shipment_status: "CANCELLED",
+          provider_void_id: "provider-void-confirmed",
+        },
+      ]);
+    });
+  });
+
+  it("lets a verified carrier acceptance scan win the pending-cancellation race atomically", async () => {
+    await rollback(
+      "shipment-cancellation-scan-race",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "shipment-cancellation-scan-race",
+        );
+        const productions = await createCurrentPlanAndPayment(
+          client,
+          fixtures,
+          foundation,
+        );
+        await activateCurrentPlan(client, fixtures, foundation, productions);
+        for (const status of [
+          "IN_PRODUCTION",
+          "QC_PASSED",
+          "READY_TO_SHIP",
+        ] as const) {
+          await advanceOrderLifecycleStep(client, foundation.orderId, status);
+        }
+        await client.query(
+          `UPDATE shipments
+         SET status = 'CANCELLATION_PENDING',
+             cancellation_requested_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+          [foundation.shipmentId],
+        );
+
+        await expectQueryError(
+          client,
+          "handoff_pending_without_verified_scan",
+          () =>
+            client.query(
+              `UPDATE shipments
+             SET status = 'HANDED_OVER',
+                 provider_acceptance_scan_id = 'unverified-scan',
+                 handed_over_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+              [foundation.shipmentId],
+            ),
+          {
+            code: "23514",
+            constraint: "shipment_acceptance_scan_confirmation_check",
+          },
+        );
+        await expectQueryError(
+          client,
+          "persist_scan_without_atomic_handoff",
+          async () => {
+            await persistVerifiedAcceptanceScan(
+              client,
+              foundation.shipmentId,
+              "orphaned-acceptance-scan",
+            );
+            await client.query(
+              `SET CONSTRAINTS "shipment_provider_events_consumed" IMMEDIATE`,
+            );
+          },
+          {
+            code: "23514",
+            constraint: "shipment_provider_event_consumption_check",
+          },
+        );
+        await expectQueryError(
+          client,
+          "handoff_before_scan_verification_time",
+          () =>
+            client.query(
+              `INSERT INTO shipment_provider_events
+               (id, shipment_id, carrier, carrier_label_id, provider_event_id,
+                provider_transaction_id, kind, occurred_at, authenticated_at,
+                verified_at, created_at)
+             SELECT $1, shipment.id, shipment.carrier,
+                    shipment.carrier_label_id, 'future-verification-scan',
+                    'future-verification-scan:transaction', 'ACCEPTANCE_SCAN',
+                    statement_timestamp(), statement_timestamp(),
+                    statement_timestamp() + interval '2 seconds',
+                    statement_timestamp()
+             FROM shipments shipment
+             WHERE shipment.id = $2`,
+              [randomUUID(), foundation.shipmentId],
+            ),
+          {
+            code: "23514",
+            constraint: "shipment_provider_event_evidence_check",
+          },
+        );
+
+        const providerScanId = "provider-acceptance-scan";
+        const handedOverAt = await persistVerifiedAcceptanceScan(
+          client,
+          foundation.shipmentId,
+          providerScanId,
+        );
+        await client.query(
+          `UPDATE jobs
+         SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+          [foundation.orderId, handedOverAt],
+        );
+        await client.query(
+          `UPDATE shipments
+         SET status = 'HANDED_OVER', provider_acceptance_scan_id = $2,
+             handed_over_at = $3, updated_at = $3
+         WHERE id = $1`,
+          [foundation.shipmentId, providerScanId, handedOverAt],
+        );
+        await client.query(
+          `UPDATE order_phases
+         SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+          [foundation.orderId, handedOverAt],
+        );
+        await client.query(
+          `UPDATE orders SET status = 'SHIPPED', updated_at = $2 WHERE id = $1`,
+          [foundation.orderId, handedOverAt],
+        );
+        await forceOrderLifecycleConstraints(client);
+
+        expect(
+          (
+            await client.query<{
+              cancellation_requested_at: Date;
+              job_status: string;
+              order_status: string;
+              provider_acceptance_scan_id: string;
+              shipment_status: string;
+            }>(
+              `SELECT target_order.status::text AS order_status,
+                    job.status::text AS job_status,
+                    shipment.status::text AS shipment_status,
+                    shipment.cancellation_requested_at,
+                    shipment.provider_acceptance_scan_id
+             FROM orders target_order
+             JOIN jobs job ON job.order_id = target_order.id
+             JOIN shipments shipment ON shipment.order_id = target_order.id
+             WHERE target_order.id = $1`,
+              [foundation.orderId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            order_status: "SHIPPED",
+            job_status: "HANDED_OVER",
+            shipment_status: "HANDED_OVER",
+            cancellation_requested_at: expect.any(Date),
+            provider_acceptance_scan_id: providerScanId,
+          },
+        ]);
+        expect(
+          (
+            await client.query<{ count: string }>(
+              `SELECT count(*)::text
+             FROM refund_transactions refund
+             JOIN payments payment ON payment.id = refund.payment_id
+             WHERE payment.order_id = $1`,
+              [foundation.orderId],
+            )
+          ).rows,
+        ).toEqual([{ count: "0" }]);
+        await expectQueryError(
+          client,
+          "cancel_after_verified_handoff",
+          () =>
+            client.query(
+              `UPDATE shipments
+             SET status = 'CANCELLED', cancelled_at = clock_timestamp()
+             WHERE id = $1`,
+              [foundation.shipmentId],
+            ),
+          { code: "23514", constraint: "shipment_status_transition_check" },
+        );
+      },
+    );
+  });
+
   it("rejects future evidence for every Shipment lifecycle timestamp", async () => {
     await rollback("future-shipment-evidence", async (client, fixtures) => {
       const toleratedFoundation = await fixtures.createFoundation(
@@ -7477,6 +8070,7 @@ describe("commerce persistence foundations", () => {
         `UPDATE shipments
          SET status = 'LABEL_CREATED', carrier = 'tolerated-carrier',
              provider_shipment_id = 'tolerated-provider',
+             carrier_label_id = 'tolerated-label',
              tracking_code = 'tolerated-tracking',
              label_created_at = clock_timestamp() + interval '2 seconds',
              updated_at = clock_timestamp()
@@ -7515,6 +8109,7 @@ describe("commerce persistence foundations", () => {
                 `UPDATE shipments
                  SET status = 'LABEL_CREATED', carrier = 'future-carrier',
                      provider_shipment_id = 'future-provider',
+                     carrier_label_id = 'future-label',
                      tracking_code = 'future-tracking',
                      label_created_at = $2, updated_at = $2
                  WHERE id = $1`,
@@ -7525,6 +8120,7 @@ describe("commerce persistence foundations", () => {
                 `UPDATE shipments
                  SET status = 'LABEL_CREATED', carrier = 'past-carrier',
                      provider_shipment_id = 'past-provider',
+                     carrier_label_id = 'past-label',
                      tracking_code = 'past-tracking',
                      label_created_at = $2, updated_at = $2
                  WHERE id = $1`,
@@ -7541,6 +8137,7 @@ describe("commerce persistence foundations", () => {
                 `UPDATE shipments
                  SET status = 'LABEL_CREATED', carrier = 'delivered-carrier',
                      provider_shipment_id = 'delivered-provider',
+                     carrier_label_id = 'delivered-label',
                      tracking_code = 'delivered-tracking',
                      label_created_at = $2, updated_at = $2
                  WHERE id = $1`,
@@ -8390,6 +8987,7 @@ describe("commerce persistence foundations", () => {
           `UPDATE shipments
          SET status = 'LABEL_CREATED', carrier = 'coverage-carrier',
              provider_shipment_id = 'coverage-provider',
+             carrier_label_id = 'coverage-label',
              tracking_code = 'coverage-tracking',
              label_created_at = $2, updated_at = $2
          WHERE id = $1`,

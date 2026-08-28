@@ -26,7 +26,10 @@ CREATE TYPE "order_phase_status" AS ENUM ('QUOTED', 'ACTIVE', 'IN_PRODUCTION', '
 CREATE TYPE "fulfilment_slot_outcome" AS ENUM ('PENDING', 'DELIVERED', 'CANCELLED', 'CANCELLED_REFUNDED');
 
 -- CreateEnum
-CREATE TYPE "shipment_status" AS ENUM ('PLANNED', 'LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED');
+CREATE TYPE "shipment_status" AS ENUM ('PLANNED', 'LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED');
+
+-- CreateEnum
+CREATE TYPE "shipment_provider_event_kind" AS ENUM ('LABEL_VOIDED', 'ACCEPTANCE_SCAN');
 
 -- CreateEnum
 CREATE TYPE "job_status" AS ENUM ('CREATED', 'ACCEPTED', 'GCODE_READY', 'PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED', 'CANCELLED', 'FAILED', 'QC_REJECTED');
@@ -323,14 +326,36 @@ CREATE TABLE "shipments" (
     "status" "shipment_status" NOT NULL DEFAULT 'PLANNED',
     "carrier" VARCHAR(100),
     "provider_shipment_id" VARCHAR(255),
+    "carrier_label_id" VARCHAR(190),
     "tracking_code" VARCHAR(255),
     "label_created_at" TIMESTAMPTZ(3),
+    "cancellation_requested_at" TIMESTAMPTZ(3),
+    "provider_void_id" VARCHAR(255),
+    "provider_voided_at" TIMESTAMPTZ(3),
+    "provider_acceptance_scan_id" VARCHAR(255),
     "handed_over_at" TIMESTAMPTZ(3),
     "delivered_at" TIMESTAMPTZ(3),
     "cancelled_at" TIMESTAMPTZ(3),
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL,
     CONSTRAINT "shipments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "shipment_provider_events" (
+    "id" UUID NOT NULL,
+    "shipment_id" UUID NOT NULL,
+    "outbox_message_id" UUID,
+    "carrier" VARCHAR(100) NOT NULL,
+    "carrier_label_id" VARCHAR(190) NOT NULL,
+    "provider_event_id" VARCHAR(255) NOT NULL,
+    "provider_transaction_id" VARCHAR(255) NOT NULL,
+    "kind" "shipment_provider_event_kind" NOT NULL,
+    "occurred_at" TIMESTAMPTZ(3) NOT NULL,
+    "authenticated_at" TIMESTAMPTZ(3) NOT NULL,
+    "verified_at" TIMESTAMPTZ(3) NOT NULL,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "shipment_provider_events_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -478,11 +503,17 @@ CREATE UNIQUE INDEX "shipment_plan_fulfilment_slots_order_price_binding_id_fulfi
 CREATE INDEX "shipment_plan_fulfilment_slots_fulfilment_slot_id_idx" ON "shipment_plan_fulfilment_slots"("fulfilment_slot_id");
 CREATE INDEX "price_component_fulfilment_allocations_fulfilment_slot_id_idx" ON "price_component_fulfilment_allocations"("fulfilment_slot_id");
 CREATE UNIQUE INDEX "shipments_carrier_provider_shipment_id_key" ON "shipments"("carrier", "provider_shipment_id");
+CREATE UNIQUE INDEX "shipments_carrier_carrier_label_id_key" ON "shipments"("carrier", "carrier_label_id");
+CREATE UNIQUE INDEX "shipments_carrier_provider_void_id_key" ON "shipments"("carrier", "provider_void_id");
 CREATE UNIQUE INDEX "shipments_replaces_shipment_id_key" ON "shipments"("replaces_shipment_id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id");
 CREATE UNIQUE INDEX "shipments_lineage_scope_key" ON "shipments"("id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id");
 CREATE UNIQUE INDEX "shipments_plan_root_key" ON "shipments"("shipment_plan_id") WHERE "replaces_shipment_id" IS NULL;
 CREATE INDEX "shipments_order_id_status_idx" ON "shipments"("order_id", "status");
 CREATE INDEX "shipments_shipment_plan_id_status_idx" ON "shipments"("shipment_plan_id", "status");
+CREATE UNIQUE INDEX "shipment_provider_events_outbox_message_id_key" ON "shipment_provider_events"("outbox_message_id");
+CREATE UNIQUE INDEX "shipment_provider_events_carrier_provider_event_id_key" ON "shipment_provider_events"("carrier", "provider_event_id");
+CREATE UNIQUE INDEX "shipment_provider_events_carrier_provider_transaction_id_key" ON "shipment_provider_events"("carrier", "provider_transaction_id");
+CREATE INDEX "shipment_provider_events_shipment_id_kind_idx" ON "shipment_provider_events"("shipment_id", "kind");
 CREATE UNIQUE INDEX "jobs_id_node_id_phase_resource_plan_job_id_key" ON "jobs"("id", "node_id", "phase_resource_plan_job_id");
 CREATE UNIQUE INDEX "jobs_phase_resource_plan_job_id_key" ON "jobs"("phase_resource_plan_job_id");
 CREATE UNIQUE INDEX "jobs_qc_photo_asset_id_key" ON "jobs"("qc_photo_asset_id");
@@ -558,6 +589,8 @@ ALTER TABLE "shipments" ADD CONSTRAINT "shipments_order_phase_id_order_id_fkey" 
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_shipment_plan_id_order_id_order_phase_id_deliver_fkey" FOREIGN KEY ("shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") REFERENCES "shipment_plans"("id", "order_id", "order_phase_id", "delivery_destination_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_delivery_destination_id_order_id_fkey" FOREIGN KEY ("delivery_destination_id", "order_id") REFERENCES "delivery_destinations"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_replacement_scope_fkey" FOREIGN KEY ("replaces_shipment_id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") REFERENCES "shipments"("id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "shipment_provider_events" ADD CONSTRAINT "shipment_provider_events_shipment_id_fkey" FOREIGN KEY ("shipment_id") REFERENCES "shipments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "shipment_provider_events" ADD CONSTRAINT "shipment_provider_events_outbox_message_id_fkey" FOREIGN KEY ("outbox_message_id") REFERENCES "outbox_messages"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "nodes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_order_phase_id_order_id_fkey" FOREIGN KEY ("order_phase_id", "order_id") REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -3504,8 +3537,13 @@ BEGIN
                   "status" <> 'PLANNED'
                   OR "carrier" IS NOT NULL
                   OR "provider_shipment_id" IS NOT NULL
+                  OR "carrier_label_id" IS NOT NULL
                   OR "tracking_code" IS NOT NULL
                   OR "label_created_at" IS NOT NULL
+                  OR "cancellation_requested_at" IS NOT NULL
+                  OR "provider_void_id" IS NOT NULL
+                  OR "provider_voided_at" IS NOT NULL
+                  OR "provider_acceptance_scan_id" IS NOT NULL
                   OR "handed_over_at" IS NOT NULL
                   OR "delivered_at" IS NOT NULL
                   OR "cancelled_at" IS NOT NULL
@@ -3718,9 +3756,10 @@ BEGIN
                   WHERE replacement."replaces_shipment_id" = shipment."id"
               )
               AND (
-                  shipment."status" <> 'LABEL_CREATED'
+                  shipment."status" NOT IN ('LABEL_CREATED', 'CANCELLATION_PENDING')
                   OR shipment."carrier" IS NULL
                   OR shipment."provider_shipment_id" IS NULL
+                  OR shipment."carrier_label_id" IS NULL
                   OR shipment."label_created_at" IS NULL
               )
         ) OR EXISTS (
@@ -3754,7 +3793,7 @@ BEGIN
             SELECT 1
             FROM "shipments" shipment
             WHERE shipment."order_id" = target_order_id
-              AND shipment."status" NOT IN ('LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND shipment."status" NOT IN ('LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
               AND NOT EXISTS (
                   SELECT 1
                   FROM "shipments" replacement
@@ -6166,6 +6205,128 @@ CREATE TRIGGER "fulfilment_slots_topology_protected"
 BEFORE INSERT OR UPDATE OR DELETE ON "fulfilment_slots"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_fulfilment_slot_topology();
 
+CREATE FUNCTION taven_protect_shipment_provider_event()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_status "shipment_status";
+    target_carrier varchar(100);
+    target_label_id varchar(255);
+    target_label_created_at timestamptz;
+    target_cancellation_requested_at timestamptz;
+    evidence_now timestamptz := clock_timestamp();
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Shipment provider events are immutable audit evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_immutable_check';
+    END IF;
+
+    SELECT shipment."status", shipment."carrier", shipment."carrier_label_id",
+           shipment."label_created_at", shipment."cancellation_requested_at"
+    INTO target_status, target_carrier, target_label_id,
+         target_label_created_at, target_cancellation_requested_at
+    FROM "shipments" shipment
+    WHERE shipment."id" = NEW."shipment_id"
+    FOR UPDATE;
+
+    IF target_status IS DISTINCT FROM 'CANCELLATION_PENDING'::"shipment_status"
+       OR NEW."carrier" IS DISTINCT FROM target_carrier
+       OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id
+       OR NEW."carrier" !~ '[^[:space:]]'
+       OR NEW."carrier_label_id" !~ '[^[:space:]]'
+       OR NEW."provider_event_id" !~ '[^[:space:]]'
+       OR NEW."provider_transaction_id" !~ '[^[:space:]]' THEN
+        RAISE EXCEPTION 'Shipment provider event must match the exact pending cancellation scope'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
+    END IF;
+
+    IF NEW."occurred_at" > evidence_now + interval '5 seconds'
+       OR NEW."authenticated_at" > evidence_now + interval '5 milliseconds'
+       OR NEW."verified_at" > evidence_now + interval '5 milliseconds'
+       OR NEW."occurred_at" < target_label_created_at
+       OR NEW."authenticated_at" < NEW."occurred_at"
+       OR NEW."verified_at" < NEW."authenticated_at" THEN
+        RAISE EXCEPTION 'Shipment provider event timestamps must be current and chronological'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_evidence_check';
+    END IF;
+
+    IF NEW."kind" = 'LABEL_VOIDED' THEN
+        IF NEW."occurred_at" < target_cancellation_requested_at
+           OR NEW."outbox_message_id" IS NULL
+           OR NOT EXISTS (
+               SELECT 1
+               FROM "outbox_messages" message
+               WHERE message."id" = NEW."outbox_message_id"
+                 AND message."deduplication_key" =
+                     'void_carrier_label:' || NEW."shipment_id"::text || ':' || NEW."carrier_label_id"
+                 AND message."aggregate_type" = 'Shipment'
+                 AND message."aggregate_id" = NEW."shipment_id"
+                 AND message."message_type" = 'void_carrier_label'
+                 AND message."schema_version" = 1
+                 AND message."status" = 'DELIVERED'
+                 AND message."delivered_at" IS NOT NULL
+                 AND message."delivered_at" <= NEW."occurred_at"
+                 AND message."payload" = jsonb_build_object(
+                     'shipmentId', NEW."shipment_id"::text,
+                     'carrierLabelId', NEW."carrier_label_id",
+                     'action', 'void_carrier_label'
+                 )
+           ) THEN
+            RAISE EXCEPTION 'Provider label void must prove the exact delivered outbox command'
+                USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_outbox_check';
+        END IF;
+    ELSIF NEW."kind" = 'ACCEPTANCE_SCAN' THEN
+        IF NEW."outbox_message_id" IS NOT NULL THEN
+            RAISE EXCEPTION 'Carrier acceptance scan cannot consume a provider-void outbox command'
+                USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_outbox_check';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "shipment_provider_events_protected"
+BEFORE INSERT OR UPDATE OR DELETE ON "shipment_provider_events"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_shipment_provider_event();
+
+CREATE FUNCTION taven_reconcile_shipment_provider_event_consumption()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (NEW."kind" = 'LABEL_VOIDED'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."id" = NEW."shipment_id"
+              AND shipment."status" = 'CANCELLED'
+              AND shipment."provider_void_id" = NEW."provider_event_id"
+              AND shipment."provider_voided_at" = NEW."verified_at"
+        ))
+       OR (NEW."kind" = 'ACCEPTANCE_SCAN'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "shipments" shipment
+               WHERE shipment."id" = NEW."shipment_id"
+                 AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+                 AND shipment."provider_acceptance_scan_id" = NEW."provider_event_id"
+                 AND shipment."handed_over_at" = NEW."verified_at"
+           )) THEN
+        RAISE EXCEPTION 'Shipment provider event and its complete lifecycle outcome must commit atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_consumption_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "shipment_provider_events_consumed"
+AFTER INSERT ON "shipment_provider_events"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_shipment_provider_event_consumption();
+
 CREATE FUNCTION taven_protect_shipment_lifecycle()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -6175,6 +6336,10 @@ DECLARE
 BEGIN
     IF (NEW."label_created_at" IS NOT NULL
         AND NEW."label_created_at" > evidence_now + interval '5 seconds')
+       OR (NEW."cancellation_requested_at" IS NOT NULL
+           AND NEW."cancellation_requested_at" > evidence_now + interval '5 seconds')
+       OR (NEW."provider_voided_at" IS NOT NULL
+           AND NEW."provider_voided_at" > evidence_now + interval '5 seconds')
        OR (NEW."handed_over_at" IS NOT NULL
            AND NEW."handed_over_at" > evidence_now + interval '5 seconds')
        OR (NEW."delivered_at" IS NOT NULL
@@ -6189,8 +6354,13 @@ BEGIN
         IF NEW."status" <> 'PLANNED'
            OR NEW."carrier" IS NOT NULL
            OR NEW."provider_shipment_id" IS NOT NULL
+           OR NEW."carrier_label_id" IS NOT NULL
            OR NEW."tracking_code" IS NOT NULL
            OR NEW."label_created_at" IS NOT NULL
+           OR NEW."cancellation_requested_at" IS NOT NULL
+           OR NEW."provider_void_id" IS NOT NULL
+           OR NEW."provider_voided_at" IS NOT NULL
+           OR NEW."provider_acceptance_scan_id" IS NOT NULL
            OR NEW."handed_over_at" IS NOT NULL
            OR NEW."delivered_at" IS NOT NULL
            OR NEW."cancelled_at" IS NOT NULL THEN
@@ -6202,8 +6372,13 @@ BEGIN
 
     IF (OLD."carrier" IS NOT NULL AND NEW."carrier" IS DISTINCT FROM OLD."carrier")
        OR (OLD."provider_shipment_id" IS NOT NULL AND NEW."provider_shipment_id" IS DISTINCT FROM OLD."provider_shipment_id")
+       OR (OLD."carrier_label_id" IS NOT NULL AND NEW."carrier_label_id" IS DISTINCT FROM OLD."carrier_label_id")
        OR (OLD."tracking_code" IS NOT NULL AND NEW."tracking_code" IS DISTINCT FROM OLD."tracking_code")
        OR (OLD."label_created_at" IS NOT NULL AND NEW."label_created_at" IS DISTINCT FROM OLD."label_created_at")
+       OR (OLD."cancellation_requested_at" IS NOT NULL AND NEW."cancellation_requested_at" IS DISTINCT FROM OLD."cancellation_requested_at")
+       OR (OLD."provider_void_id" IS NOT NULL AND NEW."provider_void_id" IS DISTINCT FROM OLD."provider_void_id")
+       OR (OLD."provider_voided_at" IS NOT NULL AND NEW."provider_voided_at" IS DISTINCT FROM OLD."provider_voided_at")
+       OR (OLD."provider_acceptance_scan_id" IS NOT NULL AND NEW."provider_acceptance_scan_id" IS DISTINCT FROM OLD."provider_acceptance_scan_id")
        OR (OLD."handed_over_at" IS NOT NULL AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at")
        OR (OLD."delivered_at" IS NOT NULL AND NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at")
        OR (OLD."cancelled_at" IS NOT NULL AND NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at") THEN
@@ -6215,8 +6390,13 @@ BEGIN
        AND (
            NEW."carrier" IS DISTINCT FROM OLD."carrier"
            OR NEW."provider_shipment_id" IS DISTINCT FROM OLD."provider_shipment_id"
+           OR NEW."carrier_label_id" IS DISTINCT FROM OLD."carrier_label_id"
            OR NEW."tracking_code" IS DISTINCT FROM OLD."tracking_code"
            OR NEW."label_created_at" IS DISTINCT FROM OLD."label_created_at"
+           OR NEW."cancellation_requested_at" IS DISTINCT FROM OLD."cancellation_requested_at"
+           OR NEW."provider_void_id" IS DISTINCT FROM OLD."provider_void_id"
+           OR NEW."provider_voided_at" IS DISTINCT FROM OLD."provider_voided_at"
+           OR NEW."provider_acceptance_scan_id" IS DISTINCT FROM OLD."provider_acceptance_scan_id"
            OR NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
            OR NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
            OR NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at"
@@ -6228,7 +6408,8 @@ BEGIN
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
            (OLD."status" = 'PLANNED' AND NEW."status" IN ('LABEL_CREATED', 'CANCELLED'))
-           OR (OLD."status" = 'LABEL_CREATED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLED'))
+           OR (OLD."status" = 'LABEL_CREATED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLATION_PENDING'))
+           OR (OLD."status" = 'CANCELLATION_PENDING' AND NEW."status" IN ('CANCELLED', 'HANDED_OVER'))
            OR (OLD."status" = 'HANDED_OVER' AND NEW."status" IN ('IN_TRANSIT', 'DELIVERED'))
            OR (OLD."status" = 'IN_TRANSIT' AND NEW."status" = 'DELIVERED')
        ) THEN
@@ -6241,71 +6422,253 @@ BEGIN
            (OLD."status" = 'PLANNED' AND NEW."status" = 'LABEL_CREATED'
             AND NEW."carrier" IS DISTINCT FROM OLD."carrier"
             AND NEW."provider_shipment_id" IS DISTINCT FROM OLD."provider_shipment_id"
+            AND NEW."carrier_label_id" IS DISTINCT FROM OLD."carrier_label_id"
             AND NEW."label_created_at" IS DISTINCT FROM OLD."label_created_at"
+            AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+            AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+            AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+            AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
             AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
             AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
             AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
            OR (OLD."status" = 'LABEL_CREATED' AND NEW."status" = 'HANDED_OVER'
                AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
                AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
                AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
                AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
                AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
            OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'IN_TRANSIT'
                AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
                AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
                AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
                AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
                AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
            OR (OLD."status" IN ('HANDED_OVER', 'IN_TRANSIT') AND NEW."status" = 'DELIVERED'
                AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
                AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
                AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
                AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
                AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
                AND NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
-           OR (NEW."status" = 'CANCELLED'
+           OR (OLD."status" = 'PLANNED' AND NEW."status" = 'CANCELLED'
                AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
                AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
                AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
                AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
                AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'LABEL_CREATED' AND NEW."status" = 'CANCELLATION_PENDING'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'CANCELLATION_PENDING' AND NEW."status" = 'CANCELLED'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'CANCELLATION_PENDING' AND NEW."status" = 'HANDED_OVER'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS DISTINCT FROM OLD."provider_acceptance_scan_id"
+               AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
        ) THEN
         RAISE EXCEPTION 'Shipment transition may assign only its own lifecycle evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
     END IF;
 
-    IF (NEW."status" IN ('LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+    IF (NEW."status" IN ('LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
         AND (
             NEW."carrier" IS NULL
             OR NEW."carrier" !~ '[^[:space:]]'
             OR NEW."provider_shipment_id" IS NULL
             OR NEW."provider_shipment_id" !~ '[^[:space:]]'
+            OR NEW."carrier_label_id" IS NULL
+            OR NEW."carrier_label_id" !~ '[^[:space:]]'
             OR NEW."label_created_at" IS NULL
         ))
        OR (NEW."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
            AND NEW."handed_over_at" IS NULL)
+       OR (NEW."status" = 'CANCELLATION_PENDING'
+           AND (
+               NEW."cancellation_requested_at" IS NULL
+               OR NEW."provider_void_id" IS NOT NULL
+               OR NEW."provider_voided_at" IS NOT NULL
+               OR NEW."provider_acceptance_scan_id" IS NOT NULL
+               OR NEW."cancelled_at" IS NOT NULL
+           ))
+       OR (NEW."provider_acceptance_scan_id" IS NOT NULL
+           AND NEW."provider_acceptance_scan_id" !~ '[^[:space:]]')
+       OR (NEW."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+           AND NEW."cancellation_requested_at" IS NOT NULL
+           AND NEW."provider_acceptance_scan_id" IS NULL)
        OR (NEW."status" = 'DELIVERED' AND NEW."delivered_at" IS NULL)
-       OR (NEW."status" = 'CANCELLED' AND NEW."cancelled_at" IS NULL) THEN
+       OR (NEW."status" = 'CANCELLED'
+           AND (
+               NEW."cancelled_at" IS NULL
+               OR (
+                   NEW."label_created_at" IS NULL
+                   AND (
+                       NEW."cancellation_requested_at" IS NOT NULL
+                       OR NEW."provider_void_id" IS NOT NULL
+                       OR NEW."provider_voided_at" IS NOT NULL
+                       OR NEW."provider_acceptance_scan_id" IS NOT NULL
+                   )
+               )
+               OR (
+                   NEW."label_created_at" IS NOT NULL
+                   AND (
+                       NEW."cancellation_requested_at" IS NULL
+                       OR NEW."provider_void_id" IS NULL
+                       OR NEW."provider_void_id" !~ '[^[:space:]]'
+                       OR NEW."provider_voided_at" IS NULL
+                       OR NEW."provider_acceptance_scan_id" IS NOT NULL
+                   )
+               )
+           )) THEN
         RAISE EXCEPTION 'Shipment lifecycle state requires its complete provider evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
     END IF;
 
     IF (NEW."label_created_at" IS NOT NULL AND NEW."handed_over_at" IS NOT NULL
         AND NEW."handed_over_at" < NEW."label_created_at")
+       OR (NEW."label_created_at" IS NOT NULL AND NEW."cancellation_requested_at" IS NOT NULL
+           AND NEW."cancellation_requested_at" < NEW."label_created_at")
+       OR (NEW."cancellation_requested_at" IS NOT NULL AND NEW."provider_voided_at" IS NOT NULL
+           AND NEW."provider_voided_at" < NEW."cancellation_requested_at")
+       OR (NEW."provider_voided_at" IS NOT NULL AND NEW."cancelled_at" IS NOT NULL
+           AND NEW."cancelled_at" < NEW."provider_voided_at")
        OR (NEW."handed_over_at" IS NOT NULL AND NEW."delivered_at" IS NOT NULL
            AND NEW."delivered_at" < NEW."handed_over_at")
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."label_created_at" IS NOT NULL
            AND NEW."cancelled_at" < NEW."label_created_at") THEN
         RAISE EXCEPTION 'Shipment lifecycle timestamps must be chronological'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
+    END IF;
+
+    IF OLD."status" = 'CANCELLATION_PENDING'
+       AND NEW."status" = 'CANCELLED'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "shipment_provider_events" event
+           JOIN "outbox_messages" message
+             ON message."id" = event."outbox_message_id"
+           WHERE event."shipment_id" = NEW."id"
+             AND event."kind" = 'LABEL_VOIDED'
+             AND event."carrier" = NEW."carrier"
+             AND event."carrier_label_id" = NEW."carrier_label_id"
+             AND event."provider_event_id" = NEW."provider_void_id"
+             AND event."verified_at" = NEW."provider_voided_at"
+             AND message."deduplication_key" =
+                 'void_carrier_label:' || NEW."id"::text || ':' || NEW."carrier_label_id"
+             AND message."aggregate_type" = 'Shipment'
+             AND message."aggregate_id" = NEW."id"
+             AND message."message_type" = 'void_carrier_label'
+             AND message."schema_version" = 1
+             AND message."status" = 'DELIVERED'
+             AND message."delivered_at" IS NOT NULL
+             AND message."payload" = jsonb_build_object(
+                 'shipmentId', NEW."id"::text,
+                 'carrierLabelId', NEW."carrier_label_id",
+                 'action', 'void_carrier_label'
+             )
+       ) THEN
+        RAISE EXCEPTION 'Shipment cancellation requires an authenticated provider void result for its exact outbox command'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_void_confirmation_check';
+    END IF;
+
+    IF OLD."status" = 'CANCELLATION_PENDING'
+       AND NEW."status" = 'HANDED_OVER'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "shipment_provider_events" event
+           WHERE event."shipment_id" = NEW."id"
+             AND event."outbox_message_id" IS NULL
+             AND event."kind" = 'ACCEPTANCE_SCAN'
+             AND event."carrier" = NEW."carrier"
+             AND event."carrier_label_id" = NEW."carrier_label_id"
+             AND event."provider_event_id" = NEW."provider_acceptance_scan_id"
+             AND event."verified_at" = NEW."handed_over_at"
+       ) THEN
+        RAISE EXCEPTION 'pending cancellation may hand off only from its exact verified carrier acceptance scan'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_acceptance_scan_confirmation_check';
+    END IF;
+
+    IF OLD."status" = 'LABEL_CREATED'
+       AND NEW."status" = 'CANCELLATION_PENDING' THEN
+        INSERT INTO "outbox_messages" (
+            "id", "deduplication_key", "aggregate_type", "aggregate_id",
+            "message_type", "schema_version", "payload", "status", "attempts",
+            "available_at", "created_at", "updated_at"
+        ) VALUES (
+            gen_random_uuid(),
+            'void_carrier_label:' || NEW."id"::text || ':' || NEW."carrier_label_id",
+            'Shipment',
+            NEW."id",
+            'void_carrier_label',
+            1,
+            jsonb_build_object(
+                'shipmentId', NEW."id"::text,
+                'carrierLabelId', NEW."carrier_label_id",
+                'action', 'void_carrier_label'
+            ),
+            'PENDING',
+            0,
+            NEW."cancellation_requested_at",
+            NEW."cancellation_requested_at",
+            NEW."cancellation_requested_at"
+        )
+        ON CONFLICT ("deduplication_key") DO NOTHING;
     END IF;
 
     RETURN NEW;
@@ -6315,6 +6678,40 @@ $$;
 CREATE TRIGGER "shipments_lifecycle_protected"
 BEFORE INSERT OR UPDATE ON "shipments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_shipment_lifecycle();
+
+CREATE FUNCTION taven_reconcile_shipment_label_void_outbox()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."cancellation_requested_at" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "outbox_messages" message
+           WHERE message."deduplication_key" =
+                 'void_carrier_label:' || NEW."id"::text || ':' || NEW."carrier_label_id"
+             AND message."aggregate_type" = 'Shipment'
+             AND message."aggregate_id" = NEW."id"
+             AND message."message_type" = 'void_carrier_label'
+             AND message."schema_version" = 1
+             AND message."payload" = jsonb_build_object(
+                 'shipmentId', NEW."id"::text,
+                 'carrierLabelId', NEW."carrier_label_id",
+                 'action', 'void_carrier_label'
+             )
+       ) THEN
+        RAISE EXCEPTION 'issued-label cancellation requires its immutable carrier-void outbox command'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_label_void_outbox_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "shipments_label_void_outbox_reconciled"
+AFTER UPDATE OF "status", "cancellation_requested_at" ON "shipments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_shipment_label_void_outbox();
 
 CREATE FUNCTION taven_protect_shipment_topology()
 RETURNS trigger
