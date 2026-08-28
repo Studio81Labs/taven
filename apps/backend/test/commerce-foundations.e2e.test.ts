@@ -2547,13 +2547,119 @@ describe("commerce persistence foundations", () => {
           { status: "RELEASED" },
         ]);
 
+        const refundFailedAt = new Date(failedAt.getTime() + 500);
+        await client.query(
+          `UPDATE refund_transactions
+           SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+          [refundId, refundFailedAt],
+        );
+        await client.query(
+          `UPDATE payments SET status = 'CAPTURED', updated_at = $2 WHERE id = $1`,
+          [foundation.paymentId, refundFailedAt],
+        );
+        await client.query(
+          `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+        );
+        await client.query(
+          `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" DEFERRED`,
+        );
+        await forceOrderLifecycleConstraints(client);
+        expect(
+          (
+            await client.query<{
+              job_status: string;
+              payment_status: string;
+              refund_status: string;
+            }>(
+              `SELECT job.status::text AS job_status,
+                      payment.status::text AS payment_status,
+                      refund.status::text AS refund_status
+               FROM jobs job
+               JOIN payments payment ON payment.order_id = job.order_id
+               JOIN refund_transactions refund ON refund.payment_id = payment.id
+               WHERE job.id = $1 AND refund.id = $2`,
+              [jobId, refundId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            job_status: "FAILED",
+            payment_status: "CAPTURED",
+            refund_status: "FAILED",
+          },
+        ]);
+
+        const wrongRetryAmount = Number(capturedAmount) - 1;
+        if (wrongRetryAmount <= 0) {
+          throw new Error("production failure retry fixture is too small");
+        }
+        await expectQueryError(
+          client,
+          "retain_only_latest_failed_refund_attempt",
+          async () => {
+            const wrongRetryAt = new Date(refundFailedAt.getTime() + 1);
+            await client.query(
+              `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                requested_at, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,'PRODUCTION_FAILURE','FAILED',$5,$5,$5)`,
+              [
+                fixtures.id("wrong-production-failure-refund-retry"),
+                foundation.paymentId,
+                "wrong-production-failure-refund-retry",
+                wrongRetryAmount,
+                wrongRetryAt,
+              ],
+            );
+            await client.query(
+              `SET CONSTRAINTS "refunds_production_failure_reconciled" IMMEDIATE`,
+            );
+          },
+          { code: "23514", constraint: "job_failure_cancellation_check" },
+        );
+
+        const retryRefundId = fixtures.id("production-failure-refund-retry");
+        await client.query(
+          `INSERT INTO refund_transactions
+           (id, payment_id, idempotency_key, amount_minor, reason, status,
+            requested_at, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,'PRODUCTION_FAILURE','PENDING',$5,$5,$5)`,
+          [
+            retryRefundId,
+            foundation.paymentId,
+            "production-failure-refund-retry",
+            capturedAmount,
+            refundFailedAt,
+          ],
+        );
+        await client.query(
+          `UPDATE payments SET status = 'REFUND_PENDING', updated_at = $2
+           WHERE id = $1`,
+          [foundation.paymentId, refundFailedAt],
+        );
+        await client.query(
+          `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+        );
+        await client.query(
+          `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" DEFERRED`,
+        );
+        await forceOrderLifecycleConstraints(client);
+
         const refundedAt = new Date(failedAt.getTime() + 1_000);
         await client.query(
           `UPDATE refund_transactions
          SET status = 'SUCCEEDED', provider_refund_id = $2,
              completed_at = $3, updated_at = $3
          WHERE id = $1`,
-          [refundId, "production-failure-refund", refundedAt],
+          [retryRefundId, "production-failure-refund-retry", refundedAt],
         );
         await client.query(
           `UPDATE payments SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
@@ -2599,7 +2705,7 @@ describe("commerce persistence foundations", () => {
              JOIN payments payment ON payment.order_id = target_order.id
              JOIN refund_transactions refund ON refund.payment_id = payment.id
              WHERE job.id = $1 AND refund.id = $2`,
-              [jobId, refundId],
+              [jobId, retryRefundId],
             )
           ).rows,
         ).toEqual([

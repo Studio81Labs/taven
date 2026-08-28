@@ -1447,6 +1447,16 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM 1
+    FROM "quote_sessions"
+    WHERE "id" = NEW."quote_session_id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = NEW."order_id"
+    FOR UPDATE;
+
     IF NOT EXISTS (
         SELECT 1
         FROM "orders" target_order
@@ -4976,27 +4986,63 @@ BEGIN
         OR EXISTS (
             SELECT 1
             FROM "payments" payment
+            CROSS JOIN LATERAL (
+                SELECT coalesce(sum(refund."amount_minor") FILTER (
+                           WHERE refund."status" = 'SUCCEEDED'
+                       ), 0) AS succeeded_total,
+                       coalesce(sum(refund."amount_minor") FILTER (
+                           WHERE refund."reason" = 'PRODUCTION_FAILURE'
+                             AND refund."status" = 'PENDING'
+                       ), 0) AS production_pending
+                FROM "refund_transactions" refund
+                WHERE refund."payment_id" = payment."id"
+            ) refund_totals
+            LEFT JOIN LATERAL (
+                SELECT refund."amount_minor", refund."status"
+                FROM "refund_transactions" refund
+                WHERE refund."payment_id" = payment."id"
+                  AND refund."reason" = 'PRODUCTION_FAILURE'
+                ORDER BY refund."requested_at" DESC,
+                         refund."created_at" DESC,
+                         refund."id" DESC
+                LIMIT 1
+            ) latest_production_refund ON true
             WHERE payment."order_id" = target_order_id
               AND payment."captured_amount_minor" IS NOT NULL
-              AND (
-                  payment."status" NOT IN ('REFUND_PENDING', 'REFUNDED')
-                  OR coalesce((
-                      SELECT sum(refund."amount_minor")
-                      FROM "refund_transactions" refund
-                      WHERE refund."payment_id" = payment."id"
-                        AND refund."reason" = 'PRODUCTION_FAILURE'
-                        AND refund."status" IN ('PENDING', 'SUCCEEDED')
-                  ), 0) <> payment."captured_amount_minor" - coalesce((
-                      SELECT sum(refund."amount_minor")
-                      FROM "refund_transactions" refund
-                      WHERE refund."payment_id" = payment."id"
-                        AND refund."reason" <> 'PRODUCTION_FAILURE'
-                        AND refund."status" = 'SUCCEEDED'
-                  ), 0)
+              AND NOT (
+                  (
+                      payment."captured_amount_minor"
+                        - refund_totals.succeeded_total = 0
+                      AND payment."status" = 'REFUNDED'
+                  )
+                  OR (
+                      payment."captured_amount_minor"
+                        - refund_totals.succeeded_total > 0
+                      AND (
+                          (
+                              refund_totals.production_pending
+                                = payment."captured_amount_minor"
+                                  - refund_totals.succeeded_total
+                              AND payment."status" = 'REFUND_PENDING'
+                          )
+                          OR (
+                              refund_totals.production_pending = 0
+                              AND latest_production_refund."status" = 'FAILED'
+                              AND latest_production_refund."amount_minor"
+                                = payment."captured_amount_minor"
+                                  - refund_totals.succeeded_total
+                              AND payment."status" = CASE
+                                  WHEN refund_totals.succeeded_total = 0
+                                      THEN 'CAPTURED'::"payment_status"
+                                  ELSE 'PARTIALLY_REFUNDED'::"payment_status"
+                              END
+                          )
+                      )
+                  )
               )
         )
     ) THEN
-        RAISE EXCEPTION 'failed production must atomically cancel the order and allocate its remaining captured value to production-failure refunds'
+        RAISE EXCEPTION 'failed production must cancel the order and retain a complete production-failure refund obligation or attempt'
             USING ERRCODE = '23514', CONSTRAINT = 'job_failure_cancellation_check';
     ELSIF has_production_failure_refund
           AND (NOT has_failed_job OR target_order_status NOT IN ('CANCELLED', 'REFUNDED')) THEN
