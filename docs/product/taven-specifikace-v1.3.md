@@ -976,7 +976,7 @@ Následují fakturační údaje **bez povinné registrace**; souhlas s podmínka
 
 ### 7.8 Sledování
 
-**Tokenizovaná URL v e-mailu, bez účtu.** Stav v lidské řeči, termín, **fotka hotového dílu s možností odsouhlasení před odesláním**, tracking, doklad.
+**Tokenizovaná URL v e-mailu, bez účtu.** Stav v lidské řeči, termín, **view-only fotka hotového dílu před odesláním**, tracking, doklad. Fotografie dokládá interní QC, ale zákazník ji před handoffem neschvaluje: neexistuje approval deadline ani rejection stav a zobrazení/nečinnost neblokují `qc_approved → packed → handed_over`. Námitka zákazníka používá po doručení běžný Claim flow.
 
 Fotka jako zákaznický touchpoint není režie navíc — db3D to už dělá, takže je to očekávaná praxe.
 
@@ -1285,6 +1285,14 @@ kompozitně odkazovat stejný origin spor a právě doklad tohoto superseded
 settlementu; nezávislé propojení s jiným settlementem je zakázané. Pokud je
 napaden i replacement, vzniká nový dispute a další replacement článek;
 origin předchozího článku se nikdy nepřepisuje.
+
+Accepted dispute uzamkne úplnou line authorization bijekci proti challenged
+settlementu. Každý původní line má právě jeden autorizovaný replacement
+payload hash: untouched line kopíruje všechny doménové hodnoty, změněný line
+smí použít jen explicitně schválené adjustment refs a částky. Replacement
+musí vytvořit právě jeden line pro každou autorizaci, žádný další, a každý
+svázat s bezprostředním predecessor line a origin dispute. Correction proto
+nemůže vynechat untouched compensation ani přidat nesouvisející assignment.
 
 Ruční bankovní převod smí začít až po lokálně commitnutém přechodu
 `MakerPayout.created | failed → initiated` s `initiated_at` a novým audit-stable

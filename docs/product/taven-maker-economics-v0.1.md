@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#206; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#208; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -564,6 +564,25 @@ Každý replacement při vystavení snapshotuje vlastní nový pětidenní dispu
 deadline a smí přejít do `payable` až potvrzením makera nebo po jeho uplynutí
 podle stejného guardu jako původní settlement.
 
+Accepted `MakerDispute` před vytvořením replacementu uzamkne úplnou množinu
+`MakerDisputeLineAuthorization`: právě jednu autorizaci pro každý line
+challenged settlementu. `action = copy_unchanged` ukládá hash přesné původní
+line payload; `action = replace_adjustments` ukládá explicitní zdrojové
+adjustments a hash celého autorizovaného replacement payloadu včetně makera,
+assignmentu, compensation snapshotu, grossu, měny, requested/applied
+adjustments, absorbed excess a payable amount. Acceptance nesmí skončit,
+dokud tato množina není úplná.
+
+Correction transakce pak vytvoří právě jeden replacement line pro každou
+autorizaci a žádný další. Každý nový line immutable odkazuje svůj
+`supersedes_settlement_line_id`, `origin_dispute_id` a
+`authorized_payload_hash`; kompozitní reference musí trefit právě autorizaci
+tohoto sporu a hash se musí rovnat nově vytvořenému celému line payloadu.
+Untouched line se proto kopíruje bitově v doménových hodnotách, changed line
+smí změnit jen dispute-authorized adjustment fields a žádný unrelated
+assignment nelze přidat ani původní line vynechat. Další correction opakuje
+stejnou bijekci proti bezprostřednímu předchůdci.
+
 Unikátní assignment membership se vyhodnocuje jen mezi nevoidovanými
 settlements, takže historický voided line zůstane auditovatelný, ale nemůže
 být znovu vyplacen. Po zahájení nebo dokončení bankovního převodu tento
@@ -730,6 +749,28 @@ MakerDispute
 - status (`opened` | `rejected` | `accepted`)
 ```
 
+### MakerDisputeLineAuthorization
+
+``` text
+MakerDisputeLineAuthorization
+- id
+- dispute_id
+- challenged_settlement_id
+- challenged_settlement_line_id
+- constraint `(dispute_id, challenged_settlement_id)`
+  → `MakerDispute.(id, challenged_settlement_id)`
+- constraint `(challenged_settlement_line_id, challenged_settlement_id)`
+  → `MakerSettlementLine.(id, settlement_id)`
+- action (`copy_unchanged` | `replace_adjustments`)
+- authorized_adjustment_source_refs
+- authorized_payload_hash (hash úplného replacement line payloadu)
+- constraint `(dispute_id, challenged_settlement_line_id)` (unique)
+```
+
+Accepted dispute vyžaduje úplnou bijekci: počet jeho line authorizations se
+rovná počtu lines challenged settlementu a každý challenged line je zastoupen
+právě jednou.
+
 ### MakerSettlementLine
 
 ``` text
@@ -738,6 +779,17 @@ MakerSettlementLine
 - settlement_id
 - maker_id (musí se shodovat se settlementem, assignmentem i snapshotem)
 - constraint `(settlement_id, maker_id)` → `MakerSettlement.(id, maker_id)`
+- supersedes_settlement_line_id (nullable; vyplněné právě s
+  `origin_dispute_id` a `authorized_payload_hash`)
+- origin_dispute_id (nullable; vyplněné právě s
+  `supersedes_settlement_line_id` a `authorized_payload_hash`)
+- authorized_payload_hash (nullable)
+- constraint `(settlement_id, origin_dispute_id)`
+  → `MakerSettlement.(id, origin_dispute_id)`
+- constraint `(origin_dispute_id, supersedes_settlement_line_id,
+  authorized_payload_hash)`
+  → `MakerDisputeLineAuthorization.(dispute_id,
+  challenged_settlement_line_id, authorized_payload_hash)`
 - production_assignment_id (unique mezi nevoidovanými settlements)
 - compensation_snapshot_id (unique mezi nevoidovanými settlements)
 - constraint `(compensation_snapshot_id, production_assignment_id, maker_id)`
@@ -1018,6 +1070,10 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     zamykají assignments podle ID a potom sloty podle ID; aktivace, která
     serializačně vyhraje, blokuje další přechod, zatímco už commitnutý
     `initiated` payout se řeší reconciliation a nepřepisuje.
+48. Accepted dispute autorizuje právě jeden replacement payload pro každý line
+    challenged settlementu; replacement zachová úplnou line bijekci, každý
+    payload ověří hashem a nesmí přidat, vynechat ani změnit line mimo tuto
+    autorizaci.
 
 ------------------------------------------------------------------------
 
@@ -1026,7 +1082,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#206.
+#184–#208.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav

@@ -89,7 +89,7 @@ Zakázáno: slider výplně, výběr trysky, teploty, styl podpěr, orientace.
 
 Checkout: výběr jednoho obsluhovaného výdejního místa nebo Z-BOXu pro celý `Order`, fakturační údaje (jméno nebo název, adresa a případné firemní údaje) a kontakt bez povinné registrace, přijetí aktuální verze VOP, výslovné potvrzení výjimky z odstoupení, samostatný nepovinný souhlas se zveřejněním fotografií a platba kartou i bankovním tlačítkem.
 
-Sledování: tokenizovaná URL bez účtu, časová osa stavů v lidské řeči, **fotka hotového dílu k odsouhlasení před odesláním**, tracking, doklad.
+Sledování: tokenizovaná URL bez účtu, časová osa stavů v lidské řeči, **fotka hotového dílu k nahlédnutí před odesláním**, tracking, doklad. Fotka je view-only důkaz interního QC, není customer approval gate, neblokuje balení ani handoff a případná námitka používá až běžný Claim flow.
 
 **Ve sledování se neuvádí stroj ani obsluha** — viz identita §2.
 
@@ -193,7 +193,7 @@ Body, které se v první iteraci rozešly se specifikací nebo s parametry:
 1. Landing, desktop i mobil
 2. Konfigurátor ve všech stavech z §9, včetně multi-item objednávky
 3. Checkout
-4. Sledování zakázky včetně odsouhlasení fotky
+4. Sledování zakázky včetně view-only fotky hotového dílu
 5. Zákaznický archiv + login/aktivace účtu
 6. Jak to funguje, Ceník, Ukázky + detail, Potřebuji model, Kontakt
 7. VOP, Reklamace, Ochrana soukromí
