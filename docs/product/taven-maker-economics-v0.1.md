@@ -169,13 +169,14 @@ vrátí tentýž zamčený výsledek.
 
 Kompozitní reference `(production_assignment_id, maker_id)` vyžaduje makera
 skutečně přijatého assignmentu ještě před výpočtem a zamknutím odměny;
-neshoda proto nemůže vytvořit snapshot ani změnit `Job.payout_amount`.
+neshoda proto nemůže vytvořit snapshot ani změnit
+`Job.(payout_amount, payout_currency)`.
 
 Přijetí současně zamkne `Job` i všechny jeho assignmenty a vyžaduje, aby
 dosud žádný neměl `accepted_at`. Částečný unikátní constraint nad `job_id`
 pro přijaté assignmenty dovolí právě jedno přijetí v celé historii jobu;
 pozdní acceptance starého offeru proto skončí konfliktem, uzavře se a
-nevytvoří snapshot ani `Job.payout_amount`.
+nevytvoří snapshot ani `Job.(payout_amount, payout_currency)`.
 
 Snapshot obsahuje minimálně:
 
@@ -620,8 +621,8 @@ Ve v0 existuje:
 
 -   Studio81 Labs jako jediný seller of record,
 -   jeden vlastní `Node/Machine` podle kanonické specifikace,
--   povinný immutable `Job.payout_amount` snapshotovaný při každém přijetí,
-    i když je příjemcem provozovatel,
+-   povinné immutable `Job.payout_amount` a `Job.payout_currency`
+    snapshotované při každém přijetí, i když je příjemcem provozovatel,
 -   ruční účetní zacházení mimo produktový maker subsystém.
 
 Ve v0 se **nestaví**:
@@ -641,8 +642,9 @@ Ve v0 se **nestaví**:
 
 Datový šev pro budoucí `Node` scope zůstává zachován, ale žádná z těchto
 maker entit ani workflow nevzniká před kapacitní bránou.
-`Job.payout_amount` však bránu přežívá: u externího assignmentu je přesným
-immutable aliasem `MakerCompensationSnapshot.agreed_compensation`.
+`Job.(payout_amount, payout_currency)` však bránu přežívá: u externího
+assignmentu je přesným immutable aliasem
+`MakerCompensationSnapshot.(agreed_compensation, currency)`.
 
 ------------------------------------------------------------------------
 
@@ -725,9 +727,11 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     snapshotu musí být totožný a shoda je vynucena referenčním constraintem.
 23. Production assignment smí použít jen maker-owned uzel téhož makera;
     platform-owned uzel assignment ani compensation workflow nevytváří.
-24. `Job.payout_amount` maker-owned assignmentu se po maker gate rovná
-    `MakerCompensationSnapshot.agreed_compensation`; platform-owned fallback
-    zůstává interním jobem bez maker snapshotu a settlementu.
+24. `Job.(payout_amount, payout_currency)` maker-owned assignmentu se po
+    maker gate rovná
+    `MakerCompensationSnapshot.(agreed_compensation, currency)`;
+    platform-owned fallback zůstává interním jobem bez maker snapshotu a
+    settlementu.
 25. Každý neuzavřený claim dotýkající se assignmentu blokuje settlement bez
     ohledu na dosud neurčené zavinění; maker-caused výsledek vyžaduje
     schválenou adjustment.
