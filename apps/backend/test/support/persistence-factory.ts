@@ -1134,6 +1134,7 @@ export class PersistenceFactory {
     status = "RESERVED",
     resourceSnapshot: unknown = {},
     jobId: string | null = null,
+    reservationExpiresAt = expiresAt,
   ): Promise<void> {
     const topologyIndex = foundation.fulfilmentSlotIds.indexOf(
       planned.fulfilmentSlotId,
@@ -1168,7 +1169,7 @@ export class PersistenceFactory {
         planned.requiredMachineSeconds,
         JSON.stringify(resourceSnapshot),
         status,
-        expiresAt,
+        reservationExpiresAt,
         createdAt,
         createdAt,
         foundation.phaseResourcePlanId,

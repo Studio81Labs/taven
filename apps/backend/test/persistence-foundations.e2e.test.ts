@@ -127,6 +127,70 @@ async function activateReservationGraph(
   );
 }
 
+async function advanceReservationOrderToProduction(
+  client: PoolClient,
+  foundation: PersistenceFoundation,
+): Promise<void> {
+  const printingAt = new Date();
+  await client.query(
+    `UPDATE jobs
+     SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+     WHERE order_id = $1`,
+    [foundation.orderId, printingAt],
+  );
+  await client.query(
+    `UPDATE jobs
+     SET status = 'PRINTING', printing_at = $2, updated_at = $2
+     WHERE order_id = $1`,
+    [foundation.orderId, printingAt],
+  );
+  await client.query(
+    `UPDATE order_phases
+     SET status = 'IN_PRODUCTION', updated_at = $2
+     WHERE id = $1`,
+    [foundation.orderPhaseId, printingAt],
+  );
+  await client.query(
+    `UPDATE orders SET status = 'IN_PRODUCTION', updated_at = $2 WHERE id = $1`,
+    [foundation.orderId, printingAt],
+  );
+  await client.query(
+    `SET CONSTRAINTS
+       "orders_post_confirmation_lifecycle_reconciled",
+       "orders_production_resource_start_reconciled",
+       "order_phases_parent_lifecycle_reconciled",
+       "jobs_parent_lifecycle_reconciled" IMMEDIATE`,
+  );
+  await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+}
+
+async function cancelConfirmedReservationOrder(
+  client: PoolClient,
+  foundation: PersistenceFoundation,
+): Promise<void> {
+  const cancelledAt = new Date();
+  await client.query(
+    `UPDATE jobs SET status = 'CANCELLED', updated_at = $2 WHERE order_id = $1`,
+    [foundation.orderId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE shipments
+     SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+     WHERE order_id = $1`,
+    [foundation.orderId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE order_phases
+     SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+     WHERE id = $1`,
+    [foundation.orderPhaseId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE orders SET status = 'CANCELLED', updated_at = $2 WHERE id = $1`,
+    [foundation.orderId, cancelledAt],
+  );
+}
+
 async function createReferenceSlice(
   client: PoolClient,
   fixtures: PersistenceFactory,
@@ -2193,6 +2257,7 @@ describe("persistence foundations", () => {
           'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
           [capacityReservationIds[0]?.id, "PRINTING"],
         );
+        await advanceReservationOrderToProduction(client, foundation);
 
         await expect(
           client.query("SET CONSTRAINTS ALL IMMEDIATE"),
@@ -3098,6 +3163,7 @@ describe("persistence foundations", () => {
       await client.query("ROLLBACK").catch(() => undefined);
       if (heldCommitted && foundation && production) {
         await client.query("BEGIN");
+        await cancelConfirmedReservationOrder(client, foundation);
         await client.query(
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
           [foundation.phaseReservationSetId, "RELEASED"],
@@ -3201,9 +3267,35 @@ describe("persistence foundations", () => {
 
       const terminalProduction = graph.productions[0];
       const liveProduction = graph.productions[1];
-      if (!terminalProduction || !liveProduction) {
+      const liveCapacityReservationId = capacityReservationIds[1];
+      if (
+        !terminalProduction ||
+        !liveProduction ||
+        !liveCapacityReservationId
+      ) {
         throw new Error("reservation group fixture is missing");
       }
+      await client.query(
+        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveProduction.inventoryReservationId, "ALLOCATED"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveCapacityReservationId, "SCHEDULED"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveProduction.productionReservationId, "SCHEDULED"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveCapacityReservationId, "PRINTING"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [liveProduction.productionReservationId, "PRINTING"],
+      );
+      await advanceReservationOrderToProduction(client, graph.foundation);
       const heldSetId = graph.foundation.phaseReservationSetId;
       const consumeWithReleasedInventory = async (
         settleParent: boolean,
@@ -3251,7 +3343,7 @@ describe("persistence foundations", () => {
           );
           await client.query(
             'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-            [capacityReservationIds[1], "RELEASED"],
+            [liveCapacityReservationId, "RELEASED"],
           );
           await client.query(
             'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
@@ -3308,7 +3400,7 @@ describe("persistence foundations", () => {
       );
       await client.query(
         'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-        [capacityReservationIds[1], "RELEASED"],
+        [liveCapacityReservationId, "RELEASED"],
       );
       await expect(client.query("COMMIT")).rejects.toMatchObject({
         code: "23514",
@@ -3384,6 +3476,7 @@ describe("persistence foundations", () => {
           'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
           [production.productionReservationId, "PRINTING"],
         );
+        await advanceReservationOrderToProduction(client, foundation);
         await client.query(
           'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
           [production.productionReservationId, "CONSUMED"],
@@ -3593,6 +3686,27 @@ describe("persistence foundations", () => {
            "phase_reservation_sets_capture_activation_reconciled",
            "jobs_captured_reservation_reconciled" IMMEDIATE`,
       );
+      await client.query(
+        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.inventoryReservationId, "ALLOCATED"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalCapacityId, "SCHEDULED"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.productionReservationId, "SCHEDULED"],
+      );
+      await client.query(
+        'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalCapacityId, "PRINTING"],
+      );
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+        [terminalProduction.productionReservationId, "PRINTING"],
+      );
+      await advanceReservationOrderToProduction(client, foundation);
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
         [terminalProduction.productionReservationId, "RELEASED"],

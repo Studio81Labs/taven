@@ -51,6 +51,7 @@ async function createCurrentPlan(
   client: PoolClient,
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
+  reservationExpiresAt = testTimes.expiresAt,
 ): Promise<
   Array<
     ProductionReservationFixture & {
@@ -81,14 +82,25 @@ async function createCurrentPlan(
     );
     productions.push({ ...production, startsAt, endsAt });
   }
-  await fixtures.createResourcePlan(foundation, productions);
+  await fixtures.createResourcePlan(
+    foundation,
+    productions,
+    reservationExpiresAt,
+  );
   await client.query(
     `UPDATE inventories SET remaining_milligrams = 1000 WHERE id = $1`,
     [foundation.inventoryId],
   );
-  await fixtures.createPhaseReservationSet(foundation);
+  await fixtures.createPhaseReservationSet(foundation, reservationExpiresAt);
   for (const [index, production] of productions.entries()) {
-    await fixtures.createProductionReservation(foundation, production);
+    await fixtures.createProductionReservation(
+      foundation,
+      production,
+      "RESERVED",
+      {},
+      null,
+      reservationExpiresAt,
+    );
     await client.query(
       `INSERT INTO inventory_reservations (id, node_id, production_reservation_id,
                                           inventory_id, reserved_milligrams, expires_at,
@@ -100,7 +112,7 @@ async function createCurrentPlan(
         production.productionReservationId,
         foundation.inventoryId,
         production.requiredMaterialMilligrams,
-        testTimes.expiresAt,
+        reservationExpiresAt,
         testTimes.createdAt,
       ],
     );
@@ -117,7 +129,7 @@ async function createCurrentPlan(
         foundation.machineId,
         production.startsAt,
         production.endsAt,
-        testTimes.expiresAt,
+        reservationExpiresAt,
         testTimes.createdAt,
       ],
     );
@@ -243,6 +255,54 @@ async function advanceOrderLifecycleStep(
 ): Promise<void> {
   const transitionedAt = new Date();
   if (status === "IN_PRODUCTION") {
+    await client.query(
+      `UPDATE inventory_reservations inventory_reservation
+       SET status = 'ALLOCATED'
+       FROM production_reservations production
+       JOIN jobs job ON job.id = production.job_id
+       WHERE inventory_reservation.production_reservation_id = production.id
+         AND job.order_id = $1
+         AND inventory_reservation.status = 'HELD'`,
+      [orderId],
+    );
+    await client.query(
+      `UPDATE capacity_reservations capacity_reservation
+       SET status = 'SCHEDULED'
+       FROM production_reservations production
+       JOIN jobs job ON job.id = production.job_id
+       WHERE capacity_reservation.production_reservation_id = production.id
+         AND job.order_id = $1
+         AND capacity_reservation.status = 'HELD'`,
+      [orderId],
+    );
+    await client.query(
+      `UPDATE production_reservations production
+       SET status = 'SCHEDULED'
+       FROM jobs job
+       WHERE job.id = production.job_id
+         AND job.order_id = $1
+         AND production.status = 'HELD'`,
+      [orderId],
+    );
+    await client.query(
+      `UPDATE capacity_reservations capacity_reservation
+       SET status = 'PRINTING'
+       FROM production_reservations production
+       JOIN jobs job ON job.id = production.job_id
+       WHERE capacity_reservation.production_reservation_id = production.id
+         AND job.order_id = $1
+         AND capacity_reservation.status = 'SCHEDULED'`,
+      [orderId],
+    );
+    await client.query(
+      `UPDATE production_reservations production
+       SET status = 'PRINTING'
+       FROM jobs job
+       WHERE job.id = production.job_id
+         AND job.order_id = $1
+         AND production.status = 'SCHEDULED'`,
+      [orderId],
+    );
     await client.query(
       `UPDATE jobs
        SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
@@ -1989,6 +2049,294 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("checks payment resource expiry against wall-clock time", async () => {
+    await rollback("wall-clock-payment-expiry", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "wall-clock-payment-expiry",
+      );
+      const reservationExpiresAt = new Date(Date.now() + 2_000);
+      await createCurrentPlan(
+        client,
+        fixtures,
+        foundation,
+        reservationExpiresAt,
+      );
+      await client.query(
+        `SELECT pg_sleep(
+           greatest(extract(epoch FROM $1::timestamptz - clock_timestamp()), 0)
+           + 0.05
+         )`,
+        [reservationExpiresAt],
+      );
+      expect(
+        (
+          await client.query<{
+            transaction_time_accepts: boolean;
+            wall_clock_expired: boolean;
+          }>(
+            `SELECT $1::timestamptz > CURRENT_TIMESTAMP AS transaction_time_accepts,
+                    $1::timestamptz <= clock_timestamp() AS wall_clock_expired`,
+            [reservationExpiresAt],
+          )
+        ).rows,
+      ).toEqual([{ transaction_time_accepts: true, wall_clock_expired: true }]);
+      await expectQueryError(
+        client,
+        "expired_plan_payment",
+        () => fixtures.finalizePayment(foundation),
+        { code: "23514", constraint: "payment_fulfilment_topology_check" },
+      );
+    });
+  });
+
+  it("keeps confirmed orders bound to their captured held reservations", async () => {
+    await rollback("confirmed-reservation-hold", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "confirmed-reservation-hold",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      const production = productions[0];
+      if (!production) {
+        throw new Error("confirmed reservation fixture has no production");
+      }
+      const capacityReservationId = fixtures.id(
+        `payment-capacity-${foundation.orderId}-0`,
+      );
+      const departures = [
+        {
+          name: "confirmed_set_release",
+          query: `UPDATE phase_reservation_sets
+                  SET status = 'RELEASED' WHERE id = $1`,
+          id: foundation.phaseReservationSetId,
+          trigger: "phase_reservation_sets_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_set_expiry",
+          query: `UPDATE phase_reservation_sets
+                  SET status = 'EXPIRED' WHERE id = $1`,
+          id: foundation.phaseReservationSetId,
+          trigger: "phase_reservation_sets_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_production_schedule",
+          query: `UPDATE production_reservations
+                  SET status = 'SCHEDULED' WHERE id = $1`,
+          id: production.productionReservationId,
+          trigger: "production_reservations_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_production_release",
+          query: `UPDATE production_reservations
+                  SET status = 'RELEASED' WHERE id = $1`,
+          id: production.productionReservationId,
+          trigger: "production_reservations_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_production_expiry",
+          query: `UPDATE production_reservations
+                  SET status = 'EXPIRED' WHERE id = $1`,
+          id: production.productionReservationId,
+          trigger: "production_reservations_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_inventory_allocate",
+          query: `UPDATE inventory_reservations
+                  SET status = 'ALLOCATED' WHERE id = $1`,
+          id: production.inventoryReservationId,
+          trigger: "inventory_reservations_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_inventory_release",
+          query: `UPDATE inventory_reservations
+                  SET status = 'RELEASED' WHERE id = $1`,
+          id: production.inventoryReservationId,
+          trigger: "inventory_reservations_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_inventory_expiry",
+          query: `UPDATE inventory_reservations
+                  SET status = 'EXPIRED' WHERE id = $1`,
+          id: production.inventoryReservationId,
+          trigger: "inventory_reservations_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_capacity_schedule",
+          query: `UPDATE capacity_reservations
+                  SET status = 'SCHEDULED' WHERE id = $1`,
+          id: capacityReservationId,
+          trigger: "capacity_reservations_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_capacity_release",
+          query: `UPDATE capacity_reservations
+                  SET status = 'RELEASED' WHERE id = $1`,
+          id: capacityReservationId,
+          trigger: "capacity_reservations_confirmed_order_hold_reconciled",
+        },
+        {
+          name: "confirmed_capacity_expiry",
+          query: `UPDATE capacity_reservations
+                  SET status = 'EXPIRED' WHERE id = $1`,
+          id: capacityReservationId,
+          trigger: "capacity_reservations_confirmed_order_hold_reconciled",
+        },
+      ] as const;
+
+      for (const departure of departures) {
+        await expectQueryError(
+          client,
+          departure.name,
+          async () => {
+            await client.query(departure.query, [departure.id]);
+            await client.query(
+              `SET CONSTRAINTS "${departure.trigger}" IMMEDIATE`,
+            );
+          },
+          {
+            code: "23514",
+            constraint: "confirmed_order_reservation_hold_check",
+          },
+        );
+      }
+
+      await expectQueryError(
+        client,
+        "confirmed_complete_graph_release",
+        async () => {
+          await client.query(
+            `UPDATE inventory_reservations SET status = 'RELEASED' WHERE id = $1`,
+            [production.inventoryReservationId],
+          );
+          await client.query(
+            `UPDATE capacity_reservations SET status = 'RELEASED' WHERE id = $1`,
+            [capacityReservationId],
+          );
+          await client.query(
+            `UPDATE production_reservations SET status = 'RELEASED' WHERE id = $1`,
+            [production.productionReservationId],
+          );
+          await client.query(
+            `UPDATE phase_reservation_sets SET status = 'RELEASED' WHERE id = $1`,
+            [foundation.phaseReservationSetId],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "phase_reservation_sets_confirmed_order_hold_reconciled",
+               "production_reservations_confirmed_order_hold_reconciled",
+               "inventory_reservations_confirmed_order_hold_reconciled",
+               "capacity_reservations_confirmed_order_hold_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "confirmed_order_reservation_hold_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "production_parent_before_resources",
+        async () => {
+          const printingAt = new Date();
+          await client.query(
+            `UPDATE jobs
+             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, printingAt],
+          );
+          await client.query(
+            `UPDATE jobs
+             SET status = 'PRINTING', printing_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, printingAt],
+          );
+          await client.query(
+            `UPDATE order_phases
+             SET status = 'IN_PRODUCTION', updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, printingAt],
+          );
+          await client.query(
+            `UPDATE orders
+             SET status = 'IN_PRODUCTION', updated_at = $2 WHERE id = $1`,
+            [foundation.orderId, printingAt],
+          );
+          await client.query(
+            `SET CONSTRAINTS "orders_production_resource_start_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "order_production_resource_start_check",
+        },
+      );
+
+      await client.query(
+        `UPDATE inventory_reservations SET status = 'ALLOCATED' WHERE id = $1`,
+        [production.inventoryReservationId],
+      );
+      await client.query(
+        `UPDATE capacity_reservations SET status = 'SCHEDULED' WHERE id = $1`,
+        [capacityReservationId],
+      );
+      await client.query(
+        `UPDATE capacity_reservations SET status = 'PRINTING' WHERE id = $1`,
+        [capacityReservationId],
+      );
+      await client.query(
+        `UPDATE production_reservations SET status = 'SCHEDULED' WHERE id = $1`,
+        [production.productionReservationId],
+      );
+      await client.query(
+        `UPDATE production_reservations SET status = 'PRINTING' WHERE id = $1`,
+        [production.productionReservationId],
+      );
+      await advanceOrderLifecycleStep(
+        client,
+        foundation.orderId,
+        "IN_PRODUCTION",
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "phase_reservation_sets_confirmed_order_hold_reconciled",
+           "production_reservations_confirmed_order_hold_reconciled",
+           "inventory_reservations_confirmed_order_hold_reconciled",
+           "capacity_reservations_confirmed_order_hold_reconciled",
+           "phase_reservation_sets_complete",
+           "production_reservations_complete_set",
+           "inventory_reservations_complete_set",
+           "capacity_reservations_complete_set" IMMEDIATE`,
+      );
+      await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+
+      await client.query(
+        `UPDATE inventory_reservations SET status = 'RELEASED' WHERE id = $1`,
+        [production.inventoryReservationId],
+      );
+      await client.query(
+        `UPDATE capacity_reservations SET status = 'RELEASED' WHERE id = $1`,
+        [capacityReservationId],
+      );
+      await client.query(
+        `UPDATE production_reservations SET status = 'RELEASED' WHERE id = $1`,
+        [production.productionReservationId],
+      );
+      await client.query(
+        `UPDATE phase_reservation_sets SET status = 'RELEASED' WHERE id = $1`,
+        [foundation.phaseReservationSetId],
+      );
+      await cancelOrderBeforeHandoff(client, foundation.orderId);
+      await expect(
+        client.query(`SET CONSTRAINTS ALL IMMEDIATE`),
+      ).resolves.toBeDefined();
+    });
+  });
+
   it("requires aggregate evidence for every post-confirmation order edge", async () => {
     await rollback("order-lifecycle-evidence", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -2295,6 +2643,71 @@ describe("commerce persistence foundations", () => {
       );
       await expectQueryError(
         client,
+        "audit_quote_order_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, quote_id, order_id, event_type, payload, created_at)
+             VALUES ($1,$2,$3,'quote.order_scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-quote-order-mismatch"),
+              other.quoteId,
+              foundation.orderId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "audit_quote_payment_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, quote_id, payment_id, event_type, payload, created_at)
+             VALUES ($1,$2,$3,'quote.payment_scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-quote-payment-mismatch"),
+              other.quoteId,
+              foundation.paymentId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
+      await client.query(
+        `INSERT INTO audit_events
+         (id, quote_id, order_id, payment_id, event_type, payload, created_at)
+         VALUES ($1,$2,$3,$4,'quote.payment_scope_consistent','{}'::jsonb,$5)`,
+        [
+          fixtures.id("audit-quote-payment-consistent"),
+          foundation.quoteId,
+          foundation.orderId,
+          foundation.paymentId,
+          new Date(),
+        ],
+      );
+      await expectQueryError(
+        client,
+        "move_issued_request_quote_session",
+        () =>
+          client.query(
+            `UPDATE quote_requests SET quote_session_id = $2 WHERE id = $1`,
+            [foundation.quoteRequestId, other.quoteSessionId],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_request_issued_quote_identity_check",
+        },
+      );
+      await expectQueryError(
+        client,
         "cross_order_shipment",
         () =>
           client.query(
@@ -2455,13 +2868,34 @@ describe("commerce persistence foundations", () => {
           constraint: "audit_event_scope_reconciliation_check",
         },
       );
+      await expectQueryError(
+        client,
+        "audit_quote_refund_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, quote_id, refund_transaction_id, event_type, payload, created_at)
+             VALUES ($1,$2,$3,'quote.refund_scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-quote-refund-mismatch"),
+              other.quoteId,
+              fixtures.id("refund-first"),
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
       await client.query(
         `INSERT INTO audit_events
-         (id, order_id, payment_id, refund_transaction_id,
+         (id, quote_id, order_id, payment_id, refund_transaction_id,
           event_type, payload, created_at)
-         VALUES ($1,$2,$3,$4,'refund.scope_consistent','{}'::jsonb,$5)`,
+         VALUES ($1,$2,$3,$4,$5,'refund.scope_consistent','{}'::jsonb,$6)`,
         [
           fixtures.id("audit-refund-scope-consistent"),
+          foundation.quoteId,
           foundation.orderId,
           foundation.paymentId,
           fixtures.id("refund-first"),
@@ -3303,6 +3737,12 @@ describe("commerce persistence foundations", () => {
            "individual_order_origins_quote_snapshot_reconciled",
            "quote_requests_individual_order_reconciled",
            "individual_order_origins_request_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `INSERT INTO audit_events
+         (id, quote_id, order_id, event_type, payload, created_at)
+         VALUES ($1,$2,$3,'individual_quote.order_scope_consistent','{}'::jsonb,$4)`,
+        [fixtures.id("individual-quote-order-audit"), quoteId, orderId, now],
       );
       expect(
         (

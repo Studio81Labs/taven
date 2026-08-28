@@ -725,6 +725,76 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF NEW."quote_id" IS NOT NULL
+       AND NEW."order_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "individual_order_origins" origin
+           WHERE origin."quote_id" = NEW."quote_id"
+             AND origin."order_id" = NEW."order_id"
+           UNION ALL
+           SELECT 1
+           FROM "automatic_order_origins" origin
+           JOIN "quote_requests" request
+             ON request."quote_session_id" = origin."quote_session_id"
+           JOIN "quotes" quote ON quote."quote_request_id" = request."id"
+           WHERE quote."id" = NEW."quote_id"
+             AND origin."order_id" = NEW."order_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event quote must belong to its scoped order origin'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
+    IF NEW."quote_id" IS NOT NULL
+       AND NEW."payment_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           JOIN "individual_order_origins" origin
+             ON origin."order_id" = payment."order_id"
+            AND origin."quote_id" = NEW."quote_id"
+           WHERE payment."id" = NEW."payment_id"
+           UNION ALL
+           SELECT 1
+           FROM "payments" payment
+           JOIN "automatic_order_origins" origin
+             ON origin."order_id" = payment."order_id"
+           JOIN "quote_requests" request
+             ON request."quote_session_id" = origin."quote_session_id"
+           JOIN "quotes" quote ON quote."quote_request_id" = request."id"
+           WHERE payment."id" = NEW."payment_id"
+             AND quote."id" = NEW."quote_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event quote must belong to its scoped payment order origin'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
+    IF NEW."quote_id" IS NOT NULL
+       AND NEW."refund_transaction_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "refund_transactions" refund
+           JOIN "payments" payment ON payment."id" = refund."payment_id"
+           JOIN "individual_order_origins" origin
+             ON origin."order_id" = payment."order_id"
+            AND origin."quote_id" = NEW."quote_id"
+           WHERE refund."id" = NEW."refund_transaction_id"
+           UNION ALL
+           SELECT 1
+           FROM "refund_transactions" refund
+           JOIN "payments" payment ON payment."id" = refund."payment_id"
+           JOIN "automatic_order_origins" origin
+             ON origin."order_id" = payment."order_id"
+           JOIN "quote_requests" request
+             ON request."quote_session_id" = origin."quote_session_id"
+           JOIN "quotes" quote ON quote."quote_request_id" = request."id"
+           WHERE refund."id" = NEW."refund_transaction_id"
+             AND quote."id" = NEW."quote_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event quote must belong to its scoped refund order origin'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
     IF NEW."payment_id" IS NOT NULL
        AND NEW."order_id" IS NOT NULL
        AND NOT EXISTS (
@@ -940,6 +1010,14 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF NEW."quote_session_id" IS DISTINCT FROM OLD."quote_session_id"
+       AND EXISTS (
+           SELECT 1 FROM "quotes" quote WHERE quote."quote_request_id" = OLD."id"
+       ) THEN
+        RAISE EXCEPTION 'a quoted request must retain its quote session origin'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_issued_quote_identity_check';
+    END IF;
+
     IF EXISTS (
         SELECT 1
         FROM "quotes" quote
@@ -1005,7 +1083,7 @@ END;
 $$;
 
 CREATE TRIGGER "quote_requests_issued_quote_protected"
-BEFORE UPDATE OF "customer_id", "status" ON "quote_requests"
+BEFORE UPDATE OF "quote_session_id", "customer_id", "status" ON "quote_requests"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_request_issued_quote();
 
 CREATE FUNCTION taven_require_order_origin_for_order()
@@ -2783,6 +2861,33 @@ BEGIN
                     OR job."order_id" <> target_order."id"
                     OR job."order_phase_id" <> phase."id"
                     OR job."status" <> 'CREATED'
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM "inventory_reservations" inventory_reservation
+                        WHERE inventory_reservation."production_reservation_id" = production."id"
+                          AND inventory_reservation."node_id" = production."node_id"
+                          AND inventory_reservation."status" = 'HELD'
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM "inventory_reservations" inventory_reservation
+                        WHERE inventory_reservation."production_reservation_id" = production."id"
+                          AND inventory_reservation."node_id" = production."node_id"
+                          AND inventory_reservation."status" <> 'HELD'
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM "capacity_reservations" capacity_reservation
+                        WHERE capacity_reservation."production_reservation_id" = production."id"
+                          AND capacity_reservation."node_id" = production."node_id"
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM "capacity_reservations" capacity_reservation
+                        WHERE capacity_reservation."production_reservation_id" = production."id"
+                          AND capacity_reservation."node_id" = production."node_id"
+                          AND capacity_reservation."status" <> 'HELD'
+                    )
                 )
           )
     ) THEN
@@ -2818,6 +2923,256 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 WHEN (OLD."status" IS DISTINCT FROM NEW."status" AND NEW."status" = 'HELD')
 EXECUTE FUNCTION taven_reconcile_payment_capture_activation();
+
+CREATE FUNCTION taven_reconcile_confirmed_order_reservation_hold()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_status "order_status";
+BEGIN
+    CASE TG_TABLE_NAME
+        WHEN 'phase_reservation_sets' THEN
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "phase_reservation_sets" reservation_set
+            JOIN "phase_resource_plans" plan
+              ON plan."id" = reservation_set."phase_resource_plan_id"
+             AND plan."node_id" = reservation_set."node_id"
+            JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+            WHERE reservation_set."id" = (to_jsonb(NEW) ->> 'id')::uuid;
+        WHEN 'production_reservations' THEN
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "production_reservations" production
+            JOIN "phase_resource_plans" plan
+              ON plan."id" = production."phase_resource_plan_id"
+             AND plan."node_id" = production."node_id"
+            JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+            WHERE production."id" = (to_jsonb(NEW) ->> 'id')::uuid;
+        ELSE
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "production_reservations" production
+            JOIN "phase_resource_plans" plan
+              ON plan."id" = production."phase_resource_plan_id"
+             AND plan."node_id" = production."node_id"
+            JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+            WHERE production."id" = (to_jsonb(NEW) ->> 'production_reservation_id')::uuid;
+    END CASE;
+
+    SELECT target_order."status"
+    INTO target_status
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    IF target_status IS DISTINCT FROM 'CONFIRMED'::"order_status" THEN
+        RETURN NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "order_phases" phase
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."order_phase_id" = phase."id"
+        JOIN "phase_reservation_sets" reservation_set
+          ON reservation_set."phase_resource_plan_id" = resource_plan."id"
+         AND reservation_set."node_id" = resource_plan."node_id"
+         AND reservation_set."status" = 'HELD'
+        WHERE phase."order_id" = target_order_id
+          AND phase."kind" = 'SINGLE'
+          AND phase."status" = 'ACTIVE'
+          AND phase."activated_at" IS NOT NULL
+          AND (
+              SELECT count(*)
+              FROM "phase_reservation_sets" held_set
+              JOIN "phase_resource_plans" held_plan
+                ON held_plan."id" = held_set."phase_resource_plan_id"
+               AND held_plan."node_id" = held_set."node_id"
+              WHERE held_plan."order_phase_id" = phase."id"
+                AND held_set."status" = 'HELD'
+          ) = 1
+          AND EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
+              LEFT JOIN "production_reservations" production
+                ON production."phase_reservation_set_id" = reservation_set."id"
+               AND production."phase_resource_plan_job_id" = plan_job."id"
+               AND production."node_id" = plan_job."node_id"
+              LEFT JOIN "jobs" job
+                ON job."id" = production."job_id"
+               AND job."node_id" = production."node_id"
+               AND job."phase_resource_plan_job_id" = production."phase_resource_plan_job_id"
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+                AND (
+                    production."id" IS NULL
+                    OR production."status" <> 'HELD'
+                    OR production."job_id" IS NULL
+                    OR job."id" IS NULL
+                    OR job."order_id" <> target_order_id
+                    OR job."order_phase_id" <> phase."id"
+                    OR job."status" NOT IN ('CREATED', 'ACCEPTED')
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM "inventory_reservations" inventory_reservation
+                        WHERE inventory_reservation."production_reservation_id" = production."id"
+                          AND inventory_reservation."node_id" = production."node_id"
+                          AND inventory_reservation."status" = 'HELD'
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM "inventory_reservations" inventory_reservation
+                        WHERE inventory_reservation."production_reservation_id" = production."id"
+                          AND inventory_reservation."node_id" = production."node_id"
+                          AND inventory_reservation."status" <> 'HELD'
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM "capacity_reservations" capacity_reservation
+                        WHERE capacity_reservation."production_reservation_id" = production."id"
+                          AND capacity_reservation."node_id" = production."node_id"
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM "capacity_reservations" capacity_reservation
+                        WHERE capacity_reservation."production_reservation_id" = production."id"
+                          AND capacity_reservation."node_id" = production."node_id"
+                          AND capacity_reservation."status" <> 'HELD'
+                    )
+                )
+          )
+    ) THEN
+        RAISE EXCEPTION 'confirmed order must retain its complete held reservation graph'
+            USING ERRCODE = '23514', CONSTRAINT = 'confirmed_order_reservation_hold_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "phase_reservation_sets_confirmed_order_hold_reconciled"
+AFTER UPDATE OF "status" ON "phase_reservation_sets"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_confirmed_order_reservation_hold();
+CREATE CONSTRAINT TRIGGER "production_reservations_confirmed_order_hold_reconciled"
+AFTER UPDATE OF "status" ON "production_reservations"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_confirmed_order_reservation_hold();
+CREATE CONSTRAINT TRIGGER "inventory_reservations_confirmed_order_hold_reconciled"
+AFTER UPDATE OF "status" ON "inventory_reservations"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_confirmed_order_reservation_hold();
+CREATE CONSTRAINT TRIGGER "capacity_reservations_confirmed_order_hold_reconciled"
+AFTER UPDATE OF "status" ON "capacity_reservations"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_confirmed_order_reservation_hold();
+
+CREATE FUNCTION taven_reconcile_order_production_resource_start()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_status "order_status";
+BEGIN
+    SELECT "status"
+    INTO target_status
+    FROM "orders"
+    WHERE "id" = NEW."id"
+    FOR UPDATE;
+
+    IF target_status IS DISTINCT FROM 'IN_PRODUCTION'::"order_status" THEN
+        RETURN NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "jobs" job
+        JOIN "production_reservations" production
+          ON production."job_id" = job."id"
+         AND production."node_id" = job."node_id"
+         AND production."phase_resource_plan_job_id" = job."phase_resource_plan_job_id"
+        WHERE job."order_id" = NEW."id"
+          AND job."printing_at" IS NOT NULL
+          AND (
+              (
+                  production."status" = 'PRINTING'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "inventory_reservations" inventory_reservation
+                      WHERE inventory_reservation."production_reservation_id" = production."id"
+                        AND inventory_reservation."node_id" = production."node_id"
+                        AND inventory_reservation."status" = 'ALLOCATED'
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."node_id" = production."node_id"
+                        AND capacity_reservation."status" = 'PRINTING'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."node_id" = production."node_id"
+                        AND capacity_reservation."status" NOT IN ('SCHEDULED', 'PRINTING')
+                  )
+              ) OR (
+                  production."status" = 'CONSUMED'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "inventory_reservations" inventory_reservation
+                      WHERE inventory_reservation."production_reservation_id" = production."id"
+                        AND inventory_reservation."node_id" = production."node_id"
+                        AND inventory_reservation."status" = 'CONSUMED'
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."node_id" = production."node_id"
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."node_id" = production."node_id"
+                        AND capacity_reservation."status" <> 'COMPLETED'
+                  )
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION 'in-production order requires an atomically started reservation group'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_production_resource_start_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "orders_production_resource_start_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" = 'CONFIRMED' AND NEW."status" = 'IN_PRODUCTION')
+EXECUTE FUNCTION taven_reconcile_order_production_resource_start();
 
 CREATE FUNCTION taven_extend_quote_source_retention()
 RETURNS trigger
@@ -3389,14 +3744,14 @@ BEGIN
             SELECT "id" FROM "order_phases"
             WHERE "order_id" = NEW."order_id" AND "kind" = 'SINGLE' AND "status" = 'QUOTED'
         )
-          AND resource_plan."expires_at" > CURRENT_TIMESTAMP
+          AND resource_plan."expires_at" > clock_timestamp()
           AND EXISTS (
               SELECT 1
               FROM "phase_reservation_sets" reservation_set
               WHERE reservation_set."phase_resource_plan_id" = resource_plan."id"
                 AND reservation_set."node_id" = resource_plan."node_id"
                 AND reservation_set."status" IN ('RESERVED', 'HELD')
-                AND reservation_set."expires_at" > CURRENT_TIMESTAMP
+                AND reservation_set."expires_at" > clock_timestamp()
           )
           AND NOT EXISTS (
               SELECT 1
