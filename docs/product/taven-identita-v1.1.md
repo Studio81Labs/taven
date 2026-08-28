@@ -39,7 +39,7 @@ Studio81 Labs se může zobrazovat jako právní/provozní subjekt v trust sekci
 | Ano | Ne |
 |---|---|
 | „Cena platí. Zaplať a tiskneme." | „Nejlepší kvalita za skvělé ceny" |
-| „Odesíláme do 3 pracovních dnů" | „Rychle a spolehlivě" |
+| „Termín odeslání vidíš před platbou." | „Rychle a spolehlivě" |
 | „Tahle stěna je tenčí než dvě housenky materiálu" | „Detekován potenciální problém" |
 | „Tiskneme věrně podle tvého modelu" | „Garantujeme perfektní výsledek" |
 

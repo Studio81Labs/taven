@@ -15,7 +15,7 @@ Kompletní zákaznický povrch **Tavenu** — české služby zakázkového 3D t
 
 ## 2. Ústřední myšlenka
 
-> Nahraj soubor. Do dvou minut máš závaznou cenu a je zaplaceno.
+> Nahraj soubor. Po přesném výpočtu a výběru dopravy dostaneš závaznou cenu. Zaplať a tiskneme.
 
 Konkurence v Česku má kalkulačky, ale **všechny končí orientačním odhadem a e-mailem**. Taven dá cenu, která platí. To musí být z obrazovky čitelné do tří sekund.
 
@@ -145,7 +145,7 @@ Body, které se v první iteraci rozešly se specifikací nebo s parametry:
 | 4 | **Procenta u kvality** (−18 % / +35 %) | zobrazit přepočtenou cenu, viz §4 |
 | 5 | **Stroj ve sledování** („Stroj 2 — Prusa MK4") | „Tiskne se, odhad dokončení 15:20" |
 | 6 | **Dvě primární barvy** — černá pro vybrané, modrá pro akci | sjednotit, viz identita §8 |
-| 7 | **Expres jednou pevných +199 Kč, jinde ×2,0** | rozhodnout a použít jedno; na zakázce za tisícovku se to rozejde |
+| 7 | **Expres jednou pevných +199 Kč, jinde ×2,0** | používat pouze `koef_express = ×2,0`; expres se zobrazí jen pro celý Order s jedinou `OrderPhase(kind = single)`, když všechny položky, podložky, materiály, barvy, post-processing a výrobní okno splní eligibility |
 | 8 | **Rozpor u sestavy** — vpravo „cenu spočítáme, až bude soubor v pořádku", vlevo ceny u těles | jedno, nebo druhé |
 
 ## 11. Odevzdat
