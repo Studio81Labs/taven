@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#185; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -218,6 +218,7 @@ Systém uchovává jednotlivé metriky, například:
 -   `first_pass_yield`,
 -   `maker_caused_reprint_rate`,
 -   `claim_rate`,
+-   `maker_caused_claim_rate`,
 -   `on_time_rate`,
 -   `handoff_delay`,
 -   `acceptance_rate`,
@@ -343,7 +344,8 @@ Maker
 ``` text
 Node
 - id
-- maker_id
+- owner_type (`platform` | `maker`)
+- maker_id (nullable; povinné jen pro `owner_type = maker`)
 - location / service area
 - status
 - capabilities
@@ -399,6 +401,7 @@ MakerPerformanceSnapshot
 - first_pass_yield
 - maker_caused_reprint_rate
 - claim_rate
+- maker_caused_claim_rate
 - on_time_rate
 - handoff_delay
 - acceptance_rate
@@ -477,11 +480,17 @@ v0:
 manual operation
 no maker settlement/payout domain
 
-after gate:
+first stage after gate:
 N Maker
 N Node
-automatic routing
+platform-owned and maker-owned nodes
+manual assignment or limited policy routing
 performance-based priority
+settlement records
+manual invoice and bank-transfer payout
+
+later network:
+automatic routing
 automated settlement/payout
 ```
 
@@ -511,13 +520,17 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     konkrétního jobu.
 13. Účetní a daňové plnění mezi Studio81 Labs a makerem musí odpovídat
     skutečně poskytnuté službě a předem definovaným podmínkám.
+14. Platform-owned `Node` zůstává po aktivaci sítě platný bez
+    fiktivního `Maker`; maker-owned `Node` naopak vždy odkazuje svého
+    dodavatele.
 
 ------------------------------------------------------------------------
 
 ## 12. Rozhodovací log --- zapsané záznamy
 
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
-#181 platí až po aktivační bráně #183.
+#181 platí až po aktivační bráně #183. Vlastnictví uzlů a první ruční
+payout fázi doplňují #184–#185.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
