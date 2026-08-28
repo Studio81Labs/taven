@@ -24,12 +24,16 @@ warn() { printf '  \033[1;33m!\033[0m %s\n' "$1"; }
 require_command pnpm
 
 # ── 1. Env files ─────────────────────────────────────────────────────
-# Compose reads its overrides (TAVEN_POSTGRES_PORT, POSTGRES_USER, POSTGRES_DB,
-# ...) from infra/docker/.env, next to the compose file. Carry the root
-# checkout's copy over first so this worktree renders the same Compose identity
-# that the copied apps/backend/.env DATABASE_URL was written against;
-# bootstrap.sh refuses to migrate when the two disagree. Shell-level overrides
-# apply to both checkouts already and need no copying.
+# Compose interpolates its overrides (TAVEN_POSTGRES_PORT, POSTGRES_USER,
+# POSTGRES_DB, ...) from the .env file in its project directory. Without
+# --project-directory that is the directory of the first -f compose file, so
+# for `pnpm infra:up` it is infra/docker/.env, not the repo-root .env; the
+# shell's PWD only applies when no -f file is given (verified with
+# `docker compose config`). Carry the root checkout's copy over first so this
+# worktree renders the same Compose identity that the copied apps/backend/.env
+# DATABASE_URL was written against; bootstrap.sh refuses to migrate when the
+# two disagree. Shell-level overrides apply to both checkouts already and need
+# no copying.
 echo "Setting up env files..."
 if [ -f infra/docker/.env ]; then
   ok "infra/docker/.env already exists"
