@@ -38,6 +38,3 @@ infra/docker/miniodata/
 
 # Local working notes
 docs/cowork/
-
-# Superset workspace-local infra ownership marker (see .superset/setup.sh)
-.superset/.infra-started
