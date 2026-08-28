@@ -38,7 +38,7 @@ CREATE TYPE "payment_status" AS ENUM ('CREATED', 'PENDING', 'CAPTURED', 'FAILED'
 CREATE TYPE "refund_status" AS ENUM ('PENDING', 'SUCCEEDED', 'FAILED');
 
 -- CreateEnum
-CREATE TYPE "refund_reason" AS ENUM ('CUSTOMER_CANCELLATION');
+CREATE TYPE "refund_reason" AS ENUM ('CUSTOMER_CANCELLATION', 'PRODUCTION_FAILURE');
 
 -- CreateEnum
 CREATE TYPE "audit_actor_kind" AS ENUM ('SYSTEM', 'CUSTOMER', 'OPERATOR');
@@ -1158,6 +1158,7 @@ BEGIN
            JOIN "quote_price_bindings" binding ON binding."quote_id" = quote."id"
            JOIN "price_snapshots" snapshot ON snapshot."id" = binding."price_snapshot_id"
            WHERE quote."quote_request_id" = OLD."id"
+             AND quote."issued_at" <= clock_timestamp()
              AND quote."expires_at" > clock_timestamp()
              AND (
                  SELECT coalesce(sum(component."amount_minor"), 0)
@@ -1994,7 +1995,7 @@ BEGIN
 
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
-           (OLD."status" = 'CREATED' AND NEW."status" IN ('ACCEPTED', 'CANCELLED', 'FAILED'))
+           (OLD."status" = 'CREATED' AND NEW."status" IN ('ACCEPTED', 'CANCELLED'))
            OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('PRINTING', 'CANCELLED', 'FAILED'))
            OR (OLD."status" = 'PRINTING' AND NEW."status" IN ('QC_APPROVED', 'CANCELLED', 'FAILED', 'QC_REJECTED'))
            OR (OLD."status" = 'QC_APPROVED' AND NEW."status" IN ('PACKED', 'CANCELLED'))
@@ -2491,7 +2492,7 @@ BEGIN
             SELECT 1
             FROM "jobs"
             WHERE "order_id" = target_order_id
-              AND "status" <> 'CANCELLED'
+              AND "status" NOT IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
         ) OR EXISTS (
             SELECT 1
             FROM "shipments" shipment
@@ -2522,7 +2523,7 @@ BEGIN
             SELECT 1
             FROM "jobs"
             WHERE "order_id" = target_order_id
-              AND "status" <> 'CANCELLED'
+              AND "status" NOT IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
         ) OR EXISTS (
             SELECT 1
             FROM "shipments" shipment
@@ -4878,6 +4879,101 @@ CREATE CONSTRAINT TRIGGER "refunds_customer_cancellation_order_reconciled"
 AFTER INSERT OR UPDATE OF "payment_id", "reason", "status" ON "refund_transactions"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_reconcile_customer_cancellation_refund_order();
+
+CREATE FUNCTION taven_reconcile_production_failure_cancellation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_order_status "order_status";
+    has_failed_job boolean;
+    has_production_failure_refund boolean;
+BEGIN
+    IF TG_TABLE_NAME = 'orders' THEN
+        target_order_id := NEW."id";
+    ELSIF TG_TABLE_NAME = 'jobs' OR TG_TABLE_NAME = 'payments' THEN
+        target_order_id := NEW."order_id";
+    ELSE
+        SELECT payment."order_id"
+        INTO target_order_id
+        FROM "payments" payment
+        WHERE payment."id" = NEW."payment_id";
+    END IF;
+
+    SELECT target_order."status",
+           EXISTS (
+               SELECT 1
+               FROM "jobs" job
+               WHERE job."order_id" = target_order_id
+                 AND job."status" IN ('FAILED', 'QC_REJECTED')
+           ),
+           EXISTS (
+               SELECT 1
+               FROM "payments" payment
+               JOIN "refund_transactions" refund
+                 ON refund."payment_id" = payment."id"
+               WHERE payment."order_id" = target_order_id
+                 AND refund."reason" = 'PRODUCTION_FAILURE'
+           )
+    INTO target_order_status, has_failed_job, has_production_failure_refund
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    IF has_failed_job AND (
+        target_order_status NOT IN ('CANCELLED', 'REFUNDED')
+        OR EXISTS (
+            SELECT 1
+            FROM "payments" payment
+            WHERE payment."order_id" = target_order_id
+              AND payment."captured_amount_minor" IS NOT NULL
+              AND (
+                  payment."status" NOT IN ('REFUND_PENDING', 'REFUNDED')
+                  OR coalesce((
+                      SELECT sum(refund."amount_minor")
+                      FROM "refund_transactions" refund
+                      WHERE refund."payment_id" = payment."id"
+                        AND refund."reason" = 'PRODUCTION_FAILURE'
+                        AND refund."status" IN ('PENDING', 'SUCCEEDED')
+                  ), 0) <> payment."captured_amount_minor" - coalesce((
+                      SELECT sum(refund."amount_minor")
+                      FROM "refund_transactions" refund
+                      WHERE refund."payment_id" = payment."id"
+                        AND refund."reason" <> 'PRODUCTION_FAILURE'
+                        AND refund."status" = 'SUCCEEDED'
+                  ), 0)
+              )
+        )
+    ) THEN
+        RAISE EXCEPTION 'failed production must atomically cancel the order and allocate its remaining captured value to production-failure refunds'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_failure_cancellation_check';
+    ELSIF has_production_failure_refund
+          AND (NOT has_failed_job OR target_order_status NOT IN ('CANCELLED', 'REFUNDED')) THEN
+        RAISE EXCEPTION 'production-failure refunds require retained failure evidence in a cancelled order lifecycle'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_failure_cancellation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "orders_production_failure_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_production_failure_cancellation();
+CREATE CONSTRAINT TRIGGER "jobs_production_failure_reconciled"
+AFTER UPDATE OF "status" ON "jobs"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_production_failure_cancellation();
+CREATE CONSTRAINT TRIGGER "payments_production_failure_reconciled"
+AFTER UPDATE OF "status", "captured_amount_minor" ON "payments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_production_failure_cancellation();
+CREATE CONSTRAINT TRIGGER "refunds_production_failure_reconciled"
+AFTER INSERT OR UPDATE OF "payment_id", "amount_minor", "reason", "status" ON "refund_transactions"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_production_failure_cancellation();
 
 CREATE FUNCTION taven_validate_payment_capture_against_refunds()
 RETURNS trigger

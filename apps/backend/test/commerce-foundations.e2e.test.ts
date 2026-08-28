@@ -276,6 +276,10 @@ async function forceOrderLifecycleConstraints(
        "orders_customer_cancellation_refund_reconciled",
        "payments_customer_cancellation_refund_reconciled",
        "refunds_customer_cancellation_order_reconciled",
+       "orders_production_failure_reconciled",
+       "jobs_production_failure_reconciled",
+       "payments_production_failure_reconciled",
+       "refunds_production_failure_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
        "jobs_printing_reservation_group_reconciled",
@@ -297,6 +301,10 @@ async function forceOrderLifecycleConstraints(
        "orders_customer_cancellation_refund_reconciled",
        "payments_customer_cancellation_refund_reconciled",
        "refunds_customer_cancellation_order_reconciled",
+       "orders_production_failure_reconciled",
+       "jobs_production_failure_reconciled",
+       "payments_production_failure_reconciled",
+       "refunds_production_failure_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
        "jobs_printing_reservation_group_reconciled",
@@ -597,7 +605,10 @@ async function cancelOrderBeforeHandoff(
     [orderId, cancelledAt],
   );
   await client.query(
-    `UPDATE jobs SET status = 'CANCELLED', updated_at = $2 WHERE order_id = $1`,
+    `UPDATE jobs
+     SET status = 'CANCELLED', updated_at = $2
+     WHERE order_id = $1
+       AND status NOT IN ('FAILED', 'QC_REJECTED')`,
     [orderId, cancelledAt],
   );
   await client.query(
@@ -2323,6 +2334,284 @@ describe("commerce persistence foundations", () => {
         ).rows,
       ).toEqual([{ outcome: "CANCELLED" }]);
     });
+  });
+
+  it("cancels failed production atomically without rewriting the failed Job", async () => {
+    await rollback(
+      "failed-production-cancellation",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "failed-production-cancellation",
+        );
+        const productions = await createCurrentPlanAndPayment(
+          client,
+          fixtures,
+          foundation,
+        );
+        await activateCurrentPlan(client, fixtures, foundation, productions);
+
+        const jobId = productions[0]?.jobId;
+        if (!jobId) {
+          throw new Error("failed production fixture Job is missing");
+        }
+        const failedAt = new Date();
+        await expectQueryError(
+          client,
+          "fail_unaccepted_job",
+          () =>
+            client.query(
+              `UPDATE jobs SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+              [jobId, failedAt],
+            ),
+          { code: "23514", constraint: "job_status_transition_check" },
+        );
+        await client.query(
+          `UPDATE jobs
+         SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+         WHERE id = $1`,
+          [jobId, failedAt],
+        );
+
+        await expectQueryError(
+          client,
+          "leave_failed_job_active",
+          async () => {
+            await client.query(
+              `UPDATE jobs SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+              [jobId, failedAt],
+            );
+            await client.query(
+              `SET CONSTRAINTS "jobs_production_failure_reconciled" IMMEDIATE`,
+            );
+          },
+          { code: "23514", constraint: "job_failure_cancellation_check" },
+        );
+
+        const capturedAmount = (
+          await client.query<{ captured_amount_minor: string }>(
+            `SELECT captured_amount_minor::text
+           FROM payments WHERE id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows[0]?.captured_amount_minor;
+        if (!capturedAmount) {
+          throw new Error("failed production fixture capture is missing");
+        }
+        await expectQueryError(
+          client,
+          "orphan_production_failure_refund",
+          async () => {
+            await client.query(
+              `INSERT INTO refund_transactions
+             (id, payment_id, idempotency_key, amount_minor, reason, status,
+              requested_at, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,'PRODUCTION_FAILURE','FAILED',$5,$5,$5)`,
+              [
+                fixtures.id("orphan-production-failure-refund"),
+                foundation.paymentId,
+                "orphan-production-failure-refund",
+                capturedAmount,
+                failedAt,
+              ],
+            );
+            await client.query(
+              `SET CONSTRAINTS "refunds_production_failure_reconciled" IMMEDIATE`,
+            );
+          },
+          { code: "23514", constraint: "job_failure_cancellation_check" },
+        );
+        await expectQueryError(
+          client,
+          "misattribute_failed_job_refund",
+          async () => {
+            await client.query(
+              `UPDATE jobs SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+              [jobId, failedAt],
+            );
+            await client.query(
+              `INSERT INTO refund_transactions
+             (id, payment_id, idempotency_key, amount_minor, reason, status,
+              requested_at, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','PENDING',$5,$5,$5)`,
+              [
+                fixtures.id("misattributed-production-refund"),
+                foundation.paymentId,
+                "misattributed-production-refund",
+                capturedAmount,
+                failedAt,
+              ],
+            );
+            await client.query(
+              `UPDATE payments SET status = 'REFUND_PENDING', updated_at = $2
+             WHERE id = $1`,
+              [foundation.paymentId, failedAt],
+            );
+            await cancelOrderBeforeHandoff(client, foundation.orderId);
+          },
+          { code: "23514", constraint: "job_failure_cancellation_check" },
+        );
+
+        const refundId = fixtures.id("production-failure-refund");
+        await client.query(
+          `UPDATE jobs SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+          [jobId, failedAt],
+        );
+        await client.query(
+          `INSERT INTO refund_transactions
+         (id, payment_id, idempotency_key, amount_minor, reason, status,
+          requested_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,'PRODUCTION_FAILURE','PENDING',$5,$5,$5)`,
+          [
+            refundId,
+            foundation.paymentId,
+            "production-failure-refund",
+            capturedAmount,
+            failedAt,
+          ],
+        );
+        await client.query(
+          `UPDATE payments SET status = 'REFUND_PENDING', updated_at = $2
+         WHERE id = $1`,
+          [foundation.paymentId, failedAt],
+        );
+        await cancelOrderBeforeHandoff(client, foundation.orderId);
+        await client.query(
+          `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+        );
+        await client.query(
+          `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" DEFERRED`,
+        );
+
+        expect(
+          (
+            await client.query<{
+              job_status: string;
+              order_status: string;
+              payment_status: string;
+              refund_reason: string;
+              refund_status: string;
+            }>(
+              `SELECT job.status::text AS job_status,
+                    target_order.status::text AS order_status,
+                    payment.status::text AS payment_status,
+                    refund.reason::text AS refund_reason,
+                    refund.status::text AS refund_status
+             FROM jobs job
+             JOIN orders target_order ON target_order.id = job.order_id
+             JOIN payments payment ON payment.order_id = target_order.id
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE job.id = $1 AND refund.id = $2`,
+              [jobId, refundId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            job_status: "FAILED",
+            order_status: "CANCELLED",
+            payment_status: "REFUND_PENDING",
+            refund_reason: "PRODUCTION_FAILURE",
+            refund_status: "PENDING",
+          },
+        ]);
+        expect(
+          (
+            await client.query<{ status: string }>(
+              `SELECT status::text
+             FROM phase_reservation_sets WHERE id = $1
+             UNION ALL
+             SELECT status::text
+             FROM production_reservations WHERE job_id = $2
+             UNION ALL
+             SELECT status::text
+             FROM inventory_reservations
+             WHERE production_reservation_id = $3
+             UNION ALL
+             SELECT status::text
+             FROM capacity_reservations
+             WHERE production_reservation_id = $3`,
+              [
+                foundation.phaseReservationSetId,
+                jobId,
+                productions[0]?.productionReservationId,
+              ],
+            )
+          ).rows,
+        ).toEqual([
+          { status: "RELEASED" },
+          { status: "RELEASED" },
+          { status: "RELEASED" },
+          { status: "RELEASED" },
+        ]);
+
+        const refundedAt = new Date(failedAt.getTime() + 1_000);
+        await client.query(
+          `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
+          [refundId, "production-failure-refund", refundedAt],
+        );
+        await client.query(
+          `UPDATE payments SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+          [foundation.paymentId, refundedAt],
+        );
+        await client.query(
+          `UPDATE order_phases
+         SET status = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+          [foundation.orderId, refundedAt],
+        );
+        await client.query(
+          `UPDATE fulfilment_slots
+         SET outcome = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+          [foundation.orderId, refundedAt],
+        );
+        await client.query(
+          `UPDATE orders SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+          [foundation.orderId, refundedAt],
+        );
+        await forceOrderLifecycleConstraints(client);
+        await client.query(
+          `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "orders_refund_completion_reconciled" IMMEDIATE`,
+        );
+        expect(
+          (
+            await client.query<{
+              job_status: string;
+              order_status: string;
+              payment_status: string;
+              refund_status: string;
+            }>(
+              `SELECT job.status::text AS job_status,
+                    target_order.status::text AS order_status,
+                    payment.status::text AS payment_status,
+                    refund.status::text AS refund_status
+             FROM jobs job
+             JOIN orders target_order ON target_order.id = job.order_id
+             JOIN payments payment ON payment.order_id = target_order.id
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE job.id = $1 AND refund.id = $2`,
+              [jobId, refundId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            job_status: "FAILED",
+            order_status: "REFUNDED",
+            payment_status: "REFUNDED",
+            refund_status: "SUCCEEDED",
+          },
+        ]);
+      },
+    );
   });
 
   it("allows a payment schedule retry only after a failed attempt", async () => {
@@ -5652,6 +5941,28 @@ describe("commerce persistence foundations", () => {
               `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
              WHERE id = $1`,
               [staleRequestId, now],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_price_binding_acceptance_check",
+          },
+        );
+
+        const futureIssuedAt = new Date(now.getTime() + 60 * 60 * 1_000);
+        const futureRequestId = await createPricedOffer(
+          "future-offer",
+          futureIssuedAt,
+          new Date(now.getTime() + 2 * 60 * 60 * 1_000),
+          "3".repeat(64),
+        );
+        await expectQueryError(
+          client,
+          "accept_future_offer",
+          () =>
+            client.query(
+              `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
+               WHERE id = $1`,
+              [futureRequestId, now],
             ),
           {
             code: "23514",
