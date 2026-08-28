@@ -597,7 +597,24 @@ ALTER TABLE "fulfilment_slots" ADD CONSTRAINT "fulfilment_slots_values_check" CH
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_timestamps_check" CHECK (("label_created_at" IS NULL OR "label_created_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at") AND ("delivered_at" IS NULL OR "delivered_at" >= "created_at") AND ("cancelled_at" IS NULL OR "cancelled_at" >= "created_at"));
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (("accepted_at" IS NULL OR "accepted_at" >= "created_at") AND ("printing_at" IS NULL OR "printing_at" >= "created_at") AND ("qc_approved_at" IS NULL OR "qc_approved_at" >= "created_at") AND ("packed_at" IS NULL OR "packed_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
+ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
+    (
+        "status" IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED')
+        AND "captured_amount_minor" IS NULL
+        AND "provider_capture_id" IS NULL
+        AND "captured_at" IS NULL
+    ) OR (
+        "status" IN ('CAPTURED', 'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED')
+        AND "captured_amount_minor" IS NOT NULL
+        AND "provider_capture_id" IS NOT NULL
+        AND "captured_at" IS NOT NULL
+    )
+);
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_values_check" CHECK ("amount_minor" > 0 AND ("completed_at" IS NULL OR "completed_at" >= "requested_at"));
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_success_facts_check" CHECK (
+    "status" <> 'SUCCEEDED'
+    OR ("provider_refund_id" IS NOT NULL AND "completed_at" IS NOT NULL)
+);
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_scope_check" CHECK ("quote_id" IS NOT NULL OR "order_id" IS NOT NULL OR "payment_id" IS NOT NULL OR "refund_transaction_id" IS NOT NULL);
 
 -- Immutable commercial snapshots and append-only audit rows.
@@ -625,6 +642,33 @@ FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
 CREATE TRIGGER "quote_items_immutable"
 BEFORE UPDATE OR DELETE ON "quote_items"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
+
+CREATE FUNCTION taven_require_mutable_quote_for_item()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    request_status "quote_request_status";
+BEGIN
+    SELECT request."status" INTO request_status
+    FROM "quotes" quote
+    JOIN "quote_requests" request ON request."id" = quote."quote_request_id"
+    WHERE quote."id" = NEW."quote_id"
+    FOR UPDATE OF request;
+
+    IF request_status IS DISTINCT FROM 'QUOTED'::"quote_request_status" THEN
+        RAISE EXCEPTION 'quote items can be inserted only before the quote is accepted or closed'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_item_accepted_immutable_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "quote_items_require_mutable_quote"
+BEFORE INSERT ON "quote_items"
+FOR EACH ROW EXECUTE FUNCTION taven_require_mutable_quote_for_item();
+
 CREATE TRIGGER "audit_events_append_only"
 BEFORE UPDATE OR DELETE ON "audit_events"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
@@ -1044,6 +1088,24 @@ $$;
 CREATE TRIGGER "order_items_draft_mutability"
 BEFORE INSERT OR UPDATE OR DELETE ON "order_items"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_order_item_mutation();
+
+CREATE FUNCTION taven_protect_order_draft_status()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD."status" <> 'DRAFT' AND NEW."status" = 'DRAFT' THEN
+        RAISE EXCEPTION 'draft is an initial order state and cannot be restored'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "orders_draft_status_not_restored"
+BEFORE UPDATE OF "status" ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_order_draft_status();
 
 CREATE FUNCTION taven_validate_order_price_binding()
 RETURNS trigger
@@ -1699,13 +1761,27 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM 1
+        FROM "orders"
+        WHERE "id" = NEW."order_id"
+        FOR UPDATE;
+
+        IF EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = NEW."order_id") THEN
+            RAISE EXCEPTION 'shipment plans cannot be added after payment intent creation'
+                USING ERRCODE = '23514', CONSTRAINT = 'shipment_plan_payment_guard';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
     RAISE EXCEPTION 'shipment plans are insert-only topology'
         USING ERRCODE = '23514', CONSTRAINT = 'shipment_plan_insert_only_check';
 END;
 $$;
 
 CREATE TRIGGER "shipment_plans_insert_only"
-BEFORE UPDATE OR DELETE ON "shipment_plans"
+BEFORE INSERT OR UPDATE OR DELETE ON "shipment_plans"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_shipment_plan_mutation();
 
 CREATE FUNCTION taven_validate_shipment_plan_fulfilment_slot()
@@ -1742,7 +1818,24 @@ CREATE FUNCTION taven_protect_fulfilment_slot_topology()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    target_order_id uuid := CASE WHEN TG_OP = 'INSERT' THEN NEW."order_id" ELSE OLD."order_id" END;
+    target_order_status "order_status";
 BEGIN
+    SELECT "status" INTO target_order_status
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    IF TG_OP = 'INSERT' THEN
+        IF target_order_status IS DISTINCT FROM 'DRAFT'::"order_status" THEN
+            RAISE EXCEPTION 'fulfilment slots can be inserted only while the order is draft'
+                USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'fulfilment slots are stable topology and cannot be deleted'
             USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
@@ -1765,7 +1858,7 @@ END;
 $$;
 
 CREATE TRIGGER "fulfilment_slots_topology_protected"
-BEFORE UPDATE OR DELETE ON "fulfilment_slots"
+BEFORE INSERT OR UPDATE OR DELETE ON "fulfilment_slots"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_fulfilment_slot_topology();
 
 CREATE FUNCTION taven_protect_shipment_topology()
@@ -1819,6 +1912,7 @@ BEGIN
         JOIN "order_price_bindings" binding
           ON binding."id" = active."order_price_binding_id"
         WHERE target_order."id" = NEW."order_id"
+          AND target_order."status" = 'QUOTED'
           AND target_order."customer_id" IS NOT NULL
           AND binding."id" = NEW."order_price_binding_id"
           AND binding."price_snapshot_id" = NEW."price_snapshot_id"
@@ -1960,6 +2054,19 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_identity_immutable_check';
     END IF;
 
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'CREATED' AND NEW."status" = 'PENDING')
+           OR (OLD."status" = 'PENDING' AND NEW."status" IN ('CAPTURED', 'FAILED', 'VOIDED'))
+           OR (OLD."status" = 'CAPTURED' AND NEW."status" = 'REFUND_PENDING')
+           OR (OLD."status" = 'VOIDED' AND NEW."status" = 'REFUND_PENDING')
+           OR (OLD."status" = 'REFUND_PENDING' AND NEW."status" IN ('PARTIALLY_REFUNDED', 'REFUNDED'))
+           OR (OLD."status" = 'PARTIALLY_REFUNDED' AND NEW."status" IN ('REFUND_PENDING', 'REFUNDED'))
+       ) THEN
+        RAISE EXCEPTION 'payment status transition is not allowed'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_status_transition_check';
+    END IF;
+
     IF NEW."id" IS DISTINCT FROM OLD."id"
        OR NEW."order_id" IS DISTINCT FROM OLD."order_id"
        OR NEW."price_snapshot_id" IS DISTINCT FROM OLD."price_snapshot_id"
@@ -2006,6 +2113,34 @@ CREATE TRIGGER "payments_identity_protected"
 BEFORE UPDATE OR DELETE ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_identity();
 
+CREATE FUNCTION taven_validate_payment_refunded_total()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    succeeded_refunds bigint;
+BEGIN
+    IF NEW."status" = 'REFUNDED' THEN
+        SELECT coalesce(sum("amount_minor"), 0)
+        INTO succeeded_refunds
+        FROM "refund_transactions"
+        WHERE "payment_id" = NEW."id"
+          AND "status" = 'SUCCEEDED';
+
+        IF succeeded_refunds <> coalesce(NEW."captured_amount_minor", 0) THEN
+            RAISE EXCEPTION 'refunded payment requires successful refunds equal to its capture'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_refund_reconciliation_check';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "payments_refunded_total_validated"
+BEFORE INSERT OR UPDATE OF "status", "captured_amount_minor" ON "payments"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_payment_refunded_total();
+
 CREATE FUNCTION taven_validate_payment_capture_against_refunds()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2042,6 +2177,12 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_append_only_check';
     END IF;
 
+    IF OLD."status" = 'SUCCEEDED'
+       AND NEW."status" IS DISTINCT FROM OLD."status" THEN
+        RAISE EXCEPTION 'successful refund transactions are terminal'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_succeeded_immutable_check';
+    END IF;
+
     IF NEW."id" IS DISTINCT FROM OLD."id"
        OR NEW."payment_id" IS DISTINCT FROM OLD."payment_id"
        OR NEW."idempotency_key" IS DISTINCT FROM OLD."idempotency_key"
@@ -2049,6 +2190,8 @@ BEGIN
        OR NEW."reason" IS DISTINCT FROM OLD."reason"
        OR NEW."requested_at" IS DISTINCT FROM OLD."requested_at"
        OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
+       OR (OLD."completed_at" IS NOT NULL
+           AND NEW."completed_at" IS DISTINCT FROM OLD."completed_at")
        OR (OLD."provider_refund_id" IS NOT NULL
            AND NEW."provider_refund_id" IS DISTINCT FROM OLD."provider_refund_id") THEN
         RAISE EXCEPTION 'refund transaction financial identity is immutable'

@@ -158,6 +158,7 @@ export class PersistenceFactory {
     sliceMetrics: SliceMetrics = defaultSliceMetrics,
     slotCount = 1,
     commerceItems?: CommerceItem[],
+    finalOrderStatus: "DRAFT" | "QUOTED" = "QUOTED",
   ): Promise<PersistenceFoundation> {
     const items: CommerceItem[] =
       commerceItems ?? Array.from({ length: slotCount }, () => ({}));
@@ -461,6 +462,7 @@ export class PersistenceFactory {
       quoteExpiresAt:
         sourceRetention.quoteExpiresAt ??
         new Date(testRunStartedAt + hourInMilliseconds),
+      finalOrderStatus,
     });
     return {
       nodeId,
@@ -535,6 +537,7 @@ export class PersistenceFactory {
     }>;
     quoteSessionExpiresAt: Date;
     quoteExpiresAt: Date;
+    finalOrderStatus: "DRAFT" | "QUOTED";
   }): Promise<void> {
     const t = createdAt;
     const quoteIssuedAt = new Date(
@@ -833,20 +836,22 @@ export class PersistenceFactory {
       "INSERT INTO payment_schedules (id, price_snapshot_id, sequence, role, gross_amount_minor, fee_rate_basis_points, fee_fixed_minor, provider_config, created_at) VALUES ($1,$2,0,'FULL',$3,0,0,$4::jsonb,$5)",
       [scheduleId, snapshotId, contractTotal, JSON.stringify({}), t],
     );
-    await this.sql.query(
-      "UPDATE orders SET status = 'QUOTED', quoted_at = $2, updated_at = $2 WHERE id = $1",
-      [input.orderId, t],
-    );
-    await this.sql.query(
-      "INSERT INTO audit_events (id, quote_id, order_id, event_type, payload, created_at) VALUES ($1,$2,$3,'order.quoted',$4::jsonb,$5)",
-      [
-        this.id(`${input.name}:audit`),
-        input.quoteId,
-        input.orderId,
-        JSON.stringify({}),
-        t,
-      ],
-    );
+    if (input.finalOrderStatus === "QUOTED") {
+      await this.sql.query(
+        "UPDATE orders SET status = 'QUOTED', quoted_at = $2, updated_at = $2 WHERE id = $1",
+        [input.orderId, t],
+      );
+      await this.sql.query(
+        "INSERT INTO audit_events (id, quote_id, order_id, event_type, payload, created_at) VALUES ($1,$2,$3,'order.quoted',$4::jsonb,$5)",
+        [
+          this.id(`${input.name}:audit`),
+          input.quoteId,
+          input.orderId,
+          JSON.stringify({}),
+          t,
+        ],
+      );
+    }
   }
 
   async finalizePayment(foundation: PersistenceFoundation): Promise<void> {
@@ -859,7 +864,7 @@ export class PersistenceFactory {
       throw new Error("commerce topology payment schedule is missing");
     }
     await this.sql.query(
-      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, provider_intent_id, requested_amount_minor, currency, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR',$8,$8)",
+      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, provider_intent_id, requested_amount_minor, currency, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR','PENDING',$8,$8)",
       [
         foundation.paymentId,
         foundation.orderId,

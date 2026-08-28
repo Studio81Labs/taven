@@ -364,7 +364,85 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514", constraint: "order_item_mutability_check" },
       );
+      await expectQueryError(
+        client,
+        "quoted_fulfilment_slot_insert",
+        () =>
+          client.query(
+            `INSERT INTO fulfilment_slots (id, order_id, order_phase_id, order_item_id,
+                                           quantity_ordinal, settlement_amount_minor,
+                                           created_at, updated_at)
+             VALUES ($1,$2,$3,$4,2,0,$5,$5)`,
+            [
+              fixtures.id("late-quoted-slot"),
+              foundation.orderId,
+              foundation.orderPhaseId,
+              foundation.orderItemId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "fulfilment_slot_topology_immutable_check",
+        },
+      );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
+      await expectQueryError(
+        client,
+        "paid_fulfilment_slot_insert",
+        () =>
+          client.query(
+            `INSERT INTO fulfilment_slots (id, order_id, order_phase_id, order_item_id,
+                                           quantity_ordinal, settlement_amount_minor,
+                                           created_at, updated_at)
+             VALUES ($1,$2,$3,$4,2,0,$5,$5)`,
+            [
+              fixtures.id("late-paid-slot"),
+              foundation.orderId,
+              foundation.orderPhaseId,
+              foundation.orderItemId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "fulfilment_slot_topology_immutable_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "paid_shipment_plan_insert",
+        () =>
+          client.query(
+            `INSERT INTO shipment_plans (id, order_id, order_phase_id,
+                                        price_snapshot_id, order_price_binding_id,
+                                        delivery_destination_id, ordinal, category,
+                                        planned_volume_cubic_mm,
+                                        planned_weight_milligrams,
+                                        shipping_amount_minor, packaging_amount_minor,
+                                        handling_amount_minor, allocation_snapshot, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,99,'standard',1,1,0,0,0,'{}'::jsonb,$7)`,
+            [
+              fixtures.id("late-paid-shipment-plan"),
+              foundation.orderId,
+              foundation.orderPhaseId,
+              foundation.priceSnapshotId,
+              foundation.orderPriceBindingId,
+              foundation.deliveryDestinationId,
+              new Date(),
+            ],
+          ),
+        { code: "23514", constraint: "shipment_plan_payment_guard" },
+      );
+      await expectQueryError(
+        client,
+        "restore_paid_order_draft",
+        () =>
+          client.query(`UPDATE orders SET status = 'DRAFT' WHERE id = $1`, [
+            foundation.orderId,
+          ]),
+        { code: "23514", constraint: "order_status_transition_check" },
+      );
       expect(
         (
           await client.query<{ kind: string; scope: string }>(
@@ -450,7 +528,16 @@ describe("commerce persistence foundations", () => {
 
   it("requires scoped payment topology and retains provider/refund identities", async () => {
     await rollback("scoped-identities", async (client, fixtures) => {
-      const foundation = await fixtures.createFoundation("scoped-identities");
+      const foundation = await fixtures.createFoundation(
+        "scoped-identities",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
       await client.query(
         `UPDATE reference_profiles
          SET state = 'RETIRED', retired_at = $1
@@ -458,6 +545,16 @@ describe("commerce persistence foundations", () => {
         [new Date()],
       );
       const other = await fixtures.createFoundation("other");
+      await expectQueryError(
+        client,
+        "draft_order_payment",
+        () => createCurrentPlanAndPayment(client, fixtures, foundation),
+        { code: "23514", constraint: "payment_fulfilment_topology_check" },
+      );
+      await client.query(
+        `UPDATE orders SET status = 'QUOTED', quoted_at = $2 WHERE id = $1`,
+        [foundation.orderId, new Date()],
+      );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
       await expectQueryError(
         client,
@@ -528,6 +625,16 @@ describe("commerce persistence foundations", () => {
       if (!capturedAmount || !providerIntentId) {
         throw new Error("fixture payment is missing");
       }
+      await expectQueryError(
+        client,
+        "capture_without_provider_facts",
+        () =>
+          client.query(
+            `UPDATE payments SET status = 'CAPTURED' WHERE id = $1`,
+            [foundation.paymentId],
+          ),
+        { code: "23514", constraint: "payments_capture_facts_check" },
+      );
       await client.query(
         `UPDATE payments
          SET status = 'CAPTURED', captured_amount_minor = $2,
@@ -567,6 +674,76 @@ describe("commerce persistence foundations", () => {
             ],
           ),
         { code: "23514", constraint: "refund_captured_payment_check" },
+      );
+      await expectQueryError(
+        client,
+        "succeed_refund_without_provider_facts",
+        () =>
+          client.query(
+            `UPDATE refund_transactions SET status = 'SUCCEEDED' WHERE id = $1`,
+            [fixtures.id("refund-first")],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_transactions_success_facts_check",
+        },
+      );
+      const refundCompletedAt = new Date();
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [
+          fixtures.id("refund-first"),
+          "provider-refund-first",
+          refundCompletedAt,
+        ],
+      );
+      for (const status of ["PENDING", "FAILED"]) {
+        await expectQueryError(
+          client,
+          `reopen_succeeded_refund_${status.toLowerCase()}`,
+          () =>
+            client.query(
+              `UPDATE refund_transactions SET status = $2 WHERE id = $1`,
+              [fixtures.id("refund-first"), status],
+            ),
+          {
+            code: "23514",
+            constraint: "refund_transaction_succeeded_immutable_check",
+          },
+        );
+      }
+      await client.query(
+        `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+        [foundation.paymentId],
+      );
+      await expectQueryError(
+        client,
+        "claim_full_refund_before_reconciliation",
+        () =>
+          client.query(
+            `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,
+            [foundation.paymentId],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_refund_reconciliation_check",
+        },
+      );
+      await client.query(
+        `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,
+        [foundation.paymentId],
+      );
+      await expectQueryError(
+        client,
+        "rewind_captured_payment",
+        () =>
+          client.query(`UPDATE payments SET status = 'FAILED' WHERE id = $1`, [
+            foundation.paymentId,
+          ]),
+        { code: "23514", constraint: "payment_status_transition_check" },
       );
       await expectQueryError(
         client,
@@ -842,6 +1019,29 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1`,
         [quoteRequestId, now],
+      );
+      await expectQueryError(
+        client,
+        "accepted_quote_item_insert",
+        () =>
+          client.query(
+            `INSERT INTO quote_items (id, quote_id, ordinal, source_model_file_id,
+                                     model_geometry_id, print_config_revision_id, material,
+                                     color, quantity, created_at)
+             VALUES ($1,$2,1,$3,$4,$5,'PLA','white',1,$6)`,
+            [
+              fixtures.id("late-accepted-quote-item"),
+              quoteId,
+              foundation.modelFileId,
+              foundation.modelGeometryId,
+              foundation.printConfigRevisionId,
+              now,
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_item_accepted_immutable_check",
+        },
       );
       await client.query(
         `INSERT INTO orders (id, customer_id, public_reference, status, created_at, updated_at)
