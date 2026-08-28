@@ -51,7 +51,7 @@ Zakázáno: slider výplně, výběr trysky, teploty, styl podpěr, orientace.
 
 ## 5. Checkout a sledování
 
-Checkout: výběr výdejního místa, fakturační údaje (jméno nebo název, adresa a případné firemní údaje) a kontakt bez povinné registrace, přijetí aktuální verze VOP, výslovné potvrzení výjimky z odstoupení, samostatný nepovinný souhlas se zveřejněním fotografií a platba kartou i bankovním tlačítkem.
+Checkout: výběr jednoho obsluhovaného výdejního místa nebo Z-BOXu pro celý `Order`, fakturační údaje (jméno nebo název, adresa a případné firemní údaje) a kontakt bez povinné registrace, přijetí aktuální verze VOP, výslovné potvrzení výjimky z odstoupení, samostatný nepovinný souhlas se zveřejněním fotografií a platba kartou i bankovním tlačítkem.
 
 Sledování: tokenizovaná URL bez účtu, časová osa stavů v lidské řeči, **fotka hotového dílu k odsouhlasení před odesláním**, tracking, doklad.
 

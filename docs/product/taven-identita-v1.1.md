@@ -68,7 +68,7 @@ Orientační poměr plochy: **80 %** typografie/whitespace/neutrální plochy, *
 | `--ink-3` | `#66675F` | mikrotexty; kontrast 5,72 : 1 na `--surface` a 4,96 : 1 na `--paper` |
 | `--rule` | `#D9D9D2` | linky |
 | `--accent` | `#1B44E8` | závazná cena, primární akce, tečka v logu |
-| `--warn` | `#B4741A` | dotaz na jednotky, varování |
+| `--warn` | `#925B10` | dotaz na jednotky, varování; kontrast 5,64 : 1 na `--surface` a 4,89 : 1 na `--paper` |
 | `--stop` | `#B4441A` | odmítnutí, blokující nález |
 
 **Akcent nepřesáhne přibližně 5 % plochy.** Modrá `#1B44E8` je finální primární akcent a používá se významově pro aktivní krok, vybranou variantu, závaznou cenu, primární CTA a tečku v logu.
