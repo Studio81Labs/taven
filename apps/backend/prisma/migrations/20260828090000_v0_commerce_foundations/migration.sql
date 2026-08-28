@@ -874,14 +874,17 @@ BEGIN
 
     PERFORM 1
     FROM "slice_results" slice_result
+    JOIN "reference_profiles" reference_profile
+      ON reference_profile."id" = slice_result."reference_profile_id"
     WHERE slice_result."id" = NEW."reference_slice_result_id"
       AND slice_result."kind" = 'REFERENCE'
       AND slice_result."model_geometry_id" = NEW."model_geometry_id"
       AND slice_result."print_config_revision_id" = NEW."print_config_revision_id"
+      AND reference_profile."material" = NEW."material"
     FOR KEY SHARE;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION '% reference slice must be a REFERENCE slice for its exact geometry and print configuration', TG_TABLE_NAME
+        RAISE EXCEPTION '% reference slice must be a REFERENCE slice for its exact geometry, print configuration, and material', TG_TABLE_NAME
             USING ERRCODE = '23514',
                   CONSTRAINT = CASE TG_TABLE_NAME
                       WHEN 'quote_items' THEN 'quote_item_reference_slice_input_check'
@@ -897,7 +900,7 @@ CREATE TRIGGER "quote_items_reference_slice_inputs"
 BEFORE INSERT ON "quote_items"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_item_reference_slice_inputs();
 CREATE TRIGGER "order_items_reference_slice_inputs"
-BEFORE INSERT OR UPDATE OF "reference_slice_result_id", "model_geometry_id", "print_config_revision_id" ON "order_items"
+BEFORE INSERT OR UPDATE OF "reference_slice_result_id", "model_geometry_id", "print_config_revision_id", "material" ON "order_items"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_item_reference_slice_inputs();
 
 CREATE TRIGGER "audit_events_append_only"
@@ -1519,6 +1522,25 @@ BEGIN
                  WHERE schedule."price_snapshot_id" = snapshot."id"
                    AND schedule."role" = 'FULL'
              ) = snapshot."contract_total_minor"
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM "quote_items" quote_item
+                 CROSS JOIN (
+                     VALUES
+                         ('ITEM_PRODUCTION'::"price_component_kind"),
+                         ('ITEM_QUANTITY'::"price_component_kind"),
+                         ('ITEM_POSTPROCESSING'::"price_component_kind")
+                 ) AS mandatory("kind")
+                 WHERE quote_item."quote_id" = quote."id"
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM "price_snapshot_components" component
+                       WHERE component."price_snapshot_id" = snapshot."id"
+                         AND component."scope" = 'QUOTE_ITEM'
+                         AND component."quote_item_id" = quote_item."id"
+                         AND component."kind" = mandatory."kind"
+                   )
+             )
            )
        ) THEN
         RAISE EXCEPTION 'accepted quote request requires a current quoted offer with one complete immutable price binding'

@@ -1792,7 +1792,7 @@ describe("commerce persistence foundations", () => {
     }
   });
 
-  it("binds item reference slices to their exact geometry and print configuration", async () => {
+  it("binds item reference slices to their exact geometry, print configuration, and material", async () => {
     await rollback("reference-slice-inputs", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
         "reference-slice-inputs",
@@ -1948,13 +1948,14 @@ describe("commerce persistence foundations", () => {
           referenceSliceId: string,
           geometryId = foundation.modelGeometryIds[0]!,
           configId = foundation.printConfigRevisionIds[0]!,
+          material: "PLA" | "PETG" = "PLA",
         ) =>
           client.query(
             `INSERT INTO ${table} (id, ${parentColumn}, ordinal,
                                   source_model_file_id, model_geometry_id,
                                   print_config_revision_id, reference_slice_result_id,
                                   material, color, quantity, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,'PLA','black',1,$8)`,
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::material,'black',1,$9)`,
             [
               id,
               parentId,
@@ -1963,6 +1964,7 @@ describe("commerce persistence foundations", () => {
               geometryId,
               configId,
               referenceSliceId,
+              material,
               new Date(),
             ],
           );
@@ -2007,6 +2009,20 @@ describe("commerce persistence foundations", () => {
             ),
           { code: "23514", constraint },
         );
+        await expectQueryError(
+          client,
+          `${table}_wrong_material_reference`,
+          () =>
+            insertItem(
+              fixtures.id(`${table}:wrong-material-reference-item`),
+              6,
+              matchingReferenceId,
+              foundation.modelGeometryIds[0]!,
+              foundation.printConfigRevisionIds[0]!,
+              "PETG",
+            ),
+          { code: "23514", constraint },
+        );
         if (table === "order_items") {
           await expectQueryError(
             client,
@@ -2020,6 +2036,18 @@ describe("commerce persistence foundations", () => {
                   fixtures.id(`${table}:matching-reference-item`),
                   foundation.sliceResultId,
                 ],
+              ),
+            { code: "23514", constraint },
+          );
+          await expectQueryError(
+            client,
+            "order_item_reference_material_update_bypass",
+            () =>
+              client.query(
+                `UPDATE order_items
+                 SET material = 'PETG'
+                 WHERE id = $1`,
+                [fixtures.id(`${table}:matching-reference-item`)],
               ),
             { code: "23514", constraint },
           );
@@ -7568,8 +7596,10 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514" },
       );
-      for (const component of priceComponents) {
-        await client.query(
+      const insertQuotePriceComponent = (
+        component: (typeof priceComponents)[number],
+      ) =>
+        client.query(
           `INSERT INTO price_snapshot_components
              (id, price_snapshot_id, kind, scope, quote_item_id,
               amount_minor, allocation, created_at)
@@ -7584,7 +7614,23 @@ describe("commerce persistence foundations", () => {
             now,
           ],
         );
+      for (const component of priceComponents.slice(0, -1)) {
+        await insertQuotePriceComponent(component);
       }
+      await expectQueryError(
+        client,
+        "accept_quote_without_item_price_coverage",
+        () =>
+          client.query(
+            `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1`,
+            [quoteRequestId, now],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_price_binding_acceptance_check",
+        },
+      );
+      await insertQuotePriceComponent(priceComponents.at(-1)!);
       await forceQuoteIssuanceConstraints(client);
       await expectQueryError(
         client,
