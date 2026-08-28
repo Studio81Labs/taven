@@ -121,6 +121,7 @@ CREATE TABLE "price_snapshots" (
     "pricing_revision" VARCHAR(100) NOT NULL,
     "input_snapshot" JSONB NOT NULL,
     "snapshot_hash" VARCHAR(64) NOT NULL,
+    "sealed_at" TIMESTAMPTZ(3),
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "price_snapshots_pkey" PRIMARY KEY ("id")
 );
@@ -603,6 +604,7 @@ ALTER TABLE "photo_assets" ADD COLUMN "retention_days" INTEGER NOT NULL DEFAULT 
 ALTER TABLE "photo_assets" ADD CONSTRAINT "photo_assets_retention_days_check" CHECK ("retention_days" > 0);
 ALTER TABLE "customers" ADD CONSTRAINT "customers_email_normalized_check" CHECK ("email" = lower("email") AND "email" <> '');
 ALTER TABLE "quote_sessions" ADD CONSTRAINT "quote_sessions_expiry_check" CHECK ("expires_at" > "created_at");
+ALTER TABLE "quote_sessions" ADD CONSTRAINT "quote_sessions_public_token_hash_check" CHECK ("public_token_hash" ~ '^[0-9a-f]{64}$');
 ALTER TABLE "quotes" ADD CONSTRAINT "quotes_expiry_check" CHECK ("expires_at" > "issued_at");
 ALTER TABLE "quote_items" ADD CONSTRAINT "quote_items_ordinal_quantity_check" CHECK ("ordinal" >= 0 AND "quantity" > 0);
 ALTER TABLE "price_snapshots" ADD CONSTRAINT "price_snapshots_money_currency_check" CHECK ("contract_total_minor" >= 0 AND "currency" ~ '^[A-Z]{3}$' AND "snapshot_hash" ~ '^[0-9a-f]{64}$');
@@ -719,9 +721,67 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION taven_protect_price_snapshot()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'UPDATE'
+       AND pg_trigger_depth() > 1
+       AND OLD."sealed_at" IS NULL
+       AND NEW."sealed_at" IS NOT NULL
+       AND NEW."sealed_at" IS NOT DISTINCT FROM CURRENT_TIMESTAMP(3)
+       AND NEW."id" IS NOT DISTINCT FROM OLD."id"
+       AND NEW."currency" IS NOT DISTINCT FROM OLD."currency"
+       AND NEW."contract_total_minor" IS NOT DISTINCT FROM OLD."contract_total_minor"
+       AND NEW."pricing_revision" IS NOT DISTINCT FROM OLD."pricing_revision"
+       AND NEW."input_snapshot" IS NOT DISTINCT FROM OLD."input_snapshot"
+       AND NEW."snapshot_hash" IS NOT DISTINCT FROM OLD."snapshot_hash"
+       AND NEW."created_at" IS NOT DISTINCT FROM OLD."created_at"
+       AND (
+           EXISTS (
+               SELECT 1
+               FROM "quote_price_bindings"
+               WHERE "price_snapshot_id" = OLD."id"
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM "order_price_bindings"
+               WHERE "price_snapshot_id" = OLD."id"
+           )
+       )
+       AND EXISTS (
+           SELECT 1
+           FROM "price_snapshots" snapshot
+           WHERE snapshot."id" = OLD."id"
+             AND (
+                 SELECT coalesce(sum(component."amount_minor"), 0)
+                 FROM "price_snapshot_components" component
+                 WHERE component."price_snapshot_id" = snapshot."id"
+             ) = snapshot."contract_total_minor"
+             AND (
+                 SELECT count(*)
+                 FROM "payment_schedules" schedule
+                 WHERE schedule."price_snapshot_id" = snapshot."id"
+                   AND schedule."role" = 'FULL'
+             ) = 1
+             AND (
+                 SELECT coalesce(sum(schedule."gross_amount_minor"), 0)
+                 FROM "payment_schedules" schedule
+                 WHERE schedule."price_snapshot_id" = snapshot."id"
+                   AND schedule."role" = 'FULL'
+             ) = snapshot."contract_total_minor"
+       ) THEN
+        RETURN NEW;
+    END IF;
+
+    RAISE EXCEPTION 'price_snapshots rows are immutable' USING ERRCODE = '23514';
+END;
+$$;
+
 CREATE TRIGGER "price_snapshots_immutable"
 BEFORE UPDATE OR DELETE ON "price_snapshots"
-FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
+FOR EACH ROW EXECUTE FUNCTION taven_protect_price_snapshot();
 CREATE TRIGGER "price_snapshot_components_immutable"
 BEFORE UPDATE OR DELETE ON "price_snapshot_components"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
@@ -734,6 +794,38 @@ FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
 CREATE TRIGGER "quote_items_immutable"
 BEFORE UPDATE OR DELETE ON "quote_items"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
+
+CREATE FUNCTION taven_require_unsealed_price_snapshot()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_snapshot_id uuid := NEW."price_snapshot_id";
+    target_sealed_at timestamptz;
+BEGIN
+    -- Binding and graph assembly share one transaction. The snapshot row lock
+    -- serializes that assembly with later attempts to extend the graph.
+    SELECT "sealed_at"
+    INTO target_sealed_at
+    FROM "price_snapshots"
+    WHERE "id" = target_snapshot_id
+    FOR UPDATE;
+
+    IF target_sealed_at IS NOT NULL THEN
+        RAISE EXCEPTION 'sealed price snapshot cannot receive more components or schedules'
+            USING ERRCODE = '23514', CONSTRAINT = 'price_snapshot_binding_immutable_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "price_snapshot_components_binding_guard"
+BEFORE INSERT ON "price_snapshot_components"
+FOR EACH ROW EXECUTE FUNCTION taven_require_unsealed_price_snapshot();
+CREATE TRIGGER "payment_schedules_binding_guard"
+BEFORE INSERT ON "payment_schedules"
+FOR EACH ROW EXECUTE FUNCTION taven_require_unsealed_price_snapshot();
 
 CREATE FUNCTION taven_require_mutable_quote_for_item()
 RETURNS trigger
@@ -958,6 +1050,11 @@ BEGIN
     JOIN "quote_requests" request ON request."id" = quote."quote_request_id"
     WHERE quote."id" = NEW."quote_id"
     FOR UPDATE OF request;
+
+    PERFORM 1
+    FROM "price_snapshots"
+    WHERE "id" = NEW."price_snapshot_id"
+    FOR UPDATE;
 
     IF request_status IS DISTINCT FROM 'QUOTED'::"quote_request_status" THEN
         RAISE EXCEPTION 'quote price binding must be fixed before quote acceptance or closure'
@@ -3280,6 +3377,11 @@ BEGIN
     WHERE "id" = NEW."order_id"
     FOR UPDATE;
 
+    PERFORM 1
+    FROM "price_snapshots"
+    WHERE "id" = NEW."price_snapshot_id"
+    FOR UPDATE;
+
     IF EXISTS (
         SELECT 1 FROM "individual_order_origins" origin WHERE origin."order_id" = NEW."order_id"
     ) AND NOT EXISTS (
@@ -3760,6 +3862,21 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'price_snapshot_total_reconciliation_check';
     END IF;
 
+    IF EXISTS (
+        SELECT 1
+        FROM "quote_price_bindings"
+        WHERE "price_snapshot_id" = target_snapshot_id
+        UNION ALL
+        SELECT 1
+        FROM "order_price_bindings"
+        WHERE "price_snapshot_id" = target_snapshot_id
+    ) THEN
+        UPDATE "price_snapshots"
+        SET "sealed_at" = CURRENT_TIMESTAMP(3)
+        WHERE "id" = target_snapshot_id
+          AND "sealed_at" IS NULL;
+    END IF;
+
     RETURN NULL;
 END;
 $$;
@@ -3774,6 +3891,14 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_price_snapshot_totals();
 CREATE CONSTRAINT TRIGGER "payment_schedules_total_reconciled"
 AFTER INSERT ON "payment_schedules"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_price_snapshot_totals();
+CREATE CONSTRAINT TRIGGER "quote_price_bindings_snapshot_sealed"
+AFTER INSERT ON "quote_price_bindings"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_price_snapshot_totals();
+CREATE CONSTRAINT TRIGGER "order_price_bindings_snapshot_sealed"
+AFTER INSERT ON "order_price_bindings"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_price_snapshot_totals();
 

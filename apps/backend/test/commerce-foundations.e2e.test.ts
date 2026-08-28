@@ -76,7 +76,9 @@ async function forceQuoteIssuanceConstraints(
        "quote_price_bindings_request_issuance_reconciled",
        "price_snapshots_total_reconciled",
        "price_snapshot_components_total_reconciled",
-       "payment_schedules_total_reconciled" IMMEDIATE`,
+       "payment_schedules_total_reconciled",
+       "quote_price_bindings_snapshot_sealed",
+       "order_price_bindings_snapshot_sealed" IMMEDIATE`,
   );
   await client.query(
     `SET CONSTRAINTS
@@ -85,7 +87,9 @@ async function forceQuoteIssuanceConstraints(
        "quote_price_bindings_request_issuance_reconciled",
        "price_snapshots_total_reconciled",
        "price_snapshot_components_total_reconciled",
-       "payment_schedules_total_reconciled" DEFERRED`,
+       "payment_schedules_total_reconciled",
+       "quote_price_bindings_snapshot_sealed",
+       "order_price_bindings_snapshot_sealed" DEFERRED`,
   );
 }
 
@@ -727,6 +731,15 @@ describe("commerce persistence foundations", () => {
         ],
       );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
+      await forceQuoteIssuanceConstraints(client);
+      expect(
+        (
+          await client.query<{ sealed_at: Date | null }>(
+            `SELECT sealed_at FROM price_snapshots WHERE id = $1`,
+            [foundation.priceSnapshotId],
+          )
+        ).rows[0]?.sealed_at,
+      ).not.toBeNull();
 
       expect(
         (
@@ -957,6 +970,32 @@ describe("commerce persistence foundations", () => {
 
       const anonymousSessionId = fixtures.id("anonymous-owner-session");
       const anonymousOrderId = fixtures.id("anonymous-owner-order");
+      for (const [name, publicTokenHash] of [
+        ["empty_public_token_hash", ""],
+        ["blank_public_token_hash", "   "],
+        ["non_hex_public_token_hash", "g".repeat(64)],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(
+              `INSERT INTO quote_sessions
+                 (id, public_token_hash, expires_at, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$4)`,
+              [
+                fixtures.id(name),
+                publicTokenHash,
+                new Date(createdAt.getTime() + 60 * 60 * 1_000),
+                createdAt,
+              ],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_sessions_public_token_hash_check",
+          },
+        );
+      }
       await client.query(
         `INSERT INTO quote_sessions
            (id, public_token_hash, expires_at, created_at, updated_at)
@@ -1291,6 +1330,47 @@ describe("commerce persistence foundations", () => {
         },
       );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
+      await forceQuoteIssuanceConstraints(client);
+      await expectQueryError(
+        client,
+        "sealed_snapshot_component_insert",
+        () =>
+          client.query(
+            `INSERT INTO price_snapshot_components
+               (id, price_snapshot_id, kind, scope, amount_minor,
+                allocation, created_at)
+             VALUES ($1,$2,'PAYMENT_FEE','ORDER',0,'{}'::jsonb,$3)`,
+            [
+              fixtures.id("late-zero-price-component"),
+              foundation.priceSnapshotId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "price_snapshot_binding_immutable_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "sealed_snapshot_schedule_insert",
+        () =>
+          client.query(
+            `INSERT INTO payment_schedules
+               (id, price_snapshot_id, sequence, role, gross_amount_minor,
+                fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+             VALUES ($1,$2,1,'FULL',0,0,0,'{}'::jsonb,$3)`,
+            [
+              fixtures.id("late-zero-payment-schedule"),
+              foundation.priceSnapshotId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "price_snapshot_binding_immutable_check",
+        },
+      );
       await expectQueryError(
         client,
         "paid_fulfilment_slot_insert",
@@ -7326,6 +7406,18 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id) VALUES ($1,$2)`,
         [quoteId, snapshotId],
+      );
+      await expectQueryError(
+        client,
+        "direct_snapshot_seal_before_components",
+        () =>
+          client.query(
+            `UPDATE price_snapshots
+             SET sealed_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [snapshotId],
+          ),
+        { code: "23514" },
       );
       for (const component of priceComponents) {
         await client.query(

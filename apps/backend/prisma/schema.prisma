@@ -1087,13 +1087,14 @@ model QuoteItem {
 }
 
 model PriceSnapshot {
-  id                 String   @id @default(uuid()) @db.Uuid
-  currency           String   @db.Char(3)
-  contractTotalMinor BigInt   @map("contract_total_minor")
-  pricingRevision    String   @map("pricing_revision") @db.VarChar(100)
-  inputSnapshot      Json     @map("input_snapshot") @db.JsonB
-  snapshotHash       String   @unique @map("snapshot_hash") @db.VarChar(64)
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                 String    @id @default(uuid()) @db.Uuid
+  currency           String    @db.Char(3)
+  contractTotalMinor BigInt    @map("contract_total_minor")
+  pricingRevision    String    @map("pricing_revision") @db.VarChar(100)
+  inputSnapshot      Json      @map("input_snapshot") @db.JsonB
+  snapshotHash       String    @unique @map("snapshot_hash") @db.VarChar(64)
+  sealedAt           DateTime? @map("sealed_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   quoteBinding     QuotePriceBinding?
   orderBinding     OrderPriceBinding?
