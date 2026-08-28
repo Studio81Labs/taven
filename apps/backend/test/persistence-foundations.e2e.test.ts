@@ -344,6 +344,7 @@ async function createSiblingMachineFoundation(
   const modelFileId = fixtures.id(`${name}:model-file`);
   const geometryId = fixtures.id(`${name}:geometry`);
   const sliceResultId = fixtures.id(`${name}:slice-result`);
+  const referenceSliceResultId = fixtures.id(`${name}:reference-slice-result`);
   const printConfigRevisionId =
     foundation.fulfilmentSlotPrintConfigRevisionIds[1] ??
     foundation.printConfigRevisionId;
@@ -439,6 +440,27 @@ async function createSiblingMachineFoundation(
     ],
   );
   await client.query(
+    `INSERT INTO slice_results
+       (id, kind, cache_key, model_geometry_id, print_config_revision_id,
+        reference_profile_id, parts_per_plate, artifact_object_key,
+        artifact_hash, estimated_print_seconds,
+        estimated_material_milligrams, slicer_engine, slicer_version)
+     SELECT $1, 'REFERENCE', $2, $3, $4, source.reference_profile_id,
+            source.parts_per_plate, $5, source.artifact_hash,
+            source.estimated_print_seconds,
+            source.estimated_material_milligrams,
+            source.slicer_engine, source.slicer_version
+     FROM slice_results source WHERE source.id = $6`,
+    [
+      referenceSliceResultId,
+      `sibling-reference-${fixtures.id(`${name}:cache-key`)}`,
+      geometryId,
+      printConfigRevisionId,
+      `reference-slices/${fixtures.id(`${name}:artifact-key`)}`,
+      foundation.referenceSliceResultId,
+    ],
+  );
+  await client.query(
     'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
     [
       sliceResultId,
@@ -472,6 +494,10 @@ async function createSiblingMachineFoundation(
     ),
     sliceResultId,
     sliceResultIds: foundation.sliceResultIds.map(() => sliceResultId),
+    referenceSliceResultId,
+    referenceSliceResultIds: foundation.referenceSliceResultIds.map(
+      () => referenceSliceResultId,
+    ),
     fulfilmentSlotModelGeometryIds:
       foundation.fulfilmentSlotModelGeometryIds.map(() => geometryId),
     fulfilmentSlotSliceResultIds: foundation.fulfilmentSlotSliceResultIds.map(
@@ -3688,13 +3714,15 @@ describe("persistence foundations", () => {
           await client.query(
             `UPDATE order_items
              SET source_model_file_id = $2, model_geometry_id = $3,
-                 print_config_revision_id = $4
+                 print_config_revision_id = $4,
+                 reference_slice_result_id = $5
              WHERE id = $1`,
             [
               draftFoundation.orderItemIds[1],
               liveFoundation.modelFileId,
               liveFoundation.modelGeometryId,
               liveFoundation.printConfigRevisionId,
+              liveFoundation.referenceSliceResultId,
             ],
           );
         },

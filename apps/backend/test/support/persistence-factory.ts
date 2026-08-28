@@ -12,6 +12,8 @@ export type PersistenceFoundation = {
   modelGeometryIds: string[];
   sliceResultId: string;
   sliceResultIds: string[];
+  referenceSliceResultId: string;
+  referenceSliceResultIds: string[];
   printConfigRevisionId: string;
   printConfigRevisionIds: string[];
   machineProfileId: string;
@@ -244,6 +246,13 @@ export class PersistenceFactory {
         index === 0 ? `${name}:slice-result` : `${name}:slice-result:${index}`,
       ),
     );
+    const referenceSliceResultIds = resolvedItems.map((_, index) =>
+      this.id(
+        index === 0
+          ? `${name}:reference-slice-result`
+          : `${name}:reference-slice-result:${index}`,
+      ),
+    );
     const fulfilmentSlotIds: string[] = [];
     const fulfilmentSlotShipmentPlanIds: string[] = [];
     const fulfilmentSlotModelGeometryIds: string[] = [];
@@ -414,6 +423,7 @@ export class PersistenceFactory {
       const itemGeometryId = modelGeometryIds[index]!;
       const configId = printConfigRevisionIds[index]!;
       const itemSliceResultId = sliceResultIds[index]!;
+      const itemReferenceSliceResultId = referenceSliceResultIds[index]!;
       await this.sql.query(
         'INSERT INTO "model_geometries" ("id", "source_model_file_id", "canonical_object_key", "geometry_hash", "canonicalizer_revision", "volume_cubic_micrometers", "bounds_x_micrometers", "bounds_y_micrometers", "bounds_z_micrometers", "triangle_count") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
         [
@@ -438,6 +448,24 @@ export class PersistenceFactory {
           20 + index,
           200,
           JSON.stringify({ itemIndex: index }),
+        ],
+      );
+      await this.sql.query(
+        'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "reference_profile_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+        [
+          itemReferenceSliceResultId,
+          "REFERENCE",
+          `reference-slice-${this.scope}-${name}-${index}`,
+          itemGeometryId,
+          configId,
+          referenceProfileId,
+          item.sliceMetrics.partsPerPlate,
+          `reference-slices/${this.scope}/${name}/${index}`,
+          this.hash(`${name}:reference-slice:${index}`),
+          item.sliceMetrics.estimatedPrintSeconds,
+          item.sliceMetrics.estimatedMaterialMilligrams,
+          "orca",
+          "test",
         ],
       );
       await this.sql.query(
@@ -469,6 +497,8 @@ export class PersistenceFactory {
       modelGeometryIds,
       sliceResultId: sliceResultIds[0]!,
       sliceResultIds,
+      referenceSliceResultId: referenceSliceResultIds[0]!,
+      referenceSliceResultIds,
       printConfigRevisionId: printConfigRevisionIds[0]!,
       printConfigRevisionIds,
       machineProfileId,
@@ -523,6 +553,7 @@ export class PersistenceFactory {
       fulfilmentSlotIds,
       modelGeometryIds,
       printConfigRevisionIds,
+      referenceSliceResultIds,
       resolvedItems,
       quoteSessionExpiresAt: new Date(testRunStartedAt + hourInMilliseconds),
       quoteExpiresAt:
@@ -561,6 +592,7 @@ export class PersistenceFactory {
     fulfilmentSlotIds: string[];
     modelGeometryIds: string[];
     printConfigRevisionIds: string[];
+    referenceSliceResultIds: string[];
     resolvedItems: Array<{
       color: string;
       geometryBounds: GeometryBounds;
@@ -721,7 +753,7 @@ export class PersistenceFactory {
     );
     for (const [index, item] of input.resolvedItems.entries()) {
       await this.sql.query(
-        "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PLA',$7,$8,$9)",
+        "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, reference_slice_result_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'PLA',$8,$9,$10)",
         [
           input.orderItemIds[index],
           input.orderId,
@@ -729,6 +761,9 @@ export class PersistenceFactory {
           input.modelFileId,
           input.modelGeometryIds[index],
           input.printConfigRevisionIds[index],
+          input.orderOrigin === "AUTOMATIC"
+            ? input.referenceSliceResultIds[index]
+            : null,
           item.color,
           item.quantity,
           t,
@@ -979,6 +1014,15 @@ export class PersistenceFactory {
         [input.orderId, t],
       );
       await this.sql.query(
+        `UPDATE orders
+         SET accepted_terms_revision = 'terms-v1',
+             accepted_claim_policy_revision = 'claim-policy-v1',
+             withdrawal_exception_acknowledged_at = $2,
+             updated_at = $2
+         WHERE id = $1`,
+        [input.orderId, t],
+      );
+      await this.sql.query(
         "INSERT INTO audit_events (id, quote_id, order_id, event_type, payload, created_at) VALUES ($1,$2,$3,'order.quoted',$4::jsonb,$5)",
         [
           this.id(`${input.name}:audit`),
@@ -1002,7 +1046,11 @@ export class PersistenceFactory {
     paymentCreatedAt = checkoutCaptureExpiresAt
       ? new Date(checkoutCaptureExpiresAt.getTime() - 60 * 60 * 1_000)
       : new Date(),
+    recordCheckoutAcceptance = true,
   ): Promise<void> {
+    if (recordCheckoutAcceptance) {
+      await this.acceptCheckoutTerms(foundation);
+    }
     const schedule = await this.sql.query<{ gross_amount_minor: string }>(
       'SELECT "gross_amount_minor"::text FROM "payment_schedules" WHERE "id" = $1',
       [foundation.paymentScheduleId],
@@ -1028,9 +1076,29 @@ export class PersistenceFactory {
     );
   }
 
+  async acceptCheckoutTerms(
+    foundation: PersistenceFoundation,
+    acknowledgedAt = new Date(),
+  ): Promise<void> {
+    await this.sql.query(
+      `UPDATE orders
+       SET accepted_terms_revision = 'terms-v1',
+           accepted_claim_policy_revision = 'claim-policy-v1',
+           withdrawal_exception_acknowledged_at = $2,
+           updated_at = $2
+       WHERE id = $1
+         AND status = 'QUOTED'
+         AND accepted_terms_revision IS NULL
+         AND accepted_claim_policy_revision IS NULL
+         AND withdrawal_exception_acknowledged_at IS NULL`,
+      [foundation.orderId, acknowledgedAt],
+    );
+  }
+
   async capturePayment(
     foundation: PersistenceFoundation,
     providerCaptureId?: string,
+    capturedAt = new Date(),
   ): Promise<void> {
     const existing = await this.sql.query<{ status: string }>(
       'SELECT "status"::text FROM "payments" WHERE "id" = $1',
@@ -1046,7 +1114,6 @@ export class PersistenceFactory {
       );
     }
 
-    const capturedAt = new Date();
     await this.sql.query(
       `UPDATE payments
        SET status = 'CAPTURED', captured_amount_minor = requested_amount_minor,
@@ -1091,7 +1158,7 @@ export class PersistenceFactory {
        WHERE id = $1`,
       [foundation.orderPhaseId, activatedAt],
     );
-    await this.capturePayment(foundation, providerCaptureId);
+    await this.capturePayment(foundation, providerCaptureId, activatedAt);
   }
 
   async planProduction(

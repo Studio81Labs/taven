@@ -1176,14 +1176,17 @@ model QuotePriceBinding {
 }
 
 model Order {
-  id              String      @id @default(uuid()) @db.Uuid
-  customerId      String?     @map("customer_id") @db.Uuid
-  publicReference String      @unique @map("public_reference") @db.VarChar(50)
-  status          OrderStatus @default(DRAFT)
-  quotedAt        DateTime?   @map("quoted_at") @db.Timestamptz(3)
-  confirmedAt     DateTime?   @map("confirmed_at") @db.Timestamptz(3)
-  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                                String      @id @default(uuid()) @db.Uuid
+  customerId                        String?     @map("customer_id") @db.Uuid
+  publicReference                   String      @unique @map("public_reference") @db.VarChar(50)
+  status                            OrderStatus @default(DRAFT)
+  quotedAt                          DateTime?   @map("quoted_at") @db.Timestamptz(3)
+  confirmedAt                       DateTime?   @map("confirmed_at") @db.Timestamptz(3)
+  acceptedTermsRevision             String?     @map("accepted_terms_revision") @db.VarChar(100)
+  acceptedClaimPolicyRevision       String?     @map("accepted_claim_policy_revision") @db.VarChar(100)
+  withdrawalExceptionAcknowledgedAt DateTime?   @map("withdrawal_exception_acknowledged_at") @db.Timestamptz(3)
+  createdAt                         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   customer             Customer?                @relation(fields: [customerId], references: [id], onDelete: Restrict)
   automaticOrigin      AutomaticOrderOrigin?
@@ -1521,11 +1524,11 @@ model Payment {
   refunds           RefundTransaction[]
   auditEvents       AuditEvent[]
 
+  @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
+  @@unique([provider, providerCaptureId], map: "payments_provider_provider_capture_id_key")
   @@index([orderId, status])
   @@index([captureCutoffAt, status])
   @@index([checkoutCaptureExpiresAt, status])
-  @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
-  @@unique([provider, providerCaptureId], map: "payments_provider_provider_capture_id_key")
   @@map("payments")
 }
 

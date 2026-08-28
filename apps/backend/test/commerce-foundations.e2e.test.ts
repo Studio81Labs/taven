@@ -3237,6 +3237,100 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("requires a reference slice before sealing or quoting an automatic order", async () => {
+    await rollback("automatic-reference-slice", async (client, fixtures) => {
+      await expectQueryError(
+        client,
+        "seal_automatic_price_without_reference",
+        async () => {
+          await fixtures.createFoundation(
+            "seal-automatic-price-without-reference",
+            {},
+            undefined,
+            undefined,
+            undefined,
+            1,
+            undefined,
+            "DRAFT",
+            async (foundation) => {
+              await client.query(
+                `UPDATE order_items
+                 SET reference_slice_result_id = NULL
+                 WHERE id = $1`,
+                [foundation.orderItemId],
+              );
+            },
+          );
+          await forceQuoteIssuanceConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "automatic_order_reference_slice_check",
+        },
+      );
+
+      const corrupted = await fixtures.createFoundation(
+        "quote-automatic-price-without-reference",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await client.query(
+        `UPDATE order_items SET reference_slice_result_id = NULL WHERE id = $1`,
+        [corrupted.orderItemId],
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
+      await expectQueryError(
+        client,
+        "quote_automatic_order_without_reference",
+        async () => {
+          await client.query(
+            `UPDATE orders
+             SET status = 'QUOTED', quoted_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [corrupted.orderId],
+          );
+          await client.query(
+            `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "automatic_order_reference_slice_check",
+        },
+      );
+
+      const individual = await fixtures.createFoundation(
+        "individual-order-without-reference",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "QUOTED",
+        undefined,
+        {},
+        "INDIVIDUAL",
+      );
+      expect(
+        (
+          await client.query<{ reference_slice_result_id: string | null }>(
+            `SELECT reference_slice_result_id
+             FROM order_items WHERE id = $1`,
+            [individual.orderItemId],
+          )
+        ).rows,
+      ).toEqual([{ reference_slice_result_id: null }]);
+    });
+  });
+
   it("revalidates source availability when a draft item selects another geometry", async () => {
     await rollback("draft-item-source-update", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -3567,13 +3661,15 @@ describe("commerce persistence foundations", () => {
           await client.query(
             `UPDATE order_items
              SET source_model_file_id = $2, model_geometry_id = $3,
-                 print_config_revision_id = $4
+                 print_config_revision_id = $4,
+                 reference_slice_result_id = $5
              WHERE id = $1`,
             [
               draftFoundation.orderItemIds[1],
               draftFoundation.modelFileId,
               draftFoundation.modelGeometryId,
               draftFoundation.printConfigRevisionId,
+              draftFoundation.referenceSliceResultId,
             ],
           );
         },
@@ -5758,6 +5854,82 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("binds confirmation and phase activation evidence to payment capture time", async () => {
+    await rollback(
+      "capture-activation-chronology",
+      async (client, fixtures) => {
+        for (const [name, staleOrder, stalePhase] of [
+          ["stale-order-confirmation", true, false],
+          ["stale-phase-activation", false, true],
+        ] as const) {
+          await expectQueryError(
+            client,
+            `capture_after_${name.replaceAll("-", "_")}`,
+            async () => {
+              const foundation = await fixtures.createFoundation(name);
+              const productions = await createCurrentPlanAndPayment(
+                client,
+                fixtures,
+                foundation,
+              );
+              await holdCurrentPlan(client, fixtures, foundation, productions);
+              const capturedAt = new Date();
+              const staleAt = new Date(capturedAt.getTime() - 60_000);
+              await client.query(
+                `UPDATE orders
+                 SET status = 'CONFIRMED', confirmed_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [foundation.orderId, staleOrder ? staleAt : capturedAt],
+              );
+              await client.query(
+                `UPDATE order_phases
+                 SET status = 'ACTIVE', activated_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [foundation.orderPhaseId, stalePhase ? staleAt : capturedAt],
+              );
+              await fixtures.capturePayment(foundation, undefined, capturedAt);
+              await forceCaptureActivationConstraints(client);
+            },
+            { code: "23514", constraint: "payment_capture_activation_check" },
+          );
+        }
+
+        const tolerated = await fixtures.createFoundation(
+          "tolerated-capture-activation-skew",
+        );
+        const toleratedProductions = await createCurrentPlanAndPayment(
+          client,
+          fixtures,
+          tolerated,
+        );
+        await holdCurrentPlan(
+          client,
+          fixtures,
+          tolerated,
+          toleratedProductions,
+        );
+        const capturedAt = new Date();
+        const toleratedActivationAt = new Date(capturedAt.getTime() - 2_000);
+        await client.query(
+          `UPDATE orders
+           SET status = 'CONFIRMED', confirmed_at = $2, updated_at = $2
+           WHERE id = $1`,
+          [tolerated.orderId, toleratedActivationAt],
+        );
+        await client.query(
+          `UPDATE order_phases
+           SET status = 'ACTIVE', activated_at = $2, updated_at = $2
+           WHERE id = $1`,
+          [tolerated.orderPhaseId, toleratedActivationAt],
+        );
+        await fixtures.capturePayment(tolerated, undefined, capturedAt);
+        await expect(
+          forceCaptureActivationConstraints(client),
+        ).resolves.toBeUndefined();
+      },
+    );
+  });
+
   it("checks payment resource expiry against wall-clock time", async () => {
     await rollback("wall-clock-payment-expiry", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -7802,6 +7974,229 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("records immutable checkout acceptance before payment and confirmation", async () => {
+    await rollback("checkout-acceptance", async (client, fixtures) => {
+      const checkout = await fixtures.createFoundation(
+        "checkout-acceptance",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      const quotedAt = new Date();
+      await client.query(
+        `UPDATE orders
+         SET status = 'QUOTED', quoted_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [checkout.orderId, quotedAt],
+      );
+
+      await expectQueryError(
+        client,
+        "partial_checkout_acceptance",
+        () =>
+          client.query(
+            `UPDATE orders SET accepted_terms_revision = 'terms-partial'
+             WHERE id = $1`,
+            [checkout.orderId],
+          ),
+        {
+          code: "23514",
+          constraint: "order_checkout_acceptance_immutable_check",
+        },
+      );
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await expectQueryError(
+        client,
+        "partial_checkout_acceptance_shape",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET accepted_claim_policy_revision = 'claim-policy-partial',
+                 withdrawal_exception_acknowledged_at = clock_timestamp()
+             WHERE id = $1`,
+            [checkout.orderId],
+          ),
+        {
+          code: "23514",
+          constraint: "orders_checkout_acceptance_shape_check",
+        },
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
+      await expectQueryError(
+        client,
+        "future_checkout_acceptance",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET accepted_terms_revision = 'terms-v1',
+                 accepted_claim_policy_revision = 'claim-policy-v1',
+                 withdrawal_exception_acknowledged_at =
+                   clock_timestamp() + interval '60 seconds'
+             WHERE id = $1`,
+            [checkout.orderId],
+          ),
+        {
+          code: "23514",
+          constraint: "order_checkout_acceptance_evidence_check",
+        },
+      );
+
+      await fixtures.acceptCheckoutTerms(checkout);
+      expect(
+        (
+          await client.query<{
+            accepted_claim_policy_revision: string;
+            accepted_terms_revision: string;
+            withdrawal_exception_acknowledged_at: Date;
+          }>(
+            `SELECT accepted_terms_revision,
+                    accepted_claim_policy_revision,
+                    withdrawal_exception_acknowledged_at
+             FROM orders WHERE id = $1`,
+            [checkout.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          accepted_claim_policy_revision: "claim-policy-v1",
+          accepted_terms_revision: "terms-v1",
+          withdrawal_exception_acknowledged_at: expect.any(Date),
+        },
+      ]);
+      for (const [name, assignment] of [
+        ["rewrite_terms_revision", "accepted_terms_revision = 'terms-v2'"],
+        [
+          "rewrite_claim_policy_revision",
+          "accepted_claim_policy_revision = 'claim-policy-v2'",
+        ],
+        [
+          "clear_withdrawal_acknowledgement",
+          "withdrawal_exception_acknowledged_at = NULL",
+        ],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(`UPDATE orders SET ${assignment} WHERE id = $1`, [
+              checkout.orderId,
+            ]),
+          {
+            code: "23514",
+            constraint: "order_checkout_acceptance_immutable_check",
+          },
+        );
+      }
+
+      const missingPaymentAcceptance = await fixtures.createFoundation(
+        "missing-payment-acceptance",
+      );
+      await createCurrentPlan(client, fixtures, missingPaymentAcceptance);
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await client.query(
+        `UPDATE orders
+         SET accepted_terms_revision = NULL,
+             accepted_claim_policy_revision = NULL,
+             withdrawal_exception_acknowledged_at = NULL
+         WHERE id = $1`,
+        [missingPaymentAcceptance.orderId],
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
+      await expectQueryError(
+        client,
+        "payment_without_checkout_acceptance",
+        () =>
+          fixtures.finalizePayment(
+            missingPaymentAcceptance,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            false,
+          ),
+        { code: "23514", constraint: "payment_terms_acceptance_check" },
+      );
+
+      const missingConfirmationAcceptance = await fixtures.createFoundation(
+        "missing-confirmation-acceptance",
+      );
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await client.query(
+        `UPDATE orders
+         SET accepted_terms_revision = NULL,
+             accepted_claim_policy_revision = NULL,
+             withdrawal_exception_acknowledged_at = NULL
+         WHERE id = $1`,
+        [missingConfirmationAcceptance.orderId],
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
+      await expectQueryError(
+        client,
+        "confirmation_without_checkout_acceptance",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET status = 'CONFIRMED', confirmed_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [missingConfirmationAcceptance.orderId],
+          ),
+        { code: "23514", constraint: "order_checkout_acceptance_check" },
+      );
+
+      const missingActivationAcceptance = await fixtures.createFoundation(
+        "missing-activation-acceptance",
+      );
+      const missingActivationProductions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        missingActivationAcceptance,
+      );
+      await holdCurrentPlan(
+        client,
+        fixtures,
+        missingActivationAcceptance,
+        missingActivationProductions,
+      );
+      const activationAt = new Date();
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await client.query(
+        `UPDATE orders
+         SET status = 'CONFIRMED', confirmed_at = $2,
+             accepted_terms_revision = NULL,
+             accepted_claim_policy_revision = NULL,
+             withdrawal_exception_acknowledged_at = NULL,
+             updated_at = $2
+         WHERE id = $1`,
+        [missingActivationAcceptance.orderId, activationAt],
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'ACTIVE', activated_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [missingActivationAcceptance.orderPhaseId, activationAt],
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
+      await expectQueryError(
+        client,
+        "activation_without_checkout_acceptance",
+        async () => {
+          await fixtures.capturePayment(
+            missingActivationAcceptance,
+            undefined,
+            activationAt,
+          );
+          await forceCaptureActivationConstraints(client);
+        },
+        { code: "23514", constraint: "payment_capture_activation_check" },
+      );
+    });
+  });
+
   it("bounds Order and OrderPhase lifecycle evidence by the database clock", async () => {
     await rollback("future-order-evidence", async (client, fixtures) => {
       const order = await fixtures.createFoundation(
@@ -7839,6 +8234,7 @@ describe("commerce persistence foundations", () => {
          WHERE id = $1`,
         [order.orderId],
       );
+      await fixtures.acceptCheckoutTerms(order, new Date(Date.now() + 2_000));
       await expectQueryError(
         client,
         "future_order_confirmed",

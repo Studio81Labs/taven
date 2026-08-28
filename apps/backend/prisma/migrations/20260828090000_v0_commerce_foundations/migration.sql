@@ -171,6 +171,9 @@ CREATE TABLE "orders" (
     "status" "order_status" NOT NULL DEFAULT 'DRAFT',
     "quoted_at" TIMESTAMPTZ(3),
     "confirmed_at" TIMESTAMPTZ(3),
+    "accepted_terms_revision" VARCHAR(100),
+    "accepted_claim_policy_revision" VARCHAR(100),
+    "withdrawal_exception_acknowledged_at" TIMESTAMPTZ(3),
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL,
     CONSTRAINT "orders_pkey" PRIMARY KEY ("id")
@@ -628,9 +631,30 @@ ALTER TABLE "price_snapshot_components" ADD CONSTRAINT "price_snapshot_component
 ALTER TABLE "price_component_fulfilment_allocations" ADD CONSTRAINT "price_component_fulfilment_allocations_amount_check" CHECK ("amount_minor" >= 0);
 ALTER TABLE "payment_schedules" ADD CONSTRAINT "payment_schedules_values_check" CHECK ("sequence" >= 0 AND "gross_amount_minor" >= 0 AND "fee_rate_basis_points" >= 0 AND "fee_fixed_minor" >= 0);
 ALTER TABLE "orders" ADD CONSTRAINT "orders_public_reference_identity_check" CHECK ("public_reference" ~ '[^[:space:]]');
+ALTER TABLE "orders" ADD CONSTRAINT "orders_checkout_acceptance_shape_check" CHECK (
+    (
+        "accepted_terms_revision" IS NULL
+        AND "accepted_claim_policy_revision" IS NULL
+        AND "withdrawal_exception_acknowledged_at" IS NULL
+    )
+    OR (
+        "accepted_terms_revision" IS NOT NULL
+        AND "accepted_claim_policy_revision" IS NOT NULL
+        AND "withdrawal_exception_acknowledged_at" IS NOT NULL
+        AND "accepted_terms_revision" ~ '[^[:space:]]'
+        AND "accepted_claim_policy_revision" ~ '[^[:space:]]'
+    )
+);
 ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
     ("quoted_at" IS NULL OR "quoted_at" >= "created_at")
     AND ("confirmed_at" IS NULL OR ("quoted_at" IS NOT NULL AND "confirmed_at" >= "quoted_at"))
+    AND (
+        "withdrawal_exception_acknowledged_at" IS NULL
+        OR (
+            "quoted_at" IS NOT NULL
+            AND "withdrawal_exception_acknowledged_at" >= "quoted_at"
+        )
+    )
     AND (
         ("status" = 'DRAFT' AND "quoted_at" IS NULL AND "confirmed_at" IS NULL)
         OR ("status" IN ('QUOTED', 'EXPIRED') AND "quoted_at" IS NOT NULL AND "confirmed_at" IS NULL)
@@ -1026,6 +1050,24 @@ CREATE TRIGGER "order_items_reference_slice_inputs"
 BEFORE INSERT OR UPDATE OF "reference_slice_result_id", "model_geometry_id", "print_config_revision_id", "material" ON "order_items"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_item_reference_slice_inputs();
 
+CREATE FUNCTION taven_assert_automatic_order_reference_slices(target_order_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "automatic_order_origins" origin
+        JOIN "order_items" item ON item."order_id" = origin."order_id"
+        WHERE origin."order_id" = target_order_id
+          AND item."reference_slice_result_id" IS NULL
+    ) THEN
+        RAISE EXCEPTION 'automatic order pricing requires a reference slice for every item'
+            USING ERRCODE = '23514', CONSTRAINT = 'automatic_order_reference_slice_check';
+    END IF;
+END;
+$$;
+
 CREATE TRIGGER "audit_events_append_only"
 BEFORE UPDATE OR DELETE ON "audit_events"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
@@ -1328,6 +1370,8 @@ BEGIN
         RAISE EXCEPTION 'automatic order items cannot claim a QuoteItem source'
             USING ERRCODE = '23514', CONSTRAINT = 'automatic_order_item_source_check';
     END IF;
+
+    PERFORM taven_assert_automatic_order_reference_slices(NEW."id");
 
     IF NOT EXISTS (
         SELECT 1
@@ -2555,7 +2599,10 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'DRAFT'
            OR NEW."quoted_at" IS NOT NULL
-           OR NEW."confirmed_at" IS NOT NULL THEN
+           OR NEW."confirmed_at" IS NOT NULL
+           OR NEW."accepted_terms_revision" IS NOT NULL
+           OR NEW."accepted_claim_policy_revision" IS NOT NULL
+           OR NEW."withdrawal_exception_acknowledged_at" IS NOT NULL THEN
             RAISE EXCEPTION 'new orders must begin draft without lifecycle timestamps'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
         END IF;
@@ -2620,6 +2667,17 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'order_lifecycle_timestamp_check';
     END IF;
 
+    IF OLD."status" = 'QUOTED' AND NEW."status" = 'CONFIRMED'
+       AND (
+           NEW."accepted_terms_revision" IS NULL
+           OR NEW."accepted_claim_policy_revision" IS NULL
+           OR NEW."withdrawal_exception_acknowledged_at" IS NULL
+           OR NEW."withdrawal_exception_acknowledged_at" > NEW."confirmed_at"
+       ) THEN
+        RAISE EXCEPTION 'quoted-to-confirmed transition requires prior checkout acceptance evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_check';
+    END IF;
+
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
            (OLD."status" = 'DRAFT' AND NEW."status" = 'QUOTED')
@@ -2645,8 +2703,64 @@ END;
 $$;
 
 CREATE TRIGGER "orders_status_transitions_valid"
-BEFORE INSERT OR UPDATE OF "id", "public_reference", "status", "quoted_at", "confirmed_at", "created_at" ON "orders"
+BEFORE INSERT OR UPDATE OF "id", "public_reference", "status", "quoted_at", "confirmed_at", "accepted_terms_revision", "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at", "created_at" ON "orders"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_status_transition();
+
+CREATE FUNCTION taven_protect_order_checkout_acceptance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    evidence_now timestamptz := clock_timestamp();
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."accepted_terms_revision" IS NOT NULL
+           OR NEW."accepted_claim_policy_revision" IS NOT NULL
+           OR NEW."withdrawal_exception_acknowledged_at" IS NOT NULL THEN
+            RAISE EXCEPTION 'checkout acceptance cannot predate the quoted order'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_immutable_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
+    IF NEW."accepted_terms_revision" IS NOT DISTINCT FROM OLD."accepted_terms_revision"
+       AND NEW."accepted_claim_policy_revision" IS NOT DISTINCT FROM OLD."accepted_claim_policy_revision"
+       AND NEW."withdrawal_exception_acknowledged_at" IS NOT DISTINCT FROM OLD."withdrawal_exception_acknowledged_at" THEN
+        RETURN NEW;
+    END IF;
+
+    IF OLD."accepted_terms_revision" IS NOT NULL
+       OR OLD."accepted_claim_policy_revision" IS NOT NULL
+       OR OLD."withdrawal_exception_acknowledged_at" IS NOT NULL
+       OR NEW."accepted_terms_revision" IS NULL
+       OR btrim(NEW."accepted_terms_revision") = ''
+       OR NEW."accepted_claim_policy_revision" IS NULL
+       OR btrim(NEW."accepted_claim_policy_revision") = ''
+       OR NEW."withdrawal_exception_acknowledged_at" IS NULL
+       OR OLD."status" <> 'QUOTED'
+       OR NEW."status" <> 'QUOTED'
+       OR EXISTS (
+           SELECT 1 FROM "payments" payment
+           WHERE payment."order_id" = OLD."id"
+       ) THEN
+        RAISE EXCEPTION 'checkout acceptance must be recorded atomically once before payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_immutable_check';
+    END IF;
+
+    IF NEW."withdrawal_exception_acknowledged_at" < OLD."quoted_at"
+       OR NEW."withdrawal_exception_acknowledged_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'checkout acceptance evidence must follow the quote and cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_evidence_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "orders_checkout_acceptance_protected"
+BEFORE INSERT OR UPDATE OF "accepted_terms_revision", "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at" ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_order_checkout_acceptance();
 
 CREATE FUNCTION taven_reconcile_refunded_order()
 RETURNS trigger
@@ -4752,6 +4866,10 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'price_snapshot_total_reconciliation_check';
     END IF;
 
+    PERFORM taven_assert_automatic_order_reference_slices(binding."order_id")
+    FROM "order_price_bindings" binding
+    WHERE binding."price_snapshot_id" = target_snapshot_id;
+
     IF EXISTS (
         SELECT 1
         FROM "quote_price_bindings"
@@ -5048,6 +5166,11 @@ BEGIN
         WHERE target_order."id" = target_order_id
           AND target_order."status" = 'CONFIRMED'
           AND target_order."confirmed_at" IS NOT NULL
+          AND target_order."accepted_terms_revision" IS NOT NULL
+          AND target_order."accepted_claim_policy_revision" IS NOT NULL
+          AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
+          AND target_order."confirmed_at" >= payment."captured_at" - interval '5 seconds'
+          AND phase."activated_at" >= payment."captured_at" - interval '5 seconds'
           AND (target_payment_id IS NULL OR payment."id" = target_payment_id)
           AND (
               SELECT count(*)
@@ -6323,6 +6446,18 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'payment requires the active destination-bound price binding and a customer'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_fulfilment_topology_check';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "orders" target_order
+        WHERE target_order."id" = NEW."order_id"
+          AND target_order."accepted_terms_revision" IS NOT NULL
+          AND target_order."accepted_claim_policy_revision" IS NOT NULL
+          AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION 'payment requires immutable checkout acceptance evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_terms_acceptance_check';
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM "order_items" WHERE "order_id" = NEW."order_id")
