@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#190; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#191; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -196,11 +196,14 @@ Kompozitní reference `(performance_snapshot_id, maker_id)` navíc vyžaduje
 performance snapshot stejného makera a acceptance ověří, že jeho
 `resulting_modifier` je totožný s uloženým `performance_modifier`.
 
-Po aktivaci maker modelu zapíše acceptance transakce tutéž částku současně
-jako `MakerCompensationSnapshot.agreed_compensation` a
-`Job.payout_amount`; nejde o dvě cenové veličiny. Offer a routing pracují s
-budoucí agreed compensation a přijetí odmítne jakoukoli neshodu. Settlement
-pak čte immutable snapshot, jehož částka se rovná jobovému poli.
+U přijatého externího maker-owned assignmentu zapíše acceptance transakce
+tutéž částku současně jako
+`MakerCompensationSnapshot.agreed_compensation` a `Job.payout_amount`; nejde
+o dvě cenové veličiny. Offer a routing pracují s budoucí agreed compensation
+a přijetí odmítne jakoukoli neshodu. Settlement pak čte immutable snapshot,
+jehož částka se rovná jobovému poli. Post-gate job na platform-owned fallbacku
+si dál ukládá interní `Job.payout_amount`, ale bez `ProductionAssignment`,
+compensation snapshotu nebo maker settlementu.
 
 ------------------------------------------------------------------------
 
@@ -388,7 +391,10 @@ Přípustný provozní model:
 Kompozitní reference `(self_billing_document_id, settlement_id)` vyžaduje
 doklad vystavený právě pro tento settlement. Vytvoření payoutu současně
 ověří, že součet immutable settlement lines odpovídá jeho zamčenému
-`payable_amount` i částce dokladu.
+`payable_amount` i částce dokladu. Vystavení dokladu immutable uloží jeho
+měnu, gross compensation, adjustment total, payable amount a hash přesného
+payloadu; payout proto neparsuje ani nedůvěřuje později nahraditelnému
+artefaktu.
 
 Budoucí síť může tento proces automatizovat, ale ekonomický model se
 nemění.
@@ -504,6 +510,7 @@ MakerSettlement
 - maker_id
 - period_from
 - period_to
+- currency
 - gross_compensation
 - adjustments
 - payable_amount
@@ -522,6 +529,7 @@ MakerSettlementLine
 - constraint `(compensation_snapshot_id, production_assignment_id, maker_id)`
   → `MakerCompensationSnapshot`
 - gross_compensation
+- currency
 - adjustment_source_refs (claim ID + explicit amount)
 - payable_amount
 - created_at
@@ -534,7 +542,12 @@ MakerSelfBillingDocument
 - id
 - settlement_id (unique)
 - document_number (unique)
-- artifact_ref
+- currency
+- gross_compensation
+- adjustment_total
+- payable_amount
+- payload_hash (immutable)
+- artifact_ref (immutable content-addressed)
 - issued_at
 - status
 ```
@@ -549,6 +562,7 @@ MakerPayout
 - constraint `(self_billing_document_id, settlement_id)`
   → `MakerSelfBillingDocument`
 - transfer_idempotency_key (unique)
+- currency
 - amount
 - payment_reference (unique; nullable do provedení převodu)
 - paid_at
@@ -668,8 +682,9 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     snapshotu musí být totožný a shoda je vynucena referenčním constraintem.
 23. Production assignment smí použít jen maker-owned uzel téhož makera;
     platform-owned uzel assignment ani compensation workflow nevytváří.
-24. `Job.payout_amount` se po maker gate rovná
-    `MakerCompensationSnapshot.agreed_compensation` stejného assignmentu.
+24. `Job.payout_amount` maker-owned assignmentu se po maker gate rovná
+    `MakerCompensationSnapshot.agreed_compensation`; platform-owned fallback
+    zůstává interním jobem bez maker snapshotu a settlementu.
 25. Každý neuzavřený claim dotýkající se assignmentu blokuje settlement bez
     ohledu na dosud neurčené zavinění; maker-caused výsledek vyžaduje
     schválenou adjustment.
@@ -683,6 +698,8 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     se tohoto assignmentu.
 29. Payout smí odkazovat jen self-billing doklad svého settlementu; částka
     settlementu, součet jeho lines, doklad i payout se musejí shodovat.
+30. Vydaný self-billing doklad immutable ukládá měnu, strukturované částky a
+    hash payloadu; payout se musí shodovat v částce i měně.
 
 ------------------------------------------------------------------------
 
@@ -691,7 +708,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#190.
+#184–#191.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
