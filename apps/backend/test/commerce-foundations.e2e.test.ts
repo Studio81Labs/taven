@@ -1538,6 +1538,97 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("allows a matching session ownership claim after anonymous automatic quoting", async () => {
+    await rollback("anonymous-quoted-claim", async (client, fixtures) => {
+      const anonymousQuoted = await fixtures.createFoundation(
+        "anonymous-quoted-claim",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "QUOTED",
+        undefined,
+        {},
+        "AUTOMATIC",
+        true,
+        false,
+      );
+
+      expect(
+        (
+          await client.query<{
+            order_customer_id: string | null;
+            session_customer_id: string | null;
+            session_status: string;
+          }>(
+            `SELECT target_order.customer_id AS order_customer_id,
+                    session.customer_id AS session_customer_id,
+                    session.status::text AS session_status
+             FROM orders target_order
+             JOIN automatic_order_origins origin
+               ON origin.order_id = target_order.id
+             JOIN quote_sessions session ON session.id = origin.quote_session_id
+             WHERE target_order.id = $1`,
+            [anonymousQuoted.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_customer_id: null,
+          session_customer_id: null,
+          session_status: "CONVERTED",
+        },
+      ]);
+
+      await expectQueryError(
+        client,
+        "claim_quoted_order_without_session",
+        () =>
+          client.query(`UPDATE orders SET customer_id = $2 WHERE id = $1`, [
+            anonymousQuoted.orderId,
+            anonymousQuoted.customerId,
+          ]),
+        {
+          code: "23514",
+          constraint: "order_customer_ownership_immutable_check",
+        },
+      );
+
+      await client.query(
+        `UPDATE quote_sessions
+         SET customer_id = $2, updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [anonymousQuoted.quoteSessionId, anonymousQuoted.customerId],
+      );
+      expect(
+        (
+          await client.query<{ customer_id: string }>(
+            `SELECT customer_id FROM quote_sessions WHERE id = $1
+             UNION ALL
+             SELECT customer_id FROM orders WHERE id = $2`,
+            [anonymousQuoted.quoteSessionId, anonymousQuoted.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        { customer_id: anonymousQuoted.customerId },
+        { customer_id: anonymousQuoted.customerId },
+      ]);
+
+      await createCurrentPlan(client, fixtures, anonymousQuoted);
+      await fixtures.finalizePayment(anonymousQuoted);
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM payments WHERE id = $1`,
+            [anonymousQuoted.paymentId],
+          )
+        ).rows,
+      ).toEqual([{ status: "PENDING" }]);
+    });
+  });
+
   it("reconciles immutable price components and freezes automatic commerce after payment intent creation", async () => {
     await rollback("immutable-pricing", async (client, fixtures) => {
       const zeroContract = await fixtures.createFoundation(

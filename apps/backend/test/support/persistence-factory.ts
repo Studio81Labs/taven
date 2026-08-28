@@ -168,7 +168,12 @@ export class PersistenceFactory {
     pricing: CommercePricing = {},
     orderOrigin: "AUTOMATIC" | "INDIVIDUAL" = "AUTOMATIC",
     includeActivePriceBinding = true,
+    customerOwned = true,
   ): Promise<PersistenceFoundation> {
+    if (!customerOwned && orderOrigin !== "AUTOMATIC") {
+      throw new Error("only automatic foundations may begin anonymously");
+    }
+
     const items: CommerceItem[] =
       commerceItems ?? Array.from({ length: slotCount }, () => ({}));
     if (items.length < 1) {
@@ -522,6 +527,7 @@ export class PersistenceFactory {
       pricing,
       orderOrigin,
       includeActivePriceBinding,
+      customerOwned,
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -562,6 +568,7 @@ export class PersistenceFactory {
     pricing: CommercePricing;
     orderOrigin: "AUTOMATIC" | "INDIVIDUAL";
     includeActivePriceBinding: boolean;
+    customerOwned: boolean;
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
@@ -609,54 +616,56 @@ export class PersistenceFactory {
       "INSERT INTO quote_sessions (id, customer_id, public_token_hash, expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$5)",
       [
         input.quoteSessionId,
-        input.customerId,
+        input.customerOwned ? input.customerId : null,
         this.hash(`${input.name}:token`),
         input.quoteSessionExpiresAt,
         t,
       ],
     );
-    await this.sql.query(
-      "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, created_at, updated_at) VALUES ($1,$2,$3,'NEW',$4,$4)",
-      [
-        input.quoteRequestId,
-        input.quoteSessionId,
-        input.customerId,
-        quoteRequestCreatedAt,
-      ],
-    );
-    await this.sql.query(
-      "UPDATE quote_requests SET status = 'IN_REVIEW', updated_at = $2 WHERE id = $1",
-      [input.quoteRequestId, t],
-    );
-    await this.sql.query(
-      "UPDATE quote_requests SET status = 'QUOTED', updated_at = $2 WHERE id = $1",
-      [input.quoteRequestId, t],
-    );
-    await this.sql.query(
-      "INSERT INTO quotes (id, quote_request_id, customer_id, expires_at, issued_at, created_at) VALUES ($1,$2,$3,$4,$5,$5)",
-      [
-        input.quoteId,
-        input.quoteRequestId,
-        input.customerId,
-        input.quoteExpiresAt,
-        quoteIssuedAt,
-      ],
-    );
-    for (const [index, item] of input.resolvedItems.entries()) {
+    if (input.customerOwned) {
       await this.sql.query(
-        "INSERT INTO quote_items (id, quote_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PLA',$7,$8,$9)",
+        "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, created_at, updated_at) VALUES ($1,$2,$3,'NEW',$4,$4)",
         [
-          input.quoteItemIds[index],
-          input.quoteId,
-          index,
-          input.modelFileId,
-          input.modelGeometryIds[index],
-          input.printConfigRevisionIds[index],
-          item.color,
-          item.quantity,
-          t,
+          input.quoteRequestId,
+          input.quoteSessionId,
+          input.customerId,
+          quoteRequestCreatedAt,
         ],
       );
+      await this.sql.query(
+        "UPDATE quote_requests SET status = 'IN_REVIEW', updated_at = $2 WHERE id = $1",
+        [input.quoteRequestId, t],
+      );
+      await this.sql.query(
+        "UPDATE quote_requests SET status = 'QUOTED', updated_at = $2 WHERE id = $1",
+        [input.quoteRequestId, t],
+      );
+      await this.sql.query(
+        "INSERT INTO quotes (id, quote_request_id, customer_id, expires_at, issued_at, created_at) VALUES ($1,$2,$3,$4,$5,$5)",
+        [
+          input.quoteId,
+          input.quoteRequestId,
+          input.customerId,
+          input.quoteExpiresAt,
+          quoteIssuedAt,
+        ],
+      );
+      for (const [index, item] of input.resolvedItems.entries()) {
+        await this.sql.query(
+          "INSERT INTO quote_items (id, quote_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PLA',$7,$8,$9)",
+          [
+            input.quoteItemIds[index],
+            input.quoteId,
+            index,
+            input.modelFileId,
+            input.modelGeometryIds[index],
+            input.printConfigRevisionIds[index],
+            item.color,
+            item.quantity,
+            t,
+          ],
+        );
+      }
     }
     await this.sql.query(
       "INSERT INTO price_snapshots (id, currency, contract_total_minor, pricing_revision, input_snapshot, snapshot_hash, created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)",
@@ -670,15 +679,17 @@ export class PersistenceFactory {
         t,
       ],
     );
-    await this.sql.query(
-      "INSERT INTO quote_price_bindings (quote_id, price_snapshot_id) VALUES ($1,$2)",
-      [input.quoteId, snapshotId],
-    );
+    if (input.customerOwned) {
+      await this.sql.query(
+        "INSERT INTO quote_price_bindings (quote_id, price_snapshot_id) VALUES ($1,$2)",
+        [input.quoteId, snapshotId],
+      );
+    }
     await this.sql.query(
       "INSERT INTO orders (id, customer_id, public_reference, status, created_at, updated_at) VALUES ($1,$2,$3,'DRAFT',$4,$4)",
       [
         input.orderId,
-        input.customerId,
+        input.customerOwned ? input.customerId : null,
         `T-${this.hash(input.name).slice(0, 12)}`,
         t,
       ],
@@ -962,7 +973,7 @@ export class PersistenceFactory {
         "INSERT INTO audit_events (id, quote_id, order_id, event_type, payload, created_at) VALUES ($1,$2,$3,'order.quoted',$4::jsonb,$5)",
         [
           this.id(`${input.name}:audit`),
-          input.quoteId,
+          input.customerOwned ? input.quoteId : null,
           input.orderId,
           JSON.stringify({}),
           t,

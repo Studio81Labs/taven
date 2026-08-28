@@ -2020,6 +2020,7 @@ AS $$
 DECLARE
     has_automatic_origin boolean := false;
     has_commerce_topology boolean := false;
+    has_payment boolean := false;
     session_claim_matches boolean := false;
 BEGIN
     IF NEW."customer_id" IS NOT DISTINCT FROM OLD."customer_id" THEN
@@ -2054,6 +2055,12 @@ BEGIN
        )
     ) INTO has_commerce_topology;
 
+    SELECT EXISTS (
+        SELECT 1
+        FROM "payments" payment
+        WHERE payment."order_id" = OLD."id"
+    ) INTO has_payment;
+
     IF OLD."customer_id" IS NULL AND NEW."customer_id" IS NOT NULL THEN
         SELECT
             EXISTS (
@@ -2073,9 +2080,18 @@ BEGIN
     END IF;
 
     IF OLD."customer_id" IS NOT NULL
-       OR OLD."status" <> 'DRAFT'
-       OR (has_automatic_origin AND NOT session_claim_matches)
-       OR (NOT has_automatic_origin AND has_commerce_topology) THEN
+       OR (
+           has_automatic_origin
+           AND (
+               NOT session_claim_matches
+               OR OLD."status" NOT IN ('DRAFT', 'QUOTED')
+               OR has_payment
+           )
+       )
+       OR (
+           NOT has_automatic_origin
+           AND (OLD."status" <> 'DRAFT' OR has_commerce_topology)
+       ) THEN
         RAISE EXCEPTION 'order customer is immutable after ownership or commerce topology is attached'
             USING ERRCODE = '23514', CONSTRAINT = 'order_customer_ownership_immutable_check';
     END IF;
