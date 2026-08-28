@@ -167,6 +167,12 @@ Acceptance příkaz je idempotentní podle `production_assignment_id`; při
 souběhu ani retry nesmí vzniknout více než jeden snapshot a příkaz vždy
 vrátí tentýž zamčený výsledek.
 
+Přijetí současně zamkne `Job` i všechny jeho assignmenty a vyžaduje, aby
+dosud žádný neměl `accepted_at`. Částečný unikátní constraint nad `job_id`
+pro přijaté assignmenty dovolí právě jedno přijetí v celé historii jobu;
+pozdní acceptance starého offeru proto skončí konfliktem, uzavře se a
+nevytvoří snapshot ani `Job.payout_amount`.
+
 Snapshot obsahuje minimálně:
 
 -   `production_assignment_id`,
@@ -185,6 +191,10 @@ Snapshot obsahuje minimálně:
 `performance_snapshot_id` odkazuje přesné immutable metriky, ze kterých byl
 modifier odvozen. Pozdější změna performance score nebo compensation policy
 nesmí zpětně změnit odměnu již přijatého jobu.
+
+Kompozitní reference `(performance_snapshot_id, maker_id)` navíc vyžaduje
+performance snapshot stejného makera a acceptance ověří, že jeho
+`resulting_modifier` je totožný s uloženým `performance_modifier`.
 
 Po aktivaci maker modelu zapíše acceptance transakce tutéž částku současně
 jako `MakerCompensationSnapshot.agreed_compensation` a
@@ -345,6 +355,12 @@ musejí mít stejné `maker_id`. Kompozitní referenční constraint tuto shodu
 vynucuje při vložení řádku; cizí plnění proto nelze připsat na self-billing
 doklad ani payout jiného makera.
 
+Další kompozitní reference
+`(compensation_snapshot_id, production_assignment_id, maker_id)` vyžaduje
+právě snapshot uvedeného assignmentu, nikoli jen libovolný snapshot stejného
+makera. Každý `adjustment_source_ref` musí obdobně odkazovat claim, který se
+tohoto assignmentu skutečně dotýká.
+
 V první etapě po aktivaci maker modelu se settlement a platformní
 self-billing uzavírají **měsíčně**. Konkrétní cutoff, časové pásmo a pravidlo
 pro assignment způsobilý až po cutoffu jsou provozní parametry této měsíční
@@ -368,6 +384,11 @@ Přípustný provozní model:
     referenci. Tentýž payout lze označit jako dokončený jen jednou a součet
     úspěšných převodů nikdy nesmí překročit `payable_amount`; payout zůstává
     spojený se settlementem a jeho self-billing dokladem.
+
+Kompozitní reference `(self_billing_document_id, settlement_id)` vyžaduje
+doklad vystavený právě pro tento settlement. Vytvoření payoutu současně
+ověří, že součet immutable settlement lines odpovídá jeho zamčenému
+`payable_amount` i částce dokladu.
 
 Budoucí síť může tento proces automatizovat, ale ekonomický model se
 nemění.
@@ -410,7 +431,7 @@ interním `Job` scope bez fiktivního `ProductionAssignment`.
 ``` text
 ProductionAssignment
 - id
-- job_id
+- job_id (nejvýše jeden assignment s `accepted_at`)
 - maker_id
 - node_id
 - constraint `(node_id, maker_id)` → maker-owned `Node`
@@ -443,6 +464,7 @@ MakerCompensationSnapshot
 - maker_id
 - policy_version
 - performance_snapshot_id
+- constraint `(performance_snapshot_id, maker_id)` → `MakerPerformanceSnapshot`
 - production_inputs (immutable material, time, plates, handling,
   post-processing, handoff and special-requirement inputs)
 - base_compensation
@@ -497,6 +519,8 @@ MakerSettlementLine
 - maker_id (musí se shodovat se settlementem, assignmentem i snapshotem)
 - production_assignment_id (unique)
 - compensation_snapshot_id (unique)
+- constraint `(compensation_snapshot_id, production_assignment_id, maker_id)`
+  → `MakerCompensationSnapshot`
 - gross_compensation
 - adjustment_source_refs (claim ID + explicit amount)
 - payable_amount
@@ -522,6 +546,8 @@ MakerPayout
 - id
 - settlement_id (unique)
 - self_billing_document_id (unique)
+- constraint `(self_billing_document_id, settlement_id)`
+  → `MakerSelfBillingDocument`
 - transfer_idempotency_key (unique)
 - amount
 - payment_reference (unique; nullable do provedení převodu)
@@ -647,6 +673,16 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 25. Každý neuzavřený claim dotýkající se assignmentu blokuje settlement bez
     ohledu na dosud neurčené zavinění; maker-caused výsledek vyžaduje
     schválenou adjustment.
+26. Jeden `Job` smí mít v celé historii nejvýše jeden přijatý production
+    assignment; pozdní acceptance konkurenčního offeru nevytvoří finanční
+    závazek.
+27. Compensation snapshot smí odkazovat performance snapshot téhož makera a
+    jeho uložený modifier se musí rovnat `resulting_modifier`.
+28. Settlement line musí odkazovat compensation snapshot právě svého
+    assignmentu a každá claim adjustment musí mít zdroj v claimu dotýkajícím
+    se tohoto assignmentu.
+29. Payout smí odkazovat jen self-billing doklad svého settlementu; částka
+    settlementu, součet jeho lines, doklad i payout se musejí shodovat.
 
 ------------------------------------------------------------------------
 
