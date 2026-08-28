@@ -1231,7 +1231,13 @@ Vlna 3 (45–120 min): další způsobilý uzel po přesunu rezervace       payo
 
 ### 11.8 Výplaty a reklamace
 
-Brána na vstupu, **měsíční samofakturace** na výstupu. Zádržné se uvolní po `delivered` + reklamační okno.
+Brána na vstupu, **měsíční samofakturace** na výstupu. Zádržné se standardně
+uvolní po `delivered` + reklamační okno. Pokud zásilka po ověřeném předání
+dopravci není doručena a incident skončí konečným non-maker-caused
+refund/replacement rozhodnutím, odvodí se payout eligibility místo toho z
+`incident_resolved_at`; makerovi zůstává plná accepted compensation. Případ
+před handoffem, neuzavřený incident ani maker-caused výsledek tuto cestu
+nesmí použít.
 
 Po aktivaci maker modelu zapisuje acceptance transakce externího maker-owned
 assignmentu
@@ -1244,6 +1250,13 @@ Orderu a `payout_eligible_at` nesmí předcházet žádnému `claim_until` slotu
 plněného assignmentem. Uplynutí okna samo nestačí, pokud se assignmentu
 dotýká neuzavřený claim nebo legal hold: settlement čeká na jejich ukončení a
 maker-caused výsledek zahrne až se schválenou adjustment.
+
+Po vystavení self-billing dokladu běží uložené
+`maker_settlement_dispute_days` (aktuálně ⚠ 5 kalendářních dní). Bez sporu
+přejde settlement z `issued` do `payable` explicitním potvrzením makera nebo
+idempotentně po deadline; spor otevřený před touto tranzicí má přednost.
+Payout smí vzniknout jen nad `payable` settlementem a jeho aktivním `issued`
+dokladem.
 
 - **zavinění uzlu** → uzel nese materiál, platforma dopravu a přetisk
 - **nezaviněné** (vada modelu zákazníka, nereálná tolerance) → uzel dostane zaplaceno v plné výši
