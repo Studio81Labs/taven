@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#185; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#186; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -304,6 +304,12 @@ Tyto pojmy se nesmějí zaměňovat:
 -   payable amount,
 -   settlement status.
 
+Assignment smí vstoupit do payable amount až po uplynutí snapshotovaného
+maker claim hold od `delivered_at` --- podle aktuálních parametrů 7 dní
+--- a jen pokud proti němu neběží maker-caused claim. Do té doby zůstává
+compensation v zádržném a nesmí přejít do payoutu. Uznané claim
+adjustments se vypořádají explicitní položkou settlementu.
+
 V první etapě po aktivaci maker modelu může být settlement vytvářen
 například měsíčně.
 
@@ -313,12 +319,14 @@ Automatické payouty nejsou požadavkem první etapy externí maker sítě.
 
 Přípustný provozní model:
 
-1.  Taven uzavře settlement období.
-2.  Maker obdrží settlement statement.
-3.  Maker vystaví Studio81 Labs účetní doklad/fakturu podle dohodnutého
-    modelu.
-4.  Studio81 Labs provede bankovní platbu.
-5.  `MakerPayout` se označí jako dokončený a spojí se se settlementem.
+1.  Taven uzavře settlement období pouze nad assignments, které prošly
+    maker claim hold guardem.
+2.  Studio81 Labs v dohodnutém self-billing režimu vystaví makerovi
+    settlement statement a účetní/daňový doklad.
+3.  Maker obdrží dokumenty a řeší případný spor před payoutem.
+4.  Studio81 Labs provede ruční bankovní platbu.
+5.  `MakerPayout` se označí jako dokončený a spojí se se settlementem a
+    self-billing dokladem.
 
 Budoucí síť může tento proces automatizovat, ale ekonomický model se
 nemění.
@@ -487,7 +495,7 @@ platform-owned and maker-owned nodes
 manual assignment or limited policy routing
 performance-based priority
 settlement records
-manual invoice and bank-transfer payout
+platform self-billing and manual bank-transfer payout
 
 later network:
 automatic routing
@@ -530,7 +538,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů a první ruční
-payout fázi doplňují #184–#185.
+payout fázi doplňují #184–#186.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
@@ -603,7 +611,7 @@ Před aktivací externího maker modelu po kapacitní bráně doplnit:
 -   minimální sample size pro performance bonusy,
 -   settlement period,
 -   pravidla pro maker-caused reprint a claim adjustments,
--   způsob účetního dokladu mezi makerem a Studio81 Labs,
+-   právní a účetní potvrzení konkrétní podoby self-billing dokladu,
 -   potvrzení účetního/daňového zacházení u propojených osob.
 
 Poslední bod je právní/daňová validace provozního modelu; nemění
