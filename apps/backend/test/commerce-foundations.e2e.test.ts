@@ -774,6 +774,28 @@ describe("commerce persistence foundations", () => {
           ]),
         { code: "23514", constraint: "shipment_topology_immutable_check" },
       );
+      await expectQueryError(
+        client,
+        "rekey_persisted_shipment",
+        () =>
+          client.query(`UPDATE shipments SET id = $2 WHERE id = $1`, [
+            foundation.shipmentIds[0],
+            fixtures.id("rekeyed-shipment"),
+          ]),
+        { code: "23514", constraint: "shipment_topology_immutable_check" },
+      );
+      await expectQueryError(
+        client,
+        "rewrite_shipment_creation_time",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET created_at = created_at + interval '1 millisecond'
+             WHERE id = $1`,
+            [foundation.shipmentIds[0]],
+          ),
+        { code: "23514", constraint: "shipment_topology_immutable_check" },
+      );
       expect(
         (
           await client.query(
@@ -2341,6 +2363,7 @@ describe("commerce persistence foundations", () => {
       for (const [name, providerIntentId] of [
         ["null_provider_intent", null],
         ["blank_provider_intent", "   "],
+        ["control_whitespace_provider_intent", "\t\n"],
       ] as const) {
         await expectQueryError(
           client,
@@ -2373,6 +2396,29 @@ describe("commerce persistence foundations", () => {
       await createCurrentPlanAndPayment(client, fixtures, foundation);
       await cancelOrderBeforeHandoff(client, foundation.orderId);
       const capturedAt = new Date();
+      for (const [name, providerCaptureId] of [
+        ["empty_compensation_capture_id", ""],
+        ["blank_compensation_capture_id", "   "],
+        ["control_whitespace_compensation_capture_id", "\t\n"],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(
+              `UPDATE payments
+               SET status = 'REFUND_PENDING',
+                   captured_amount_minor = requested_amount_minor,
+                   provider_capture_id = $2, captured_at = $3
+               WHERE id = $1`,
+              [foundation.paymentId, providerCaptureId, capturedAt],
+            ),
+          {
+            code: "23514",
+            constraint: "payments_provider_capture_identity_check",
+          },
+        );
+      }
       await client.query(
         `UPDATE payments
          SET status = 'REFUND_PENDING',
@@ -2532,6 +2578,26 @@ describe("commerce persistence foundations", () => {
           [foundation.paymentId, providerCaptureId, new Date()],
         );
       };
+
+      const blankCapture = await fixtures.createFoundation(
+        "blank-provider-capture",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, blankCapture);
+      for (const [name, providerCaptureId] of [
+        ["empty_provider_capture", ""],
+        ["blank_provider_capture", "   "],
+        ["control_whitespace_provider_capture", "\t\n"],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () => capturePayment(blankCapture, providerCaptureId),
+          {
+            code: "23514",
+            constraint: "payments_provider_capture_identity_check",
+          },
+        );
+      }
 
       const unauthorized = await fixtures.createFoundation(
         "unauthorized-capture",
@@ -4065,9 +4131,86 @@ describe("commerce persistence foundations", () => {
         () => createCurrentPlanAndPayment(client, fixtures, foundation),
         { code: "23514", constraint: "payment_fulfilment_topology_check" },
       );
+      await expectQueryError(
+        client,
+        "quote_without_timestamp",
+        () =>
+          client.query(`UPDATE orders SET status = 'QUOTED' WHERE id = $1`, [
+            foundation.orderId,
+          ]),
+        {
+          code: "23514",
+          constraint: "order_lifecycle_timestamp_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "preassign_quoted_timestamp",
+        () =>
+          client.query(`UPDATE orders SET quoted_at = $2 WHERE id = $1`, [
+            foundation.orderId,
+            new Date(),
+          ]),
+        {
+          code: "23514",
+          constraint: "order_lifecycle_timestamp_check",
+        },
+      );
       await client.query(
         `UPDATE orders SET status = 'QUOTED', quoted_at = $2 WHERE id = $1`,
         [foundation.orderId, new Date()],
+      );
+      expect(
+        (
+          await client.query<{
+            confirmed_is_null: boolean;
+            quoted_is_recorded: boolean;
+          }>(
+            `SELECT quoted_at IS NOT NULL AS quoted_is_recorded,
+                    confirmed_at IS NULL AS confirmed_is_null
+             FROM orders WHERE id = $1`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([{ quoted_is_recorded: true, confirmed_is_null: true }]);
+      await expectQueryError(
+        client,
+        "rewrite_quoted_timestamp",
+        () =>
+          client.query(
+            `UPDATE orders SET quoted_at = quoted_at + interval '1 millisecond'
+             WHERE id = $1`,
+            [foundation.orderId],
+          ),
+        {
+          code: "23514",
+          constraint: "order_lifecycle_timestamp_immutable_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "preassign_confirmed_timestamp",
+        () =>
+          client.query(`UPDATE orders SET confirmed_at = $2 WHERE id = $1`, [
+            foundation.orderId,
+            new Date(),
+          ]),
+        {
+          code: "23514",
+          constraint: "order_lifecycle_timestamp_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "confirm_without_timestamp",
+        () =>
+          client.query(`UPDATE orders SET status = 'CONFIRMED' WHERE id = $1`, [
+            foundation.orderId,
+          ]),
+        {
+          code: "23514",
+          constraint: "order_lifecycle_timestamp_check",
+        },
       );
       await expectQueryError(
         client,
@@ -4312,6 +4455,37 @@ describe("commerce persistence foundations", () => {
         foundation,
         foundationProductions,
       );
+      expect(
+        (
+          await client.query<{ lifecycle_timestamps_ordered: boolean }>(
+            `SELECT confirmed_at >= quoted_at AS lifecycle_timestamps_ordered
+             FROM orders WHERE id = $1`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([{ lifecycle_timestamps_ordered: true }]);
+      for (const [name, timestampExpression] of [
+        ["clear_confirmed_timestamp", "NULL"],
+        [
+          "rewrite_confirmed_timestamp",
+          "confirmed_at + interval '1 millisecond'",
+        ],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(
+              `UPDATE orders SET confirmed_at = ${timestampExpression}
+               WHERE id = $1`,
+              [foundation.orderId],
+            ),
+          {
+            code: "23514",
+            constraint: "order_lifecycle_timestamp_immutable_check",
+          },
+        );
+      }
       await expectQueryError(
         client,
         "active_order_pending_customer_cancellation_refund",

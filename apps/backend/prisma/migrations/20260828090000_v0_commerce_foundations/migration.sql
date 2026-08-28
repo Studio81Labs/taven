@@ -597,7 +597,26 @@ ALTER TABLE "price_snapshot_components" ADD CONSTRAINT "price_snapshot_component
 );
 ALTER TABLE "price_component_fulfilment_allocations" ADD CONSTRAINT "price_component_fulfilment_allocations_amount_check" CHECK ("amount_minor" >= 0);
 ALTER TABLE "payment_schedules" ADD CONSTRAINT "payment_schedules_values_check" CHECK ("sequence" >= 0 AND "gross_amount_minor" >= 0 AND "fee_rate_basis_points" >= 0 AND "fee_fixed_minor" >= 0);
-ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (("quoted_at" IS NULL OR "quoted_at" >= "created_at") AND ("confirmed_at" IS NULL OR "confirmed_at" >= "created_at"));
+ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
+    ("quoted_at" IS NULL OR "quoted_at" >= "created_at")
+    AND ("confirmed_at" IS NULL OR ("quoted_at" IS NOT NULL AND "confirmed_at" >= "quoted_at"))
+    AND (
+        ("status" = 'DRAFT' AND "quoted_at" IS NULL AND "confirmed_at" IS NULL)
+        OR ("status" = 'QUOTED' AND "quoted_at" IS NOT NULL AND "confirmed_at" IS NULL)
+        OR (
+            "status" IN (
+                'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED', 'READY_TO_SHIP',
+                'SHIPPED', 'DELIVERED', 'COMPLETED', 'PARTIALLY_FULFILLED'
+            )
+            AND "quoted_at" IS NOT NULL
+            AND "confirmed_at" IS NOT NULL
+        )
+        OR (
+            "status" IN ('CANCELLED', 'REFUNDED', 'CANCELLED_SETTLED')
+            AND "quoted_at" IS NOT NULL
+        )
+    )
+);
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_ordinal_quantity_check" CHECK ("ordinal" >= 0 AND "quantity" > 0);
 ALTER TABLE "order_phases" ADD CONSTRAINT "order_phases_timestamps_check" CHECK (("activated_at" IS NULL OR "activated_at" >= "created_at") AND ("qc_passed_at" IS NULL OR "qc_passed_at" >= "created_at") AND ("shipped_at" IS NULL OR "shipped_at" >= "created_at") AND ("delivered_at" IS NULL OR "delivered_at" >= "created_at") AND ("completed_at" IS NULL OR "completed_at" >= "created_at") AND ("cancelled_at" IS NULL OR "cancelled_at" >= "created_at"));
 ALTER TABLE "shipment_plans" ADD CONSTRAINT "shipment_plans_values_check" CHECK ("ordinal" >= 0 AND "category" <> '' AND "planned_volume_cubic_mm" >= 0 AND "planned_weight_milligrams" >= 0 AND "shipping_amount_minor" >= 0 AND "packaging_amount_minor" >= 0 AND "handling_amount_minor" >= 0);
@@ -607,8 +626,11 @@ ALTER TABLE "shipments" ADD CONSTRAINT "shipments_replacement_not_self_check" CH
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (("accepted_at" IS NULL OR "accepted_at" >= "created_at") AND ("printing_at" IS NULL OR "printing_at" >= "created_at") AND ("qc_approved_at" IS NULL OR "qc_approved_at" >= "created_at") AND ("packed_at" IS NULL OR "packed_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_intent_identity_check" CHECK (
-    ("provider_intent_id" IS NOT NULL AND btrim("provider_intent_id") <> '')
+    ("provider_intent_id" IS NOT NULL AND "provider_intent_id" ~ '[^[:space:]]')
     OR ("provider_intent_id" IS NULL AND "status" IN ('CREATED', 'VOIDED'))
+);
+ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_capture_identity_check" CHECK (
+    "provider_capture_id" IS NULL OR "provider_capture_id" ~ '[^[:space:]]'
 );
 ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
     (
@@ -1519,12 +1541,47 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        IF NEW."status" <> 'DRAFT' THEN
-            RAISE EXCEPTION 'new orders must begin in draft status'
+        IF NEW."status" <> 'DRAFT'
+           OR NEW."quoted_at" IS NOT NULL
+           OR NEW."confirmed_at" IS NOT NULL THEN
+            RAISE EXCEPTION 'new orders must begin draft without lifecycle timestamps'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
         END IF;
 
         RETURN NEW;
+    END IF;
+
+    IF NEW."created_at" IS DISTINCT FROM OLD."created_at"
+       OR (OLD."quoted_at" IS NOT NULL AND NEW."quoted_at" IS DISTINCT FROM OLD."quoted_at")
+       OR (OLD."confirmed_at" IS NOT NULL AND NEW."confirmed_at" IS DISTINCT FROM OLD."confirmed_at") THEN
+        RAISE EXCEPTION 'order creation and recorded lifecycle timestamps are immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_lifecycle_timestamp_immutable_check';
+    END IF;
+
+    IF NEW."quoted_at" IS DISTINCT FROM OLD."quoted_at"
+       AND NOT (OLD."status" = 'DRAFT' AND NEW."status" = 'QUOTED'
+                AND OLD."quoted_at" IS NULL AND NEW."quoted_at" IS NOT NULL) THEN
+        RAISE EXCEPTION 'quoted timestamp must be assigned with the draft-to-quoted transition'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_lifecycle_timestamp_check';
+    END IF;
+
+    IF NEW."confirmed_at" IS DISTINCT FROM OLD."confirmed_at"
+       AND NOT (OLD."status" = 'QUOTED' AND NEW."status" = 'CONFIRMED'
+                AND OLD."confirmed_at" IS NULL AND NEW."confirmed_at" IS NOT NULL) THEN
+        RAISE EXCEPTION 'confirmed timestamp must be assigned with the quoted-to-confirmed transition'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_lifecycle_timestamp_check';
+    END IF;
+
+    IF OLD."status" = 'DRAFT' AND NEW."status" = 'QUOTED'
+       AND NEW."quoted_at" IS NULL THEN
+        RAISE EXCEPTION 'draft-to-quoted transition requires its quoted timestamp'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_lifecycle_timestamp_check';
+    END IF;
+
+    IF OLD."status" = 'QUOTED' AND NEW."status" = 'CONFIRMED'
+       AND NEW."confirmed_at" IS NULL THEN
+        RAISE EXCEPTION 'quoted-to-confirmed transition requires its confirmed timestamp'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_lifecycle_timestamp_check';
     END IF;
 
     IF NEW."status" IS DISTINCT FROM OLD."status"
@@ -1552,7 +1609,7 @@ END;
 $$;
 
 CREATE TRIGGER "orders_status_transitions_valid"
-BEFORE INSERT OR UPDATE OF "status" ON "orders"
+BEFORE INSERT OR UPDATE OF "status", "quoted_at", "confirmed_at", "created_at" ON "orders"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_status_transition();
 
 CREATE FUNCTION taven_reconcile_refunded_order()
@@ -4244,12 +4301,14 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_topology_immutable_check';
     END IF;
 
-    IF NEW."order_id" IS DISTINCT FROM OLD."order_id"
+    IF NEW."id" IS DISTINCT FROM OLD."id"
+       OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
+       OR NEW."order_id" IS DISTINCT FROM OLD."order_id"
        OR NEW."order_phase_id" IS DISTINCT FROM OLD."order_phase_id"
        OR NEW."shipment_plan_id" IS DISTINCT FROM OLD."shipment_plan_id"
        OR NEW."delivery_destination_id" IS DISTINCT FROM OLD."delivery_destination_id"
        OR NEW."replaces_shipment_id" IS DISTINCT FROM OLD."replaces_shipment_id" THEN
-        RAISE EXCEPTION 'shipment order, phase, plan, destination, and replacement lineage cannot be changed'
+        RAISE EXCEPTION 'shipment identity, creation time, topology, and replacement lineage cannot be changed'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_topology_immutable_check';
     END IF;
 
