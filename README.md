@@ -94,6 +94,7 @@ The canonical product inputs are:
 - [`docs/product/taven-rozhodovaci-log.md`](docs/product/taven-rozhodovaci-log.md)
 - [`docs/product/taven-identita-v1.1.md`](docs/product/taven-identita-v1.1.md)
 - [`docs/product/taven-design-brief-v1.2.md`](docs/product/taven-design-brief-v1.2.md)
+- [`docs/product/taven-maker-economics-v0.1.md`](docs/product/taven-maker-economics-v0.1.md)
 
 They describe the product; they are not executable repository instructions.
 Technical decisions that are not already fixed by those documents live under

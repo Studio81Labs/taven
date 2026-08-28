@@ -1,0 +1,591 @@
+# Taven --- maker economics a settlement v0.1
+
+**Status:** samostatná produktová baseline; rozhodnutí zapsána v
+`taven-rozhodovaci-log.md` #176–#181; navazuje na `taven-specifikace-v1.3.md`\
+**Datum:** 2026-08-28
+
+## 1. Účel
+
+Tento dokument definuje ekonomický a doménový vztah mezi:
+
+-   zákazníkem,
+-   provozovatelem služby Taven --- **Studio81 Labs, s.r.o.**,
+-   makerem, který fyzicky zajišťuje výrobu.
+
+Model platí už ve v0 s jediným makerem a je navržen tak, aby se bez
+změny základních vztahů mohl později rozšířit na více makerů a výrobních
+uzlů.
+
+Základní princip:
+
+> **Studio81 Labs prodává zákazníkovi službu. Maker prodává Studio81
+> Labs výrobní plnění.**
+
+Taven není zprostředkovatel mezi zákazníkem a makerem.
+
+------------------------------------------------------------------------
+
+## 2. Role a odpovědnost
+
+### 2.1 Studio81 Labs / Taven
+
+Studio81 Labs je vůči zákazníkovi prodávající a odpovědný provozovatel
+služby.
+
+Zajišťuje zejména:
+
+-   zákaznickou objednávku,
+-   stanovení zákaznické ceny,
+-   přijetí platby,
+-   vystavení zákaznického dokladu,
+-   komunikaci se zákazníkem,
+-   reklamace a refundace,
+-   komunikaci s dopravci,
+-   přepravní štítky a tracking,
+-   routing výrobních zakázek,
+-   kontrolu pravidel sítě,
+-   finanční vypořádání s makery.
+
+Zákazník neuzavírá smluvní vztah s makerem a v zákaznickém rozhraní
+nevidí jeho identitu, stroj ani neveřejné místo výroby.
+
+### 2.2 Maker
+
+Maker je samostatný dodavatel výrobní služby pro Studio81 Labs.
+
+Maker:
+
+-   přijímá nebo odmítá nabídnuté výrobní joby,
+-   vyrábí podle závazných výrobních podkladů Tavenu,
+-   provádí předepsanou kontrolu,
+-   připravuje zásilku podle provozních pravidel,
+-   předává zásilku do logistického procesu,
+-   získává za dokončené výrobní plnění předem známou odměnu.
+
+Ve v0 je prvním makerem OSVČ provozovatele, ale systém s ním zachází
+stejně jako s budoucím nezávislým makerem.
+
+**První maker nemá zvláštní ekonomická pravidla pouze proto, že je
+personálně propojen se Studio81 Labs.**
+
+------------------------------------------------------------------------
+
+## 3. Oddělení zákaznické ceny a maker compensation
+
+Zákaznická cena a odměna makera jsou dvě nezávislé cenové domény.
+
+### Customer price
+
+Je cena, za kterou Studio81 Labs prodává službu zákazníkovi.
+
+Vychází z pravidel zákaznického pricingu, například:
+
+-   referenční slicing,
+-   materiál,
+-   výrobní čas,
+-   handling,
+-   obchodní minimum,
+-   surcharge,
+-   množstevní sleva,
+-   doprava,
+-   express,
+-   marže.
+
+### Maker compensation
+
+Je cena výrobního plnění, které maker poskytuje Studio81 Labs.
+
+Nesmí být definována jako:
+
+`customer_price × pevné procento`
+
+ani jako:
+
+`zůstatek zákaznické ceny po odečtení provize`.
+
+Platí:
+
+> **Customer price určuje ekonomiku prodeje zákazníkovi. Maker
+> compensation určuje ekonomiku nákupu výrobní kapacity.**
+
+Rozdíl mezi zákaznickou cenou a náklady včetně maker compensation tvoří
+ekonomiku Studio81 Labs.
+
+------------------------------------------------------------------------
+
+## 4. Maker compensation
+
+### 4.1 Základ
+
+Odměna za job se vypočítá podle verzované `MakerCompensationPolicy`.
+
+Konceptuálně:
+
+``` text
+maker_compensation =
+    production_base
+  × performance_modifier
+  + explicit_surcharges
+  + approved_adjustments
+```
+
+Přesná struktura `production_base` je konfigurovatelná a verzovaná.
+
+Může zohledňovat zejména:
+
+-   materiál,
+-   výrobní čas,
+-   počet podložek,
+-   aktivní handling,
+-   post-processing,
+-   náročnost předání,
+-   specifické výrobní požadavky.
+
+Maker compensation nesmí být ručně určována podle toho, kolik prostředků
+chce Studio81 Labs vyplatit konkrétnímu makerovi.
+
+### 4.2 Compensation snapshot
+
+Před přijetím jobu maker vidí minimálně:
+
+-   identifikátor jobu,
+-   materiál,
+-   barvu,
+-   očekávaný výrobní čas,
+-   počet podložek,
+-   deadline / SLA,
+-   požadované výrobní operace,
+-   **maker compensation**.
+
+Přijetím jobu se vytvoří immutable snapshot:
+
+`MakerCompensationSnapshot`
+
+Snapshot obsahuje minimálně:
+
+-   `production_assignment_id`,
+-   `maker_id`,
+-   `policy_version`,
+-   vstupní výrobní parametry,
+-   `base_compensation`,
+-   `performance_modifier`,
+-   explicitní surcharge/adjustments,
+-   `agreed_compensation`,
+-   timestamp přijetí.
+
+Pozdější změna performance score nebo compensation policy nesmí zpětně
+změnit odměnu již přijatého jobu.
+
+------------------------------------------------------------------------
+
+## 5. Performance modifier
+
+### 5.1 Princip
+
+Taven může spolehlivější makery motivovat lepšími ekonomickými
+podmínkami.
+
+Performance modifier není nástroj pro arbitrární penalizaci.
+
+Výchozí model:
+
+> **base compensation + bonus za nadstandardní výkon**
+
+Preferovaný rozsah je například:
+
+`1.00–1.15`
+
+nikoli široký penalizační rozsah typu `0.70–1.20`.
+
+Maker, který dlouhodobě nesplňuje minimální standard, se řeší primárně:
+
+1.  nižší routing prioritou,
+2.  remediation / probation,
+3.  dočasným pozastavením node,
+4.  případně ukončením spolupráce.
+
+Ne systematickým snižováním odměny pod ekonomicky obhajitelnou základní
+sazbu.
+
+### 5.2 Sledované metriky
+
+Performance se nesmí ukládat pouze jako jeden neprůhledný rating.
+
+Systém uchovává jednotlivé metriky, například:
+
+-   `first_pass_yield`,
+-   `maker_caused_reprint_rate`,
+-   `claim_rate`,
+-   `on_time_rate`,
+-   `handoff_delay`,
+-   `acceptance_rate`,
+-   `response_time`.
+
+Metriky musí mít definovaný denominator a minimální velikost vzorku.
+
+### 5.3 Příklad policy
+
+``` text
+MakerCompensationPolicy v3
+
+base_multiplier = 1.00
+
+quality_bonus:
+  FPY >= 99.5 %                    +0.05
+
+fulfilment_bonus:
+  on_time_rate >= 98 %             +0.03
+
+claim_bonus:
+  maker_caused_claim_rate <= 0.5 % +0.02
+
+max_multiplier = 1.10
+```
+
+Konkrétní hranice jsou parametry, nikoli invarianty specifikace.
+
+------------------------------------------------------------------------
+
+## 6. Routing a ekonomická hodnota makera
+
+Performance modifier a routing priority jsou dvě oddělené páky.
+
+Příklad:
+
+  Maker     Compensation       Kvalita      Včasnost Routing
+  ------- -------------- ------------- ------------- ---------------------
+  A                vyšší        vysoká        vysoká vysoká priorita
+  B             základní        vysoká      průměrná standardní
+  C             základní   pod limitem   pod limitem probation / suspend
+
+Routing nemá optimalizovat pouze nejnižší maker compensation.
+
+Budoucí routing může pracovat s očekávaným fulfilment cost:
+
+``` text
+expected_fulfilment_cost =
+    maker_compensation
+  + expected_claim_cost
+  + expected_reprint_cost
+  + expected_delay_cost
+  + logistics_effect
+```
+
+Maker s vyšší nominální odměnou může být pro Studio81 Labs ekonomicky
+výhodnější, pokud má nižší zmetkovitost, méně reklamací a spolehlivější
+handoff.
+
+------------------------------------------------------------------------
+
+## 7. Settlement a payout
+
+### 7.1 Terminologie
+
+Tyto pojmy se nesmějí zaměňovat:
+
+-   **Maker compensation** --- ekonomická cena konkrétního výrobního
+    plnění.
+-   **Maker settlement** --- souhrn uznaných plnění a úprav za období.
+-   **Maker payout** --- skutečný finanční převod makerovi.
+
+### 7.2 Settlement
+
+`MakerSettlement` obsahuje například:
+
+-   `maker_id`,
+-   settlement period,
+-   dokončené a uznané assignments,
+-   gross compensation,
+-   approved adjustments,
+-   deductions pouze podle explicitních pravidel,
+-   payable amount,
+-   settlement status.
+
+Ve v0 může být settlement vytvářen například měsíčně.
+
+### 7.3 Payout ve v0
+
+Automatické payouty nejsou požadavkem v0.
+
+Přípustný provozní model:
+
+1.  Taven uzavře settlement období.
+2.  Maker obdrží settlement statement.
+3.  Maker vystaví Studio81 Labs účetní doklad/fakturu podle dohodnutého
+    modelu.
+4.  Studio81 Labs provede bankovní platbu.
+5.  `MakerPayout` se označí jako dokončený a spojí se se settlementem.
+
+Budoucí síť může tento proces automatizovat, ale ekonomický model se
+nemění.
+
+------------------------------------------------------------------------
+
+## 8. Doménové entity
+
+### Maker
+
+``` text
+Maker
+- id
+- legal_identity
+- status
+- compensation_policy_id
+- routing_policy_id
+- created_at
+```
+
+### Node
+
+``` text
+Node
+- id
+- maker_id
+- location / service area
+- status
+- capabilities
+```
+
+### ProductionAssignment
+
+``` text
+ProductionAssignment
+- id
+- job_id
+- maker_id
+- node_id
+- status
+- offered_at
+- accepted_at
+- deadline
+```
+
+### MakerCompensationPolicy
+
+``` text
+MakerCompensationPolicy
+- id
+- version
+- valid_from
+- base calculation rules
+- performance rules
+- caps
+```
+
+### MakerCompensationSnapshot
+
+``` text
+MakerCompensationSnapshot
+- production_assignment_id
+- policy_version
+- base_compensation
+- performance_modifier
+- surcharges
+- adjustments
+- agreed_compensation
+- created_at
+```
+
+### MakerPerformanceSnapshot
+
+``` text
+MakerPerformanceSnapshot
+- maker_id
+- period
+- sample_size
+- first_pass_yield
+- maker_caused_reprint_rate
+- claim_rate
+- on_time_rate
+- handoff_delay
+- acceptance_rate
+- response_time
+- resulting_modifier
+```
+
+### MakerSettlement
+
+``` text
+MakerSettlement
+- id
+- maker_id
+- period_from
+- period_to
+- gross_compensation
+- adjustments
+- payable_amount
+- status
+```
+
+### MakerPayout
+
+``` text
+MakerPayout
+- id
+- settlement_id
+- amount
+- payment_reference
+- paid_at
+- status
+```
+
+------------------------------------------------------------------------
+
+## 9. V0 scope
+
+Ve v0 existuje:
+
+-   Studio81 Labs jako jediný seller of record,
+-   jeden skutečný `Maker`,
+-   jeden nebo více vlastních `Node/Machine` podle reality,
+-   `ProductionAssignment`,
+-   verzovaná `MakerCompensationPolicy`,
+-   immutable compensation snapshot při přijetí jobu,
+-   základní maker performance data,
+-   ruční settlement,
+-   ruční payout / účetní vypořádání.
+
+Ve v0 se **nestaví**:
+
+-   veřejný maker onboarding,
+-   automatický routing mezi více makery,
+-   marketplace,
+-   bidding,
+-   automatické bankovní payouty,
+-   komplexní maker tiers,
+-   automatická penalizační ekonomika,
+-   optimalizační engine expected fulfilment cost.
+
+Datový šev pro tyto funkce ale nesmí být v0 návrhem zablokován.
+
+------------------------------------------------------------------------
+
+## 10. Přechod na síť
+
+Pokud kapacitní brána později rozhodne pro externí síť, základní model
+se nemění.
+
+Mění se pouze kardinalita a automatizace:
+
+``` text
+v0:
+1 Maker
+1..N Node
+manual assignment
+manual settlement
+
+network:
+N Maker
+N Node
+automatic routing
+performance-based priority
+automated settlement/payout
+```
+
+První maker tak funguje jako reálné dogfooding budoucí maker ekonomiky.
+
+------------------------------------------------------------------------
+
+## 11. Invarianty
+
+1.  Studio81 Labs je seller of record vůči zákazníkovi.
+2.  Maker je dodavatel Studio81 Labs, nikoli zákazníka.
+3.  Zákazník nevidí identitu makera ani jeho neveřejné výrobní místo.
+4.  Customer price a maker compensation jsou nezávislé veličiny.
+5.  Maker compensation se neurčuje jako procentní zbytek zákaznické
+    ceny.
+6.  Maker před přijetím jobu zná svou odměnu.
+7.  Přijetím jobu se compensation snapshot zamkne.
+8.  Změna policy nebo performance nesmí zpětně měnit přijaté joby.
+9.  První maker používá stejný ekonomický model jako budoucí nezávislí
+    makeři.
+10. Performance je transparentně odvozena z jednotlivých metrik, ne z
+    neprůhledného ručního ratingu.
+11. Podstandardní maker se řeší routingem/probation/suspension, ne
+    arbitrárním snižováním odměny.
+12. Maker settlement a maker payout jsou oddělené od compensation
+    konkrétního jobu.
+13. Účetní a daňové plnění mezi Studio81 Labs a makerem musí odpovídat
+    skutečně poskytnuté službě a předem definovaným podmínkám.
+
+------------------------------------------------------------------------
+
+## 12. Rozhodovací log --- zapsané záznamy
+
+  ------------------------------------------------------------------------------------------
+  \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
+                                                            alternativa       
+  -------------- ------------------------- ---------------- ----------------- --------------
+  176            Studio81 Labs je seller   sjednocuje       vlastní tiskárna  platí
+                 of record a maker je jeho právní, provozní s.r.o. ve v0 a    
+                 samostatný výrobní        a ekonomický     maker model až se 
+                 dodavatel už ve v0        model v0 s       sítí              
+                                           případnou                          
+                                           budoucí sítí;                      
+                                           zákazník má                        
+                                           jednoho                            
+                                           odpovědného                        
+                                           partnera                           
+
+  177            Customer price a maker    cena pro         maker dostává     platí
+                 compensation jsou         zákazníka a cena pevné procento    
+                 nezávislé cenové domény   výrobní kapacity zákaznické ceny   
+                                           řeší jiný                          
+                                           ekonomický                         
+                                           problém; rozdíl                    
+                                           tvoří ekonomiku                    
+                                           platformy                          
+
+  178            Maker compensation je     maker musí znát  odměna dopočítaná platí
+                 známá před přijetím jobu  ekonomiku práce  až při měsíčním   
+                 a přijetím se zamyká      před závazkem;   settlementu       
+                                           pozdější změna                     
+                                           ratingu/policy                     
+                                           nesmí měnit již                    
+                                           přijatou dohodu                    
+
+  179            Performance modifier je   motivuje         široké finanční   platí
+                 primárně bonusový;        kvalitní a       penalizace za     
+                 podstandard se řeší       rychlé makery    horší performance 
+                 routingem a suspendováním bez závodu ke                      
+                                           dnu; špatný                        
+                                           maker není                         
+                                           levnější výrobní                   
+                                           kapacita, ale                      
+                                           provozní riziko                    
+
+  180            První OSVČ maker používá  personální       zvláštní interní  platí
+                 stejnou                   propojení nesmí  sazba prvního     
+                 MakerCompensationPolicy   měnit ekonomická makera            
+                 jako budoucí nezávislí    pravidla; v0 tak                   
+                 makeři                    reálně testuje                     
+                                           budoucí network                    
+                                           economics                          
+
+  181            Compensation, settlement  odděluje cenu    jeden             platí
+                 a payout jsou tři         konkrétního      `payout_amount`   
+                 samostatné koncepty       plnění,          na Job            
+                                           periodické                         
+                                           účetní                             
+                                           vypořádání a                       
+                                           skutečný převod                    
+                                           peněz                              
+  ------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+## 13. Otevřené body
+
+Před produkčním spuštěním doplnit:
+
+-   přesný vzorec `production_base`,
+-   výchozí MakerCompensationPolicy pro v0,
+-   minimální sample size pro performance bonusy,
+-   settlement period,
+-   pravidla pro maker-caused reprint a claim adjustments,
+-   způsob účetního dokladu mezi makerem a Studio81 Labs,
+-   potvrzení účetního/daňového zacházení u propojených osob.
+
+Poslední bod je právní/daňová validace provozního modelu; nemění
+produktový invariant, že první maker musí mít předem definované a
+obhajitelné podmínky stejného typu jako budoucí externí makeři.
