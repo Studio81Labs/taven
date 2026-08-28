@@ -10374,6 +10374,29 @@ describe("commerce persistence foundations", () => {
           .find(({ id }) => id === longReferencePhotoId)
           ?.photo_delete_after.getTime(),
       ).toBe(longPhotoDeadline.getTime());
+      await expectQueryError(
+        client,
+        "shorten_issued_quote_reference_deadline",
+        () =>
+          client.query(
+            `UPDATE photo_assets SET photo_delete_after = $2 WHERE id = $1`,
+            [oldReferencePhotoId, initialPhotoDeadline],
+          ),
+        {
+          code: "23514",
+          constraint: "asset_deadline_monotonic_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "mutate_quote_reference_retention_snapshot",
+        () =>
+          client.query(
+            `UPDATE photo_assets SET retention_days = 1 WHERE id = $1`,
+            [oldReferencePhotoId],
+          ),
+        { code: "55000" },
+      );
 
       const lateReferencePhotoId = fixtures.id(
         "quote-issuance-late-reference-photo",
