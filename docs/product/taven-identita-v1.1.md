@@ -65,7 +65,7 @@ Orientační poměr plochy: **80 %** typografie/whitespace/neutrální plochy, *
 | `--surface` | `#FFFFFF` | karty, plátno |
 | `--ink` | `#1A1A16` | text, kóty |
 | `--ink-2` | `#54554C` | sekundární text |
-| `--ink-3` | `#83847A` | mikrotexty |
+| `--ink-3` | `#66675F` | mikrotexty; kontrast 5,72 : 1 na `--surface` a 4,96 : 1 na `--paper` |
 | `--rule` | `#D9D9D2` | linky |
 | `--accent` | `#1B44E8` | závazná cena, primární akce, tečka v logu |
 | `--warn` | `#B4741A` | dotaz na jednotky, varování |

@@ -49,7 +49,7 @@ Zakázáno: slider výplně, výběr trysky, teploty, styl podpěr, orientace.
 
 ## 5. Checkout a sledování
 
-Checkout: výběr výdejního místa, kontakt bez povinné registrace, platba kartou i bankovním tlačítkem, výslovné potvrzení výjimky z odstoupení.
+Checkout: výběr výdejního místa, kontakt bez povinné registrace, přijetí aktuální verze VOP, výslovné potvrzení výjimky z odstoupení, samostatný nepovinný souhlas se zveřejněním fotografií a platba kartou i bankovním tlačítkem.
 
 Sledování: tokenizovaná URL bez účtu, časová osa stavů v lidské řeči, **fotka hotového dílu k odsouhlasení před odesláním**, tracking, doklad.
 
@@ -80,13 +80,15 @@ Před cenou zobrazuje skutečný stav pipeline:
 
 ### Více položek v objednávce
 
-Objednávka může obsahovat více samostatně konfigurovaných modelů. Po konfiguraci se zobrazuje technický order summary a volby `Pokračovat k dopravě` / `+ Přidat další model`.
+Objednávka může obsahovat více samostatně konfigurovaných `OrderItem` z jednoho nebo více `ModelFile`. U souboru s více tělesy zákazník tělesa sdílející jednu konfiguraci seskupí do jednoho `OrderItem`, nebo je rozdělí do více samostatně konfigurovaných položek; jeden soubor ani jedno těleso proto automaticky neznamená jednu položku. Po konfiguraci se zobrazuje technický order summary a volby `Pokračovat k dopravě` / `+ Přidat další model`.
 
 V headeru lze zobrazit kompaktní indikátor typu `OBJ. / 03 / 2 636 Kč`; nepoužívá se ikona košíku.
 
 ### Account shell
 
 `Moje zakázky` je technický registr, ne datová tabulka/dashboard. Používá `ZÁZNAM`, `TV-XXXX`, `REV.`, stav, datum, počet položek a částku. Aktivní zakázka používá akcent.
+
+Detail historické zakázky nabízí `Objednat znovu`. Akce vytvoří nový draft z podporované znovu použitelné konfigurace, vždy projde aktuálním slicem a ukáže novou závaznou cenu. Když zdrojový artefakt po retenční lhůtě chybí, místo automatické kopie se zobrazí výzva k novému nahrání; po něm se bezpečně předvyplní pouze znovu použitelná konfigurace.
 
 ### Footery
 
