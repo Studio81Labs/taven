@@ -135,13 +135,29 @@ async function advanceReservationOrderToProduction(
   await client.query(
     `UPDATE jobs
      SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
-     WHERE order_id = $1`,
+     WHERE order_id = $1
+       AND EXISTS (
+           SELECT 1
+           FROM production_reservations production
+           WHERE production.job_id = jobs.id
+             AND production.node_id = jobs.node_id
+             AND production.phase_resource_plan_job_id = jobs.phase_resource_plan_job_id
+             AND production.status = 'PRINTING'
+       )`,
     [foundation.orderId, printingAt],
   );
   await client.query(
     `UPDATE jobs
      SET status = 'PRINTING', printing_at = $2, updated_at = $2
-     WHERE order_id = $1`,
+     WHERE order_id = $1
+       AND EXISTS (
+           SELECT 1
+           FROM production_reservations production
+           WHERE production.job_id = jobs.id
+             AND production.node_id = jobs.node_id
+             AND production.phase_resource_plan_job_id = jobs.phase_resource_plan_job_id
+             AND production.status = 'PRINTING'
+       )`,
     [foundation.orderId, printingAt],
   );
   await client.query(
@@ -159,7 +175,11 @@ async function advanceReservationOrderToProduction(
        "orders_post_confirmation_lifecycle_reconciled",
        "orders_production_resource_start_reconciled",
        "order_phases_parent_lifecycle_reconciled",
-       "jobs_parent_lifecycle_reconciled" IMMEDIATE`,
+       "jobs_parent_lifecycle_reconciled",
+       "jobs_printing_reservation_group_reconciled",
+       "production_reservations_job_printing_reconciled",
+       "inventory_reservations_job_printing_reconciled",
+       "capacity_reservations_job_printing_reconciled" IMMEDIATE`,
   );
   await client.query(`SET CONSTRAINTS ALL DEFERRED`);
 }
@@ -3418,20 +3438,20 @@ describe("persistence foundations", () => {
       if (heldCommitted && graph && liveProduction) {
         await client.query("BEGIN");
         await client.query(
-          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-          [graph.foundation.phaseReservationSetId, "RELEASED"],
-        );
-        await client.query(
-          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-          [liveProduction.productionReservationId, "RELEASED"],
-        );
-        await client.query(
-          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-          [liveProduction.inventoryReservationId, "RELEASED"],
+          'UPDATE "inventory_reservations" SET "status" = $2, "consumed_milligrams" = "reserved_milligrams" WHERE "id" = $1',
+          [liveProduction.inventoryReservationId, "CONSUMED"],
         );
         await client.query(
           'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-          [capacityReservationIds[1], "RELEASED"],
+          [capacityReservationIds[1], "COMPLETED"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [liveProduction.productionReservationId, "CONSUMED"],
+        );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [graph.foundation.phaseReservationSetId, "SETTLED"],
         );
         await client.query("COMMIT");
       }
@@ -3715,15 +3735,15 @@ describe("persistence foundations", () => {
       await advanceReservationOrderToProduction(client, foundation);
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
-        [terminalProduction.productionReservationId, "RELEASED"],
+        [terminalProduction.productionReservationId, "CONSUMED"],
       );
       await client.query(
-        'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
-        [terminalProduction.inventoryReservationId, "RELEASED"],
+        'UPDATE "inventory_reservations" SET "status" = $2, "consumed_milligrams" = "reserved_milligrams" WHERE "id" = $1',
+        [terminalProduction.inventoryReservationId, "CONSUMED"],
       );
       await client.query(
         'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
-        [terminalCapacityId, "RELEASED"],
+        [terminalCapacityId, "COMPLETED"],
       );
       await client.query("COMMIT");
       heldCommitted = true;

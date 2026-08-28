@@ -2033,8 +2033,47 @@ BEGIN
             FROM "jobs"
             WHERE "order_id" = target_order_id
               AND "status" NOT IN ('PACKED', 'HANDED_OVER', 'SETTLED')
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND (
+                  NOT EXISTS (
+                      SELECT 1
+                      FROM "jobs" job
+                      WHERE job."order_id" = shipment."order_id"
+                        AND job."order_phase_id" = shipment."order_phase_id"
+                        AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "jobs" job
+                      WHERE job."order_id" = shipment."order_id"
+                        AND job."order_phase_id" = shipment."order_phase_id"
+                        AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                        AND (
+                            job."status" NOT IN ('HANDED_OVER', 'SETTLED')
+                            OR job."handed_over_at" IS NULL
+                        )
+                  )
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs" job
+            WHERE job."order_id" = target_order_id
+              AND job."status" IN ('HANDED_OVER', 'SETTLED')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" shipment
+                  WHERE shipment."order_id" = job."order_id"
+                    AND shipment."order_phase_id" = job."order_phase_id"
+                    AND shipment."shipment_plan_id" = job."shipment_plan_id"
+                    AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+                    AND shipment."handed_over_at" IS NOT NULL
+              )
         ) THEN
-            RAISE EXCEPTION 'shipped order requires atomic phase and physical handoff evidence'
+            RAISE EXCEPTION 'shipped order requires plan-matched Job and Shipment handoff evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
         END IF;
     ELSIF target_status = 'DELIVERED' THEN
@@ -2200,6 +2239,60 @@ BEGIN
     FOR UPDATE;
 
     IF target_status IS NULL OR target_status NOT IN ('CANCELLED', 'REFUNDED') THEN
+        IF target_status = 'COMPLETED' THEN
+            IF EXISTS (
+                SELECT 1
+                FROM "order_phases" phase
+                JOIN "phase_resource_plans" resource_plan
+                  ON resource_plan."order_phase_id" = phase."id"
+                JOIN "phase_reservation_sets" reservation_set
+                  ON reservation_set."phase_resource_plan_id" = resource_plan."id"
+                 AND reservation_set."node_id" = resource_plan."node_id"
+                WHERE phase."order_id" = target_order_id
+                  AND reservation_set."status" IN ('BUILDING', 'RESERVED', 'HELD')
+            ) OR EXISTS (
+                SELECT 1
+                FROM "jobs" job
+                WHERE job."order_id" = target_order_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "production_reservations" production
+                      JOIN "phase_reservation_sets" reservation_set
+                        ON reservation_set."id" = production."phase_reservation_set_id"
+                       AND reservation_set."node_id" = production."node_id"
+                       AND reservation_set."phase_resource_plan_id" = production."phase_resource_plan_id"
+                      WHERE production."job_id" = job."id"
+                        AND production."node_id" = job."node_id"
+                        AND production."phase_resource_plan_job_id" = job."phase_resource_plan_job_id"
+                        AND production."status" = 'CONSUMED'
+                        AND reservation_set."status" = 'SETTLED'
+                        AND EXISTS (
+                            SELECT 1
+                            FROM "inventory_reservations" inventory_reservation
+                            WHERE inventory_reservation."production_reservation_id" = production."id"
+                              AND inventory_reservation."node_id" = production."node_id"
+                              AND inventory_reservation."status" = 'CONSUMED'
+                              AND inventory_reservation."consumed_milligrams" IS NOT NULL
+                        )
+                        AND EXISTS (
+                            SELECT 1
+                            FROM "capacity_reservations" capacity_reservation
+                            WHERE capacity_reservation."production_reservation_id" = production."id"
+                              AND capacity_reservation."node_id" = production."node_id"
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM "capacity_reservations" capacity_reservation
+                            WHERE capacity_reservation."production_reservation_id" = production."id"
+                              AND capacity_reservation."node_id" = production."node_id"
+                              AND capacity_reservation."status" <> 'COMPLETED'
+                        )
+                  )
+            ) THEN
+                RAISE EXCEPTION 'completed order requires settled consumed reservation groups'
+                    USING ERRCODE = '23514', CONSTRAINT = 'completed_order_reservation_settlement_check';
+            END IF;
+        END IF;
         RETURN NULL;
     END IF;
 
@@ -2576,6 +2669,50 @@ BEGIN
     -- Drafts and issued custom quotes can exist without an Order binding.
     IF target_snapshot_id IS NULL THEN
         RETURN;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "fulfilment_slots"
+        WHERE "order_id" = target_order_id
+    ) AND EXISTS (
+        SELECT 1
+        FROM "order_items" item
+        CROSS JOIN (
+            VALUES
+                ('ITEM_PRODUCTION'::"price_component_kind"),
+                ('ITEM_QUANTITY'::"price_component_kind"),
+                ('ITEM_POSTPROCESSING'::"price_component_kind")
+        ) AS mandatory("kind")
+        WHERE item."order_id" = target_order_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "price_snapshot_components" component
+              WHERE component."price_snapshot_id" = target_snapshot_id
+                AND component."kind" = mandatory."kind"
+                AND (
+                    (component."scope" = 'ORDER_ITEM'
+                     AND component."order_item_id" = item."id")
+                    OR (component."scope" = 'QUOTE_ITEM' AND EXISTS (
+                        SELECT 1
+                        FROM "individual_order_item_sources" source
+                        WHERE source."order_item_id" = item."id"
+                          AND source."quote_item_id" = component."quote_item_id"
+                    ))
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM "price_component_fulfilment_allocations" allocation
+                    JOIN "fulfilment_slots" slot
+                      ON slot."id" = allocation."fulfilment_slot_id"
+                    WHERE allocation."price_snapshot_component_id" = component."id"
+                      AND slot."order_id" = target_order_id
+                      AND slot."order_item_id" = item."id"
+                )
+          )
+    ) THEN
+        RAISE EXCEPTION 'every order item requires allocated production, quantity, and post-processing components'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_item_price_component_coverage_check';
     END IF;
 
     IF EXISTS (
@@ -3349,6 +3486,175 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 WHEN (OLD."status" = 'CONFIRMED' AND NEW."status" = 'IN_PRODUCTION')
 EXECUTE FUNCTION taven_reconcile_order_production_resource_start();
+
+CREATE FUNCTION taven_reconcile_job_printing_reservation_group()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_job_id uuid;
+    target_job_status "job_status";
+    target_job_printing_at timestamptz;
+    job_started_printing_event boolean := false;
+    live_printing_group_started boolean;
+    group_started_or_completed boolean;
+    live_printing_group_consistent boolean;
+    completed_printing_group_consistent boolean;
+BEGIN
+    IF TG_TABLE_NAME = 'jobs' THEN
+        target_job_id := NEW."id";
+        job_started_printing_event := OLD."status" = 'ACCEPTED' AND NEW."status" = 'PRINTING';
+    ELSIF TG_TABLE_NAME = 'production_reservations' THEN
+        target_job_id := coalesce(NEW."job_id", OLD."job_id");
+    ELSE
+        SELECT production."job_id"
+        INTO target_job_id
+        FROM "production_reservations" production
+        WHERE production."id" = NEW."production_reservation_id";
+    END IF;
+
+    IF target_job_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT job."status", job."printing_at"
+    INTO target_job_status, target_job_printing_at
+    FROM "jobs" job
+    WHERE job."id" = target_job_id
+    FOR UPDATE;
+
+    IF target_job_status IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT
+        EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            WHERE production."job_id" = target_job_id
+              AND (
+                  production."status" = 'PRINTING'
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."node_id" = production."node_id"
+                        AND capacity_reservation."status" = 'PRINTING'
+                  )
+              )
+        ),
+        EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            WHERE production."job_id" = target_job_id
+              AND (
+                  production."status" IN ('PRINTING', 'CONSUMED')
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "capacity_reservations" capacity_reservation
+                      WHERE capacity_reservation."production_reservation_id" = production."id"
+                        AND capacity_reservation."node_id" = production."node_id"
+                        AND capacity_reservation."status" IN ('PRINTING', 'COMPLETED')
+                  )
+              )
+        ),
+        EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            WHERE production."job_id" = target_job_id
+              AND production."status" = 'PRINTING'
+              AND EXISTS (
+                  SELECT 1
+                  FROM "inventory_reservations" inventory_reservation
+                  WHERE inventory_reservation."production_reservation_id" = production."id"
+                    AND inventory_reservation."node_id" = production."node_id"
+                    AND inventory_reservation."status" = 'ALLOCATED'
+              )
+              AND EXISTS (
+                  SELECT 1
+                  FROM "capacity_reservations" capacity_reservation
+                  WHERE capacity_reservation."production_reservation_id" = production."id"
+                    AND capacity_reservation."node_id" = production."node_id"
+                    AND capacity_reservation."status" = 'PRINTING'
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "capacity_reservations" capacity_reservation
+                  WHERE capacity_reservation."production_reservation_id" = production."id"
+                    AND capacity_reservation."node_id" = production."node_id"
+                    AND capacity_reservation."status" NOT IN ('SCHEDULED', 'PRINTING')
+              )
+        ),
+        EXISTS (
+            SELECT 1
+            FROM "production_reservations" production
+            WHERE production."job_id" = target_job_id
+              AND production."status" = 'CONSUMED'
+              AND EXISTS (
+                  SELECT 1
+                  FROM "inventory_reservations" inventory_reservation
+                  WHERE inventory_reservation."production_reservation_id" = production."id"
+                    AND inventory_reservation."node_id" = production."node_id"
+                    AND inventory_reservation."status" = 'CONSUMED'
+              )
+              AND EXISTS (
+                  SELECT 1
+                  FROM "capacity_reservations" capacity_reservation
+                  WHERE capacity_reservation."production_reservation_id" = production."id"
+                    AND capacity_reservation."node_id" = production."node_id"
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "capacity_reservations" capacity_reservation
+                  WHERE capacity_reservation."production_reservation_id" = production."id"
+                    AND capacity_reservation."node_id" = production."node_id"
+                    AND capacity_reservation."status" <> 'COMPLETED'
+              )
+        )
+    INTO live_printing_group_started,
+         group_started_or_completed,
+         live_printing_group_consistent,
+         completed_printing_group_consistent;
+
+    IF (job_started_printing_event AND NOT live_printing_group_consistent)
+       OR (target_job_status = 'PRINTING'
+           AND NOT (live_printing_group_consistent OR completed_printing_group_consistent))
+       OR (target_job_status IN ('QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+           AND (target_job_printing_at IS NULL OR NOT completed_printing_group_consistent))
+       OR (live_printing_group_started AND target_job_status <> 'PRINTING')
+       OR (target_job_status IN ('CREATED', 'ACCEPTED') AND group_started_or_completed) THEN
+        RAISE EXCEPTION 'printing Job and its exact reservation group must transition atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_printing_reservation_group_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "jobs_printing_reservation_group_reconciled"
+AFTER UPDATE OF "status" ON "jobs"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_job_printing_reservation_group();
+CREATE CONSTRAINT TRIGGER "production_reservations_job_printing_reconciled"
+AFTER UPDATE OF "status", "job_id" ON "production_reservations"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status" OR OLD."job_id" IS DISTINCT FROM NEW."job_id")
+EXECUTE FUNCTION taven_reconcile_job_printing_reservation_group();
+CREATE CONSTRAINT TRIGGER "inventory_reservations_job_printing_reconciled"
+AFTER UPDATE OF "status" ON "inventory_reservations"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_job_printing_reservation_group();
+CREATE CONSTRAINT TRIGGER "capacity_reservations_job_printing_reconciled"
+AFTER UPDATE OF "status" ON "capacity_reservations"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_job_printing_reservation_group();
 
 CREATE FUNCTION taven_extend_quote_source_retention()
 RETURNS trigger

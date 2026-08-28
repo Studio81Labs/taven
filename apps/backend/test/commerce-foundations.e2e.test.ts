@@ -227,22 +227,32 @@ async function forceOrderLifecycleConstraints(
   await client.query(
     `SET CONSTRAINTS
        "orders_post_confirmation_lifecycle_reconciled",
+       "orders_production_resource_start_reconciled",
        "orders_cancelled_reservations_reconciled",
        "phase_reservation_sets_cancelled_order_reconciled",
        "orders_quoted_cancellation_payments_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
+       "jobs_printing_reservation_group_reconciled",
+       "production_reservations_job_printing_reconciled",
+       "inventory_reservations_job_printing_reconciled",
+       "capacity_reservations_job_printing_reconciled",
        "shipments_parent_lifecycle_reconciled",
        "fulfilment_slots_parent_lifecycle_reconciled" IMMEDIATE`,
   );
   await client.query(
     `SET CONSTRAINTS
        "orders_post_confirmation_lifecycle_reconciled",
+       "orders_production_resource_start_reconciled",
        "orders_cancelled_reservations_reconciled",
        "phase_reservation_sets_cancelled_order_reconciled",
        "orders_quoted_cancellation_payments_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
+       "jobs_printing_reservation_group_reconciled",
+       "production_reservations_job_printing_reconciled",
+       "inventory_reservations_job_printing_reconciled",
+       "capacity_reservations_job_printing_reconciled",
        "shipments_parent_lifecycle_reconciled",
        "fulfilment_slots_parent_lifecycle_reconciled" DEFERRED`,
   );
@@ -329,6 +339,37 @@ async function advanceOrderLifecycleStep(
     );
   } else if (status === "QC_PASSED") {
     await client.query(
+      `UPDATE inventory_reservations inventory_reservation
+       SET status = 'CONSUMED',
+           consumed_milligrams = inventory_reservation.reserved_milligrams,
+           updated_at = $2
+       FROM production_reservations production
+       JOIN jobs job ON job.id = production.job_id
+       WHERE inventory_reservation.production_reservation_id = production.id
+         AND job.order_id = $1
+         AND inventory_reservation.status = 'ALLOCATED'`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE capacity_reservations capacity_reservation
+       SET status = 'COMPLETED', updated_at = $2
+       FROM production_reservations production
+       JOIN jobs job ON job.id = production.job_id
+       WHERE capacity_reservation.production_reservation_id = production.id
+         AND job.order_id = $1
+         AND capacity_reservation.status = 'PRINTING'`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE production_reservations production
+       SET status = 'CONSUMED', updated_at = $2
+       FROM jobs job
+       WHERE job.id = production.job_id
+         AND job.order_id = $1
+         AND production.status = 'PRINTING'`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
       `UPDATE jobs
        SET status = 'QC_APPROVED', qc_approved_at = $2, updated_at = $2
        WHERE order_id = $1`,
@@ -395,6 +436,18 @@ async function advanceOrderLifecycleStep(
       [orderId, transitionedAt],
     );
   } else {
+    await client.query(
+      `UPDATE phase_reservation_sets reservation_set
+       SET status = 'SETTLED', updated_at = $2
+       FROM phase_resource_plans resource_plan,
+            order_phases phase
+       WHERE reservation_set.phase_resource_plan_id = resource_plan.id
+         AND reservation_set.node_id = resource_plan.node_id
+         AND resource_plan.order_phase_id = phase.id
+         AND phase.order_id = $1
+         AND reservation_set.status = 'HELD'`,
+      [orderId, transitionedAt],
+    );
     await client.query(
       `UPDATE jobs SET status = 'SETTLED', updated_at = $2 WHERE order_id = $1`,
       [orderId, transitionedAt],
@@ -989,6 +1042,31 @@ describe("commerce persistence foundations", () => {
         {
           code: "23514",
           constraint: "fulfilment_slot_settlement_payment_guard",
+        },
+      );
+    });
+  });
+
+  it("requires allocated item-level price components for every order item", async () => {
+    await rollback("item-price-coverage", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "item-price-coverage",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        2,
+        [{}, { priced: false }],
+      );
+      await createCurrentPlan(client, fixtures, foundation);
+
+      await expectQueryError(
+        client,
+        "unpriced_order_item_payment",
+        () => fixtures.finalizePayment(foundation),
+        {
+          code: "23514",
+          constraint: "order_item_price_component_coverage_check",
         },
       );
     });
@@ -2719,6 +2797,500 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("couples every printing Job to its exact reservation group", async () => {
+    await rollback("job-printing-reservations", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "job-printing-reservations",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        2,
+        [{}, {}],
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      const first = productions[0];
+      const second = productions[1];
+      if (!first || !second) {
+        throw new Error("multi-Job reservation fixture is incomplete");
+      }
+
+      const startReservationGroup = async (
+        production: ProductionReservationFixture,
+      ): Promise<void> => {
+        await client.query(
+          `UPDATE inventory_reservations
+           SET status = 'ALLOCATED'
+           WHERE production_reservation_id = $1`,
+          [production.productionReservationId],
+        );
+        await client.query(
+          `UPDATE capacity_reservations
+           SET status = 'SCHEDULED'
+           WHERE production_reservation_id = $1`,
+          [production.productionReservationId],
+        );
+        await client.query(
+          `UPDATE production_reservations
+           SET status = 'SCHEDULED' WHERE id = $1`,
+          [production.productionReservationId],
+        );
+        await client.query(
+          `UPDATE capacity_reservations
+           SET status = 'PRINTING'
+           WHERE production_reservation_id = $1`,
+          [production.productionReservationId],
+        );
+        await client.query(
+          `UPDATE production_reservations
+           SET status = 'PRINTING' WHERE id = $1`,
+          [production.productionReservationId],
+        );
+      };
+      const completeReservationGroup = async (
+        production: ProductionReservationFixture,
+      ): Promise<void> => {
+        await client.query(
+          `UPDATE inventory_reservations
+           SET status = 'CONSUMED', consumed_milligrams = reserved_milligrams
+           WHERE production_reservation_id = $1`,
+          [production.productionReservationId],
+        );
+        await client.query(
+          `UPDATE capacity_reservations
+           SET status = 'COMPLETED'
+           WHERE production_reservation_id = $1`,
+          [production.productionReservationId],
+        );
+        await client.query(
+          `UPDATE production_reservations
+           SET status = 'CONSUMED' WHERE id = $1`,
+          [production.productionReservationId],
+        );
+      };
+
+      const printingAt = new Date();
+      await startReservationGroup(first);
+      await client.query(
+        `UPDATE jobs SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [first.jobId, printingAt],
+      );
+      await client.query(
+        `UPDATE jobs SET status = 'PRINTING', printing_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [first.jobId, printingAt],
+      );
+      await client.query(
+        `UPDATE order_phases SET status = 'IN_PRODUCTION', updated_at = $2
+         WHERE id = $1`,
+        [foundation.orderPhaseId, printingAt],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'IN_PRODUCTION', updated_at = $2
+         WHERE id = $1`,
+        [foundation.orderId, printingAt],
+      );
+      await forceOrderLifecycleConstraints(client);
+
+      await expectQueryError(
+        client,
+        "second_job_without_resources",
+        async () => {
+          await client.query(
+            `UPDATE jobs
+             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [second.jobId, printingAt],
+          );
+          await client.query(
+            `UPDATE jobs
+             SET status = 'PRINTING', printing_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [second.jobId, printingAt],
+          );
+          await client.query(
+            `SET CONSTRAINTS "jobs_printing_reservation_group_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "job_printing_reservation_group_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "second_resources_without_job",
+        async () => {
+          await startReservationGroup(second);
+          await client.query(
+            `SET CONSTRAINTS
+               "production_reservations_job_printing_reconciled",
+               "capacity_reservations_job_printing_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "job_printing_reservation_group_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "second_consumed_resources_without_job",
+        async () => {
+          await startReservationGroup(second);
+          await completeReservationGroup(second);
+          await client.query(
+            `SET CONSTRAINTS
+               "production_reservations_job_printing_reconciled",
+               "inventory_reservations_job_printing_reconciled",
+               "capacity_reservations_job_printing_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "job_printing_reservation_group_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "second_job_with_completed_resources",
+        async () => {
+          await startReservationGroup(second);
+          await completeReservationGroup(second);
+          await client.query(
+            `UPDATE jobs
+             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [second.jobId, printingAt],
+          );
+          await client.query(
+            `UPDATE jobs
+             SET status = 'PRINTING', printing_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [second.jobId, printingAt],
+          );
+          await client.query(
+            `SET CONSTRAINTS "jobs_printing_reservation_group_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "job_printing_reservation_group_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "terminal_job_with_live_resources",
+        async () => {
+          await client.query(
+            `UPDATE jobs SET status = 'CANCELLED', updated_at = $2 WHERE id = $1`,
+            [second.jobId, printingAt],
+          );
+          await startReservationGroup(second);
+          await client.query(
+            `SET CONSTRAINTS
+               "production_reservations_job_printing_reconciled",
+               "inventory_reservations_job_printing_reconciled",
+               "capacity_reservations_job_printing_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "job_printing_reservation_group_check",
+        },
+      );
+
+      await startReservationGroup(second);
+      await client.query(
+        `UPDATE jobs SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [second.jobId, printingAt],
+      );
+      await client.query(
+        `UPDATE jobs SET status = 'PRINTING', printing_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [second.jobId, printingAt],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "jobs_printing_reservation_group_reconciled",
+           "production_reservations_job_printing_reconciled",
+           "inventory_reservations_job_printing_reconciled",
+           "capacity_reservations_job_printing_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "jobs_printing_reservation_group_reconciled",
+           "production_reservations_job_printing_reconciled",
+           "inventory_reservations_job_printing_reconciled",
+           "capacity_reservations_job_printing_reconciled" DEFERRED`,
+      );
+    });
+  });
+
+  it("matches every handed-over Job to its Shipment plan", async () => {
+    await rollback("shipment-job-handoff", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "shipment-job-handoff",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        2,
+        [{}, {}],
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+      ] as const) {
+        await advanceOrderLifecycleStep(client, foundation.orderId, status);
+      }
+      const first = productions[0];
+      const second = productions[1];
+      const firstShipmentId = foundation.shipmentIds[0];
+      if (!first || !second || !firstShipmentId) {
+        throw new Error("multi-Shipment handoff fixture is incomplete");
+      }
+      const handedOverAt = new Date();
+
+      await expectQueryError(
+        client,
+        "cross_plan_handoff",
+        async () => {
+          await client.query(
+            `UPDATE shipments
+             SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [firstShipmentId, handedOverAt],
+          );
+          await client.query(
+            `UPDATE jobs
+             SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [first.jobId, handedOverAt],
+          );
+          await client.query(
+            `UPDATE jobs
+             SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [second.jobId, handedOverAt],
+          );
+          await client.query(
+            `UPDATE order_phases
+             SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [foundation.orderPhaseId, handedOverAt],
+          );
+          await client.query(
+            `UPDATE orders SET status = 'SHIPPED', updated_at = $2 WHERE id = $1`,
+            [foundation.orderId, handedOverAt],
+          );
+          await forceOrderLifecycleConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "order_post_confirmation_lifecycle_check",
+        },
+      );
+
+      await client.query(
+        `UPDATE shipments
+         SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [firstShipmentId, handedOverAt],
+      );
+      await client.query(
+        `UPDATE jobs
+         SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [first.jobId, handedOverAt],
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [foundation.orderPhaseId, handedOverAt],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'SHIPPED', updated_at = $2 WHERE id = $1`,
+        [foundation.orderId, handedOverAt],
+      );
+      await forceOrderLifecycleConstraints(client);
+    });
+  });
+
+  it("hands over every Job assigned to a handed-over Shipment plan", async () => {
+    await rollback("multi-job-shipment-handoff", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "multi-job-shipment-handoff",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        2,
+        [{ quantity: 2 }],
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+      ] as const) {
+        await advanceOrderLifecycleStep(client, foundation.orderId, status);
+      }
+      const first = productions[0];
+      const shipmentId = foundation.shipmentIds[0];
+      if (!first || !productions[1] || !shipmentId) {
+        throw new Error("multi-Job Shipment fixture is incomplete");
+      }
+      const handedOverAt = new Date();
+
+      await expectQueryError(
+        client,
+        "partial_plan_handoff",
+        async () => {
+          await client.query(
+            `UPDATE shipments
+             SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [shipmentId, handedOverAt],
+          );
+          await client.query(
+            `UPDATE jobs
+             SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [first.jobId, handedOverAt],
+          );
+          await client.query(
+            `UPDATE order_phases
+             SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [foundation.orderPhaseId, handedOverAt],
+          );
+          await client.query(
+            `UPDATE orders SET status = 'SHIPPED', updated_at = $2 WHERE id = $1`,
+            [foundation.orderId, handedOverAt],
+          );
+          await forceOrderLifecycleConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "order_post_confirmation_lifecycle_check",
+        },
+      );
+
+      await advanceOrderLifecycleStep(client, foundation.orderId, "SHIPPED");
+    });
+  });
+
+  it("settles exact reservation groups before completing an order", async () => {
+    await rollback("completed-reservations", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "completed-reservations",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+        "SHIPPED",
+        "DELIVERED",
+      ] as const) {
+        await advanceOrderLifecycleStep(client, foundation.orderId, status);
+      }
+
+      await expectQueryError(
+        client,
+        "complete_with_held_reservation_set",
+        async () => {
+          const completedAt = new Date();
+          await client.query(
+            `UPDATE jobs SET status = 'SETTLED', updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, completedAt],
+          );
+          await client.query(
+            `UPDATE order_phases
+             SET status = 'COMPLETED', completed_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, completedAt],
+          );
+          await client.query(
+            `UPDATE orders SET status = 'COMPLETED', updated_at = $2 WHERE id = $1`,
+            [foundation.orderId, completedAt],
+          );
+          await client.query(
+            `SET CONSTRAINTS "orders_cancelled_reservations_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "completed_order_reservation_settlement_check",
+        },
+      );
+
+      await advanceOrderLifecycleStep(client, foundation.orderId, "COMPLETED");
+      expect(
+        (
+          await client.query<{
+            capacity_status: string;
+            inventory_status: string;
+            production_status: string;
+            set_status: string;
+          }>(
+            `SELECT reservation_set.status::text AS set_status,
+                    production.status::text AS production_status,
+                    inventory_reservation.status::text AS inventory_status,
+                    capacity_reservation.status::text AS capacity_status
+             FROM phase_reservation_sets reservation_set
+             JOIN production_reservations production
+               ON production.phase_reservation_set_id = reservation_set.id
+             JOIN inventory_reservations inventory_reservation
+               ON inventory_reservation.production_reservation_id = production.id
+             JOIN capacity_reservations capacity_reservation
+               ON capacity_reservation.production_reservation_id = production.id
+             WHERE reservation_set.id = $1`,
+            [foundation.phaseReservationSetId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          set_status: "SETTLED",
+          production_status: "CONSUMED",
+          inventory_status: "CONSUMED",
+          capacity_status: "COMPLETED",
+        },
+      ]);
+    });
+  });
+
   it("requires aggregate evidence for every post-confirmation order edge", async () => {
     await rollback("order-lifecycle-evidence", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -2841,7 +3413,10 @@ describe("commerce persistence foundations", () => {
           },
           {
             code: "23514",
-            constraint: "order_post_confirmation_lifecycle_check",
+            constraint:
+              status === "COMPLETED"
+                ? "completed_order_reservation_settlement_check"
+                : "order_post_confirmation_lifecycle_check",
           },
         );
         await advanceOrderLifecycleStep(client, foundation.orderId, status);

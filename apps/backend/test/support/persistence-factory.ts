@@ -86,6 +86,7 @@ export type CommerceItem = {
   color?: string;
   geometryBounds?: GeometryBounds;
   sliceMetrics?: SliceMetrics;
+  priced?: boolean;
 };
 
 const defaultGeometryBounds: GeometryBounds = {
@@ -169,6 +170,7 @@ export class PersistenceFactory {
     const resolvedItems = items.map((item) => ({
       color: item.color ?? "red",
       geometryBounds: item.geometryBounds ?? geometryBounds,
+      priced: item.priced ?? true,
       quantity: item.quantity ?? 1,
       sliceMetrics: item.sliceMetrics ?? sliceMetrics,
     }));
@@ -540,6 +542,7 @@ export class PersistenceFactory {
     resolvedItems: Array<{
       color: string;
       geometryBounds: GeometryBounds;
+      priced: boolean;
       quantity: number;
       sliceMetrics: SliceMetrics;
     }>;
@@ -555,12 +558,16 @@ export class PersistenceFactory {
     const snapshotId = this.id(`${input.name}:price-snapshot`);
     const scheduleId = this.id(`${input.name}:payment-schedule`);
     const componentIds = this.componentIds(input.name, input.resolvedItems);
-    const componentAmounts = input.resolvedItems.map((item) => ({
-      production: 500 * item.quantity,
-      quantity: 100 * item.quantity,
-      postprocessing: 25 * item.quantity,
-      shipment: 50,
-    }));
+    const componentAmounts = input.resolvedItems.map((item) =>
+      item.priced
+        ? {
+            production: 500 * item.quantity,
+            quantity: 100 * item.quantity,
+            postprocessing: 25 * item.quantity,
+            shipment: 50,
+          }
+        : { production: 0, quantity: 0, postprocessing: 0, shipment: 0 },
+    );
     const orderMinimum = 200;
     const smallSurcharge = 100;
     const contractTotal =
@@ -769,6 +776,9 @@ export class PersistenceFactory {
         );
       }
       slotIndex += item.quantity;
+      if (!item.priced) {
+        continue;
+      }
       const productionComponentId = componentIds[itemIndex * 4]!;
       const quantityComponentId = componentIds[itemIndex * 4 + 1]!;
       const postprocessingComponentId = componentIds[itemIndex * 4 + 2]!;
