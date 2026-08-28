@@ -982,7 +982,7 @@ export class PersistenceFactory {
         foundation.phaseReservationSetId,
         foundation.nodeId,
         foundation.phaseResourcePlanId,
-        `reservation-${this.scope}`,
+        `reservation-${this.hash(foundation.phaseReservationSetId).slice(0, 48)}`,
         status,
         reservationExpiresAt,
         reservationCreatedAt,

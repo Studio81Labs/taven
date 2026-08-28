@@ -1001,13 +1001,33 @@ CREATE FUNCTION taven_protect_order_item_mutation()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    target_order_id uuid := CASE WHEN TG_OP = 'INSERT' THEN NEW."order_id" ELSE OLD."order_id" END;
+    target_order_status "order_status";
 BEGIN
-    IF NOT EXISTS (
+    SELECT "status" INTO target_order_status
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    IF TG_OP = 'INSERT' THEN
+        IF target_order_status IS DISTINCT FROM 'DRAFT'::"order_status" THEN
+            RAISE EXCEPTION 'order items can be inserted only while the order is draft'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_item_mutability_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'UPDATE' AND NEW."order_id" IS DISTINCT FROM OLD."order_id" THEN
+        RAISE EXCEPTION 'order items cannot be moved between orders'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_item_mutability_check';
+    END IF;
+
+    IF target_order_status IS DISTINCT FROM 'DRAFT'::"order_status" OR NOT EXISTS (
         SELECT 1
-        FROM "orders" target_order
-        JOIN "automatic_order_origins" origin ON origin."order_id" = target_order."id"
-        WHERE target_order."id" = OLD."order_id"
-          AND target_order."status" = 'DRAFT'
+        FROM "automatic_order_origins" origin
+        WHERE origin."order_id" = target_order_id
     ) THEN
         RAISE EXCEPTION 'order items are mutable only on automatic draft orders'
             USING ERRCODE = '23514', CONSTRAINT = 'order_item_mutability_check';
@@ -1022,7 +1042,7 @@ END;
 $$;
 
 CREATE TRIGGER "order_items_draft_mutability"
-BEFORE UPDATE OR DELETE ON "order_items"
+BEFORE INSERT OR UPDATE OR DELETE ON "order_items"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_order_item_mutation();
 
 CREATE FUNCTION taven_validate_order_price_binding()
@@ -1551,7 +1571,37 @@ CREATE FUNCTION taven_hold_confirmed_order_sources()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    terminal_at timestamptz := clock_timestamp();
+    old_is_terminal boolean;
+    new_is_terminal boolean;
 BEGIN
+    old_is_terminal := OLD."status" IN ('COMPLETED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED')
+        OR (
+            OLD."status" = 'CANCELLED'
+            AND NOT EXISTS (
+                SELECT 1
+                FROM "payments" payment
+                WHERE payment."order_id" = OLD."id"
+                  AND coalesce(payment."captured_amount_minor", 0) > 0
+            )
+        );
+    new_is_terminal := NEW."status" IN ('COMPLETED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED')
+        OR (
+            NEW."status" = 'CANCELLED'
+            AND NOT EXISTS (
+                SELECT 1
+                FROM "payments" payment
+                WHERE payment."order_id" = NEW."id"
+                  AND coalesce(payment."captured_amount_minor", 0) > 0
+            )
+        );
+
+    IF old_is_terminal AND NOT new_is_terminal THEN
+        RAISE EXCEPTION 'terminal orders cannot return to an active status'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_terminal_status_check';
+    END IF;
+
     IF OLD."status" IN ('DRAFT', 'QUOTED')
        AND NEW."status" NOT IN ('DRAFT', 'QUOTED') THEN
         UPDATE "model_files" source
@@ -1559,6 +1609,53 @@ BEGIN
             WHEN source."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL') THEN source."retention_hold"
             ELSE 'ACTIVE_ORDER'::"retention_hold"
         END
+        FROM "order_items" item
+        WHERE item."order_id" = NEW."id"
+          AND source."id" = item."source_model_file_id";
+    END IF;
+
+    IF NOT old_is_terminal AND new_is_terminal THEN
+        PERFORM 1
+        FROM "model_files" source
+        WHERE source."id" IN (
+            SELECT item."source_model_file_id"
+            FROM "order_items" item
+            WHERE item."order_id" = NEW."id"
+        )
+        ORDER BY source."id"
+        FOR UPDATE;
+
+        UPDATE "model_files" source
+        SET "source_delete_after" = greatest(
+                source."source_delete_after",
+                terminal_at + make_interval(days => source."source_retention_days")
+            ),
+            "retention_hold" = CASE
+                WHEN source."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL') THEN source."retention_hold"
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM "order_items" other_item
+                    JOIN "orders" other_order ON other_order."id" = other_item."order_id"
+                    WHERE other_item."source_model_file_id" = source."id"
+                      AND other_order."id" <> NEW."id"
+                      AND (
+                          other_order."status" IN (
+                              'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
+                              'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'
+                          )
+                          OR (
+                              other_order."status" = 'CANCELLED'
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM "payments" other_payment
+                                  WHERE other_payment."order_id" = other_order."id"
+                                    AND coalesce(other_payment."captured_amount_minor", 0) > 0
+                              )
+                          )
+                      )
+                ) THEN 'ACTIVE_ORDER'::"retention_hold"
+                ELSE 'NONE'::"retention_hold"
+            END
         FROM "order_items" item
         WHERE item."order_id" = NEW."id"
           AND source."id" = item."source_model_file_id";
@@ -1852,6 +1949,62 @@ $$;
 CREATE TRIGGER "payments_require_fulfilment_topology"
 BEFORE INSERT ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_require_payment_fulfilment_topology();
+
+CREATE FUNCTION taven_protect_payment_identity()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'payment transactions are append-only financial history'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_identity_immutable_check';
+    END IF;
+
+    IF NEW."id" IS DISTINCT FROM OLD."id"
+       OR NEW."order_id" IS DISTINCT FROM OLD."order_id"
+       OR NEW."price_snapshot_id" IS DISTINCT FROM OLD."price_snapshot_id"
+       OR NEW."order_price_binding_id" IS DISTINCT FROM OLD."order_price_binding_id"
+       OR NEW."payment_schedule_id" IS DISTINCT FROM OLD."payment_schedule_id"
+       OR NEW."role" IS DISTINCT FROM OLD."role"
+       OR NEW."provider" IS DISTINCT FROM OLD."provider"
+       OR NEW."requested_amount_minor" IS DISTINCT FROM OLD."requested_amount_minor"
+       OR NEW."currency" IS DISTINCT FROM OLD."currency"
+       OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
+       OR (
+           OLD."captured_amount_minor" IS NOT NULL
+           AND NEW."captured_amount_minor" IS DISTINCT FROM OLD."captured_amount_minor"
+       )
+       OR (
+           OLD."captured_at" IS NOT NULL
+           AND NEW."captured_at" IS DISTINCT FROM OLD."captured_at"
+       )
+       OR (
+           NOT OLD."capture_authorized"
+           AND NEW."capture_authorized"
+       )
+       OR (
+           OLD."capture_cutoff_at" IS NOT NULL
+           AND NEW."capture_cutoff_at" IS DISTINCT FROM OLD."capture_cutoff_at"
+       )
+       OR (
+           OLD."provider_intent_id" IS NOT NULL
+           AND NEW."provider_intent_id" IS DISTINCT FROM OLD."provider_intent_id"
+       )
+       OR (
+           OLD."provider_capture_id" IS NOT NULL
+           AND NEW."provider_capture_id" IS DISTINCT FROM OLD."provider_capture_id"
+       ) THEN
+        RAISE EXCEPTION 'payment financial identity is immutable after assignment'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_identity_immutable_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "payments_identity_protected"
+BEFORE UPDATE OR DELETE ON "payments"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_identity();
 
 CREATE FUNCTION taven_validate_payment_capture_against_refunds()
 RETURNS trigger

@@ -65,7 +65,7 @@ async function createCurrentPlanAndPayment(
     const endsAt = new Date(startsAt.getTime() + 60 * 60 * 1_000);
     const production = await fixtures.planProduction(
       foundation,
-      `payment-plan-${index}`,
+      `payment-plan-${foundation.orderId}-${index}`,
       { startsAt, endsAt },
       60,
       60,
@@ -103,7 +103,7 @@ async function createCurrentPlanAndPayment(
                                          starts_at, ends_at, expires_at, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
       [
-        fixtures.id(`payment-capacity-${index}`),
+        fixtures.id(`payment-capacity-${foundation.orderId}-${index}`),
         foundation.nodeId,
         production.productionReservationId,
         production.candidateCapacityIntervalId,
@@ -344,6 +344,26 @@ describe("commerce persistence foundations", () => {
   it("reconciles immutable price components and freezes automatic commerce after payment intent creation", async () => {
     await rollback("immutable-pricing", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation("immutable-pricing");
+      await expectQueryError(
+        client,
+        "quoted_order_item_insert",
+        () =>
+          client.query(
+            `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,
+                                     model_geometry_id, print_config_revision_id,
+                                     material, color, quantity, created_at)
+             VALUES ($1,$2,99,$3,$4,$5,'PLA','green',1,$6)`,
+            [
+              fixtures.id("late-order-item"),
+              foundation.orderId,
+              foundation.modelFileId,
+              foundation.modelGeometryId,
+              foundation.printConfigRevisionId,
+              new Date(),
+            ],
+          ),
+        { code: "23514", constraint: "order_item_mutability_check" },
+      );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
       expect(
         (
@@ -495,12 +515,17 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514" },
       );
-      const payment = await client.query<{ requested_amount_minor: string }>(
-        `SELECT requested_amount_minor::text FROM payments WHERE id = $1`,
+      const payment = await client.query<{
+        provider_intent_id: string;
+        requested_amount_minor: string;
+      }>(
+        `SELECT provider_intent_id, requested_amount_minor::text
+         FROM payments WHERE id = $1`,
         [foundation.paymentId],
       );
       const capturedAmount = payment.rows[0]?.requested_amount_minor;
-      if (!capturedAmount) {
+      const providerIntentId = payment.rows[0]?.provider_intent_id;
+      if (!capturedAmount || !providerIntentId) {
         throw new Error("fixture payment is missing");
       }
       await client.query(
@@ -543,9 +568,73 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514", constraint: "refund_captured_payment_check" },
       );
+      await expectQueryError(
+        client,
+        "mutate_provider_intent",
+        () =>
+          client.query(
+            `UPDATE payments SET provider_intent_id = $2 WHERE id = $1`,
+            [foundation.paymentId, "replacement-provider-intent"],
+          ),
+        { code: "23514", constraint: "payment_identity_immutable_check" },
+      );
+      await expectQueryError(
+        client,
+        "mutate_provider_capture",
+        () =>
+          client.query(
+            `UPDATE payments SET provider_capture_id = $2 WHERE id = $1`,
+            [foundation.paymentId, "replacement-provider-capture"],
+          ),
+        { code: "23514", constraint: "payment_identity_immutable_check" },
+      );
+      await expectQueryError(
+        client,
+        "rewrite_captured_at",
+        () =>
+          client.query(
+            `UPDATE payments
+             SET captured_at = captured_at + interval '1 second'
+             WHERE id = $1`,
+            [foundation.paymentId],
+          ),
+        { code: "23514", constraint: "payment_identity_immutable_check" },
+      );
       await client.query(
-        `UPDATE payments SET provider_intent_id = $2 WHERE id = $1`,
-        [foundation.paymentId, "duplicate-provider-intent"],
+        `UPDATE payments
+         SET capture_authorized = false, capture_cutoff_at = $2
+         WHERE id = $1`,
+        [foundation.paymentId, new Date()],
+      );
+      await expectQueryError(
+        client,
+        "reopen_capture_window",
+        () =>
+          client.query(
+            `UPDATE payments SET capture_authorized = true WHERE id = $1`,
+            [foundation.paymentId],
+          ),
+        { code: "23514", constraint: "payment_identity_immutable_check" },
+      );
+      await expectQueryError(
+        client,
+        "mutate_payment_contract",
+        () =>
+          client.query(
+            `UPDATE payments SET requested_amount_minor = requested_amount_minor - 1
+             WHERE id = $1`,
+            [foundation.paymentId],
+          ),
+        { code: "23514", constraint: "payment_identity_immutable_check" },
+      );
+      await expectQueryError(
+        client,
+        "delete_payment",
+        () =>
+          client.query(`DELETE FROM payments WHERE id = $1`, [
+            foundation.paymentId,
+          ]),
+        { code: "23514", constraint: "payment_identity_immutable_check" },
       );
       await expectQueryError(
         client,
@@ -562,13 +651,133 @@ describe("commerce persistence foundations", () => {
               foundation.priceSnapshotId,
               foundation.orderPriceBindingId,
               foundation.paymentScheduleId,
-              "duplicate-provider-intent",
+              providerIntentId,
               capturedAmount,
               new Date(),
             ],
           ),
         { code: "23505" },
       );
+    });
+  });
+
+  it("releases terminal order source holds without clearing financial or legal blockers", async () => {
+    await rollback("terminal-source-retention", async (client, fixtures) => {
+      const completed = await fixtures.createFoundation("completed-order", {
+        deleteAfter: testTimes.capacityEnd,
+        quoteExpiresAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000),
+      });
+      await createCurrentPlanAndPayment(client, fixtures, completed);
+      await client.query(
+        `UPDATE orders SET status = 'CONFIRMED', confirmed_at = $2 WHERE id = $1`,
+        [completed.orderId, new Date()],
+      );
+      expect(
+        (
+          await client.query<{ retention_hold: string }>(
+            `SELECT retention_hold::text FROM model_files WHERE id = $1`,
+            [completed.modelFileId],
+          )
+        ).rows,
+      ).toEqual([{ retention_hold: "ACTIVE_ORDER" }]);
+      const completedAt = new Date();
+      await client.query(
+        `UPDATE orders SET status = 'COMPLETED' WHERE id = $1`,
+        [completed.orderId],
+      );
+      const releasedSource = await client.query<{
+        retention_hold: string;
+        source_delete_after: Date;
+      }>(
+        `SELECT retention_hold::text, source_delete_after
+         FROM model_files WHERE id = $1`,
+        [completed.modelFileId],
+      );
+      expect(releasedSource.rows[0]?.retention_hold).toBe("NONE");
+      expect(
+        releasedSource.rows[0]?.source_delete_after.getTime(),
+      ).toBeGreaterThanOrEqual(
+        completedAt.getTime() + 90 * 24 * 60 * 60 * 1_000,
+      );
+      await expectQueryError(
+        client,
+        "reopen_terminal_order",
+        () =>
+          client.query(`UPDATE orders SET status = 'CONFIRMED' WHERE id = $1`, [
+            completed.orderId,
+          ]),
+        { code: "23514", constraint: "order_terminal_status_check" },
+      );
+
+      const captured = await fixtures.createFoundation("captured-cancelled");
+      await createCurrentPlanAndPayment(client, fixtures, captured);
+      const capturedAmount = (
+        await client.query<{ requested_amount_minor: string }>(
+          `SELECT requested_amount_minor::text FROM payments WHERE id = $1`,
+          [captured.paymentId],
+        )
+      ).rows[0]?.requested_amount_minor;
+      if (!capturedAmount) {
+        throw new Error("captured retention fixture payment is missing");
+      }
+      await client.query(
+        `UPDATE payments
+         SET status = 'CAPTURED', captured_amount_minor = $2,
+             provider_capture_id = $3, captured_at = $4
+         WHERE id = $1`,
+        [captured.paymentId, capturedAmount, "retention-capture", new Date()],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'CONFIRMED', confirmed_at = $2 WHERE id = $1`,
+        [captured.orderId, new Date()],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'CANCELLED' WHERE id = $1`,
+        [captured.orderId],
+      );
+      expect(
+        (
+          await client.query<{ retention_hold: string }>(
+            `SELECT retention_hold::text FROM model_files WHERE id = $1`,
+            [captured.modelFileId],
+          )
+        ).rows,
+      ).toEqual([{ retention_hold: "ACTIVE_ORDER" }]);
+      await client.query(
+        `UPDATE orders SET status = 'REFUNDED' WHERE id = $1`,
+        [captured.orderId],
+      );
+      expect(
+        (
+          await client.query<{ retention_hold: string }>(
+            `SELECT retention_hold::text FROM model_files WHERE id = $1`,
+            [captured.modelFileId],
+          )
+        ).rows,
+      ).toEqual([{ retention_hold: "NONE" }]);
+
+      const legal = await fixtures.createFoundation("legal-order");
+      await createCurrentPlanAndPayment(client, fixtures, legal);
+      await client.query(
+        `UPDATE orders SET status = 'CONFIRMED', confirmed_at = $2 WHERE id = $1`,
+        [legal.orderId, new Date()],
+      );
+      await client.query(
+        `UPDATE model_files SET retention_hold = 'LEGAL' WHERE id = $1`,
+        [legal.modelFileId],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'COMPLETED' WHERE id = $1`,
+        [legal.orderId],
+      );
+      expect(
+        (
+          await client.query<{ retention_hold: string }>(
+            `SELECT retention_hold::text FROM model_files WHERE id = $1`,
+            [legal.modelFileId],
+          )
+        ).rows,
+      ).toEqual([{ retention_hold: "LEGAL" }]);
     });
   });
 
