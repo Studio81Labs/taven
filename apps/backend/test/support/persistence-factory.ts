@@ -202,6 +202,8 @@ export class PersistenceFactory {
     const inventoryId = this.id(`${name}:inventory`);
     const modelFileId = this.id(`${name}:model-file`);
     let referenceProfileId = this.id(`${name}:reference-profile`);
+    let referenceSlicerEngine: string;
+    let referenceSlicerVersion: string;
     const machineProfileId = this.id(`${name}:machine-profile`);
     const machineCalibrationId = this.id(`${name}:machine-calibration`);
     const eligibilitySnapshotId = this.id(`${name}:eligibility-snapshot`);
@@ -350,12 +352,18 @@ export class PersistenceFactory {
         sourceRetention.hold ?? "NONE",
       ],
     );
-    const activeReferenceProfile = await this.sql.query<{ id: string }>(
-      'SELECT "id" FROM "reference_profiles" WHERE "material" = $1 AND "quality" = $2 AND "state" = $3',
+    const activeReferenceProfile = await this.sql.query<{
+      id: string;
+      slicer_engine: string;
+      slicer_version: string;
+    }>(
+      'SELECT "id", "slicer_engine", "slicer_version" FROM "reference_profiles" WHERE "material" = $1 AND "quality" = $2 AND "state" = $3',
       ["PLA", "STANDARD", "ACTIVE"],
     );
     if (activeReferenceProfile.rows[0]) {
       referenceProfileId = activeReferenceProfile.rows[0].id;
+      referenceSlicerEngine = activeReferenceProfile.rows[0].slicer_engine;
+      referenceSlicerVersion = activeReferenceProfile.rows[0].slicer_version;
     } else {
       const candidateReferenceProfileId = referenceProfileId;
       await this.createRevisionIdentity(
@@ -375,14 +383,20 @@ export class PersistenceFactory {
           createdAt,
         ],
       );
-      const resolvedReferenceProfile = await this.sql.query<{ id: string }>(
-        'SELECT "id" FROM "reference_profiles" WHERE "material" = $1 AND "quality" = $2 AND "state" = $3',
+      const resolvedReferenceProfile = await this.sql.query<{
+        id: string;
+        slicer_engine: string;
+        slicer_version: string;
+      }>(
+        'SELECT "id", "slicer_engine", "slicer_version" FROM "reference_profiles" WHERE "material" = $1 AND "quality" = $2 AND "state" = $3',
         ["PLA", "STANDARD", "ACTIVE"],
       );
       if (!resolvedReferenceProfile.rows[0]) {
         throw new Error("an active PLA/STANDARD reference profile is required");
       }
       referenceProfileId = resolvedReferenceProfile.rows[0].id;
+      referenceSlicerEngine = resolvedReferenceProfile.rows[0].slicer_engine;
+      referenceSlicerVersion = resolvedReferenceProfile.rows[0].slicer_version;
     }
     await this.createRevisionIdentity(machineProfileId, "MACHINE_PROFILE");
     await this.sql.query(
@@ -464,8 +478,8 @@ export class PersistenceFactory {
           this.hash(`${name}:reference-slice:${index}`),
           item.sliceMetrics.estimatedPrintSeconds,
           item.sliceMetrics.estimatedMaterialMilligrams,
-          "orca",
-          "test",
+          referenceSlicerEngine,
+          referenceSlicerVersion,
         ],
       );
       await this.sql.query(
