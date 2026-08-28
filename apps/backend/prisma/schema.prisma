@@ -1454,6 +1454,8 @@ model Job {
   phaseResourcePlanJobId  String                 @map("phase_resource_plan_job_id") @db.Uuid
   status                  JobStatus              @default(CREATED)
   acceptedAt              DateTime?              @map("accepted_at") @db.Timestamptz(3)
+  payoutAmount            BigInt?                @map("payout_amount")
+  payoutCurrency          String?                @map("payout_currency") @db.Char(3)
   gcodeReadyAt            DateTime?              @map("gcode_ready_at") @db.Timestamptz(3)
   productionSliceResultId String?                @map("production_slice_result_id") @db.Uuid
   productionArtifactHash  String?                @map("production_artifact_hash") @db.VarChar(64)

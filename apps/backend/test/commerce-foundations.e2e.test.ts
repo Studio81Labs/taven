@@ -261,6 +261,7 @@ async function forceOrderLifecycleConstraints(
        "orders_cancelled_reservations_reconciled",
        "phase_reservation_sets_cancelled_order_reconciled",
        "orders_quoted_cancellation_payments_reconciled",
+       "payments_quoted_void_closure_reconciled",
        "orders_customer_cancellation_refund_reconciled",
        "payments_customer_cancellation_refund_reconciled",
        "refunds_customer_cancellation_order_reconciled",
@@ -286,6 +287,7 @@ async function forceOrderLifecycleConstraints(
        "orders_cancelled_reservations_reconciled",
        "phase_reservation_sets_cancelled_order_reconciled",
        "orders_quoted_cancellation_payments_reconciled",
+       "payments_quoted_void_closure_reconciled",
        "orders_customer_cancellation_refund_reconciled",
        "payments_customer_cancellation_refund_reconciled",
        "refunds_customer_cancellation_order_reconciled",
@@ -390,7 +392,8 @@ async function advanceOrderLifecycleStep(
     );
     await client.query(
       `UPDATE jobs
-       SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+       SET status = 'ACCEPTED', accepted_at = $2,
+           payout_amount = 0, payout_currency = 'EUR', updated_at = $2
        WHERE order_id = $1`,
       [orderId, transitionedAt],
     );
@@ -1420,6 +1423,26 @@ describe("commerce persistence foundations", () => {
       );
 
       const foundation = await fixtures.createFoundation("immutable-pricing");
+      const insertLateShipmentPlan = (id: string) =>
+        client.query(
+          `INSERT INTO shipment_plans (id, order_id, order_phase_id,
+                                      price_snapshot_id, order_price_binding_id,
+                                      delivery_destination_id, ordinal, category,
+                                      planned_volume_cubic_mm,
+                                      planned_weight_milligrams,
+                                      shipping_amount_minor, packaging_amount_minor,
+                                      handling_amount_minor, allocation_snapshot, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,99,'standard',1,1,0,0,0,'{}'::jsonb,$7)`,
+          [
+            id,
+            foundation.orderId,
+            foundation.orderPhaseId,
+            foundation.priceSnapshotId,
+            foundation.orderPriceBindingId,
+            foundation.deliveryDestinationId,
+            new Date(),
+          ],
+        );
       await expectQueryError(
         client,
         "quoted_order_item_insert",
@@ -1464,6 +1487,12 @@ describe("commerce persistence foundations", () => {
           code: "23514",
           constraint: "fulfilment_slot_topology_immutable_check",
         },
+      );
+      await expectQueryError(
+        client,
+        "quoted_shipment_plan_insert",
+        () => insertLateShipmentPlan(fixtures.id("late-quoted-shipment-plan")),
+        { code: "23514", constraint: "shipment_plan_order_status_guard" },
       );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
       await forceQuoteIssuanceConstraints(client);
@@ -1532,26 +1561,7 @@ describe("commerce persistence foundations", () => {
       await expectQueryError(
         client,
         "paid_shipment_plan_insert",
-        () =>
-          client.query(
-            `INSERT INTO shipment_plans (id, order_id, order_phase_id,
-                                        price_snapshot_id, order_price_binding_id,
-                                        delivery_destination_id, ordinal, category,
-                                        planned_volume_cubic_mm,
-                                        planned_weight_milligrams,
-                                        shipping_amount_minor, packaging_amount_minor,
-                                        handling_amount_minor, allocation_snapshot, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,99,'standard',1,1,0,0,0,'{}'::jsonb,$7)`,
-            [
-              fixtures.id("late-paid-shipment-plan"),
-              foundation.orderId,
-              foundation.orderPhaseId,
-              foundation.priceSnapshotId,
-              foundation.orderPriceBindingId,
-              foundation.deliveryDestinationId,
-              new Date(),
-            ],
-          ),
+        () => insertLateShipmentPlan(fixtures.id("late-paid-shipment-plan")),
         { code: "23514", constraint: "shipment_plan_payment_guard" },
       );
       await expectQueryError(
@@ -2588,6 +2598,27 @@ describe("commerce persistence foundations", () => {
 
       await expectQueryError(
         client,
+        "void_pending_payment_without_order_closure",
+        async () => {
+          await client.query(
+            `UPDATE payments
+             SET status = 'VOIDED', capture_authorized = false,
+                 capture_cutoff_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [foundation.paymentId, new Date()],
+          );
+          await client.query(
+            `SET CONSTRAINTS "payments_quoted_void_closure_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "quoted_payment_void_closure_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
         "cancel_with_open_payment",
         () => cancelOrderBeforeHandoff(client, foundation.orderId, false),
         {
@@ -2970,7 +3001,8 @@ describe("commerce persistence foundations", () => {
         );
         await client.query(
           `UPDATE jobs
-         SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+         SET status = 'ACCEPTED', accepted_at = $2,
+             payout_amount = 0, payout_currency = 'EUR', updated_at = $2
          WHERE id = $1`,
           [jobId, failedAt],
         );
@@ -3421,27 +3453,6 @@ describe("commerce persistence foundations", () => {
       await expect(
         insertRetry(retryPaymentId, "failed-provider-intent-retry"),
       ).resolves.toBeDefined();
-
-      await client.query(
-        `UPDATE payments
-         SET status = 'VOIDED', capture_authorized = false,
-             capture_cutoff_at = $2
-         WHERE id = $1`,
-        [retryPaymentId, new Date()],
-      );
-      await expectQueryError(
-        client,
-        "voided_payment_schedule_attempt",
-        () =>
-          insertRetry(
-            fixtures.id("voided-payment-retry"),
-            "voided-provider-intent-retry",
-          ),
-        {
-          code: "23505",
-          constraint: "payments_one_nonfailed_attempt_per_schedule_key",
-        },
-      );
     });
   });
 
@@ -3485,12 +3496,25 @@ describe("commerce persistence foundations", () => {
           constraint: "payments_provider_intent_identity_check",
         },
       );
-      await client.query(
-        `UPDATE payments
-         SET status = 'VOIDED', capture_authorized = false,
-             capture_cutoff_at = $2, updated_at = $2
-         WHERE id = $1`,
-        [createdFoundation.paymentId, new Date()],
+      await expectQueryError(
+        client,
+        "void_created_payment_without_order_closure",
+        async () => {
+          await client.query(
+            `UPDATE payments
+             SET status = 'VOIDED', capture_authorized = false,
+                 capture_cutoff_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [createdFoundation.paymentId, new Date()],
+          );
+          await client.query(
+            `SET CONSTRAINTS "payments_quoted_void_closure_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "quoted_payment_void_closure_check",
+        },
       );
 
       const pendingFoundation = await fixtures.createFoundation(
@@ -4354,7 +4378,8 @@ describe("commerce persistence foundations", () => {
           const printingAt = new Date();
           await client.query(
             `UPDATE jobs
-             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             SET status = 'ACCEPTED', accepted_at = $2,
+                 payout_amount = 0, payout_currency = 'EUR', updated_at = $2
              WHERE order_id = $1`,
             [foundation.orderId, printingAt],
           );
@@ -4570,7 +4595,8 @@ describe("commerce persistence foundations", () => {
       const printingAt = new Date();
       await startReservationGroup(first);
       await client.query(
-        `UPDATE jobs SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+        `UPDATE jobs SET status = 'ACCEPTED', accepted_at = $2,
+                         payout_amount = 0, payout_currency = 'EUR', updated_at = $2
          WHERE id = $1`,
         [first.jobId, printingAt],
       );
@@ -4598,7 +4624,8 @@ describe("commerce persistence foundations", () => {
         async () => {
           await client.query(
             `UPDATE jobs
-             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             SET status = 'ACCEPTED', accepted_at = $2,
+                 payout_amount = 0, payout_currency = 'EUR', updated_at = $2
              WHERE id = $1`,
             [second.jobId, printingAt],
           );
@@ -4667,7 +4694,8 @@ describe("commerce persistence foundations", () => {
           await completeReservationGroup(second);
           await client.query(
             `UPDATE jobs
-             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             SET status = 'ACCEPTED', accepted_at = $2,
+                 payout_amount = 0, payout_currency = 'EUR', updated_at = $2
              WHERE id = $1`,
             [second.jobId, printingAt],
           );
@@ -4719,7 +4747,8 @@ describe("commerce persistence foundations", () => {
 
       await startReservationGroup(second);
       await client.query(
-        `UPDATE jobs SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+        `UPDATE jobs SET status = 'ACCEPTED', accepted_at = $2,
+                         payout_amount = 0, payout_currency = 'EUR', updated_at = $2
          WHERE id = $1`,
         [second.jobId, printingAt],
       );
@@ -5334,12 +5363,38 @@ describe("commerce persistence foundations", () => {
       );
       await expectQueryError(
         client,
+        "accept_job_without_payout_snapshot",
+        () =>
+          client.query(
+            `UPDATE jobs
+             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, new Date()],
+          ),
+        { code: "23514", constraint: "job_lifecycle_evidence_check" },
+      );
+      await expectQueryError(
+        client,
+        "accept_job_with_invalid_payout_snapshot",
+        () =>
+          client.query(
+            `UPDATE jobs
+             SET status = 'ACCEPTED', accepted_at = $2,
+                 payout_amount = -1, payout_currency = 'eur', updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, new Date()],
+          ),
+        { code: "23514", constraint: "jobs_payout_acceptance_check" },
+      );
+      await expectQueryError(
+        client,
         "skip_gcode_ready",
         async () => {
           const transitionedAt = new Date();
           await client.query(
             `UPDATE jobs
-             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             SET status = 'ACCEPTED', accepted_at = $2,
+                 payout_amount = 0, payout_currency = 'EUR', updated_at = $2
              WHERE order_id = $1`,
             [foundation.orderId, transitionedAt],
           );
@@ -5359,7 +5414,8 @@ describe("commerce persistence foundations", () => {
           const transitionedAt = new Date();
           await client.query(
             `UPDATE jobs
-             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             SET status = 'ACCEPTED', accepted_at = $2,
+                 payout_amount = 0, payout_currency = 'EUR', updated_at = $2
              WHERE order_id = $1`,
             [foundation.orderId, transitionedAt],
           );
@@ -5423,7 +5479,8 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `UPDATE jobs
-             SET status = 'ACCEPTED', accepted_at = $2, printing_at = $2,
+             SET status = 'ACCEPTED', accepted_at = $2,
+                 payout_amount = 0, payout_currency = 'EUR', printing_at = $2,
                  qc_approved_at = $2, packed_at = $2, handed_over_at = $2
              WHERE order_id = $1`,
             [foundation.orderId, prematureEvidenceAt],
@@ -5473,6 +5530,28 @@ describe("commerce persistence foundations", () => {
         );
         await advanceOrderLifecycleStep(client, foundation.orderId, status);
         if (status === "IN_PRODUCTION") {
+          expect(
+            (
+              await client.query<{
+                payout_amount: string;
+                payout_currency: string;
+              }>(
+                `SELECT payout_amount::text, payout_currency
+                 FROM jobs WHERE order_id = $1`,
+                [foundation.orderId],
+              )
+            ).rows,
+          ).toEqual([{ payout_amount: "0", payout_currency: "EUR" }]);
+          await expectQueryError(
+            client,
+            "mutate_accepted_job_payout",
+            () =>
+              client.query(
+                `UPDATE jobs SET payout_amount = 1 WHERE order_id = $1`,
+                [foundation.orderId],
+              ),
+            { code: "23514", constraint: "job_lifecycle_immutable_check" },
+          );
           await expectQueryError(
             client,
             "deliver_while_order_in_production",
@@ -7339,10 +7418,13 @@ describe("commerce persistence foundations", () => {
           issuedAt: Date,
           expiresAt: Date,
           snapshotHash: string,
+          includeItem = true,
         ): Promise<string> => {
           const requestId = fixtures.id(`${name}:request`);
           const quoteId = fixtures.id(`${name}:quote`);
+          const quoteItemId = fixtures.id(`${name}:item`);
           const snapshotId = fixtures.id(`${name}:snapshot`);
+          const contractTotal = includeItem ? 0 : 1;
           await client.query(
             `INSERT INTO quote_requests
              (id, customer_id, status, created_at, updated_at)
@@ -7356,29 +7438,104 @@ describe("commerce persistence foundations", () => {
            VALUES ($1,$2,$3,$4,$5,$5)`,
             [quoteId, requestId, foundation.customerId, expiresAt, issuedAt],
           );
+          if (includeItem) {
+            await client.query(
+              `INSERT INTO quote_items
+                 (id, quote_id, ordinal, source_model_file_id,
+                  model_geometry_id, print_config_revision_id, material,
+                  color, quantity, created_at)
+               VALUES ($1,$2,0,$3,$4,$5,'PLA','black',1,$6)`,
+              [
+                quoteItemId,
+                quoteId,
+                foundation.modelFileId,
+                foundation.modelGeometryId,
+                foundation.printConfigRevisionId,
+                issuedAt,
+              ],
+            );
+          }
           await client.query(
             `INSERT INTO price_snapshots
              (id, currency, contract_total_minor, pricing_revision,
               input_snapshot, snapshot_hash, created_at)
-           VALUES ($1,'EUR',0,'offer-v0','{}'::jsonb,$2,$3)`,
-            [snapshotId, snapshotHash, issuedAt],
+           VALUES ($1,'EUR',$2,'offer-v0','{}'::jsonb,$3,$4)`,
+            [snapshotId, contractTotal, snapshotHash, issuedAt],
           );
+          await client.query(
+            `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id)
+             VALUES ($1,$2)`,
+            [quoteId, snapshotId],
+          );
+          if (includeItem) {
+            await client.query(
+              `INSERT INTO price_snapshot_components
+                 (id, price_snapshot_id, kind, scope, quote_item_id,
+                  amount_minor, allocation, created_at)
+               VALUES
+                 ($1,$2,'ITEM_PRODUCTION','QUOTE_ITEM',$3,0,'{}'::jsonb,$4),
+                 ($5,$2,'ITEM_QUANTITY','QUOTE_ITEM',$3,0,'{}'::jsonb,$4),
+                 ($6,$2,'ITEM_POSTPROCESSING','QUOTE_ITEM',$3,0,'{}'::jsonb,$4)`,
+              [
+                fixtures.id(`${name}:production-component`),
+                snapshotId,
+                quoteItemId,
+                issuedAt,
+                fixtures.id(`${name}:quantity-component`),
+                fixtures.id(`${name}:postprocessing-component`),
+              ],
+            );
+          } else {
+            await client.query(
+              `INSERT INTO price_snapshot_components
+                 (id, price_snapshot_id, kind, scope, amount_minor,
+                  allocation, created_at)
+               VALUES ($1,$2,'ORDER_MIN_PRINT','ORDER',$3,'{}'::jsonb,$4)`,
+              [
+                fixtures.id(`${name}:order-component`),
+                snapshotId,
+                contractTotal,
+                issuedAt,
+              ],
+            );
+          }
           await client.query(
             `INSERT INTO payment_schedules
              (id, price_snapshot_id, sequence, role, gross_amount_minor,
               fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
-           VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
-            [fixtures.id(`${name}:schedule`), snapshotId, issuedAt],
-          );
-          await client.query(
-            `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id)
-           VALUES ($1,$2)`,
-            [quoteId, snapshotId],
+           VALUES ($1,$2,0,'FULL',$3,0,0,'{}'::jsonb,$4)`,
+            [
+              fixtures.id(`${name}:schedule`),
+              snapshotId,
+              contractTotal,
+              issuedAt,
+            ],
           );
           return requestId;
         };
 
         const now = new Date();
+        const itemlessRequestId = await createPricedOffer(
+          "itemless-offer",
+          now,
+          new Date(now.getTime() + 60 * 60 * 1_000),
+          "4".repeat(64),
+          false,
+        );
+        await expectQueryError(
+          client,
+          "accept_itemless_offer",
+          () =>
+            client.query(
+              `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
+               WHERE id = $1`,
+              [itemlessRequestId, now],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_price_binding_acceptance_check",
+          },
+        );
         const closedIssuedAt = new Date(now.getTime() - 2 * 60 * 60 * 1_000);
         const closedRequestId = await createPricedOffer(
           "closed-offer",

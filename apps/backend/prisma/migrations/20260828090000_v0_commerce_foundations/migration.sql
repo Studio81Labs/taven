@@ -340,6 +340,8 @@ CREATE TABLE "jobs" (
     "phase_resource_plan_job_id" UUID NOT NULL,
     "status" "job_status" NOT NULL DEFAULT 'CREATED',
     "accepted_at" TIMESTAMPTZ(3),
+    "payout_amount" BIGINT,
+    "payout_currency" CHAR(3),
     "gcode_ready_at" TIMESTAMPTZ(3),
     "production_slice_result_id" UUID,
     "production_artifact_hash" VARCHAR(64),
@@ -671,6 +673,16 @@ ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (
     AND ("cancelled_at" IS NULL OR "cancelled_at" >= "created_at")
     AND ("production_artifact_hash" IS NULL OR "production_artifact_hash" ~ '^[0-9a-f]{64}$')
     AND ("failure_reason" IS NULL OR "failure_reason" ~ '[^[:space:]]')
+);
+ALTER TABLE "jobs" ADD CONSTRAINT "jobs_payout_acceptance_check" CHECK (
+    ("accepted_at" IS NULL AND "payout_amount" IS NULL AND "payout_currency" IS NULL)
+    OR (
+        "accepted_at" IS NOT NULL
+        AND "payout_amount" IS NOT NULL
+        AND "payout_amount" >= 0
+        AND "payout_currency" IS NOT NULL
+        AND "payout_currency" ~ '^[A-Z]{3}$'
+    )
 );
 ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_identity_check" CHECK (
@@ -1522,6 +1534,11 @@ BEGIN
                  WHERE schedule."price_snapshot_id" = snapshot."id"
                    AND schedule."role" = 'FULL'
              ) = snapshot."contract_total_minor"
+             AND EXISTS (
+                 SELECT 1
+                 FROM "quote_items" quote_item
+                 WHERE quote_item."quote_id" = quote."id"
+             )
              AND NOT EXISTS (
                  SELECT 1
                  FROM "quote_items" quote_item
@@ -2359,6 +2376,8 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'CREATED'
            OR NEW."accepted_at" IS NOT NULL
+           OR NEW."payout_amount" IS NOT NULL
+           OR NEW."payout_currency" IS NOT NULL
            OR NEW."gcode_ready_at" IS NOT NULL
            OR NEW."production_slice_result_id" IS NOT NULL
            OR NEW."production_artifact_hash" IS NOT NULL
@@ -2413,8 +2432,10 @@ BEGIN
     IF NEW."status" IS DISTINCT FROM OLD."status" AND (
        NEW."status" = 'ACCEPTED' AND NOT (
         OLD."accepted_at" IS NULL AND NEW."accepted_at" IS NOT NULL
-        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'accepted_at']) =
-            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'accepted_at'])
+        AND OLD."payout_amount" IS NULL AND NEW."payout_amount" IS NOT NULL
+        AND OLD."payout_currency" IS NULL AND NEW."payout_currency" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'accepted_at', 'payout_amount', 'payout_currency']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'accepted_at', 'payout_amount', 'payout_currency'])
     ) OR NEW."status" = 'GCODE_READY' AND NOT (
         OLD."gcode_ready_at" IS NULL AND NEW."gcode_ready_at" IS NOT NULL
         AND OLD."production_slice_result_id" IS NULL AND NEW."production_slice_result_id" IS NOT NULL
@@ -4970,9 +4991,12 @@ CREATE FUNCTION taven_prevent_shipment_plan_mutation()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    target_order_status "order_status";
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        PERFORM 1
+        SELECT "status"
+        INTO target_order_status
         FROM "orders"
         WHERE "id" = NEW."order_id"
         FOR UPDATE;
@@ -4980,6 +5004,11 @@ BEGIN
         IF EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = NEW."order_id") THEN
             RAISE EXCEPTION 'shipment plans cannot be added after payment intent creation'
                 USING ERRCODE = '23514', CONSTRAINT = 'shipment_plan_payment_guard';
+        END IF;
+
+        IF target_order_status IS DISTINCT FROM 'DRAFT'::"order_status" THEN
+            RAISE EXCEPTION 'shipment plans can be added only while the order is draft'
+                USING ERRCODE = '23514', CONSTRAINT = 'shipment_plan_order_status_guard';
         END IF;
 
         RETURN NEW;
@@ -5527,6 +5556,35 @@ $$;
 CREATE TRIGGER "payments_identity_protected"
 BEFORE UPDATE OR DELETE ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_identity();
+
+CREATE FUNCTION taven_reconcile_quoted_payment_void_closure()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_status "order_status";
+BEGIN
+    SELECT "status"
+    INTO target_order_status
+    FROM "orders"
+    WHERE "id" = NEW."order_id"
+    FOR UPDATE;
+
+    IF target_order_status NOT IN ('EXPIRED', 'CANCELLED') THEN
+        RAISE EXCEPTION 'voided quoted checkout payment requires atomic order closure'
+            USING ERRCODE = '23514', CONSTRAINT = 'quoted_payment_void_closure_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "payments_quoted_void_closure_reconciled"
+AFTER UPDATE OF "status" ON "payments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IN ('CREATED', 'PENDING') AND NEW."status" = 'VOIDED' AND NEW."role" = 'FULL')
+EXECUTE FUNCTION taven_reconcile_quoted_payment_void_closure();
 
 CREATE FUNCTION taven_validate_payment_refund_status()
 RETURNS trigger

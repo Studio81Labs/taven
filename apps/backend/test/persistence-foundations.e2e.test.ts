@@ -134,7 +134,8 @@ async function advanceReservationOrderToProduction(
   const printingAt = new Date();
   await client.query(
     `UPDATE jobs
-     SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+     SET status = 'ACCEPTED', accepted_at = $2,
+         payout_amount = 0, payout_currency = 'EUR', updated_at = $2
      WHERE order_id = $1
        AND EXISTS (
            SELECT 1
