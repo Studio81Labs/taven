@@ -167,6 +167,7 @@ export class PersistenceFactory {
     beforeOrderPricing?: (foundation: PersistenceFoundation) => Promise<void>,
     pricing: CommercePricing = {},
     orderOrigin: "AUTOMATIC" | "INDIVIDUAL" = "AUTOMATIC",
+    includeActivePriceBinding = true,
   ): Promise<PersistenceFoundation> {
     const items: CommerceItem[] =
       commerceItems ?? Array.from({ length: slotCount }, () => ({}));
@@ -520,6 +521,7 @@ export class PersistenceFactory {
       finalOrderStatus,
       pricing,
       orderOrigin,
+      includeActivePriceBinding,
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -559,6 +561,7 @@ export class PersistenceFactory {
     finalOrderStatus: "DRAFT" | "QUOTED";
     pricing: CommercePricing;
     orderOrigin: "AUTOMATIC" | "INDIVIDUAL";
+    includeActivePriceBinding: boolean;
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
@@ -719,10 +722,12 @@ export class PersistenceFactory {
         t,
       ],
     );
-    await this.sql.query(
-      "INSERT INTO order_active_price_bindings (order_id, order_price_binding_id) VALUES ($1,$2)",
-      [input.orderId, input.orderPriceBindingId],
-    );
+    if (input.includeActivePriceBinding) {
+      await this.sql.query(
+        "INSERT INTO order_active_price_bindings (order_id, order_price_binding_id) VALUES ($1,$2)",
+        [input.orderId, input.orderPriceBindingId],
+      );
+    }
     await this.sql.query(
       "INSERT INTO order_phases (id, order_id, kind, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$5)",
       [input.orderPhaseId, input.orderId, "SINGLE", "QUOTED", t],

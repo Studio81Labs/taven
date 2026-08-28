@@ -3827,10 +3827,32 @@ BEGIN
     END IF;
 
     IF OLD."invalidated_at" IS NULL AND NEW."invalidated_at" IS NOT NULL THEN
+        -- Reject an already-active binding before taking any secondary lock.
+        IF EXISTS (
+            SELECT 1
+            FROM "order_active_price_bindings" active
+            WHERE active."order_id" = OLD."order_id"
+              AND active."order_price_binding_id" = OLD."id"
+        ) THEN
+            RAISE EXCEPTION 'active price binding can be invalidated only by an atomic binding move'
+                USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_invalidation_check';
+        END IF;
+
         PERFORM 1
         FROM "orders"
         WHERE "id" = OLD."order_id"
-        FOR UPDATE;
+        FOR UPDATE NOWAIT;
+
+        -- Repeat the active-reference check after taking the Order lock.
+        IF EXISTS (
+            SELECT 1
+            FROM "order_active_price_bindings" active
+            WHERE active."order_id" = OLD."order_id"
+              AND active."order_price_binding_id" = OLD."id"
+        ) THEN
+            RAISE EXCEPTION 'active price binding can be invalidated only by an atomic binding move'
+                USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_invalidation_check';
+        END IF;
 
         IF EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = OLD."order_id") THEN
             RAISE EXCEPTION 'price binding cannot be invalidated after payment intent creation'
@@ -3851,7 +3873,6 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    previous_binding_id uuid;
     target_order_status "order_status";
 BEGIN
     IF TG_OP = 'UPDATE' AND NEW."order_id" IS DISTINCT FROM OLD."order_id" THEN
@@ -3859,22 +3880,30 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_owner_immutable_check';
     END IF;
 
+    -- Lock the candidate without waiting on transactions that may already hold
+    -- it while waiting for this active-pointer row. The no-op update creates an
+    -- MVCC version so stronger-isolation invalidators cannot miss activation.
+    PERFORM 1
+    FROM "order_price_bindings" binding
+    WHERE binding."id" = NEW."order_price_binding_id"
+      AND binding."order_id" = NEW."order_id"
+      AND binding."invalidated_at" IS NULL
+    FOR UPDATE NOWAIT;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'active order price binding must belong to its order and remain valid'
+            USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_owner_check';
+    END IF;
+
+    UPDATE "order_price_bindings"
+    SET "invalidated_at" = "invalidated_at"
+    WHERE "id" = NEW."order_price_binding_id";
+
     SELECT "status"
     INTO target_order_status
     FROM "orders"
     WHERE "id" = NEW."order_id"
-    FOR UPDATE;
-
-    IF NOT EXISTS (
-        SELECT 1
-        FROM "order_price_bindings" binding
-        WHERE binding."id" = NEW."order_price_binding_id"
-          AND binding."order_id" = NEW."order_id"
-          AND binding."invalidated_at" IS NULL
-    ) THEN
-        RAISE EXCEPTION 'active order price binding must belong to its order and remain valid'
-            USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_owner_check';
-    END IF;
+    FOR UPDATE NOWAIT;
 
     IF EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = NEW."order_id") THEN
         RAISE EXCEPTION 'active destination and price binding cannot change after payment intent creation'
@@ -3937,14 +3966,6 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_quote_topology_check';
     END IF;
 
-    IF TG_OP = 'UPDATE' AND NEW."order_price_binding_id" IS DISTINCT FROM OLD."order_price_binding_id" THEN
-        previous_binding_id := OLD."order_price_binding_id";
-        UPDATE "order_price_bindings"
-        SET "invalidated_at" = CURRENT_TIMESTAMP
-        WHERE "id" = previous_binding_id
-          AND "invalidated_at" IS NULL;
-    END IF;
-
     RETURN NEW;
 END;
 $$;
@@ -3952,6 +3973,31 @@ $$;
 CREATE TRIGGER "order_active_price_bindings_guarded"
 BEFORE INSERT OR UPDATE ON "order_active_price_bindings"
 FOR EACH ROW EXECUTE FUNCTION taven_move_active_order_price_binding();
+
+CREATE FUNCTION taven_invalidate_moved_order_price_binding()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "order_price_bindings"
+    WHERE "id" = OLD."order_price_binding_id"
+    FOR UPDATE NOWAIT;
+
+    UPDATE "order_price_bindings"
+    SET "invalidated_at" = CURRENT_TIMESTAMP
+    WHERE "id" = OLD."order_price_binding_id"
+      AND "invalidated_at" IS NULL;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "order_active_price_bindings_invalidate_previous"
+AFTER UPDATE OF "order_price_binding_id" ON "order_active_price_bindings"
+FOR EACH ROW
+WHEN (NEW."order_price_binding_id" IS DISTINCT FROM OLD."order_price_binding_id")
+EXECUTE FUNCTION taven_invalidate_moved_order_price_binding();
 
 CREATE FUNCTION taven_prevent_active_order_price_binding_delete()
 RETURNS trigger

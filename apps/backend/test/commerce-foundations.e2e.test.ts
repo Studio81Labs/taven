@@ -2092,6 +2092,21 @@ describe("commerce persistence foundations", () => {
 
         await expectQueryError(
           client,
+          "invalidate_active_binding_in_place",
+          () =>
+            client.query(
+              `UPDATE order_price_bindings
+             SET invalidated_at = clock_timestamp()
+             WHERE id = $1`,
+              [foundation.orderPriceBindingId],
+            ),
+          {
+            code: "23514",
+            constraint: "active_order_price_binding_invalidation_check",
+          },
+        );
+        await expectQueryError(
+          client,
           "move_without_shipment_topology",
           () =>
             client.query(
@@ -2232,6 +2247,18 @@ describe("commerce persistence foundations", () => {
           `UPDATE order_price_bindings SET invalidated_at = $2 WHERE id = $1`,
           [foundation.orderPriceBindingId, new Date()],
         ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "active_order_price_binding_invalidation_check",
+      });
+      await mutating.query("ROLLBACK");
+
+      await mutating.query("BEGIN");
+      await expect(
+        mutating.query(
+          `UPDATE order_price_bindings SET invalidated_at = $2 WHERE id = $1`,
+          [replacementBindingId, new Date()],
+        ),
       ).rejects.toMatchObject({ code: "55P03" });
       await mutating.query("ROLLBACK");
 
@@ -2255,7 +2282,7 @@ describe("commerce persistence foundations", () => {
         ),
       ).rejects.toMatchObject({
         code: "23514",
-        constraint: "order_price_binding_payment_guard",
+        constraint: "active_order_price_binding_invalidation_check",
       });
       await setup.query("ROLLBACK");
 
@@ -2280,6 +2307,182 @@ describe("commerce persistence foundations", () => {
       mutating.release();
     }
   });
+
+  it.each([
+    ["UPDATE", "READ COMMITTED", "update-read-committed", true, "23514"],
+    ["UPDATE", "REPEATABLE READ", "update-repeatable-read", true, "40001"],
+    ["INSERT", "READ COMMITTED", "insert-read-committed", false, "23514"],
+    ["INSERT", "REPEATABLE READ", "insert-repeatable-read", false, "40001"],
+  ] as const)(
+    "prevents candidate invalidation after a concurrent active-binding %s at %s",
+    async (
+      operation,
+      isolationLevel,
+      caseScope,
+      includeActivePriceBinding,
+      expectedCode,
+    ) => {
+      const setup = await pool.connect();
+      const moving = await pool.connect();
+      const invalidating = await pool.connect();
+      try {
+        const fixtures = new PersistenceFactory(
+          setup,
+          `${scope}:binding-invalidation-concurrency:${caseScope}`,
+        );
+        await setup.query("BEGIN");
+        const foundation = await fixtures.createFoundation(
+          "binding-invalidation-concurrency",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          1,
+          undefined,
+          "DRAFT",
+          undefined,
+          {},
+          "AUTOMATIC",
+          includeActivePriceBinding,
+        );
+        const replacementSnapshotId = fixtures.id(
+          "binding-invalidation-concurrency:replacement-snapshot",
+        );
+        const replacementBindingId = fixtures.id(
+          "binding-invalidation-concurrency:replacement-binding",
+        );
+        const createdAt = new Date();
+        await setup.query(
+          `INSERT INTO price_snapshots
+           (id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         VALUES ($1,'EUR',0,'concurrency-v0','{}'::jsonb,$2,$3)`,
+          [
+            replacementSnapshotId,
+            randomUUID().replaceAll("-", "").repeat(2),
+            createdAt,
+          ],
+        );
+        await setup.query(
+          `INSERT INTO payment_schedules
+           (id, price_snapshot_id, sequence, role, gross_amount_minor,
+            fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+         VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
+          [
+            fixtures.id(
+              "binding-invalidation-concurrency:replacement-schedule",
+            ),
+            replacementSnapshotId,
+            createdAt,
+          ],
+        );
+        await setup.query(
+          `INSERT INTO order_price_bindings
+           (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
+         VALUES ($1,$2,$3,$4,$5)`,
+          [
+            replacementBindingId,
+            foundation.orderId,
+            replacementSnapshotId,
+            foundation.deliveryDestinationId,
+            createdAt,
+          ],
+        );
+        await setup.query("COMMIT");
+
+        await moving.query("BEGIN");
+        await moving.query("SET LOCAL lock_timeout = '1s'");
+        await moving.query(
+          operation === "UPDATE"
+            ? `UPDATE order_active_price_bindings
+               SET order_price_binding_id = $2 WHERE order_id = $1`
+            : `INSERT INTO order_active_price_bindings
+                 (order_id, order_price_binding_id) VALUES ($1,$2)`,
+          [foundation.orderId, replacementBindingId],
+        );
+
+        await invalidating.query(`BEGIN ISOLATION LEVEL ${isolationLevel}`);
+        await invalidating.query("SET LOCAL statement_timeout = '2s'");
+        const invalidatingPid = (
+          await invalidating.query<{ pid: number }>(
+            `SELECT pg_backend_pid() AS pid`,
+          )
+        ).rows[0]?.pid;
+        if (!invalidatingPid) {
+          throw new Error("binding invalidation backend pid is unavailable");
+        }
+        const blockedInvalidation = invalidating.query(
+          `UPDATE order_price_bindings
+         SET invalidated_at = clock_timestamp()
+         WHERE id = $1`,
+          [replacementBindingId],
+        );
+
+        let invalidationIsWaitingForActivatedBinding = false;
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          const activity = await setup.query<{
+            wait_event_type: string | null;
+          }>(
+            `SELECT wait_event_type
+           FROM pg_stat_activity
+           WHERE pid = $1`,
+            [invalidatingPid],
+          );
+          if (activity.rows[0]?.wait_event_type === "Lock") {
+            invalidationIsWaitingForActivatedBinding = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(invalidationIsWaitingForActivatedBinding).toBe(true);
+
+        await moving.query("COMMIT");
+        await expect(blockedInvalidation).rejects.toMatchObject({
+          code: expectedCode,
+          ...(expectedCode === "23514"
+            ? { constraint: "active_order_price_binding_invalidation_check" }
+            : {}),
+        });
+        await invalidating.query("ROLLBACK");
+
+        expect(
+          (
+            await setup.query<{
+              active_binding_id: string;
+              original_invalidated: boolean;
+              replacement_invalidated_at: Date | null;
+            }>(
+              `SELECT active.order_price_binding_id AS active_binding_id,
+                    original.invalidated_at IS NOT NULL AS original_invalidated,
+                    replacement.invalidated_at AS replacement_invalidated_at
+             FROM order_active_price_bindings active
+             JOIN order_price_bindings original ON original.id = $2
+             JOIN order_price_bindings replacement ON replacement.id = $3
+             WHERE active.order_id = $1`,
+              [
+                foundation.orderId,
+                foundation.orderPriceBindingId,
+                replacementBindingId,
+              ],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            active_binding_id: replacementBindingId,
+            original_invalidated: operation === "UPDATE",
+            replacement_invalidated_at: null,
+          },
+        ]);
+      } finally {
+        await setup.query("ROLLBACK").catch(() => undefined);
+        await moving.query("ROLLBACK").catch(() => undefined);
+        await invalidating.query("ROLLBACK").catch(() => undefined);
+        setup.release();
+        moving.release();
+        invalidating.release();
+      }
+    },
+  );
 
   it("binds item reference slices to their exact geometry, print configuration, and material", async () => {
     await rollback("reference-slice-inputs", async (client, fixtures) => {
