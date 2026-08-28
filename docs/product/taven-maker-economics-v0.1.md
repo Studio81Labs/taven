@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#201; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#203; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -417,16 +417,25 @@ Přípustný provozní model:
     každý pokus používá stejný idempotency key.
 5.  Ještě před otevřením bankovního rozhraní nebo odesláním příkazu jedna
     lokální transakce zamkne payout, settlement a doklad, znovu ověří jejich
-    aktivní stavy a uloží `MakerPayout.created → initiated` spolu s
-    `initiated_at`. Teprve po commitu smí následovat externí bankovní side
-    effect se stejným `transfer_idempotency_key`.
-6.  Potvrzení banky uloží unikátní bankovní referenci a přepne tentýž payout
-    `initiated → paid`. Payout lze označit jako dokončený jen jednou a součet
-    úspěšných převodů nikdy nesmí překročit `payable_amount`; payout zůstává
-    spojený se settlementem a jeho self-billing dokladem. Timeout ponechá
-    payout v `initiated` až do reconciliation; jen autoritativní potvrzení, že
-    peníze neodešly, jej smí přepnout do `failed` pro bezpečný retry se stejným
-    idempotency key.
+    aktivní stavy a uloží `MakerPayout.created | failed → initiated` spolu s
+    novým audit-stable `MakerPayoutAttempt` a aktuálním `initiated_at`. Teprve po
+    commitu smí následovat externí bankovní side effect se stejným parent
+    `transfer_idempotency_key`.
+6.  Potvrzení banky v jedné transakci uloží unikátní bankovní referenci a
+    přepne `MakerPayout` z `initiated` do `paid`, jeho `MakerSettlement` z
+    `payable` do `paid` a `MakerSelfBillingDocument` z `issued` do `paid`.
+    Aktivní attempt uzavře jako `paid` se stejnou referencí.
+    Tentýž payout lze označit jako dokončený jen jednou a součet úspěšných
+    převodů nikdy nesmí překročit `payable_amount`; payout zůstává spojený se
+    settlementem a jeho self-billing dokladem. Retry stejného potvrzení je
+    idempotentní, odlišná reference po `paid` se odmítne.
+7.  Timeout ponechá payout i otevřený attempt v `initiated` až do
+    reconciliation. Jen autoritativní potvrzení, že peníze neodešly, zavře
+    attempt jako `failed_no_transfer` a přepne tentýž payout
+    `initiated → failed`. Následující initiation transakce vrátí stejný řádek
+    `failed → initiated`, zvýší `attempt_count`, připojí nový attempt a znovu
+    použije původní idempotency key; unikátní `settlement_id` se neobchází
+    vytvořením druhého payoutu.
 
 Kompozitní reference `(self_billing_document_id, settlement_id)` vyžaduje
 doklad vystavený právě pro tento settlement. Vytvoření payoutu současně
@@ -731,12 +740,36 @@ MakerPayout
 - currency
 - amount
 - payment_reference (unique; nullable do provedení převodu)
-- initiated_at (nullable; uložené před externím side effectem)
+- initiated_at (nullable; čas aktuálního pokusu uložený před side effectem)
+- attempt_count (začíná 0; zvýší se při každém vstupu do `initiated`)
 - paid_at (nullable)
-- failed_at (nullable)
+- last_failed_at (nullable)
 - cancelled_at (nullable)
 - status (`created` | `initiated` | `paid` | `failed` | `cancelled`)
 ```
+
+### MakerPayoutAttempt
+
+``` text
+MakerPayoutAttempt
+- id
+- payout_id
+- attempt_no
+- constraint `(payout_id, attempt_no)` (unique)
+- transfer_idempotency_key (= parent payout key)
+- constraint `(payout_id, transfer_idempotency_key)`
+  → `MakerPayout.(id, transfer_idempotency_key)`
+- initiated_at (immutable; vytvořené před externím side effectem)
+- resolved_at (nullable)
+- bank_reference (nullable)
+- outcome (nullable; jednou nastavitelné na `failed_no_transfer` | `paid`)
+```
+
+Pro jeden payout smí existovat nejvýše jeden attempt s `resolved_at = null`.
+Attempt se nikdy nemaže ani znovu neotevírá; jeho terminální outcome a
+`resolved_at` se nastaví právě jednou. Payout ve stavu `initiated` musí mít
+právě jeden otevřený attempt s `attempt_no = attempt_count`; každý jiný payout
+stav vyžaduje, aby žádný otevřený attempt nezůstal.
 
 ------------------------------------------------------------------------
 
@@ -907,6 +940,13 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 42. Bankovní side effect smí začít až po durable `MakerPayout.initiated`;
     dispute acceptance zamyká tentýž payout a smí voidnout settlement jen pro
     chybějící nebo bezpečně neprovedený payout, nikdy pro `initiated | paid`.
+43. Autoritativní `failed_no_transfer` smí tentýž payout vrátit
+    `failed → initiated`; retry zvýší čítač, zapíše nový audit-stable attempt a
+    použije stejný parent idempotency key, nikdy druhý payout pro settlement;
+    `initiated` právě odpovídá jedinému otevřenému attemptu.
+44. Bankovní potvrzení atomicky přepne payout, jeho přesný settlement i doklad
+    do `paid` a uzavře aktivní attempt se stejnou unikátní referencí; retry
+    stejné události je idempotentní a konfliktní reference se odmítne.
 
 ------------------------------------------------------------------------
 
@@ -915,7 +955,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#201.
+#184–#203.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav

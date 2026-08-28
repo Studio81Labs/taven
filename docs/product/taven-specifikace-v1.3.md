@@ -1269,12 +1269,17 @@ napaden i replacement, vzniká nový dispute a další replacement článek;
 origin předchozího článku se nikdy nepřepisuje.
 
 Ruční bankovní převod smí začít až po lokálně commitnutém přechodu
-`MakerPayout.created → initiated` s `initiated_at`; externí příkaz používá
-stabilní idempotency key. Dispute acceptance zamyká stejný payout a smí
-voidnout settlement jen bez payoutu nebo pro `created | failed`, který zároveň
-zruší. Stav `initiated | paid` pre-payout correction odmítne a vyžaduje
-samostatnou reconciliation; timeout zůstává `initiated`, dokud banka
-autoritativně nepotvrdí, že peníze neodešly.
+`MakerPayout.created | failed → initiated` s `initiated_at` a novým audit-stable
+attemptem; externí příkaz používá stabilní parent idempotency key. Dispute
+acceptance zamyká stejný payout a smí voidnout settlement jen bez payoutu nebo
+pro `created | failed`, který zároveň zruší. Stav `initiated | paid`
+pre-payout correction odmítne a vyžaduje samostatnou reconciliation; timeout
+zůstává `initiated`, dokud banka autoritativně nepotvrdí, že peníze neodešly.
+Teprve `failed_no_transfer` dovolí na stejném payout řádku nový
+`failed → initiated` attempt se stejným klíčem. Úspěšné bankovní potvrzení v
+jedné transakci přepne payout, jeho settlement i self-billing doklad do `paid`
+a uloží jednu unikátní bankovní referenci; opakování stejné události je
+idempotentní.
 
 - **zavinění uzlu** → uzel nese materiál, platforma dopravu a přetisk
 - **nezaviněné** (vada modelu zákazníka, nereálná tolerance) → uzel dostane zaplaceno v plné výši
