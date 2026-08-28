@@ -605,7 +605,7 @@ ALTER TABLE "model_files" ADD COLUMN "source_retention_days" INTEGER NOT NULL DE
 ALTER TABLE "model_files" ADD CONSTRAINT "model_files_source_retention_days_check" CHECK ("source_retention_days" > 0);
 ALTER TABLE "photo_assets" ADD COLUMN "retention_days" INTEGER NOT NULL DEFAULT 90;
 ALTER TABLE "photo_assets" ADD CONSTRAINT "photo_assets_retention_days_check" CHECK ("retention_days" > 0);
-ALTER TABLE "customers" ADD CONSTRAINT "customers_email_normalized_check" CHECK ("email" = lower("email") AND "email" ~ '[^[:space:]]');
+ALTER TABLE "customers" ADD CONSTRAINT "customers_email_normalized_check" CHECK ("email" = lower(btrim("email")) AND "email" ~ '[^[:space:]]' AND "email" !~ '[[:space:]]');
 ALTER TABLE "quote_sessions" ADD CONSTRAINT "quote_sessions_expiry_check" CHECK ("expires_at" > "created_at");
 ALTER TABLE "quote_sessions" ADD CONSTRAINT "quote_sessions_public_token_hash_check" CHECK ("public_token_hash" ~ '^[0-9a-f]{64}$');
 ALTER TABLE "quotes" ADD CONSTRAINT "quotes_expiry_check" CHECK ("expires_at" > "issued_at");
@@ -724,6 +724,10 @@ ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_success_fa
     OR ("provider_refund_id" IS NOT NULL AND "completed_at" IS NOT NULL)
 );
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_scope_check" CHECK ("quote_id" IS NOT NULL OR "order_id" IS NOT NULL OR "payment_id" IS NOT NULL OR "refund_transaction_id" IS NOT NULL);
+ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_identity_check" CHECK (
+    ("actor_kind" = 'SYSTEM' AND "actor_id" IS NULL)
+    OR ("actor_kind" IN ('CUSTOMER', 'OPERATOR') AND "actor_id" IS NOT NULL)
+);
 
 -- Immutable commercial snapshots and append-only audit rows.
 CREATE FUNCTION taven_prevent_commerce_row_mutation()
@@ -1344,6 +1348,11 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quote_session_created_at_immutable_check';
     END IF;
 
+    IF NEW."public_token_hash" IS DISTINCT FROM OLD."public_token_hash" THEN
+        RAISE EXCEPTION 'quote session public token hash is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_session_public_token_hash_immutable_check';
+    END IF;
+
     IF NEW."expires_at" IS DISTINCT FROM OLD."expires_at" THEN
         RAISE EXCEPTION 'quote session expiry is immutable'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_session_expiry_immutable_check';
@@ -1370,7 +1379,7 @@ END;
 $$;
 
 CREATE TRIGGER "quote_sessions_lifecycle_protected"
-BEFORE INSERT OR UPDATE OF "status", "expires_at", "created_at" ON "quote_sessions"
+BEFORE INSERT OR UPDATE OF "status", "expires_at", "created_at", "public_token_hash" ON "quote_sessions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_session_lifecycle();
 
 CREATE FUNCTION taven_claim_quote_session_customer(

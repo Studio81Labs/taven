@@ -969,6 +969,9 @@ describe("commerce persistence foundations", () => {
         ["empty_customer_email", ""],
         ["blank_customer_email", "   "],
         ["control_whitespace_customer_email", "\t\n"],
+        ["leading_whitespace_customer_email", " owner@example.test"],
+        ["trailing_whitespace_customer_email", "owner@example.test "],
+        ["embedded_whitespace_customer_email", "owner @example.test"],
       ] as const) {
         await expectQueryError(
           client,
@@ -1047,16 +1050,35 @@ describe("commerce persistence foundations", () => {
           },
         );
       }
+      const anonymousPublicTokenHash = randomUUID()
+        .replaceAll("-", "")
+        .padEnd(64, "0");
       await client.query(
         `INSERT INTO quote_sessions
            (id, public_token_hash, expires_at, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$4)`,
         [
           anonymousSessionId,
-          randomUUID().replaceAll("-", "").padEnd(64, "0"),
+          anonymousPublicTokenHash,
           new Date(Date.now() + 60 * 60 * 1_000),
           createdAt,
         ],
+      );
+      await expectQueryError(
+        client,
+        "rewrite_public_token_hash",
+        () =>
+          client.query(
+            `UPDATE quote_sessions SET public_token_hash = $2 WHERE id = $1`,
+            [
+              anonymousSessionId,
+              randomUUID().replaceAll("-", "").padEnd(64, "1"),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_session_public_token_hash_immutable_check",
+        },
       );
       await client.query(
         `INSERT INTO orders (id, public_reference, status, created_at, updated_at)
@@ -6551,6 +6573,78 @@ describe("commerce persistence foundations", () => {
             ],
           ),
         { code: "23514", constraint: "payment_initial_status_check" },
+      );
+      await expectQueryError(
+        client,
+        "customer_audit_without_actor",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, order_id, event_type, actor_kind, payload, created_at)
+             VALUES ($1,$2,'audit.customer_missing_actor','CUSTOMER','{}'::jsonb,$3)`,
+            [
+              fixtures.id("audit-customer-missing-actor"),
+              foundation.orderId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_events_actor_identity_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "operator_audit_without_actor",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, order_id, event_type, actor_kind, payload, created_at)
+             VALUES ($1,$2,'audit.operator_missing_actor','OPERATOR','{}'::jsonb,$3)`,
+            [
+              fixtures.id("audit-operator-missing-actor"),
+              foundation.orderId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_events_actor_identity_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "system_audit_with_actor",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, order_id, event_type, actor_kind, actor_id, payload, created_at)
+             VALUES ($1,$2,'audit.system_with_actor','SYSTEM',$3,'{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-system-with-actor"),
+              foundation.orderId,
+              foundation.customerId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_events_actor_identity_check",
+        },
+      );
+      await client.query(
+        `INSERT INTO audit_events
+         (id, order_id, event_type, actor_kind, actor_id, payload, created_at)
+         VALUES ($1,$2,'audit.customer_with_actor','CUSTOMER',$3,'{}'::jsonb,$4),
+                ($5,$2,'audit.operator_with_actor','OPERATOR',$6,'{}'::jsonb,$4)`,
+        [
+          fixtures.id("audit-customer-with-actor"),
+          foundation.orderId,
+          foundation.customerId,
+          new Date(),
+          fixtures.id("audit-operator-with-actor"),
+          fixtures.id("audit-operator-id"),
+        ],
       );
       await expectQueryError(
         client,
