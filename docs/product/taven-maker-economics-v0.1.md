@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#193; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#194; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -187,6 +187,7 @@ Snapshot obsahuje minimálně:
 -   `performance_snapshot_id`,
 -   `performance_modifier`,
 -   explicitní surcharge/adjustments,
+-   `currency`,
 -   `agreed_compensation`,
 -   `claim_hold_policy_version`,
 -   `maker_claim_hold_days`,
@@ -201,13 +202,14 @@ performance snapshot stejného makera a acceptance ověří, že jeho
 `resulting_modifier` je totožný s uloženým `performance_modifier`.
 
 U přijatého externího maker-owned assignmentu zapíše acceptance transakce
-tutéž částku současně jako
-`MakerCompensationSnapshot.agreed_compensation` a `Job.payout_amount`; nejde
-o dvě cenové veličiny. Offer a routing pracují s budoucí agreed compensation
-a přijetí odmítne jakoukoli neshodu. Settlement pak čte immutable snapshot,
-jehož částka se rovná jobovému poli. Post-gate job na platform-owned fallbacku
-si dál ukládá interní `Job.payout_amount`, ale bez `ProductionAssignment`,
-compensation snapshotu nebo maker settlementu.
+tutéž částku a měnu současně jako
+`MakerCompensationSnapshot.(agreed_compensation, currency)` a
+`Job.(payout_amount, payout_currency)`; nejde o dvě cenové veličiny. Offer a
+routing pracují s budoucí agreed compensation v této měně a přijetí odmítne
+jakoukoli neshodu. Settlement pak čte immutable snapshot, jehož částka i měna
+se rovnají jobovým polím. Post-gate job na platform-owned fallbacku si dál
+ukládá interní `Job.payout_amount` a `Job.payout_currency`, ale bez
+`ProductionAssignment`, compensation snapshotu nebo maker settlementu.
 
 ------------------------------------------------------------------------
 
@@ -375,6 +377,11 @@ self-billing uzavírají **měsíčně**. Konkrétní cutoff, časové pásmo a 
 pro assignment způsobilý až po cutoffu jsou provozní parametry této měsíční
 periody, nikoli volba jiné cadence.
 
+Jeden settlement obsahuje jen lines stejného makera a jedné měny. Jeho
+`currency` se musí rovnat currency každého compensation snapshotu a line;
+doklad i payout tuto měnu dále pouze přebírají. Různé měny proto vytvářejí
+oddělené settlements, i když mají stejné období.
+
 ### 7.3 Payout po aktivaci maker modelu
 
 Automatické payouty nejsou požadavkem první etapy externí maker sítě.
@@ -406,8 +413,8 @@ artefaktu.
 
 Otevření sporu přepne settlement i self-billing doklad do `disputed` a
 zablokuje vytvoření nebo provedení payoutu. Je-li spor zamítnut, auditované
-rozhodnutí vrátí nezměněnou dvojici do `payable`. Je-li uznán ještě před
-zahájením bankovního převodu, jedna transakce:
+rozhodnutí vrátí nezměněný settlement do `payable` a jeho doklad do `issued`.
+Je-li uznán ještě před zahájením bankovního převodu, jedna transakce:
 
 1.  nastaví původní immutable settlement a doklad na `voided`, propojí je s
     `maker_dispute_id` a zavře případný neprovedený payout pokus,
@@ -506,6 +513,7 @@ MakerCompensationSnapshot
 - performance_modifier
 - surcharges
 - adjustments
+- currency
 - agreed_compensation
 - order_claim_policy_version
 - claim_hold_policy_version
@@ -743,6 +751,9 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     payout se nepřepisuje.
 33. Compensation snapshot musí kompozitní referencí odkazovat assignment i
     jeho skutečného makera ještě před zamknutím odměny a jobového payoutu.
+34. Compensation snapshot zamyká také měnu; jobový payout, settlement line,
+    settlement, self-billing doklad a payout se s ní musejí shodovat a jeden
+    settlement nesmí míchat měny.
 
 ------------------------------------------------------------------------
 
@@ -751,7 +762,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#193.
+#184–#194.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav

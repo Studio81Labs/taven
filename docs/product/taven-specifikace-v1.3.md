@@ -821,7 +821,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 4. `shipped` vyžaduje vůči aktuálnímu cenovému snapshotu `amount_due = 0` a `refundable_balance = 0`; záloha sama nikdy nestačí, ale dokončená částečná refundace odeslání neblokuje.
 5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `geometry_hash` konkrétního `ModelGeometry`, `print_config_revision_id` i `parts_per_plate`; machine-specific odhad rezervace používá oddělený `CandidateResourceEstimate`.
 6. `Order` nesmí být `confirmed` bez reference na **verzi ceníku a verzi podmínek**.
-7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel; po aktivaci maker modelu je tato částka u maker-owned assignmentu přesným immutable aliasem `MakerCompensationSnapshot.agreed_compensation`, zatímco platform-owned fallback zůstává interním jobem bez maker assignmentu, snapshotu a settlementu.
+7. `Job` si při přijetí ukládá `payout_amount` i `payout_currency`, i když je příjemcem provozovatel; po aktivaci maker modelu jsou tato částka a měna u maker-owned assignmentu přesným immutable aliasem `MakerCompensationSnapshot.(agreed_compensation, currency)`, zatímco platform-owned fallback zůstává interním jobem bez maker assignmentu, snapshotu a settlementu.
 8. Závazná cena smí vzniknout jen z deterministického výpočtu.
 9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
 10. Neúspěšný job musí mít otevřený `ReplacementRequest` s deadlinem; navazující `Job` přes `replaces_job_id` smí vzniknout jen atomicky s čerstvou `ProductionReservation`. Jinak se jeho slot/fáze zruší: bez jediného dříve doručeného `FulfilmentSlot` následuje `cancelled → refunded`, s alespoň jedním doručeným slotem finančně vypořádané `partially_fulfilled`; u nedoručeného prerequisite sample se současně zruší a kredituje i neaktivovaný batch.
@@ -1235,9 +1235,10 @@ Brána na vstupu, **měsíční samofakturace** na výstupu. Zádržné se uvoln
 
 Po aktivaci maker modelu zapisuje acceptance transakce externího maker-owned
 assignmentu
-`Job.payout_amount = MakerCompensationSnapshot.agreed_compensation`; offer,
-routing i settlement proto používají tutéž immutable částku. Platform-owned
-fallback žádný maker assignment, snapshot ani settlement nevytváří. Maker
+`Job.(payout_amount, payout_currency) = MakerCompensationSnapshot.(agreed_compensation, currency)`;
+offer, routing i settlement proto používají tutéž immutable částku a měnu.
+Platform-owned fallback žádný maker assignment, snapshot ani settlement
+nevytváří. Maker
 hold se odvozuje z reklamační policy snapshotované zákazníkem při přijetí
 Orderu a `payout_eligible_at` nesmí předcházet žádnému `claim_until` slotu
 plněného assignmentem. Uplynutí okna samo nestačí, pokud se assignmentu
