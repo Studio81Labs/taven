@@ -925,7 +925,10 @@ export class PersistenceFactory {
     );
   }
 
-  async capturePayment(foundation: PersistenceFoundation): Promise<void> {
+  async capturePayment(
+    foundation: PersistenceFoundation,
+    providerCaptureId?: string,
+  ): Promise<void> {
     const existing = await this.sql.query<{ status: string }>(
       'SELECT "status"::text FROM "payments" WHERE "id" = $1',
       [foundation.paymentId],
@@ -948,13 +951,17 @@ export class PersistenceFactory {
        WHERE id = $1`,
       [
         foundation.paymentId,
-        `capture-${this.hash(foundation.paymentId).slice(0, 32)}`,
+        providerCaptureId ??
+          `capture-${this.hash(foundation.paymentId).slice(0, 32)}`,
         capturedAt,
       ],
     );
   }
 
-  async activatePayment(foundation: PersistenceFoundation): Promise<void> {
+  async activatePayment(
+    foundation: PersistenceFoundation,
+    providerCaptureId?: string,
+  ): Promise<void> {
     const existing = await this.sql.query(
       "SELECT 1 FROM payments WHERE id = $1",
       [foundation.paymentId],
@@ -981,7 +988,7 @@ export class PersistenceFactory {
        WHERE id = $1`,
       [foundation.orderPhaseId, activatedAt],
     );
-    await this.capturePayment(foundation);
+    await this.capturePayment(foundation, providerCaptureId);
   }
 
   async planProduction(

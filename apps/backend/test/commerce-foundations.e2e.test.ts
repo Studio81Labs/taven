@@ -209,6 +209,7 @@ async function activateCurrentPlan(
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
   productions: ProductionReservationFixture[],
+  providerCaptureId?: string,
 ): Promise<void> {
   for (const production of productions) {
     await client.query(
@@ -232,7 +233,7 @@ async function activateCurrentPlan(
     `UPDATE phase_reservation_sets SET status = 'HELD' WHERE id = $1`,
     [foundation.phaseReservationSetId],
   );
-  await fixtures.activatePayment(foundation);
+  await fixtures.activatePayment(foundation, providerCaptureId);
   await client.query(
     `SET CONSTRAINTS
        "payments_capture_activation_reconciled",
@@ -3568,6 +3569,136 @@ describe("commerce persistence foundations", () => {
         "stable-provider-intent",
       );
     });
+  });
+
+  it("scopes external payment identities to their provider", async () => {
+    await rollback(
+      "provider-scoped-payment-identities",
+      async (client, fixtures) => {
+        const sharedProviderIntentId = "shared-provider-intent";
+        const sharedProviderCaptureId = "shared-provider-capture";
+        const checkoutCaptureExpiresAt = new Date(Date.now() + 60 * 60 * 1_000);
+
+        const first = await fixtures.createFoundation("provider-scoped-first");
+        const firstProductions = await createCurrentPlan(
+          client,
+          fixtures,
+          first,
+        );
+        await fixtures.finalizePayment(
+          first,
+          checkoutCaptureExpiresAt,
+          sharedProviderIntentId,
+          "provider-a",
+        );
+
+        const second = await fixtures.createFoundation(
+          "provider-scoped-second",
+        );
+        const secondProductions = await createCurrentPlan(
+          client,
+          fixtures,
+          second,
+        );
+        await fixtures.finalizePayment(
+          second,
+          checkoutCaptureExpiresAt,
+          sharedProviderIntentId,
+          "provider-b",
+        );
+
+        await activateCurrentPlan(
+          client,
+          fixtures,
+          first,
+          firstProductions,
+          sharedProviderCaptureId,
+        );
+        await activateCurrentPlan(
+          client,
+          fixtures,
+          second,
+          secondProductions,
+          sharedProviderCaptureId,
+        );
+
+        expect(
+          (
+            await client.query<{
+              provider: string;
+              provider_capture_id: string;
+              provider_intent_id: string;
+            }>(
+              `SELECT provider, provider_intent_id, provider_capture_id
+             FROM payments WHERE id IN ($1, $2) ORDER BY provider`,
+              [first.paymentId, second.paymentId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            provider: "provider-a",
+            provider_intent_id: sharedProviderIntentId,
+            provider_capture_id: sharedProviderCaptureId,
+          },
+          {
+            provider: "provider-b",
+            provider_intent_id: sharedProviderIntentId,
+            provider_capture_id: sharedProviderCaptureId,
+          },
+        ]);
+
+        const duplicateIntent = await fixtures.createFoundation(
+          "provider-scoped-duplicate-intent",
+        );
+        await createCurrentPlan(client, fixtures, duplicateIntent);
+        await expectQueryError(
+          client,
+          "duplicate_provider_intent_same_provider",
+          () =>
+            fixtures.finalizePayment(
+              duplicateIntent,
+              checkoutCaptureExpiresAt,
+              sharedProviderIntentId,
+              "provider-a",
+            ),
+          {
+            code: "23505",
+            constraint: "payments_provider_provider_intent_id_key",
+          },
+        );
+
+        const duplicateCapture = await fixtures.createFoundation(
+          "provider-scoped-duplicate-capture",
+        );
+        const duplicateCaptureProductions = await createCurrentPlan(
+          client,
+          fixtures,
+          duplicateCapture,
+        );
+        await fixtures.finalizePayment(
+          duplicateCapture,
+          checkoutCaptureExpiresAt,
+          "different-provider-intent",
+          "provider-a",
+        );
+        await expectQueryError(
+          client,
+          "duplicate_provider_capture_same_provider",
+          () =>
+            activateCurrentPlan(
+              client,
+              fixtures,
+              duplicateCapture,
+              duplicateCaptureProductions,
+              sharedProviderCaptureId,
+            ),
+          {
+            code: "23505",
+            constraint: "payments_provider_provider_capture_id_key",
+          },
+        );
+      },
+    );
   });
 
   it("persists a pending compensation capture directly as refund pending", async () => {

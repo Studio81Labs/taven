@@ -1501,8 +1501,8 @@ model Payment {
   paymentScheduleId        String        @map("payment_schedule_id") @db.Uuid
   role                     PaymentRole
   provider                 String        @db.VarChar(100)
-  providerIntentId         String?       @unique @map("provider_intent_id") @db.VarChar(255)
-  providerCaptureId        String?       @unique @map("provider_capture_id") @db.VarChar(255)
+  providerIntentId         String?       @map("provider_intent_id") @db.VarChar(255)
+  providerCaptureId        String?       @map("provider_capture_id") @db.VarChar(255)
   requestedAmountMinor     BigInt        @map("requested_amount_minor")
   capturedAmountMinor      BigInt?       @map("captured_amount_minor")
   currency                 String        @db.Char(3)
@@ -1523,6 +1523,8 @@ model Payment {
   @@index([orderId, status])
   @@index([captureCutoffAt, status])
   @@index([checkoutCaptureExpiresAt, status])
+  @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
+  @@unique([provider, providerCaptureId], map: "payments_provider_provider_capture_id_key")
   @@map("payments")
 }
 
