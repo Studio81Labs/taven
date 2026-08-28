@@ -170,6 +170,13 @@ async function createSiblingMachineFoundation(
   if (!capabilityId) {
     throw new Error("foundation machine capability is missing");
   }
+  const plannedItem = await client.query<{ color: string | null }>(
+    'SELECT "color" FROM "order_items" WHERE "id" = $1',
+    [foundation.orderItemIds[1] ?? foundation.orderItemId],
+  );
+  if (!plannedItem.rows[0]) {
+    throw new Error("foundation planned order item is missing");
+  }
 
   await client.query(
     'INSERT INTO "machines" ("id", "node_id", "machine_capability_id", "code", "display_name", "installed_nozzle_micrometers", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
@@ -185,13 +192,14 @@ async function createSiblingMachineFoundation(
     ],
   );
   await client.query(
-    'INSERT INTO "inventories" ("id", "node_id", "machine_id", "sku", "material", "vendor", "price_minor_units_numerator", "price_minor_units_denominator", "currency", "remaining_milligrams", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
+    'INSERT INTO "inventories" ("id", "node_id", "machine_id", "sku", "material", "color", "vendor", "price_minor_units_numerator", "price_minor_units_denominator", "currency", "remaining_milligrams", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
     [
       inventoryId,
       foundation.nodeId,
       machineId,
       `sibling-${inventoryId.slice(0, 24)}`,
       "PLA",
+      plannedItem.rows[0].color,
       "Test vendor",
       1,
       1,

@@ -909,12 +909,15 @@ BEGIN
 
     IF NEW."status" = 'ACCEPTED'
        AND OLD."status" IS DISTINCT FROM NEW."status"
-       AND NOT EXISTS (
+       AND (
+           OLD."status" IS DISTINCT FROM 'QUOTED'::"quote_request_status"
+           OR NOT EXISTS (
            SELECT 1
            FROM "quotes" quote
            JOIN "quote_price_bindings" binding ON binding."quote_id" = quote."id"
            JOIN "price_snapshots" snapshot ON snapshot."id" = binding."price_snapshot_id"
            WHERE quote."quote_request_id" = OLD."id"
+             AND quote."expires_at" > clock_timestamp()
              AND (
                  SELECT coalesce(sum(component."amount_minor"), 0)
                  FROM "price_snapshot_components" component
@@ -932,8 +935,9 @@ BEGIN
                  WHERE schedule."price_snapshot_id" = snapshot."id"
                    AND schedule."role" = 'FULL'
              ) = snapshot."contract_total_minor"
+           )
        ) THEN
-        RAISE EXCEPTION 'accepted quote request requires one complete immutable price binding'
+        RAISE EXCEPTION 'accepted quote request requires a current quoted offer with one complete immutable price binding'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_price_binding_acceptance_check';
     END IF;
 
@@ -1666,13 +1670,9 @@ BEGIN
           AND candidate."model_geometry_id" = item."model_geometry_id"
           AND candidate."print_config_revision_id" = item."print_config_revision_id"
           AND inventory."material" = item."material"
-          AND (
-              item."color" IS NULL
-              OR inventory."color" IS NULL
-              OR inventory."color" = item."color"
-          )
+          AND (item."color" IS NULL OR inventory."color" = item."color")
     ) THEN
-        RAISE EXCEPTION 'planned slot must match its candidate geometry, print configuration, material, and shipment allocation'
+        RAISE EXCEPTION 'planned slot must match its candidate geometry, print configuration, material, color, and shipment allocation'
             USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_slot_candidate_input_check';
     END IF;
 
@@ -1816,7 +1816,7 @@ END;
 $$;
 
 CREATE TRIGGER "order_items_geometry_source_available"
-BEFORE INSERT ON "order_items"
+BEFORE INSERT OR UPDATE OF "source_model_file_id", "model_geometry_id" ON "order_items"
 FOR EACH ROW EXECUTE FUNCTION taven_assert_geometry_usage_available();
 CREATE TRIGGER "order_items_hold_source_retention"
 AFTER INSERT ON "order_items"

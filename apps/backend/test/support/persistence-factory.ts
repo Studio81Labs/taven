@@ -165,8 +165,8 @@ export class PersistenceFactory {
     if (items.length < 1) {
       throw new Error("a commerce foundation requires at least one slot");
     }
-    const resolvedItems = items.map((item, index) => ({
-      color: item.color ?? (index === 0 ? "red" : "blue"),
+    const resolvedItems = items.map((item) => ({
+      color: item.color ?? "red",
       geometryBounds: item.geometryBounds ?? geometryBounds,
       quantity: item.quantity ?? 1,
       sliceMetrics: item.sliceMetrics ?? sliceMetrics,
@@ -290,13 +290,14 @@ export class PersistenceFactory {
       ],
     );
     await this.sql.query(
-      'INSERT INTO "inventories" ("id", "node_id", "machine_id", "sku", "material", "vendor", "price_minor_units_numerator", "price_minor_units_denominator", "currency", "remaining_milligrams", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
+      'INSERT INTO "inventories" ("id", "node_id", "machine_id", "sku", "material", "color", "vendor", "price_minor_units_numerator", "price_minor_units_denominator", "currency", "remaining_milligrams", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
       [
         inventoryId,
         nodeId,
         machineId,
         `sku-${this.hash(`${name}:sku`).slice(0, 32)}`,
         "PLA",
+        resolvedItems[0]!.color,
         "Test vendor",
         1,
         1,

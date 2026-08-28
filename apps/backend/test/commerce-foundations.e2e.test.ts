@@ -145,7 +145,7 @@ describe("commerce persistence foundations", () => {
         [
           { color: "red", quantity: 1 },
           {
-            color: "blue",
+            color: "red",
             quantity: 2,
             geometryBounds: {
               xMicrometers: 2,
@@ -700,6 +700,85 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("revalidates source availability when a draft item selects another geometry", async () => {
+    await rollback("draft-item-source-update", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "draft-item-source-update",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      const expiredSourceId = fixtures.id("expired-update-source");
+      const expiredGeometryId = fixtures.id("expired-update-geometry");
+      const uploadedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+      const deleteAfter = new Date(Date.now() - 24 * 60 * 60 * 1_000);
+      await client.query(
+        `INSERT INTO model_files (id, format, original_filename,
+                                 storage_object_key, content_hash, size_bytes,
+                                 uploaded_at, source_delete_after, retention_hold)
+         VALUES ($1,'STL','expired.stl',$2,$3,1,$4,$5,'ACTIVE_ORDER')`,
+        [
+          expiredSourceId,
+          `models/${expiredSourceId}.stl`,
+          "f".repeat(64),
+          uploadedAt,
+          deleteAfter,
+        ],
+      );
+      await client.query(
+        `INSERT INTO model_geometries
+           (id, source_model_file_id, canonical_object_key, geometry_hash,
+            canonicalizer_revision, volume_cubic_micrometers,
+            bounds_x_micrometers, bounds_y_micrometers,
+            bounds_z_micrometers, triangle_count)
+         VALUES ($1,$2,$3,$4,'test',1,1,1,1,1)`,
+        [
+          expiredGeometryId,
+          expiredSourceId,
+          `canonical/${expiredGeometryId}`,
+          "e".repeat(64),
+        ],
+      );
+      await client.query(
+        `UPDATE model_files SET retention_hold = 'NONE' WHERE id = $1`,
+        [expiredSourceId],
+      );
+      const selectExpiredSource = () =>
+        client.query(
+          `UPDATE order_items
+           SET source_model_file_id = $2, model_geometry_id = $3
+           WHERE id = $1`,
+          [foundation.orderItemId, expiredSourceId, expiredGeometryId],
+        );
+      await expectQueryError(
+        client,
+        "expired_geometry_update_bypass",
+        selectExpiredSource,
+        {
+          code: "23514",
+          constraint: "model_geometry_source_available_check",
+        },
+      );
+      await client.query(
+        `UPDATE model_files SET deleted_at = now() WHERE id = $1`,
+        [expiredSourceId],
+      );
+      await expectQueryError(
+        client,
+        "deleted_geometry_update_bypass",
+        selectExpiredSource,
+        {
+          code: "23514",
+          constraint: "model_geometry_source_available_check",
+        },
+      );
+    });
+  });
+
   it("binds every planned slot to compatible candidate inputs and quantity", async () => {
     await rollback("planned-slot-inputs", async (client, fixtures) => {
       const crossItem = await fixtures.createFoundation(
@@ -767,6 +846,35 @@ describe("commerce persistence foundations", () => {
         client,
         "wrong_color_candidate_slot",
         () => fixtures.createResourcePlan(wrongColor, [wrongColorProduction]),
+        {
+          code: "23514",
+          constraint: "phase_resource_plan_slot_candidate_input_check",
+        },
+      );
+
+      const missingInventoryColor = await fixtures.createFoundation(
+        "missing-inventory-color-candidate",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        [{ color: "white" }],
+      );
+      await client.query(`UPDATE inventories SET color = NULL WHERE id = $1`, [
+        missingInventoryColor.inventoryId,
+      ]);
+      const missingInventoryColorProduction = await fixtures.planProduction(
+        missingInventoryColor,
+        "missing-inventory-color-candidate",
+      );
+      await expectQueryError(
+        client,
+        "missing_inventory_color_candidate_slot",
+        () =>
+          fixtures.createResourcePlan(missingInventoryColor, [
+            missingInventoryColorProduction,
+          ]),
         {
           code: "23514",
           constraint: "phase_resource_plan_slot_candidate_input_check",
@@ -866,7 +974,7 @@ describe("commerce persistence foundations", () => {
         `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,
                                  model_geometry_id, print_config_revision_id,
                                  material, color, quantity, created_at)
-         VALUES ($1,$2,1,$3,$4,$5,'PLA','blue',1,$6)`,
+         VALUES ($1,$2,1,$3,$4,$5,'PLA','red',1,$6)`,
         [
           secondItemId,
           mixedItems.orderId,
@@ -1523,6 +1631,108 @@ describe("commerce persistence foundations", () => {
         ).rows,
       ).toEqual([{ retention_hold: "LEGAL" }]);
     });
+  });
+
+  it("accepts only currently quoted and unexpired individual offers", async () => {
+    await rollback(
+      "individual-offer-availability",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "individual-offer-availability",
+        );
+        const createPricedOffer = async (
+          name: string,
+          issuedAt: Date,
+          expiresAt: Date,
+          snapshotHash: string,
+        ): Promise<string> => {
+          const requestId = fixtures.id(`${name}:request`);
+          const quoteId = fixtures.id(`${name}:quote`);
+          const snapshotId = fixtures.id(`${name}:snapshot`);
+          await client.query(
+            `INSERT INTO quote_requests
+             (id, customer_id, status, created_at, updated_at)
+           VALUES ($1,$2,'QUOTED',$3,$3)`,
+            [requestId, foundation.customerId, issuedAt],
+          );
+          await client.query(
+            `INSERT INTO quotes
+             (id, quote_request_id, customer_id, expires_at, issued_at, created_at)
+           VALUES ($1,$2,$3,$4,$5,$5)`,
+            [quoteId, requestId, foundation.customerId, expiresAt, issuedAt],
+          );
+          await client.query(
+            `INSERT INTO price_snapshots
+             (id, currency, contract_total_minor, pricing_revision,
+              input_snapshot, snapshot_hash, created_at)
+           VALUES ($1,'EUR',0,'offer-v0','{}'::jsonb,$2,$3)`,
+            [snapshotId, snapshotHash, issuedAt],
+          );
+          await client.query(
+            `INSERT INTO payment_schedules
+             (id, price_snapshot_id, sequence, role, gross_amount_minor,
+              fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+           VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
+            [fixtures.id(`${name}:schedule`), snapshotId, issuedAt],
+          );
+          await client.query(
+            `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id)
+           VALUES ($1,$2)`,
+            [quoteId, snapshotId],
+          );
+          return requestId;
+        };
+
+        const now = new Date();
+        const closedRequestId = await createPricedOffer(
+          "closed-offer",
+          now,
+          new Date(now.getTime() + 60 * 60 * 1_000),
+          "1".repeat(64),
+        );
+        await client.query(
+          `UPDATE quote_requests SET status = 'EXPIRED', updated_at = $2
+         WHERE id = $1`,
+          [closedRequestId, now],
+        );
+        await expectQueryError(
+          client,
+          "accept_closed_offer",
+          () =>
+            client.query(
+              `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
+             WHERE id = $1`,
+              [closedRequestId, now],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_price_binding_acceptance_check",
+          },
+        );
+
+        const staleIssuedAt = new Date(now.getTime() - 2 * 60 * 60 * 1_000);
+        const staleRequestId = await createPricedOffer(
+          "stale-offer",
+          staleIssuedAt,
+          new Date(now.getTime() - 60 * 60 * 1_000),
+          "2".repeat(64),
+        );
+        await expectQueryError(
+          client,
+          "accept_stale_offer",
+          () =>
+            client.query(
+              `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
+             WHERE id = $1`,
+              [staleRequestId, now],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_price_binding_acceptance_check",
+          },
+        );
+      },
+    );
   });
 
   it("allows an individual draft only after accepting a quoted request and copies its quote item exactly", async () => {
