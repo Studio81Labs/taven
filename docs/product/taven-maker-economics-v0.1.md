@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#205; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#206; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -381,6 +381,15 @@ blokující claim ani aktivní legal hold; bez tohoto rechecku nesmějí
 pokračovat. Legal hold aktivovaný během dispute window tak settlement ponechá
 v `issued` i po deadline a po jeho uvolnění se guard vyhodnotí znovu.
 
+Aktivace i uvolnění legal holdu, který zasahuje maker compensation, odvodí
+všechny dotčené assignments a sloty a zamknou je ve stejném pořadí:
+assignments podle ID, potom sloty podle ID. Teprve pod lockem zapíší stav
+holdu. Vyhraje-li aktivace, issuance/payable/zero-settlement/payout guard jej
+uvidí a zastaví se. Vyhraje-li payout initiation a commitne `initiated` ještě
+před aktivací, hold už převod nevrací; aktivuje retenční/auditní scope a případ
+směřuje do post-initiation reconciliation. Uvolnění holdu pod stejnými locks
+teprve dovolí blokované guardy znovu vyhodnotit.
+
 Každý assignment se do settlementu zařadí přes immutable
 `MakerSettlementLine`, který jednoznačně odkazuje právě jeden
 `ProductionAssignment` a jeho `MakerCompensationSnapshot`. Assignment ani
@@ -728,6 +737,7 @@ MakerSettlementLine
 - id
 - settlement_id
 - maker_id (musí se shodovat se settlementem, assignmentem i snapshotem)
+- constraint `(settlement_id, maker_id)` → `MakerSettlement.(id, maker_id)`
 - production_assignment_id (unique mezi nevoidovanými settlements)
 - compensation_snapshot_id (unique mezi nevoidovanými settlements)
 - constraint `(compensation_snapshot_id, production_assignment_id, maker_id)`
@@ -954,7 +964,8 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 31. Maker payout eligibility se odvozuje z claim policy přijaté s Orderem a
     nesmí nastat před nejpozdějším `claim_until` plněných slotů; aktivní
     legal hold pod lockem blokuje issuance, `issued → payable`, `settled_zero`
-    i payout initiation.
+    i payout initiation a jeho aktivace/uvolnění používá stejné
+    assignment/slot locks.
 32. Uznaný spor před převodem voidne původní settlement a doklad a vytvoří
     propojený replacement/correcting chain; žádný vydaný řádek, doklad ani
     payout se nepřepisuje.
@@ -1003,6 +1014,10 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     `opened_at <= claim_until`, settlement až při `now > payout_eligible_at`,
     takže na přesné hranici vyhraje claim a nikdy nevznikne paid line s novým
     neuzavřeným claimem.
+47. Legal-hold activation/release a všechny finální settlement/payout guardy
+    zamykají assignments podle ID a potom sloty podle ID; aktivace, která
+    serializačně vyhraje, blokuje další přechod, zatímco už commitnutý
+    `initiated` payout se řeší reconciliation a nepřepisuje.
 
 ------------------------------------------------------------------------
 
@@ -1011,7 +1026,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#205.
+#184–#206.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav

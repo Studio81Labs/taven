@@ -1262,6 +1262,13 @@ znovu zamknou a claim i legal-hold guard zopakují. Totéž platí pro
 `issued → payable` a nulové `settled_zero`; legal hold aktivovaný během
 dispute window ponechá settlement v `issued` až do svého uvolnění.
 
+Aktivace i uvolnění legal holdu zasahujícího maker compensation zamykají
+stejné assignments podle ID a potom sloty podle ID jako tyto payout přechody.
+Vyhraje-li aktivace, guard se zastaví; vyhraje-li payout initiation a commitne
+`initiated`, pozdější hold už externí převod nevrací a případ pokračuje
+post-initiation reconciliation. Uvolnění pod stejnými locks pouze dovolí
+guardy znovu vyhodnotit.
+
 Po vystavení self-billing dokladu běží uložené
 `maker_settlement_dispute_days` (aktuálně ⚠ 5 kalendářních dní). Bez sporu
 přejde settlement z `issued` do `payable` explicitním potvrzením makera nebo
