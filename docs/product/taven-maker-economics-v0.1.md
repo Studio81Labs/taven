@@ -163,6 +163,10 @@ Přijetím jobu se vytvoří immutable snapshot:
 
 `MakerCompensationSnapshot`
 
+Acceptance příkaz je idempotentní podle `production_assignment_id`; při
+souběhu ani retry nesmí vzniknout více než jeden snapshot a příkaz vždy
+vrátí tentýž zamčený výsledek.
+
 Snapshot obsahuje minimálně:
 
 -   `production_assignment_id`,
@@ -327,6 +331,11 @@ výsledný payable amount; uzavřením settlementu se tato množina i částky
 zamknou. Opakované vytvoření, překryv období ani pozdě způsobilý assignment
 tak nesmějí vést k dvojímu zahrnutí.
 
+Settlement, každý jeho line, odkazovaný assignment i compensation snapshot
+musejí mít stejné `maker_id`. Kompozitní referenční constraint tuto shodu
+vynucuje při vložení řádku; cizí plnění proto nelze připsat na self-billing
+doklad ani payout jiného makera.
+
 V první etapě po aktivaci maker modelu se settlement a platformní
 self-billing uzavírají **měsíčně**. Konkrétní cutoff, časové pásmo a pravidlo
 pro assignment způsobilý až po cutoffu jsou provozní parametry této měsíční
@@ -415,7 +424,8 @@ MakerCompensationPolicy
 ``` text
 MakerCompensationSnapshot
 - id
-- production_assignment_id
+- production_assignment_id (unique)
+- maker_id
 - policy_version
 - performance_snapshot_id
 - production_inputs (immutable material, time, plates, handling,
@@ -469,6 +479,7 @@ MakerSettlement
 MakerSettlementLine
 - id
 - settlement_id
+- maker_id (musí se shodovat se settlementem, assignmentem i snapshotem)
 - production_assignment_id (unique)
 - compensation_snapshot_id (unique)
 - gross_compensation
@@ -608,6 +619,10 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 20. Pro jeden settlement existuje nejvýše jeden payout se stabilním
     idempotency key; jeho úspěšná částka se musí rovnat zamčenému
     `payable_amount` a nesmí být převedena podruhé.
+21. Každý assignment má právě jeden compensation snapshot vytvořený
+    idempotentním acceptance příkazem.
+22. Maker na settlementu, každém jeho line, assignmentu a compensation
+    snapshotu musí být totožný a shoda je vynucena referenčním constraintem.
 
 ------------------------------------------------------------------------
 
