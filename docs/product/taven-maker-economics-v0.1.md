@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#204; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#205; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -366,14 +366,30 @@ vyžaduje schválenou adjustment zahrnutou v settlement line. Aktivní legal
 hold jej blokuje i po datu. Do té doby zůstává compensation v zádržném a
 nesmí přejít do payoutu.
 
+U `delivered_claim_window` používá claim opening autoritativní serverové
+`opened_at <= claim_until`, zatímco settlement inclusion vyžaduje
+`now > payout_eligible_at`. Obě transakce po maker gate zamykají nejdřív
+všechny dotčené `ProductionAssignment` podle ID a potom všechny jejich
+`FulfilmentSlot` podle ID; čas odvodí a guardy znovu vyhodnotí až pod těmito
+locks. Vyhraje-li claim opening, zapíše `active_claim_id` a settlement po
+zámku inclusion odmítne. Vyhraje-li inclusion po striktním uplynutí okna,
+zapíše membership a následný běžný claim opening je už po deadline. V přesném
+okamžiku `claim_until` je způsobilý jen claim, nikoli settlement. Vystavení
+dokladu i payout initiation znovu zamknou settlement, assignmenty a sloty a
+ověří, že od inclusion nevznikl žádný blokující claim; bez tohoto rechecku
+nesmějí pokračovat.
+
 Každý assignment se do settlementu zařadí přes immutable
 `MakerSettlementLine`, který jednoznačně odkazuje právě jeden
 `ProductionAssignment` a jeho `MakerCompensationSnapshot`. Assignment ani
-snapshot nesmí být členem druhého settlementu. Řádek uchová gross
-compensation, každou schválenou adjustment s odkazem na zdrojový claim a
-výsledný payable amount; uzavřením settlementu se tato množina i částky
-zamknou. Opakované vytvoření, překryv období ani pozdě způsobilý assignment
-tak nesmějí vést k dvojímu zahrnutí.
+snapshot nesmí být současně členem druhého **nevoidovaného** settlementu.
+Řádek uchová gross compensation, každou schválenou adjustment s odkazem na
+zdrojový claim a výsledný payable amount; uzavřením settlementu se tato
+množina i částky zamknou. Opakované vytvoření, překryv období ani pozdě
+způsobilý assignment tak nesmějí vést k dvojímu aktivnímu zahrnutí.
+Replacement smí stejný assignment a snapshot převzít až v jedné transakci,
+která původní settlement nejdřív nastaví na `voided`; historická membership
+zůstává auditovatelná.
 
 Při vytvoření line se `gross_compensation` i `currency` kopírují přesně z
 `MakerCompensationSnapshot.(agreed_compensation, currency)` a guard vyžaduje
@@ -894,9 +910,9 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 15. Claim-hold policy a délka se snapshotují při přijetí assignmentu;
     settlement používá jednou odvozený `payout_eligible_at`, ne pozdější
     hodnotu parametru.
-16. Každý způsobilý assignment patří nejvýše do jednoho immutable
-    settlement line; řádek odkazuje jeho compensation snapshot i zdrojové
-    claim adjustments.
+16. Každý způsobilý assignment patří současně nejvýše do jednoho immutable
+    line mezi nevoidovanými settlements; replacement smí jeho snapshot převzít
+    až ve stejné transakci, která předchůdce voidne.
 17. Compensation snapshot uchovává immutable vstupy výpočtu dostatečné k
     reprodukci `base_compensation`, i když se zdrojová job data později
     změní nebo expirují.
@@ -979,6 +995,11 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     záporné adjustments se na line omezí nejvýše do jeho gross compensation,
     excess nese Studio81 Labs bez carry-forward dluhu a nulový settlement se
     uzavře jako `settled_zero` bez `MakerPayout`.
+46. Claim opening a settlement inclusion zamykají stejné assignment/slot
+    scope a guardy vyhodnotí pod lockem; claim smí vzniknout při
+    `opened_at <= claim_until`, settlement až při `now > payout_eligible_at`,
+    takže na přesné hranici vyhraje claim a nikdy nevznikne paid line s novým
+    neuzavřeným claimem.
 
 ------------------------------------------------------------------------
 
@@ -987,7 +1008,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#204.
+#184–#205.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
