@@ -855,6 +855,9 @@ CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "shipments"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "shipment_provider_events"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "jobs"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 CREATE TRIGGER "commerce_creation_evidence_bounded"

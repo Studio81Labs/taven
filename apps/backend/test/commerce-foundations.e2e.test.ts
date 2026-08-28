@@ -7785,6 +7785,42 @@ describe("commerce persistence foundations", () => {
       );
       await expectQueryError(
         client,
+        "future_provider_event_creation",
+        async () => {
+          await client.query(
+            `UPDATE outbox_messages
+             SET status = 'DELIVERED', delivered_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE deduplication_key =
+                   'void_carrier_label:' || $1::text || ':label-' || $1::text`,
+            [foundation.shipmentId],
+          );
+          await client.query(
+            `INSERT INTO shipment_provider_events
+               (id, shipment_id, outbox_message_id, carrier, carrier_label_id,
+                provider_event_id, provider_transaction_id, kind, occurred_at,
+                authenticated_at, verified_at, created_at)
+             SELECT $1, shipment.id, message.id, shipment.carrier,
+                    shipment.carrier_label_id, 'future-created-provider-void',
+                    'future-created-provider-void:transaction', 'LABEL_VOIDED',
+                    statement_timestamp(), statement_timestamp(),
+                    statement_timestamp(),
+                    statement_timestamp() + interval '60 seconds'
+             FROM shipments shipment
+             JOIN outbox_messages message
+               ON message.deduplication_key =
+                  'void_carrier_label:' || shipment.id::text || ':' || shipment.carrier_label_id
+             WHERE shipment.id = $2`,
+            [randomUUID(), foundation.shipmentId],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_provider_events_creation_evidence_check",
+        },
+      );
+      await expectQueryError(
+        client,
         "confirm_void_before_verification_time",
         async () => {
           await client.query(
@@ -8210,6 +8246,7 @@ describe("commerce persistence foundations", () => {
         "quotes",
         "refund_transactions",
         "shipment_plans",
+        "shipment_provider_events",
         "shipments",
       ]);
 
