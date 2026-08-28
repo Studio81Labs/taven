@@ -333,6 +333,7 @@ enum RefundStatus {
 enum RefundReason {
   CUSTOMER_CANCELLATION
   PRODUCTION_FAILURE
+  LATE_CAPTURE_COMPENSATION
 
   @@map("refund_reason")
 }

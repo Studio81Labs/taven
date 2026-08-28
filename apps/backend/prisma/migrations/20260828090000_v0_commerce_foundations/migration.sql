@@ -44,7 +44,7 @@ CREATE TYPE "payment_status" AS ENUM ('CREATED', 'PENDING', 'CAPTURED', 'FAILED'
 CREATE TYPE "refund_status" AS ENUM ('PENDING', 'SUCCEEDED', 'FAILED');
 
 -- CreateEnum
-CREATE TYPE "refund_reason" AS ENUM ('CUSTOMER_CANCELLATION', 'PRODUCTION_FAILURE');
+CREATE TYPE "refund_reason" AS ENUM ('CUSTOMER_CANCELLATION', 'PRODUCTION_FAILURE', 'LATE_CAPTURE_COMPENSATION');
 
 -- CreateEnum
 CREATE TYPE "audit_actor_kind" AS ENUM ('SYSTEM', 'CUSTOMER', 'OPERATOR');
@@ -5541,12 +5541,20 @@ AS $$
 DECLARE
     captured_amount bigint;
     committed_refunds bigint;
+    payment_capture_authorized boolean;
+    payment_capture_cutoff_at timestamptz;
+    payment_captured_at timestamptz;
+    target_order_status "order_status";
 BEGIN
-    SELECT "captured_amount_minor"
-    INTO captured_amount
-    FROM "payments"
-    WHERE "id" = NEW."payment_id"
-    FOR UPDATE;
+    SELECT payment."captured_amount_minor", payment."capture_authorized",
+           payment."capture_cutoff_at", payment."captured_at",
+           target_order."status"
+    INTO captured_amount, payment_capture_authorized,
+         payment_capture_cutoff_at, payment_captured_at, target_order_status
+    FROM "payments" payment
+    JOIN "orders" target_order ON target_order."id" = payment."order_id"
+    WHERE payment."id" = NEW."payment_id"
+    FOR UPDATE OF payment;
 
     IF captured_amount IS NULL OR captured_amount <= 0 THEN
         RAISE EXCEPTION 'refund requires a captured payment'
@@ -5566,6 +5574,27 @@ BEGIN
         FROM "refund_transactions"
         WHERE "payment_id" = NEW."payment_id"
           AND "status" IN ('PENDING', 'SUCCEEDED');
+    END IF;
+
+    IF NEW."reason" = 'LATE_CAPTURE_COMPENSATION' AND (
+        payment_capture_authorized
+        OR payment_capture_cutoff_at IS NULL
+        OR payment_captured_at IS NULL
+        OR payment_captured_at < payment_capture_cutoff_at
+        OR target_order_status NOT IN ('EXPIRED', 'CANCELLED')
+        OR NEW."amount_minor" <> captured_amount - committed_refunds
+    ) THEN
+        RAISE EXCEPTION 'late-capture compensation requires the full remaining capture after a terminal checkout cutoff'
+            USING ERRCODE = '23514', CONSTRAINT = 'late_capture_compensation_check';
+    END IF;
+
+    IF NOT payment_capture_authorized
+       AND payment_capture_cutoff_at IS NOT NULL
+       AND payment_captured_at >= payment_capture_cutoff_at
+       AND target_order_status IN ('EXPIRED', 'CANCELLED')
+       AND NEW."reason" <> 'LATE_CAPTURE_COMPENSATION' THEN
+        RAISE EXCEPTION 'a capture after a terminal checkout cutoff requires late-capture compensation'
+            USING ERRCODE = '23514', CONSTRAINT = 'late_capture_compensation_reason_check';
     END IF;
 
     IF committed_refunds

@@ -2489,6 +2489,159 @@ describe("commerce persistence foundations", () => {
           ]),
         { code: "23514", constraint: "order_status_transition_check" },
       );
+
+      const captureCutoffAt = (
+        await client.query<{ capture_cutoff_at: Date }>(
+          `SELECT capture_cutoff_at FROM payments WHERE id = $1`,
+          [foundation.paymentId],
+        )
+      ).rows[0]?.capture_cutoff_at;
+      expect(captureCutoffAt).toBeInstanceOf(Date);
+      const lateCapturedAt = new Date(captureCutoffAt!.getTime() + 1);
+      await expectQueryError(
+        client,
+        "partially_compensate_expired_late_capture",
+        async () => {
+          await client.query(
+            `UPDATE payments
+             SET status = 'REFUND_PENDING',
+                 captured_amount_minor = requested_amount_minor,
+                 provider_capture_id = $2, captured_at = $3,
+                 updated_at = $3
+             WHERE id = $1`,
+            [
+              foundation.paymentId,
+              "partial-expired-late-capture",
+              lateCapturedAt,
+            ],
+          );
+          await client.query(
+            `INSERT INTO refund_transactions
+             (id, payment_id, idempotency_key, amount_minor, reason, status,
+              requested_at, created_at, updated_at)
+             SELECT $1, id, $2, requested_amount_minor - 1,
+                    'LATE_CAPTURE_COMPENSATION', 'PENDING', $3, $3, $3
+             FROM payments WHERE id = $4`,
+            [
+              fixtures.id("partial-expired-late-capture-refund"),
+              "late_initial_capture:partial-expired-late-capture",
+              lateCapturedAt,
+              foundation.paymentId,
+            ],
+          );
+        },
+        { code: "23514", constraint: "late_capture_compensation_check" },
+      );
+
+      const refundId = fixtures.id("expired-late-capture-refund");
+      await client.query(
+        `UPDATE payments
+         SET status = 'REFUND_PENDING',
+             captured_amount_minor = requested_amount_minor,
+             provider_capture_id = $2, captured_at = $3,
+             updated_at = $3
+         WHERE id = $1`,
+        [foundation.paymentId, "expired-late-capture", lateCapturedAt],
+      );
+      await client.query(
+        `INSERT INTO refund_transactions
+         (id, payment_id, idempotency_key, amount_minor, reason, status,
+          requested_at, created_at, updated_at)
+         SELECT $1, id, $2, requested_amount_minor,
+                'LATE_CAPTURE_COMPENSATION', 'PENDING', $3, $3, $3
+         FROM payments WHERE id = $4`,
+        [
+          refundId,
+          "late_initial_capture:expired-late-capture",
+          lateCapturedAt,
+          foundation.paymentId,
+        ],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+
+      expect(
+        (
+          await client.query<{
+            capture_matches_refund: boolean;
+            job_count: string;
+            order_status: string;
+            payment_status: string;
+            refund_reason: string;
+            refund_status: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    payment.status::text AS payment_status,
+                    refund.status::text AS refund_status,
+                    refund.reason::text AS refund_reason,
+                    payment.captured_amount_minor = refund.amount_minor
+                      AS capture_matches_refund,
+                    (SELECT count(*)::text FROM jobs
+                     WHERE order_id = target_order.id) AS job_count
+             FROM orders target_order
+             JOIN payments payment ON payment.order_id = target_order.id
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE target_order.id = $1 AND refund.id = $2`,
+            [foundation.orderId, refundId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "EXPIRED",
+          payment_status: "REFUND_PENDING",
+          refund_status: "PENDING",
+          refund_reason: "LATE_CAPTURE_COMPENSATION",
+          capture_matches_refund: true,
+          job_count: "0",
+        },
+      ]);
+
+      const refundedAt = new Date();
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [refundId, "expired-late-capture-refund", refundedAt],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [foundation.paymentId, refundedAt],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      expect(
+        (
+          await client.query<{
+            order_status: string;
+            payment_status: string;
+            refund_status: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    payment.status::text AS payment_status,
+                    refund.status::text AS refund_status
+             FROM orders target_order
+             JOIN payments payment ON payment.order_id = target_order.id
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE target_order.id = $1 AND refund.id = $2`,
+            [foundation.orderId, refundId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "EXPIRED",
+          payment_status: "REFUNDED",
+          refund_status: "SUCCEEDED",
+        },
+      ]);
     });
   });
 
@@ -3089,7 +3242,14 @@ describe("commerce persistence foundations", () => {
       );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
       await cancelOrderBeforeHandoff(client, foundation.orderId);
-      const capturedAt = new Date();
+      const captureCutoffAt = (
+        await client.query<{ capture_cutoff_at: Date }>(
+          `SELECT capture_cutoff_at FROM payments WHERE id = $1`,
+          [foundation.paymentId],
+        )
+      ).rows[0]?.capture_cutoff_at;
+      expect(captureCutoffAt).toBeInstanceOf(Date);
+      const capturedAt = new Date(captureCutoffAt!.getTime() + 1);
       for (const [name, providerCaptureId] of [
         ["empty_compensation_capture_id", ""],
         ["blank_compensation_capture_id", "   "],
@@ -3113,6 +3273,42 @@ describe("commerce persistence foundations", () => {
           },
         );
       }
+      await expectQueryError(
+        client,
+        "misclassify_late_capture_as_customer_cancellation",
+        async () => {
+          await client.query(
+            `UPDATE payments
+             SET status = 'REFUND_PENDING',
+                 captured_amount_minor = requested_amount_minor,
+                 provider_capture_id = $2, captured_at = $3
+             WHERE id = $1`,
+            [
+              foundation.paymentId,
+              "misclassified-late-provider-capture",
+              capturedAt,
+            ],
+          );
+          await client.query(
+            `INSERT INTO refund_transactions
+             (id, payment_id, idempotency_key, amount_minor, reason, status,
+              requested_at, created_at, updated_at)
+             SELECT $1, id, $2, requested_amount_minor,
+                    'CUSTOMER_CANCELLATION', 'PENDING', $3, $3, $3
+             FROM payments WHERE id = $4`,
+            [
+              fixtures.id("misclassified-late-capture-refund"),
+              "misclassified-late-capture-refund",
+              capturedAt,
+              foundation.paymentId,
+            ],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "late_capture_compensation_reason_check",
+        },
+      );
       await client.query(
         `UPDATE payments
          SET status = 'REFUND_PENDING',
@@ -3126,7 +3322,7 @@ describe("commerce persistence foundations", () => {
          (id, payment_id, idempotency_key, amount_minor, reason, status,
           requested_at, created_at, updated_at)
          SELECT $1, id, $2, requested_amount_minor,
-                'CUSTOMER_CANCELLATION', 'PENDING', $3, $3, $3
+                'LATE_CAPTURE_COMPENSATION', 'PENDING', $3, $3, $3
          FROM payments WHERE id = $4`,
         [
           fixtures.id("late-capture-refund"),
@@ -3137,9 +3333,7 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `SET CONSTRAINTS "payments_refund_status_reconciled",
-                         "refund_transactions_payment_status_reconciled",
-                         "payments_customer_cancellation_refund_reconciled",
-                         "refunds_customer_cancellation_order_reconciled" IMMEDIATE`,
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
       );
       expect(
         (
@@ -3147,13 +3341,17 @@ describe("commerce persistence foundations", () => {
             capture_matches_request: boolean;
             captured_at: Date;
             provider_capture_id: string;
+            refund_reason: string;
             status: string;
           }>(
-            `SELECT status::text,
-                    captured_amount_minor = requested_amount_minor
+            `SELECT payment.status::text,
+                    payment.captured_amount_minor = payment.requested_amount_minor
                       AS capture_matches_request,
-                    provider_capture_id, captured_at
-             FROM payments WHERE id = $1`,
+                    payment.provider_capture_id, payment.captured_at,
+                    refund.reason::text AS refund_reason
+             FROM payments payment
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE payment.id = $1`,
             [foundation.paymentId],
           )
         ).rows,
@@ -3163,6 +3361,7 @@ describe("commerce persistence foundations", () => {
           capture_matches_request: true,
           provider_capture_id: "late-provider-capture",
           captured_at: capturedAt,
+          refund_reason: "LATE_CAPTURE_COMPENSATION",
         },
       ]);
     });
