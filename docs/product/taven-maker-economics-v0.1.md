@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#187; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#188; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -299,7 +299,7 @@ Tyto pojmy se nesmějí zaměňovat:
 
 -   `maker_id`,
 -   settlement period,
--   dokončené a uznané assignments,
+-   immutable řádky dokončených a uznaných assignments,
 -   gross compensation,
 -   approved adjustments,
 -   deductions pouze podle explicitních pravidel,
@@ -316,8 +316,19 @@ settlement guard nikdy znovu nečte aktuální parametr. Do té doby zůstává
 compensation v zádržném a nesmí přejít do payoutu. Uznané claim adjustments
 se vypořádají explicitní položkou settlementu.
 
-V první etapě po aktivaci maker modelu může být settlement vytvářen
-například měsíčně.
+Každý assignment se do settlementu zařadí přes immutable
+`MakerSettlementLine`, který jednoznačně odkazuje právě jeden
+`ProductionAssignment` a jeho `MakerCompensationSnapshot`. Assignment ani
+snapshot nesmí být členem druhého settlementu. Řádek uchová gross
+compensation, každou schválenou adjustment s odkazem na zdrojový claim a
+výsledný payable amount; uzavřením settlementu se tato množina i částky
+zamknou. Opakované vytvoření, překryv období ani pozdě způsobilý assignment
+tak nesmějí vést k dvojímu zahrnutí.
+
+V první etapě po aktivaci maker modelu se settlement a platformní
+self-billing uzavírají **měsíčně**. Konkrétní cutoff, časové pásmo a pravidlo
+pro assignment způsobilý až po cutoffu jsou provozní parametry této měsíční
+periody, nikoli volba jiné cadence.
 
 ### 7.3 Payout po aktivaci maker modelu
 
@@ -397,6 +408,7 @@ MakerCompensationPolicy
 
 ``` text
 MakerCompensationSnapshot
+- id
 - production_assignment_id
 - policy_version
 - base_compensation
@@ -441,6 +453,20 @@ MakerSettlement
 - status
 ```
 
+### MakerSettlementLine
+
+``` text
+MakerSettlementLine
+- id
+- settlement_id
+- production_assignment_id (unique)
+- compensation_snapshot_id (unique)
+- gross_compensation
+- adjustment_source_refs (claim ID + explicit amount)
+- payable_amount
+- created_at
+```
+
 ### MakerPayout
 
 ``` text
@@ -461,7 +487,8 @@ Ve v0 existuje:
 
 -   Studio81 Labs jako jediný seller of record,
 -   jeden vlastní `Node/Machine` podle kanonické specifikace,
--   interní `Job.payout_amount`, pokud jej provoz potřebuje,
+-   povinný immutable `Job.payout_amount` snapshotovaný při každém přijetí,
+    i když je příjemcem provozovatel,
 -   ruční účetní zacházení mimo produktový maker subsystém.
 
 Ve v0 se **nestaví**:
@@ -544,6 +571,9 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 15. Claim-hold policy a délka se snapshotují při přijetí assignmentu;
     settlement používá jednou odvozený `payout_eligible_at`, ne pozdější
     hodnotu parametru.
+16. Každý způsobilý assignment patří nejvýše do jednoho immutable
+    settlement line; řádek odkazuje jeho compensation snapshot i zdrojové
+    claim adjustments.
 
 ------------------------------------------------------------------------
 
@@ -551,7 +581,8 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
-payout fázi a immutable payout eligibility doplňují #184–#187.
+payout fázi, immutable payout eligibility a settlement membership doplňují
+#184–#188.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
@@ -622,7 +653,8 @@ Před aktivací externího maker modelu po kapacitní bráně doplnit:
 -   přesný vzorec `production_base`,
 -   výchozí `MakerCompensationPolicy` pro první síťovou etapu,
 -   minimální sample size pro performance bonusy,
--   settlement period,
+-   přesný cutoff, časové pásmo a late-eligibility pravidlo měsíčního
+    settlementu,
 -   pravidla pro maker-caused reprint a claim adjustments,
 -   právní a účetní potvrzení konkrétní podoby self-billing dokladu,
 -   potvrzení účetního/daňového zacházení u propojených osob.
