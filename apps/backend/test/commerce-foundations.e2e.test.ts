@@ -5109,6 +5109,86 @@ describe("commerce persistence foundations", () => {
           "e".repeat(64),
         ],
       );
+      const closedSessionCases = [
+        {
+          name: "expired_state",
+          status: "EXPIRED",
+          createdAt: ownershipCreatedAt,
+          expiresAt: new Date(ownershipCreatedAt.getTime() + 60 * 60 * 1_000),
+        },
+        {
+          name: "cancelled_state",
+          status: "CANCELLED",
+          createdAt: ownershipCreatedAt,
+          expiresAt: new Date(ownershipCreatedAt.getTime() + 60 * 60 * 1_000),
+        },
+        {
+          name: "elapsed_open",
+          status: "OPEN",
+          createdAt: new Date(
+            ownershipCreatedAt.getTime() - 2 * 60 * 60 * 1_000,
+          ),
+          expiresAt: new Date(ownershipCreatedAt.getTime() - 60 * 60 * 1_000),
+        },
+      ] as const;
+      for (const closedSession of closedSessionCases) {
+        const sessionId = fixtures.id(`closed-commerce-${closedSession.name}`);
+        await client.query(
+          `INSERT INTO quote_sessions
+           (id, customer_id, public_token_hash, status, expires_at,
+            created_at, updated_at)
+           VALUES ($1,$2,$3,$4::quote_session_status,$5,$6,$6)`,
+          [
+            sessionId,
+            foundation.customerId,
+            randomUUID().replaceAll("-", "").padEnd(64, "f"),
+            closedSession.status,
+            closedSession.expiresAt,
+            closedSession.createdAt,
+          ],
+        );
+        await expectQueryError(
+          client,
+          `attach_request_${closedSession.name}`,
+          () =>
+            client.query(
+              `INSERT INTO quote_requests
+               (id, quote_session_id, customer_id, status, created_at, updated_at)
+               VALUES ($1,$2,$3,'NEW',$4,$4)`,
+              [
+                fixtures.id(`closed-request-${closedSession.name}`),
+                sessionId,
+                foundation.customerId,
+                ownershipCreatedAt,
+              ],
+            ),
+          { code: "23514", constraint: "quote_session_commerce_open_check" },
+        );
+        await expectQueryError(
+          client,
+          `attach_order_${closedSession.name}`,
+          async () => {
+            const orderId = fixtures.id(`closed-order-${closedSession.name}`);
+            await client.query(
+              `INSERT INTO orders
+               (id, customer_id, public_reference, status, created_at, updated_at)
+               VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
+              [
+                orderId,
+                foundation.customerId,
+                `T-${closedSession.name}`,
+                ownershipCreatedAt,
+              ],
+            );
+            await client.query(
+              `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+               VALUES ($1,$2)`,
+              [orderId, sessionId],
+            );
+          },
+          { code: "23514", constraint: "quote_session_commerce_open_check" },
+        );
+      }
       await expectQueryError(
         client,
         "cross_customer_quote_request_insert",

@@ -125,7 +125,6 @@ CREATE TABLE "photo_assets" (
     "media_type" VARCHAR(100) NOT NULL,
     "size_bytes" BIGINT NOT NULL,
     "uploaded_at" TIMESTAMPTZ(3) NOT NULL,
-    "retention_days" INTEGER NOT NULL DEFAULT 90,
     "photo_delete_after" TIMESTAMPTZ(3) NOT NULL,
     "retention_hold" "retention_hold" NOT NULL DEFAULT 'NONE',
     "deleted_at" TIMESTAMPTZ(3),
@@ -959,7 +958,6 @@ ALTER TABLE "model_geometries"
 ALTER TABLE "photo_assets"
     ADD CONSTRAINT "photo_assets_content_hash_check" CHECK ("content_hash" ~ '^[0-9a-f]{64}$'),
     ADD CONSTRAINT "photo_assets_size_bytes_check" CHECK ("size_bytes" > 0),
-    ADD CONSTRAINT "photo_assets_retention_days_check" CHECK ("retention_days" > 0),
     ADD CONSTRAINT "photo_assets_deletion_deadline_check" CHECK ("photo_delete_after" >= "uploaded_at"),
     ADD CONSTRAINT "photo_assets_deleted_at_check" CHECK (
         "deleted_at" IS NULL OR (

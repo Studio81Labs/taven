@@ -599,6 +599,8 @@ ALTER TABLE "production_reservations" ADD CONSTRAINT "production_reservations_jo
 -- Focused data checks.
 ALTER TABLE "model_files" ADD COLUMN "source_retention_days" INTEGER NOT NULL DEFAULT 90;
 ALTER TABLE "model_files" ADD CONSTRAINT "model_files_source_retention_days_check" CHECK ("source_retention_days" > 0);
+ALTER TABLE "photo_assets" ADD COLUMN "retention_days" INTEGER NOT NULL DEFAULT 90;
+ALTER TABLE "photo_assets" ADD CONSTRAINT "photo_assets_retention_days_check" CHECK ("retention_days" > 0);
 ALTER TABLE "customers" ADD CONSTRAINT "customers_email_normalized_check" CHECK ("email" = lower("email") AND "email" <> '');
 ALTER TABLE "quote_sessions" ADD CONSTRAINT "quote_sessions_expiry_check" CHECK ("expires_at" > "created_at");
 ALTER TABLE "quotes" ADD CONSTRAINT "quotes_expiry_check" CHECK ("expires_at" > "issued_at");
@@ -1147,6 +1149,33 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION taven_assert_quote_session_commerce_open(target_session_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    session_status "quote_session_status";
+    session_expires_at timestamptz;
+BEGIN
+    IF target_session_id IS NULL THEN
+        RETURN;
+    END IF;
+
+    SELECT session."status", session."expires_at"
+    INTO session_status, session_expires_at
+    FROM "quote_sessions" session
+    WHERE session."id" = target_session_id
+    FOR UPDATE;
+
+    IF NOT FOUND
+       OR session_status <> 'OPEN'
+       OR session_expires_at <= clock_timestamp() THEN
+        RAISE EXCEPTION 'commerce can be attached only to an open, unexpired quote session'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_session_commerce_open_check';
+    END IF;
+END;
+$$;
+
 CREATE FUNCTION taven_require_initial_quote_request_status()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1156,6 +1185,8 @@ BEGIN
         RAISE EXCEPTION 'quote requests must begin in NEW'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_initial_status_check';
     END IF;
+
+    PERFORM taven_assert_quote_session_commerce_open(NEW."quote_session_id");
 
     PERFORM taven_assert_quote_request_session_owner(
         NEW."quote_session_id",
@@ -1264,6 +1295,10 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'accepted quote request requires a current quoted offer with one complete immutable price binding'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_price_binding_acceptance_check';
+    END IF;
+
+    IF NEW."quote_session_id" IS DISTINCT FROM OLD."quote_session_id" THEN
+        PERFORM taven_assert_quote_session_commerce_open(NEW."quote_session_id");
     END IF;
 
     PERFORM taven_assert_quote_request_session_owner(
@@ -1485,10 +1520,7 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM 1
-    FROM "quote_sessions"
-    WHERE "id" = NEW."quote_session_id"
-    FOR UPDATE;
+    PERFORM taven_assert_quote_session_commerce_open(NEW."quote_session_id");
 
     PERFORM 1
     FROM "orders"
