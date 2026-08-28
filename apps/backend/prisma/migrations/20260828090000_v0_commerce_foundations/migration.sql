@@ -929,9 +929,15 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    evidence_now timestamptz := clock_timestamp();
     matching_customer_owners integer;
     mismatched_customer_owners integer;
 BEGIN
+    IF NEW."created_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'Audit event creation evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_created_at_check';
+    END IF;
+
     IF NEW."quote_id" IS NOT NULL
        AND NEW."order_id" IS NOT NULL
        AND NOT EXISTS (

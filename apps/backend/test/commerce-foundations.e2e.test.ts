@@ -7274,12 +7274,44 @@ describe("commerce persistence foundations", () => {
     });
   });
 
-  it("bounds financial and Job lifecycle evidence by the database clock", async () => {
+  it("bounds financial, audit, and Job lifecycle evidence by the database clock", async () => {
     await rollback("future-commerce-evidence", async (client, fixtures) => {
       const financial = await fixtures.createFoundation(
         "future-financial-evidence",
       );
       await createCurrentPlanAndPayment(client, fixtures, financial);
+
+      await expectQueryError(
+        client,
+        "future_audit_event",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+               (id, order_id, event_type, payload, created_at)
+             VALUES ($1,$2,'audit.future','{}'::jsonb,
+                     clock_timestamp() + interval '60 seconds')`,
+            [fixtures.id("future-audit-event"), financial.orderId],
+          ),
+        { code: "23514", constraint: "audit_event_created_at_check" },
+      );
+      await client.query(
+        `INSERT INTO audit_events
+           (id, order_id, event_type, payload, created_at)
+         VALUES ($1,$2,'audit.tolerated_skew','{}'::jsonb,
+                 clock_timestamp() + interval '2 seconds'),
+                ($3,$2,'audit.historical','{}'::jsonb,
+                 clock_timestamp() - interval '30 days')`,
+        [
+          fixtures.id("tolerated-future-audit-event"),
+          financial.orderId,
+          fixtures.id("historical-audit-event"),
+        ],
+      );
+      await client.query(
+        `INSERT INTO audit_events (id, order_id, event_type, payload)
+         VALUES ($1,$2,'audit.default_timestamp','{}'::jsonb)`,
+        [fixtures.id("default-timestamp-audit-event"), financial.orderId],
+      );
 
       const jobs = await fixtures.createFoundation("future-job-evidence");
       const productions = await createCurrentPlanAndPayment(
