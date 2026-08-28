@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#197; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#198; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -442,30 +442,43 @@ samostatný auditovaný correction proces podle stavu bankovního převodu.
 
 #### Oprava sporu před payoutem
 
-Otevření sporu přepne settlement i self-billing doklad do `disputed` a
-zablokuje vytvoření nebo provedení payoutu. Je-li spor zamítnut, auditované
-rozhodnutí vrátí nezměněný settlement do `payable` a jeho doklad do `issued`.
-Je-li uznán ještě před zahájením bankovního převodu, jedna transakce:
+Otevření sporu vytvoří immutable `MakerDispute`, který jako
+`challenged_settlement_id` a `challenged_document_id` odkazuje právě napadený
+settlement a jeho doklad, přepne oba do `disputed` a zablokuje vytvoření nebo
+provedení payoutu. Jeden settlement lze tímto běžným window napadnout nejvýše
+jednou. Je-li spor zamítnut, auditované rozhodnutí vrátí nezměněný settlement
+do `payable` a jeho doklad do `issued`; rejected `MakerDispute` zůstane v
+historii. Je-li spor uznán ještě před zahájením bankovního převodu, jedna
+transakce:
 
-1.  nastaví původní immutable settlement a doklad na `voided`, propojí je s
-    `maker_dispute_id` a zavře případný neprovedený payout pokus,
+1.  nastaví původní immutable settlement a doklad na `voided`, uzavře
+    `MakerDispute` jako `accepted` a zavře případný neprovedený payout pokus,
 2.  vytvoří replacement `MakerSettlement` se
-    `supersedes_settlement_id`, opravenými immutable lines a novým
-    `payable_amount`,
-3.  vystaví nový self-billing doklad s `corrects_document_id` a novými
+    `supersedes_settlement_id`, immutable `origin_dispute_id`, opravenými
+    immutable lines a novým `payable_amount`,
+3.  vystaví nový self-billing doklad s `corrects_document_id`,
+    `corrects_settlement_id`, stejným `origin_dispute_id` a novými
     strukturovanými částkami,
 4.  povolí payout pouze nad replacement settlementem a jeho novým dokladem.
 
-Replacement settlement musí kompozitní self-referencí zachovat
-`maker_id`, `currency` a `maker_dispute_id` svého superseded settlementu.
-Correcting dokument navíc ukládá `corrects_settlement_id`; jedna kompozitní
-reference jej váže k
-`MakerSettlement.(id, supersedes_settlement_id, maker_dispute_id)` a druhá
-vyžaduje, aby `corrects_document_id` patřil právě tomuto
-`corrects_settlement_id` a témuž sporu. U původního dokladu jsou všechny tři
-correction hodnoty `null`, u correcting dokladu musejí být všechny vyplněné.
-Nelze proto propojit replacement s dokumentem jiného settlementu, makera,
-měny ani sporu.
+Replacement settlement musí kompozitní self-referencí zachovat `maker_id` a
+`currency` svého superseded settlementu a jeho `origin_dispute_id` musí
+odkazovat spor, který právě tento superseded settlement a doklad napadl.
+U původního settlementu jsou `supersedes_settlement_id` i `origin_dispute_id`
+`null`; u replacementu musejí být obě hodnoty vyplněné.
+Correcting dokument váže vlastní settlement, `corrects_settlement_id`,
+`corrects_document_id` a `origin_dispute_id` ke stejnému trojúhelníku
+referencí. U původního dokladu jsou všechny tři correction hodnoty `null`, u
+correcting dokladu musejí být všechny vyplněné. Nelze proto propojit
+replacement s dokumentem jiného settlementu, makera, měny ani sporu.
+
+`origin_dispute_id` popisuje výhradně spor, který replacement vytvořil, a po
+vystavení se nikdy nepřepisuje. Je-li ve vlastním pětidenním okně napaden
+correcting settlement, vznikne nový `MakerDispute` s tímto settlementem a
+jeho dokladem jako novým challenged párem. Uznání vytvoří další replacement,
+který přímo superseduje právě napadeného předchůdce a jako origin uloží nový
+spor. Libovolně dlouhá correction chain je proto auditovatelná po jednotlivých
+hranách a žádný další spor nepřepisuje původ předchozího článku.
 
 Unikátní assignment membership se vyhodnocuje jen mezi nevoidovanými
 settlements, takže historický voided line zůstane auditovatelný, ale nemůže
@@ -592,10 +605,13 @@ MakerPerformanceSnapshot
 MakerSettlement
 - id
 - maker_id
-- supersedes_settlement_id (nullable)
-- maker_dispute_id (nullable)
-- constraint `(supersedes_settlement_id, maker_id, currency,
-  maker_dispute_id)` → `MakerSettlement`
+- supersedes_settlement_id (nullable; vyplněné právě s `origin_dispute_id`)
+- origin_dispute_id (nullable; unique; vyplněné právě se
+  `supersedes_settlement_id`; po vytvoření immutable)
+- constraint `(supersedes_settlement_id, maker_id, currency)`
+  → `MakerSettlement.(id, maker_id, currency)`
+- constraint `(origin_dispute_id, supersedes_settlement_id, maker_id)`
+  → `MakerDispute.(id, challenged_settlement_id, maker_id)`
 - period_from
 - period_to
 - issued_at (nullable)
@@ -606,6 +622,22 @@ MakerSettlement
 - adjustments
 - payable_amount
 - status (`draft` | `issued` | `disputed` | `payable` | `voided` | `paid`)
+```
+
+### MakerDispute
+
+``` text
+MakerDispute
+- id
+- maker_id
+- challenged_settlement_id (unique)
+- challenged_document_id (unique)
+- constraint `(challenged_document_id, challenged_settlement_id)`
+  → `MakerSelfBillingDocument.(id, settlement_id)`
+- opened_at
+- dispute_deadline_at
+- resolved_at (nullable)
+- status (`opened` | `rejected` | `accepted`)
 ```
 
 ### MakerSettlementLine
@@ -635,12 +667,12 @@ MakerSelfBillingDocument
 - document_number (unique)
 - corrects_document_id (nullable; unique)
 - corrects_settlement_id (nullable)
-- maker_dispute_id (nullable)
-- constraint `(settlement_id, corrects_settlement_id, maker_dispute_id)`
-  → `MakerSettlement.(id, supersedes_settlement_id, maker_dispute_id)`
-- constraint `(corrects_document_id, corrects_settlement_id,
-  maker_dispute_id)`
-  → `MakerSelfBillingDocument.(id, settlement_id, maker_dispute_id)`
+- origin_dispute_id (nullable; po vystavení immutable)
+- constraint `(settlement_id, corrects_settlement_id, origin_dispute_id)`
+  → `MakerSettlement.(id, supersedes_settlement_id, origin_dispute_id)`
+- constraint `(origin_dispute_id, corrects_settlement_id,
+  corrects_document_id)`
+  → `MakerDispute.(id, challenged_settlement_id, challenged_document_id)`
 - currency
 - gross_compensation
 - adjustment_total
@@ -827,6 +859,9 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 38. Correcting doklad musí odkazovat právě doklad superseded settlementu a
     replacement settlement, oba pro stejného makera, měnu a spor; všechny
     correction reference jsou společně null nebo společně vyplněné.
+39. Každý settlement má nejvýše jeden vlastní `MakerDispute`; replacement
+    immutable uchová spor svého vzniku jako `origin_dispute_id`, zatímco jeho
+    případné napadení vytváří nový dispute a další článek correction chain.
 
 ------------------------------------------------------------------------
 
@@ -835,7 +870,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#197.
+#184–#198.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav

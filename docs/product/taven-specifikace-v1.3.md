@@ -1258,10 +1258,13 @@ idempotentně po deadline; spor otevřený před touto tranzicí má přednost.
 Payout smí vzniknout jen nad `payable` settlementem a jeho aktivním `issued`
 dokladem.
 
-Replacement settlement po uznaném sporu zachovává makera, měnu a dispute ID
-superseded settlementu. Jeho correcting self-billing doklad musí kompozitně
-odkazovat právě doklad tohoto superseded settlementu a tentýž spor; nezávislé
-propojení correcting dokladu s jiným settlementem je zakázané.
+Replacement settlement po uznaném sporu zachovává makera a měnu superseded
+settlementu a jako immutable `origin_dispute_id` ukládá spor, který právě
+tento settlement a doklad napadl. Jeho correcting self-billing doklad musí
+kompozitně odkazovat stejný origin spor a právě doklad tohoto superseded
+settlementu; nezávislé propojení s jiným settlementem je zakázané. Pokud je
+napaden i replacement, vzniká nový dispute a další replacement článek;
+origin předchozího článku se nikdy nepřepisuje.
 
 - **zavinění uzlu** → uzel nese materiál, platforma dopravu a přetisk
 - **nezaviněné** (vada modelu zákazníka, nereálná tolerance) → uzel dostane zaplaceno v plné výši
