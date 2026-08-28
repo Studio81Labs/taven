@@ -701,7 +701,7 @@ pending | reship_pending | reprint_pending | replacement_in_production | recover
 ```
 Quality Claim lze otevřít proti doručené položce/fázi bez ohledu na to, zda je agregátní objednávka `delivered`, `completed` nebo `partially_fulfilled`; jen rodič bez jediného incident-backed slotu smí po vyšetření skončit `resolved_rejected` nebo se před handoff stáhnout. `reject_claim` pod zámkem vyžaduje, aby rodič byl stále `investigating`, neměl žádný Job, autorizaci, refund ani incident a všechny jeho child resolution byly `pending`; v jedné transakci je přepne na `rejected`, rodiče na `resolved_rejected`, uvolní všechna `active_claim_id` a přepočítá retenční deadline. Automatický shipment incident patří Shipmentu ve stavu `lost | returned | recovered`, i když je agregát teprve `in_production` nebo `shipped`; dokud jeho sloty nejsou doručené náhradou/reshipem nebo finančně vypořádané, rodič nesmí přejít do `resolved_rejected | withdrawn`.
 
-Příkaz vytvoření Claim zamkne všechny cílové `FulfilmentSlot` v deterministickém pořadí. Slot s `active_claim_id = null` přiřadí novému Claim a vytvoří unikátní `ClaimSlotResolution(claim_id, slot_id, claimed_shipment_leaf_id)`; retry se stejným idempotency klíčem vrátí tentýž rodič. Pokud libovolný slot už vlastní jiný neterminální Claim, celý create se bez částečných změn odmítne a UI/API vrátí konfliktní rodiče. Překrývá-li request právě jednoho vlastníka, lze případné další neobsazené sloty přidat jen samostatným atomickým `extend_claim`, který znovu zamkne celou rozšiřovanou množinu a nesmí překrýt jiného vlastníka; více vlastníků se musí nejdřív provozně vypořádat, nikdy sloučit po vytvoření Jobů. Automatický shipment incident se naproti tomu povinně rozpartitionuje a připojí k existujícím vlastníkům, jak je popsáno výše. `active_claim_id` se uvolní až při terminálním stavu rodiče, takže dvě souběžné item/phase žádosti nikdy nevytvoří dvě replacement lineage pro tentýž slot; nový pozdější Claim může cílit až aktuální doručený Shipment leaf po skončení předchozího.
+Příkaz vytvoření Claim zamkne všechny cílové `FulfilmentSlot` v deterministickém pořadí. Po maker gate nejdřív podle ID zamkne také všechny `ProductionAssignment`, které tyto sloty plní, a teprve potom sloty podle ID; maker settlement inclusion používá přesně stejné dvě skupiny a pořadí. Autoritativní `opened_at` i kontrola `opened_at <= claim_until` vzniknou až pod těmito locks. Slot s `active_claim_id = null` přiřadí novému Claim a vytvoří unikátní `ClaimSlotResolution(claim_id, slot_id, claimed_shipment_leaf_id)`; retry se stejným idempotency klíčem vrátí tentýž rodič. Pokud libovolný slot už vlastní jiný neterminální Claim, celý create se bez částečných změn odmítne a UI/API vrátí konfliktní rodiče. Překrývá-li request právě jednoho vlastníka, lze případné další neobsazené sloty přidat jen samostatným atomickým `extend_claim`, který znovu zamkne celou rozšiřovanou množinu a nesmí překrýt jiného vlastníka; více vlastníků se musí nejdřív provozně vypořádat, nikdy sloučit po vytvoření Jobů. Automatický shipment incident se naproti tomu povinně rozpartitionuje a připojí k existujícím vlastníkům, jak je popsáno výše. `active_claim_id` se uvolní až při terminálním stavu rodiče, takže dvě souběžné item/phase žádosti nikdy nevytvoří dvě replacement lineage pro tentýž slot; nový pozdější Claim může cílit až aktuální doručený Shipment leaf po skončení předchozího.
 
 Rodič přejde po výběru alespoň jednoho remedy do `active`, zatímco každý jeho slot může **současně a nezávisle** zvolit `reship_pending`, `reprint_pending` nebo `refund_pending`. Reprint pod stejnými slot locks nejdřív ověří `active_claim_id = claim_id` i unikátní child resolution pro celý scope; při jediné odchylce vše abortuje. Potom snapshotuje `replacement_required_slots` jen z child resolution ve `reprint_pending` a vytvoří pro ně `ReplacementRequestSet` s jedním child `ReplacementRequest` pro každý plánovaný náhradní Job/parcel group tak, aby každý required slot pokryl právě jeden request; rodič s ostatními reship/refund sloty zůstává `active`.
 
@@ -821,7 +821,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 4. `shipped` vyžaduje vůči aktuálnímu cenovému snapshotu `amount_due = 0` a `refundable_balance = 0`; záloha sama nikdy nestačí, ale dokončená částečná refundace odeslání neblokuje.
 5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `geometry_hash` konkrétního `ModelGeometry`, `print_config_revision_id` i `parts_per_plate`; machine-specific odhad rezervace používá oddělený `CandidateResourceEstimate`.
 6. `Order` nesmí být `confirmed` bez reference na **verzi ceníku a verzi podmínek**.
-7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
+7. `Job` si při přijetí ukládá `payout_amount` i `payout_currency`, i když je příjemcem provozovatel; po aktivaci maker modelu jsou tato částka a měna u maker-owned assignmentu přesným immutable aliasem `MakerCompensationSnapshot.(agreed_compensation, currency)`, zatímco platform-owned fallback zůstává interním jobem bez maker assignmentu, snapshotu a settlementu.
 8. Závazná cena smí vzniknout jen z deterministického výpočtu.
 9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
 10. Neúspěšný job musí mít otevřený `ReplacementRequest` s deadlinem; navazující `Job` přes `replaces_job_id` smí vzniknout jen atomicky s čerstvou `ProductionReservation`. Jinak se jeho slot/fáze zruší: bez jediného dříve doručeného `FulfilmentSlot` následuje `cancelled → refunded`, s alespoň jedním doručeným slotem finančně vypořádané `partially_fulfilled`; u nedoručeného prerequisite sample se současně zruší a kredituje i neaktivovaný batch.
@@ -902,7 +902,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 - `Job` jako samostatná entita oddělená od `Order`.
 - Profilová matice postavená pořádně i pro jeden stroj.
 - Dvoufázový slicing implementovaný celý.
-- `payout_amount` na jobu.
+- Immutable tuple `payout_amount` + `payout_currency` na jobu.
 - Fotodokumentace vlastních tisků — korpus, ze kterého se později definuje přijatelný výsledek.
 
 Až dorazí maker č. 2, přidá se tlačítko „přiřadit ručně" — jeden den práce.
@@ -976,7 +976,7 @@ Následují fakturační údaje **bez povinné registrace**; souhlas s podmínka
 
 ### 7.8 Sledování
 
-**Tokenizovaná URL v e-mailu, bez účtu.** Stav v lidské řeči, termín, **fotka hotového dílu s možností odsouhlasení před odesláním**, tracking, doklad.
+**Tokenizovaná URL v e-mailu, bez účtu.** Stav v lidské řeči, termín, **view-only fotka hotového dílu před odesláním**, tracking, doklad. Fotografie dokládá interní QC, ale zákazník ji před handoffem neschvaluje: neexistuje approval deadline ani rejection stav a zobrazení/nečinnost neblokují `qc_approved → packed → handed_over`. Námitka zákazníka používá po doručení běžný Claim flow.
 
 Fotka jako zákaznický touchpoint není režie navíc — db3D to už dělá, takže je to očekávaná praxe.
 
@@ -1231,7 +1231,89 @@ Vlna 3 (45–120 min): další způsobilý uzel po přesunu rezervace       payo
 
 ### 11.8 Výplaty a reklamace
 
-Brána na vstupu, **měsíční samofakturace** na výstupu. Zádržné se uvolní po `delivered` + reklamační okno.
+Brána na vstupu, **měsíční samofakturace** na výstupu. Zádržné se standardně
+uvolní po `delivered` + reklamační okno. Pokud zásilka po ověřeném předání
+dopravci není doručena a incident skončí konečným non-maker-caused
+refund/replacement rozhodnutím, odvodí se payout eligibility místo toho z
+`incident_resolved_at`; makerovi zůstává plná accepted compensation. Případ
+před handoffem, neuzavřený incident ani maker-caused výsledek tuto cestu
+nesmí použít.
+
+Po aktivaci maker modelu zapisuje acceptance transakce externího maker-owned
+assignmentu
+`Job.(payout_amount, payout_currency) = MakerCompensationSnapshot.(agreed_compensation, currency)`;
+offer, routing i settlement proto používají tutéž immutable částku a měnu.
+Platform-owned fallback žádný maker assignment, snapshot ani settlement
+nevytváří. Maker
+hold se odvozuje z reklamační policy snapshotované zákazníkem při přijetí
+Orderu a `payout_eligible_at` nesmí předcházet žádnému `claim_until` slotu
+plněného assignmentem. Uplynutí okna samo nestačí, pokud se assignmentu
+dotýká neuzavřený claim nebo legal hold: settlement čeká na jejich ukončení a
+maker-caused výsledek zahrne až se schválenou adjustment.
+
+Claim opening a maker settlement inclusion po gate zamykají nejdřív dotčené
+assignments podle ID a potom jejich sloty podle ID a všechny guardy znovu
+vyhodnotí pod lockem. Claim smí uložit autoritativní
+`opened_at <= claim_until`; settlement inclusion pro delivered větev smí
+pokračovat až při `now > payout_eligible_at` a bez `active_claim_id`. Claim,
+který získá lock včas, proto settlement zablokuje; v přesném okamžiku deadline
+není settlement ještě způsobilý. Issuance i payout initiation stejný scope
+znovu zamknou a claim i legal-hold guard zopakují. Totéž platí pro
+`issued → payable` a nulové `settled_zero`; legal hold aktivovaný během
+dispute window ponechá settlement v `issued` až do svého uvolnění.
+
+Aktivace i uvolnění legal holdu zasahujícího maker compensation zamykají
+stejné assignments podle ID a potom sloty podle ID jako tyto payout přechody.
+Vyhraje-li aktivace, guard se zastaví; vyhraje-li payout initiation a commitne
+`initiated`, pozdější hold už externí převod nevrací a případ pokračuje
+post-initiation reconciliation. Uvolnění pod stejnými locks pouze dovolí
+guardy znovu vyhodnotit.
+
+Po vystavení self-billing dokladu běží uložené
+`maker_settlement_dispute_days` (aktuálně ⚠ 5 kalendářních dní). Bez sporu
+přejde settlement z `issued` do `payable` explicitním potvrzením makera nebo
+idempotentně po deadline; spor otevřený před touto tranzicí má přednost.
+Payout smí vzniknout jen nad `payable` settlementem a jeho aktivním `issued`
+dokladem. Otevření sporu pod stejným zámkem vyžaduje autoritativní serverové
+`opened_at <= dispute_deadline_at` a maker ID vlastníka settlementu; opožděný
+worker tedy neprodlouží okno a cizí maker nemůže settlement zablokovat.
+
+Replacement settlement po uznaném sporu zachovává makera a měnu superseded
+settlementu a jako immutable `origin_dispute_id` ukládá spor, který právě
+tento settlement a doklad napadl. Jeho correcting self-billing doklad musí
+kompozitně odkazovat stejný origin spor a právě doklad tohoto superseded
+settlementu; nezávislé propojení s jiným settlementem je zakázané. Pokud je
+napaden i replacement, vzniká nový dispute a další replacement článek;
+origin předchozího článku se nikdy nepřepisuje.
+
+Accepted dispute uzamkne úplnou line authorization bijekci proti challenged
+settlementu. Každý původní line má právě jeden autorizovaný replacement
+payload hash: untouched line kopíruje všechny doménové hodnoty, změněný line
+smí použít jen explicitně schválené adjustment refs a částky. Replacement
+musí vytvořit právě jeden line pro každou autorizaci, žádný další, a každý
+svázat s bezprostředním predecessor line a origin dispute. Correction proto
+nemůže vynechat untouched compensation ani přidat nesouvisející assignment.
+
+Ruční bankovní převod smí začít až po lokálně commitnutém přechodu
+`MakerPayout.created | failed → initiated` s `initiated_at` a novým audit-stable
+attemptem; externí příkaz používá stabilní parent idempotency key. Dispute
+acceptance zamyká stejný payout a smí voidnout settlement jen bez payoutu nebo
+pro `created | failed`, který zároveň zruší. Stav `initiated | paid`
+pre-payout correction odmítne a vyžaduje samostatnou reconciliation; timeout
+zůstává `initiated`, dokud banka autoritativně nepotvrdí, že peníze neodešly.
+Teprve `failed_no_transfer` dovolí na stejném payout řádku nový
+`failed → initiated` attempt se stejným klíčem. Úspěšné bankovní potvrzení v
+jedné transakci přepne payout, jeho settlement i self-billing doklad do `paid`
+a uloží jednu unikátní bankovní referenci; opakování stejné události je
+idempotentní.
+
+Záporné maker adjustments se aplikují nejvýše do nuly každého assignment
+line: `payable_amount = max(0, gross_compensation + Σ approved adjustments)`.
+Případný excess se auditně uloží, ale nese jej Studio81 Labs a nepřechází jako
+makerův dluh ani offset do jiného assignmentu, období či payoutu. Settlement
+i self-billing doklad proto mají nezáporný payable amount. Je-li přesně nula,
+oba se po dispute guardu atomicky uzavřou jako `settled_zero` bez vytvoření
+`MakerPayout`; payout existuje jen pro kladnou částku.
 
 - **zavinění uzlu** → uzel nese materiál, platforma dopravu a přetisk
 - **nezaviněné** (vada modelu zákazníka, nereálná tolerance) → uzel dostane zaplaceno v plné výši
@@ -1275,7 +1357,8 @@ Architekturně tentýž problém jako FastyBird — discovery, stavový automat,
 | **Vlákno zpráv v portálu** | poptávek je tolik, že se e-mail přestane zvládat |
 | **Multicolor jednoho dílu** | opakovaná poptávka v individuálních nabídkách |
 | **Oddělení `/maker`** | první externí uzel |
-| **Certifikace, tiery, výplaty** | druhý až třetí externí uzel |
+| **Maker settlement, měsíční samofakturace a ruční výplaty** | první externí uzel |
+| **Certifikace a tiery** | druhý až třetí externí uzel |
 | **Nabídkové vlny (routing)** | ruční přiřazování přestane stačit, ~5 uzlů |
 | **Node agent** | ruční provoz je úzké hrdlo, > 10 uzlů |
 | **Druhý vlastní stroj** | brána §11 |
