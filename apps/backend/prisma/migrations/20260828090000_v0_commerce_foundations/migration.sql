@@ -1748,6 +1748,7 @@ BEGIN
            WHERE quote."quote_request_id" = OLD."id"
              AND quote."issued_at" <= clock_timestamp()
              AND quote."expires_at" > clock_timestamp()
+             AND snapshot."contract_total_minor" > 0
              AND (
                  SELECT coalesce(sum(component."amount_minor"), 0)
                  FROM "price_snapshot_components" component
@@ -1765,6 +1766,13 @@ BEGIN
                  WHERE schedule."price_snapshot_id" = snapshot."id"
                    AND schedule."role" = 'FULL'
              ) = snapshot."contract_total_minor"
+             AND EXISTS (
+                 SELECT 1
+                 FROM "payment_schedules" schedule
+                 WHERE schedule."price_snapshot_id" = snapshot."id"
+                   AND schedule."role" = 'FULL'
+                   AND schedule."gross_amount_minor" > 0
+             )
              AND EXISTS (
                  SELECT 1
                  FROM "quote_items" quote_item

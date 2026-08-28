@@ -10907,6 +10907,26 @@ describe("commerce persistence foundations", () => {
             constraint: "quote_price_binding_acceptance_check",
           },
         );
+        const zeroValueRequestId = await createPricedOffer(
+          "zero-value-offer",
+          now,
+          new Date(now.getTime() + 60 * 60 * 1_000),
+          "5".repeat(64),
+        );
+        await expectQueryError(
+          client,
+          "accept_zero_value_offer",
+          () =>
+            client.query(
+              `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
+               WHERE id = $1`,
+              [zeroValueRequestId, now],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_price_binding_acceptance_check",
+          },
+        );
         const closedIssuedAt = new Date(now.getTime() - 2 * 60 * 60 * 1_000);
         const closedRequestId = await createPricedOffer(
           "closed-offer",
