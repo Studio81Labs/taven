@@ -1,7 +1,8 @@
 # Taven --- maker economics a settlement v0.1
 
-**Status:** samostatná produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #176–#181; navazuje na `taven-specifikace-v1.3.md`\
+**Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183; aktivace až po kapacitní
+bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
 ## 1. Účel
@@ -12,9 +13,11 @@ Tento dokument definuje ekonomický a doménový vztah mezi:
 -   provozovatelem služby Taven --- **Studio81 Labs, s.r.o.**,
 -   makerem, který fyzicky zajišťuje výrobu.
 
-Model platí už ve v0 s jediným makerem a je navržen tak, aby se bez
-změny základních vztahů mohl později rozšířit na více makerů a výrobních
-uzlů.
+Model není součástí implementačního scope v0. Aktivuje se až tehdy, když
+kapacitní brána v `taven-specifikace-v1.3.md` §11 rozhodne pro externího
+makera nebo síť. V0 zůstává na jediném vlastním stroji, ručním provozu a
+účetním vypořádání mimo produktový maker subsystém; tento dokument
+definuje budoucí smluvní a ekonomický vztah předem.
 
 Základní princip:
 
@@ -62,11 +65,10 @@ Maker:
 -   předává zásilku do logistického procesu,
 -   získává za dokončené výrobní plnění předem známou odměnu.
 
-Ve v0 je prvním makerem OSVČ provozovatele, ale systém s ním zachází
-stejně jako s budoucím nezávislým makerem.
-
-**První maker nemá zvláštní ekonomická pravidla pouze proto, že je
-personálně propojen se Studio81 Labs.**
+Prvním `Maker` v systému je až externí dodavatel přijatý po kapacitní
+bráně. Provozovatel vlastního stroje ve v0 se pouze kvůli dogfoodingu
+nemodeluje jako `Maker` a nevzniká mu produktový compensation,
+settlement ani payout workflow.
 
 ------------------------------------------------------------------------
 
@@ -301,11 +303,12 @@ Tyto pojmy se nesmějí zaměňovat:
 -   payable amount,
 -   settlement status.
 
-Ve v0 může být settlement vytvářen například měsíčně.
+V první etapě po aktivaci maker modelu může být settlement vytvářen
+například měsíčně.
 
-### 7.3 Payout ve v0
+### 7.3 Payout po aktivaci maker modelu
 
-Automatické payouty nejsou požadavkem v0.
+Automatické payouty nejsou požadavkem první etapy externí maker sítě.
 
 Přípustný provozní model:
 
@@ -431,22 +434,21 @@ MakerPayout
 
 ------------------------------------------------------------------------
 
-## 9. V0 scope
+## 9. V0 scope a aktivační hranice
 
 Ve v0 existuje:
 
 -   Studio81 Labs jako jediný seller of record,
--   jeden skutečný `Maker`,
--   jeden nebo více vlastních `Node/Machine` podle reality,
--   `ProductionAssignment`,
--   verzovaná `MakerCompensationPolicy`,
--   immutable compensation snapshot při přijetí jobu,
--   základní maker performance data,
--   ruční settlement,
--   ruční payout / účetní vypořádání.
+-   jeden vlastní `Node/Machine` podle kanonické specifikace,
+-   interní `Job.payout_amount`, pokud jej provoz potřebuje,
+-   ruční účetní zacházení mimo produktový maker subsystém.
 
 Ve v0 se **nestaví**:
 
+-   `Maker` a `ProductionAssignment`,
+-   `MakerCompensationPolicy` a compensation snapshoty,
+-   maker performance data a modifier,
+-   `MakerSettlement` a `MakerPayout`,
 -   veřejný maker onboarding,
 -   automatický routing mezi více makery,
 -   marketplace,
@@ -456,25 +458,26 @@ Ve v0 se **nestaví**:
 -   automatická penalizační ekonomika,
 -   optimalizační engine expected fulfilment cost.
 
-Datový šev pro tyto funkce ale nesmí být v0 návrhem zablokován.
+Datový šev pro budoucí `Node` scope zůstává zachován, ale žádná z těchto
+maker entit ani workflow nevzniká před kapacitní bránou.
 
 ------------------------------------------------------------------------
 
 ## 10. Přechod na síť
 
-Pokud kapacitní brána později rozhodne pro externí síť, základní model
-se nemění.
+Pokud kapacitní brána později rozhodne pro externího makera nebo síť,
+aktivuje se smluvní a ekonomický model z tohoto dokumentu.
 
-Mění se pouze kardinalita a automatizace:
+Teprve potom se mění produktová topologie:
 
 ``` text
 v0:
-1 Maker
-1..N Node
-manual assignment
-manual settlement
+0 Maker
+1 owned Node/Machine
+manual operation
+no maker settlement/payout domain
 
-network:
+after gate:
 N Maker
 N Node
 automatic routing
@@ -482,7 +485,8 @@ performance-based priority
 automated settlement/payout
 ```
 
-První maker tak funguje jako reálné dogfooding budoucí maker ekonomiky.
+První externí maker používá od začátku stejný typ policy a snapshotů
+jako každý další maker; výjimka pro interní dogfooding nevzniká.
 
 ------------------------------------------------------------------------
 
@@ -497,8 +501,8 @@ První maker tak funguje jako reálné dogfooding budoucí maker ekonomiky.
 6.  Maker před přijetím jobu zná svou odměnu.
 7.  Přijetím jobu se compensation snapshot zamkne.
 8.  Změna policy nebo performance nesmí zpětně měnit přijaté joby.
-9.  První maker používá stejný ekonomický model jako budoucí nezávislí
-    makeři.
+9.  První externí maker po kapacitní bráně používá stejný ekonomický
+    model jako každý další nezávislý maker.
 10. Performance je transparentně odvozena z jednotlivých metrik, ne z
     neprůhledného ručního ratingu.
 11. Podstandardní maker se řeší routingem/probation/suspension, ne
@@ -512,11 +516,14 @@ První maker tak funguje jako reálné dogfooding budoucí maker ekonomiky.
 
 ## 12. Rozhodovací log --- zapsané záznamy
 
+Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
+#181 platí až po aktivační bráně #183.
+
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
                                                             alternativa       
   -------------- ------------------------- ---------------- ----------------- --------------
-  176            Studio81 Labs je seller   sjednocuje       vlastní tiskárna  platí
+  176            Studio81 Labs je seller   sjednocuje       vlastní tiskárna  zrušeno #183
                  of record a maker je jeho právní, provozní s.r.o. ve v0 a    
                  samostatný výrobní        a ekonomický     maker model až se 
                  dodavatel už ve v0        model v0 s       sítí              
@@ -554,7 +561,7 @@ První maker tak funguje jako reálné dogfooding budoucí maker ekonomiky.
                                            kapacita, ale                      
                                            provozní riziko                    
 
-  180            První OSVČ maker používá  personální       zvláštní interní  platí
+  180            První OSVČ maker používá  personální       zvláštní interní  zrušeno #183
                  stejnou                   propojení nesmí  sazba prvního     
                  MakerCompensationPolicy   měnit ekonomická makera            
                  jako budoucí nezávislí    pravidla; v0 tak                   
@@ -576,10 +583,10 @@ První maker tak funguje jako reálné dogfooding budoucí maker ekonomiky.
 
 ## 13. Otevřené body
 
-Před produkčním spuštěním doplnit:
+Před aktivací externího maker modelu po kapacitní bráně doplnit:
 
 -   přesný vzorec `production_base`,
--   výchozí MakerCompensationPolicy pro v0,
+-   výchozí `MakerCompensationPolicy` pro první síťovou etapu,
 -   minimální sample size pro performance bonusy,
 -   settlement period,
 -   pravidla pro maker-caused reprint a claim adjustments,
@@ -587,5 +594,5 @@ Před produkčním spuštěním doplnit:
 -   potvrzení účetního/daňového zacházení u propojených osob.
 
 Poslední bod je právní/daňová validace provozního modelu; nemění
-produktový invariant, že první maker musí mít předem definované a
-obhajitelné podmínky stejného typu jako budoucí externí makeři.
+produktový invariant, že první externí maker po gate musí mít předem
+definované a obhajitelné podmínky stejného typu jako každý další maker.
