@@ -2644,7 +2644,14 @@ describe("commerce persistence foundations", () => {
     await rollback("quoted-order-expiry", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation("quoted-order-expiry");
       await createCurrentPlan(client, fixtures, foundation);
-      const checkoutExpiresAt = new Date(Date.now() + 300);
+      const checkoutExpiresAt = (
+        await client.query<{ checkout_expires_at: Date }>(
+          `SELECT clock_timestamp() + interval '2 seconds' AS checkout_expires_at`,
+        )
+      ).rows[0]?.checkout_expires_at;
+      if (!checkoutExpiresAt) {
+        throw new Error("database checkout deadline is missing");
+      }
       await fixtures.finalizePayment(foundation, checkoutExpiresAt);
 
       await expectQueryError(
@@ -2664,7 +2671,13 @@ describe("commerce persistence foundations", () => {
         },
       );
 
-      await client.query("SELECT pg_sleep(0.35)");
+      await client.query(
+        `SELECT pg_sleep(
+           greatest(extract(epoch FROM $1::timestamptz - clock_timestamp()), 0)
+           + 0.05
+         )`,
+        [checkoutExpiresAt],
+      );
 
       await expectQueryError(
         client,
