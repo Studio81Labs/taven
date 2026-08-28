@@ -5162,6 +5162,30 @@ describe("commerce persistence foundations", () => {
         if (status === "QC_PASSED") {
           await expectQueryError(
             client,
+            "handoff_job_before_shipment",
+            async () => {
+              const handedOverAt = new Date();
+              await client.query(
+                `UPDATE jobs
+                 SET status = 'PACKED', packed_at = $2, updated_at = $2
+                 WHERE order_id = $1`,
+                [foundation.orderId, handedOverAt],
+              );
+              await client.query(
+                `UPDATE jobs
+                 SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+                 WHERE order_id = $1`,
+                [foundation.orderId, handedOverAt],
+              );
+              await forceOrderLifecycleConstraints(client);
+            },
+            {
+              code: "23514",
+              constraint: "order_post_confirmation_lifecycle_check",
+            },
+          );
+          await expectQueryError(
+            client,
             "release_active_order_qc_photo",
             () =>
               client.query(
@@ -5193,6 +5217,26 @@ describe("commerce persistence foundations", () => {
             {
               code: "23514",
               constraint: "shipment_lifecycle_evidence_check",
+            },
+          );
+        }
+        if (status === "SHIPPED") {
+          await expectQueryError(
+            client,
+            "settle_job_before_delivery",
+            async () => {
+              const settledAt = new Date();
+              await client.query(
+                `UPDATE jobs
+                 SET status = 'SETTLED', settled_at = $2, updated_at = $2
+                 WHERE order_id = $1`,
+                [foundation.orderId, settledAt],
+              );
+              await forceOrderLifecycleConstraints(client);
+            },
+            {
+              code: "23514",
+              constraint: "order_post_confirmation_lifecycle_check",
             },
           );
         }
@@ -5544,6 +5588,38 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514", constraint: "quote_request_session_owner_check" },
       );
+      await expectQueryError(
+        client,
+        "clear_attached_request_session_owner",
+        () =>
+          client.query(
+            `UPDATE quote_sessions SET customer_id = NULL WHERE id = $1`,
+            [ownedSessionId],
+          ),
+        { code: "23514", constraint: "quote_session_owner_removal_check" },
+      );
+      await expectQueryError(
+        client,
+        "clear_attached_automatic_session_owner",
+        () =>
+          client.query(
+            `UPDATE quote_sessions SET customer_id = NULL WHERE id = $1`,
+            [foundation.quoteSessionId],
+          ),
+        { code: "23514", constraint: "quote_session_owner_removal_check" },
+      );
+      await client.query(
+        `UPDATE quote_sessions SET customer_id = NULL WHERE id = $1`,
+        [otherOwnedSessionId],
+      );
+      expect(
+        (
+          await client.query<{ customer_id: string | null }>(
+            `SELECT customer_id FROM quote_sessions WHERE id = $1`,
+            [otherOwnedSessionId],
+          )
+        ).rows,
+      ).toEqual([{ customer_id: null }]);
       await expectQueryError(
         client,
         "skip_draft_lifecycle",

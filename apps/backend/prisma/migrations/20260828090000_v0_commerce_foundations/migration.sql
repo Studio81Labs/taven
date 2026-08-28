@@ -1090,6 +1090,24 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF OLD."customer_id" IS NOT NULL
+       AND NEW."customer_id" IS NULL
+       AND (
+           EXISTS (
+               SELECT 1
+               FROM "quote_requests" request
+               WHERE request."quote_session_id" = OLD."id"
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM "automatic_order_origins" origin
+               WHERE origin."quote_session_id" = OLD."id"
+           )
+       ) THEN
+        RAISE EXCEPTION 'an attached quote session cannot lose its customer owner'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_session_owner_removal_check';
+    END IF;
+
     IF NEW."customer_id" IS DISTINCT FROM OLD."customer_id"
        AND NEW."customer_id" IS NOT NULL
        AND EXISTS (
@@ -2486,6 +2504,21 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    IF EXISTS (
+        SELECT 1
+        FROM "jobs" job
+        WHERE job."order_id" = target_order_id
+          AND (
+              (job."status" = 'HANDED_OVER'
+               AND target_status NOT IN ('SHIPPED', 'DELIVERED'))
+              OR (job."status" = 'SETTLED'
+                  AND target_status NOT IN ('DELIVERED', 'COMPLETED'))
+          )
+    ) THEN
+        RAISE EXCEPTION 'Job handoff and settlement require the corresponding delivery lifecycle'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+    END IF;
+
     IF target_status IN ('DRAFT', 'QUOTED') THEN
         IF EXISTS (
             SELECT 1
@@ -2597,7 +2630,7 @@ BEGIN
             SELECT 1
             FROM "jobs"
             WHERE "order_id" = target_order_id
-              AND "status" IN ('PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+              AND "status" IN ('PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED')
               AND "printing_at" IS NOT NULL
         ) OR EXISTS (
             SELECT 1
@@ -2637,7 +2670,7 @@ BEGIN
             FROM "jobs"
             WHERE "order_id" = target_order_id
               AND (
-                  "status" NOT IN ('QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+                  "status" NOT IN ('QC_APPROVED', 'PACKED')
                   OR "qc_approved_at" IS NULL
               )
         ) OR EXISTS (
@@ -2738,13 +2771,13 @@ BEGIN
             SELECT 1
             FROM "jobs"
             WHERE "order_id" = target_order_id
-              AND "status" IN ('HANDED_OVER', 'SETTLED')
+              AND "status" = 'HANDED_OVER'
               AND "handed_over_at" IS NOT NULL
         ) OR EXISTS (
             SELECT 1
             FROM "jobs"
             WHERE "order_id" = target_order_id
-              AND "status" NOT IN ('PACKED', 'HANDED_OVER', 'SETTLED')
+              AND "status" NOT IN ('PACKED', 'HANDED_OVER')
         ) OR EXISTS (
             SELECT 1
             FROM "shipments" shipment
@@ -2770,7 +2803,7 @@ BEGIN
                         AND job."order_phase_id" = shipment."order_phase_id"
                         AND job."shipment_plan_id" = shipment."shipment_plan_id"
                         AND (
-                            job."status" NOT IN ('HANDED_OVER', 'SETTLED')
+                            job."status" <> 'HANDED_OVER'
                             OR job."handed_over_at" IS NULL
                         )
                   )
@@ -2779,7 +2812,7 @@ BEGIN
             SELECT 1
             FROM "jobs" job
             WHERE job."order_id" = target_order_id
-              AND job."status" IN ('HANDED_OVER', 'SETTLED')
+              AND job."status" = 'HANDED_OVER'
               AND NOT EXISTS (
                   SELECT 1
                   FROM "shipments" shipment
