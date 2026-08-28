@@ -821,7 +821,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 4. `shipped` vyžaduje vůči aktuálnímu cenovému snapshotu `amount_due = 0` a `refundable_balance = 0`; záloha sama nikdy nestačí, ale dokončená částečná refundace odeslání neblokuje.
 5. `SliceResult` použitý pro cenu vždy odkazuje na `ReferenceProfile`, nikdy na `MachineProfile`, a jeho klíč obsahuje `geometry_hash` konkrétního `ModelGeometry`, `print_config_revision_id` i `parts_per_plate`; machine-specific odhad rezervace používá oddělený `CandidateResourceEstimate`.
 6. `Order` nesmí být `confirmed` bez reference na **verzi ceníku a verzi podmínek**.
-7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel.
+7. `Job` si při přijetí ukládá `payout_amount`, i když je příjemcem provozovatel; po aktivaci maker modelu je tato částka přesným immutable aliasem `MakerCompensationSnapshot.agreed_compensation` stejného assignmentu.
 8. Závazná cena smí vzniknout jen z deterministického výpočtu.
 9. Makerovy náklady **nikdy** nevstupují do zákaznické ceny.
 10. Neúspěšný job musí mít otevřený `ReplacementRequest` s deadlinem; navazující `Job` přes `replaces_job_id` smí vzniknout jen atomicky s čerstvou `ProductionReservation`. Jinak se jeho slot/fáze zruší: bez jediného dříve doručeného `FulfilmentSlot` následuje `cancelled → refunded`, s alespoň jedním doručeným slotem finančně vypořádané `partially_fulfilled`; u nedoručeného prerequisite sample se současně zruší a kredituje i neaktivovaný batch.
@@ -1232,6 +1232,13 @@ Vlna 3 (45–120 min): další způsobilý uzel po přesunu rezervace       payo
 ### 11.8 Výplaty a reklamace
 
 Brána na vstupu, **měsíční samofakturace** na výstupu. Zádržné se uvolní po `delivered` + reklamační okno.
+
+Po aktivaci maker modelu zapisuje acceptance transakce
+`Job.payout_amount = MakerCompensationSnapshot.agreed_compensation`; offer,
+routing i settlement proto používají tutéž immutable částku. Uplynutí
+reklamačního okna samo nestačí, pokud se assignmentu dotýká neuzavřený
+claim: settlement čeká na zamítnutí, stažení nebo konečné určení zavinění a
+maker-caused výsledek zahrne až se schválenou adjustment.
 
 - **zavinění uzlu** → uzel nese materiál, platforma dopravu a přetisk
 - **nezaviněné** (vada modelu zákazníka, nereálná tolerance) → uzel dostane zaplaceno v plné výši

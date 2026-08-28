@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#188; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#190; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -186,6 +186,12 @@ Snapshot obsahuje minimálně:
 modifier odvozen. Pozdější změna performance score nebo compensation policy
 nesmí zpětně změnit odměnu již přijatého jobu.
 
+Po aktivaci maker modelu zapíše acceptance transakce tutéž částku současně
+jako `MakerCompensationSnapshot.agreed_compensation` a
+`Job.payout_amount`; nejde o dvě cenové veličiny. Offer a routing pracují s
+budoucí agreed compensation a přijetí odmítne jakoukoli neshodu. Settlement
+pak čte immutable snapshot, jehož částka se rovná jobovému poli.
+
 ------------------------------------------------------------------------
 
 ## 5. Performance modifier
@@ -317,10 +323,13 @@ claim-hold policy a její `maker_claim_hold_days` --- podle aktuálních
 parametrů 7 dní. Doručení jednou a neměnně odvodí
 `payout_eligible_at = delivered_at + maker_claim_hold_days` z tohoto
 snapshotu. Assignment smí vstoupit do payable amount jen tehdy, když nastal
-jeho uložený `payout_eligible_at` a neběží proti němu maker-caused claim;
-settlement guard nikdy znovu nečte aktuální parametr. Do té doby zůstává
-compensation v zádržném a nesmí přejít do payoutu. Uznané claim adjustments
-se vypořádají explicitní položkou settlementu.
+jeho uložený `payout_eligible_at` a žádný claim, který se assignmentu dotýká,
+není v neuzavřeném stavu jako `opened`, `investigating` nebo
+`awaiting_resolution`. Guard blokuje i claim, jehož zavinění ještě nebylo
+určeno. Uvolní jej až zamítnutí, stažení nebo konečné rozhodnutí; u
+maker-caused výsledku navíc vyžaduje schválenou adjustment zahrnutou v
+settlement line. Settlement guard nikdy znovu nečte aktuální parametr. Do té
+doby zůstává compensation v zádržném a nesmí přejít do payoutu.
 
 Každý assignment se do settlementu zařadí přes immutable
 `MakerSettlementLine`, který jednoznačně odkazuje právě jeden
@@ -549,6 +558,8 @@ Ve v0 se **nestaví**:
 
 Datový šev pro budoucí `Node` scope zůstává zachován, ale žádná z těchto
 maker entit ani workflow nevzniká před kapacitní bránou.
+`Job.payout_amount` však bránu přežívá: u externího assignmentu je přesným
+immutable aliasem `MakerCompensationSnapshot.agreed_compensation`.
 
 ------------------------------------------------------------------------
 
@@ -631,6 +642,11 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     snapshotu musí být totožný a shoda je vynucena referenčním constraintem.
 23. Production assignment smí použít jen maker-owned uzel téhož makera;
     platform-owned uzel assignment ani compensation workflow nevytváří.
+24. `Job.payout_amount` se po maker gate rovná
+    `MakerCompensationSnapshot.agreed_compensation` stejného assignmentu.
+25. Každý neuzavřený claim dotýkající se assignmentu blokuje settlement bez
+    ohledu na dosud neurčené zavinění; maker-caused výsledek vyžaduje
+    schválenou adjustment.
 
 ------------------------------------------------------------------------
 
@@ -639,7 +655,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#188.
+#184–#190.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
