@@ -130,6 +130,25 @@ async function createCurrentPlanAndPayment(
   await fixtures.finalizePayment(foundation);
 }
 
+async function advanceOrderToCompleted(
+  client: PoolClient,
+  orderId: string,
+): Promise<void> {
+  for (const status of [
+    "IN_PRODUCTION",
+    "QC_PASSED",
+    "READY_TO_SHIP",
+    "SHIPPED",
+    "DELIVERED",
+    "COMPLETED",
+  ]) {
+    await client.query(
+      `UPDATE orders SET status = $2::order_status WHERE id = $1`,
+      [orderId, status],
+    );
+  }
+}
+
 describe("commerce persistence foundations", () => {
   beforeAll(() => {
     if (!databaseUrl) {
@@ -1612,6 +1631,22 @@ describe("commerce persistence foundations", () => {
 
   it("requires scoped payment topology and retains provider/refund identities", async () => {
     await rollback("scoped-identities", async (client, fixtures) => {
+      await expectQueryError(
+        client,
+        "terminal_order_insert",
+        () =>
+          client.query(
+            `INSERT INTO orders
+             (id, public_reference, status, created_at, updated_at)
+             VALUES ($1,$2,'COMPLETED',$3,$3)`,
+            [
+              fixtures.id("terminal-order-insert"),
+              "terminal-order-insert",
+              new Date(),
+            ],
+          ),
+        { code: "23514", constraint: "order_status_transition_check" },
+      );
       const foundation = await fixtures.createFoundation(
         "scoped-identities",
         {},
@@ -1631,6 +1666,15 @@ describe("commerce persistence foundations", () => {
       const other = await fixtures.createFoundation("other");
       await expectQueryError(
         client,
+        "skip_draft_lifecycle",
+        () =>
+          client.query(`UPDATE orders SET status = 'COMPLETED' WHERE id = $1`, [
+            foundation.orderId,
+          ]),
+        { code: "23514", constraint: "order_status_transition_check" },
+      );
+      await expectQueryError(
+        client,
         "draft_order_payment",
         () => createCurrentPlanAndPayment(client, fixtures, foundation),
         { code: "23514", constraint: "payment_fulfilment_topology_check" },
@@ -1639,7 +1683,61 @@ describe("commerce persistence foundations", () => {
         `UPDATE orders SET status = 'QUOTED', quoted_at = $2 WHERE id = $1`,
         [foundation.orderId, new Date()],
       );
+      await expectQueryError(
+        client,
+        "skip_quoted_lifecycle",
+        () =>
+          client.query(`UPDATE orders SET status = 'SHIPPED' WHERE id = $1`, [
+            foundation.orderId,
+          ]),
+        { code: "23514", constraint: "order_status_transition_check" },
+      );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
+      await createCurrentPlanAndPayment(client, fixtures, other);
+      await expectQueryError(
+        client,
+        "captured_payment_insert",
+        () =>
+          client.query(
+            `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
+                                  payment_schedule_id, role, provider, provider_intent_id,
+                                  provider_capture_id, requested_amount_minor,
+                                  captured_amount_minor, currency, status, captured_at,
+                                  created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,950,950,'EUR','CAPTURED',$8,$8,$8)`,
+            [
+              fixtures.id("direct-captured-payment"),
+              foundation.orderId,
+              foundation.priceSnapshotId,
+              foundation.orderPriceBindingId,
+              foundation.paymentScheduleId,
+              "direct-captured-intent",
+              "direct-captured-capture",
+              new Date(),
+            ],
+          ),
+        { code: "23514", constraint: "payment_initial_status_check" },
+      );
+      await expectQueryError(
+        client,
+        "audit_order_payment_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, order_id, payment_id, event_type, payload, created_at)
+             VALUES ($1,$2,$3,'payment.scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-order-payment-mismatch"),
+              foundation.orderId,
+              other.paymentId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
       await expectQueryError(
         client,
         "cross_order_shipment",
@@ -1743,6 +1841,59 @@ describe("commerce persistence foundations", () => {
           fixtures.id("refund-first"),
           foundation.paymentId,
           "refund-first",
+          new Date(),
+        ],
+      );
+      await expectQueryError(
+        client,
+        "audit_refund_payment_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, payment_id, refund_transaction_id, event_type, payload, created_at)
+             VALUES ($1,$2,$3,'refund.scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-refund-payment-mismatch"),
+              other.paymentId,
+              fixtures.id("refund-first"),
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "audit_refund_order_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, order_id, refund_transaction_id, event_type, payload, created_at)
+             VALUES ($1,$2,$3,'refund.scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-refund-order-mismatch"),
+              other.orderId,
+              fixtures.id("refund-first"),
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
+      await client.query(
+        `INSERT INTO audit_events
+         (id, order_id, payment_id, refund_transaction_id,
+          event_type, payload, created_at)
+         VALUES ($1,$2,$3,$4,'refund.scope_consistent','{}'::jsonb,$5)`,
+        [
+          fixtures.id("audit-refund-scope-consistent"),
+          foundation.orderId,
+          foundation.paymentId,
+          fixtures.id("refund-first"),
           new Date(),
         ],
       );
@@ -2034,10 +2185,7 @@ describe("commerce persistence foundations", () => {
         ).rows,
       ).toEqual([{ retention_hold: "ACTIVE_ORDER" }]);
       const completedAt = new Date();
-      await client.query(
-        `UPDATE orders SET status = 'COMPLETED' WHERE id = $1`,
-        [completed.orderId],
-      );
+      await advanceOrderToCompleted(client, completed.orderId);
       const releasedSource = await client.query<{
         retention_hold: string;
         source_delete_after: Date;
@@ -2059,7 +2207,7 @@ describe("commerce persistence foundations", () => {
           client.query(`UPDATE orders SET status = 'CONFIRMED' WHERE id = $1`, [
             completed.orderId,
           ]),
-        { code: "23514", constraint: "order_terminal_status_check" },
+        { code: "23514", constraint: "order_status_transition_check" },
       );
 
       const captured = await fixtures.createFoundation("captured-cancelled");
@@ -2119,10 +2267,7 @@ describe("commerce persistence foundations", () => {
         `UPDATE model_files SET retention_hold = 'LEGAL' WHERE id = $1`,
         [legal.modelFileId],
       );
-      await client.query(
-        `UPDATE orders SET status = 'COMPLETED' WHERE id = $1`,
-        [legal.orderId],
-      );
+      await advanceOrderToCompleted(client, legal.orderId);
       expect(
         (
           await client.query<{ retention_hold: string }>(

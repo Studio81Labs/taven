@@ -720,6 +720,56 @@ CREATE TRIGGER "audit_events_append_only"
 BEFORE UPDATE OR DELETE ON "audit_events"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
 
+CREATE FUNCTION taven_validate_audit_event_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."payment_id" IS NOT NULL
+       AND NEW."order_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           WHERE payment."id" = NEW."payment_id"
+             AND payment."order_id" = NEW."order_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event payment must belong to its scoped order'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
+    IF NEW."refund_transaction_id" IS NOT NULL
+       AND NEW."payment_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "refund_transactions" refund
+           WHERE refund."id" = NEW."refund_transaction_id"
+             AND refund."payment_id" = NEW."payment_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event refund must belong to its scoped payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
+    IF NEW."refund_transaction_id" IS NOT NULL
+       AND NEW."order_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "refund_transactions" refund
+           JOIN "payments" payment ON payment."id" = refund."payment_id"
+           WHERE refund."id" = NEW."refund_transaction_id"
+             AND payment."order_id" = NEW."order_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event refund must belong to its scoped order'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "audit_events_scope_reconciled"
+BEFORE INSERT ON "audit_events"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_audit_event_scope();
+
 CREATE FUNCTION taven_prevent_quote_price_binding_mutation()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1206,13 +1256,42 @@ CREATE TRIGGER "order_items_draft_mutability"
 BEFORE INSERT OR UPDATE OR DELETE ON "order_items"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_order_item_mutation();
 
-CREATE FUNCTION taven_protect_order_draft_status()
+CREATE FUNCTION taven_validate_order_status_transition()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    IF OLD."status" <> 'DRAFT' AND NEW."status" = 'DRAFT' THEN
-        RAISE EXCEPTION 'draft is an initial order state and cannot be restored'
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."status" <> 'DRAFT' THEN
+            RAISE EXCEPTION 'new orders must begin in draft status'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'DRAFT' AND NEW."status" = 'QUOTED')
+           OR (OLD."status" = 'QUOTED' AND NEW."status" IN ('CONFIRMED', 'CANCELLED'))
+           OR (OLD."status" = 'CONFIRMED' AND NEW."status" IN ('IN_PRODUCTION', 'CANCELLED'))
+           OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'CANCELLED'))
+           OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED'))
+           OR (OLD."status" = 'READY_TO_SHIP' AND NEW."status" IN ('SHIPPED', 'CANCELLED'))
+           OR (OLD."status" = 'SHIPPED' AND NEW."status" IN ('DELIVERED', 'PARTIALLY_FULFILLED', 'CANCELLED'))
+           OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
+           OR (
+               OLD."status" = 'CANCELLED'
+               AND NEW."status" IN ('REFUNDED', 'CANCELLED_SETTLED')
+               AND EXISTS (
+                   SELECT 1
+                   FROM "payments" payment
+                   WHERE payment."order_id" = OLD."id"
+                     AND coalesce(payment."captured_amount_minor", 0) > 0
+               )
+           )
+       ) THEN
+        RAISE EXCEPTION 'order status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
     END IF;
 
@@ -1220,9 +1299,9 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER "orders_draft_status_not_restored"
-BEFORE UPDATE OF "status" ON "orders"
-FOR EACH ROW EXECUTE FUNCTION taven_protect_order_draft_status();
+CREATE TRIGGER "orders_status_transitions_valid"
+BEFORE INSERT OR UPDATE OF "status" ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_order_status_transition();
 
 CREATE FUNCTION taven_validate_order_price_binding()
 RETURNS trigger
@@ -2198,6 +2277,11 @@ AS $$
 DECLARE
     quoted_phase_count integer;
 BEGIN
+    IF NEW."status" NOT IN ('CREATED', 'PENDING') THEN
+        RAISE EXCEPTION 'new payments must begin in a pre-capture state'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_initial_status_check';
+    END IF;
+
     IF NOT NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NOT NULL THEN
         RAISE EXCEPTION 'new payment capture intent requires an open authorization window'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
