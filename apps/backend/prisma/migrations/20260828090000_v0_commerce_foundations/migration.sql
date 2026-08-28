@@ -921,11 +921,28 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM "individual_order_origins" origin
-        JOIN "order_items" item ON item."order_id" = origin."order_id"
-        LEFT JOIN "individual_order_item_sources" source ON source."order_item_id" = item."id"
         WHERE origin."order_id" = NEW."id"
-        GROUP BY origin."order_id"
-        HAVING count(item."id") = 0 OR count(source."order_item_id") <> count(item."id")
+          AND (
+              EXISTS (
+                  SELECT 1
+                  FROM "order_items" item
+                  LEFT JOIN "individual_order_item_sources" source
+                    ON source."order_item_id" = item."id"
+                  WHERE item."order_id" = origin."order_id"
+                    AND source."order_item_id" IS NULL
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM "quote_items" quote_item
+                  LEFT JOIN "individual_order_item_sources" source
+                    ON source."quote_item_id" = quote_item."id"
+                  LEFT JOIN "order_items" item
+                    ON item."id" = source."order_item_id"
+                   AND item."order_id" = origin."order_id"
+                  WHERE quote_item."quote_id" = origin."quote_id"
+                    AND item."id" IS NULL
+              )
+          )
     ) THEN
         RAISE EXCEPTION 'quoted individual order requires an exact immutable source for every item'
             USING ERRCODE = '23514', CONSTRAINT = 'individual_order_item_completion_check';
@@ -2098,6 +2115,68 @@ CREATE CONSTRAINT TRIGGER "fulfilment_slots_parent_lifecycle_reconciled"
 AFTER UPDATE OF "outcome" ON "fulfilment_slots"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_reconcile_order_post_confirmation_lifecycle();
+
+CREATE FUNCTION taven_reconcile_cancelled_order_reservation_terminal()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_status "order_status";
+BEGIN
+    IF TG_TABLE_NAME = 'orders' THEN
+        target_order_id := (to_jsonb(NEW) ->> 'id')::uuid;
+    ELSE
+        SELECT phase."order_id"
+        INTO target_order_id
+        FROM "phase_reservation_sets" reservation_set
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."id" = reservation_set."phase_resource_plan_id"
+         AND resource_plan."node_id" = reservation_set."node_id"
+        JOIN "order_phases" phase ON phase."id" = resource_plan."order_phase_id"
+        WHERE reservation_set."id" = (to_jsonb(NEW) ->> 'id')::uuid;
+    END IF;
+
+    SELECT target_order."status"
+    INTO target_status
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    IF target_status IS NULL OR target_status NOT IN ('CANCELLED', 'REFUNDED') THEN
+        RETURN NULL;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "order_phases" phase
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."order_phase_id" = phase."id"
+        JOIN "phase_reservation_sets" reservation_set
+          ON reservation_set."phase_resource_plan_id" = resource_plan."id"
+         AND reservation_set."node_id" = resource_plan."node_id"
+        WHERE phase."order_id" = target_order_id
+          AND reservation_set."status" NOT IN ('SETTLED', 'RELEASED', 'EXPIRED')
+    ) THEN
+        RAISE EXCEPTION 'cancelled order cannot retain an active reservation set'
+            USING ERRCODE = '23514', CONSTRAINT = 'cancelled_order_reservation_terminal_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "orders_cancelled_reservations_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_cancelled_order_reservation_terminal();
+CREATE CONSTRAINT TRIGGER "phase_reservation_sets_cancelled_order_reconciled"
+AFTER INSERT OR UPDATE OF "status" ON "phase_reservation_sets"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION taven_reconcile_cancelled_order_reservation_terminal();
 
 CREATE FUNCTION taven_validate_order_price_binding()
 RETURNS trigger

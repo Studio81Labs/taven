@@ -227,6 +227,8 @@ async function forceOrderLifecycleConstraints(
   await client.query(
     `SET CONSTRAINTS
        "orders_post_confirmation_lifecycle_reconciled",
+       "orders_cancelled_reservations_reconciled",
+       "phase_reservation_sets_cancelled_order_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
        "shipments_parent_lifecycle_reconciled",
@@ -235,6 +237,8 @@ async function forceOrderLifecycleConstraints(
   await client.query(
     `SET CONSTRAINTS
        "orders_post_confirmation_lifecycle_reconciled",
+       "orders_cancelled_reservations_reconciled",
+       "phase_reservation_sets_cancelled_order_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
        "shipments_parent_lifecycle_reconciled",
@@ -413,6 +417,60 @@ async function cancelOrderBeforeHandoff(
   orderId: string,
 ): Promise<void> {
   const cancelledAt = new Date();
+  await client.query(
+    `UPDATE inventory_reservations inventory_reservation
+     SET status = 'RELEASED', updated_at = $2
+     FROM production_reservations production,
+          phase_resource_plans resource_plan,
+          order_phases phase
+     WHERE inventory_reservation.production_reservation_id = production.id
+       AND inventory_reservation.node_id = production.node_id
+       AND production.phase_resource_plan_id = resource_plan.id
+       AND production.node_id = resource_plan.node_id
+       AND resource_plan.order_phase_id = phase.id
+       AND phase.order_id = $1
+       AND inventory_reservation.status IN ('RESERVED', 'HELD', 'ALLOCATED')`,
+    [orderId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE capacity_reservations capacity_reservation
+     SET status = 'RELEASED', updated_at = $2
+     FROM production_reservations production,
+          phase_resource_plans resource_plan,
+          order_phases phase
+     WHERE capacity_reservation.production_reservation_id = production.id
+       AND capacity_reservation.node_id = production.node_id
+       AND production.phase_resource_plan_id = resource_plan.id
+       AND production.node_id = resource_plan.node_id
+       AND resource_plan.order_phase_id = phase.id
+       AND phase.order_id = $1
+       AND capacity_reservation.status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')`,
+    [orderId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE production_reservations production
+     SET status = 'RELEASED', updated_at = $2
+     FROM phase_resource_plans resource_plan,
+          order_phases phase
+     WHERE production.phase_resource_plan_id = resource_plan.id
+       AND production.node_id = resource_plan.node_id
+       AND resource_plan.order_phase_id = phase.id
+       AND phase.order_id = $1
+       AND production.status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')`,
+    [orderId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE phase_reservation_sets reservation_set
+     SET status = 'RELEASED', updated_at = $2
+     FROM phase_resource_plans resource_plan,
+          order_phases phase
+     WHERE reservation_set.phase_resource_plan_id = resource_plan.id
+       AND reservation_set.node_id = resource_plan.node_id
+       AND resource_plan.order_phase_id = phase.id
+       AND phase.order_id = $1
+       AND reservation_set.status IN ('BUILDING', 'RESERVED', 'HELD')`,
+    [orderId, cancelledAt],
+  );
   await client.query(
     `UPDATE jobs SET status = 'CANCELLED', updated_at = $2 WHERE order_id = $1`,
     [orderId, cancelledAt],
@@ -2276,6 +2334,43 @@ describe("commerce persistence foundations", () => {
         },
       );
 
+      await expectQueryError(
+        client,
+        "confirmed_cancel_without_resource_release",
+        async () => {
+          const cancelledAt = new Date();
+          await client.query(
+            `UPDATE jobs
+             SET status = 'CANCELLED', updated_at = $2 WHERE order_id = $1`,
+            [foundation.orderId, cancelledAt],
+          );
+          await client.query(
+            `UPDATE shipments
+             SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, cancelledAt],
+          );
+          await client.query(
+            `UPDATE order_phases
+             SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, cancelledAt],
+          );
+          await client.query(
+            `UPDATE orders
+             SET status = 'CANCELLED', updated_at = $2 WHERE id = $1`,
+            [foundation.orderId, cancelledAt],
+          );
+          await client.query(
+            `SET CONSTRAINTS "orders_cancelled_reservations_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "cancelled_order_reservation_terminal_check",
+        },
+      );
+
       await client.query(
         `UPDATE inventory_reservations SET status = 'ALLOCATED' WHERE id = $1`,
         [production.inventoryReservationId],
@@ -3433,16 +3528,18 @@ describe("commerce persistence foundations", () => {
     );
   });
 
-  it("allows an individual draft only after accepting a quoted request and copies its quote item exactly", async () => {
+  it("quotes an individual order only after copying every accepted quote item exactly", async () => {
     await rollback("individual-copy", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation("individual-copy");
       const quoteRequestId = fixtures.id("custom-request");
       const quoteId = fixtures.id("custom-quote");
       const quoteItemId = fixtures.id("custom-quote-item");
+      const secondQuoteItemId = fixtures.id("custom-quote-item-2");
       const snapshotId = fixtures.id("custom-snapshot");
       const scheduleId = fixtures.id("custom-schedule");
       const orderId = fixtures.id("custom-order");
       const orderItemId = fixtures.id("custom-order-item");
+      const secondOrderItemId = fixtures.id("custom-order-item-2");
       const now = new Date();
       await client.query(
         `INSERT INTO quote_requests (id, customer_id, status, created_at, updated_at)
@@ -3467,6 +3564,20 @@ describe("commerce persistence foundations", () => {
          VALUES ($1,$2,0,$3,$4,$5,'PLA','black',2,$6)`,
         [
           quoteItemId,
+          quoteId,
+          foundation.modelFileId,
+          foundation.modelGeometryId,
+          foundation.printConfigRevisionId,
+          now,
+        ],
+      );
+      await client.query(
+        `INSERT INTO quote_items (id, quote_id, ordinal, source_model_file_id,
+                                 model_geometry_id, print_config_revision_id, material,
+                                 color, quantity, created_at)
+         VALUES ($1,$2,1,$3,$4,$5,'PLA','white',1,$6)`,
+        [
+          secondQuoteItemId,
           quoteId,
           foundation.modelFileId,
           foundation.modelGeometryId,
@@ -3512,7 +3623,7 @@ describe("commerce persistence foundations", () => {
             `INSERT INTO quote_items (id, quote_id, ordinal, source_model_file_id,
                                      model_geometry_id, print_config_revision_id, material,
                                      color, quantity, created_at)
-             VALUES ($1,$2,1,$3,$4,$5,'PLA','white',1,$6)`,
+             VALUES ($1,$2,2,$3,$4,$5,'PLA','white',1,$6)`,
             [
               fixtures.id("price-bound-quote-item"),
               quoteId,
@@ -3701,6 +3812,16 @@ describe("commerce persistence foundations", () => {
         [orderId, quoteId],
       );
       await client.query(
+        `SET CONSTRAINTS
+           "quote_requests_individual_order_reconciled",
+           "individual_order_origins_request_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "quote_requests_individual_order_reconciled",
+           "individual_order_origins_request_reconciled" DEFERRED`,
+      );
+      await client.query(
         `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,
                                  model_geometry_id, print_config_revision_id, material,
                                  color, quantity, created_at)
@@ -3719,24 +3840,83 @@ describe("commerce persistence foundations", () => {
          VALUES ($1,$2)`,
         [orderItemId, quoteItemId],
       );
+      const bindingId = fixtures.id("custom-order-price-binding");
+      const phaseId = fixtures.id("custom-order-phase");
+      const createQuotedTopology = async (): Promise<void> => {
+        await client.query(
+          `INSERT INTO order_price_bindings
+             (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [bindingId, orderId, snapshotId, destinationId, now],
+        );
+        await client.query(
+          `INSERT INTO order_active_price_bindings
+             (order_id, order_price_binding_id)
+           VALUES ($1,$2)`,
+          [orderId, bindingId],
+        );
+        await client.query(
+          `INSERT INTO order_phases
+             (id, order_id, kind, status, created_at, updated_at)
+           VALUES ($1,$2,'SINGLE','QUOTED',$3,$3)`,
+          [phaseId, orderId, now],
+        );
+      };
+
+      await expectQueryError(
+        client,
+        "quoted_individual_order_missing_quote_item",
+        async () => {
+          await createQuotedTopology();
+          await client.query(
+            `UPDATE orders
+             SET status = 'QUOTED', quoted_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [orderId, now],
+          );
+          await client.query(
+            `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "individual_order_item_completion_check",
+        },
+      );
+
       await client.query(
-        `INSERT INTO order_price_bindings
-           (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
-         VALUES ($1,$2,$3,$4,$5)`,
+        `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,
+                                 model_geometry_id, print_config_revision_id, material,
+                                 color, quantity, created_at)
+         VALUES ($1,$2,1,$3,$4,$5,'PLA','white',1,$6)`,
         [
-          fixtures.id("custom-order-price-binding"),
+          secondOrderItemId,
           orderId,
-          snapshotId,
-          destinationId,
+          foundation.modelFileId,
+          foundation.modelGeometryId,
+          foundation.printConfigRevisionId,
           now,
         ],
       );
       await client.query(
+        `INSERT INTO individual_order_item_sources (order_item_id, quote_item_id)
+         VALUES ($1,$2)`,
+        [secondOrderItemId, secondQuoteItemId],
+      );
+      await createQuotedTopology();
+      await client.query(
         `SET CONSTRAINTS
            "order_price_bindings_individual_quote_snapshot_reconciled",
-           "individual_order_origins_quote_snapshot_reconciled",
-           "quote_requests_individual_order_reconciled",
-           "individual_order_origins_request_reconciled" IMMEDIATE`,
+           "individual_order_origins_quote_snapshot_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `UPDATE orders
+         SET status = 'QUOTED', quoted_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [orderId, now],
+      );
+      await client.query(
+        `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" IMMEDIATE`,
       );
       await client.query(
         `INSERT INTO audit_events
@@ -3757,7 +3937,7 @@ describe("commerce persistence foundations", () => {
             [quoteRequestId],
           )
         ).rows,
-      ).toEqual([{ request_status: "ACCEPTED", order_status: "DRAFT" }]);
+      ).toEqual([{ request_status: "ACCEPTED", order_status: "QUOTED" }]);
       expect(
         (
           await client.query<{
