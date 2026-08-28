@@ -2069,6 +2069,30 @@ describe("commerce persistence foundations", () => {
       );
       const changedAt = new Date();
 
+      for (const [name, providerShipmentId] of [
+        ["empty_provider_shipment", ""],
+        ["blank_provider_shipment", "   "],
+        ["control_whitespace_provider_shipment", "\t\n"],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(
+              `UPDATE shipments
+               SET status = 'LABEL_CREATED', carrier = 'test-carrier',
+                   provider_shipment_id = $2, label_created_at = $3,
+                   updated_at = $3
+               WHERE order_id = $1`,
+              [foundation.orderId, providerShipmentId, changedAt],
+            ),
+          {
+            code: "23514",
+            constraint: "shipment_lifecycle_evidence_check",
+          },
+        );
+      }
+
       await expectQueryError(
         client,
         "quoted_shipment_label",
@@ -3797,6 +3821,31 @@ describe("commerce persistence foundations", () => {
         ].sort((left, right) => left.id.localeCompare(right.id)),
       );
 
+      await expectQueryError(
+        client,
+        "finish_delivery_without_parent_transition",
+        async () => {
+          const finalDeliveredAt = new Date();
+          await client.query(
+            `UPDATE shipments
+             SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+             WHERE order_id = $1 AND status IN ('HANDED_OVER', 'IN_TRANSIT')`,
+            [foundation.orderId, finalDeliveredAt],
+          );
+          await client.query(
+            `UPDATE fulfilment_slots
+             SET outcome = 'DELIVERED', updated_at = $2
+             WHERE order_id = $1 AND outcome = 'PENDING'`,
+            [foundation.orderId, finalDeliveredAt],
+          );
+          await forceOrderLifecycleConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "order_post_confirmation_lifecycle_check",
+        },
+      );
+
       await advanceOrderLifecycleStep(client, foundation.orderId, "DELIVERED");
     });
   });
@@ -4016,6 +4065,47 @@ describe("commerce persistence foundations", () => {
           },
         );
         await advanceOrderLifecycleStep(client, foundation.orderId, status);
+        if (status === "IN_PRODUCTION") {
+          await expectQueryError(
+            client,
+            "deliver_while_order_in_production",
+            async () => {
+              const deliveredAt = new Date();
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'LABEL_CREATED', carrier = 'test-carrier',
+                     provider_shipment_id = 'provider-premature-delivery',
+                     tracking_code = 'tracking-premature-delivery',
+                     label_created_at = $2, updated_at = $2
+                 WHERE order_id = $1`,
+                [foundation.orderId, deliveredAt],
+              );
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+                 WHERE order_id = $1`,
+                [foundation.orderId, deliveredAt],
+              );
+              await client.query(
+                `UPDATE shipments
+                 SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+                 WHERE order_id = $1`,
+                [foundation.orderId, deliveredAt],
+              );
+              await client.query(
+                `UPDATE fulfilment_slots
+                 SET outcome = 'DELIVERED', updated_at = $2
+                 WHERE order_id = $1`,
+                [foundation.orderId, deliveredAt],
+              );
+              await forceOrderLifecycleConstraints(client);
+            },
+            {
+              code: "23514",
+              constraint: "order_post_confirmation_lifecycle_check",
+            },
+          );
+        }
         if (status === "READY_TO_SHIP") {
           await expectQueryError(
             client,
@@ -4703,6 +4793,43 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514", constraint: "refund_captured_payment_check" },
       );
+      for (const [name, providerRefundId] of [
+        ["empty_provider_refund", ""],
+        ["blank_provider_refund", "   "],
+        ["control_whitespace_provider_refund", "\t\n"],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(
+              `UPDATE refund_transactions
+               SET provider_refund_id = $2
+               WHERE id = $1`,
+              [fixtures.id("refund-first"), providerRefundId],
+            ),
+          {
+            code: "23514",
+            constraint: "refund_transactions_provider_refund_identity_check",
+          },
+        );
+        await expectQueryError(
+          client,
+          `${name}_on_success`,
+          () =>
+            client.query(
+              `UPDATE refund_transactions
+               SET status = 'SUCCEEDED', provider_refund_id = $2,
+                   completed_at = $3, updated_at = $3
+               WHERE id = $1`,
+              [fixtures.id("refund-first"), providerRefundId, new Date()],
+            ),
+          {
+            code: "23514",
+            constraint: "refund_transactions_provider_refund_identity_check",
+          },
+        );
+      }
       await expectQueryError(
         client,
         "succeed_refund_without_provider_facts",
@@ -4780,6 +4907,20 @@ describe("commerce persistence foundations", () => {
           "provider-refund-first",
           refundCompletedAt,
         ],
+      );
+      await expectQueryError(
+        client,
+        "replace_successful_provider_refund_with_blank",
+        () =>
+          client.query(
+            `UPDATE refund_transactions SET provider_refund_id = '   '
+             WHERE id = $1`,
+            [fixtures.id("refund-first")],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_transaction_identity_immutable_check",
+        },
       );
       await client.query(
         `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,

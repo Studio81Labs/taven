@@ -622,6 +622,11 @@ ALTER TABLE "order_phases" ADD CONSTRAINT "order_phases_timestamps_check" CHECK 
 ALTER TABLE "shipment_plans" ADD CONSTRAINT "shipment_plans_values_check" CHECK ("ordinal" >= 0 AND "category" <> '' AND "planned_volume_cubic_mm" >= 0 AND "planned_weight_milligrams" >= 0 AND "shipping_amount_minor" >= 0 AND "packaging_amount_minor" >= 0 AND "handling_amount_minor" >= 0);
 ALTER TABLE "fulfilment_slots" ADD CONSTRAINT "fulfilment_slots_values_check" CHECK ("quantity_ordinal" >= 1 AND "settlement_amount_minor" >= 0);
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_timestamps_check" CHECK (("label_created_at" IS NULL OR "label_created_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at") AND ("delivered_at" IS NULL OR "delivered_at" >= "created_at") AND ("cancelled_at" IS NULL OR "cancelled_at" >= "created_at"));
+ALTER TABLE "shipments" ADD CONSTRAINT "shipments_provider_identity_check" CHECK (
+    ("carrier" IS NULL OR "carrier" ~ '[^[:space:]]')
+    AND ("provider_shipment_id" IS NULL OR "provider_shipment_id" ~ '[^[:space:]]')
+    AND ("tracking_code" IS NULL OR "tracking_code" ~ '[^[:space:]]')
+);
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_replacement_not_self_check" CHECK ("replaces_shipment_id" IS NULL OR "replaces_shipment_id" <> "id");
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (("accepted_at" IS NULL OR "accepted_at" >= "created_at") AND ("printing_at" IS NULL OR "printing_at" >= "created_at") AND ("qc_approved_at" IS NULL OR "qc_approved_at" >= "created_at") AND ("packed_at" IS NULL OR "packed_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
@@ -646,6 +651,9 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
     )
 );
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_values_check" CHECK ("amount_minor" > 0 AND ("completed_at" IS NULL OR "completed_at" >= "requested_at"));
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_provider_refund_identity_check" CHECK (
+    "provider_refund_id" IS NULL OR "provider_refund_id" ~ '[^[:space:]]'
+);
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_success_facts_check" CHECK (
     "status" <> 'SUCCEEDED'
     OR ("provider_refund_id" IS NOT NULL AND "completed_at" IS NOT NULL)
@@ -2089,8 +2097,23 @@ BEGIN
             FROM "jobs"
             WHERE "order_id" = target_order_id
               AND "status" IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" <> 'PLANNED'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
         ) THEN
-            RAISE EXCEPTION 'in-production order requires atomic phase and Job production start'
+            RAISE EXCEPTION 'in-production order requires production facts and initial fulfilment state'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
         END IF;
     ELSIF target_status = 'QC_PASSED' THEN
@@ -2110,8 +2133,23 @@ BEGIN
                   "status" NOT IN ('QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
                   OR "qc_approved_at" IS NULL
               )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" <> 'PLANNED'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
         ) THEN
-            RAISE EXCEPTION 'QC-passed order requires complete phase and Job QC evidence'
+            RAISE EXCEPTION 'QC-passed order requires complete QC and initial fulfilment state'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
         END IF;
     ELSIF target_status = 'READY_TO_SHIP' THEN
@@ -2152,6 +2190,11 @@ BEGIN
                   OR shipment."provider_shipment_id" IS NULL
                   OR shipment."label_created_at" IS NULL
               )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
         ) THEN
             RAISE EXCEPTION 'ready-to-ship order requires every Job packed and every Shipment labelled'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
@@ -2244,8 +2287,26 @@ BEGIN
                         WHERE replacement."replaces_shipment_id" = shipment."id"
                     )
               )
+        ) OR (
+            NOT EXISTS (
+                SELECT 1
+                FROM "shipments" shipment
+                WHERE shipment."order_id" = target_order_id
+                  AND shipment."status" <> 'DELIVERED'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "shipments" replacement
+                      WHERE replacement."replaces_shipment_id" = shipment."id"
+                  )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM "fulfilment_slots"
+                WHERE "order_id" = target_order_id
+                  AND "outcome" <> 'DELIVERED'
+            )
         ) THEN
-            RAISE EXCEPTION 'shipped order requires plan-matched Job and Shipment handoff evidence'
+            RAISE EXCEPTION 'shipped order requires matched handoff evidence and must advance after final delivery'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
         END IF;
     ELSIF target_status = 'DELIVERED' THEN
@@ -4262,7 +4323,9 @@ BEGIN
     IF (NEW."status" IN ('LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
         AND (
             NEW."carrier" IS NULL
+            OR NEW."carrier" !~ '[^[:space:]]'
             OR NEW."provider_shipment_id" IS NULL
+            OR NEW."provider_shipment_id" !~ '[^[:space:]]'
             OR NEW."label_created_at" IS NULL
         ))
        OR (NEW."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
