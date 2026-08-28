@@ -398,7 +398,7 @@ CREATE TABLE "refund_transactions" (
     "amount_minor" BIGINT NOT NULL,
     "reason" "refund_reason" NOT NULL,
     "status" "refund_status" NOT NULL DEFAULT 'PENDING',
-    "requested_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "requested_at" TIMESTAMPTZ(3) NOT NULL DEFAULT clock_timestamp(),
     "completed_at" TIMESTAMPTZ(3),
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL,
@@ -1254,11 +1254,18 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     evidence_now timestamptz := clock_timestamp();
+    request_created_at timestamptz;
 BEGIN
-    PERFORM 1
+    SELECT "created_at"
+    INTO request_created_at
     FROM "quote_requests"
     WHERE "id" = NEW."quote_request_id"
     FOR UPDATE;
+
+    IF NEW."issued_at" < request_created_at THEN
+        RAISE EXCEPTION 'Quote issuance evidence cannot predate its request'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_issuance_request_created_at_check';
+    END IF;
 
     IF NEW."issued_at" > evidence_now + interval '5 seconds' THEN
         RAISE EXCEPTION 'Quote issuance evidence cannot be in the future'
@@ -1538,6 +1545,11 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
+        RAISE EXCEPTION 'quote request creation evidence is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_created_at_immutable_check';
+    END IF;
+
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
            (OLD."status" = 'NEW' AND NEW."status" = 'IN_REVIEW')
@@ -1667,7 +1679,7 @@ END;
 $$;
 
 CREATE TRIGGER "quote_requests_issued_quote_protected"
-BEFORE UPDATE OF "quote_session_id", "customer_id", "status" ON "quote_requests"
+BEFORE UPDATE OF "quote_session_id", "customer_id", "status", "created_at" ON "quote_requests"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_request_issued_quote();
 
 CREATE FUNCTION taven_reconcile_issued_quote_request()
@@ -3747,12 +3759,15 @@ BEGIN
 
     IF EXISTS (
         SELECT 1 FROM "individual_order_origins" origin WHERE origin."order_id" = NEW."order_id"
-    ) AND NOT EXISTS (
-        SELECT 1
-        FROM "individual_order_origins" origin
-        JOIN "quote_price_bindings" quote_binding ON quote_binding."quote_id" = origin."quote_id"
-        WHERE origin."order_id" = NEW."order_id"
-          AND quote_binding."price_snapshot_id" = NEW."price_snapshot_id"
+    ) AND (
+        NEW."invalidated_at" IS NOT NULL
+        OR NOT EXISTS (
+            SELECT 1
+            FROM "individual_order_origins" origin
+            JOIN "quote_price_bindings" quote_binding ON quote_binding."quote_id" = origin."quote_id"
+            WHERE origin."order_id" = NEW."order_id"
+              AND quote_binding."price_snapshot_id" = NEW."price_snapshot_id"
+        )
     ) THEN
         RAISE EXCEPTION 'individual order price binding must use its accepted quote snapshot'
             USING ERRCODE = '23514', CONSTRAINT = 'individual_order_price_binding_check';
@@ -3787,7 +3802,7 @@ BEGIN
           ON quoted."quote_id" = origin."quote_id"
          AND quoted."price_snapshot_id" = binding."price_snapshot_id"
         WHERE binding."order_id" = target_order_id
-          AND quoted."quote_id" IS NULL
+          AND (quoted."quote_id" IS NULL OR binding."invalidated_at" IS NOT NULL)
     ) THEN
         RAISE EXCEPTION 'individual order price binding must use its accepted quote snapshot'
             USING ERRCODE = '23514', CONSTRAINT = 'individual_order_price_binding_check';
@@ -3842,6 +3857,15 @@ BEGIN
         FROM "orders"
         WHERE "id" = OLD."order_id"
         FOR UPDATE NOWAIT;
+
+        IF EXISTS (
+            SELECT 1
+            FROM "individual_order_origins" origin
+            WHERE origin."order_id" = OLD."order_id"
+        ) THEN
+            RAISE EXCEPTION 'individual order price bindings retain their accepted Quote snapshot'
+                USING ERRCODE = '23514', CONSTRAINT = 'individual_order_price_binding_invalidation_check';
+        END IF;
 
         -- Repeat the active-reference check after taking the Order lock.
         IF EXISTS (
@@ -6481,10 +6505,21 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'refund_captured_payment_check';
     END IF;
 
+    IF NEW."requested_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'refund request evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_request_evidence_check';
+    END IF;
+
     IF NEW."completed_at" IS NOT NULL
        AND NEW."completed_at" > evidence_now + interval '5 seconds' THEN
         RAISE EXCEPTION 'refund completion evidence cannot be in the future'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_completion_evidence_check';
+    END IF;
+
+    IF NEW."requested_at" < payment_captured_at
+       OR (NEW."completed_at" IS NOT NULL AND NEW."completed_at" < payment_captured_at) THEN
+        RAISE EXCEPTION 'refund evidence cannot predate payment capture'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_capture_timestamp_order_check';
     END IF;
 
     IF TG_OP = 'UPDATE' THEN

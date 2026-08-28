@@ -2411,12 +2411,17 @@ describe("commerce persistence foundations", () => {
         if (!invalidatingPid) {
           throw new Error("binding invalidation backend pid is unavailable");
         }
-        const blockedInvalidation = invalidating.query(
-          `UPDATE order_price_bindings
-         SET invalidated_at = clock_timestamp()
-         WHERE id = $1`,
-          [replacementBindingId],
-        );
+        const blockedInvalidation = invalidating
+          .query(
+            `UPDATE order_price_bindings
+             SET invalidated_at = clock_timestamp()
+             WHERE id = $1`,
+            [replacementBindingId],
+          )
+          .then(
+            () => ({ error: undefined }),
+            (error: unknown) => ({ error }),
+          );
 
         let invalidationIsWaitingForActivatedBinding = false;
         for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -2437,7 +2442,8 @@ describe("commerce persistence foundations", () => {
         expect(invalidationIsWaitingForActivatedBinding).toBe(true);
 
         await moving.query("COMMIT");
-        await expect(blockedInvalidation).rejects.toMatchObject({
+        const invalidationOutcome = await blockedInvalidation;
+        expect(invalidationOutcome.error).toMatchObject({
           code: expectedCode,
           ...(expectedCode === "23514"
             ? { constraint: "active_order_price_binding_invalidation_check" }
@@ -6872,6 +6878,61 @@ describe("commerce persistence foundations", () => {
 
       await expectQueryError(
         client,
+        "future_refund_request",
+        () =>
+          client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                requested_at, created_at, updated_at)
+             VALUES ($1,$2,$3,1,'PRODUCTION_FAILURE','PENDING',
+                     clock_timestamp() + interval '60 seconds',
+                     clock_timestamp(), clock_timestamp())`,
+            [
+              fixtures.id("future-refund-request"),
+              financial.paymentId,
+              "future-refund-request",
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_request_evidence_check",
+        },
+      );
+
+      for (const [name, status] of [
+        ["historical-pending-refund", "PENDING"],
+        ["historical-succeeded-refund", "SUCCEEDED"],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name.replaceAll("-", "_"),
+          () =>
+            client.query(
+              `INSERT INTO refund_transactions
+                 (id, payment_id, idempotency_key, provider_refund_id,
+                  amount_minor, reason, status, requested_at, completed_at,
+                  created_at, updated_at)
+               SELECT $1,$2,$3::text,
+                      CASE WHEN $4::refund_status = 'SUCCEEDED'::refund_status
+                           THEN $3::text ELSE NULL END,
+                      1,'PRODUCTION_FAILURE',$4::refund_status,
+                      captured_at - interval '1 millisecond',
+                      CASE WHEN $4::refund_status = 'SUCCEEDED'::refund_status
+                           THEN captured_at - interval '1 millisecond'
+                           ELSE NULL END,
+                      clock_timestamp(),clock_timestamp()
+               FROM payments WHERE id = $2`,
+              [fixtures.id(name), financial.paymentId, name, status],
+            ),
+          {
+            code: "23514",
+            constraint: "refund_capture_timestamp_order_check",
+          },
+        );
+      }
+
+      await expectQueryError(
+        client,
         "future_refund_insert",
         () =>
           client.query(
@@ -6880,7 +6941,8 @@ describe("commerce persistence foundations", () => {
                 amount_minor, reason, status, requested_at, completed_at,
                 created_at, updated_at)
              VALUES ($1,$2,$3,$4,1,'PRODUCTION_FAILURE','SUCCEEDED',
-                     clock_timestamp(), clock_timestamp() + interval '60 seconds',
+                     (SELECT captured_at FROM payments WHERE id = $2),
+                     clock_timestamp() + interval '60 seconds',
                      clock_timestamp(), clock_timestamp())`,
             [
               fixtures.id("future-refund-insert"),
@@ -6900,7 +6962,8 @@ describe("commerce persistence foundations", () => {
             amount_minor, reason, status, requested_at, completed_at,
             created_at, updated_at)
          VALUES ($1,$2,$3,$4,1,'PRODUCTION_FAILURE','SUCCEEDED',
-                 clock_timestamp(), clock_timestamp() + interval '2 seconds',
+                 (SELECT captured_at FROM payments WHERE id = $2),
+                 clock_timestamp() + interval '2 seconds',
                  clock_timestamp(), clock_timestamp())`,
         [
           fixtures.id("tolerated-refund-insert"),
@@ -6914,7 +6977,8 @@ describe("commerce persistence foundations", () => {
            (id, payment_id, idempotency_key, amount_minor, reason, status,
             requested_at, created_at, updated_at)
          VALUES ($1,$2,$3,1,'PRODUCTION_FAILURE','PENDING',
-                 clock_timestamp(), clock_timestamp(), clock_timestamp())`,
+                 (SELECT captured_at FROM payments WHERE id = $2),
+                 clock_timestamp(), clock_timestamp())`,
         [
           fixtures.id("pending-refund-completion"),
           financial.paymentId,
@@ -9466,6 +9530,53 @@ describe("commerce persistence foundations", () => {
           ).rows,
         ).toEqual([{ quote_exists: true }]);
 
+        await expectQueryError(
+          client,
+          "rewrite_quote_request_created_at",
+          () =>
+            client.query(
+              `UPDATE quote_requests
+               SET created_at = created_at + interval '1 second'
+               WHERE id = $1`,
+              [toleratedRequestId],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_request_created_at_immutable_check",
+          },
+        );
+
+        const historicalRequestId = fixtures.id("historical-offer:request");
+        await client.query(
+          `INSERT INTO quote_requests
+             (id, customer_id, status, created_at, updated_at)
+           VALUES ($1,$2,'NEW',clock_timestamp(),clock_timestamp())`,
+          [historicalRequestId, foundation.customerId],
+        );
+        await advanceQuoteRequestToQuoted(client, historicalRequestId, now);
+        await expectQueryError(
+          client,
+          "historical_quote_issuance",
+          () =>
+            client.query(
+              `INSERT INTO quotes
+                 (id, quote_request_id, customer_id, expires_at,
+                  issued_at, created_at)
+               SELECT $1,$2,$3,clock_timestamp() + interval '1 hour',
+                      created_at - interval '1 millisecond',clock_timestamp()
+               FROM quote_requests WHERE id = $2`,
+              [
+                fixtures.id("historical-offer:quote"),
+                historicalRequestId,
+                foundation.customerId,
+              ],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_issuance_request_created_at_check",
+          },
+        );
+
         const futureRequestId = fixtures.id("future-offer:request");
         await client.query(
           `INSERT INTO quote_requests
@@ -9497,6 +9608,50 @@ describe("commerce persistence foundations", () => {
         );
       },
     );
+  });
+
+  it("retains the accepted snapshot for an individual order binding", async () => {
+    await rollback("individual-binding-retention", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "individual-binding-retention",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+        undefined,
+        {},
+        "INDIVIDUAL",
+        false,
+      );
+
+      await expectQueryError(
+        client,
+        "invalidate_individual_binding",
+        () =>
+          client.query(
+            `UPDATE order_price_bindings
+             SET invalidated_at = clock_timestamp()
+             WHERE id = $1`,
+            [foundation.orderPriceBindingId],
+          ),
+        {
+          code: "23514",
+          constraint: "individual_order_price_binding_invalidation_check",
+        },
+      );
+
+      expect(
+        (
+          await client.query<{ invalidated_at: Date | null }>(
+            `SELECT invalidated_at FROM order_price_bindings WHERE id = $1`,
+            [foundation.orderPriceBindingId],
+          )
+        ).rows,
+      ).toEqual([{ invalidated_at: null }]);
+    });
   });
 
   it("quotes an individual order only after copying every accepted quote item exactly", async () => {
@@ -9846,6 +10001,66 @@ describe("commerce persistence foundations", () => {
             `INSERT INTO individual_order_origins (order_id, quote_id)
              VALUES ($1,$2)`,
             [mismatchedOrderId, quoteId],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "individual_order_origins_quote_snapshot_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "individual_order_price_binding_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "invalidated_binding_before_individual_origin",
+        async () => {
+          const invalidatedOrderId = fixtures.id("invalidated-custom-order");
+          const invalidatedDestinationId = fixtures.id(
+            "invalidated-custom-destination",
+          );
+          await client.query(
+            `INSERT INTO orders
+               (id, customer_id, public_reference, status, created_at, updated_at)
+             VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
+            [
+              invalidatedOrderId,
+              foundation.customerId,
+              `I-${randomUUID()}`,
+              now,
+            ],
+          );
+          await client.query(
+            `INSERT INTO delivery_destinations
+               (id, order_id, provider_endpoint_id, endpoint_type,
+                address_snapshot, capability_snapshot, created_at)
+             VALUES ($1,$2,$3,'address','{}'::jsonb,'{}'::jsonb,$4)`,
+            [
+              invalidatedDestinationId,
+              invalidatedOrderId,
+              `endpoint-${randomUUID()}`,
+              now,
+            ],
+          );
+          await client.query(
+            `INSERT INTO order_price_bindings
+               (id, order_id, price_snapshot_id, delivery_destination_id,
+                invalidated_at, created_at)
+             VALUES ($1,$2,$3,$4,$5,$5)`,
+            [
+              fixtures.id("invalidated-custom-binding"),
+              invalidatedOrderId,
+              snapshotId,
+              invalidatedDestinationId,
+              now,
+            ],
+          );
+          await client.query(
+            `INSERT INTO individual_order_origins (order_id, quote_id)
+             VALUES ($1,$2)`,
+            [invalidatedOrderId, quoteId],
           );
           await client.query(
             `SET CONSTRAINTS

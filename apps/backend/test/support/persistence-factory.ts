@@ -568,6 +568,7 @@ export class PersistenceFactory {
     const quoteIssuedAt = new Date(
       Math.min(t.getTime(), input.quoteExpiresAt.getTime() - 1),
     );
+    const quoteRequestCreatedAt = quoteIssuedAt;
     const snapshotId = this.id(`${input.name}:price-snapshot`);
     const scheduleId = this.id(`${input.name}:payment-schedule`);
     const componentIds = this.componentIds(input.name, input.resolvedItems);
@@ -616,7 +617,12 @@ export class PersistenceFactory {
     );
     await this.sql.query(
       "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, created_at, updated_at) VALUES ($1,$2,$3,'NEW',$4,$4)",
-      [input.quoteRequestId, input.quoteSessionId, input.customerId, t],
+      [
+        input.quoteRequestId,
+        input.quoteSessionId,
+        input.customerId,
+        quoteRequestCreatedAt,
+      ],
     );
     await this.sql.query(
       "UPDATE quote_requests SET status = 'IN_REVIEW', updated_at = $2 WHERE id = $1",

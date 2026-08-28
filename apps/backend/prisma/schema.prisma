@@ -1538,7 +1538,7 @@ model RefundTransaction {
   amountMinor      BigInt       @map("amount_minor")
   reason           RefundReason
   status           RefundStatus @default(PENDING)
-  requestedAt      DateTime     @default(now()) @map("requested_at") @db.Timestamptz(3)
+  requestedAt      DateTime     @default(dbgenerated("clock_timestamp()")) @map("requested_at") @db.Timestamptz(3)
   completedAt      DateTime?    @map("completed_at") @db.Timestamptz(3)
   createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
