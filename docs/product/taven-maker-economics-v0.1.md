@@ -391,6 +391,11 @@ Node
 - capabilities
 ```
 
+`ProductionAssignment` smí odkazovat jen `Node(owner_type = maker)` a jeho
+`maker_id` se musí shodovat s vlastníkem uzlu. Kompozitní reference
+`(node_id, maker_id)` tuto vazbu vynucuje. Platform-owned uzel zůstává
+interním `Job` scope bez fiktivního `ProductionAssignment`.
+
 ### ProductionAssignment
 
 ``` text
@@ -399,6 +404,7 @@ ProductionAssignment
 - job_id
 - maker_id
 - node_id
+- constraint `(node_id, maker_id)` → maker-owned `Node`
 - status
 - offered_at
 - accepted_at
@@ -623,6 +629,8 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     idempotentním acceptance příkazem.
 22. Maker na settlementu, každém jeho line, assignmentu a compensation
     snapshotu musí být totožný a shoda je vynucena referenčním constraintem.
+23. Production assignment smí použít jen maker-owned uzel téhož makera;
+    platform-owned uzel assignment ani compensation workflow nevytváří.
 
 ------------------------------------------------------------------------
 
