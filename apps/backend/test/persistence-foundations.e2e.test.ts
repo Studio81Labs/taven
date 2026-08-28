@@ -159,6 +159,9 @@ async function createSiblingMachineFoundation(
   const modelFileId = fixtures.id(`${name}:model-file`);
   const geometryId = fixtures.id(`${name}:geometry`);
   const sliceResultId = fixtures.id(`${name}:slice-result`);
+  const printConfigRevisionId =
+    foundation.fulfilmentSlotPrintConfigRevisionIds[1] ??
+    foundation.printConfigRevisionId;
   const capability = await client.query<{ machine_capability_id: string }>(
     'SELECT "machine_capability_id" FROM "machines" WHERE "id" = $1',
     [foundation.machineId],
@@ -249,7 +252,7 @@ async function createSiblingMachineFoundation(
       "PRODUCTION",
       `sibling-${fixtures.id(`${name}:cache-key`)}`,
       geometryId,
-      foundation.printConfigRevisionId,
+      printConfigRevisionId,
       foundation.machineProfileId,
       calibrationId,
       1,
@@ -268,8 +271,23 @@ async function createSiblingMachineFoundation(
     inventoryId,
     modelFileId,
     modelGeometryId: geometryId,
+    modelGeometryIds: foundation.modelGeometryIds.map(() => geometryId),
     machineCalibrationId: calibrationId,
+    printConfigRevisionId,
+    printConfigRevisionIds: foundation.printConfigRevisionIds.map(
+      () => printConfigRevisionId,
+    ),
     sliceResultId,
+    sliceResultIds: foundation.sliceResultIds.map(() => sliceResultId),
+    fulfilmentSlotModelGeometryIds:
+      foundation.fulfilmentSlotModelGeometryIds.map(() => geometryId),
+    fulfilmentSlotSliceResultIds: foundation.fulfilmentSlotSliceResultIds.map(
+      () => sliceResultId,
+    ),
+    fulfilmentSlotPrintConfigRevisionIds:
+      foundation.fulfilmentSlotPrintConfigRevisionIds.map(
+        () => printConfigRevisionId,
+      ),
   };
 }
 
@@ -352,76 +370,51 @@ describe("persistence foundations", () => {
     );
   });
 
-  it("seeds the Prague H2S foundation and immutable active revisions", async () => {
-    const machine = await pool.query<{
-      code: string;
-      installed_nozzle_micrometers: number;
-      build_volume_x_micrometers: string;
-      build_volume_y_micrometers: string;
-      build_volume_z_micrometers: string;
-    }>(
-      'SELECT machine."code", machine."installed_nozzle_micrometers", capability."build_volume_x_micrometers", capability."build_volume_y_micrometers", capability."build_volume_z_micrometers" FROM "nodes" node JOIN "machines" machine ON machine."node_id" = node."id" JOIN "machine_capabilities" capability ON capability."id" = machine."machine_capability_id" WHERE node."code" = $1 AND machine."code" = $2',
-      ["PRG-01", "H2S-01"],
-    );
-    expect(machine.rows).toEqual([
-      {
-        code: "H2S-01",
-        installed_nozzle_micrometers: 400,
-        build_volume_x_micrometers: "340000",
-        build_volume_y_micrometers: "320000",
-        build_volume_z_micrometers: "340000",
+  it("creates an active, immutable node-scoped resource foundation", async () => {
+    await inRollbackTransaction(
+      "active-foundation",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation("active-foundation");
+        const machine = await client.query<{
+          installed_nozzle_micrometers: number;
+          build_volume_x_micrometers: string;
+          build_volume_y_micrometers: string;
+          build_volume_z_micrometers: string;
+        }>(
+          `SELECT machine.installed_nozzle_micrometers,
+                capability.build_volume_x_micrometers,
+                capability.build_volume_y_micrometers,
+                capability.build_volume_z_micrometers
+         FROM machines machine
+         JOIN machine_capabilities capability ON capability.id = machine.machine_capability_id
+         WHERE machine.id = $1`,
+          [foundation.machineId],
+        );
+        expect(machine.rows).toEqual([
+          {
+            installed_nozzle_micrometers: 400,
+            build_volume_x_micrometers: "200000",
+            build_volume_y_micrometers: "200000",
+            build_volume_z_micrometers: "200000",
+          },
+        ]);
+        const revisions = await client.query<{ state: string }>(
+          `SELECT state::text
+         FROM reference_profiles
+         WHERE id IN (
+           SELECT reference_profile_id FROM machine_profiles WHERE id = $1
+         )`,
+          [foundation.machineProfileId],
+        );
+        expect(revisions.rows).toEqual([{ state: "ACTIVE" }]);
+        await expect(
+          client.query(
+            `UPDATE print_config_revisions SET infill_percent = 21 WHERE id = $1`,
+            [foundation.printConfigRevisionId],
+          ),
+        ).rejects.toMatchObject({ code: "55000" });
       },
-    ]);
-    const inventories = await pool.query<{
-      material: string;
-      currency: string;
-      machine_code: string;
-    }>(
-      'SELECT inventory."material"::text AS material, inventory."currency", machine."code" AS machine_code FROM "inventories" inventory JOIN "machines" machine ON machine."id" = inventory."machine_id" AND machine."node_id" = inventory."node_id" WHERE machine."code" = $1 ORDER BY inventory."material"',
-      ["H2S-01"],
     );
-    expect(inventories.rows).toEqual([
-      { material: "PLA", currency: "CZK", machine_code: "H2S-01" },
-      { material: "PETG", currency: "CZK", machine_code: "H2S-01" },
-    ]);
-    const revisions = await pool.query<{
-      kind: string;
-      infill_percent: number | null;
-      state: string | null;
-    }>(
-      'SELECT identity."kind"::text AS kind, config."infill_percent", NULL::text AS state FROM "revision_identities" identity JOIN "print_config_revisions" config ON config."id" = identity."id" WHERE identity."id" = ANY($1::uuid[]) UNION ALL SELECT identity."kind"::text AS kind, NULL::integer AS infill_percent, profile."state"::text AS state FROM "revision_identities" identity JOIN "machine_profiles" profile ON profile."id" = identity."id" WHERE identity."id" = ANY($2::uuid[]) UNION ALL SELECT identity."kind"::text AS kind, NULL::integer AS infill_percent, calibration."state"::text AS state FROM "revision_identities" identity JOIN "machine_calibrations" calibration ON calibration."id" = identity."id" WHERE identity."id" = $3::uuid',
-      [
-        [
-          "91111111-1111-4111-8111-111111111111",
-          "92222222-2222-4222-8222-222222222222",
-          "93333333-3333-4333-8333-333333333333",
-        ],
-        [
-          "71111111-1111-4111-8111-111111111111",
-          "72222222-2222-4111-8111-111111111111",
-        ],
-        "83333333-3333-4333-8333-333333333333",
-      ],
-    );
-    expect(
-      revisions.rows
-        .filter((row) => row.kind === "PRINT_CONFIG")
-        .map((row) => row.infill_percent)
-        .sort(),
-    ).toEqual([10, 20, 40]);
-    expect(
-      revisions.rows
-        .filter((row) => row.kind !== "PRINT_CONFIG")
-        .every((row) => row.state === "ACTIVE"),
-    ).toBe(true);
-    await inRollbackTransaction("seed-immutable", async (client) => {
-      await expect(
-        client.query(
-          'UPDATE "print_config_revisions" SET "infill_percent" = 11 WHERE "id" = $1',
-          ["91111111-1111-4111-8111-111111111111"],
-        ),
-      ).rejects.toMatchObject({ code: "55000" });
-    });
   });
 
   it("requires eligibility snapshot arrays to be canonical UUID sets", async () => {
@@ -438,7 +431,7 @@ describe("persistence foundations", () => {
         [
           fixtures.id(`${name}:snapshot`),
           foundation.nodeId,
-          fixtures.id(`${name}:order-phase`),
+          foundation.orderPhaseId,
           JSON.stringify(requiredSlotIds),
           JSON.stringify(eligibleCandidateIds),
           "f".repeat(64),
@@ -852,6 +845,7 @@ describe("persistence foundations", () => {
       uploadedAt: new Date(Date.now() - 120_000),
       deleteAfter: new Date(Date.now() - 60_000),
       hold: "ACTIVE_ORDER" as const,
+      quoteExpiresAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000),
     };
 
     await inRollbackTransaction(
@@ -1572,16 +1566,39 @@ describe("persistence foundations", () => {
     await inRollbackTransaction(
       "plan-machine-capacity-overlap",
       async (_client, fixtures) => {
-        const foundation = await fixtures.createFoundation();
+        const foundation = await fixtures.createFoundation(
+          "foundation",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          2,
+        );
         const productions = [
-          await fixtures.planProduction(foundation, "first-plan-candidate", {
-            startsAt: testTimes.capacityStart,
-            endsAt: testTimes.capacityEnd,
-          }),
-          await fixtures.planProduction(foundation, "second-plan-candidate", {
-            startsAt: testTimes.capacityHalfHour,
-            endsAt: testTimes.capacityOneAndHalfHours,
-          }),
+          await fixtures.planProduction(
+            foundation,
+            "first-plan-candidate",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+            undefined,
+            undefined,
+            undefined,
+            0,
+          ),
+          await fixtures.planProduction(
+            foundation,
+            "second-plan-candidate",
+            {
+              startsAt: testTimes.capacityHalfHour,
+              endsAt: testTimes.capacityOneAndHalfHours,
+            },
+            undefined,
+            undefined,
+            undefined,
+            1,
+          ),
         ];
 
         await expect(
@@ -1752,8 +1769,14 @@ describe("persistence foundations", () => {
     const setupFactory = factory(setup, "inventory-concurrency");
     let cleanupWinner: (() => Promise<void>) | undefined;
     try {
+      await setup.query("BEGIN");
       const foundation = await setupFactory.createFoundation(
         "inventory-concurrency",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        2,
       );
       const intervals = [
         {
@@ -1783,6 +1806,10 @@ describe("persistence foundations", () => {
           planFoundation,
           `plan-${index}:production`,
           interval,
+          undefined,
+          undefined,
+          undefined,
+          index,
         );
         await setupFactory.createResourcePlan(planFoundation, [production]);
         plans.push({
@@ -1793,6 +1820,35 @@ describe("persistence foundations", () => {
           scope: `inventory-concurrency-${index}`,
         });
       }
+      for (const plan of plans) {
+        const topology = await setup.query<{
+          jobs: string;
+          plan_slots: string[];
+          required_slots: string[];
+        }>(
+          `SELECT snapshot.required_fulfilment_slot_ids AS required_slots,
+                  (SELECT array_agg(slot.fulfilment_slot_id ORDER BY slot.fulfilment_slot_id)
+                   FROM phase_resource_plan_slots slot
+                   WHERE slot.phase_resource_plan_id = resource_plan.id) AS plan_slots,
+                  (SELECT count(*)::text
+                   FROM phase_resource_plan_jobs job
+                   WHERE job.phase_resource_plan_id = resource_plan.id) AS jobs
+           FROM phase_resource_plans resource_plan
+           JOIN eligibility_snapshots snapshot
+             ON snapshot.id = resource_plan.eligibility_snapshot_id
+            AND snapshot.node_id = resource_plan.node_id
+           WHERE resource_plan.id = $1`,
+          [plan.foundation.phaseResourcePlanId],
+        );
+        expect(topology.rows).toEqual([
+          {
+            jobs: "1",
+            plan_slots: [plan.production.fulfilmentSlotId],
+            required_slots: [plan.production.fulfilmentSlotId],
+          },
+        ]);
+      }
+      await setup.query("COMMIT");
 
       const reserve = async (plan: (typeof plans)[number]) => {
         const client = await pool.connect();
@@ -2062,6 +2118,7 @@ describe("persistence foundations", () => {
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
         await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await fixtures.createJob(foundation, production);
         await client.query(
           'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
           [production.productionReservationId, "HELD", production.jobId],
@@ -2146,12 +2203,14 @@ describe("persistence foundations", () => {
     try {
       const scope = "plan-membership-concurrency";
       const setupFixtures = factory(setup, scope);
+      await setup.query("BEGIN");
       const foundation = await setupFixtures.createFoundation(scope);
       const production = await setupFixtures.planProduction(
         foundation,
         "initial-production",
       );
       await setupFixtures.createResourcePlan(foundation, [production]);
+      await setup.query("COMMIT");
 
       await reserving.query("BEGIN");
       await factory(reserving, scope).createPhaseReservationSet(foundation);
@@ -2365,12 +2424,19 @@ describe("persistence foundations", () => {
             uploadedAt: new Date(capacityStartsAt.getTime() - 60_000),
             deleteAfter: capacityEndsAt,
             hold: "ACTIVE_ORDER",
+            quoteExpiresAt: capacityEndsAt,
           },
         );
         await expect(
           client.query(
             'UPDATE "model_files" SET "retention_hold" = $2 WHERE "id" = $1',
             [foundation.modelFileId, "NONE"],
+          ),
+        ).resolves.toBeDefined();
+        await expect(
+          client.query(
+            'UPDATE "model_files" SET "deleted_at" = CURRENT_TIMESTAMP WHERE "id" = $1',
+            [foundation.modelFileId],
           ),
         ).rejects.toMatchObject({
           code: "23514",
@@ -2391,7 +2457,13 @@ describe("persistence foundations", () => {
             endsAt: testTimes.capacityEnd,
           },
           {},
-          { deleteAfter: testTimes.capacityHalfHour, hold: "NONE" },
+          {
+            deleteAfter: testTimes.capacityHalfHour,
+            hold: "NONE",
+            quoteExpiresAt: new Date(
+              testTimes.capacityStart.getTime() - 91 * 24 * 60 * 60 * 1_000,
+            ),
+          },
         );
         await client.query(
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
@@ -2440,18 +2512,20 @@ describe("persistence foundations", () => {
     await inRollbackTransaction(
       "live-source-retention-horizon",
       async (client, fixtures) => {
+        const capacityStart = new Date(Date.now() + 100 * 24 * 60 * 60 * 1_000);
+        const capacityEnd = new Date(capacityStart.getTime() + 60 * 60 * 1_000);
         const { foundation, production } =
           await createCompleteSingleReservationGraph(
             client,
             fixtures,
             "live-source-retention-horizon",
             {
-              startsAt: testTimes.capacityStart,
-              endsAt: testTimes.capacityEnd,
+              startsAt: capacityStart,
+              endsAt: capacityEnd,
             },
             {},
             {
-              deleteAfter: testTimes.capacityHalfHour,
+              deleteAfter: new Date(capacityStart.getTime() + 30 * 60 * 1_000),
               hold: "ACTIVE_ORDER",
             },
           );
@@ -2461,6 +2535,7 @@ describe("persistence foundations", () => {
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
         await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await fixtures.createJob(foundation, production);
         await client.query(
           'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
           [production.productionReservationId, "HELD", production.jobId],
@@ -2527,6 +2602,10 @@ describe("persistence foundations", () => {
       await confirming.query(
         'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
         [production.productionReservationId, "HELD"],
+      );
+      await factory(confirming, "node-deactivation-concurrency").createJob(
+        foundation,
+        production,
       );
       await confirming.query(
         'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
@@ -2712,6 +2791,7 @@ describe("persistence foundations", () => {
           testTimes.createdAt,
         ],
       );
+      await fixtures.createJob(foundation, production);
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
         [production.productionReservationId, "HELD", production.jobId],
@@ -2908,6 +2988,7 @@ describe("persistence foundations", () => {
       );
       await client.query("SET CONSTRAINTS ALL IMMEDIATE");
       await client.query("SET CONSTRAINTS ALL DEFERRED");
+      await fixtures.createJob(foundation, production);
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
         [production.productionReservationId, "HELD", production.jobId],
@@ -2994,6 +3075,7 @@ describe("persistence foundations", () => {
       );
       await client.query("SET CONSTRAINTS ALL IMMEDIATE");
       await client.query("SET CONSTRAINTS ALL DEFERRED");
+      await fixtures.createJob(foundation, production);
       await client.query(
         'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
         [production.productionReservationId, "HELD", production.jobId],
@@ -3131,6 +3213,7 @@ describe("persistence foundations", () => {
       await client.query("SET CONSTRAINTS ALL IMMEDIATE");
       await client.query("SET CONSTRAINTS ALL DEFERRED");
       for (const [index, production] of graph.productions.entries()) {
+        await fixtures.createJob(graph.foundation, production);
         await client.query(
           'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
           [production.productionReservationId, "HELD", production.jobId],
@@ -3311,6 +3394,7 @@ describe("persistence foundations", () => {
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
         await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await fixtures.createJob(foundation, production);
         await client.query(
           'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
           [production.productionReservationId, "HELD", production.jobId],
@@ -3409,6 +3493,7 @@ describe("persistence foundations", () => {
       uploadedAt: new Date(Date.now() - 120_000),
       deleteAfter: new Date(Date.now() - 60_000),
       hold: "ACTIVE_ORDER" as const,
+      quoteExpiresAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000),
     };
     let foundation: PersistenceFoundation | null = null;
     let liveFoundation: PersistenceFoundation | null = null;
@@ -3422,6 +3507,10 @@ describe("persistence foundations", () => {
       foundation = await fixtures.createFoundation(
         "terminal-machine",
         expiredHeldSource,
+        undefined,
+        undefined,
+        undefined,
+        2,
       );
       liveFoundation = await createSiblingMachineFoundation(
         client,
@@ -3445,6 +3534,10 @@ describe("persistence foundations", () => {
           startsAt: testTimes.capacityStart,
           endsAt: testTimes.capacityEnd,
         },
+        undefined,
+        undefined,
+        undefined,
+        1,
       );
       await fixtures.createResourcePlan(foundation, [
         terminalProduction,
@@ -3499,10 +3592,11 @@ describe("persistence foundations", () => {
       );
       await client.query("SET CONSTRAINTS ALL IMMEDIATE");
       await client.query("SET CONSTRAINTS ALL DEFERRED");
-      for (const [production, capacityId] of [
-        [terminalProduction, terminalCapacityId],
-        [liveProduction, liveCapacityId],
+      for (const [resource, production, capacityId] of [
+        [foundation, terminalProduction, terminalCapacityId],
+        [liveFoundation, liveProduction, liveCapacityId],
       ] as const) {
+        await fixtures.createJob(resource, production);
         await client.query(
           'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
           [production.productionReservationId, "HELD", production.jobId],
@@ -3751,6 +3845,7 @@ describe("persistence foundations", () => {
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
 
+        await fixtures.createJob(foundation, production);
         await expect(
           client.query(
             'UPDATE "production_reservations" SET "job_id" = $2 WHERE "id" = $1',
@@ -3819,6 +3914,7 @@ describe("persistence foundations", () => {
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
 
+        await fixtures.createJob(foundation, production);
         await expect(
           client.query(
             'UPDATE "production_reservations" SET "job_id" = $2 WHERE "id" = $1',
@@ -3858,6 +3954,7 @@ describe("persistence foundations", () => {
           'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
           [production.productionReservationId, "HELD"],
         );
+        await fixtures.createJob(foundation, production);
         await client.query(
           'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
           [production.productionReservationId, "HELD", production.jobId],
