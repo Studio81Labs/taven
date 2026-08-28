@@ -318,6 +318,27 @@ async function forceOrderLifecycleConstraints(
   );
 }
 
+async function advanceAcceptedJobToGcodeReady(
+  client: PoolClient,
+  jobId: string,
+  transitionedAt: Date,
+): Promise<void> {
+  await client.query(
+    `UPDATE jobs job
+     SET status = 'GCODE_READY', gcode_ready_at = $2,
+         production_slice_result_id = production.slice_result_id,
+         production_artifact_hash = slice.artifact_hash,
+         updated_at = $2
+     FROM production_reservations production
+     JOIN slice_results slice ON slice.id = production.slice_result_id
+     WHERE job.id = $1
+       AND production.job_id = job.id
+       AND production.node_id = job.node_id
+       AND production.phase_resource_plan_job_id = job.phase_resource_plan_job_id`,
+    [jobId, transitionedAt],
+  );
+}
+
 async function advanceOrderLifecycleStep(
   client: PoolClient,
   orderId: string,
@@ -386,6 +407,20 @@ async function advanceOrderLifecycleStep(
       [orderId, transitionedAt],
     );
     await client.query(
+      `UPDATE jobs job
+       SET status = 'GCODE_READY', gcode_ready_at = $2,
+           production_slice_result_id = production.slice_result_id,
+           production_artifact_hash = slice.artifact_hash,
+           updated_at = $2
+       FROM production_reservations production
+       JOIN slice_results slice ON slice.id = production.slice_result_id
+       WHERE job.order_id = $1
+         AND production.job_id = job.id
+         AND production.node_id = job.node_id
+         AND production.phase_resource_plan_job_id = job.phase_resource_plan_job_id`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
       `UPDATE jobs
        SET status = 'PRINTING', printing_at = $2, updated_at = $2
        WHERE order_id = $1`,
@@ -427,6 +462,33 @@ async function advanceOrderLifecycleStep(
        WHERE job.id = production.job_id
          AND job.order_id = $1
          AND production.status = 'PRINTING'`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE jobs
+       SET status = 'PRINTED', printed_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `INSERT INTO photo_assets (
+           id, kind, scope_kind, scope_id, storage_object_key, content_hash,
+           media_type, size_bytes, uploaded_at, photo_delete_after,
+           retention_hold, created_at
+       )
+       SELECT job.id, 'QC', 'JOB', job.id, 'qc/' || job.id::text,
+              repeat('b', 64), 'image/jpeg', 1, $2::timestamptz,
+              $2::timestamptz + interval '90 days',
+              'ACTIVE_ORDER', $2::timestamptz
+       FROM jobs job
+       WHERE job.order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE jobs
+       SET status = 'PHOTO_SUBMITTED', photo_submitted_at = $2,
+           qc_photo_asset_id = id, updated_at = $2
+       WHERE order_id = $1`,
       [orderId, transitionedAt],
     );
     await client.query(
@@ -509,7 +571,9 @@ async function advanceOrderLifecycleStep(
       [orderId, transitionedAt],
     );
     await client.query(
-      `UPDATE jobs SET status = 'SETTLED', updated_at = $2 WHERE order_id = $1`,
+      `UPDATE jobs
+       SET status = 'SETTLED', settled_at = $2, updated_at = $2
+       WHERE order_id = $1`,
       [orderId, transitionedAt],
     );
     await client.query(
@@ -532,6 +596,7 @@ async function cancelOrderBeforeHandoff(
   orderId: string,
   closePayments = true,
   closeSlots = true,
+  orderStatus: "CANCELLED" | "EXPIRED" = "CANCELLED",
 ): Promise<void> {
   const cancelledAt = new Date();
   if (closePayments) {
@@ -542,12 +607,16 @@ async function cancelOrderBeforeHandoff(
              ELSE status
            END,
            capture_authorized = false,
-           capture_cutoff_at = coalesce(capture_cutoff_at, $2),
+           capture_cutoff_at = coalesce(
+             capture_cutoff_at,
+             CASE WHEN $3::order_status = 'EXPIRED'
+                  THEN checkout_capture_expires_at ELSE $2 END
+           ),
            updated_at = $2
        WHERE order_id = $1
          AND captured_amount_minor IS NULL
          AND status IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED')`,
-      [orderId, cancelledAt],
+      [orderId, cancelledAt, orderStatus],
     );
   }
   await client.query(
@@ -606,7 +675,8 @@ async function cancelOrderBeforeHandoff(
   );
   await client.query(
     `UPDATE jobs
-     SET status = 'CANCELLED', updated_at = $2
+     SET status = 'CANCELLED', cancelled_at = $2,
+         cancellation_reason = 'ORDER_CANCELLED', updated_at = $2
      WHERE order_id = $1
        AND status NOT IN ('FAILED', 'QC_REJECTED')`,
     [orderId, cancelledAt],
@@ -632,8 +702,9 @@ async function cancelOrderBeforeHandoff(
     [orderId, cancelledAt],
   );
   await client.query(
-    `UPDATE orders SET status = 'CANCELLED', updated_at = $2 WHERE id = $1`,
-    [orderId, cancelledAt],
+    `UPDATE orders
+     SET status = $3::order_status, updated_at = $2 WHERE id = $1`,
+    [orderId, cancelledAt, orderStatus],
   );
   await forceOrderLifecycleConstraints(client);
 }
@@ -2336,6 +2407,107 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("expires a quoted order only after closing its checkout window and fulfilment graph", async () => {
+    await rollback("quoted-order-expiry", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation("quoted-order-expiry");
+      await createCurrentPlan(client, fixtures, foundation);
+      const checkoutExpiresAt = new Date(Date.now() + 300);
+      await fixtures.finalizePayment(foundation, checkoutExpiresAt);
+
+      await expectQueryError(
+        client,
+        "expire_before_checkout_deadline",
+        () =>
+          cancelOrderBeforeHandoff(
+            client,
+            foundation.orderId,
+            true,
+            true,
+            "EXPIRED",
+          ),
+        {
+          code: "23514",
+          constraint: "quoted_order_expiry_deadline_check",
+        },
+      );
+
+      await client.query("SELECT pg_sleep(0.35)");
+
+      await expectQueryError(
+        client,
+        "expire_with_open_payment",
+        () =>
+          cancelOrderBeforeHandoff(
+            client,
+            foundation.orderId,
+            false,
+            true,
+            "EXPIRED",
+          ),
+        {
+          code: "23514",
+          constraint: "quoted_order_payment_cancellation_check",
+        },
+      );
+
+      await cancelOrderBeforeHandoff(
+        client,
+        foundation.orderId,
+        true,
+        true,
+        "EXPIRED",
+      );
+
+      expect(
+        (
+          await client.query<{
+            order_status: string;
+            payment_status: string;
+            phase_status: string;
+            reservation_status: string;
+            retention_hold: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    payment.status::text AS payment_status,
+                    phase.status::text AS phase_status,
+                    reservation_set.status::text AS reservation_status,
+                    source.retention_hold::text AS retention_hold
+             FROM orders target_order
+             JOIN payments payment ON payment.order_id = target_order.id
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             JOIN phase_resource_plans resource_plan
+               ON resource_plan.order_phase_id = phase.id
+             JOIN phase_reservation_sets reservation_set
+               ON reservation_set.phase_resource_plan_id = resource_plan.id
+              AND reservation_set.node_id = resource_plan.node_id
+             JOIN order_items item ON item.order_id = target_order.id
+             JOIN model_files source ON source.id = item.source_model_file_id
+             WHERE target_order.id = $1`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "EXPIRED",
+          payment_status: "VOIDED",
+          phase_status: "CANCELLED",
+          reservation_status: "RELEASED",
+          retention_hold: "NONE",
+        },
+      ]);
+
+      await expectQueryError(
+        client,
+        "reopen_expired_order",
+        () =>
+          client.query(`UPDATE orders SET status = 'CONFIRMED' WHERE id = $1`, [
+            foundation.orderId,
+          ]),
+        { code: "23514", constraint: "order_status_transition_check" },
+      );
+    });
+  });
+
   it("cancels failed production atomically without rewriting the failed Job", async () => {
     await rollback(
       "failed-production-cancellation",
@@ -2360,7 +2532,11 @@ describe("commerce persistence foundations", () => {
           "fail_unaccepted_job",
           () =>
             client.query(
-              `UPDATE jobs SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+              `UPDATE jobs
+               SET status = 'FAILED', failed_at = $2,
+                   failure_stage = 'PREPARATION',
+                   failure_reason = 'test production failure', updated_at = $2
+               WHERE id = $1`,
               [jobId, failedAt],
             ),
           { code: "23514", constraint: "job_status_transition_check" },
@@ -2377,7 +2553,11 @@ describe("commerce persistence foundations", () => {
           "leave_failed_job_active",
           async () => {
             await client.query(
-              `UPDATE jobs SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+              `UPDATE jobs
+               SET status = 'FAILED', failed_at = $2,
+                   failure_stage = 'PREPARATION',
+                   failure_reason = 'test production failure', updated_at = $2
+               WHERE id = $1`,
               [jobId, failedAt],
             );
             await client.query(
@@ -2425,7 +2605,11 @@ describe("commerce persistence foundations", () => {
           "misattribute_failed_job_refund",
           async () => {
             await client.query(
-              `UPDATE jobs SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+              `UPDATE jobs
+               SET status = 'FAILED', failed_at = $2,
+                   failure_stage = 'PREPARATION',
+                   failure_reason = 'test production failure', updated_at = $2
+               WHERE id = $1`,
               [jobId, failedAt],
             );
             await client.query(
@@ -2453,7 +2637,11 @@ describe("commerce persistence foundations", () => {
 
         const refundId = fixtures.id("production-failure-refund");
         await client.query(
-          `UPDATE jobs SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+          `UPDATE jobs
+           SET status = 'FAILED', failed_at = $2,
+               failure_stage = 'PREPARATION',
+               failure_reason = 'test production failure', updated_at = $2
+           WHERE id = $1`,
           [jobId, failedAt],
         );
         await client.query(
@@ -3648,6 +3836,11 @@ describe("commerce persistence foundations", () => {
              WHERE order_id = $1`,
             [foundation.orderId, printingAt],
           );
+          await advanceAcceptedJobToGcodeReady(
+            client,
+            production.jobId,
+            printingAt,
+          );
           await client.query(
             `UPDATE jobs
              SET status = 'PRINTING', printing_at = $2, updated_at = $2
@@ -3682,7 +3875,9 @@ describe("commerce persistence foundations", () => {
           const cancelledAt = new Date();
           await client.query(
             `UPDATE jobs
-             SET status = 'CANCELLED', updated_at = $2 WHERE order_id = $1`,
+             SET status = 'CANCELLED', cancelled_at = $2,
+                 cancellation_reason = 'ORDER_CANCELLED', updated_at = $2
+             WHERE order_id = $1`,
             [foundation.orderId, cancelledAt],
           );
           await client.query(
@@ -3857,6 +4052,7 @@ describe("commerce persistence foundations", () => {
          WHERE id = $1`,
         [first.jobId, printingAt],
       );
+      await advanceAcceptedJobToGcodeReady(client, first.jobId, printingAt);
       await client.query(
         `UPDATE jobs SET status = 'PRINTING', printing_at = $2, updated_at = $2
          WHERE id = $1`,
@@ -3883,6 +4079,11 @@ describe("commerce persistence foundations", () => {
              SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
              WHERE id = $1`,
             [second.jobId, printingAt],
+          );
+          await advanceAcceptedJobToGcodeReady(
+            client,
+            second.jobId,
+            printingAt,
           );
           await client.query(
             `UPDATE jobs
@@ -3948,6 +4149,11 @@ describe("commerce persistence foundations", () => {
              WHERE id = $1`,
             [second.jobId, printingAt],
           );
+          await advanceAcceptedJobToGcodeReady(
+            client,
+            second.jobId,
+            printingAt,
+          );
           await client.query(
             `UPDATE jobs
              SET status = 'PRINTING', printing_at = $2, updated_at = $2
@@ -3969,7 +4175,10 @@ describe("commerce persistence foundations", () => {
         "terminal_job_with_live_resources",
         async () => {
           await client.query(
-            `UPDATE jobs SET status = 'CANCELLED', updated_at = $2 WHERE id = $1`,
+            `UPDATE jobs
+             SET status = 'CANCELLED', cancelled_at = $2,
+                 cancellation_reason = 'ORDER_CANCELLED', updated_at = $2
+             WHERE id = $1`,
             [second.jobId, printingAt],
           );
           await startReservationGroup(second);
@@ -3992,6 +4201,7 @@ describe("commerce persistence foundations", () => {
          WHERE id = $1`,
         [second.jobId, printingAt],
       );
+      await advanceAcceptedJobToGcodeReady(client, second.jobId, printingAt);
       await client.query(
         `UPDATE jobs SET status = 'PRINTING', printing_at = $2, updated_at = $2
          WHERE id = $1`,
@@ -4465,7 +4675,8 @@ describe("commerce persistence foundations", () => {
         async () => {
           const completedAt = new Date();
           await client.query(
-            `UPDATE jobs SET status = 'SETTLED', updated_at = $2
+            `UPDATE jobs
+             SET status = 'SETTLED', settled_at = $2, updated_at = $2
              WHERE order_id = $1`,
             [foundation.orderId, completedAt],
           );
@@ -4555,6 +4766,49 @@ describe("commerce persistence foundations", () => {
             [foundation.orderId],
           ),
         { code: "23514", constraint: "job_status_transition_check" },
+      );
+      await expectQueryError(
+        client,
+        "skip_gcode_ready",
+        async () => {
+          const transitionedAt = new Date();
+          await client.query(
+            `UPDATE jobs
+             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, transitionedAt],
+          );
+          await client.query(
+            `UPDATE jobs
+             SET status = 'PRINTING', printing_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, transitionedAt],
+          );
+        },
+        { code: "23514", constraint: "job_status_transition_check" },
+      );
+      await expectQueryError(
+        client,
+        "gcode_ready_with_wrong_artifact_hash",
+        async () => {
+          const transitionedAt = new Date();
+          await client.query(
+            `UPDATE jobs
+             SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, transitionedAt],
+          );
+          await client.query(
+            `UPDATE jobs job
+             SET status = 'GCODE_READY', gcode_ready_at = $2,
+                 production_slice_result_id = production.slice_result_id,
+                 production_artifact_hash = repeat('f', 64), updated_at = $2
+             FROM production_reservations production
+             WHERE job.order_id = $1 AND production.job_id = job.id`,
+            [foundation.orderId, transitionedAt],
+          );
+        },
+        { code: "23514", constraint: "job_gcode_artifact_check" },
       );
       await expectQueryError(
         client,

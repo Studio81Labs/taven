@@ -147,6 +147,21 @@ async function advanceReservationOrderToProduction(
     [foundation.orderId, printingAt],
   );
   await client.query(
+    `UPDATE jobs job
+     SET status = 'GCODE_READY', gcode_ready_at = $2,
+         production_slice_result_id = production.slice_result_id,
+         production_artifact_hash = slice.artifact_hash,
+         updated_at = $2
+     FROM production_reservations production
+     JOIN slice_results slice ON slice.id = production.slice_result_id
+     WHERE job.order_id = $1
+       AND production.job_id = job.id
+       AND production.node_id = job.node_id
+       AND production.phase_resource_plan_job_id = job.phase_resource_plan_job_id
+       AND production.status = 'PRINTING'`,
+    [foundation.orderId, printingAt],
+  );
+  await client.query(
     `UPDATE jobs
      SET status = 'PRINTING', printing_at = $2, updated_at = $2
      WHERE order_id = $1
@@ -190,7 +205,10 @@ async function cancelConfirmedReservationOrder(
 ): Promise<void> {
   const cancelledAt = new Date();
   await client.query(
-    `UPDATE jobs SET status = 'CANCELLED', updated_at = $2 WHERE order_id = $1`,
+    `UPDATE jobs
+     SET status = 'CANCELLED', cancelled_at = $2,
+         cancellation_reason = 'ORDER_CANCELLED', updated_at = $2
+     WHERE order_id = $1`,
     [foundation.orderId, cancelledAt],
   );
   await client.query(
@@ -3450,6 +3468,10 @@ describe("persistence foundations", () => {
           [liveProduction.productionReservationId, "CONSUMED"],
         );
         await client.query(
+          'UPDATE "jobs" SET "status" = $2, "printed_at" = $3, "updated_at" = $3 WHERE "id" = $1',
+          [liveProduction.jobId, "PRINTED", new Date()],
+        );
+        await client.query(
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
           [graph.foundation.phaseReservationSetId, "SETTLED"],
         );
@@ -3514,6 +3536,10 @@ describe("persistence foundations", () => {
         await client.query(
           'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
           [production.productionReservationId, "COMPLETED"],
+        );
+        await client.query(
+          'UPDATE "jobs" SET "status" = $2, "printed_at" = $3, "updated_at" = $3 WHERE "id" = $1',
+          [production.jobId, "PRINTED", new Date()],
         );
         await client.query(
           'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
@@ -3744,6 +3770,10 @@ describe("persistence foundations", () => {
       await client.query(
         'UPDATE "capacity_reservations" SET "status" = $2 WHERE "id" = $1',
         [terminalCapacityId, "COMPLETED"],
+      );
+      await client.query(
+        'UPDATE "jobs" SET "status" = $2, "printed_at" = $3, "updated_at" = $3 WHERE "id" = $1',
+        [terminalProduction.jobId, "PRINTED", new Date()],
       );
       await client.query("COMMIT");
       heldCommitted = true;

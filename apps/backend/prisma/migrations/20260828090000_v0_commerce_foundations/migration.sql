@@ -14,7 +14,7 @@ CREATE TYPE "price_component_scope" AS ENUM ('ORDER', 'QUOTE_ITEM', 'ORDER_ITEM'
 CREATE TYPE "payment_role" AS ENUM ('FULL');
 
 -- CreateEnum
-CREATE TYPE "order_status" AS ENUM ('DRAFT', 'QUOTED', 'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED', 'COMPLETED', 'CANCELLED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED');
+CREATE TYPE "order_status" AS ENUM ('DRAFT', 'QUOTED', 'EXPIRED', 'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED', 'COMPLETED', 'CANCELLED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED');
 
 -- CreateEnum
 CREATE TYPE "order_phase_kind" AS ENUM ('SINGLE');
@@ -29,7 +29,13 @@ CREATE TYPE "fulfilment_slot_outcome" AS ENUM ('PENDING', 'DELIVERED', 'CANCELLE
 CREATE TYPE "shipment_status" AS ENUM ('PLANNED', 'LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED');
 
 -- CreateEnum
-CREATE TYPE "job_status" AS ENUM ('CREATED', 'ACCEPTED', 'PRINTING', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED', 'CANCELLED', 'FAILED', 'QC_REJECTED');
+CREATE TYPE "job_status" AS ENUM ('CREATED', 'ACCEPTED', 'GCODE_READY', 'PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED', 'CANCELLED', 'FAILED', 'QC_REJECTED');
+
+-- CreateEnum
+CREATE TYPE "job_failure_stage" AS ENUM ('PREPARATION', 'GCODE', 'MACHINE', 'PRINTING', 'POST_PRINT', 'POST_QC', 'PACKING');
+
+-- CreateEnum
+CREATE TYPE "job_cancellation_reason" AS ENUM ('ROUTING_EXHAUSTED', 'ORDER_CANCELLED', 'PHASE_CANCELLED', 'CLAIM_WITHDRAWN');
 
 -- CreateEnum
 CREATE TYPE "payment_status" AS ENUM ('CREATED', 'PENDING', 'CAPTURED', 'FAILED', 'VOIDED', 'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED');
@@ -333,10 +339,23 @@ CREATE TABLE "jobs" (
     "phase_resource_plan_job_id" UUID NOT NULL,
     "status" "job_status" NOT NULL DEFAULT 'CREATED',
     "accepted_at" TIMESTAMPTZ(3),
+    "gcode_ready_at" TIMESTAMPTZ(3),
+    "production_slice_result_id" UUID,
+    "production_artifact_hash" VARCHAR(64),
     "printing_at" TIMESTAMPTZ(3),
+    "printed_at" TIMESTAMPTZ(3),
+    "photo_submitted_at" TIMESTAMPTZ(3),
+    "qc_photo_asset_id" UUID,
     "qc_approved_at" TIMESTAMPTZ(3),
+    "qc_rejected_at" TIMESTAMPTZ(3),
     "packed_at" TIMESTAMPTZ(3),
     "handed_over_at" TIMESTAMPTZ(3),
+    "settled_at" TIMESTAMPTZ(3),
+    "failed_at" TIMESTAMPTZ(3),
+    "failure_stage" "job_failure_stage",
+    "failure_reason" TEXT,
+    "cancelled_at" TIMESTAMPTZ(3),
+    "cancellation_reason" "job_cancellation_reason",
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL,
     CONSTRAINT "jobs_pkey" PRIMARY KEY ("id")
@@ -459,8 +478,10 @@ CREATE INDEX "shipments_order_id_status_idx" ON "shipments"("order_id", "status"
 CREATE INDEX "shipments_shipment_plan_id_status_idx" ON "shipments"("shipment_plan_id", "status");
 CREATE UNIQUE INDEX "jobs_id_node_id_phase_resource_plan_job_id_key" ON "jobs"("id", "node_id", "phase_resource_plan_job_id");
 CREATE UNIQUE INDEX "jobs_phase_resource_plan_job_id_key" ON "jobs"("phase_resource_plan_job_id");
+CREATE UNIQUE INDEX "jobs_qc_photo_asset_id_key" ON "jobs"("qc_photo_asset_id");
 CREATE INDEX "jobs_shipment_plan_id_status_idx" ON "jobs"("shipment_plan_id", "status");
 CREATE INDEX "jobs_node_id_status_idx" ON "jobs"("node_id", "status");
+CREATE INDEX "jobs_production_slice_result_id_idx" ON "jobs"("production_slice_result_id");
 CREATE UNIQUE INDEX "payments_provider_intent_id_key" ON "payments"("provider_intent_id");
 CREATE UNIQUE INDEX "payments_provider_capture_id_key" ON "payments"("provider_capture_id");
 CREATE UNIQUE INDEX "payments_one_nonfailed_attempt_per_schedule_key" ON "payments"("payment_schedule_id") WHERE "status" <> 'FAILED';
@@ -535,6 +556,8 @@ ALTER TABLE "jobs" ADD CONSTRAINT "jobs_order_id_fkey" FOREIGN KEY ("order_id") 
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_order_phase_id_order_id_fkey" FOREIGN KEY ("order_phase_id", "order_id") REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_shipment_plan_id_order_id_order_phase_id_fkey" FOREIGN KEY ("shipment_plan_id", "order_id", "order_phase_id") REFERENCES "shipment_plans"("id", "order_id", "order_phase_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_phase_resource_plan_job_id_node_id_fkey" FOREIGN KEY ("phase_resource_plan_job_id", "node_id") REFERENCES "phase_resource_plan_jobs"("id", "node_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "jobs" ADD CONSTRAINT "jobs_production_slice_result_id_fkey" FOREIGN KEY ("production_slice_result_id") REFERENCES "slice_results"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "jobs" ADD CONSTRAINT "jobs_qc_photo_asset_id_fkey" FOREIGN KEY ("qc_photo_asset_id") REFERENCES "photo_assets"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payments" ADD CONSTRAINT "payments_order_snapshot_fkey" FOREIGN KEY ("order_price_binding_id", "order_id", "price_snapshot_id") REFERENCES "order_price_bindings"("id", "order_id", "price_snapshot_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payments" ADD CONSTRAINT "payments_snapshot_currency_fkey" FOREIGN KEY ("price_snapshot_id", "currency") REFERENCES "price_snapshots"("id", "currency") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payments" ADD CONSTRAINT "payments_schedule_contract_fkey" FOREIGN KEY ("payment_schedule_id", "price_snapshot_id", "role", "requested_amount_minor") REFERENCES "payment_schedules"("id", "price_snapshot_id", "role", "gross_amount_minor") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -602,7 +625,7 @@ ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
     AND ("confirmed_at" IS NULL OR ("quoted_at" IS NOT NULL AND "confirmed_at" >= "quoted_at"))
     AND (
         ("status" = 'DRAFT' AND "quoted_at" IS NULL AND "confirmed_at" IS NULL)
-        OR ("status" = 'QUOTED' AND "quoted_at" IS NOT NULL AND "confirmed_at" IS NULL)
+        OR ("status" IN ('QUOTED', 'EXPIRED') AND "quoted_at" IS NOT NULL AND "confirmed_at" IS NULL)
         OR (
             "status" IN (
                 'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED', 'READY_TO_SHIP',
@@ -628,7 +651,22 @@ ALTER TABLE "shipments" ADD CONSTRAINT "shipments_provider_identity_check" CHECK
     AND ("tracking_code" IS NULL OR "tracking_code" ~ '[^[:space:]]')
 );
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_replacement_not_self_check" CHECK ("replaces_shipment_id" IS NULL OR "replaces_shipment_id" <> "id");
-ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (("accepted_at" IS NULL OR "accepted_at" >= "created_at") AND ("printing_at" IS NULL OR "printing_at" >= "created_at") AND ("qc_approved_at" IS NULL OR "qc_approved_at" >= "created_at") AND ("packed_at" IS NULL OR "packed_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at"));
+ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (
+    ("accepted_at" IS NULL OR "accepted_at" >= "created_at")
+    AND ("gcode_ready_at" IS NULL OR "gcode_ready_at" >= "created_at")
+    AND ("printing_at" IS NULL OR "printing_at" >= "created_at")
+    AND ("printed_at" IS NULL OR "printed_at" >= "created_at")
+    AND ("photo_submitted_at" IS NULL OR "photo_submitted_at" >= "created_at")
+    AND ("qc_approved_at" IS NULL OR "qc_approved_at" >= "created_at")
+    AND ("qc_rejected_at" IS NULL OR "qc_rejected_at" >= "created_at")
+    AND ("packed_at" IS NULL OR "packed_at" >= "created_at")
+    AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at")
+    AND ("settled_at" IS NULL OR "settled_at" >= "created_at")
+    AND ("failed_at" IS NULL OR "failed_at" >= "created_at")
+    AND ("cancelled_at" IS NULL OR "cancelled_at" >= "created_at")
+    AND ("production_artifact_hash" IS NULL OR "production_artifact_hash" ~ '^[0-9a-f]{64}$')
+    AND ("failure_reason" IS NULL OR "failure_reason" ~ '[^[:space:]]')
+);
 ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_intent_identity_check" CHECK (
     ("provider_intent_id" IS NOT NULL AND "provider_intent_id" ~ '[^[:space:]]')
@@ -1757,7 +1795,7 @@ BEGIN
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
            (OLD."status" = 'DRAFT' AND NEW."status" = 'QUOTED')
-           OR (OLD."status" = 'QUOTED' AND NEW."status" IN ('CONFIRMED', 'CANCELLED'))
+           OR (OLD."status" = 'QUOTED' AND NEW."status" IN ('CONFIRMED', 'EXPIRED', 'CANCELLED'))
            OR (OLD."status" = 'CONFIRMED' AND NEW."status" IN ('IN_PRODUCTION', 'CANCELLED'))
            OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'CANCELLED'))
            OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED'))
@@ -2010,10 +2048,23 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'CREATED'
            OR NEW."accepted_at" IS NOT NULL
+           OR NEW."gcode_ready_at" IS NOT NULL
+           OR NEW."production_slice_result_id" IS NOT NULL
+           OR NEW."production_artifact_hash" IS NOT NULL
            OR NEW."printing_at" IS NOT NULL
+           OR NEW."printed_at" IS NOT NULL
+           OR NEW."photo_submitted_at" IS NOT NULL
+           OR NEW."qc_photo_asset_id" IS NOT NULL
            OR NEW."qc_approved_at" IS NOT NULL
+           OR NEW."qc_rejected_at" IS NOT NULL
            OR NEW."packed_at" IS NOT NULL
-           OR NEW."handed_over_at" IS NOT NULL THEN
+           OR NEW."handed_over_at" IS NOT NULL
+           OR NEW."settled_at" IS NOT NULL
+           OR NEW."failed_at" IS NOT NULL
+           OR NEW."failure_stage" IS NOT NULL
+           OR NEW."failure_reason" IS NOT NULL
+           OR NEW."cancelled_at" IS NOT NULL
+           OR NEW."cancellation_reason" IS NOT NULL THEN
             RAISE EXCEPTION 'new Jobs must begin created without lifecycle evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'job_initial_status_check';
         END IF;
@@ -2025,118 +2076,206 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_immutable_check';
     END IF;
 
-    IF NEW."id" IS DISTINCT FROM OLD."id"
-       OR NEW."node_id" IS DISTINCT FROM OLD."node_id"
-       OR NEW."order_id" IS DISTINCT FROM OLD."order_id"
-       OR NEW."order_phase_id" IS DISTINCT FROM OLD."order_phase_id"
-       OR NEW."shipment_plan_id" IS DISTINCT FROM OLD."shipment_plan_id"
-       OR NEW."phase_resource_plan_job_id" IS DISTINCT FROM OLD."phase_resource_plan_job_id"
-       OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
-       OR (OLD."accepted_at" IS NOT NULL AND NEW."accepted_at" IS DISTINCT FROM OLD."accepted_at")
-       OR (OLD."printing_at" IS NOT NULL AND NEW."printing_at" IS DISTINCT FROM OLD."printing_at")
-       OR (OLD."qc_approved_at" IS NOT NULL AND NEW."qc_approved_at" IS DISTINCT FROM OLD."qc_approved_at")
-       OR (OLD."packed_at" IS NOT NULL AND NEW."packed_at" IS DISTINCT FROM OLD."packed_at")
-       OR (OLD."handed_over_at" IS NOT NULL AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at") THEN
-        RAISE EXCEPTION 'Job identity and recorded lifecycle evidence are immutable'
-            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_immutable_check';
-    END IF;
-
     IF NEW."status" IS NOT DISTINCT FROM OLD."status"
-       AND (
-           NEW."accepted_at" IS DISTINCT FROM OLD."accepted_at"
-           OR NEW."printing_at" IS DISTINCT FROM OLD."printing_at"
-           OR NEW."qc_approved_at" IS DISTINCT FROM OLD."qc_approved_at"
-           OR NEW."packed_at" IS DISTINCT FROM OLD."packed_at"
-           OR NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
-       ) THEN
-        RAISE EXCEPTION 'Job lifecycle evidence must be assigned with its status transition'
-            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
+       AND (to_jsonb(NEW) - 'updated_at') IS DISTINCT FROM
+           (to_jsonb(OLD) - 'updated_at') THEN
+        RAISE EXCEPTION 'Job identity and lifecycle evidence are immutable outside a status transition'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_immutable_check';
     END IF;
 
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
            (OLD."status" = 'CREATED' AND NEW."status" IN ('ACCEPTED', 'CANCELLED'))
-           OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('PRINTING', 'CANCELLED', 'FAILED'))
-           OR (OLD."status" = 'PRINTING' AND NEW."status" IN ('QC_APPROVED', 'CANCELLED', 'FAILED', 'QC_REJECTED'))
-           OR (OLD."status" = 'QC_APPROVED' AND NEW."status" IN ('PACKED', 'CANCELLED'))
-           OR (OLD."status" = 'PACKED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLED'))
+           OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('GCODE_READY', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'GCODE_READY' AND NEW."status" IN ('PRINTING', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'PRINTING' AND NEW."status" IN ('PRINTED', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'PRINTED' AND NEW."status" IN ('PHOTO_SUBMITTED', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'PHOTO_SUBMITTED' AND NEW."status" IN ('QC_APPROVED', 'QC_REJECTED', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'QC_APPROVED' AND NEW."status" IN ('PACKED', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'PACKED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLED', 'FAILED'))
            OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'SETTLED')
        ) THEN
         RAISE EXCEPTION 'Job status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'job_status_transition_check';
     END IF;
 
-    IF NEW."status" IS DISTINCT FROM OLD."status"
-       AND NOT (
-           (OLD."status" = 'CREATED' AND NEW."status" = 'ACCEPTED'
-            AND NEW."accepted_at" IS DISTINCT FROM OLD."accepted_at"
-            AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
-            AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
-            AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
-            AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
-           OR (OLD."status" = 'ACCEPTED' AND NEW."status" = 'PRINTING'
-               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
-               AND NEW."printing_at" IS DISTINCT FROM OLD."printing_at"
-               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
-               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
-               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
-           OR (OLD."status" = 'PRINTING' AND NEW."status" = 'QC_APPROVED'
-               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
-               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
-               AND NEW."qc_approved_at" IS DISTINCT FROM OLD."qc_approved_at"
-               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
-               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
-           OR (OLD."status" = 'QC_APPROVED' AND NEW."status" = 'PACKED'
-               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
-               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
-               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
-               AND NEW."packed_at" IS DISTINCT FROM OLD."packed_at"
-               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
-           OR (OLD."status" = 'PACKED' AND NEW."status" = 'HANDED_OVER'
-               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
-               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
-               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
-               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
-               AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at")
-           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'SETTLED'
-               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
-               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
-               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
-               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
-               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
-           OR (NEW."status" IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
-               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
-               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
-               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
-               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
-               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
-       ) THEN
+    IF NEW."status" IS DISTINCT FROM OLD."status" AND (
+       NEW."status" = 'ACCEPTED' AND NOT (
+        OLD."accepted_at" IS NULL AND NEW."accepted_at" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'accepted_at']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'accepted_at'])
+    ) OR NEW."status" = 'GCODE_READY' AND NOT (
+        OLD."gcode_ready_at" IS NULL AND NEW."gcode_ready_at" IS NOT NULL
+        AND OLD."production_slice_result_id" IS NULL AND NEW."production_slice_result_id" IS NOT NULL
+        AND OLD."production_artifact_hash" IS NULL AND NEW."production_artifact_hash" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'gcode_ready_at', 'production_slice_result_id', 'production_artifact_hash']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'gcode_ready_at', 'production_slice_result_id', 'production_artifact_hash'])
+    ) OR NEW."status" = 'PRINTING' AND NOT (
+        OLD."printing_at" IS NULL AND NEW."printing_at" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'printing_at']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'printing_at'])
+    ) OR NEW."status" = 'PRINTED' AND NOT (
+        OLD."printed_at" IS NULL AND NEW."printed_at" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'printed_at']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'printed_at'])
+    ) OR NEW."status" = 'PHOTO_SUBMITTED' AND NOT (
+        OLD."photo_submitted_at" IS NULL AND NEW."photo_submitted_at" IS NOT NULL
+        AND OLD."qc_photo_asset_id" IS NULL AND NEW."qc_photo_asset_id" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'photo_submitted_at', 'qc_photo_asset_id']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'photo_submitted_at', 'qc_photo_asset_id'])
+    ) OR NEW."status" = 'QC_APPROVED' AND NOT (
+        OLD."qc_approved_at" IS NULL AND NEW."qc_approved_at" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'qc_approved_at']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'qc_approved_at'])
+    ) OR NEW."status" = 'QC_REJECTED' AND NOT (
+        OLD."qc_rejected_at" IS NULL AND NEW."qc_rejected_at" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'qc_rejected_at']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'qc_rejected_at'])
+    ) OR NEW."status" = 'PACKED' AND NOT (
+        OLD."packed_at" IS NULL AND NEW."packed_at" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'packed_at']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'packed_at'])
+    ) OR NEW."status" = 'HANDED_OVER' AND NOT (
+        OLD."handed_over_at" IS NULL AND NEW."handed_over_at" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'handed_over_at']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'handed_over_at'])
+    ) OR NEW."status" = 'SETTLED' AND NOT (
+        OLD."settled_at" IS NULL AND NEW."settled_at" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'settled_at']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'settled_at'])
+    ) OR NEW."status" = 'FAILED' AND NOT (
+        OLD."failed_at" IS NULL AND NEW."failed_at" IS NOT NULL
+        AND OLD."failure_stage" IS NULL AND NEW."failure_stage" IS NOT NULL
+        AND OLD."failure_reason" IS NULL AND NEW."failure_reason" ~ '[^[:space:]]'
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'failed_at', 'failure_stage', 'failure_reason']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'failed_at', 'failure_stage', 'failure_reason'])
+    ) OR NEW."status" = 'CANCELLED' AND NOT (
+        OLD."cancelled_at" IS NULL AND NEW."cancelled_at" IS NOT NULL
+        AND OLD."cancellation_reason" IS NULL AND NEW."cancellation_reason" IS NOT NULL
+        AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'cancelled_at', 'cancellation_reason']) =
+            (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'cancelled_at', 'cancellation_reason'])
+    )) THEN
         RAISE EXCEPTION 'Job transition may assign only its own lifecycle evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
     END IF;
 
-    IF (NEW."status" IN ('ACCEPTED', 'PRINTING', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+    IF (NEW."status" IN ('ACCEPTED', 'GCODE_READY', 'PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
         AND NEW."accepted_at" IS NULL)
-       OR (NEW."status" IN ('PRINTING', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+       OR (NEW."status" IN ('GCODE_READY', 'PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+           AND (NEW."gcode_ready_at" IS NULL OR NEW."production_slice_result_id" IS NULL OR NEW."production_artifact_hash" IS NULL))
+       OR (NEW."status" IN ('PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
            AND NEW."printing_at" IS NULL)
+       OR (NEW."status" IN ('PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+           AND NEW."printed_at" IS NULL)
+       OR (NEW."status" IN ('PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+           AND (NEW."photo_submitted_at" IS NULL OR NEW."qc_photo_asset_id" IS NULL))
        OR (NEW."status" IN ('QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
            AND NEW."qc_approved_at" IS NULL)
        OR (NEW."status" IN ('PACKED', 'HANDED_OVER', 'SETTLED') AND NEW."packed_at" IS NULL)
-       OR (NEW."status" IN ('HANDED_OVER', 'SETTLED') AND NEW."handed_over_at" IS NULL) THEN
+       OR (NEW."status" IN ('HANDED_OVER', 'SETTLED') AND NEW."handed_over_at" IS NULL)
+       OR (NEW."status" = 'SETTLED' AND NEW."settled_at" IS NULL)
+       OR (NEW."status" = 'QC_REJECTED' AND NEW."qc_rejected_at" IS NULL)
+       OR (NEW."status" = 'FAILED' AND (NEW."failed_at" IS NULL OR NEW."failure_stage" IS NULL OR NEW."failure_reason" IS NULL))
+       OR (NEW."status" = 'CANCELLED' AND (NEW."cancelled_at" IS NULL OR NEW."cancellation_reason" IS NULL)) THEN
         RAISE EXCEPTION 'Job lifecycle state requires its complete timestamp evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
     END IF;
 
-    IF (NEW."accepted_at" IS NOT NULL AND NEW."printing_at" IS NOT NULL
-        AND NEW."printing_at" < NEW."accepted_at")
+    IF (NEW."accepted_at" IS NOT NULL AND NEW."gcode_ready_at" IS NOT NULL
+        AND NEW."gcode_ready_at" < NEW."accepted_at")
+       OR (NEW."gcode_ready_at" IS NOT NULL AND NEW."printing_at" IS NOT NULL
+           AND NEW."printing_at" < NEW."gcode_ready_at")
+       OR (NEW."printing_at" IS NOT NULL AND NEW."printed_at" IS NOT NULL
+           AND NEW."printed_at" < NEW."printing_at")
+       OR (NEW."printed_at" IS NOT NULL AND NEW."photo_submitted_at" IS NOT NULL
+           AND NEW."photo_submitted_at" < NEW."printed_at")
+       OR (NEW."photo_submitted_at" IS NOT NULL AND NEW."qc_approved_at" IS NOT NULL
+           AND NEW."qc_approved_at" < NEW."photo_submitted_at")
+       OR (NEW."photo_submitted_at" IS NOT NULL AND NEW."qc_rejected_at" IS NOT NULL
+           AND NEW."qc_rejected_at" < NEW."photo_submitted_at")
        OR (NEW."printing_at" IS NOT NULL AND NEW."qc_approved_at" IS NOT NULL
            AND NEW."qc_approved_at" < NEW."printing_at")
        OR (NEW."qc_approved_at" IS NOT NULL AND NEW."packed_at" IS NOT NULL
            AND NEW."packed_at" < NEW."qc_approved_at")
        OR (NEW."packed_at" IS NOT NULL AND NEW."handed_over_at" IS NOT NULL
-           AND NEW."handed_over_at" < NEW."packed_at") THEN
+           AND NEW."handed_over_at" < NEW."packed_at")
+       OR (NEW."handed_over_at" IS NOT NULL AND NEW."settled_at" IS NOT NULL
+           AND NEW."settled_at" < NEW."handed_over_at") THEN
         RAISE EXCEPTION 'Job lifecycle timestamps must be chronological'
             USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
+    END IF;
+
+    IF (NEW."status" = 'FAILED' AND NEW."failed_at" < CASE OLD."status"
+            WHEN 'ACCEPTED' THEN OLD."accepted_at"
+            WHEN 'GCODE_READY' THEN OLD."gcode_ready_at"
+            WHEN 'PRINTING' THEN OLD."printing_at"
+            WHEN 'PRINTED' THEN OLD."printed_at"
+            WHEN 'PHOTO_SUBMITTED' THEN OLD."photo_submitted_at"
+            WHEN 'QC_APPROVED' THEN OLD."qc_approved_at"
+            WHEN 'PACKED' THEN OLD."packed_at"
+        END)
+       OR (NEW."status" = 'CANCELLED' AND NEW."cancelled_at" < CASE OLD."status"
+            WHEN 'CREATED' THEN OLD."created_at"
+            WHEN 'ACCEPTED' THEN OLD."accepted_at"
+            WHEN 'GCODE_READY' THEN OLD."gcode_ready_at"
+            WHEN 'PRINTING' THEN OLD."printing_at"
+            WHEN 'PRINTED' THEN OLD."printed_at"
+            WHEN 'PHOTO_SUBMITTED' THEN OLD."photo_submitted_at"
+            WHEN 'QC_APPROVED' THEN OLD."qc_approved_at"
+            WHEN 'PACKED' THEN OLD."packed_at"
+        END) THEN
+        RAISE EXCEPTION 'Job terminal evidence cannot predate its source state'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
+    END IF;
+
+    IF NEW."status" = 'GCODE_READY' AND NOT EXISTS (
+        SELECT 1
+        FROM "production_reservations" production
+        JOIN "slice_results" slice ON slice."id" = NEW."production_slice_result_id"
+        WHERE production."job_id" = NEW."id"
+          AND production."node_id" = NEW."node_id"
+          AND production."phase_resource_plan_job_id" = NEW."phase_resource_plan_job_id"
+          AND production."slice_result_id" = slice."id"
+          AND slice."kind" = 'PRODUCTION'
+          AND slice."artifact_hash" = NEW."production_artifact_hash"
+    ) THEN
+        RAISE EXCEPTION 'G-code readiness requires the sealed production slice from the exact Job reservation'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_gcode_artifact_check';
+    END IF;
+
+    IF NEW."status" = 'PHOTO_SUBMITTED' AND NOT EXISTS (
+        SELECT 1
+        FROM "photo_assets" photo
+        WHERE photo."id" = NEW."qc_photo_asset_id"
+          AND photo."kind" = 'QC'
+          AND photo."scope_kind" = 'JOB'
+          AND photo."scope_id" = NEW."id"
+          AND photo."uploaded_at" <= NEW."photo_submitted_at"
+          AND photo."photo_delete_after" > NEW."photo_submitted_at"
+          AND photo."retention_hold" = 'ACTIVE_ORDER'
+          AND photo."deleted_at" IS NULL
+    ) THEN
+        RAISE EXCEPTION 'photo submission requires an active retained QC PhotoAsset for the exact Job'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_qc_photo_asset_check';
+    END IF;
+
+    IF NEW."status" = 'FAILED' AND NOT (
+        (OLD."status" IN ('ACCEPTED', 'GCODE_READY') AND NEW."failure_stage" IN ('PREPARATION', 'GCODE', 'MACHINE'))
+        OR (OLD."status" = 'PRINTING' AND NEW."failure_stage" = 'PRINTING')
+        OR (OLD."status" IN ('PRINTED', 'PHOTO_SUBMITTED') AND NEW."failure_stage" = 'POST_PRINT')
+        OR (OLD."status" = 'QC_APPROVED' AND NEW."failure_stage" = 'POST_QC')
+        OR (OLD."status" = 'PACKED' AND NEW."failure_stage" = 'PACKING')
+    ) THEN
+        RAISE EXCEPTION 'failure stage must match the Job source state'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_failure_stage_check';
+    END IF;
+
+    IF NEW."status" = 'CANCELLED' AND NOT (
+        (OLD."status" = 'CREATED' AND NEW."cancellation_reason" IN ('ROUTING_EXHAUSTED', 'ORDER_CANCELLED'))
+        OR (OLD."status" <> 'CREATED' AND NEW."cancellation_reason" IN ('ORDER_CANCELLED', 'PHASE_CANCELLED', 'CLAIM_WITHDRAWN'))
+    ) THEN
+        RAISE EXCEPTION 'cancellation reason must match the Job source state'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_cancellation_reason_check';
     END IF;
 
     RETURN NEW;
@@ -2212,6 +2351,38 @@ BEGIN
             RAISE EXCEPTION 'pre-confirmation order requires only quoted phase and initial fulfilment facts'
                 USING ERRCODE = '23514', CONSTRAINT = 'pre_confirmation_fulfilment_state_check';
         END IF;
+    ELSIF target_status = 'EXPIRED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."kind" = 'SINGLE'
+              AND phase."status" = 'CANCELLED'
+              AND phase."cancelled_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND (
+                  phase."status" <> 'CANCELLED'
+                  OR phase."cancelled_at" IS NULL
+              )
+        ) OR EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'CANCELLED' OR shipment."cancelled_at" IS NULL)
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'CANCELLED'
+        ) THEN
+            RAISE EXCEPTION 'expired quoted order requires a closed pre-capture fulfilment graph'
+                USING ERRCODE = '23514', CONSTRAINT = 'expired_order_checkout_closure_check';
+        END IF;
     ELSIF target_status = 'CONFIRMED' THEN
         IF NOT EXISTS (
             SELECT 1
@@ -2226,7 +2397,7 @@ BEGIN
             SELECT 1
             FROM "jobs"
             WHERE "order_id" = target_order_id
-              AND "status" NOT IN ('CREATED', 'ACCEPTED')
+              AND "status" NOT IN ('CREATED', 'ACCEPTED', 'GCODE_READY')
         ) OR EXISTS (
             SELECT 1
             FROM "shipments"
@@ -2252,7 +2423,7 @@ BEGIN
             SELECT 1
             FROM "jobs"
             WHERE "order_id" = target_order_id
-              AND "status" IN ('PRINTING', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+              AND "status" IN ('PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
               AND "printing_at" IS NOT NULL
         ) OR EXISTS (
             SELECT 1
@@ -2660,7 +2831,7 @@ BEGIN
     WHERE target_order."id" = target_order_id
     FOR UPDATE;
 
-    IF target_status IS NULL OR target_status NOT IN ('CANCELLED', 'REFUNDED') THEN
+    IF target_status IS NULL OR target_status NOT IN ('EXPIRED', 'CANCELLED', 'REFUNDED') THEN
         IF target_status = 'COMPLETED' THEN
             IF EXISTS (
                 SELECT 1
@@ -2729,8 +2900,23 @@ BEGIN
         WHERE phase."order_id" = target_order_id
           AND reservation_set."status" NOT IN ('SETTLED', 'RELEASED', 'EXPIRED')
     ) THEN
-        RAISE EXCEPTION 'cancelled order cannot retain an active reservation set'
+        RAISE EXCEPTION 'closed order cannot retain an active reservation set'
             USING ERRCODE = '23514', CONSTRAINT = 'cancelled_order_reservation_terminal_check';
+    END IF;
+
+    IF target_status = 'EXPIRED' AND EXISTS (
+        SELECT 1
+        FROM "order_phases" phase
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."order_phase_id" = phase."id"
+        JOIN "phase_reservation_sets" reservation_set
+          ON reservation_set."phase_resource_plan_id" = resource_plan."id"
+         AND reservation_set."node_id" = resource_plan."node_id"
+        WHERE phase."order_id" = target_order_id
+          AND reservation_set."status" <> 'RELEASED'
+    ) THEN
+        RAISE EXCEPTION 'expired checkout requires every reservation set to be released'
+            USING ERRCODE = '23514', CONSTRAINT = 'expired_order_reservation_release_check';
     END IF;
 
     RETURN NULL;
@@ -2775,8 +2961,21 @@ BEGIN
               OR "capture_cutoff_at" IS NULL
           )
     ) THEN
-        RAISE EXCEPTION 'quoted order cancellation requires every payment intent to be closed'
+        RAISE EXCEPTION 'quoted order closure requires every payment intent to be closed'
             USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_payment_cancellation_check';
+    END IF;
+
+    IF NEW."status" = 'EXPIRED' AND NOT EXISTS (
+        SELECT 1
+        FROM "payments"
+        WHERE "order_id" = NEW."id"
+          AND "role" = 'FULL'
+          AND "checkout_capture_expires_at" IS NOT NULL
+          AND "checkout_capture_expires_at" <= clock_timestamp()
+          AND "capture_cutoff_at" >= "checkout_capture_expires_at"
+    ) THEN
+        RAISE EXCEPTION 'quoted order expiry requires its immutable checkout capture deadline to pass'
+            USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_expiry_deadline_check';
     END IF;
 
     RETURN NULL;
@@ -2787,7 +2986,7 @@ CREATE CONSTRAINT TRIGGER "orders_quoted_cancellation_payments_reconciled"
 AFTER UPDATE OF "status" ON "orders"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-WHEN (OLD."status" = 'QUOTED' AND NEW."status" = 'CANCELLED')
+WHEN (OLD."status" = 'QUOTED' AND NEW."status" IN ('EXPIRED', 'CANCELLED'))
 EXECUTE FUNCTION taven_reconcile_quoted_order_cancellation_payments();
 
 CREATE FUNCTION taven_validate_order_price_binding()
@@ -3755,7 +3954,7 @@ BEGIN
                     OR job."id" IS NULL
                     OR job."order_id" <> target_order_id
                     OR job."order_phase_id" <> phase."id"
-                    OR job."status" NOT IN ('CREATED', 'ACCEPTED')
+                    OR job."status" NOT IN ('CREATED', 'ACCEPTED', 'GCODE_READY')
                     OR NOT EXISTS (
                         SELECT 1
                         FROM "inventory_reservations" inventory_reservation
@@ -3925,7 +4124,7 @@ DECLARE
 BEGIN
     IF TG_TABLE_NAME = 'jobs' THEN
         target_job_id := NEW."id";
-        job_started_printing_event := OLD."status" = 'ACCEPTED' AND NEW."status" = 'PRINTING';
+        job_started_printing_event := OLD."status" = 'GCODE_READY' AND NEW."status" = 'PRINTING';
     ELSIF TG_TABLE_NAME = 'production_reservations' THEN
         target_job_id := coalesce(NEW."job_id", OLD."job_id");
     ELSE
@@ -4040,11 +4239,11 @@ BEGIN
 
     IF (job_started_printing_event AND NOT live_printing_group_consistent)
        OR (target_job_status = 'PRINTING'
-           AND NOT (live_printing_group_consistent OR completed_printing_group_consistent))
-       OR (target_job_status IN ('QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+           AND NOT live_printing_group_consistent)
+       OR (target_job_status IN ('PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
            AND (target_job_printing_at IS NULL OR NOT completed_printing_group_consistent))
        OR (live_printing_group_started AND target_job_status <> 'PRINTING')
-       OR (target_job_status IN ('CREATED', 'ACCEPTED') AND group_started_or_completed) THEN
+       OR (target_job_status IN ('CREATED', 'ACCEPTED', 'GCODE_READY') AND group_started_or_completed) THEN
         RAISE EXCEPTION 'printing Job and its exact reservation group must transition atomically'
             USING ERRCODE = '23514', CONSTRAINT = 'job_printing_reservation_group_check';
     END IF;
@@ -4118,7 +4317,7 @@ BEGIN
           SELECT 1
           FROM "orders" target_order
           WHERE target_order."id" = NEW."order_id"
-            AND target_order."status" NOT IN ('DRAFT', 'QUOTED')
+            AND target_order."status" NOT IN ('DRAFT', 'QUOTED', 'EXPIRED')
       );
 
     RETURN NULL;
@@ -4141,7 +4340,7 @@ DECLARE
     old_is_terminal boolean;
     new_is_terminal boolean;
 BEGIN
-    old_is_terminal := OLD."status" IN ('COMPLETED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED')
+    old_is_terminal := OLD."status" IN ('EXPIRED', 'COMPLETED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED')
         OR (
             OLD."status" = 'CANCELLED'
             AND NOT EXISTS (
@@ -4151,7 +4350,7 @@ BEGIN
                   AND coalesce(payment."captured_amount_minor", 0) > 0
             )
         );
-    new_is_terminal := NEW."status" IN ('COMPLETED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED')
+    new_is_terminal := NEW."status" IN ('EXPIRED', 'COMPLETED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED')
         OR (
             NEW."status" = 'CANCELLED'
             AND NOT EXISTS (
@@ -4168,7 +4367,8 @@ BEGIN
     END IF;
 
     IF OLD."status" IN ('DRAFT', 'QUOTED')
-       AND NEW."status" NOT IN ('DRAFT', 'QUOTED') THEN
+       AND NEW."status" NOT IN ('DRAFT', 'QUOTED')
+       AND NOT new_is_terminal THEN
         UPDATE "model_files" source
         SET "retention_hold" = CASE
             WHEN source."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL') THEN source."retention_hold"

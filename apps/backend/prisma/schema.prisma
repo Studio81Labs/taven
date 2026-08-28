@@ -214,6 +214,7 @@ enum PaymentRole {
 enum OrderStatus {
   DRAFT
   QUOTED
+  EXPIRED
   CONFIRMED
   IN_PRODUCTION
   QC_PASSED
@@ -272,7 +273,10 @@ enum ShipmentStatus {
 enum JobStatus {
   CREATED
   ACCEPTED
+  GCODE_READY
   PRINTING
+  PRINTED
+  PHOTO_SUBMITTED
   QC_APPROVED
   PACKED
   HANDED_OVER
@@ -282,6 +286,27 @@ enum JobStatus {
   QC_REJECTED
 
   @@map("job_status")
+}
+
+enum JobFailureStage {
+  PREPARATION
+  GCODE
+  MACHINE
+  PRINTING
+  POST_PRINT
+  POST_QC
+  PACKING
+
+  @@map("job_failure_stage")
+}
+
+enum JobCancellationReason {
+  ROUTING_EXHAUSTED
+  ORDER_CANCELLED
+  PHASE_CANCELLED
+  CLAIM_WITHDRAWN
+
+  @@map("job_cancellation_reason")
 }
 
 enum PaymentStatus {
@@ -421,6 +446,8 @@ model PhotoAsset {
   retentionHold    RetentionHold  @default(NONE) @map("retention_hold")
   deletedAt        DateTime?      @map("deleted_at") @db.Timestamptz(3)
   createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  qcJobs Job[] @relation("JobQcPhotoAsset")
 
   @@index([contentHash])
   @@index([scopeKind, scopeId])
@@ -651,6 +678,7 @@ model SliceResult {
   productionReservations ProductionReservation[]
   quoteItems             QuoteItem[]
   orderItems             OrderItem[]
+  productionJobs         Job[]                       @relation("JobProductionSliceResult")
 
   @@unique([id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId])
   @@index([modelGeometryId])
@@ -1415,32 +1443,48 @@ model Shipment {
 }
 
 model Job {
-  id                     String    @id @default(uuid()) @db.Uuid
-  nodeId                 String    @map("node_id") @db.Uuid
-  orderId                String    @map("order_id") @db.Uuid
-  orderPhaseId           String    @map("order_phase_id") @db.Uuid
-  shipmentPlanId         String    @map("shipment_plan_id") @db.Uuid
-  phaseResourcePlanJobId String    @map("phase_resource_plan_job_id") @db.Uuid
-  status                 JobStatus @default(CREATED)
-  acceptedAt             DateTime? @map("accepted_at") @db.Timestamptz(3)
-  printingAt             DateTime? @map("printing_at") @db.Timestamptz(3)
-  qcApprovedAt           DateTime? @map("qc_approved_at") @db.Timestamptz(3)
-  packedAt               DateTime? @map("packed_at") @db.Timestamptz(3)
-  handedOverAt           DateTime? @map("handed_over_at") @db.Timestamptz(3)
-  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                      String                 @id @default(uuid()) @db.Uuid
+  nodeId                  String                 @map("node_id") @db.Uuid
+  orderId                 String                 @map("order_id") @db.Uuid
+  orderPhaseId            String                 @map("order_phase_id") @db.Uuid
+  shipmentPlanId          String                 @map("shipment_plan_id") @db.Uuid
+  phaseResourcePlanJobId  String                 @map("phase_resource_plan_job_id") @db.Uuid
+  status                  JobStatus              @default(CREATED)
+  acceptedAt              DateTime?              @map("accepted_at") @db.Timestamptz(3)
+  gcodeReadyAt            DateTime?              @map("gcode_ready_at") @db.Timestamptz(3)
+  productionSliceResultId String?                @map("production_slice_result_id") @db.Uuid
+  productionArtifactHash  String?                @map("production_artifact_hash") @db.VarChar(64)
+  printingAt              DateTime?              @map("printing_at") @db.Timestamptz(3)
+  printedAt               DateTime?              @map("printed_at") @db.Timestamptz(3)
+  photoSubmittedAt        DateTime?              @map("photo_submitted_at") @db.Timestamptz(3)
+  qcPhotoAssetId          String?                @unique @map("qc_photo_asset_id") @db.Uuid
+  qcApprovedAt            DateTime?              @map("qc_approved_at") @db.Timestamptz(3)
+  qcRejectedAt            DateTime?              @map("qc_rejected_at") @db.Timestamptz(3)
+  packedAt                DateTime?              @map("packed_at") @db.Timestamptz(3)
+  handedOverAt            DateTime?              @map("handed_over_at") @db.Timestamptz(3)
+  settledAt               DateTime?              @map("settled_at") @db.Timestamptz(3)
+  failedAt                DateTime?              @map("failed_at") @db.Timestamptz(3)
+  failureStage            JobFailureStage?       @map("failure_stage")
+  failureReason           String?                @map("failure_reason") @db.Text
+  cancelledAt             DateTime?              @map("cancelled_at") @db.Timestamptz(3)
+  cancellationReason      JobCancellationReason? @map("cancellation_reason")
+  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   node                   Node                    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
   order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
   orderPhase             OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
   shipmentPlan           ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict)
   phaseResourcePlanJob   PhaseResourcePlanJob    @relation(fields: [phaseResourcePlanJobId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  productionSliceResult  SliceResult?            @relation("JobProductionSliceResult", fields: [productionSliceResultId], references: [id], onDelete: Restrict)
+  qcPhotoAsset           PhotoAsset?             @relation("JobQcPhotoAsset", fields: [qcPhotoAssetId], references: [id], onDelete: Restrict)
   productionReservations ProductionReservation[] @relation("ProductionReservationJob")
 
   @@unique([id, nodeId, phaseResourcePlanJobId])
   @@unique([phaseResourcePlanJobId])
   @@index([shipmentPlanId, status])
   @@index([nodeId, status])
+  @@index([productionSliceResultId])
   @@map("jobs")
 }
 
