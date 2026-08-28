@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#200; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#201; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -415,10 +415,18 @@ Přípustný provozní model:
 4.  Taven pro settlement vytvoří nebo znovu použije právě jeden
     `MakerPayout`; jeho částka se musí rovnat zamčenému `payable_amount` a
     každý pokus používá stejný idempotency key.
-5.  Studio81 Labs provede ruční bankovní platbu a uloží unikátní bankovní
-    referenci. Tentýž payout lze označit jako dokončený jen jednou a součet
+5.  Ještě před otevřením bankovního rozhraní nebo odesláním příkazu jedna
+    lokální transakce zamkne payout, settlement a doklad, znovu ověří jejich
+    aktivní stavy a uloží `MakerPayout.created → initiated` spolu s
+    `initiated_at`. Teprve po commitu smí následovat externí bankovní side
+    effect se stejným `transfer_idempotency_key`.
+6.  Potvrzení banky uloží unikátní bankovní referenci a přepne tentýž payout
+    `initiated → paid`. Payout lze označit jako dokončený jen jednou a součet
     úspěšných převodů nikdy nesmí překročit `payable_amount`; payout zůstává
-    spojený se settlementem a jeho self-billing dokladem.
+    spojený se settlementem a jeho self-billing dokladem. Timeout ponechá
+    payout v `initiated` až do reconciliation; jen autoritativní potvrzení, že
+    peníze neodešly, jej smí přepnout do `failed` pro bezpečný retry se stejným
+    idempotency key.
 
 Kompozitní reference `(self_billing_document_id, settlement_id)` vyžaduje
 doklad vystavený právě pro tento settlement. Vytvoření payoutu současně
@@ -469,7 +477,17 @@ transakce:
 3.  vystaví nový self-billing doklad s `corrects_document_id`,
     `corrects_settlement_id`, stejným `origin_dispute_id` a novými
     strukturovanými částkami,
-4.  povolí payout pouze nad replacement settlementem a jeho novým dokladem.
+4.  spustí nad replacement settlementem a jeho novým dokladem nový běžný
+    `issued → payable → payout` lifecycle; okamžitý payout nepovolí.
+
+Dispute acceptance a payout initiation zamykají tentýž `MakerPayout` spolu se
+settlementem a dokladem. Acceptance smí pokračovat pouze bez payoutu nebo s
+payoutem ve `created | failed`, který v téže transakci nastaví na `cancelled`;
+`initiated | paid` jej odmítne a odkáže opravu do post-initiation
+reconciliation. Vyhraje-li acceptance, zrušený payout už nelze iniciovat;
+vyhraje-li initiation, correction transakce už nesmí voidnout původní
+settlement ani vystavit replacement. Externí převod proto nikdy nezačne bez
+předchozího durable guardu.
 
 Replacement settlement musí kompozitní self-referencí zachovat `maker_id` a
 `currency` svého superseded settlementu a jeho `origin_dispute_id` musí
@@ -489,6 +507,9 @@ jeho dokladem jako novým challenged párem. Uznání vytvoří další replacem
 který přímo superseduje právě napadeného předchůdce a jako origin uloží nový
 spor. Libovolně dlouhá correction chain je proto auditovatelná po jednotlivých
 hranách a žádný další spor nepřepisuje původ předchozího článku.
+Každý replacement při vystavení snapshotuje vlastní nový pětidenní dispute
+deadline a smí přejít do `payable` až potvrzením makera nebo po jeho uplynutí
+podle stejného guardu jako původní settlement.
 
 Unikátní assignment membership se vyhodnocuje jen mezi nevoidovanými
 settlements, takže historický voided line zůstane auditovatelný, ale nemůže
@@ -710,8 +731,11 @@ MakerPayout
 - currency
 - amount
 - payment_reference (unique; nullable do provedení převodu)
-- paid_at
-- status
+- initiated_at (nullable; uložené před externím side effectem)
+- paid_at (nullable)
+- failed_at (nullable)
+- cancelled_at (nullable)
+- status (`created` | `initiated` | `paid` | `failed` | `cancelled`)
 ```
 
 ------------------------------------------------------------------------
@@ -880,6 +904,9 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 41. Otevření sporu pod zámkem vyžaduje autoritativní
     `opened_at <= dispute_deadline_at`; zpoždění deadline workeru nesmí
     prodloužit uložené dispute window.
+42. Bankovní side effect smí začít až po durable `MakerPayout.initiated`;
+    dispute acceptance zamyká tentýž payout a smí voidnout settlement jen pro
+    chybějící nebo bezpečně neprovedený payout, nikdy pro `initiated | paid`.
 
 ------------------------------------------------------------------------
 
@@ -888,7 +915,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#200.
+#184–#201.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav

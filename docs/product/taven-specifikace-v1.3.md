@@ -1268,6 +1268,14 @@ settlementu; nezávislé propojení s jiným settlementem je zakázané. Pokud j
 napaden i replacement, vzniká nový dispute a další replacement článek;
 origin předchozího článku se nikdy nepřepisuje.
 
+Ruční bankovní převod smí začít až po lokálně commitnutém přechodu
+`MakerPayout.created → initiated` s `initiated_at`; externí příkaz používá
+stabilní idempotency key. Dispute acceptance zamyká stejný payout a smí
+voidnout settlement jen bez payoutu nebo pro `created | failed`, který zároveň
+zruší. Stav `initiated | paid` pre-payout correction odmítne a vyžaduje
+samostatnou reconciliation; timeout zůstává `initiated`, dokud banka
+autoritativně nepotvrdí, že peníze neodešly.
+
 - **zavinění uzlu** → uzel nese materiál, platforma dopravu a přetisk
 - **nezaviněné** (vada modelu zákazníka, nereálná tolerance) → uzel dostane zaplaceno v plné výši
 
