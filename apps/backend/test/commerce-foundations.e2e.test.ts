@@ -8595,6 +8595,561 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("stops automatic commerce after its session ends without closing the manual handoff", async () => {
+    await rollback("terminal-automatic-session", async (client, fixtures) => {
+      const cancelledDraft = await fixtures.createFoundation(
+        "cancelled-automatic-draft",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      const replacementSnapshotId = fixtures.id(
+        "cancelled-replacement-snapshot",
+      );
+      const replacementBindingId = fixtures.id("cancelled-replacement-binding");
+      await client.query(
+        `INSERT INTO price_snapshots
+           (id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         SELECT $1,currency,contract_total_minor,$2,input_snapshot,$3,
+                clock_timestamp()
+         FROM price_snapshots WHERE id = $4`,
+        [
+          replacementSnapshotId,
+          "cancelled-replacement",
+          randomUUID().replaceAll("-", "").repeat(2),
+          cancelledDraft.priceSnapshotId,
+        ],
+      );
+      await client.query(
+        `INSERT INTO payment_schedules
+           (id, price_snapshot_id, sequence, role, gross_amount_minor,
+            fee_rate_basis_points, fee_fixed_minor, provider_config,
+            created_at)
+         SELECT $1,$2,sequence,role,gross_amount_minor,
+                fee_rate_basis_points,fee_fixed_minor,provider_config,
+                clock_timestamp()
+         FROM payment_schedules WHERE id = $3`,
+        [
+          fixtures.id("cancelled-replacement-schedule"),
+          replacementSnapshotId,
+          cancelledDraft.paymentScheduleId,
+        ],
+      );
+      await client.query(
+        `INSERT INTO order_price_bindings
+           (id, order_id, price_snapshot_id, delivery_destination_id,
+            created_at)
+         VALUES ($1,$2,$3,$4,clock_timestamp())`,
+        [
+          replacementBindingId,
+          cancelledDraft.orderId,
+          replacementSnapshotId,
+          cancelledDraft.deliveryDestinationId,
+        ],
+      );
+      const replacementComponentId = fixtures.id(
+        "cancelled-replacement-component",
+      );
+      await client.query(
+        `INSERT INTO price_snapshot_components
+           (id, price_snapshot_id, kind, scope, amount_minor, allocation,
+            created_at)
+         VALUES ($1,$2,'ORDER_MIN_PRINT','ORDER',0,'{}'::jsonb,
+                 clock_timestamp())`,
+        [replacementComponentId, replacementSnapshotId],
+      );
+      await client.query(
+        `UPDATE quote_sessions
+         SET status = 'CANCELLED', updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [cancelledDraft.quoteSessionId],
+      );
+
+      await expectQueryError(
+        client,
+        "mutate_cancelled_automatic_draft",
+        () =>
+          client.query(
+            `UPDATE order_items SET quantity = quantity + 1 WHERE id = $1`,
+            [cancelledDraft.orderItemId],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expectQueryError(
+        client,
+        "quote_cancelled_automatic_draft",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET status = 'QUOTED', quoted_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [cancelledDraft.orderId],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expectQueryError(
+        client,
+        "move_cancelled_automatic_binding",
+        () =>
+          client.query(
+            `UPDATE order_active_price_bindings
+             SET order_price_binding_id = $2
+             WHERE order_id = $1`,
+            [cancelledDraft.orderId, replacementBindingId],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expectQueryError(
+        client,
+        "add_cancelled_automatic_shipment_plan",
+        () =>
+          client.query(
+            `INSERT INTO shipment_plans
+               (id, order_id, order_phase_id, price_snapshot_id,
+                order_price_binding_id, delivery_destination_id, ordinal,
+                category, planned_volume_cubic_mm,
+                planned_weight_milligrams, shipping_amount_minor,
+                packaging_amount_minor, handling_amount_minor,
+                allocation_snapshot, created_at)
+             SELECT $1,order_id,order_phase_id,price_snapshot_id,
+                    order_price_binding_id,delivery_destination_id,99,
+                    category,planned_volume_cubic_mm,
+                    planned_weight_milligrams,shipping_amount_minor,
+                    packaging_amount_minor,handling_amount_minor,
+                    allocation_snapshot,clock_timestamp()
+             FROM shipment_plans WHERE id = $2`,
+            [
+              fixtures.id("cancelled-extra-shipment-plan"),
+              cancelledDraft.shipmentPlanId,
+            ],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expectQueryError(
+        client,
+        "add_cancelled_automatic_fulfilment_slot",
+        () =>
+          client.query(
+            `INSERT INTO fulfilment_slots
+               (id, order_id, order_phase_id, order_item_id,
+                quantity_ordinal, settlement_amount_minor, outcome,
+                created_at, updated_at)
+             SELECT $1,order_id,order_phase_id,order_item_id,99,
+                    settlement_amount_minor,'PENDING',clock_timestamp(),
+                    clock_timestamp()
+             FROM fulfilment_slots WHERE id = $2`,
+            [
+              fixtures.id("cancelled-extra-fulfilment-slot"),
+              cancelledDraft.fulfilmentSlotId,
+            ],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expectQueryError(
+        client,
+        "allocate_cancelled_automatic_shipment_plan",
+        () =>
+          client.query(
+            `INSERT INTO shipment_plan_fulfilment_slots
+               (shipment_plan_id, order_price_binding_id, fulfilment_slot_id)
+             VALUES ($1,$2,$3)`,
+            [
+              cancelledDraft.shipmentPlanId,
+              cancelledDraft.orderPriceBindingId,
+              cancelledDraft.fulfilmentSlotId,
+            ],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expectQueryError(
+        client,
+        "allocate_cancelled_automatic_price_component",
+        () =>
+          client.query(
+            `INSERT INTO price_component_fulfilment_allocations
+               (price_snapshot_component_id, fulfilment_slot_id, amount_minor)
+             VALUES ($1,$2,0)`,
+            [replacementComponentId, cancelledDraft.fulfilmentSlotId],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+      await expectQueryError(
+        client,
+        "plan_cancelled_automatic_resources",
+        () => createCurrentPlan(client, fixtures, cancelledDraft),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+
+      await client.query(
+        `UPDATE quote_requests
+         SET status = 'REJECTED', updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [cancelledDraft.quoteRequestId],
+      );
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM quote_requests WHERE id = $1`,
+            [cancelledDraft.quoteRequestId],
+          )
+        ).rows,
+      ).toEqual([{ status: "REJECTED" }]);
+
+      const cancelledReservationDraft = await fixtures.createFoundation(
+        "cancelled-automatic-reservations",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      const cancelledProductions = await createCurrentPlan(
+        client,
+        fixtures,
+        cancelledReservationDraft,
+      );
+      await client.query(
+        `UPDATE quote_sessions
+         SET status = 'CANCELLED', updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [cancelledReservationDraft.quoteSessionId],
+      );
+      const firstCancelledProduction = cancelledProductions[0]!;
+      for (const [label, query] of [
+        [
+          "hold_cancelled_phase_reservation",
+          () =>
+            client.query(
+              `UPDATE phase_reservation_sets SET status = 'HELD' WHERE id = $1`,
+              [cancelledReservationDraft.phaseReservationSetId],
+            ),
+        ],
+        [
+          "hold_cancelled_production_reservation",
+          () =>
+            client.query(
+              `UPDATE production_reservations SET status = 'HELD' WHERE id = $1`,
+              [firstCancelledProduction.productionReservationId],
+            ),
+        ],
+        [
+          "hold_cancelled_inventory_reservation",
+          () =>
+            client.query(
+              `UPDATE inventory_reservations SET status = 'HELD'
+               WHERE production_reservation_id = $1`,
+              [firstCancelledProduction.productionReservationId],
+            ),
+        ],
+        [
+          "hold_cancelled_capacity_reservation",
+          () =>
+            client.query(
+              `UPDATE capacity_reservations SET status = 'HELD'
+               WHERE production_reservation_id = $1`,
+              [firstCancelledProduction.productionReservationId],
+            ),
+        ],
+      ] as const) {
+        await expectQueryError(client, label, query, {
+          code: "23514",
+          constraint: "quote_session_commerce_open_check",
+        });
+      }
+
+      for (const production of cancelledProductions) {
+        await client.query(
+          `UPDATE inventory_reservations SET status = 'RELEASED'
+           WHERE production_reservation_id = $1`,
+          [production.productionReservationId],
+        );
+        await client.query(
+          `UPDATE capacity_reservations SET status = 'RELEASED'
+           WHERE production_reservation_id = $1`,
+          [production.productionReservationId],
+        );
+        await client.query(
+          `UPDATE production_reservations SET status = 'RELEASED' WHERE id = $1`,
+          [production.productionReservationId],
+        );
+      }
+      await client.query(
+        `UPDATE phase_reservation_sets SET status = 'RELEASED' WHERE id = $1`,
+        [cancelledReservationDraft.phaseReservationSetId],
+      );
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM phase_reservation_sets WHERE id = $1`,
+            [cancelledReservationDraft.phaseReservationSetId],
+          )
+        ).rows,
+      ).toEqual([{ status: "RELEASED" }]);
+
+      const anonymousSessionId = fixtures.id(
+        "cancelled-anonymous-automatic-session",
+      );
+      const anonymousOrderId = fixtures.id(
+        "cancelled-anonymous-automatic-order",
+      );
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,clock_timestamp() + interval '1 hour',
+                 clock_timestamp(),clock_timestamp())`,
+        [anonymousSessionId, randomUUID().replaceAll("-", "").padEnd(64, "d")],
+      );
+      await client.query(
+        `INSERT INTO orders
+           (id, public_reference, status, created_at, updated_at)
+         VALUES ($1,$2,'DRAFT',clock_timestamp(),clock_timestamp())`,
+        [anonymousOrderId, `T-${randomUUID()}`],
+      );
+      await client.query(
+        `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+         VALUES ($1,$2)`,
+        [anonymousOrderId, anonymousSessionId],
+      );
+      await client.query(
+        `UPDATE quote_sessions
+         SET status = 'CANCELLED', updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [anonymousSessionId],
+      );
+      await expectQueryError(
+        client,
+        "claim_cancelled_automatic_owner",
+        () =>
+          client.query(
+            `UPDATE quote_sessions
+             SET customer_id = $2, updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [anonymousSessionId, cancelledDraft.customerId],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+
+      const convertedDraft = await fixtures.createFoundation(
+        "unbound-converted-draft",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      await client.query(
+        `UPDATE quote_sessions
+         SET status = 'CONVERTED', updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [convertedDraft.quoteSessionId],
+      );
+      await expectQueryError(
+        client,
+        "quote_unbound_converted_draft",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET status = 'QUOTED', quoted_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [convertedDraft.orderId],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+
+      const convertedBinding =
+        await fixtures.createFoundation("converted-binding");
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM quote_sessions WHERE id = $1`,
+            [convertedBinding.quoteSessionId],
+          )
+        ).rows,
+      ).toEqual([{ status: "CONVERTED" }]);
+      await expectQueryError(
+        client,
+        "cancel_converted_binding_session",
+        () =>
+          client.query(
+            `UPDATE quote_sessions
+             SET status = 'CANCELLED', updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [convertedBinding.quoteSessionId],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_session_status_transition_check",
+        },
+      );
+      const convertedProductions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        convertedBinding,
+      );
+      await activateCurrentPlan(
+        client,
+        fixtures,
+        convertedBinding,
+        convertedProductions,
+      );
+
+      const expiringSessionId = fixtures.id("expiring-automatic-session");
+      const expiringRequestId = fixtures.id("expiring-manual-request");
+      const expiringOrderId = fixtures.id("expiring-automatic-order");
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, customer_id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,clock_timestamp() + interval '250 milliseconds',
+                 clock_timestamp() - interval '1 second',clock_timestamp())`,
+        [
+          expiringSessionId,
+          cancelledDraft.customerId,
+          randomUUID().replaceAll("-", "").padEnd(64, "c"),
+        ],
+      );
+      await client.query(
+        `INSERT INTO quote_requests
+           (id, quote_session_id, customer_id, status, created_at, updated_at)
+         VALUES ($1,$2,$3,'NEW',clock_timestamp(),clock_timestamp())`,
+        [expiringRequestId, expiringSessionId, cancelledDraft.customerId],
+      );
+      await client.query(
+        `INSERT INTO orders
+           (id, customer_id, public_reference, status, created_at, updated_at)
+         VALUES ($1,$2,$3,'DRAFT',clock_timestamp(),clock_timestamp())`,
+        [expiringOrderId, cancelledDraft.customerId, `T-${randomUUID()}`],
+      );
+      await client.query(
+        `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+         VALUES ($1,$2)`,
+        [expiringOrderId, expiringSessionId],
+      );
+      await client.query(`SELECT pg_sleep(0.3)`);
+      await client.query(
+        `UPDATE quote_sessions
+         SET status = 'EXPIRED', updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [expiringSessionId],
+      );
+
+      await client.query(
+        `UPDATE quote_requests
+         SET status = 'IN_REVIEW', updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [expiringRequestId],
+      );
+      await expectQueryError(
+        client,
+        "quote_expired_automatic_draft",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET status = 'QUOTED', quoted_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [expiringOrderId],
+          ),
+        { code: "23514", constraint: "quote_session_commerce_open_check" },
+      );
+    });
+  });
+
+  it("fails automatic session lock-order conflicts promptly instead of deadlocking", async () => {
+    const setup = await pool.connect();
+    const holdingSession = await pool.connect();
+    const mutatingOrder = await pool.connect();
+    try {
+      const fixtureScope = `${scope}:automatic-session-lock-order`;
+      const fixtures = new PersistenceFactory(setup, fixtureScope);
+      await setup.query("BEGIN");
+      const draft = await fixtures.createFoundation(
+        "locked-session-draft",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      const beforePayment = await fixtures.createFoundation(
+        "locked-session-before-payment",
+      );
+      await createCurrentPlan(setup, fixtures, beforePayment);
+      const beforeCapture = await fixtures.createFoundation(
+        "locked-session-before-capture",
+      );
+      await createCurrentPlanAndPayment(setup, fixtures, beforeCapture);
+      await setup.query("COMMIT");
+
+      const contenders = new PersistenceFactory(mutatingOrder, fixtureScope);
+      const cases: ReadonlyArray<{
+        foundation: PersistenceFoundation;
+        expectsLockConflict: boolean;
+        mutate: () => Promise<unknown>;
+      }> = [
+        {
+          foundation: draft,
+          expectsLockConflict: true,
+          mutate: () =>
+            mutatingOrder.query(
+              `UPDATE orders
+               SET status = 'QUOTED', quoted_at = clock_timestamp(),
+                   updated_at = clock_timestamp()
+               WHERE id = $1`,
+              [draft.orderId],
+            ),
+        },
+        {
+          foundation: beforePayment,
+          expectsLockConflict: false,
+          mutate: () => contenders.finalizePayment(beforePayment),
+        },
+        {
+          foundation: beforeCapture,
+          expectsLockConflict: false,
+          mutate: () => contenders.capturePayment(beforeCapture),
+        },
+      ];
+
+      for (const testCase of cases) {
+        await holdingSession.query("BEGIN");
+        await holdingSession.query(
+          `SELECT 1 FROM quote_sessions WHERE id = $1 FOR UPDATE`,
+          [testCase.foundation.quoteSessionId],
+        );
+        await mutatingOrder.query("BEGIN");
+        if (testCase.expectsLockConflict) {
+          await expect(testCase.mutate()).rejects.toMatchObject({
+            code: "55P03",
+          });
+        } else {
+          await expect(testCase.mutate()).resolves.toBeUndefined();
+        }
+        await mutatingOrder.query("ROLLBACK");
+        await holdingSession.query("ROLLBACK");
+      }
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await holdingSession.query("ROLLBACK").catch(() => undefined);
+      await mutatingOrder.query("ROLLBACK").catch(() => undefined);
+      setup.release();
+      holdingSession.release();
+      mutatingOrder.release();
+    }
+  });
+
   it("serializes refunded order closure with concurrent refund completion without deadlocking", async () => {
     const setup = await pool.connect();
     const closing = await pool.connect();

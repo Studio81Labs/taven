@@ -1295,9 +1295,20 @@ CREATE FUNCTION taven_protect_quote_session_customer_ownership()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    target_order_id uuid;
 BEGIN
     IF OLD."customer_id" IS NULL
        AND NEW."customer_id" IS NOT NULL THEN
+        SELECT origin."order_id"
+        INTO target_order_id
+        FROM "automatic_order_origins" origin
+        WHERE origin."quote_session_id" = OLD."id";
+
+        IF target_order_id IS NOT NULL THEN
+            PERFORM taven_lock_automatic_order_session(target_order_id);
+        END IF;
+
         PERFORM 1
         FROM "automatic_order_origins" origin
         JOIN "orders" target_order ON target_order."id" = origin."order_id"
@@ -1812,14 +1823,195 @@ CREATE FUNCTION taven_lock_automatic_order_session(target_order_id uuid)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    session_status "quote_session_status";
+    session_expires_at timestamptz;
+    session_has_bound_order boolean;
 BEGIN
-    PERFORM 1
+    SELECT session."status", session."expires_at", (
+        target_order."status" <> 'DRAFT'
+        AND EXISTS (
+            SELECT 1
+            FROM "order_active_price_bindings" active
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active."order_price_binding_id"
+             AND binding."order_id" = active."order_id"
+            WHERE active."order_id" = target_order."id"
+              AND binding."invalidated_at" IS NULL
+        )
+    )
+    INTO session_status, session_expires_at, session_has_bound_order
     FROM "automatic_order_origins" origin
     JOIN "quote_sessions" session ON session."id" = origin."quote_session_id"
+    JOIN "orders" target_order ON target_order."id" = origin."order_id"
+    WHERE origin."order_id" = target_order_id;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- A converted session cannot return to a cancellable state, so operations
+    -- on its binding order do not need to serialize on the session row. This
+    -- preserves normal parallel reservation accounting after checkout.
+    IF session_status = 'CONVERTED' AND session_has_bound_order THEN
+        RETURN;
+    END IF;
+
+    SELECT session."status", session."expires_at", (
+        target_order."status" <> 'DRAFT'
+        AND EXISTS (
+            SELECT 1
+            FROM "order_active_price_bindings" active
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active."order_price_binding_id"
+             AND binding."order_id" = active."order_id"
+            WHERE active."order_id" = target_order."id"
+              AND binding."invalidated_at" IS NULL
+        )
+    )
+    INTO session_status, session_expires_at, session_has_bound_order
+    FROM "automatic_order_origins" origin
+    JOIN "quote_sessions" session ON session."id" = origin."quote_session_id"
+    JOIN "orders" target_order ON target_order."id" = origin."order_id"
     WHERE origin."order_id" = target_order_id
-    FOR UPDATE OF session;
+    FOR UPDATE OF session NOWAIT;
+
+    -- A QuoteRequest handed off from the configurator has its own lifecycle.
+    -- Automatic draft commerce remains scoped to its bearer session until the
+    -- session is converted into a binding order.
+    IF NOT (
+        (session_status = 'OPEN' AND session_expires_at > clock_timestamp())
+        OR (session_status = 'CONVERTED' AND session_has_bound_order)
+    ) THEN
+        RAISE EXCEPTION 'automatic commerce requires an open or converted quote session'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_session_commerce_open_check';
+    END IF;
 END;
 $$;
+
+CREATE FUNCTION taven_lock_automatic_order_resource_topology()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+BEGIN
+    CASE TG_TABLE_NAME
+        WHEN 'candidate_resource_estimates' THEN
+            SELECT plan."order_id"
+            INTO target_order_id
+            FROM "shipment_plans" plan
+            WHERE plan."id" = NEW."shipment_plan_id";
+        WHEN 'candidate_capacity_intervals' THEN
+            SELECT plan."order_id"
+            INTO target_order_id
+            FROM "candidate_resource_estimates" candidate
+            JOIN "shipment_plans" plan ON plan."id" = candidate."shipment_plan_id"
+            WHERE candidate."id" = NEW."candidate_resource_estimate_id"
+              AND candidate."node_id" = NEW."node_id";
+        WHEN 'eligibility_snapshots' THEN
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "order_phases" phase
+            WHERE phase."id" = NEW."order_phase_id";
+        WHEN 'phase_resource_plans' THEN
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "order_phases" phase
+            WHERE phase."id" = NEW."order_phase_id";
+        WHEN 'phase_resource_plan_jobs', 'phase_resource_plan_slots' THEN
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "phase_resource_plans" plan
+            JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+            WHERE plan."id" = NEW."phase_resource_plan_id"
+              AND plan."node_id" = NEW."node_id";
+        WHEN 'phase_reservation_sets', 'production_reservations' THEN
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "phase_resource_plans" plan
+            JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+            WHERE plan."id" = NEW."phase_resource_plan_id"
+              AND plan."node_id" = NEW."node_id";
+        WHEN 'inventory_reservations', 'capacity_reservations' THEN
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "production_reservations" production
+            JOIN "phase_resource_plans" plan
+              ON plan."id" = production."phase_resource_plan_id"
+             AND plan."node_id" = production."node_id"
+            JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+            WHERE production."id" = NEW."production_reservation_id"
+              AND production."node_id" = NEW."node_id";
+    END CASE;
+
+    IF target_order_id IS NOT NULL THEN
+        PERFORM taven_lock_automatic_order_session(target_order_id);
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "candidate_resource_estimates_automatic_session_guard"
+BEFORE INSERT ON "candidate_resource_estimates"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "candidate_capacity_intervals_automatic_session_guard"
+BEFORE INSERT ON "candidate_capacity_intervals"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "eligibility_snapshots_automatic_session_guard"
+BEFORE INSERT ON "eligibility_snapshots"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "phase_resource_plans_automatic_session_guard"
+BEFORE INSERT ON "phase_resource_plans"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "phase_resource_plan_jobs_automatic_session_guard"
+BEFORE INSERT ON "phase_resource_plan_jobs"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "phase_resource_plan_slots_automatic_session_guard"
+BEFORE INSERT ON "phase_resource_plan_slots"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "phase_reservation_sets_00_automatic_session_insert_guard"
+BEFORE INSERT ON "phase_reservation_sets"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "production_reservations_00_automatic_session_insert_guard"
+BEFORE INSERT ON "production_reservations"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "inventory_reservations_00_automatic_session_insert_guard"
+BEFORE INSERT ON "inventory_reservations"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "capacity_reservations_00_automatic_session_insert_guard"
+BEFORE INSERT ON "capacity_reservations"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+
+-- Forward reservation progress remains automatic commerce until the draft is
+-- converted. Release and expiry are deliberately excluded so cancellation can
+-- always return capacity and inventory. The 00 prefix keeps the session lock
+-- ahead of the resource locks taken by the foundation triggers.
+CREATE TRIGGER "phase_reservation_sets_00_automatic_session_forward_guard"
+BEFORE UPDATE OF "status" ON "phase_reservation_sets"
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status"
+      AND NEW."status" IN ('RESERVED', 'HELD', 'SETTLED'))
+EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "production_reservations_00_automatic_session_forward_guard"
+BEFORE UPDATE OF "status" ON "production_reservations"
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status"
+      AND NEW."status" IN ('HELD', 'SCHEDULED', 'PRINTING', 'CONSUMED'))
+EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "inventory_reservations_00_automatic_session_forward_guard"
+BEFORE UPDATE OF "status" ON "inventory_reservations"
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status"
+      AND NEW."status" IN ('HELD', 'ALLOCATED', 'CONSUMED'))
+EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
+CREATE TRIGGER "capacity_reservations_00_automatic_session_forward_guard"
+BEFORE UPDATE OF "status" ON "capacity_reservations"
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status"
+      AND NEW."status" IN ('HELD', 'SCHEDULED', 'PRINTING', 'COMPLETED'))
+EXECUTE FUNCTION taven_lock_automatic_order_resource_topology();
 
 CREATE FUNCTION taven_protect_order_customer_ownership()
 RETURNS trigger
@@ -2256,6 +2448,18 @@ BEGIN
        AND NEW."quoted_at" IS NULL THEN
         RAISE EXCEPTION 'draft-to-quoted transition requires its quoted timestamp'
             USING ERRCODE = '23514', CONSTRAINT = 'order_lifecycle_timestamp_check';
+    END IF;
+
+    IF OLD."status" = 'DRAFT' AND NEW."status" = 'QUOTED' THEN
+        PERFORM taven_lock_automatic_order_session(NEW."id");
+
+        UPDATE "quote_sessions" session
+        SET "status" = 'CONVERTED',
+            "updated_at" = clock_timestamp()
+        FROM "automatic_order_origins" origin
+        WHERE origin."order_id" = NEW."id"
+          AND origin."quote_session_id" = session."id"
+          AND session."status" = 'OPEN';
     END IF;
 
     IF OLD."status" = 'QUOTED' AND NEW."status" = 'CONFIRMED'
@@ -3904,6 +4108,8 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_owner_immutable_check';
     END IF;
 
+    PERFORM taven_lock_automatic_order_session(NEW."order_id");
+
     -- Lock the candidate without waiting on transactions that may already hold
     -- it while waiting for this active-pointer row. The no-op update creates an
     -- MVCC version so stronger-isolation invalidators cannot miss activation.
@@ -4090,9 +4296,16 @@ BEGIN
     FROM "price_snapshot_components" component
     JOIN "order_price_bindings" binding
       ON binding."price_snapshot_id" = component."price_snapshot_id"
-    JOIN "orders" target_order ON target_order."id" = binding."order_id"
-    WHERE component."id" = NEW."price_snapshot_component_id"
-    FOR UPDATE OF target_order;
+    WHERE component."id" = NEW."price_snapshot_component_id";
+
+    IF target_order_id IS NOT NULL THEN
+        PERFORM taven_lock_automatic_order_session(target_order_id);
+
+        PERFORM 1
+        FROM "orders"
+        WHERE "id" = target_order_id
+        FOR UPDATE;
+    END IF;
 
     IF target_order_id IS NOT NULL
        AND EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = target_order_id) THEN
@@ -5458,6 +5671,8 @@ DECLARE
     target_order_status "order_status";
 BEGIN
     IF TG_OP = 'INSERT' THEN
+        PERFORM taven_lock_automatic_order_session(NEW."order_id");
+
         SELECT "status"
         INTO target_order_status
         FROM "orders"
@@ -5490,7 +5705,18 @@ CREATE FUNCTION taven_validate_shipment_plan_fulfilment_slot()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    target_order_id uuid;
 BEGIN
+    SELECT plan."order_id"
+    INTO target_order_id
+    FROM "shipment_plans" plan
+    WHERE plan."id" = NEW."shipment_plan_id";
+
+    IF target_order_id IS NOT NULL THEN
+        PERFORM taven_lock_automatic_order_session(target_order_id);
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1
         FROM "shipment_plans" plan
@@ -5524,6 +5750,12 @@ DECLARE
     target_order_id uuid := CASE WHEN TG_OP = 'INSERT' THEN NEW."order_id" ELSE OLD."order_id" END;
     target_order_status "order_status";
 BEGIN
+    IF TG_OP = 'INSERT'
+       OR (TG_OP = 'UPDATE'
+           AND NEW."settlement_amount_minor" IS DISTINCT FROM OLD."settlement_amount_minor") THEN
+        PERFORM taven_lock_automatic_order_session(target_order_id);
+    END IF;
+
     SELECT "status" INTO target_order_status
     FROM "orders"
     WHERE "id" = target_order_id
@@ -5780,6 +6012,8 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
     END IF;
 
+    PERFORM taven_lock_automatic_order_session(NEW."order_id");
+
     PERFORM 1
     FROM "orders"
     WHERE "id" = NEW."order_id"
@@ -5960,19 +6194,22 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_status_transition_check';
     END IF;
 
-    IF OLD."status" = 'PENDING'
+    IF OLD."status" IN ('PENDING', 'REFUND_PENDING')
        AND NEW."status" = 'CAPTURED' THEN
+        PERFORM taven_lock_automatic_order_session(NEW."order_id");
+
         PERFORM 1
         FROM "orders"
         WHERE "id" = NEW."order_id"
         FOR UPDATE;
 
-        IF NOT NEW."capture_authorized"
+        IF OLD."status" = 'PENDING'
+           AND (NOT NEW."capture_authorized"
            OR NEW."capture_cutoff_at" IS NOT NULL
            OR (NEW."role" = 'FULL' AND (
                NEW."checkout_capture_expires_at" IS NULL
                OR NEW."checkout_capture_expires_at" <= clock_timestamp()
-           )) THEN
+           ))) THEN
             RAISE EXCEPTION 'ordinary payment capture requires an open authorization window'
                 USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
         END IF;
