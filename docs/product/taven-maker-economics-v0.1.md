@@ -167,6 +167,10 @@ Acceptance příkaz je idempotentní podle `production_assignment_id`; při
 souběhu ani retry nesmí vzniknout více než jeden snapshot a příkaz vždy
 vrátí tentýž zamčený výsledek.
 
+Kompozitní reference `(production_assignment_id, maker_id)` vyžaduje makera
+skutečně přijatého assignmentu ještě před výpočtem a zamknutím odměny;
+neshoda proto nemůže vytvořit snapshot ani změnit `Job.payout_amount`.
+
 Přijetí současně zamkne `Job` i všechny jeho assignmenty a vyžaduje, aby
 dosud žádný neměl `accepted_at`. Částečný unikátní constraint nad `job_id`
 pro přijaté assignmenty dovolí právě jedno přijetí v celé historii jobu;
@@ -492,6 +496,7 @@ MakerCompensationSnapshot
 - id
 - production_assignment_id (unique)
 - maker_id
+- constraint `(production_assignment_id, maker_id)` → `ProductionAssignment`
 - policy_version
 - performance_snapshot_id
 - constraint `(performance_snapshot_id, maker_id)` → `MakerPerformanceSnapshot`
@@ -736,6 +741,8 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 32. Uznaný spor před převodem voidne původní settlement a doklad a vytvoří
     propojený replacement/correcting chain; žádný vydaný řádek, doklad ani
     payout se nepřepisuje.
+33. Compensation snapshot musí kompozitní referencí odkazovat assignment i
+    jeho skutečného makera ještě před zamknutím odměny a jobového payoutu.
 
 ------------------------------------------------------------------------
 
