@@ -25,6 +25,8 @@ Konkurence v Česku má kalkulačky, ale **všechny končí orientačním odhade
 
 Druhý vchod — „nemáš soubor? pošli fotku rozbitého dílu" — je viditelný, ale tišší. Odkaz, ne rovnocenné tlačítko. Jsou to dvě cílovky, ne dvě větve.
 
+Odkaz vede na strukturovaný poptávkový formulář: popis a účel dílu, referenční fotky, rozměry, požadovaný termín a kontakt. Odeslání vytvoří `QuoteRequest` se stavem úspěchu a referencí; individuální nabídka se vrací tokenizovaným odkazem, ze kterého lze pokračovat k objednávce.
+
 Pořadí sekcí: jak to funguje → čím se liší nacenění → ceník → ukázky vlastních výtisků → **Za zakázku ručí Taven**.
 
 Původní osobní sekce „kdo za tím stojí“ se nepoužívá. Trust sekce komunikuje závaznou cenu, kontrolu každého výtisku, foto před odesláním a Studio81 Labs jako odpovědného prodávajícího. Konkrétní maker, stroj ani soukromá dílna se nezobrazují.
@@ -43,13 +45,13 @@ Zakázáno: slider výplně, výběr trysky, teploty, styl podpěr, orientace.
 
 **U kvality se zobrazuje přepočtená cena, ne procentní přirážka.** Procenta typu „+35 %" vracejí zrušený `koef_kvality` (log #51). Kvalita mění výšku vrstvy, tedy čas, a ten dává slicer přímo — celý smysl deterministického nacenění je v tom, že se nenásobí odhadem.
 
-**Nálezy před tiskem** — nezaškrtnuté checkboxy, které musí zákazník aktivně potvrdit, max tři. Text v lidské řeči. Vizuálně klidné, ne alarmující.
+**Nálezy před tiskem** — nezaškrtnuté checkboxy, které musí zákazník aktivně potvrdit, max tři. Text v lidské řeči. Vizuálně klidné, ne alarmující. Když zákazník některý nález nepotvrdí, přímý flow se zastaví a nabídne přechod do poptávky s bezpečně předvyplněným kontextem.
 
 **Cena** — položkový rozpad, celková částka vizuálně dominantní. Po slicingu zůstává výrobní mezisoučet i celková částka provizorní, dokud zákazník v checkoutu nevybere výdejní místo a nevznikne endpoint-bound `ShipmentPlan`. Přechod z orientační na závaznou cenu se zobrazí až po tomto výběru; to je celý produkt v jedné mikroanimaci.
 
 ## 5. Checkout a sledování
 
-Checkout: výběr výdejního místa, kontakt bez povinné registrace, přijetí aktuální verze VOP, výslovné potvrzení výjimky z odstoupení, samostatný nepovinný souhlas se zveřejněním fotografií a platba kartou i bankovním tlačítkem.
+Checkout: výběr výdejního místa, fakturační údaje (jméno nebo název, adresa a případné firemní údaje) a kontakt bez povinné registrace, přijetí aktuální verze VOP, výslovné potvrzení výjimky z odstoupení, samostatný nepovinný souhlas se zveřejněním fotografií a platba kartou i bankovním tlačítkem.
 
 Sledování: tokenizovaná URL bez účtu, časová osa stavů v lidské řeči, **fotka hotového dílu k odsouhlasení před odesláním**, tracking, doklad.
 
