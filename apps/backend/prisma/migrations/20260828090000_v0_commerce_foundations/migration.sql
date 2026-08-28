@@ -602,7 +602,7 @@ ALTER TABLE "model_files" ADD COLUMN "source_retention_days" INTEGER NOT NULL DE
 ALTER TABLE "model_files" ADD CONSTRAINT "model_files_source_retention_days_check" CHECK ("source_retention_days" > 0);
 ALTER TABLE "photo_assets" ADD COLUMN "retention_days" INTEGER NOT NULL DEFAULT 90;
 ALTER TABLE "photo_assets" ADD CONSTRAINT "photo_assets_retention_days_check" CHECK ("retention_days" > 0);
-ALTER TABLE "customers" ADD CONSTRAINT "customers_email_normalized_check" CHECK ("email" = lower("email") AND "email" <> '');
+ALTER TABLE "customers" ADD CONSTRAINT "customers_email_normalized_check" CHECK ("email" = lower("email") AND "email" ~ '[^[:space:]]');
 ALTER TABLE "quote_sessions" ADD CONSTRAINT "quote_sessions_expiry_check" CHECK ("expires_at" > "created_at");
 ALTER TABLE "quote_sessions" ADD CONSTRAINT "quote_sessions_public_token_hash_check" CHECK ("public_token_hash" ~ '^[0-9a-f]{64}$');
 ALTER TABLE "quotes" ADD CONSTRAINT "quotes_expiry_check" CHECK ("expires_at" > "issued_at");
@@ -624,6 +624,7 @@ ALTER TABLE "price_snapshot_components" ADD CONSTRAINT "price_snapshot_component
 );
 ALTER TABLE "price_component_fulfilment_allocations" ADD CONSTRAINT "price_component_fulfilment_allocations_amount_check" CHECK ("amount_minor" >= 0);
 ALTER TABLE "payment_schedules" ADD CONSTRAINT "payment_schedules_values_check" CHECK ("sequence" >= 0 AND "gross_amount_minor" >= 0 AND "fee_rate_basis_points" >= 0 AND "fee_fixed_minor" >= 0);
+ALTER TABLE "orders" ADD CONSTRAINT "orders_public_reference_identity_check" CHECK ("public_reference" ~ '[^[:space:]]');
 ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
     ("quoted_at" IS NULL OR "quoted_at" >= "created_at")
     AND ("confirmed_at" IS NULL OR ("quoted_at" IS NOT NULL AND "confirmed_at" >= "quoted_at"))
@@ -918,11 +919,14 @@ BEGIN
            UNION ALL
            SELECT 1
            FROM "automatic_order_origins" origin
+           JOIN "orders" target_order ON target_order."id" = origin."order_id"
            JOIN "quote_requests" request
              ON request."quote_session_id" = origin."quote_session_id"
            JOIN "quotes" quote ON quote."quote_request_id" = request."id"
            WHERE quote."id" = NEW."quote_id"
              AND origin."order_id" = NEW."order_id"
+             AND (target_order."customer_id" IS NULL
+                  OR quote."customer_id" = target_order."customer_id")
        ) THEN
         RAISE EXCEPTION 'audit event quote must belong to its scoped order origin'
             USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
@@ -942,11 +946,14 @@ BEGIN
            FROM "payments" payment
            JOIN "automatic_order_origins" origin
              ON origin."order_id" = payment."order_id"
+           JOIN "orders" target_order ON target_order."id" = payment."order_id"
            JOIN "quote_requests" request
              ON request."quote_session_id" = origin."quote_session_id"
            JOIN "quotes" quote ON quote."quote_request_id" = request."id"
            WHERE payment."id" = NEW."payment_id"
              AND quote."id" = NEW."quote_id"
+             AND (target_order."customer_id" IS NULL
+                  OR quote."customer_id" = target_order."customer_id")
        ) THEN
         RAISE EXCEPTION 'audit event quote must belong to its scoped payment order origin'
             USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
@@ -968,11 +975,14 @@ BEGIN
            JOIN "payments" payment ON payment."id" = refund."payment_id"
            JOIN "automatic_order_origins" origin
              ON origin."order_id" = payment."order_id"
+           JOIN "orders" target_order ON target_order."id" = payment."order_id"
            JOIN "quote_requests" request
              ON request."quote_session_id" = origin."quote_session_id"
            JOIN "quotes" quote ON quote."quote_request_id" = request."id"
            WHERE refund."id" = NEW."refund_transaction_id"
              AND quote."id" = NEW."quote_id"
+             AND (target_order."customer_id" IS NULL
+                  OR quote."customer_id" = target_order."customer_id")
        ) THEN
         RAISE EXCEPTION 'audit event quote must belong to its scoped refund order origin'
             USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
@@ -1237,7 +1247,8 @@ BEGIN
            SELECT 1
            FROM "quote_requests" request
            WHERE request."quote_session_id" = OLD."id"
-             AND request."customer_id" IS DISTINCT FROM NEW."customer_id"
+             AND request."customer_id" IS NOT NULL
+             AND request."customer_id" <> NEW."customer_id"
        ) THEN
         RAISE EXCEPTION 'quote session customer cannot contradict its quote request owner'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_session_owner_check';
@@ -1313,9 +1324,10 @@ CREATE TRIGGER "quote_sessions_lifecycle_protected"
 BEFORE INSERT OR UPDATE OF "status", "expires_at", "created_at" ON "quote_sessions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_session_lifecycle();
 
-CREATE FUNCTION taven_assert_quote_request_session_owner(
+CREATE FUNCTION taven_claim_quote_session_customer(
     target_session_id uuid,
-    target_customer_id uuid
+    target_customer_id uuid,
+    mismatch_constraint text
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -1333,11 +1345,35 @@ BEGIN
     WHERE session."id" = target_session_id
     FOR UPDATE;
 
-    IF session_customer_id IS NOT NULL
-       AND session_customer_id IS DISTINCT FROM target_customer_id THEN
-        RAISE EXCEPTION 'quote request customer must match its owned quote session'
-            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_session_owner_check';
+    IF NOT FOUND
+       OR (session_customer_id IS NOT NULL
+           AND session_customer_id IS DISTINCT FROM target_customer_id) THEN
+        RAISE EXCEPTION 'attached commerce customer must match its quote session owner'
+            USING ERRCODE = '23514', CONSTRAINT = mismatch_constraint;
     END IF;
+
+    IF session_customer_id IS NULL AND target_customer_id IS NOT NULL THEN
+        UPDATE "quote_sessions"
+        SET "customer_id" = target_customer_id,
+            "updated_at" = CURRENT_TIMESTAMP
+        WHERE "id" = target_session_id;
+    END IF;
+END;
+$$;
+
+CREATE FUNCTION taven_assert_quote_request_session_owner(
+    target_session_id uuid,
+    target_customer_id uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM taven_claim_quote_session_customer(
+        target_session_id,
+        target_customer_id,
+        'quote_request_session_owner_check'
+    );
 END;
 $$;
 
@@ -1672,6 +1708,16 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'order_customer_ownership_immutable_check';
     END IF;
 
+    IF OLD."customer_id" IS NULL AND NEW."customer_id" IS NOT NULL THEN
+        PERFORM taven_claim_quote_session_customer(
+            origin."quote_session_id",
+            NEW."customer_id",
+            'automatic_order_origin_owner_check'
+        )
+        FROM "automatic_order_origins" origin
+        WHERE origin."order_id" = OLD."id";
+    END IF;
+
     RETURN NEW;
 END;
 $$;
@@ -1711,13 +1757,27 @@ CREATE FUNCTION taven_validate_automatic_order_origin()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    target_order_customer_id uuid;
 BEGIN
-    PERFORM taven_assert_quote_session_commerce_open(NEW."quote_session_id");
-
-    PERFORM 1
-    FROM "orders"
-    WHERE "id" = NEW."order_id"
+    SELECT target_order."customer_id"
+    INTO target_order_customer_id
+    FROM "orders" target_order
+    WHERE target_order."id" = NEW."order_id"
+      AND target_order."status" = 'DRAFT'
     FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'automatic order origin requires a draft order'
+            USING ERRCODE = '23514', CONSTRAINT = 'automatic_order_origin_owner_check';
+    END IF;
+
+    PERFORM taven_assert_quote_session_commerce_open(NEW."quote_session_id");
+    PERFORM taven_claim_quote_session_customer(
+        NEW."quote_session_id",
+        target_order_customer_id,
+        'automatic_order_origin_owner_check'
+    );
 
     IF NOT EXISTS (
         SELECT 1
@@ -1725,8 +1785,7 @@ BEGIN
         JOIN "quote_sessions" session ON session."id" = NEW."quote_session_id"
         WHERE target_order."id" = NEW."order_id"
           AND target_order."status" = 'DRAFT'
-          AND (session."customer_id" IS NULL
-               OR session."customer_id" = target_order."customer_id")
+          AND session."customer_id" IS NOT DISTINCT FROM target_order."customer_id"
     ) THEN
         RAISE EXCEPTION 'automatic draft order must belong to its session customer'
             USING ERRCODE = '23514', CONSTRAINT = 'automatic_order_origin_owner_check';

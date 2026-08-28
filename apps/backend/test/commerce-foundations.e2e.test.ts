@@ -961,6 +961,27 @@ describe("commerce persistence foundations", () => {
       const foundation = await fixtures.createFoundation("ownership-source");
       const createdAt = new Date();
       const otherCustomerId = fixtures.id("ownership-other-customer");
+      for (const [name, email] of [
+        ["empty_customer_email", ""],
+        ["blank_customer_email", "   "],
+        ["control_whitespace_customer_email", "\t\n"],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(
+              `INSERT INTO customers
+                 (id, email, first_seen_at, created_at, updated_at)
+               VALUES ($1,$2,$3,$3,$3)`,
+              [fixtures.id(name), email, createdAt],
+            ),
+          {
+            code: "23514",
+            constraint: "customers_email_normalized_check",
+          },
+        );
+      }
       await client.query(
         `INSERT INTO customers
            (id, email, display_name, first_seen_at, created_at, updated_at)
@@ -970,6 +991,32 @@ describe("commerce persistence foundations", () => {
 
       const anonymousSessionId = fixtures.id("anonymous-owner-session");
       const anonymousOrderId = fixtures.id("anonymous-owner-order");
+      for (const [name, publicReference] of [
+        ["empty_order_reference", ""],
+        ["blank_order_reference", "   "],
+        ["control_whitespace_order_reference", "\t\n"],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(
+              `INSERT INTO orders
+                 (id, customer_id, public_reference, status, created_at, updated_at)
+               VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
+              [
+                fixtures.id(name),
+                foundation.customerId,
+                publicReference,
+                createdAt,
+              ],
+            ),
+          {
+            code: "23514",
+            constraint: "orders_public_reference_identity_check",
+          },
+        );
+      }
       for (const [name, publicTokenHash] of [
         ["empty_public_token_hash", ""],
         ["blank_public_token_hash", "   "],
@@ -1021,6 +1068,34 @@ describe("commerce persistence foundations", () => {
         anonymousOrderId,
         foundation.customerId,
       ]);
+      expect(
+        (
+          await client.query<{ customer_id: string | null }>(
+            `SELECT customer_id FROM quote_sessions WHERE id = $1`,
+            [anonymousSessionId],
+          )
+        ).rows[0]?.customer_id,
+      ).toBe(foundation.customerId);
+      await expectQueryError(
+        client,
+        "conflicting_request_after_order_claim",
+        () =>
+          client.query(
+            `INSERT INTO quote_requests
+               (id, quote_session_id, customer_id, status, created_at, updated_at)
+             VALUES ($1,$2,$3,'NEW',$4,$4)`,
+            [
+              fixtures.id("conflicting-request-after-order-claim"),
+              anonymousSessionId,
+              otherCustomerId,
+              createdAt,
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_request_session_owner_check",
+        },
+      );
       await client.query(
         `SET CONSTRAINTS "orders_require_exactly_one_origin",
                          "automatic_order_origins_require_exactly_one_origin" IMMEDIATE`,
@@ -1028,6 +1103,67 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `SET CONSTRAINTS "orders_require_exactly_one_origin",
                          "automatic_order_origins_require_exactly_one_origin" DEFERRED`,
+      );
+
+      const requestFirstSessionId = fixtures.id("request-first-session");
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$4)`,
+        [
+          requestFirstSessionId,
+          randomUUID().replaceAll("-", "").padEnd(64, "4"),
+          new Date(Date.now() + 60 * 60 * 1_000),
+          createdAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO quote_requests
+           (id, quote_session_id, customer_id, status, created_at, updated_at)
+         VALUES ($1,$2,$3,'NEW',$4,$4)`,
+        [
+          fixtures.id("request-first-request"),
+          requestFirstSessionId,
+          otherCustomerId,
+          createdAt,
+        ],
+      );
+      expect(
+        (
+          await client.query<{ customer_id: string | null }>(
+            `SELECT customer_id FROM quote_sessions WHERE id = $1`,
+            [requestFirstSessionId],
+          )
+        ).rows[0]?.customer_id,
+      ).toBe(otherCustomerId);
+      await expectQueryError(
+        client,
+        "conflicting_order_after_request_claim",
+        async () => {
+          const conflictingOrderId = fixtures.id(
+            "conflicting-order-after-request-claim",
+          );
+          await client.query(
+            `INSERT INTO orders
+               (id, customer_id, public_reference, status, created_at, updated_at)
+             VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
+            [
+              conflictingOrderId,
+              foundation.customerId,
+              `T-${randomUUID()}`,
+              createdAt,
+            ],
+          );
+          await client.query(
+            `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+             VALUES ($1,$2)`,
+            [conflictingOrderId, requestFirstSessionId],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "automatic_order_origin_owner_check",
+        },
       );
 
       for (const [name, nextCustomerId] of [
