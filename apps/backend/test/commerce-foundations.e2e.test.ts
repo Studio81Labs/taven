@@ -2976,6 +2976,96 @@ describe("commerce persistence foundations", () => {
       ).toEqual([
         { payment_status: "REFUND_PENDING", refund_status: "PENDING" },
       ]);
+
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      await expectQueryError(
+        client,
+        "fail_refund_without_payment_restore",
+        async () => {
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+            [refundId, new Date()],
+          );
+          await client.query(
+            `SET CONSTRAINTS "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_refund_status_reconciliation_check",
+        },
+      );
+
+      const failedAt = new Date();
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
+        [refundId, failedAt],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'CAPTURED', updated_at = $2 WHERE id = $1`,
+        [foundation.paymentId, failedAt],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      expect(
+        (
+          await client.query<{ payment_status: string; refund_status: string }>(
+            `SELECT payment.status::text AS payment_status,
+                    refund.status::text AS refund_status
+             FROM payments payment
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE payment.id = $1 AND refund.id = $2`,
+            [foundation.paymentId, refundId],
+          )
+        ).rows,
+      ).toEqual([{ payment_status: "CAPTURED", refund_status: "FAILED" }]);
+
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      const retryRefundId = fixtures.id("retry-pending-refund");
+      await client.query(
+        `INSERT INTO refund_transactions
+         (id, payment_id, idempotency_key, amount_minor, reason, status,
+          created_at, updated_at)
+         VALUES ($1,$2,$3,1,'CUSTOMER_CANCELLATION','PENDING',$4,$4)`,
+        [
+          retryRefundId,
+          foundation.paymentId,
+          "retry-pending-refund",
+          new Date(),
+        ],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+        [foundation.paymentId],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      expect(
+        (
+          await client.query<{ payment_status: string; refund_status: string }>(
+            `SELECT payment.status::text AS payment_status,
+                    refund.status::text AS refund_status
+             FROM payments payment
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE payment.id = $1 AND refund.id = $2`,
+            [foundation.paymentId, retryRefundId],
+          )
+        ).rows,
+      ).toEqual([
+        { payment_status: "REFUND_PENDING", refund_status: "PENDING" },
+      ]);
     });
   });
 
@@ -4598,6 +4688,85 @@ describe("commerce persistence foundations", () => {
         [new Date()],
       );
       const other = await fixtures.createFoundation("other");
+      const ownedSessionId = fixtures.id("owned-session-without-request");
+      const ownedRequestId = fixtures.id("owned-session-request");
+      const otherOwnedSessionId = fixtures.id(
+        "other-owned-session-without-request",
+      );
+      const ownershipCreatedAt = new Date();
+      await client.query(
+        `INSERT INTO quote_sessions
+         (id, customer_id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$5), ($6,$7,$8,$4,$5,$5)`,
+        [
+          ownedSessionId,
+          foundation.customerId,
+          "d".repeat(64),
+          new Date(ownershipCreatedAt.getTime() + 60 * 60 * 1_000),
+          ownershipCreatedAt,
+          otherOwnedSessionId,
+          other.customerId,
+          "e".repeat(64),
+        ],
+      );
+      await expectQueryError(
+        client,
+        "cross_customer_quote_request_insert",
+        () =>
+          client.query(
+            `INSERT INTO quote_requests
+             (id, quote_session_id, customer_id, status, created_at, updated_at)
+             VALUES ($1,$2,$3,'NEW',$4,$4)`,
+            [
+              ownedRequestId,
+              ownedSessionId,
+              other.customerId,
+              ownershipCreatedAt,
+            ],
+          ),
+        { code: "23514", constraint: "quote_request_session_owner_check" },
+      );
+      await client.query(
+        `INSERT INTO quote_requests
+         (id, quote_session_id, customer_id, status, created_at, updated_at)
+         VALUES ($1,$2,$3,'NEW',$4,$4)`,
+        [
+          ownedRequestId,
+          ownedSessionId,
+          foundation.customerId,
+          ownershipCreatedAt,
+        ],
+      );
+      await expectQueryError(
+        client,
+        "cross_customer_quote_request_update",
+        () =>
+          client.query(
+            `UPDATE quote_requests SET customer_id = $2 WHERE id = $1`,
+            [ownedRequestId, other.customerId],
+          ),
+        { code: "23514", constraint: "quote_request_session_owner_check" },
+      );
+      await expectQueryError(
+        client,
+        "cross_customer_quote_session_move",
+        () =>
+          client.query(
+            `UPDATE quote_requests SET quote_session_id = $2 WHERE id = $1`,
+            [ownedRequestId, otherOwnedSessionId],
+          ),
+        { code: "23514", constraint: "quote_request_session_owner_check" },
+      );
+      await expectQueryError(
+        client,
+        "cross_customer_quote_session_owner_update",
+        () =>
+          client.query(
+            `UPDATE quote_sessions SET customer_id = $2 WHERE id = $1`,
+            [ownedSessionId, other.customerId],
+          ),
+        { code: "23514", constraint: "quote_request_session_owner_check" },
+      );
       await expectQueryError(
         client,
         "skip_draft_lifecycle",

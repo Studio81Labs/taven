@@ -1048,6 +1048,18 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF NEW."customer_id" IS DISTINCT FROM OLD."customer_id"
+       AND NEW."customer_id" IS NOT NULL
+       AND EXISTS (
+           SELECT 1
+           FROM "quote_requests" request
+           WHERE request."quote_session_id" = OLD."id"
+             AND request."customer_id" IS DISTINCT FROM NEW."customer_id"
+       ) THEN
+        RAISE EXCEPTION 'quote session customer cannot contradict its quote request owner'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_session_owner_check';
+    END IF;
+
+    IF NEW."customer_id" IS DISTINCT FROM OLD."customer_id"
        AND EXISTS (
            SELECT 1
            FROM "automatic_order_origins" origin
@@ -1069,6 +1081,34 @@ CREATE TRIGGER "quote_sessions_customer_ownership_protected"
 BEFORE UPDATE OF "customer_id" ON "quote_sessions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_session_customer_ownership();
 
+CREATE FUNCTION taven_assert_quote_request_session_owner(
+    target_session_id uuid,
+    target_customer_id uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    session_customer_id uuid;
+BEGIN
+    IF target_session_id IS NULL THEN
+        RETURN;
+    END IF;
+
+    SELECT session."customer_id"
+    INTO session_customer_id
+    FROM "quote_sessions" session
+    WHERE session."id" = target_session_id
+    FOR UPDATE;
+
+    IF session_customer_id IS NOT NULL
+       AND session_customer_id IS DISTINCT FROM target_customer_id THEN
+        RAISE EXCEPTION 'quote request customer must match its owned quote session'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_session_owner_check';
+    END IF;
+END;
+$$;
+
 CREATE FUNCTION taven_require_initial_quote_request_status()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1078,6 +1118,11 @@ BEGIN
         RAISE EXCEPTION 'quote requests must begin in NEW'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_initial_status_check';
     END IF;
+
+    PERFORM taven_assert_quote_request_session_owner(
+        NEW."quote_session_id",
+        NEW."customer_id"
+    );
 
     RETURN NEW;
 END;
@@ -1182,6 +1227,11 @@ BEGIN
         RAISE EXCEPTION 'accepted quote request requires a current quoted offer with one complete immutable price binding'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_price_binding_acceptance_check';
     END IF;
+
+    PERFORM taven_assert_quote_request_session_owner(
+        NEW."quote_session_id",
+        NEW."customer_id"
+    );
 
     RETURN NEW;
 END;
@@ -4678,7 +4728,7 @@ BEGIN
            OR (OLD."status" = 'PENDING' AND NEW."status" IN ('CAPTURED', 'FAILED', 'VOIDED', 'REFUND_PENDING'))
            OR (OLD."status" = 'CAPTURED' AND NEW."status" = 'REFUND_PENDING')
            OR (OLD."status" = 'VOIDED' AND NEW."status" = 'REFUND_PENDING')
-           OR (OLD."status" = 'REFUND_PENDING' AND NEW."status" IN ('PARTIALLY_REFUNDED', 'REFUNDED'))
+           OR (OLD."status" = 'REFUND_PENDING' AND NEW."status" IN ('CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED'))
            OR (OLD."status" = 'PARTIALLY_REFUNDED' AND NEW."status" IN ('REFUND_PENDING', 'REFUNDED'))
        ) THEN
         RAISE EXCEPTION 'payment status transition is not allowed'
