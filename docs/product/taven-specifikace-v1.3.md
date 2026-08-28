@@ -902,7 +902,7 @@ new → in_review → quoted → accepted → (vytvoří Order)
 - `Job` jako samostatná entita oddělená od `Order`.
 - Profilová matice postavená pořádně i pro jeden stroj.
 - Dvoufázový slicing implementovaný celý.
-- `payout_amount` na jobu.
+- Immutable tuple `payout_amount` + `payout_currency` na jobu.
 - Fotodokumentace vlastních tisků — korpus, ze kterého se později definuje přijatelný výsledek.
 
 Až dorazí maker č. 2, přidá se tlačítko „přiřadit ručně" — jeden den práce.
