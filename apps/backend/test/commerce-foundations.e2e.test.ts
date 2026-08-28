@@ -1992,6 +1992,23 @@ describe("commerce persistence foundations", () => {
           1,
           undefined,
           "DRAFT",
+          undefined,
+          {},
+          "AUTOMATIC",
+          true,
+          true,
+          false,
+        );
+        const alternateDestinationId = fixtures.id(
+          "active-binding-alternate-destination",
+        );
+        await client.query(
+          `INSERT INTO delivery_destinations
+             (id, order_id, provider_endpoint_id, endpoint_type,
+              address_snapshot, capability_snapshot, created_at)
+           VALUES ($1,$2,'alternate-endpoint','HOME','{}'::jsonb,
+                   '{}'::jsonb,clock_timestamp())`,
+          [alternateDestinationId, foundation.orderId],
         );
         const sourceComponents = (
           await client.query<{
@@ -2151,6 +2168,7 @@ describe("commerce persistence foundations", () => {
 
         const incomplete = await createReplacement("incomplete", false);
         const complete = await createReplacement("complete", true);
+        const guarded = await createReplacement("guarded", true);
         await client.query(
           `SET CONSTRAINTS
            "price_snapshots_total_reconciled",
@@ -2263,6 +2281,103 @@ describe("commerce persistence foundations", () => {
             active_binding_id: complete.bindingId,
             original_invalidated: true,
             plan_id: complete.planId,
+          },
+        ]);
+
+        await expectQueryError(
+          client,
+          "insert_shipment_for_inactive_binding",
+          () =>
+            client.query(
+              `INSERT INTO shipments
+                 (id, order_id, order_phase_id, shipment_plan_id,
+                  delivery_destination_id, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,clock_timestamp(),clock_timestamp())`,
+              [
+                fixtures.id("inactive-binding-shipment"),
+                foundation.orderId,
+                foundation.orderPhaseId,
+                foundation.shipmentPlanId,
+                foundation.deliveryDestinationId,
+              ],
+            ),
+          {
+            code: "23514",
+            constraint: "active_order_price_binding_shipment_guard",
+          },
+        );
+        await expectQueryError(
+          client,
+          "insert_inactive_shipment_with_wrong_plan_scope",
+          () =>
+            client.query(
+              `INSERT INTO shipments
+                 (id, order_id, order_phase_id, shipment_plan_id,
+                  delivery_destination_id, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,clock_timestamp(),clock_timestamp())`,
+              [
+                fixtures.id("inactive-binding-wrong-scope-shipment"),
+                foundation.orderId,
+                foundation.orderPhaseId,
+                foundation.shipmentPlanId,
+                alternateDestinationId,
+              ],
+            ),
+          {
+            code: "23503",
+            constraint:
+              "shipments_shipment_plan_id_order_id_order_phase_id_deliver_fkey",
+          },
+        );
+        if (!complete.planId) {
+          throw new Error("complete replacement requires a ShipmentPlan");
+        }
+        await client.query(
+          `INSERT INTO shipments
+             (id, order_id, order_phase_id, shipment_plan_id,
+              delivery_destination_id, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5,clock_timestamp(),clock_timestamp())`,
+          [
+            fixtures.id("active-binding-shipment"),
+            foundation.orderId,
+            foundation.orderPhaseId,
+            complete.planId,
+            foundation.deliveryDestinationId,
+          ],
+        );
+        await expectQueryError(
+          client,
+          "move_after_shipment_creation",
+          () =>
+            client.query(
+              `UPDATE order_active_price_bindings
+               SET order_price_binding_id = $2 WHERE order_id = $1`,
+              [foundation.orderId, guarded.bindingId],
+            ),
+          {
+            code: "23514",
+            constraint: "active_order_price_binding_shipment_guard",
+          },
+        );
+        expect(
+          (
+            await client.query<{
+              active_binding_id: string;
+              active_invalidated_at: Date | null;
+            }>(
+              `SELECT active.order_price_binding_id AS active_binding_id,
+                      binding.invalidated_at AS active_invalidated_at
+               FROM order_active_price_bindings active
+               JOIN order_price_bindings binding
+                 ON binding.id = active.order_price_binding_id
+               WHERE active.order_id = $1`,
+              [foundation.orderId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            active_binding_id: complete.bindingId,
+            active_invalidated_at: null,
           },
         ]);
       },
@@ -2435,6 +2550,8 @@ describe("commerce persistence foundations", () => {
           {},
           "AUTOMATIC",
           includeActivePriceBinding,
+          true,
+          false,
         );
         const replacementSnapshotId = fixtures.id(
           "binding-invalidation-concurrency:replacement-snapshot",
@@ -4295,6 +4412,74 @@ describe("commerce persistence foundations", () => {
           constraint: "quoted_payment_void_closure_check",
         },
       );
+      await expectQueryError(
+        client,
+        "fail_created_payment_with_open_authorization",
+        () =>
+          client.query(`UPDATE payments SET status = 'FAILED' WHERE id = $1`, [
+            createdFoundation.paymentId,
+          ]),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+      const intentFailureAt = new Date();
+      await client.query(
+        `UPDATE payments
+         SET status = 'FAILED', capture_authorized = false,
+             capture_cutoff_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [createdFoundation.paymentId, intentFailureAt],
+      );
+      expect(
+        (
+          await client.query<{
+            capture_authorized: boolean;
+            capture_cutoff_at: Date;
+            provider_intent_id: string | null;
+            status: string;
+          }>(
+            `SELECT status::text, provider_intent_id, capture_authorized,
+                    capture_cutoff_at
+             FROM payments WHERE id = $1`,
+            [createdFoundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          status: "FAILED",
+          provider_intent_id: null,
+          capture_authorized: false,
+          capture_cutoff_at: intentFailureAt,
+        },
+      ]);
+      const replacementPaymentId = fixtures.id(
+        "created-payment-provider-retry",
+      );
+      const replacementCreatedAt = new Date();
+      await client.query(
+        `INSERT INTO payments
+           (id, order_id, price_snapshot_id, order_price_binding_id,
+            payment_schedule_id, role, provider, provider_intent_id,
+            requested_amount_minor, currency, status, capture_authorized,
+            capture_cutoff_at, checkout_capture_expires_at, created_at, updated_at)
+         SELECT $1,order_id,price_snapshot_id,order_price_binding_id,
+                payment_schedule_id,role,provider,$2,requested_amount_minor,
+                currency,'PENDING',true,NULL,checkout_capture_expires_at,$3,$3
+         FROM payments WHERE id = $4`,
+        [
+          replacementPaymentId,
+          "created-payment-provider-retry-intent",
+          replacementCreatedAt,
+          createdFoundation.paymentId,
+        ],
+      );
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM payments WHERE id = $1`,
+            [replacementPaymentId],
+          )
+        ).rows,
+      ).toEqual([{ status: "PENDING" }]);
 
       const pendingFoundation = await fixtures.createFoundation(
         "pending-payment-provider-intent",
@@ -10270,6 +10455,8 @@ describe("commerce persistence foundations", () => {
         undefined,
         {},
         "INDIVIDUAL",
+        false,
+        true,
         false,
       );
 

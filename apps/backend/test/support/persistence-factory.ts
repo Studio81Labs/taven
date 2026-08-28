@@ -169,6 +169,7 @@ export class PersistenceFactory {
     orderOrigin: "AUTOMATIC" | "INDIVIDUAL" = "AUTOMATIC",
     includeActivePriceBinding = true,
     customerOwned = true,
+    includeShipments = true,
   ): Promise<PersistenceFoundation> {
     if (!customerOwned && orderOrigin !== "AUTOMATIC") {
       throw new Error("only automatic foundations may begin anonymously");
@@ -528,6 +529,7 @@ export class PersistenceFactory {
       orderOrigin,
       includeActivePriceBinding,
       customerOwned,
+      includeShipments,
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -569,6 +571,7 @@ export class PersistenceFactory {
     orderOrigin: "AUTOMATIC" | "INDIVIDUAL";
     includeActivePriceBinding: boolean;
     customerOwned: boolean;
+    includeShipments: boolean;
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
@@ -766,17 +769,19 @@ export class PersistenceFactory {
           t,
         ],
       );
-      await this.sql.query(
-        "INSERT INTO shipments (id, order_id, order_phase_id, shipment_plan_id, delivery_destination_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$6)",
-        [
-          input.shipmentIds[index],
-          input.orderId,
-          input.orderPhaseId,
-          input.shipmentPlanIds[index],
-          input.deliveryDestinationId,
-          t,
-        ],
-      );
+      if (input.includeShipments) {
+        await this.sql.query(
+          "INSERT INTO shipments (id, order_id, order_phase_id, shipment_plan_id, delivery_destination_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$6)",
+          [
+            input.shipmentIds[index],
+            input.orderId,
+            input.orderPhaseId,
+            input.shipmentPlanIds[index],
+            input.deliveryDestinationId,
+            t,
+          ],
+        );
+      }
     }
     let slotIndex = 0;
     for (const [itemIndex, item] of input.resolvedItems.entries()) {

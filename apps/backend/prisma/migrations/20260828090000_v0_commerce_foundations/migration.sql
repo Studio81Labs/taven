@@ -694,7 +694,7 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_authorization_pair_check
 );
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_intent_identity_check" CHECK (
     ("provider_intent_id" IS NOT NULL AND "provider_intent_id" ~ '[^[:space:]]')
-    OR ("provider_intent_id" IS NULL AND "status" IN ('CREATED', 'VOIDED'))
+    OR ("provider_intent_id" IS NULL AND "status" IN ('CREATED', 'FAILED', 'VOIDED'))
 );
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_capture_identity_check" CHECK (
     "provider_capture_id" IS NULL OR "provider_capture_id" ~ '[^[:space:]]'
@@ -4156,6 +4156,19 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_payment_guard';
     END IF;
 
+    IF TG_OP = 'UPDATE'
+       AND NEW."order_price_binding_id" IS DISTINCT FROM OLD."order_price_binding_id"
+       AND EXISTS (
+           SELECT 1
+           FROM "shipment_plans" plan
+           JOIN "shipments" shipment ON shipment."shipment_plan_id" = plan."id"
+           WHERE plan."order_id" = NEW."order_id"
+             AND plan."order_price_binding_id" = OLD."order_price_binding_id"
+       ) THEN
+        RAISE EXCEPTION 'active destination and price binding cannot change after Shipment creation'
+            USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_shipment_guard';
+    END IF;
+
     IF target_order_status <> 'DRAFT'
        AND (CASE WHEN TG_OP = 'INSERT' THEN true
                  ELSE NEW."order_price_binding_id" IS DISTINCT FROM OLD."order_price_binding_id"
@@ -6006,6 +6019,50 @@ CREATE TRIGGER "shipments_topology_protected"
 BEFORE UPDATE OR DELETE ON "shipments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_shipment_topology();
 
+CREATE FUNCTION taven_require_active_order_price_binding_for_shipment()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- shipments_parent_order_locked runs first and serializes this check with
+    -- active-binding moves on the parent Order.
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "shipment_plans" plan
+        WHERE plan."id" = NEW."shipment_plan_id"
+          AND plan."order_id" = NEW."order_id"
+          AND plan."order_phase_id" = NEW."order_phase_id"
+          AND plan."delivery_destination_id" = NEW."delivery_destination_id"
+    ) THEN
+        -- Preserve the more specific composite foreign-key scope error.
+        RETURN NEW;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "shipment_plans" plan
+        JOIN "order_active_price_bindings" active
+          ON active."order_id" = plan."order_id"
+         AND active."order_price_binding_id" = plan."order_price_binding_id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+         AND binding."order_id" = active."order_id"
+         AND binding."invalidated_at" IS NULL
+        WHERE plan."id" = NEW."shipment_plan_id"
+          AND plan."order_id" = NEW."order_id"
+    ) THEN
+        RAISE EXCEPTION 'Shipment requires the current active destination and price binding'
+            USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_shipment_guard';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "shipments_zz_active_order_price_binding_guard"
+BEFORE INSERT ON "shipments"
+FOR EACH ROW EXECUTE FUNCTION taven_require_active_order_price_binding_for_shipment();
+
 CREATE FUNCTION taven_require_payment_fulfilment_topology()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -6199,7 +6256,7 @@ BEGIN
 
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
-           (OLD."status" = 'CREATED' AND NEW."status" IN ('PENDING', 'VOIDED'))
+           (OLD."status" = 'CREATED' AND NEW."status" IN ('PENDING', 'FAILED', 'VOIDED'))
            OR (OLD."status" = 'PENDING' AND NEW."status" IN ('CAPTURED', 'FAILED', 'VOIDED', 'REFUND_PENDING'))
            OR (OLD."status" = 'CAPTURED' AND NEW."status" = 'REFUND_PENDING')
            OR (OLD."status" = 'VOIDED' AND NEW."status" = 'REFUND_PENDING')
