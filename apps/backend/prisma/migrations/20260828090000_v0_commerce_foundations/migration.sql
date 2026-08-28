@@ -1162,6 +1162,15 @@ BEGIN
     WHERE "id" = target_order_id
     FOR UPDATE;
 
+    IF EXISTS (
+        SELECT 1
+        FROM "order_price_bindings"
+        WHERE "order_id" = target_order_id
+    ) THEN
+        RAISE EXCEPTION 'order items cannot change after pricing is bound'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_item_price_binding_immutable_check';
+    END IF;
+
     IF TG_OP = 'INSERT' THEN
         IF target_order_status IS DISTINCT FROM 'DRAFT'::"order_status" THEN
             RAISE EXCEPTION 'order items can be inserted only while the order is draft'
@@ -1220,6 +1229,11 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = NEW."order_id"
+    FOR UPDATE;
+
     IF EXISTS (
         SELECT 1 FROM "individual_order_origins" origin WHERE origin."order_id" = NEW."order_id"
     ) AND NOT EXISTS (
@@ -1301,11 +1315,16 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'order_price_binding_immutable_check';
     END IF;
 
-    IF OLD."invalidated_at" IS NULL
-       AND NEW."invalidated_at" IS NOT NULL
-       AND EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = OLD."order_id") THEN
-        RAISE EXCEPTION 'price binding cannot be invalidated after payment intent creation'
-            USING ERRCODE = '23514', CONSTRAINT = 'order_price_binding_payment_guard';
+    IF OLD."invalidated_at" IS NULL AND NEW."invalidated_at" IS NOT NULL THEN
+        PERFORM 1
+        FROM "orders"
+        WHERE "id" = OLD."order_id"
+        FOR UPDATE;
+
+        IF EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = OLD."order_id") THEN
+            RAISE EXCEPTION 'price binding cannot be invalidated after payment intent creation'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_price_binding_payment_guard';
+        END IF;
     END IF;
 
     RETURN NEW;
@@ -1327,6 +1346,11 @@ BEGIN
         RAISE EXCEPTION 'active order price binding cannot be reparented'
             USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_owner_immutable_check';
     END IF;
+
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = NEW."order_id"
+    FOR UPDATE;
 
     IF NOT EXISTS (
         SELECT 1
@@ -1823,6 +1847,12 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     PERFORM 1
+    FROM "payments"
+    WHERE "order_id" = NEW."order_id"
+    ORDER BY "id"
+    FOR UPDATE;
+
+    PERFORM 1
     FROM "phase_resource_plan_jobs"
     WHERE "id" = NEW."phase_resource_plan_job_id"
       AND "node_id" = NEW."node_id"
@@ -1830,13 +1860,18 @@ BEGIN
 
     IF NOT EXISTS (
         SELECT 1
+        FROM "payments" payment
+        WHERE payment."order_id" = NEW."order_id"
+          AND payment."status" = 'CAPTURED'
+    ) OR NOT EXISTS (
+        SELECT 1
         FROM "production_reservations" production
         WHERE production."job_id" = NEW."id"
           AND production."node_id" = NEW."node_id"
           AND production."phase_resource_plan_job_id" = NEW."phase_resource_plan_job_id"
           AND production."status" = 'HELD'
     ) THEN
-        RAISE EXCEPTION 'job requires its captured held production reservation'
+        RAISE EXCEPTION 'job requires a captured payment and its held production reservation'
             USING ERRCODE = '23514', CONSTRAINT = 'job_capture_reconciliation_check';
     END IF;
 

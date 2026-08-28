@@ -159,6 +159,7 @@ export class PersistenceFactory {
     slotCount = 1,
     commerceItems?: CommerceItem[],
     finalOrderStatus: "DRAFT" | "QUOTED" = "QUOTED",
+    beforeOrderPricing?: (foundation: PersistenceFoundation) => Promise<void>,
   ): Promise<PersistenceFoundation> {
     const items: CommerceItem[] =
       commerceItems ?? Array.from({ length: slotCount }, () => ({}));
@@ -440,32 +441,7 @@ export class PersistenceFactory {
         ],
       );
     }
-    await this.createCommerceTopology({
-      name,
-      customerId,
-      quoteSessionId,
-      quoteRequestId,
-      quoteId,
-      orderId,
-      orderPhaseId,
-      modelFileId,
-      deliveryDestinationId,
-      orderPriceBindingId,
-      quoteItemIds,
-      orderItemIds,
-      shipmentPlanIds,
-      shipmentIds,
-      fulfilmentSlotIds,
-      modelGeometryIds,
-      printConfigRevisionIds,
-      resolvedItems,
-      quoteSessionExpiresAt: new Date(testRunStartedAt + hourInMilliseconds),
-      quoteExpiresAt:
-        sourceRetention.quoteExpiresAt ??
-        new Date(testRunStartedAt + hourInMilliseconds),
-      finalOrderStatus,
-    });
-    return {
+    const foundation: PersistenceFoundation = {
       nodeId,
       machineId,
       inventoryId,
@@ -510,6 +486,37 @@ export class PersistenceFactory {
       fulfilmentSlotQuantities,
       paymentId,
     };
+    await this.createCommerceTopology({
+      name,
+      customerId,
+      quoteSessionId,
+      quoteRequestId,
+      quoteId,
+      orderId,
+      orderPhaseId,
+      modelFileId,
+      deliveryDestinationId,
+      orderPriceBindingId,
+      quoteItemIds,
+      orderItemIds,
+      shipmentPlanIds,
+      shipmentIds,
+      fulfilmentSlotIds,
+      modelGeometryIds,
+      printConfigRevisionIds,
+      resolvedItems,
+      quoteSessionExpiresAt: new Date(testRunStartedAt + hourInMilliseconds),
+      quoteExpiresAt:
+        sourceRetention.quoteExpiresAt ??
+        new Date(testRunStartedAt + hourInMilliseconds),
+      finalOrderStatus,
+      ...(beforeOrderPricing === undefined
+        ? {}
+        : {
+            beforeOrderPricing: () => beforeOrderPricing(foundation),
+          }),
+    });
+    return foundation;
   }
 
   private async createCommerceTopology(input: {
@@ -539,6 +546,7 @@ export class PersistenceFactory {
     quoteSessionExpiresAt: Date;
     quoteExpiresAt: Date;
     finalOrderStatus: "DRAFT" | "QUOTED";
+    beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
     const quoteIssuedAt = new Date(
@@ -657,6 +665,23 @@ export class PersistenceFactory {
         t,
       ],
     );
+    for (const [index, item] of input.resolvedItems.entries()) {
+      await this.sql.query(
+        "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PLA',$7,$8,$9)",
+        [
+          input.orderItemIds[index],
+          input.orderId,
+          index,
+          input.modelFileId,
+          input.modelGeometryIds[index],
+          input.printConfigRevisionIds[index],
+          item.color,
+          item.quantity,
+          t,
+        ],
+      );
+    }
+    await input.beforeOrderPricing?.();
     await this.sql.query(
       "INSERT INTO order_price_bindings (id, order_id, price_snapshot_id, delivery_destination_id, created_at) VALUES ($1,$2,$3,$4,$5)",
       [
@@ -675,21 +700,7 @@ export class PersistenceFactory {
       "INSERT INTO order_phases (id, order_id, kind, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$5)",
       [input.orderPhaseId, input.orderId, "SINGLE", "QUOTED", t],
     );
-    for (const [index, item] of input.resolvedItems.entries()) {
-      await this.sql.query(
-        "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PLA',$7,$8,$9)",
-        [
-          input.orderItemIds[index],
-          input.orderId,
-          index,
-          input.modelFileId,
-          input.modelGeometryIds[index],
-          input.printConfigRevisionIds[index],
-          item.color,
-          item.quantity,
-          t,
-        ],
-      );
+    for (const [index] of input.resolvedItems.entries()) {
       await this.sql.query(
         "INSERT INTO shipment_plans (id, order_id, order_phase_id, price_snapshot_id, order_price_binding_id, delivery_destination_id, ordinal, category, planned_volume_cubic_mm, planned_weight_milligrams, shipping_amount_minor, packaging_amount_minor, handling_amount_minor, allocation_snapshot, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,1,$9,0,0,$10::jsonb,$11)",
         [
@@ -875,6 +886,35 @@ export class PersistenceFactory {
         `intent-${this.hash(foundation.paymentId)}`,
         requestedAmountMinor,
         createdAt,
+      ],
+    );
+  }
+
+  async capturePayment(foundation: PersistenceFoundation): Promise<void> {
+    const existing = await this.sql.query<{ status: string }>(
+      'SELECT "status"::text FROM "payments" WHERE "id" = $1',
+      [foundation.paymentId],
+    );
+    if (!existing.rows[0]) {
+      await this.finalizePayment(foundation);
+    } else if (existing.rows[0].status === "CAPTURED") {
+      return;
+    } else if (existing.rows[0].status !== "PENDING") {
+      throw new Error(
+        `cannot capture fixture payment from ${existing.rows[0].status}`,
+      );
+    }
+
+    const capturedAt = new Date();
+    await this.sql.query(
+      `UPDATE payments
+       SET status = 'CAPTURED', captured_amount_minor = requested_amount_minor,
+           provider_capture_id = $2, captured_at = $3
+       WHERE id = $1`,
+      [
+        foundation.paymentId,
+        `capture-${this.hash(foundation.paymentId).slice(0, 32)}`,
+        capturedAt,
       ],
     );
   }

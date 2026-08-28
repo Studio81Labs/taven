@@ -47,7 +47,7 @@ async function expectQueryError(
   }
 }
 
-async function createCurrentPlanAndPayment(
+async function createCurrentPlan(
   client: PoolClient,
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
@@ -119,6 +119,14 @@ async function createCurrentPlanAndPayment(
     `UPDATE phase_reservation_sets SET status = 'RESERVED' WHERE id = $1`,
     [foundation.phaseReservationSetId],
   );
+}
+
+async function createCurrentPlanAndPayment(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  foundation: PersistenceFoundation,
+): Promise<void> {
+  await createCurrentPlan(client, fixtures, foundation);
   await fixtures.finalizePayment(foundation);
 }
 
@@ -343,6 +351,59 @@ describe("commerce persistence foundations", () => {
 
   it("reconciles immutable price components and freezes automatic commerce after payment intent creation", async () => {
     await rollback("immutable-pricing", async (client, fixtures) => {
+      const boundDraft = await fixtures.createFoundation(
+        "bound-draft-pricing",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      const boundDraftMutationError = {
+        code: "23514",
+        constraint: "order_item_price_binding_immutable_check",
+      };
+      await expectQueryError(
+        client,
+        "bound_draft_order_item_insert",
+        () =>
+          client.query(
+            `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,
+                                     model_geometry_id, print_config_revision_id,
+                                     material, color, quantity, created_at)
+             VALUES ($1,$2,99,$3,$4,$5,'PLA','green',1,$6)`,
+            [
+              fixtures.id("bound-draft-late-item"),
+              boundDraft.orderId,
+              boundDraft.modelFileId,
+              boundDraft.modelGeometryId,
+              boundDraft.printConfigRevisionId,
+              new Date(),
+            ],
+          ),
+        boundDraftMutationError,
+      );
+      await expectQueryError(
+        client,
+        "bound_draft_order_item_update",
+        () =>
+          client.query(`UPDATE order_items SET color = 'green' WHERE id = $1`, [
+            boundDraft.orderItemId,
+          ]),
+        boundDraftMutationError,
+      );
+      await expectQueryError(
+        client,
+        "bound_draft_order_item_delete",
+        () =>
+          client.query(`DELETE FROM order_items WHERE id = $1`, [
+            boundDraft.orderItemId,
+          ]),
+        boundDraftMutationError,
+      );
+
       const foundation = await fixtures.createFoundation("immutable-pricing");
       await expectQueryError(
         client,
@@ -362,7 +423,10 @@ describe("commerce persistence foundations", () => {
               new Date(),
             ],
           ),
-        { code: "23514", constraint: "order_item_mutability_check" },
+        {
+          code: "23514",
+          constraint: "order_item_price_binding_immutable_check",
+        },
       );
       await expectQueryError(
         client,
@@ -508,7 +572,10 @@ describe("commerce persistence foundations", () => {
           client.query(`UPDATE order_items SET color = 'green' WHERE id = $1`, [
             foundation.orderItemId,
           ]),
-        { code: "23514", constraint: "order_item_mutability_check" },
+        {
+          code: "23514",
+          constraint: "order_item_price_binding_immutable_check",
+        },
       );
       await expectQueryError(
         client,
@@ -524,6 +591,124 @@ describe("commerce persistence foundations", () => {
         },
       );
     });
+  });
+
+  it("serializes binding invalidation and active moves with payment insertion", async () => {
+    const setup = await pool.connect();
+    const paying = await pool.connect();
+    const mutating = await pool.connect();
+    try {
+      const fixtures = new PersistenceFactory(
+        setup,
+        `${scope}:binding-payment-concurrency`,
+      );
+      await setup.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "binding-payment-concurrency",
+      );
+      await createCurrentPlan(setup, fixtures, foundation);
+      const replacementSnapshotId = fixtures.id(
+        "binding-payment-concurrency:replacement-snapshot",
+      );
+      const replacementBindingId = fixtures.id(
+        "binding-payment-concurrency:replacement-binding",
+      );
+      const replacementSnapshotHash = randomUUID()
+        .replaceAll("-", "")
+        .repeat(2);
+      await setup.query(
+        `INSERT INTO price_snapshots
+           (id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         VALUES ($1,'EUR',0,'concurrency-v0','{}'::jsonb,$2,$3)`,
+        [replacementSnapshotId, replacementSnapshotHash, new Date()],
+      );
+      await setup.query(
+        `INSERT INTO payment_schedules
+           (id, price_snapshot_id, sequence, role, gross_amount_minor,
+            fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+         VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
+        [
+          fixtures.id("binding-payment-concurrency:replacement-schedule"),
+          replacementSnapshotId,
+          new Date(),
+        ],
+      );
+      await setup.query(
+        `INSERT INTO order_price_bindings
+           (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [
+          replacementBindingId,
+          foundation.orderId,
+          replacementSnapshotId,
+          foundation.deliveryDestinationId,
+          new Date(),
+        ],
+      );
+      await setup.query("COMMIT");
+
+      const payingFixtures = new PersistenceFactory(
+        paying,
+        `${scope}:binding-payment-concurrency`,
+      );
+      await paying.query("BEGIN");
+      await payingFixtures.finalizePayment(foundation);
+
+      await mutating.query("BEGIN");
+      await mutating.query("SET LOCAL lock_timeout = '100ms'");
+      await expect(
+        mutating.query(
+          `UPDATE order_price_bindings SET invalidated_at = $2 WHERE id = $1`,
+          [foundation.orderPriceBindingId, new Date()],
+        ),
+      ).rejects.toMatchObject({ code: "55P03" });
+      await mutating.query("ROLLBACK");
+
+      await mutating.query("BEGIN");
+      await mutating.query("SET LOCAL lock_timeout = '100ms'");
+      await expect(
+        mutating.query(
+          `UPDATE order_active_price_bindings
+           SET order_price_binding_id = $2 WHERE order_id = $1`,
+          [foundation.orderId, replacementBindingId],
+        ),
+      ).rejects.toMatchObject({ code: "55P03" });
+      await mutating.query("ROLLBACK");
+      await paying.query("COMMIT");
+
+      await setup.query("BEGIN");
+      await expect(
+        setup.query(
+          `UPDATE order_price_bindings SET invalidated_at = $2 WHERE id = $1`,
+          [foundation.orderPriceBindingId, new Date()],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "order_price_binding_payment_guard",
+      });
+      await setup.query("ROLLBACK");
+
+      await setup.query("BEGIN");
+      await expect(
+        setup.query(
+          `UPDATE order_active_price_bindings
+           SET order_price_binding_id = $2 WHERE order_id = $1`,
+          [foundation.orderId, replacementBindingId],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "active_order_price_binding_payment_guard",
+      });
+      await setup.query("ROLLBACK");
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await paying.query("ROLLBACK").catch(() => undefined);
+      await mutating.query("ROLLBACK").catch(() => undefined);
+      setup.release();
+      paying.release();
+      mutating.release();
+    }
   });
 
   it("binds item reference slices to their exact geometry and print configuration", async () => {
@@ -629,11 +814,44 @@ describe("commerce persistence foundations", () => {
           quoteCreatedAt,
         ],
       );
+      const mutableOrderId = fixtures.id("reference-inputs:order");
+      const mutableQuoteSessionId = fixtures.id(
+        "reference-inputs:quote-session",
+      );
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, customer_id, public_token_hash, expires_at,
+            created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          mutableQuoteSessionId,
+          foundation.customerId,
+          "e".repeat(64),
+          new Date(quoteCreatedAt.getTime() + 60 * 60 * 1_000),
+          quoteCreatedAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO orders
+           (id, customer_id, public_reference, status, created_at, updated_at)
+         VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
+        [
+          mutableOrderId,
+          foundation.customerId,
+          `R-${randomUUID()}`,
+          quoteCreatedAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+         VALUES ($1,$2)`,
+        [mutableOrderId, mutableQuoteSessionId],
+      );
 
       for (const table of ["quote_items", "order_items"] as const) {
         const parentColumn = table === "quote_items" ? "quote_id" : "order_id";
         const parentId =
-          table === "quote_items" ? mutableQuoteId : foundation.orderId;
+          table === "quote_items" ? mutableQuoteId : mutableOrderId;
         const constraint =
           table === "quote_items"
             ? "quote_item_reference_slice_input_check"
@@ -736,6 +954,53 @@ describe("commerce persistence foundations", () => {
         undefined,
         "DRAFT",
       );
+      const mutableSessionId = fixtures.id("source-update:quote-session");
+      const mutableOrderId = fixtures.id("source-update:order");
+      const mutableItemId = fixtures.id("source-update:item");
+      const mutableCreatedAt = new Date();
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, customer_id, public_token_hash, expires_at,
+            created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          mutableSessionId,
+          foundation.customerId,
+          "a".repeat(64),
+          new Date(mutableCreatedAt.getTime() + 60 * 60 * 1_000),
+          mutableCreatedAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO orders
+           (id, customer_id, public_reference, status, created_at, updated_at)
+         VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
+        [
+          mutableOrderId,
+          foundation.customerId,
+          `S-${randomUUID()}`,
+          mutableCreatedAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+         VALUES ($1,$2)`,
+        [mutableOrderId, mutableSessionId],
+      );
+      await client.query(
+        `INSERT INTO order_items
+           (id, order_id, ordinal, source_model_file_id, model_geometry_id,
+            print_config_revision_id, material, color, quantity, created_at)
+         VALUES ($1,$2,0,$3,$4,$5,'PLA','red',1,$6)`,
+        [
+          mutableItemId,
+          mutableOrderId,
+          foundation.modelFileId,
+          foundation.modelGeometryId,
+          foundation.printConfigRevisionId,
+          mutableCreatedAt,
+        ],
+      );
       const expiredSourceId = fixtures.id("expired-update-source");
       const expiredGeometryId = fixtures.id("expired-update-geometry");
       const uploadedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
@@ -776,7 +1041,7 @@ describe("commerce persistence foundations", () => {
           `UPDATE order_items
            SET source_model_file_id = $2, model_geometry_id = $3
            WHERE id = $1`,
-          [foundation.orderItemId, expiredSourceId, expiredGeometryId],
+          [mutableItemId, expiredSourceId, expiredGeometryId],
         );
       await expectQueryError(
         client,
@@ -989,30 +1254,33 @@ describe("commerce persistence foundations", () => {
         undefined,
         undefined,
         1,
-        undefined,
+        [{}, {}],
         "DRAFT",
+        async (draftFoundation) => {
+          await client.query(
+            `UPDATE order_items
+             SET source_model_file_id = $2, model_geometry_id = $3,
+                 print_config_revision_id = $4
+             WHERE id = $1`,
+            [
+              draftFoundation.orderItemIds[1],
+              draftFoundation.modelFileId,
+              draftFoundation.modelGeometryId,
+              draftFoundation.printConfigRevisionId,
+            ],
+          );
+        },
       );
-      const secondItemId = fixtures.id("mixed-item-candidate:second-item");
+      const secondItemId = mixedItems.orderItemIds[1];
+      if (!secondItemId) {
+        throw new Error("mixed-item fixture is missing its second item");
+      }
       const secondSlotId = fixtures.id("mixed-item-candidate:second-slot");
       await client.query(
-        `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,
-                                 model_geometry_id, print_config_revision_id,
-                                 material, color, quantity, created_at)
-         VALUES ($1,$2,1,$3,$4,$5,'PLA','red',1,$6)`,
-        [
-          secondItemId,
-          mixedItems.orderId,
-          mixedItems.modelFileId,
-          mixedItems.modelGeometryId,
-          mixedItems.printConfigRevisionId,
-          new Date(),
-        ],
-      );
-      await client.query(
-        `INSERT INTO fulfilment_slots (id, order_id, order_phase_id,
-                                      order_item_id, quantity_ordinal,
-                                      settlement_amount_minor, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,1,0,$5,$5)`,
+        `INSERT INTO fulfilment_slots
+           (id, order_id, order_phase_id, order_item_id, quantity_ordinal,
+            settlement_amount_minor, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,2,0,$5,$5)`,
         [
           secondSlotId,
           mixedItems.orderId,
@@ -1255,18 +1523,90 @@ describe("commerce persistence foundations", () => {
       await fixtures.createResourcePlan(foundation, [production]);
       await fixtures.createPhaseReservationSet(foundation);
       await fixtures.createProductionReservation(foundation, production);
+      await client.query(
+        `INSERT INTO inventory_reservations
+           (id, node_id, production_reservation_id, inventory_id,
+            reserved_milligrams, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
+        [
+          production.inventoryReservationId,
+          foundation.nodeId,
+          production.productionReservationId,
+          foundation.inventoryId,
+          production.requiredMaterialMilligrams,
+          testTimes.expiresAt,
+          testTimes.createdAt,
+        ],
+      );
+      const capacityReservationId = fixtures.id(
+        "uncaptured-production-job:capacity",
+      );
+      await client.query(
+        `INSERT INTO capacity_reservations
+           (id, node_id, production_reservation_id,
+            candidate_capacity_interval_id, machine_id,
+            starts_at, ends_at, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
+        [
+          capacityReservationId,
+          foundation.nodeId,
+          production.productionReservationId,
+          production.candidateCapacityIntervalId,
+          foundation.machineId,
+          testTimes.capacityStart,
+          testTimes.capacityEnd,
+          testTimes.expiresAt,
+          testTimes.createdAt,
+        ],
+      );
+      await client.query(
+        `UPDATE phase_reservation_sets SET status = 'RESERVED' WHERE id = $1`,
+        [foundation.phaseReservationSetId],
+      );
+      await fixtures.finalizePayment(foundation);
+      await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+      await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+
+      const holdReservationAndCreateJob = async (): Promise<void> => {
+        await client.query(
+          `UPDATE inventory_reservations SET status = 'HELD' WHERE id = $1`,
+          [production.inventoryReservationId],
+        );
+        await client.query(
+          `UPDATE capacity_reservations SET status = 'HELD' WHERE id = $1`,
+          [capacityReservationId],
+        );
+        await fixtures.createJob(foundation, production);
+        await client.query(
+          `UPDATE production_reservations
+           SET status = 'HELD', job_id = $2 WHERE id = $1`,
+          [production.productionReservationId, production.jobId],
+        );
+        await client.query(
+          `UPDATE phase_reservation_sets SET status = 'HELD' WHERE id = $1`,
+          [foundation.phaseReservationSetId],
+        );
+      };
 
       await expectQueryError(
         client,
         "uncaptured_production_job",
         async () => {
-          await fixtures.createJob(foundation, production);
+          await holdReservationAndCreateJob();
           await client.query(
             `SET CONSTRAINTS "jobs_captured_reservation_reconciled" IMMEDIATE`,
           );
         },
         { code: "23514", constraint: "job_capture_reconciliation_check" },
       );
+
+      await holdReservationAndCreateJob();
+      await fixtures.capturePayment(foundation);
+      await expect(
+        client.query(
+          `SET CONSTRAINTS "jobs_captured_reservation_reconciled" IMMEDIATE`,
+        ),
+      ).resolves.toBeDefined();
     });
   });
 
@@ -2142,25 +2482,8 @@ describe("commerce persistence foundations", () => {
         [destinationId, orderId, `endpoint-${randomUUID()}`, now],
       );
       await client.query(
-        `INSERT INTO order_price_bindings
-           (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [
-          fixtures.id("custom-order-price-binding"),
-          orderId,
-          snapshotId,
-          destinationId,
-          now,
-        ],
-      );
-      await client.query(
         `INSERT INTO individual_order_origins (order_id, quote_id) VALUES ($1,$2)`,
         [orderId, quoteId],
-      );
-      await client.query(
-        `SET CONSTRAINTS
-           "order_price_bindings_individual_quote_snapshot_reconciled",
-           "individual_order_origins_quote_snapshot_reconciled" IMMEDIATE`,
       );
       await client.query(
         `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,
@@ -2180,6 +2503,23 @@ describe("commerce persistence foundations", () => {
         `INSERT INTO individual_order_item_sources (order_item_id, quote_item_id)
          VALUES ($1,$2)`,
         [orderItemId, quoteItemId],
+      );
+      await client.query(
+        `INSERT INTO order_price_bindings
+           (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [
+          fixtures.id("custom-order-price-binding"),
+          orderId,
+          snapshotId,
+          destinationId,
+          now,
+        ],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "order_price_bindings_individual_quote_snapshot_reconciled",
+           "individual_order_origins_quote_snapshot_reconciled" IMMEDIATE`,
       );
       expect(
         (
