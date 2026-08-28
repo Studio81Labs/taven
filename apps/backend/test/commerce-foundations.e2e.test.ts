@@ -4722,6 +4722,295 @@ describe("commerce persistence foundations", () => {
     );
   });
 
+  it("retains failed customer-cancellation refund attempts for later retry", async () => {
+    await rollback("cancel-refund-retry", async (client, fixtures) => {
+      const captured = await fixtures.createFoundation("retry-captured");
+      const capturedProductions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        captured,
+      );
+      await activateCurrentPlan(
+        client,
+        fixtures,
+        captured,
+        capturedProductions,
+      );
+      await cancelOrderBeforeHandoff(client, captured.orderId);
+
+      const failedRefund = (
+        await client.query<{ amount_minor: string; id: string }>(
+          `SELECT refund.id, refund.amount_minor::text
+             FROM refund_transactions refund
+             WHERE refund.payment_id = $1
+               AND refund.reason = 'CUSTOMER_CANCELLATION'
+               AND refund.status = 'PENDING'`,
+          [captured.paymentId],
+        )
+      ).rows[0];
+      if (!failedRefund) {
+        throw new Error("customer cancellation refund fixture is missing");
+      }
+
+      await client.query(
+        `UPDATE refund_transactions
+           SET status = 'FAILED', updated_at = clock_timestamp()
+           WHERE id = $1`,
+        [failedRefund.id],
+      );
+      await client.query(
+        `UPDATE payments
+           SET status = 'CAPTURED', updated_at = clock_timestamp()
+           WHERE id = $1`,
+        [captured.paymentId],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      await forceOrderLifecycleConstraints(client);
+
+      expect(
+        (
+          await client.query<{
+            order_status: string;
+            payment_status: string;
+            refund_status: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                      payment.status::text AS payment_status,
+                      refund.status::text AS refund_status
+               FROM orders target_order
+               JOIN payments payment ON payment.order_id = target_order.id
+               JOIN refund_transactions refund ON refund.payment_id = payment.id
+               WHERE target_order.id = $1 AND refund.id = $2`,
+            [captured.orderId, failedRefund.id],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "CANCELLED",
+          payment_status: "CAPTURED",
+          refund_status: "FAILED",
+        },
+      ]);
+
+      const wrongRetryAmount = Number(failedRefund.amount_minor) - 1;
+      if (wrongRetryAmount <= 0) {
+        throw new Error("customer cancellation refund fixture is too small");
+      }
+      await expectQueryError(
+        client,
+        "latest_failed_customer_refund_must_cover_balance",
+        async () => {
+          await client.query(
+            `INSERT INTO refund_transactions
+                 (id, payment_id, idempotency_key, amount_minor, reason, status,
+                  requested_at, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','FAILED',
+                       clock_timestamp(),clock_timestamp(),clock_timestamp())`,
+            [
+              fixtures.id("wrong-customer-cancellation-refund-retry"),
+              captured.paymentId,
+              "wrong-customer-cancellation-refund-retry",
+              wrongRetryAmount,
+            ],
+          );
+          await forceOrderLifecycleConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "order_customer_cancellation_refund_obligation_check",
+        },
+      );
+
+      const retryRefundId = fixtures.id("customer-cancellation-refund-retry");
+      await client.query(
+        `INSERT INTO refund_transactions
+             (id, payment_id, idempotency_key, amount_minor, reason, status,
+              requested_at, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','PENDING',
+                   clock_timestamp(),clock_timestamp(),clock_timestamp())`,
+        [
+          retryRefundId,
+          captured.paymentId,
+          "customer-cancellation-refund-retry",
+          failedRefund.amount_minor,
+        ],
+      );
+      await client.query(
+        `UPDATE payments
+           SET status = 'REFUND_PENDING', updated_at = clock_timestamp()
+           WHERE id = $1`,
+        [captured.paymentId],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      await forceOrderLifecycleConstraints(client);
+
+      expect(
+        (
+          await client.query<{
+            failed_count: string;
+            payment_status: string;
+            pending_count: string;
+          }>(
+            `SELECT payment.status::text AS payment_status,
+                      count(*) FILTER (WHERE refund.status = 'FAILED')::text
+                        AS failed_count,
+                      count(*) FILTER (WHERE refund.status = 'PENDING')::text
+                        AS pending_count
+               FROM payments payment
+               JOIN refund_transactions refund ON refund.payment_id = payment.id
+               WHERE payment.id = $1
+               GROUP BY payment.id`,
+            [captured.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          payment_status: "REFUND_PENDING",
+          failed_count: "1",
+          pending_count: "1",
+        },
+      ]);
+
+      const partial = await fixtures.createFoundation("retry-partial");
+      const partialProductions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        partial,
+      );
+      await activateCurrentPlan(client, fixtures, partial, partialProductions);
+      const partialCapture = Number(
+        (
+          await client.query<{ captured_amount_minor: string }>(
+            `SELECT captured_amount_minor::text
+               FROM payments WHERE id = $1`,
+            [partial.paymentId],
+          )
+        ).rows[0]?.captured_amount_minor,
+      );
+      if (!Number.isSafeInteger(partialCapture) || partialCapture < 2) {
+        throw new Error("partial cancellation refund fixture is too small");
+      }
+      const firstPartialAmount = Math.floor(partialCapture / 2);
+      await cancelOrderBeforeHandoff(
+        client,
+        partial.orderId,
+        true,
+        true,
+        "CANCELLED",
+        [
+          {
+            id: fixtures.id("partial-cancellation-refund-first"),
+            idempotencyKey: "partial-cancellation-refund-first",
+            amountMinor: firstPartialAmount,
+          },
+          {
+            id: fixtures.id("partial-cancellation-refund-second"),
+            idempotencyKey: "partial-cancellation-refund-second",
+            amountMinor: partialCapture - firstPartialAmount,
+          },
+        ],
+      );
+      const partialRefunds = (
+        await client.query<{ amount_minor: string; id: string }>(
+          `SELECT refund.id, refund.amount_minor::text
+             FROM refund_transactions refund
+             WHERE refund.payment_id = $1
+               AND refund.reason = 'CUSTOMER_CANCELLATION'
+             ORDER BY refund.requested_at DESC,
+                      refund.created_at DESC,
+                      refund.id DESC`,
+          [partial.paymentId],
+        )
+      ).rows;
+      const latestPartialRefund = partialRefunds[0];
+      const succeededPartialRefund = partialRefunds[1];
+      if (!latestPartialRefund || !succeededPartialRefund) {
+        throw new Error("split cancellation refund fixture is incomplete");
+      }
+      await client.query(
+        `UPDATE refund_transactions
+           SET status = 'SUCCEEDED', provider_refund_id = $2,
+               completed_at = clock_timestamp(), updated_at = clock_timestamp()
+           WHERE id = $1`,
+        [succeededPartialRefund.id, "provider-partial-cancellation-refund"],
+      );
+      await client.query(
+        `UPDATE refund_transactions
+           SET status = 'FAILED', updated_at = clock_timestamp()
+           WHERE id = $1`,
+        [latestPartialRefund.id],
+      );
+      await client.query(
+        `UPDATE payments
+           SET status = 'PARTIALLY_REFUNDED', updated_at = clock_timestamp()
+           WHERE id = $1`,
+        [partial.paymentId],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+             "payments_refund_status_reconciled",
+             "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      await forceOrderLifecycleConstraints(client);
+
+      expect(
+        (
+          await client.query<{
+            failed_amount: string;
+            order_status: string;
+            payment_status: string;
+            succeeded_amount: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                      payment.status::text AS payment_status,
+                      sum(refund.amount_minor) FILTER (
+                        WHERE refund.status = 'SUCCEEDED'
+                      )::text AS succeeded_amount,
+                      sum(refund.amount_minor) FILTER (
+                        WHERE refund.status = 'FAILED'
+                      )::text AS failed_amount
+               FROM orders target_order
+               JOIN payments payment ON payment.order_id = target_order.id
+               JOIN refund_transactions refund ON refund.payment_id = payment.id
+               WHERE target_order.id = $1
+               GROUP BY target_order.id, payment.id`,
+            [partial.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "CANCELLED",
+          payment_status: "PARTIALLY_REFUNDED",
+          succeeded_amount: succeededPartialRefund.amount_minor,
+          failed_amount: latestPartialRefund.amount_minor,
+        },
+      ]);
+    });
+  });
+
   it("allows a payment schedule retry only after a failed attempt", async () => {
     await rollback("payment-schedule-retry", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(

@@ -7258,6 +7258,16 @@ BEGIN
                FROM "refund_transactions" refund
                WHERE refund."payment_id" = payment."id"
            ) refund_totals
+           LEFT JOIN LATERAL (
+               SELECT refund."amount_minor", refund."status"
+               FROM "refund_transactions" refund
+               WHERE refund."payment_id" = payment."id"
+                 AND refund."reason" = 'CUSTOMER_CANCELLATION'
+               ORDER BY refund."requested_at" DESC,
+                        refund."created_at" DESC,
+                        refund."id" DESC
+               LIMIT 1
+           ) latest_customer_cancellation_refund ON true
            WHERE payment."order_id" = target_order_id
              AND payment."captured_amount_minor" IS NOT NULL
              AND NOT (
@@ -7279,6 +7289,21 @@ BEGIN
                        = payment."captured_amount_minor"
                          - refund_totals.succeeded_total
                      AND payment."status" = 'REFUND_PENDING'
+                 )
+                 OR (
+                     payment."captured_amount_minor"
+                       - refund_totals.succeeded_total > 0
+                     AND refund_totals.customer_cancellation_pending = 0
+                     AND latest_customer_cancellation_refund."status"
+                       IS NOT DISTINCT FROM 'FAILED'::"refund_status"
+                     AND latest_customer_cancellation_refund."amount_minor"
+                       = payment."captured_amount_minor"
+                         - refund_totals.succeeded_total
+                     AND payment."status" = CASE
+                         WHEN refund_totals.succeeded_total = 0
+                             THEN 'CAPTURED'::"payment_status"
+                         ELSE 'PARTIALLY_REFUNDED'::"payment_status"
+                     END
                  )
              )
        ) THEN
@@ -7389,7 +7414,8 @@ BEGIN
                           )
                           OR (
                               refund_totals.production_pending = 0
-                              AND latest_production_refund."status" = 'FAILED'
+                              AND latest_production_refund."status"
+                                IS NOT DISTINCT FROM 'FAILED'::"refund_status"
                               AND latest_production_refund."amount_minor"
                                 = payment."captured_amount_minor"
                                   - refund_totals.succeeded_total
