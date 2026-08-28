@@ -746,6 +746,33 @@ describe("commerce persistence foundations", () => {
         },
       );
 
+      const wrongColor = await fixtures.createFoundation(
+        "wrong-color-candidate",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        [{ color: "white" }],
+      );
+      await client.query(
+        `UPDATE inventories SET color = 'black' WHERE id = $1`,
+        [wrongColor.inventoryId],
+      );
+      const wrongColorProduction = await fixtures.planProduction(
+        wrongColor,
+        "wrong-color-candidate",
+      );
+      await expectQueryError(
+        client,
+        "wrong_color_candidate_slot",
+        () => fixtures.createResourcePlan(wrongColor, [wrongColorProduction]),
+        {
+          code: "23514",
+          constraint: "phase_resource_plan_slot_candidate_input_check",
+        },
+      );
+
       const underfilled = await fixtures.createFoundation(
         "underfilled-candidate",
         {},
@@ -906,6 +933,69 @@ describe("commerce persistence foundations", () => {
         {
           code: "23514",
           constraint: "phase_resource_plan_slot_candidate_item_check",
+        },
+      );
+    });
+  });
+
+  it("allows a payment schedule retry only after a failed attempt", async () => {
+    await rollback("payment-schedule-retry", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "payment-schedule-retry",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, foundation);
+
+      const insertRetry = (id: string, providerIntentId: string) =>
+        client.query(
+          `INSERT INTO payments
+             (id, order_id, price_snapshot_id, order_price_binding_id,
+              payment_schedule_id, role, provider, provider_intent_id,
+              requested_amount_minor, currency, status, created_at, updated_at)
+           SELECT $1, order_id, price_snapshot_id, order_price_binding_id,
+                  payment_schedule_id, role, provider, $2,
+                  requested_amount_minor, currency, 'PENDING', $3, $3
+           FROM payments WHERE id = $4`,
+          [id, providerIntentId, new Date(), foundation.paymentId],
+        );
+
+      await expectQueryError(
+        client,
+        "concurrent_payment_schedule_attempt",
+        () =>
+          insertRetry(
+            fixtures.id("concurrent-payment-attempt"),
+            "concurrent-provider-intent",
+          ),
+        {
+          code: "23505",
+          constraint: "payments_one_nonfailed_attempt_per_schedule_key",
+        },
+      );
+
+      await client.query(
+        `UPDATE payments SET status = 'FAILED' WHERE id = $1`,
+        [foundation.paymentId],
+      );
+      const retryPaymentId = fixtures.id("failed-payment-retry");
+      await expect(
+        insertRetry(retryPaymentId, "failed-provider-intent-retry"),
+      ).resolves.toBeDefined();
+
+      await client.query(
+        `UPDATE payments SET status = 'VOIDED' WHERE id = $1`,
+        [retryPaymentId],
+      );
+      await expectQueryError(
+        client,
+        "voided_payment_schedule_attempt",
+        () =>
+          insertRetry(
+            fixtures.id("voided-payment-retry"),
+            "voided-provider-intent-retry",
+          ),
+        {
+          code: "23505",
+          constraint: "payments_one_nonfailed_attempt_per_schedule_key",
         },
       );
     });

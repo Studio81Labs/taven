@@ -458,6 +458,7 @@ CREATE INDEX "jobs_shipment_plan_id_status_idx" ON "jobs"("shipment_plan_id", "s
 CREATE INDEX "jobs_node_id_status_idx" ON "jobs"("node_id", "status");
 CREATE UNIQUE INDEX "payments_provider_intent_id_key" ON "payments"("provider_intent_id");
 CREATE UNIQUE INDEX "payments_provider_capture_id_key" ON "payments"("provider_capture_id");
+CREATE UNIQUE INDEX "payments_one_nonfailed_attempt_per_schedule_key" ON "payments"("payment_schedule_id") WHERE "status" <> 'FAILED';
 CREATE INDEX "payments_order_id_status_idx" ON "payments"("order_id", "status");
 CREATE INDEX "payments_capture_cutoff_at_status_idx" ON "payments"("capture_cutoff_at", "status");
 CREATE UNIQUE INDEX "refund_transactions_provider_refund_id_key" ON "refund_transactions"("provider_refund_id");
@@ -1665,6 +1666,11 @@ BEGIN
           AND candidate."model_geometry_id" = item."model_geometry_id"
           AND candidate."print_config_revision_id" = item."print_config_revision_id"
           AND inventory."material" = item."material"
+          AND (
+              item."color" IS NULL
+              OR inventory."color" IS NULL
+              OR inventory."color" = item."color"
+          )
     ) THEN
         RAISE EXCEPTION 'planned slot must match its candidate geometry, print configuration, material, and shipment allocation'
             USING ERRCODE = '23514', CONSTRAINT = 'phase_resource_plan_slot_candidate_input_check';
