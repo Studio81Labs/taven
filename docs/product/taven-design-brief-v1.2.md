@@ -41,6 +41,42 @@ Nejdůležitější obrazovka. Progresivní odkrývání na jedné stránce.
 
 Mimo parametry je jeden samostatný příznak: **„díl musí do něčeho zapadnout / má lícované rozměry“**. Otevírá cestu ke zkušebnímu kusu nebo individuální nabídce.
 
+### Zkušební kus a dávka
+
+Ve v1 je zkušební kus vlastností **celé objednávky**. Lze jej zapnout jen
+tehdy, když má každý zahrnutý `OrderItem` alespoň dva kusy; z každé položky
+pak quote neměnně vyčlení jeden kus do sample fáze a všechny zbývající kusy
+do batch fáze. Položku s jedním kusem, kombinaci `single` a `sample/batch`
+ani vzorek jen pro část objednávky UI nepřijme a nabídne samostatnou
+objednávku.
+
+Souhrn před platbou ukáže odděleně sample a batch, jejich zásilky a zamčenou
+cenu obou fází. Počáteční rezervace kapacity a materiálu kryje jen kompletní
+sample plán; batch má do potvrzení fitu cenu zamčenou, ale fyzické zdroje
+neblokuje.
+
+Po doručení všech sample zásilek detail objednávky zobrazí stav **Čeká na
+potvrzení celé sady**, konkrétní deadline odvozený z
+`sample_confirmation_days` (aktuálně ⚠ 14 dní od doručení) a dvě rovnocenně
+srozumitelné cesty:
+
+-   **Potvrdit fit celé sady** --- cena se nemění, ale pokračování čeká na
+    nový eligibility snapshot a atomickou rezervaci kapacity a materiálu pro
+    celý batch. Pokud chybí, stav je **Čeká na kapacitu**.
+-   **Nahrát revidovaný model** --- zákazník explicitně označí dotčené
+    položky, projde nový preflight a slice a dostane novou cenu i dopravu pro
+    celý zbývající batch. Zvýšení ceny vyžádá doplatek, snížení spustí
+    vrácení rozdílu. Přijetí revize znovu čeká na kompletní atomickou batch
+    rezervaci; do té doby je stav **Revize čeká na kapacitu**.
+
+Fit nelze potvrdit jen pro část sady. Rozpracovaná či dosud nepřijatá revize
+ani čekání na kapacitu nemažou deadline. Odmítnutí revize ukončí čekání
+rovnou; jeho marné uplynutí udělá totéž automaticky. V obou případech se
+zavřou otevřená platební okna, neaktivovaný batch se zruší, jeho nevyčerpaná
+hodnota se vrátí a objednávka skončí jako částečně splněná; pozdní capture se
+vždy plně kompenzuje. Prodloužení kvůli systémově nedostupné kapacitě musí
+být výslovné, auditované a oznámené zákazníkovi.
+
 Zakázáno: slider výplně, výběr trysky, teploty, styl podpěr, orientace.
 
 **U kvality se zobrazuje přepočtená cena, ne procentní přirážka.** Procenta typu „+35 %" vracejí zrušený `koef_kvality` (log #51). Kvalita mění výšku vrstvy, tedy čas, a ten dává slicer přímo — celý smysl deterministického nacenění je v tom, že se nenásobí odhadem.

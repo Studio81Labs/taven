@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#186; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#187; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -173,6 +173,8 @@ Snapshot obsahuje minimálně:
 -   `performance_modifier`,
 -   explicitní surcharge/adjustments,
 -   `agreed_compensation`,
+-   `claim_hold_policy_version`,
+-   `maker_claim_hold_days`,
 -   timestamp přijetí.
 
 Pozdější změna performance score nebo compensation policy nesmí zpětně
@@ -304,11 +306,15 @@ Tyto pojmy se nesmějí zaměňovat:
 -   payable amount,
 -   settlement status.
 
-Assignment smí vstoupit do payable amount až po uplynutí snapshotovaného
-maker claim hold od `delivered_at` --- podle aktuálních parametrů 7 dní
---- a jen pokud proti němu neběží maker-caused claim. Do té doby zůstává
-compensation v zádržném a nesmí přejít do payoutu. Uznané claim
-adjustments se vypořádají explicitní položkou settlementu.
+Při přijetí assignmentu se do compensation snapshotu uloží také verze
+claim-hold policy a její `maker_claim_hold_days` --- podle aktuálních
+parametrů 7 dní. Doručení jednou a neměnně odvodí
+`payout_eligible_at = delivered_at + maker_claim_hold_days` z tohoto
+snapshotu. Assignment smí vstoupit do payable amount jen tehdy, když nastal
+jeho uložený `payout_eligible_at` a neběží proti němu maker-caused claim;
+settlement guard nikdy znovu nečte aktuální parametr. Do té doby zůstává
+compensation v zádržném a nesmí přejít do payoutu. Uznané claim adjustments
+se vypořádají explicitní položkou settlementu.
 
 V první etapě po aktivaci maker modelu může být settlement vytvářen
 například měsíčně.
@@ -370,6 +376,8 @@ ProductionAssignment
 - status
 - offered_at
 - accepted_at
+- delivered_at (nullable)
+- payout_eligible_at (nullable; po doručení immutable)
 - deadline
 ```
 
@@ -396,6 +404,8 @@ MakerCompensationSnapshot
 - surcharges
 - adjustments
 - agreed_compensation
+- claim_hold_policy_version
+- maker_claim_hold_days
 - created_at
 ```
 
@@ -531,14 +541,17 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 14. Platform-owned `Node` zůstává po aktivaci sítě platný bez
     fiktivního `Maker`; maker-owned `Node` naopak vždy odkazuje svého
     dodavatele.
+15. Claim-hold policy a délka se snapshotují při přijetí assignmentu;
+    settlement používá jednou odvozený `payout_eligible_at`, ne pozdější
+    hodnotu parametru.
 
 ------------------------------------------------------------------------
 
 ## 12. Rozhodovací log --- zapsané záznamy
 
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
-#181 platí až po aktivační bráně #183. Vlastnictví uzlů a první ruční
-payout fázi doplňují #184–#186.
+#181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
+payout fázi a immutable payout eligibility doplňují #184–#187.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
