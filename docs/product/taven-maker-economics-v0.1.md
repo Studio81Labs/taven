@@ -375,9 +375,11 @@ locks. Vyhraje-li claim opening, zapíše `active_claim_id` a settlement po
 zámku inclusion odmítne. Vyhraje-li inclusion po striktním uplynutí okna,
 zapíše membership a následný běžný claim opening je už po deadline. V přesném
 okamžiku `claim_until` je způsobilý jen claim, nikoli settlement. Vystavení
-dokladu i payout initiation znovu zamknou settlement, assignmenty a sloty a
-ověří, že od inclusion nevznikl žádný blokující claim; bez tohoto rechecku
-nesmějí pokračovat.
+dokladu, `issued → payable`, `settled_zero` i payout initiation znovu zamknou
+settlement, assignmenty a sloty a ověří, že od inclusion nevznikl žádný
+blokující claim ani aktivní legal hold; bez tohoto rechecku nesmějí
+pokračovat. Legal hold aktivovaný během dispute window tak settlement ponechá
+v `issued` i po deadline a po jeho uvolnění se guard vyhodnotí znovu.
 
 Každý assignment se do settlementu zařadí přes immutable
 `MakerSettlementLine`, který jednoznačně odkazuje právě jeden
@@ -951,7 +953,8 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     hash payloadu; payout se musí shodovat v částce i měně.
 31. Maker payout eligibility se odvozuje z claim policy přijaté s Orderem a
     nesmí nastat před nejpozdějším `claim_until` plněných slotů; aktivní
-    legal hold settlement dál blokuje.
+    legal hold pod lockem blokuje issuance, `issued → payable`, `settled_zero`
+    i payout initiation.
 32. Uznaný spor před převodem voidne původní settlement a doklad a vytvoří
     propojený replacement/correcting chain; žádný vydaný řádek, doklad ani
     payout se nepřepisuje.

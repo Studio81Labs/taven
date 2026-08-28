@@ -1258,7 +1258,9 @@ vyhodnotí pod lockem. Claim smí uložit autoritativní
 pokračovat až při `now > payout_eligible_at` a bez `active_claim_id`. Claim,
 který získá lock včas, proto settlement zablokuje; v přesném okamžiku deadline
 není settlement ještě způsobilý. Issuance i payout initiation stejný scope
-znovu zamknou a claim guard zopakují.
+znovu zamknou a claim i legal-hold guard zopakují. Totéž platí pro
+`issued → payable` a nulové `settled_zero`; legal hold aktivovaný během
+dispute window ponechá settlement v `issued` až do svého uvolnění.
 
 Po vystavení self-billing dokladu běží uložené
 `maker_settlement_dispute_days` (aktuálně ⚠ 5 kalendářních dní). Bez sporu
