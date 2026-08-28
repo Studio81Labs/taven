@@ -1018,6 +1018,11 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM 1
+    FROM "quote_requests"
+    WHERE "id" = NEW."quote_request_id"
+    FOR UPDATE;
+
     IF NOT EXISTS (
         SELECT 1
         FROM "quote_requests" request
@@ -1064,11 +1069,39 @@ CREATE TRIGGER "quote_sessions_customer_ownership_protected"
 BEFORE UPDATE OF "customer_id" ON "quote_sessions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_session_customer_ownership();
 
+CREATE FUNCTION taven_require_initial_quote_request_status()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."status" <> 'NEW' THEN
+        RAISE EXCEPTION 'quote requests must begin in NEW'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_initial_status_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "quote_requests_require_initial_status"
+BEFORE INSERT ON "quote_requests"
+FOR EACH ROW EXECUTE FUNCTION taven_require_initial_quote_request_status();
+
 CREATE FUNCTION taven_protect_quote_request_issued_quote()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'NEW' AND NEW."status" = 'IN_REVIEW')
+           OR (OLD."status" = 'IN_REVIEW' AND NEW."status" = 'QUOTED')
+           OR (OLD."status" = 'QUOTED' AND NEW."status" IN ('ACCEPTED', 'REJECTED', 'EXPIRED'))
+       ) THEN
+        RAISE EXCEPTION 'quote request status transition is not allowed'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_status_transition_check';
+    END IF;
+
     IF NEW."quote_session_id" IS DISTINCT FROM OLD."quote_session_id"
        AND EXISTS (
            SELECT 1 FROM "quotes" quote WHERE quote."quote_request_id" = OLD."id"
@@ -1098,9 +1131,21 @@ BEGIN
 
     IF EXISTS (
         SELECT 1 FROM "quotes" quote WHERE quote."quote_request_id" = OLD."id"
-    ) AND NEW."status" NOT IN ('QUOTED', 'ACCEPTED', 'EXPIRED') THEN
-        RAISE EXCEPTION 'an issued quote request cannot return to a pre-quote or rejected state'
+    ) AND NEW."status" NOT IN ('QUOTED', 'ACCEPTED', 'REJECTED', 'EXPIRED') THEN
+        RAISE EXCEPTION 'an issued quote request cannot return to a pre-quote state'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_issued_quote_status_check';
+    END IF;
+
+    IF NEW."status" = 'EXPIRED'
+       AND OLD."status" IS DISTINCT FROM NEW."status"
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "quotes" quote
+           WHERE quote."quote_request_id" = OLD."id"
+             AND quote."expires_at" <= clock_timestamp()
+       ) THEN
+        RAISE EXCEPTION 'quote request can expire only after its immutable Quote deadline'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_expiration_check';
     END IF;
 
     IF NEW."status" = 'ACCEPTED'
@@ -1144,6 +1189,62 @@ $$;
 CREATE TRIGGER "quote_requests_issued_quote_protected"
 BEFORE UPDATE OF "quote_session_id", "customer_id", "status" ON "quote_requests"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_request_issued_quote();
+
+CREATE FUNCTION taven_reconcile_issued_quote_request()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_request_id uuid;
+    target_status "quote_request_status";
+BEGIN
+    IF TG_TABLE_NAME = 'quote_requests' THEN
+        target_request_id := NEW."id";
+    ELSIF TG_TABLE_NAME = 'quotes' THEN
+        target_request_id := NEW."quote_request_id";
+    ELSE
+        SELECT quote."quote_request_id"
+        INTO target_request_id
+        FROM "quotes" quote
+        WHERE quote."id" = NEW."quote_id";
+    END IF;
+
+    SELECT request."status"
+    INTO target_status
+    FROM "quote_requests" request
+    WHERE request."id" = target_request_id
+    FOR UPDATE;
+
+    IF target_status IN ('QUOTED', 'ACCEPTED', 'REJECTED', 'EXPIRED')
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "quote_requests" request
+           JOIN "quotes" quote ON quote."quote_request_id" = request."id"
+           JOIN "quote_price_bindings" binding ON binding."quote_id" = quote."id"
+           JOIN "price_snapshots" snapshot ON snapshot."id" = binding."price_snapshot_id"
+           WHERE request."id" = target_request_id
+             AND quote."customer_id" = request."customer_id"
+       ) THEN
+        RAISE EXCEPTION 'quoted or closed request requires its immutable Quote and price binding atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_issuance_atomic_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "quote_requests_issuance_reconciled"
+AFTER INSERT OR UPDATE OF "status" ON "quote_requests"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_issued_quote_request();
+CREATE CONSTRAINT TRIGGER "quotes_request_issuance_reconciled"
+AFTER INSERT ON "quotes"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_issued_quote_request();
+CREATE CONSTRAINT TRIGGER "quote_price_bindings_request_issuance_reconciled"
+AFTER INSERT ON "quote_price_bindings"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_issued_quote_request();
 
 CREATE FUNCTION taven_require_order_origin_for_order()
 RETURNS trigger
@@ -4608,9 +4709,9 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
     END IF;
 
-    IF NEW."status" = 'VOIDED'
+    IF NEW."status" IN ('FAILED', 'VOIDED')
        AND (NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NULL) THEN
-        RAISE EXCEPTION 'voided payment requires a closed authorization window'
+        RAISE EXCEPTION 'failed or voided payment requires a closed authorization window'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
     END IF;
 

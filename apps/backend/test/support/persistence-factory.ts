@@ -602,8 +602,16 @@ export class PersistenceFactory {
       ],
     );
     await this.sql.query(
-      "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, created_at, updated_at) VALUES ($1,$2,$3,'QUOTED',$4,$4)",
+      "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, created_at, updated_at) VALUES ($1,$2,$3,'NEW',$4,$4)",
       [input.quoteRequestId, input.quoteSessionId, input.customerId, t],
+    );
+    await this.sql.query(
+      "UPDATE quote_requests SET status = 'IN_REVIEW', updated_at = $2 WHERE id = $1",
+      [input.quoteRequestId, t],
+    );
+    await this.sql.query(
+      "UPDATE quote_requests SET status = 'QUOTED', updated_at = $2 WHERE id = $1",
+      [input.quoteRequestId, t],
     );
     await this.sql.query(
       "INSERT INTO quotes (id, quote_request_id, customer_id, expires_at, issued_at, created_at) VALUES ($1,$2,$3,$4,$5,$5)",

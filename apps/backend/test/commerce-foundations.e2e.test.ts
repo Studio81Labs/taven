@@ -47,6 +47,48 @@ async function expectQueryError(
   }
 }
 
+async function advanceQuoteRequestToQuoted(
+  client: PoolClient,
+  quoteRequestId: string,
+  updatedAt: Date,
+): Promise<void> {
+  await client.query(
+    `UPDATE quote_requests
+     SET status = 'IN_REVIEW', updated_at = $2
+     WHERE id = $1`,
+    [quoteRequestId, updatedAt],
+  );
+  await client.query(
+    `UPDATE quote_requests
+     SET status = 'QUOTED', updated_at = $2
+     WHERE id = $1`,
+    [quoteRequestId, updatedAt],
+  );
+}
+
+async function forceQuoteIssuanceConstraints(
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `SET CONSTRAINTS
+       "quote_requests_issuance_reconciled",
+       "quotes_request_issuance_reconciled",
+       "quote_price_bindings_request_issuance_reconciled",
+       "price_snapshots_total_reconciled",
+       "price_snapshot_components_total_reconciled",
+       "payment_schedules_total_reconciled" IMMEDIATE`,
+  );
+  await client.query(
+    `SET CONSTRAINTS
+       "quote_requests_issuance_reconciled",
+       "quotes_request_issuance_reconciled",
+       "quote_price_bindings_request_issuance_reconciled",
+       "price_snapshots_total_reconciled",
+       "price_snapshot_components_total_reconciled",
+       "payment_schedules_total_reconciled" DEFERRED`,
+  );
+}
+
 async function createCurrentPlan(
   client: PoolClient,
   fixtures: PersistenceFactory,
@@ -1523,8 +1565,13 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `INSERT INTO quote_requests
            (id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,'QUOTED',$3,$3)`,
+         VALUES ($1,$2,'NEW',$3,$3)`,
         [mutableQuoteRequestId, foundation.customerId, quoteCreatedAt],
+      );
+      await advanceQuoteRequestToQuoted(
+        client,
+        mutableQuoteRequestId,
+        quoteCreatedAt,
       );
       await client.query(
         `INSERT INTO quotes
@@ -1663,6 +1710,32 @@ describe("commerce persistence foundations", () => {
           );
         }
       }
+
+      const mutableSnapshotId = fixtures.id("reference-inputs:price-snapshot");
+      await client.query(
+        `INSERT INTO price_snapshots
+           (id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         VALUES ($1,'EUR',0,'reference-inputs-v0','{}'::jsonb,$2,$3)`,
+        [mutableSnapshotId, "6".repeat(64), quoteCreatedAt],
+      );
+      await client.query(
+        `INSERT INTO payment_schedules
+           (id, price_snapshot_id, sequence, role, gross_amount_minor,
+            fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+         VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
+        [
+          fixtures.id("reference-inputs:payment-schedule"),
+          mutableSnapshotId,
+          quoteCreatedAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id)
+         VALUES ($1,$2)`,
+        [mutableQuoteId, mutableSnapshotId],
+      );
+      await forceQuoteIssuanceConstraints(client);
     });
   });
 
@@ -2182,19 +2255,17 @@ describe("commerce persistence foundations", () => {
 
       await expectQueryError(
         client,
-        "cancel_with_partial_payment_close",
-        async () => {
-          await client.query(
+        "fail_without_capture_cutoff",
+        () =>
+          client.query(
             `UPDATE payments
              SET status = 'FAILED', capture_authorized = false
              WHERE id = $1`,
             [foundation.paymentId],
-          );
-          await cancelOrderBeforeHandoff(client, foundation.orderId, false);
-        },
+          ),
         {
           code: "23514",
-          constraint: "quoted_order_payment_cancellation_check",
+          constraint: "payment_capture_window_check",
         },
       );
 
@@ -2300,10 +2371,42 @@ describe("commerce persistence foundations", () => {
         },
       );
 
-      await client.query(
-        `UPDATE payments SET status = 'FAILED' WHERE id = $1`,
-        [foundation.paymentId],
+      await expectQueryError(
+        client,
+        "fail_with_open_authorization",
+        () =>
+          client.query(`UPDATE payments SET status = 'FAILED' WHERE id = $1`, [
+            foundation.paymentId,
+          ]),
+        { code: "23514", constraint: "payment_capture_window_check" },
       );
+      const failedAt = new Date();
+      await client.query(
+        `UPDATE payments
+         SET status = 'FAILED', capture_authorized = false,
+             capture_cutoff_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [foundation.paymentId, failedAt],
+      );
+      expect(
+        (
+          await client.query<{
+            capture_authorized: boolean;
+            capture_cutoff_at: Date;
+            status: string;
+          }>(
+            `SELECT status::text, capture_authorized, capture_cutoff_at
+             FROM payments WHERE id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          status: "FAILED",
+          capture_authorized: false,
+          capture_cutoff_at: failedAt,
+        },
+      ]);
       const retryPaymentId = fixtures.id("failed-payment-retry");
       await expect(
         insertRetry(retryPaymentId, "failed-provider-intent-retry"),
@@ -5261,6 +5364,200 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("enforces atomic quote issuance and terminal rejection", async () => {
+    await rollback("quote-request-issuance", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "quote-request-issuance",
+      );
+      const now = new Date();
+      const requestId = fixtures.id("quote-issuance-request");
+      const quoteId = fixtures.id("quote-issuance-quote");
+      const snapshotId = fixtures.id("quote-issuance-snapshot");
+
+      await expectQueryError(
+        client,
+        "insert_quoted_request",
+        () =>
+          client.query(
+            `INSERT INTO quote_requests
+               (id, customer_id, status, created_at, updated_at)
+             VALUES ($1,$2,'QUOTED',$3,$3)`,
+            [fixtures.id("direct-quoted-request"), foundation.customerId, now],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_request_initial_status_check",
+        },
+      );
+
+      await client.query(
+        `INSERT INTO quote_requests
+           (id, customer_id, status, created_at, updated_at)
+         VALUES ($1,$2,'NEW',$3,$3)`,
+        [requestId, foundation.customerId, now],
+      );
+      await expectQueryError(
+        client,
+        "skip_quote_review",
+        () =>
+          client.query(
+            `UPDATE quote_requests
+             SET status = 'QUOTED', updated_at = $2
+             WHERE id = $1`,
+            [requestId, now],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_request_status_transition_check",
+        },
+      );
+      await client.query(
+        `UPDATE quote_requests
+         SET status = 'IN_REVIEW', updated_at = $2
+         WHERE id = $1`,
+        [requestId, now],
+      );
+
+      await expectQueryError(
+        client,
+        "quote_without_offer",
+        async () => {
+          await client.query(
+            `UPDATE quote_requests
+             SET status = 'QUOTED', updated_at = $2
+             WHERE id = $1`,
+            [requestId, now],
+          );
+          await forceQuoteIssuanceConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "quote_request_issuance_atomic_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "quote_without_price_binding",
+        async () => {
+          await client.query(
+            `UPDATE quote_requests
+             SET status = 'QUOTED', updated_at = $2
+             WHERE id = $1`,
+            [requestId, now],
+          );
+          await client.query(
+            `INSERT INTO quotes
+               (id, quote_request_id, customer_id, expires_at,
+                issued_at, created_at)
+             VALUES ($1,$2,$3,$4,$5,$5)`,
+            [
+              quoteId,
+              requestId,
+              foundation.customerId,
+              new Date(now.getTime() + 60 * 60 * 1_000),
+              now,
+            ],
+          );
+          await forceQuoteIssuanceConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "quote_request_issuance_atomic_check",
+        },
+      );
+
+      await client.query(
+        `UPDATE quote_requests
+         SET status = 'QUOTED', updated_at = $2
+         WHERE id = $1`,
+        [requestId, now],
+      );
+      await client.query(
+        `INSERT INTO quotes
+           (id, quote_request_id, customer_id, expires_at,
+            issued_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          quoteId,
+          requestId,
+          foundation.customerId,
+          new Date(now.getTime() + 60 * 60 * 1_000),
+          now,
+        ],
+      );
+      await client.query(
+        `INSERT INTO price_snapshots
+           (id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         VALUES ($1,'EUR',0,'quote-issuance-v0','{}'::jsonb,$2,$3)`,
+        [snapshotId, "7".repeat(64), now],
+      );
+      await client.query(
+        `INSERT INTO payment_schedules
+           (id, price_snapshot_id, sequence, role, gross_amount_minor,
+            fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+         VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
+        [fixtures.id("quote-issuance-schedule"), snapshotId, now],
+      );
+      await client.query(
+        `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id)
+         VALUES ($1,$2)`,
+        [quoteId, snapshotId],
+      );
+      await forceQuoteIssuanceConstraints(client);
+
+      await expectQueryError(
+        client,
+        "expire_current_quote",
+        () =>
+          client.query(
+            `UPDATE quote_requests
+             SET status = 'EXPIRED', updated_at = $2
+             WHERE id = $1`,
+            [requestId, new Date()],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_request_expiration_check",
+        },
+      );
+      await client.query(
+        `UPDATE quote_requests
+         SET status = 'REJECTED', updated_at = $2
+         WHERE id = $1`,
+        [requestId, new Date()],
+      );
+      await forceQuoteIssuanceConstraints(client);
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM quote_requests WHERE id = $1`,
+            [requestId],
+          )
+        ).rows,
+      ).toEqual([{ status: "REJECTED" }]);
+
+      for (const status of ["QUOTED", "ACCEPTED", "EXPIRED"] as const) {
+        await expectQueryError(
+          client,
+          `leave_rejected_for_${status.toLowerCase()}`,
+          () =>
+            client.query(
+              `UPDATE quote_requests
+               SET status = $2::quote_request_status, updated_at = $3
+               WHERE id = $1`,
+              [requestId, status, new Date()],
+            ),
+          {
+            code: "23514",
+            constraint: "quote_request_status_transition_check",
+          },
+        );
+      }
+    });
+  });
+
   it("accepts only currently quoted and unexpired individual offers", async () => {
     await rollback(
       "individual-offer-availability",
@@ -5280,9 +5577,10 @@ describe("commerce persistence foundations", () => {
           await client.query(
             `INSERT INTO quote_requests
              (id, customer_id, status, created_at, updated_at)
-           VALUES ($1,$2,'QUOTED',$3,$3)`,
+           VALUES ($1,$2,'NEW',$3,$3)`,
             [requestId, foundation.customerId, issuedAt],
           );
+          await advanceQuoteRequestToQuoted(client, requestId, issuedAt);
           await client.query(
             `INSERT INTO quotes
              (id, quote_request_id, customer_id, expires_at, issued_at, created_at)
@@ -5312,10 +5610,11 @@ describe("commerce persistence foundations", () => {
         };
 
         const now = new Date();
+        const closedIssuedAt = new Date(now.getTime() - 2 * 60 * 60 * 1_000);
         const closedRequestId = await createPricedOffer(
           "closed-offer",
-          now,
-          new Date(now.getTime() + 60 * 60 * 1_000),
+          closedIssuedAt,
+          new Date(now.getTime() - 60 * 60 * 1_000),
           "1".repeat(64),
         );
         await client.query(
@@ -5334,7 +5633,7 @@ describe("commerce persistence foundations", () => {
             ),
           {
             code: "23514",
-            constraint: "quote_price_binding_acceptance_check",
+            constraint: "quote_request_status_transition_check",
           },
         );
 
@@ -5378,9 +5677,10 @@ describe("commerce persistence foundations", () => {
       const now = new Date();
       await client.query(
         `INSERT INTO quote_requests (id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,'QUOTED',$3,$3)`,
+         VALUES ($1,$2,'NEW',$3,$3)`,
         [quoteRequestId, foundation.customerId, now],
       );
+      await advanceQuoteRequestToQuoted(client, quoteRequestId, now);
       await client.query(
         `INSERT INTO quotes (id, quote_request_id, customer_id, expires_at, issued_at, created_at)
          VALUES ($1,$2,$3,$4,$5,$5)`,
@@ -5500,9 +5800,10 @@ describe("commerce persistence foundations", () => {
       const closedSnapshotId = fixtures.id("closed-custom-snapshot");
       await client.query(
         `INSERT INTO quote_requests (id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,'QUOTED',$3,$3)`,
+         VALUES ($1,$2,'NEW',$3,$3)`,
         [closedRequestId, foundation.customerId, now],
       );
+      await advanceQuoteRequestToQuoted(client, closedRequestId, now);
       await client.query(
         `INSERT INTO quotes (id, quote_request_id, customer_id, expires_at, issued_at, created_at)
          VALUES ($1,$2,$3,$4,$5,$5)`,
@@ -5529,7 +5830,7 @@ describe("commerce persistence foundations", () => {
         [fixtures.id("closed-custom-schedule"), closedSnapshotId, now],
       );
       await client.query(
-        `UPDATE quote_requests SET status = 'EXPIRED', updated_at = $2 WHERE id = $1`,
+        `UPDATE quote_requests SET status = 'REJECTED', updated_at = $2 WHERE id = $1`,
         [closedRequestId, now],
       );
       await expectQueryError(
