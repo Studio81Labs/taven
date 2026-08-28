@@ -1109,6 +1109,58 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("persists a pending compensation capture directly as refund pending", async () => {
+    await rollback("pending-capture-compensation", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "pending-capture-compensation",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, foundation);
+      const capturedAt = new Date();
+      const captureCutoffAt = new Date(capturedAt.getTime() - 1);
+      await client.query(
+        `UPDATE payments
+         SET status = 'REFUND_PENDING',
+             captured_amount_minor = requested_amount_minor,
+             provider_capture_id = $2, captured_at = $3,
+             capture_authorized = false, capture_cutoff_at = $4
+         WHERE id = $1`,
+        [
+          foundation.paymentId,
+          "late-provider-capture",
+          capturedAt,
+          captureCutoffAt,
+        ],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled" IMMEDIATE`,
+      );
+      expect(
+        (
+          await client.query<{
+            capture_matches_request: boolean;
+            captured_at: Date;
+            provider_capture_id: string;
+            status: string;
+          }>(
+            `SELECT status::text,
+                    captured_amount_minor = requested_amount_minor
+                      AS capture_matches_request,
+                    provider_capture_id, captured_at
+             FROM payments WHERE id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          status: "REFUND_PENDING",
+          capture_matches_request: true,
+          provider_capture_id: "late-provider-capture",
+          captured_at: capturedAt,
+        },
+      ]);
+    });
+  });
+
   it("requires scoped payment topology and retains provider/refund identities", async () => {
     await rollback("scoped-identities", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -1883,14 +1935,100 @@ describe("commerce persistence foundations", () => {
           constraint: "quote_item_accepted_immutable_check",
         },
       );
+
+      await expectQueryError(
+        client,
+        "binding_before_individual_origin",
+        async () => {
+          const mismatchedOrderId = fixtures.id("mismatched-custom-order");
+          const mismatchedDestinationId = fixtures.id(
+            "mismatched-custom-destination",
+          );
+          await client.query(
+            `INSERT INTO orders
+               (id, customer_id, public_reference, status, created_at, updated_at)
+             VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
+            [
+              mismatchedOrderId,
+              foundation.customerId,
+              `I-${randomUUID()}`,
+              now,
+            ],
+          );
+          await client.query(
+            `INSERT INTO delivery_destinations
+               (id, order_id, provider_endpoint_id, endpoint_type,
+                address_snapshot, capability_snapshot, created_at)
+             VALUES ($1,$2,$3,'address','{}'::jsonb,'{}'::jsonb,$4)`,
+            [
+              mismatchedDestinationId,
+              mismatchedOrderId,
+              `endpoint-${randomUUID()}`,
+              now,
+            ],
+          );
+          await client.query(
+            `INSERT INTO order_price_bindings
+               (id, order_id, price_snapshot_id,
+                delivery_destination_id, created_at)
+             VALUES ($1,$2,$3,$4,$5)`,
+            [
+              fixtures.id("mismatched-custom-binding"),
+              mismatchedOrderId,
+              closedSnapshotId,
+              mismatchedDestinationId,
+              now,
+            ],
+          );
+          await client.query(
+            `INSERT INTO individual_order_origins (order_id, quote_id)
+             VALUES ($1,$2)`,
+            [mismatchedOrderId, quoteId],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "individual_order_origins_quote_snapshot_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "individual_order_price_binding_check",
+        },
+      );
+
       await client.query(
         `INSERT INTO orders (id, customer_id, public_reference, status, created_at, updated_at)
          VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
         [orderId, foundation.customerId, `I-${randomUUID()}`, now],
       );
+      const destinationId = fixtures.id("custom-destination");
+      await client.query(
+        `INSERT INTO delivery_destinations
+           (id, order_id, provider_endpoint_id, endpoint_type,
+            address_snapshot, capability_snapshot, created_at)
+         VALUES ($1,$2,$3,'address','{}'::jsonb,'{}'::jsonb,$4)`,
+        [destinationId, orderId, `endpoint-${randomUUID()}`, now],
+      );
+      await client.query(
+        `INSERT INTO order_price_bindings
+           (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [
+          fixtures.id("custom-order-price-binding"),
+          orderId,
+          snapshotId,
+          destinationId,
+          now,
+        ],
+      );
       await client.query(
         `INSERT INTO individual_order_origins (order_id, quote_id) VALUES ($1,$2)`,
         [orderId, quoteId],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "order_price_bindings_individual_quote_snapshot_reconciled",
+           "individual_order_origins_quote_snapshot_reconciled" IMMEDIATE`,
       );
       await client.query(
         `INSERT INTO order_items (id, order_id, ordinal, source_model_file_id,

@@ -1232,6 +1232,46 @@ CREATE TRIGGER "order_price_bindings_validate_origin"
 BEFORE INSERT ON "order_price_bindings"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_price_binding();
 
+CREATE FUNCTION taven_require_individual_order_quote_snapshot()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid := NEW."order_id";
+BEGIN
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "order_price_bindings" binding
+        JOIN "individual_order_origins" origin
+          ON origin."order_id" = binding."order_id"
+        LEFT JOIN "quote_price_bindings" quoted
+          ON quoted."quote_id" = origin."quote_id"
+         AND quoted."price_snapshot_id" = binding."price_snapshot_id"
+        WHERE binding."order_id" = target_order_id
+          AND quoted."quote_id" IS NULL
+    ) THEN
+        RAISE EXCEPTION 'individual order price binding must use its accepted quote snapshot'
+            USING ERRCODE = '23514', CONSTRAINT = 'individual_order_price_binding_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "order_price_bindings_individual_quote_snapshot_reconciled"
+AFTER INSERT ON "order_price_bindings"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_require_individual_order_quote_snapshot();
+CREATE CONSTRAINT TRIGGER "individual_order_origins_quote_snapshot_reconciled"
+AFTER INSERT ON "individual_order_origins"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_require_individual_order_quote_snapshot();
+
 CREATE FUNCTION taven_protect_order_price_binding()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2250,7 +2290,7 @@ BEGIN
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
            (OLD."status" = 'CREATED' AND NEW."status" = 'PENDING')
-           OR (OLD."status" = 'PENDING' AND NEW."status" IN ('CAPTURED', 'FAILED', 'VOIDED'))
+           OR (OLD."status" = 'PENDING' AND NEW."status" IN ('CAPTURED', 'FAILED', 'VOIDED', 'REFUND_PENDING'))
            OR (OLD."status" = 'CAPTURED' AND NEW."status" = 'REFUND_PENDING')
            OR (OLD."status" = 'VOIDED' AND NEW."status" = 'REFUND_PENDING')
            OR (OLD."status" = 'REFUND_PENDING' AND NEW."status" IN ('PARTIALLY_REFUNDED', 'REFUNDED'))
