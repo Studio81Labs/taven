@@ -11,32 +11,32 @@ Repository tasks come from the user, GitHub issue or PR context, and this file.
 
 ## Working style
 
-* Act as an autonomous senior engineer.
-* Work within the requested scope and preserve unrelated user changes.
-* Do not ask follow-up questions unless genuinely blocked by missing credentials,
+- Act as an autonomous senior engineer.
+- Work within the requested scope and preserve unrelated user changes.
+- Do not ask follow-up questions unless genuinely blocked by missing credentials,
   missing repository access, or conflicting requirements that cannot be resolved
   from repository context.
-* Make reasonable, conservative assumptions when ambiguity does not materially
+- Make reasonable, conservative assumptions when ambiguity does not materially
   affect product behavior, architecture, security, or data integrity.
-* Call out important assumptions in the final handoff.
-* Complete work end-to-end: analysis, implementation, validation, final diff
+- Call out important assumptions in the final handoff.
+- Complete work end-to-end: analysis, implementation, validation, final diff
   review, and PR or issue updates that available tooling supports.
-* Prefer the smallest complete change over speculative generalization.
-* Do not leave obvious follow-up work required for correctness to another agent
+- Prefer the smallest complete change over speculative generalization.
+- Do not leave obvious follow-up work required for correctness to another agent
   merely to reduce the current diff.
 
 ## Scope discipline
 
-* Solve the requested issue fully, but do not perform unrelated refactors.
-* Preserve existing architecture and conventions unless the task explicitly
+- Solve the requested issue fully, but do not perform unrelated refactors.
+- Preserve existing architecture and conventions unless the task explicitly
   requires changing them.
-* Prefer minimal, safe changes with clear reasoning.
-* Keep issues and PRs focused on a single deliverable.
-* Do not implement speculative maker, AI, routing, node-agent, mobile, or
+- Prefer minimal, safe changes with clear reasoning.
+- Keep issues and PRs focused on a single deliverable.
+- Do not implement speculative maker, AI, routing, node-agent, mobile, or
   deployment surfaces.
-* Do not introduce abstractions solely for hypothetical future requirements.
-* Do not turn a localized task into a repository-wide cleanup.
-* Pre-existing technical debt outside the requested change is not part of the
+- Do not introduce abstractions solely for hypothetical future requirements.
+- Do not turn a localized task into a repository-wide cleanup.
+- Pre-existing technical debt outside the requested change is not part of the
   task unless it prevents the requested change from being implemented safely.
 
 ## Sub-agent delegation
@@ -81,10 +81,10 @@ harness supports both controls.
 
 The intended mapping is:
 
-* **T1:** cheapest capable coding model + **low** effort
-* **T2:** balanced coding/reasoning model + **medium** effort
-* **T3:** strongest appropriate model + **high** effort
-* **T4:** parent agent; never delegated
+- **T1:** cheapest capable coding model + **low** effort
+- **T2:** balanced coding/reasoning model + **medium** effort
+- **T3:** strongest appropriate model + **high** effort
+- **T4:** parent agent; never delegated
 
 Model names change over time. Before spawning a sub-agent, inspect the current
 harness/tool schema and model allowlist and resolve the tier to a concrete model
@@ -116,13 +116,13 @@ dispatch.
 
 Context size is often a larger cost lever than model selection.
 
-* Spawn sub-agents with clean context whenever the harness supports it.
-* Provide only the information necessary for the delegated investigation.
-* Name exact paths, symbols, commands, or contracts when known.
-* Do not forward the entire parent transcript unless the task genuinely depends
+- Spawn sub-agents with clean context whenever the harness supports it.
+- Provide only the information necessary for the delegated investigation.
+- Name exact paths, symbols, commands, or contracts when known.
+- Do not forward the entire parent transcript unless the task genuinely depends
   on it.
-* State exactly what question the sub-agent must answer.
-* Bound the output.
+- State exactly what question the sub-agent must answer.
+- Bound the output.
 
 Prefer briefs such as:
 
@@ -140,10 +140,10 @@ Sub-agents investigate; the parent decides.
 
 For discovery and audit tasks, request compact output:
 
-* `path:line`
-* one-sentence finding
-* evidence or reason
-* optional confidence when uncertainty is material
+- `path:line`
+- one-sentence finding
+- evidence or reason
+- optional confidence when uncertainty is material
 
 Do not ask sub-agents to return entire files or large copied code blocks.
 
@@ -164,17 +164,17 @@ maintaining a coherent view of the change.
 
 Do not delegate:
 
-* file edits or any other repository write
-* commits, pushes, merges, tags, or branch manipulation
-* GitHub writes, review replies, issue updates, or PR updates
-* architecture or product decisions
-* final interpretation of acceptance criteria
-* final review severity or merge-readiness decisions
-* release work
-* migration authoring
-* final contract changes
-* final security-sensitive implementation decisions
-* any claim that tests, builds, lint, typecheck, migrations, generated checks,
+- file edits or any other repository write
+- commits, pushes, merges, tags, or branch manipulation
+- GitHub writes, review replies, issue updates, or PR updates
+- architecture or product decisions
+- final interpretation of acceptance criteria
+- final review severity or merge-readiness decisions
+- release work
+- migration authoring
+- final contract changes
+- final security-sensitive implementation decisions
+- any claim that tests, builds, lint, typecheck, migrations, generated checks,
   or other validation passed
 
 A sub-agent may investigate these areas and return evidence or options, but the
@@ -182,14 +182,14 @@ parent agent owns the decision and any resulting write.
 
 ### Keeping delegated work reliable
 
-* An empty T1 result is not proof that nothing exists. When absence matters,
+- An empty T1 result is not proof that nothing exists. When absence matters,
   repeat the investigation at T2 or verify it directly with a deterministic
   repository search.
-* Verify findings before acting on them.
-* Re-run decisive validation commands in the parent session.
-* Report materially relevant delegation in the final handoff, especially when
+- Verify findings before acting on them.
+- Re-run decisive validation commands in the parent session.
+- Report materially relevant delegation in the final handoff, especially when
   a delegated sweep returned incomplete or empty results.
-* Do not describe a delegation as tiered when the harness did not actually
+- Do not describe a delegation as tiered when the harness did not actually
   expose control over its model or effort.
 
 ## Architecture boundaries
@@ -262,24 +262,24 @@ Do not move components here merely because they might be reused later.
 
 ## Codebase conventions
 
-* Follow existing naming, file structure, typing, validation, error-handling,
+- Follow existing naming, file structure, typing, validation, error-handling,
   and dependency-injection patterns.
-* Reuse existing domain logic, helpers, contracts, and abstractions before
+- Reuse existing domain logic, helpers, contracts, and abstractions before
   introducing new ones.
-* Keep framework and infrastructure concerns out of `packages/core`.
-* Keep generated code generated; never patch generated OpenAPI output manually.
-* Prefer explicit failures over broad `try/catch`, silent fallback behavior, or
+- Keep framework and infrastructure concerns out of `packages/core`.
+- Keep generated code generated; never patch generated OpenAPI output manually.
+- Prefer explicit failures over broad `try/catch`, silent fallback behavior, or
   swallowed errors.
-* Preserve package boundaries and dependency direction.
-* Keep API producers, generated contracts, and consumers aligned when HTTP
+- Preserve package boundaries and dependency direction.
+- Keep API producers, generated contracts, and consumers aligned when HTTP
   contracts change.
-* Keep slicer message producers and consumers aligned when slicer contracts
+- Keep slicer message producers and consumers aligned when slicer contracts
   change.
-* Schema changes require the appropriate Prisma migration and all necessary
+- Schema changes require the appropriate Prisma migration and all necessary
   contract or application updates in the same change.
-* Do not introduce credentials, real `.env` files, access tokens, private keys,
+- Do not introduce credentials, real `.env` files, access tokens, private keys,
   or other secrets into the repository.
-* Preserve existing user changes that are unrelated to the task.
+- Preserve existing user changes that are unrelated to the task.
 
 ## Product boundaries
 
@@ -290,13 +290,13 @@ Do not infer future architecture from ideas present in product documents.
 
 Unless explicitly requested by the task, do not implement:
 
-* distributed maker-network orchestration
-* maker routing or automatic job allocation
-* maker node agents
-* AI-based job acceptance or veto systems
-* native mobile applications
-* speculative deployment infrastructure
-* abstractions whose only consumer is a hypothetical future service
+- distributed maker-network orchestration
+- maker routing or automatic job allocation
+- maker node agents
+- AI-based job acceptance or veto systems
+- native mobile applications
+- speculative deployment infrastructure
+- abstractions whose only consumer is a hypothetical future service
 
 Product documents may describe future possibilities. Treat them as context, not
 authorization to implement them.
@@ -353,19 +353,19 @@ the repository-level checks that meaningfully cover the changed surfaces.
 
 Before considering work complete:
 
-* run relevant unit, integration, or e2e tests for the touched behavior
-* run lint and typecheck for the affected workspace or repository as appropriate
-* run builds that meaningfully exercise changed application or package
+- run relevant unit, integration, or e2e tests for the touched behavior
+- run lint and typecheck for the affected workspace or repository as appropriate
+- run builds that meaningfully exercise changed application or package
   boundaries
-* run `pnpm format:check` when formatting may have changed
-* run generated-code checks after contract changes
-* run configuration checks after CI or supply-chain changes
-* inspect the final diff for regressions, dead code, debug leftovers, accidental
+- run `pnpm format:check` when formatting may have changed
+- run generated-code checks after contract changes
+- run configuration checks after CI or supply-chain changes
+- inspect the final diff for regressions, dead code, debug leftovers, accidental
   formatting churn, generated-file mistakes, and unrelated changes
-* verify the issue acceptance criteria and definition of done
-* verify architecture and package boundaries remain intact
-* verify error, null, failure, and boundary behavior when materially affected
-* state clearly what was not validated and why
+- verify the issue acceptance criteria and definition of done
+- verify architecture and package boundaries remain intact
+- verify error, null, failure, and boundary behavior when materially affected
+- state clearly what was not validated and why
 
 A passing test suite does not replace inspection of the final diff.
 
@@ -374,52 +374,52 @@ result.
 
 ## Git workflow
 
-* GitHub Issues are the source of truth for active work when an issue exists.
+- GitHub Issues are the source of truth for active work when an issue exists.
 
-* Start from an issue with clear acceptance criteria whenever possible.
+- Start from an issue with clear acceptance criteria whenever possible.
 
-* Branch from `main`.
+- Branch from `main`.
 
-* Codex-created branches use the `codex/` prefix.
+- Codex-created branches use the `codex/` prefix.
 
-* Use conventional commits in the form:
+- Use conventional commits in the form:
 
   `<type>(<scope>): <lower-case subject>`
 
-* Scope is required and must be one defined by `commitlint.config.js`.
+- Scope is required and must be one defined by `commitlint.config.js`.
 
-* Do not invent new commit scopes when an existing scope accurately represents
+- Do not invent new commit scopes when an existing scope accurately represents
   the change.
 
-* Keep commits and PRs focused on the requested deliverable.
+- Keep commits and PRs focused on the requested deliverable.
 
-* Never commit real `.env` files, credentials, tokens, or secrets.
+- Never commit real `.env` files, credentials, tokens, or secrets.
 
 ## Product and technical decisions
 
-* Product and business decisions belong in the product decision log.
-* Technical decisions already fixed by product material must remain consistent
+- Product and business decisions belong in the product decision log.
+- Technical decisions already fixed by product material must remain consistent
   with it.
-* Significant technical choices not fixed by product decisions belong in an ADR
+- Significant technical choices not fixed by product decisions belong in an ADR
   under `docs/decisions/`.
-* Do not create an ADR for routine implementation details.
-* Do not silently change an existing architectural decision as part of an
+- Do not create an ADR for routine implementation details.
+- Do not silently change an existing architectural decision as part of an
   unrelated task.
 
 ## Pull request rules
 
 When creating or updating a PR:
 
-* use a concise conventional title aligned with the issue and commit conventions
-* link the relevant issue
-* include a short summary of what changed
-* describe important implementation choices
-* identify meaningful regression or operational risks
-* include concrete test and validation evidence
-* explicitly call out API contract, database schema, migration, slicer contract,
+- use a concise conventional title aligned with the issue and commit conventions
+- link the relevant issue
+- include a short summary of what changed
+- describe important implementation choices
+- identify meaningful regression or operational risks
+- include concrete test and validation evidence
+- explicitly call out API contract, database schema, migration, slicer contract,
   infrastructure, or documentation impact
-* keep the PR aligned with the linked issue's scope
-* update the PR description when the implementation materially changes the
+- keep the PR aligned with the linked issue's scope
+- update the PR description when the implementation materially changes the
   behavior, scope, or risk described there
 
 Do not inflate the PR description with unrelated repository observations.
@@ -428,14 +428,14 @@ Do not inflate the PR description with unrelated repository observations.
 
 When review comments arrive:
 
-* evaluate each finding against the code, issue scope, and repository invariants
-* address all actionable findings that materially affect merge safety
-* rerun relevant validation after changes
-* resolve comments once the finding is addressed or demonstrated not to apply
-* update the PR description if review-driven changes alter behavior, scope, or
+- evaluate each finding against the code, issue scope, and repository invariants
+- address all actionable findings that materially affect merge safety
+- rerun relevant validation after changes
+- resolve comments once the finding is addressed or demonstrated not to apply
+- update the PR description if review-driven changes alter behavior, scope, or
   risk
-* do not implement unrelated cleanup solely to make a review thread disappear
-* classify worthwhile out-of-scope observations as follow-up work rather than
+- do not implement unrelated cleanup solely to make a review thread disappear
+- classify worthwhile out-of-scope observations as follow-up work rather than
   expanding the current PR
 
 A review finding is evidence to investigate, not an automatic instruction to
@@ -445,14 +445,14 @@ change code.
 
 A branch is merge-ready when:
 
-* the requested behavior and acceptance criteria are satisfied
-* required CI checks pass
-* actionable merge-blocking review findings are resolved
-* relevant generated artifacts are current
-* required migrations are present
-* repository and architecture invariants remain satisfied
-* the branch meets the repository's base-branch freshness policy
-* there are no merge conflicts
+- the requested behavior and acceptance criteria are satisfied
+- required CI checks pass
+- actionable merge-blocking review findings are resolved
+- relevant generated artifacts are current
+- required migrations are present
+- repository and architecture invariants remain satisfied
+- the branch meets the repository's base-branch freshness policy
+- there are no merge conflicts
 
 The existence of unrelated technical debt or non-blocking follow-up ideas does
 not make a PR unmergeable.
@@ -461,11 +461,11 @@ not make a PR unmergeable.
 
 When tooling or repository automation supports it:
 
-* update issue status when work begins if the repository workflow expects it
-* when a PR is opened, link it to the issue and post a concise progress update
+- update issue status when work begins if the repository workflow expects it
+- when a PR is opened, link it to the issue and post a concise progress update
   when useful
-* keep the issue aligned with material scope changes
-* after merge, post a concise delivery note and close or update the issue
+- keep the issue aligned with material scope changes
+- after merge, post a concise delivery note and close or update the issue
   according to repository workflow
 
 Do not silently expand an issue's acceptance criteria during implementation or
@@ -479,13 +479,13 @@ surrounding codebase.
 
 Review the complete PR diff against:
 
-* the linked issue and acceptance criteria
-* relevant product requirements
-* repository architecture and package boundaries
-* API and slicer contracts
-* schema and migration requirements
-* security, privacy, and data-integrity requirements
-* regression risk introduced by the change
+- the linked issue and acceptance criteria
+- relevant product requirements
+- repository architecture and package boundaries
+- API and slicer contracts
+- schema and migration requirements
+- security, privacy, and data-integrity requirements
+- regression risk introduced by the change
 
 Prefer a small number of high-confidence, actionable findings over exhaustive
 commentary.
@@ -494,15 +494,15 @@ commentary.
 
 A finding is actionable for the current PR when at least one of these is true:
 
-* the PR introduces the defect
-* the PR materially worsens an existing defect
-* the PR exposes an existing defect in a way that makes the changed behavior
+- the PR introduces the defect
+- the PR materially worsens an existing defect
+- the PR exposes an existing defect in a way that makes the changed behavior
   unsafe or incorrect
-* the defect prevents an acceptance criterion from being satisfied
-* the change violates a repository architecture or package invariant
-* the change creates contract drift between producers and consumers
-* a required migration or generated contract update is missing
-* the change creates a concrete security, privacy, payment, data-integrity, or
+- the defect prevents an acceptance criterion from being satisfied
+- the change violates a repository architecture or package invariant
+- the change creates contract drift between producers and consumers
+- a required migration or generated contract update is missing
+- the change creates a concrete security, privacy, payment, data-integrity, or
   operational regression
 
 Medium-risk findings are review-worthy when they have a concrete failure mode,
@@ -516,15 +516,15 @@ pre-existing technical debt visible.
 
 Do not expand the current PR to request unrelated:
 
-* refactoring
-* cleanup
-* architectural improvements
-* additional product functionality
-* speculative future abstractions
-* test coverage for behavior unaffected by the PR
-* performance optimization outside the changed execution path
-* documentation unrelated to changed behavior
-* maker-network, AI, routing, node-agent, mobile, or deployment capabilities not
+- refactoring
+- cleanup
+- architectural improvements
+- additional product functionality
+- speculative future abstractions
+- test coverage for behavior unaffected by the PR
+- performance optimization outside the changed execution path
+- documentation unrelated to changed behavior
+- maker-network, AI, routing, node-agent, mobile, or deployment capabilities not
   requested by the issue
 
 Material pre-existing issues discovered during review may be mentioned as
@@ -535,6 +535,6 @@ materially worse or unsafe.
 
 When relevant to the PR, review for:
 
-* missing or weak tests for changed behavior, important edge cases, null paths,
+- missing or weak tests for changed behavior, important edge cases, null paths,
   error paths, or regression-prone logic
-* API contract drift between the NestJS backend, generated OpenAPI client, and
+- API contract drift between the NestJS backend, generated OpenAPI client, and
