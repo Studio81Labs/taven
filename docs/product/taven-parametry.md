@@ -229,6 +229,7 @@ Podpěry auto. Kvalita **nemá koeficient** — čas se bere ze skutečného sli
 | **`abandoned_item_retention_days`** | **⚠ 30 dní** od `cancelled_settled`; pak auditovaná recyklace/zničení |
 | **`sample_confirmation_days`** | **⚠ 14 dní** od doručení sample; pak nejdřív zavřít revision capture window, odebrat batch z `contract_total`, zrušit jej, refundovat nečerpanou část a uzavřít `partially_fulfilled`; odmítnutí revize deadline hned ruší a pozdní capture se celý kompenzuje |
 | Reklamační okno pro zádržné (síť) | 7 dní od doručení |
+| **`maker_settlement_dispute_days`** | **⚠ 5 kalendářních dní** od vystavení self-billing dokladu; bez sporu pak settlement přejde do `payable` |
 | **`source_model_retention_days`** | **90 dní**; počáteční deadline vzniká už při uploadu pro STL/3MF/STEP i mezivýstupy, Quote jej jen prodlouží a aktivní Order drží hold do terminálního přepočtu |
 | **`photo_retention_days`** | **⚠ 90 dní**; customer-reference i QC fotografie dostane deadline už při uploadu, Quote jej smí omezeně prodloužit, aktivní Order dočasně podržet a terminální Order přepočítat nejméně do `claim_until`; potom prodlužuje jen aktivní Claim nebo legal hold |
 | **`undelivered_reproduction_retention_days`** | **⚠ 90 dní** od terminálního stavu bez doručení; pak smazat rekonstruovatelný artefakt, pokud neběží incident/claim/legal hold |
