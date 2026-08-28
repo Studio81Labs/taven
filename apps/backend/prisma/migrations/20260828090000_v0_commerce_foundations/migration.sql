@@ -392,6 +392,7 @@ CREATE TABLE "payments" (
 CREATE TABLE "refund_transactions" (
     "id" UUID NOT NULL,
     "payment_id" UUID NOT NULL,
+    "provider" VARCHAR(100) NOT NULL,
     "idempotency_key" VARCHAR(255) NOT NULL,
     "provider_refund_id" VARCHAR(255),
     "amount_minor" BIGINT NOT NULL,
@@ -473,7 +474,7 @@ CREATE INDEX "fulfilment_slots_order_phase_id_idx" ON "fulfilment_slots"("order_
 CREATE UNIQUE INDEX "shipment_plan_fulfilment_slots_order_price_binding_id_fulfi_key" ON "shipment_plan_fulfilment_slots"("order_price_binding_id", "fulfilment_slot_id");
 CREATE INDEX "shipment_plan_fulfilment_slots_fulfilment_slot_id_idx" ON "shipment_plan_fulfilment_slots"("fulfilment_slot_id");
 CREATE INDEX "price_component_fulfilment_allocations_fulfilment_slot_id_idx" ON "price_component_fulfilment_allocations"("fulfilment_slot_id");
-CREATE UNIQUE INDEX "shipments_provider_shipment_id_key" ON "shipments"("provider_shipment_id");
+CREATE UNIQUE INDEX "shipments_carrier_provider_shipment_id_key" ON "shipments"("carrier", "provider_shipment_id");
 CREATE UNIQUE INDEX "shipments_replaces_shipment_id_key" ON "shipments"("replaces_shipment_id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id");
 CREATE UNIQUE INDEX "shipments_lineage_scope_key" ON "shipments"("id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id");
 CREATE UNIQUE INDEX "shipments_plan_root_key" ON "shipments"("shipment_plan_id") WHERE "replaces_shipment_id" IS NULL;
@@ -491,7 +492,7 @@ CREATE UNIQUE INDEX "payments_one_nonfailed_attempt_per_schedule_key" ON "paymen
 CREATE INDEX "payments_order_id_status_idx" ON "payments"("order_id", "status");
 CREATE INDEX "payments_capture_cutoff_at_status_idx" ON "payments"("capture_cutoff_at", "status");
 CREATE INDEX "payments_checkout_capture_expires_at_status_idx" ON "payments"("checkout_capture_expires_at", "status");
-CREATE UNIQUE INDEX "refund_transactions_provider_refund_id_key" ON "refund_transactions"("provider_refund_id");
+CREATE UNIQUE INDEX "refund_transactions_provider_provider_refund_id_key" ON "refund_transactions"("provider", "provider_refund_id");
 CREATE UNIQUE INDEX "refund_transactions_payment_id_idempotency_key_key" ON "refund_transactions"("payment_id", "idempotency_key");
 CREATE INDEX "refund_transactions_payment_id_status_idx" ON "refund_transactions"("payment_id", "status");
 CREATE INDEX "audit_events_quote_id_created_at_idx" ON "audit_events"("quote_id", "created_at");
@@ -1238,6 +1239,16 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF OLD."customer_id" IS NULL
+       AND NEW."customer_id" IS NOT NULL THEN
+        PERFORM 1
+        FROM "automatic_order_origins" origin
+        JOIN "orders" target_order ON target_order."id" = origin."order_id"
+        WHERE origin."quote_session_id" = OLD."id"
+        ORDER BY target_order."id"
+        FOR UPDATE OF target_order;
+    END IF;
+
     IF OLD."customer_id" IS NOT NULL
        AND NEW."customer_id" IS NULL
        AND (
@@ -1290,6 +1301,29 @@ $$;
 CREATE TRIGGER "quote_sessions_customer_ownership_protected"
 BEFORE UPDATE OF "customer_id" ON "quote_sessions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_session_customer_ownership();
+
+CREATE FUNCTION taven_propagate_quote_session_customer_ownership()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE "orders" target_order
+    SET "customer_id" = NEW."customer_id",
+        "updated_at" = CURRENT_TIMESTAMP
+    FROM "automatic_order_origins" origin
+    WHERE origin."quote_session_id" = NEW."id"
+      AND target_order."id" = origin."order_id"
+      AND target_order."customer_id" IS NULL;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "quote_sessions_customer_ownership_propagated"
+AFTER UPDATE OF "customer_id" ON "quote_sessions"
+FOR EACH ROW
+WHEN (OLD."customer_id" IS NULL AND NEW."customer_id" IS NOT NULL)
+EXECUTE FUNCTION taven_propagate_quote_session_customer_ownership();
 
 CREATE FUNCTION taven_protect_quote_session_lifecycle()
 RETURNS trigger
@@ -1707,18 +1741,34 @@ AFTER INSERT ON "individual_order_origins"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_require_order_origin_for_order();
 
+CREATE FUNCTION taven_lock_automatic_order_session(target_order_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "automatic_order_origins" origin
+    JOIN "quote_sessions" session ON session."id" = origin."quote_session_id"
+    WHERE origin."order_id" = target_order_id
+    FOR UPDATE OF session;
+END;
+$$;
+
 CREATE FUNCTION taven_protect_order_customer_ownership()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    has_automatic_origin boolean := false;
+    has_commerce_topology boolean := false;
+    session_claim_matches boolean := false;
 BEGIN
     IF NEW."customer_id" IS NOT DISTINCT FROM OLD."customer_id" THEN
         RETURN NEW;
     END IF;
 
-    IF OLD."customer_id" IS NOT NULL
-       OR OLD."status" <> 'DRAFT'
-       OR EXISTS (
+    SELECT (
+       EXISTS (
            SELECT 1
            FROM "order_items" item
            WHERE item."order_id" = OLD."id"
@@ -1742,19 +1792,33 @@ BEGIN
            SELECT 1
            FROM "payments" payment
            WHERE payment."order_id" = OLD."id"
-       ) THEN
-        RAISE EXCEPTION 'order customer is immutable after ownership or commerce topology is attached'
-            USING ERRCODE = '23514', CONSTRAINT = 'order_customer_ownership_immutable_check';
-    END IF;
+       )
+    ) INTO has_commerce_topology;
 
     IF OLD."customer_id" IS NULL AND NEW."customer_id" IS NOT NULL THEN
-        PERFORM taven_claim_quote_session_customer(
-            origin."quote_session_id",
-            NEW."customer_id",
-            'automatic_order_origin_owner_check'
-        )
-        FROM "automatic_order_origins" origin
-        WHERE origin."order_id" = OLD."id";
+        SELECT
+            EXISTS (
+                SELECT 1
+                FROM "automatic_order_origins" origin
+                WHERE origin."order_id" = OLD."id"
+            ),
+            EXISTS (
+                SELECT 1
+                FROM "automatic_order_origins" origin
+                JOIN "quote_sessions" session
+                  ON session."id" = origin."quote_session_id"
+                WHERE origin."order_id" = OLD."id"
+                  AND session."customer_id" = NEW."customer_id"
+            )
+        INTO has_automatic_origin, session_claim_matches;
+    END IF;
+
+    IF OLD."customer_id" IS NOT NULL
+       OR OLD."status" <> 'DRAFT'
+       OR (has_automatic_origin AND NOT session_claim_matches)
+       OR (NOT has_automatic_origin AND has_commerce_topology) THEN
+        RAISE EXCEPTION 'order customer is immutable after ownership or commerce topology is attached'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_customer_ownership_immutable_check';
     END IF;
 
     RETURN NEW;
@@ -1770,6 +1834,8 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM taven_lock_automatic_order_session(NEW."order_id");
+
     PERFORM 1
     FROM "orders"
     WHERE "id" = NEW."order_id"
@@ -1799,6 +1865,8 @@ AS $$
 DECLARE
     target_order_customer_id uuid;
 BEGIN
+    PERFORM taven_assert_quote_session_commerce_open(NEW."quote_session_id");
+
     SELECT target_order."customer_id"
     INTO target_order_customer_id
     FROM "orders" target_order
@@ -1811,7 +1879,6 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'automatic_order_origin_owner_check';
     END IF;
 
-    PERFORM taven_assert_quote_session_commerce_open(NEW."quote_session_id");
     PERFORM taven_claim_quote_session_customer(
         NEW."quote_session_id",
         target_order_customer_id,
@@ -2016,6 +2083,8 @@ DECLARE
     target_order_id uuid := CASE WHEN TG_OP = 'INSERT' THEN NEW."order_id" ELSE OLD."order_id" END;
     target_order_status "order_status";
 BEGIN
+    PERFORM taven_lock_automatic_order_session(target_order_id);
+
     SELECT "status" INTO target_order_status
     FROM "orders"
     WHERE "id" = target_order_id
@@ -3474,6 +3543,8 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM taven_lock_automatic_order_session(NEW."order_id");
+
     PERFORM 1
     FROM "orders"
     WHERE "id" = NEW."order_id"
@@ -5859,6 +5930,40 @@ $$;
 CREATE TRIGGER "payments_capture_refund_floor"
 BEFORE UPDATE OF "captured_amount_minor" ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_payment_capture_against_refunds();
+
+CREATE FUNCTION taven_assign_refund_provider_identity()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    payment_provider varchar(100);
+BEGIN
+    SELECT provider
+    INTO payment_provider
+    FROM "payments"
+    WHERE id = NEW."payment_id";
+
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."provider" IS NOT NULL
+           AND NEW."provider" IS DISTINCT FROM payment_provider THEN
+            RAISE EXCEPTION 'refund provider must match its payment provider'
+                USING ERRCODE = '23514', CONSTRAINT = 'refund_transactions_provider_identity_check';
+        END IF;
+        NEW."provider" := payment_provider;
+    ELSIF NEW."payment_id" IS DISTINCT FROM OLD."payment_id" THEN
+        NEW."provider" := payment_provider;
+    ELSIF NEW."provider" IS DISTINCT FROM OLD."provider" THEN
+        RAISE EXCEPTION 'refund provider identity is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_transactions_provider_identity_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "refund_transactions_provider_identity"
+BEFORE INSERT OR UPDATE OF "payment_id", "provider" ON "refund_transactions"
+FOR EACH ROW EXECUTE FUNCTION taven_assign_refund_provider_identity();
 
 CREATE FUNCTION taven_protect_refund_transaction_identity()
 RETURNS trigger

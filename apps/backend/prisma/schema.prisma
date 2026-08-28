@@ -1422,7 +1422,7 @@ model Shipment {
   replacesShipmentId    String?        @map("replaces_shipment_id") @db.Uuid
   status                ShipmentStatus @default(PLANNED)
   carrier               String?        @db.VarChar(100)
-  providerShipmentId    String?        @unique @map("provider_shipment_id") @db.VarChar(255)
+  providerShipmentId    String?        @map("provider_shipment_id") @db.VarChar(255)
   trackingCode          String?        @map("tracking_code") @db.VarChar(255)
   labelCreatedAt        DateTime?      @map("label_created_at") @db.Timestamptz(3)
   handedOverAt          DateTime?      @map("handed_over_at") @db.Timestamptz(3)
@@ -1439,6 +1439,7 @@ model Shipment {
   replacementShipment Shipment?           @relation("ShipmentReplacementLineage")
 
   @@unique([id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_lineage_scope_key")
+  @@unique([carrier, providerShipmentId], map: "shipments_carrier_provider_shipment_id_key")
   @@unique([replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_replaces_shipment_id_key")
   @@index([orderId, status])
   @@index([shipmentPlanId, status])
@@ -1532,7 +1533,8 @@ model RefundTransaction {
   id               String       @id @default(uuid()) @db.Uuid
   paymentId        String       @map("payment_id") @db.Uuid
   idempotencyKey   String       @map("idempotency_key") @db.VarChar(255)
-  providerRefundId String?      @unique @map("provider_refund_id") @db.VarChar(255)
+  provider         String       @map("provider") @db.VarChar(100)
+  providerRefundId String?      @map("provider_refund_id") @db.VarChar(255)
   amountMinor      BigInt       @map("amount_minor")
   reason           RefundReason
   status           RefundStatus @default(PENDING)
@@ -1545,6 +1547,7 @@ model RefundTransaction {
   auditEvents AuditEvent[]
 
   @@unique([paymentId, idempotencyKey])
+  @@unique([provider, providerRefundId], map: "refund_transactions_provider_provider_refund_id_key")
   @@index([paymentId, status])
   @@map("refund_transactions")
 }

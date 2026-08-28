@@ -1068,10 +1068,18 @@ describe("commerce persistence foundations", () => {
          VALUES ($1,$2)`,
         [anonymousOrderId, anonymousSessionId],
       );
-      await client.query(`UPDATE orders SET customer_id = $2 WHERE id = $1`, [
-        anonymousOrderId,
-        foundation.customerId,
-      ]);
+      await client.query(
+        `UPDATE quote_sessions SET customer_id = $2 WHERE id = $1`,
+        [anonymousSessionId, foundation.customerId],
+      );
+      expect(
+        (
+          await client.query<{ customer_id: string | null }>(
+            `SELECT customer_id FROM orders WHERE id = $1`,
+            [anonymousOrderId],
+          )
+        ).rows[0]?.customer_id,
+      ).toBe(foundation.customerId);
       expect(
         (
           await client.query<{ customer_id: string | null }>(
@@ -1189,6 +1197,37 @@ describe("commerce persistence foundations", () => {
         );
       }
 
+      const claimAutomaticSession = async (
+        name: string,
+        sessionId: string,
+        orderId: string,
+      ) => {
+        await client.query(
+          `INSERT INTO quote_requests
+             (id, quote_session_id, customer_id, status, created_at, updated_at)
+           VALUES ($1,$2,$3,'NEW',$4,$4)`,
+          [
+            fixtures.id(`${name}-request`),
+            sessionId,
+            foundation.customerId,
+            createdAt,
+          ],
+        );
+        expect(
+          (
+            await client.query<{ customer_id: string }>(
+              `SELECT customer_id FROM quote_sessions WHERE id = $1
+               UNION ALL
+               SELECT customer_id FROM orders WHERE id = $2`,
+              [sessionId, orderId],
+            )
+          ).rows,
+        ).toEqual([
+          { customer_id: foundation.customerId },
+          { customer_id: foundation.customerId },
+        ]);
+      };
+
       const topologySessionId = fixtures.id("anonymous-topology-session");
       const topologyOrderId = fixtures.id("anonymous-topology-order");
       await client.query(
@@ -1239,8 +1278,17 @@ describe("commerce persistence foundations", () => {
           constraint: "order_customer_ownership_immutable_check",
         },
       );
+      await claimAutomaticSession(
+        "item-topology-claim",
+        topologySessionId,
+        topologyOrderId,
+      );
 
-      for (const topology of ["delivery-destination", "order-phase"] as const) {
+      for (const topology of [
+        "delivery-destination",
+        "order-phase",
+        "price-binding",
+      ] as const) {
         const sessionId = fixtures.id(`${topology}-ownership-session`);
         const orderId = fixtures.id(`${topology}-ownership-order`);
         await client.query(
@@ -1272,12 +1320,48 @@ describe("commerce persistence foundations", () => {
              VALUES ($1,$2,'endpoint','HOME','{}'::jsonb,'{}'::jsonb,$3)`,
             [fixtures.id("ownership-destination"), orderId, createdAt],
           );
-        } else {
+        } else if (topology === "order-phase") {
           await client.query(
             `INSERT INTO order_phases
                (id, order_id, kind, status, created_at, updated_at)
              VALUES ($1,$2,'SINGLE','QUOTED',$3,$3)`,
             [fixtures.id("ownership-phase"), orderId, createdAt],
+          );
+        } else {
+          const destinationId = fixtures.id(
+            "price-binding-ownership-destination",
+          );
+          const snapshotId = fixtures.id("price-binding-ownership-snapshot");
+          await client.query(
+            `INSERT INTO delivery_destinations
+               (id, order_id, provider_endpoint_id, endpoint_type,
+                address_snapshot, capability_snapshot, created_at)
+             VALUES ($1,$2,'endpoint','HOME','{}'::jsonb,'{}'::jsonb,$3)`,
+            [destinationId, orderId, createdAt],
+          );
+          await client.query(
+            `INSERT INTO price_snapshots
+               (id, currency, contract_total_minor, pricing_revision,
+                input_snapshot, snapshot_hash, created_at)
+             VALUES ($1,'EUR',0,'ownership-v0','{}'::jsonb,$2,$3)`,
+            [
+              snapshotId,
+              randomUUID().replaceAll("-", "").padEnd(64, "a"),
+              createdAt,
+            ],
+          );
+          await client.query(
+            `INSERT INTO order_price_bindings
+               (id, order_id, price_snapshot_id, delivery_destination_id,
+                created_at)
+             VALUES ($1,$2,$3,$4,$5)`,
+            [
+              fixtures.id("price-binding-ownership-binding"),
+              orderId,
+              snapshotId,
+              destinationId,
+              createdAt,
+            ],
           );
         }
         await expectQueryError(
@@ -1292,6 +1376,11 @@ describe("commerce persistence foundations", () => {
             code: "23514",
             constraint: "order_customer_ownership_immutable_check",
           },
+        );
+        await claimAutomaticSession(
+          `${topology}-topology-claim`,
+          sessionId,
+          orderId,
         );
       }
 
@@ -3695,6 +3784,148 @@ describe("commerce persistence foundations", () => {
           {
             code: "23505",
             constraint: "payments_provider_provider_capture_id_key",
+          },
+        );
+      },
+    );
+  });
+
+  it("scopes external refund and shipment identities to their provider", async () => {
+    await rollback(
+      "provider-scoped-refund-and-shipment-identities",
+      async (client, fixtures) => {
+        const shipmentFoundation = await fixtures.createFoundation(
+          "provider-scoped-shipments",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          3,
+        );
+        const shipmentIds = shipmentFoundation.shipmentIds;
+        const labelledAt = new Date();
+        const labelShipment = (shipmentId: string, carrier: string) =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'LABEL_CREATED', carrier = $2,
+                 provider_shipment_id = 'shared-provider-shipment',
+                 label_created_at = $3, updated_at = $3
+             WHERE id = $1`,
+            [shipmentId, carrier, labelledAt],
+          );
+
+        const firstShipmentId = shipmentIds[0];
+        const secondShipmentId = shipmentIds[1];
+        const duplicateShipmentId = shipmentIds[2];
+        if (!firstShipmentId || !secondShipmentId || !duplicateShipmentId) {
+          throw new Error("provider-scoped shipment fixture is incomplete");
+        }
+        await labelShipment(firstShipmentId, "carrier-a");
+        await expect(
+          labelShipment(secondShipmentId, "carrier-b"),
+        ).resolves.toBeDefined();
+        await expectQueryError(
+          client,
+          "duplicate_provider_shipment_same_carrier",
+          () => labelShipment(duplicateShipmentId, "carrier-a"),
+          {
+            code: "23505",
+            constraint: "shipments_carrier_provider_shipment_id_key",
+          },
+        );
+
+        const createCapturedPayment = async (
+          name: string,
+          provider: string,
+        ): Promise<PersistenceFoundation> => {
+          const foundation = await fixtures.createFoundation(name);
+          const productions = await createCurrentPlan(
+            client,
+            fixtures,
+            foundation,
+          );
+          await fixtures.finalizePayment(
+            foundation,
+            new Date(Date.now() + 60 * 60 * 1_000),
+            `intent-${name}`,
+            provider,
+          );
+          await activateCurrentPlan(
+            client,
+            fixtures,
+            foundation,
+            productions,
+            `capture-${name}`,
+          );
+          return foundation;
+        };
+        const firstPayment = await createCapturedPayment(
+          "provider-scoped-refund-first",
+          "provider-a",
+        );
+        const secondPayment = await createCapturedPayment(
+          "provider-scoped-refund-second",
+          "provider-b",
+        );
+        const duplicatePayment = await createCapturedPayment(
+          "provider-scoped-refund-duplicate",
+          "provider-a",
+        );
+        const providerRefundId = "shared-provider-refund";
+        const insertRefund = (foundation: PersistenceFoundation, id: string) =>
+          client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                provider_refund_id, requested_at, created_at, updated_at)
+             VALUES ($1, $2, $3, 1, 'CUSTOMER_CANCELLATION', 'PENDING',
+                     $4, $5, $5, $5)`,
+            [
+              id,
+              foundation.paymentId,
+              `idempotency-${id}`,
+              providerRefundId,
+              new Date(),
+            ],
+          );
+
+        await insertRefund(
+          firstPayment,
+          fixtures.id("provider-scoped-refund-first"),
+        );
+        await expect(
+          insertRefund(
+            secondPayment,
+            fixtures.id("provider-scoped-refund-second"),
+          ),
+        ).resolves.toBeDefined();
+        expect(
+          (
+            await client.query<{
+              provider: string;
+              provider_refund_id: string;
+            }>(
+              `SELECT refund.provider, refund.provider_refund_id
+               FROM refund_transactions refund
+               WHERE refund.provider_refund_id = $1
+               ORDER BY refund.provider`,
+              [providerRefundId],
+            )
+          ).rows,
+        ).toEqual([
+          { provider: "provider-a", provider_refund_id: providerRefundId },
+          { provider: "provider-b", provider_refund_id: providerRefundId },
+        ]);
+        await expectQueryError(
+          client,
+          "duplicate_provider_refund_same_provider",
+          () =>
+            insertRefund(
+              duplicatePayment,
+              fixtures.id("provider-scoped-refund-duplicate"),
+            ),
+          {
+            code: "23505",
+            constraint: "refund_transactions_provider_provider_refund_id_key",
           },
         );
       },
