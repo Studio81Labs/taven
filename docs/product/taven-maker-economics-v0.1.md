@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#191; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#193; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -331,18 +331,20 @@ Tyto pojmy se nesmějí zaměňovat:
 -   payable amount,
 -   settlement status.
 
-Při přijetí assignmentu se do compensation snapshotu uloží také verze
-claim-hold policy a její `maker_claim_hold_days` --- podle aktuálních
-parametrů 7 dní. Doručení jednou a neměnně odvodí
-`payout_eligible_at = delivered_at + maker_claim_hold_days` z tohoto
-snapshotu. Assignment smí vstoupit do payable amount jen tehdy, když nastal
+Při přijetí assignmentu se do compensation snapshotu uloží také
+`order_claim_policy_version` přijatá zákazníkem a z ní odvozená
+`maker_claim_hold_days` --- podle aktuálních parametrů 7 dní, nikdy však
+kratší než zákaznické okno této verze. Doručení jednou a neměnně odvodí
+`payout_eligible_at` jako maximum `delivered_at + maker_claim_hold_days` a
+všech `claim_until` slotů plněných assignmentem. Pozdější globální parametr
+se nečte. Assignment smí vstoupit do payable amount jen tehdy, když nastal
 jeho uložený `payout_eligible_at` a žádný claim, který se assignmentu dotýká,
 není v neuzavřeném stavu jako `opened`, `investigating` nebo
 `awaiting_resolution`. Guard blokuje i claim, jehož zavinění ještě nebylo
 určeno. Uvolní jej až zamítnutí, stažení nebo konečné rozhodnutí; u
 maker-caused výsledku navíc vyžaduje schválenou adjustment zahrnutou v
-settlement line. Settlement guard nikdy znovu nečte aktuální parametr. Do té
-doby zůstává compensation v zádržném a nesmí přejít do payoutu.
+settlement line. Aktivní legal hold jej blokuje i po datu. Do té doby zůstává
+compensation v zádržném a nesmí přejít do payoutu.
 
 Každý assignment se do settlementu zařadí přes immutable
 `MakerSettlementLine`, který jednoznačně odkazuje právě jeden
@@ -395,6 +397,28 @@ ověří, že součet immutable settlement lines odpovídá jeho zamčenému
 měnu, gross compensation, adjustment total, payable amount a hash přesného
 payloadu; payout proto neparsuje ani nedůvěřuje později nahraditelnému
 artefaktu.
+
+#### Oprava sporu před payoutem
+
+Otevření sporu přepne settlement i self-billing doklad do `disputed` a
+zablokuje vytvoření nebo provedení payoutu. Je-li spor zamítnut, auditované
+rozhodnutí vrátí nezměněnou dvojici do `payable`. Je-li uznán ještě před
+zahájením bankovního převodu, jedna transakce:
+
+1.  nastaví původní immutable settlement a doklad na `voided`, propojí je s
+    `maker_dispute_id` a zavře případný neprovedený payout pokus,
+2.  vytvoří replacement `MakerSettlement` se
+    `supersedes_settlement_id`, opravenými immutable lines a novým
+    `payable_amount`,
+3.  vystaví nový self-billing doklad s `corrects_document_id` a novými
+    strukturovanými částkami,
+4.  povolí payout pouze nad replacement settlementem a jeho novým dokladem.
+
+Unikátní assignment membership se vyhodnocuje jen mezi nevoidovanými
+settlements, takže historický voided line zůstane auditovatelný, ale nemůže
+být znovu vyplacen. Po zahájení nebo dokončení bankovního převodu tento
+pre-payout flow není povolen; případná oprava musí projít samostatným
+účetním reconciliation procesem, nikoli přepsáním dokladu nebo payoutu.
 
 Budoucí síť může tento proces automatizovat, ale ekonomický model se
 nemění.
@@ -478,6 +502,7 @@ MakerCompensationSnapshot
 - surcharges
 - adjustments
 - agreed_compensation
+- order_claim_policy_version
 - claim_hold_policy_version
 - maker_claim_hold_days
 - created_at
@@ -508,13 +533,15 @@ MakerPerformanceSnapshot
 MakerSettlement
 - id
 - maker_id
+- supersedes_settlement_id (nullable)
+- maker_dispute_id (nullable)
 - period_from
 - period_to
 - currency
 - gross_compensation
 - adjustments
 - payable_amount
-- status
+- status (`draft` | `issued` | `disputed` | `payable` | `voided` | `paid`)
 ```
 
 ### MakerSettlementLine
@@ -524,8 +551,8 @@ MakerSettlementLine
 - id
 - settlement_id
 - maker_id (musí se shodovat se settlementem, assignmentem i snapshotem)
-- production_assignment_id (unique)
-- compensation_snapshot_id (unique)
+- production_assignment_id (unique mezi nevoidovanými settlements)
+- compensation_snapshot_id (unique mezi nevoidovanými settlements)
 - constraint `(compensation_snapshot_id, production_assignment_id, maker_id)`
   → `MakerCompensationSnapshot`
 - gross_compensation
@@ -542,6 +569,8 @@ MakerSelfBillingDocument
 - id
 - settlement_id (unique)
 - document_number (unique)
+- corrects_document_id (nullable; unique)
+- maker_dispute_id (nullable)
 - currency
 - gross_compensation
 - adjustment_total
@@ -549,7 +578,8 @@ MakerSelfBillingDocument
 - payload_hash (immutable)
 - artifact_ref (immutable content-addressed)
 - issued_at
-- status
+- voided_at (nullable)
+- status (`issued` | `disputed` | `voided` | `paid`)
 ```
 
 ### MakerPayout
@@ -700,6 +730,12 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
     settlementu, součet jeho lines, doklad i payout se musejí shodovat.
 30. Vydaný self-billing doklad immutable ukládá měnu, strukturované částky a
     hash payloadu; payout se musí shodovat v částce i měně.
+31. Maker payout eligibility se odvozuje z claim policy přijaté s Orderem a
+    nesmí nastat před nejpozdějším `claim_until` plněných slotů; aktivní
+    legal hold settlement dál blokuje.
+32. Uznaný spor před převodem voidne původní settlement a doklad a vytvoří
+    propojený replacement/correcting chain; žádný vydaný řádek, doklad ani
+    payout se nepřepisuje.
 
 ------------------------------------------------------------------------
 
@@ -708,7 +744,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#191.
+#184–#193.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav

@@ -1237,9 +1237,11 @@ Po aktivaci maker modelu zapisuje acceptance transakce externího maker-owned
 assignmentu
 `Job.payout_amount = MakerCompensationSnapshot.agreed_compensation`; offer,
 routing i settlement proto používají tutéž immutable částku. Platform-owned
-fallback žádný maker assignment, snapshot ani settlement nevytváří. Uplynutí
-reklamačního okna samo nestačí, pokud se assignmentu dotýká neuzavřený claim:
-settlement čeká na zamítnutí, stažení nebo konečné určení zavinění a
+fallback žádný maker assignment, snapshot ani settlement nevytváří. Maker
+hold se odvozuje z reklamační policy snapshotované zákazníkem při přijetí
+Orderu a `payout_eligible_at` nesmí předcházet žádnému `claim_until` slotu
+plněného assignmentem. Uplynutí okna samo nestačí, pokud se assignmentu
+dotýká neuzavřený claim nebo legal hold: settlement čeká na jejich ukončení a
 maker-caused výsledek zahrne až se schválenou adjustment.
 
 - **zavinění uzlu** → uzel nese materiál, platforma dopravu a přetisk
