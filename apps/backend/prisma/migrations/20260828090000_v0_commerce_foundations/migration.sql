@@ -309,6 +309,7 @@ CREATE TABLE "shipments" (
     "order_phase_id" UUID NOT NULL,
     "shipment_plan_id" UUID NOT NULL,
     "delivery_destination_id" UUID NOT NULL,
+    "replaces_shipment_id" UUID,
     "status" "shipment_status" NOT NULL DEFAULT 'PLANNED',
     "carrier" VARCHAR(100),
     "provider_shipment_id" VARCHAR(255),
@@ -451,6 +452,9 @@ CREATE UNIQUE INDEX "shipment_plan_fulfilment_slots_order_price_binding_id_fulfi
 CREATE INDEX "shipment_plan_fulfilment_slots_fulfilment_slot_id_idx" ON "shipment_plan_fulfilment_slots"("fulfilment_slot_id");
 CREATE INDEX "price_component_fulfilment_allocations_fulfilment_slot_id_idx" ON "price_component_fulfilment_allocations"("fulfilment_slot_id");
 CREATE UNIQUE INDEX "shipments_provider_shipment_id_key" ON "shipments"("provider_shipment_id");
+CREATE UNIQUE INDEX "shipments_replaces_shipment_id_key" ON "shipments"("replaces_shipment_id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id");
+CREATE UNIQUE INDEX "shipments_lineage_scope_key" ON "shipments"("id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id");
+CREATE UNIQUE INDEX "shipments_plan_root_key" ON "shipments"("shipment_plan_id") WHERE "replaces_shipment_id" IS NULL;
 CREATE INDEX "shipments_order_id_status_idx" ON "shipments"("order_id", "status");
 CREATE INDEX "shipments_shipment_plan_id_status_idx" ON "shipments"("shipment_plan_id", "status");
 CREATE UNIQUE INDEX "jobs_id_node_id_phase_resource_plan_job_id_key" ON "jobs"("id", "node_id", "phase_resource_plan_job_id");
@@ -525,6 +529,7 @@ ALTER TABLE "shipments" ADD CONSTRAINT "shipments_order_id_fkey" FOREIGN KEY ("o
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_order_phase_id_order_id_fkey" FOREIGN KEY ("order_phase_id", "order_id") REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_shipment_plan_id_order_id_order_phase_id_deliver_fkey" FOREIGN KEY ("shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") REFERENCES "shipment_plans"("id", "order_id", "order_phase_id", "delivery_destination_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_delivery_destination_id_order_id_fkey" FOREIGN KEY ("delivery_destination_id", "order_id") REFERENCES "delivery_destinations"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "shipments" ADD CONSTRAINT "shipments_replacement_scope_fkey" FOREIGN KEY ("replaces_shipment_id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") REFERENCES "shipments"("id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "nodes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_order_phase_id_order_id_fkey" FOREIGN KEY ("order_phase_id", "order_id") REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -598,8 +603,13 @@ ALTER TABLE "order_phases" ADD CONSTRAINT "order_phases_timestamps_check" CHECK 
 ALTER TABLE "shipment_plans" ADD CONSTRAINT "shipment_plans_values_check" CHECK ("ordinal" >= 0 AND "category" <> '' AND "planned_volume_cubic_mm" >= 0 AND "planned_weight_milligrams" >= 0 AND "shipping_amount_minor" >= 0 AND "packaging_amount_minor" >= 0 AND "handling_amount_minor" >= 0);
 ALTER TABLE "fulfilment_slots" ADD CONSTRAINT "fulfilment_slots_values_check" CHECK ("quantity_ordinal" >= 1 AND "settlement_amount_minor" >= 0);
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_timestamps_check" CHECK (("label_created_at" IS NULL OR "label_created_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at") AND ("delivered_at" IS NULL OR "delivered_at" >= "created_at") AND ("cancelled_at" IS NULL OR "cancelled_at" >= "created_at"));
+ALTER TABLE "shipments" ADD CONSTRAINT "shipments_replacement_not_self_check" CHECK ("replaces_shipment_id" IS NULL OR "replaces_shipment_id" <> "id");
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (("accepted_at" IS NULL OR "accepted_at" >= "created_at") AND ("printing_at" IS NULL OR "printing_at" >= "created_at") AND ("qc_approved_at" IS NULL OR "qc_approved_at" >= "created_at") AND ("packed_at" IS NULL OR "packed_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
+ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_intent_identity_check" CHECK (
+    ("provider_intent_id" IS NOT NULL AND btrim("provider_intent_id") <> '')
+    OR ("provider_intent_id" IS NULL AND "status" IN ('CREATED', 'VOIDED'))
+);
 ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
     (
         "status" IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED')
@@ -1138,7 +1148,6 @@ BEGIN
         JOIN "orders" target_order ON target_order."id" = origin."order_id"
         WHERE origin."order_id" = target_order_id
           AND (session."customer_id" IS NULL
-               OR target_order."customer_id" IS NULL
                OR session."customer_id" = target_order."customer_id")
     ) THEN
         RAISE EXCEPTION 'automatic order customer must remain owned by its quote session'
@@ -1176,6 +1185,81 @@ AFTER INSERT ON "individual_order_origins"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_require_order_origin_for_order();
 
+CREATE FUNCTION taven_protect_order_customer_ownership()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."customer_id" IS NOT DISTINCT FROM OLD."customer_id" THEN
+        RETURN NEW;
+    END IF;
+
+    IF OLD."customer_id" IS NOT NULL
+       OR OLD."status" <> 'DRAFT'
+       OR EXISTS (
+           SELECT 1
+           FROM "order_items" item
+           WHERE item."order_id" = OLD."id"
+       )
+       OR EXISTS (
+           SELECT 1
+           FROM "delivery_destinations" destination
+           WHERE destination."order_id" = OLD."id"
+       )
+       OR EXISTS (
+           SELECT 1
+           FROM "order_phases" phase
+           WHERE phase."order_id" = OLD."id"
+       )
+       OR EXISTS (
+           SELECT 1
+           FROM "order_price_bindings" binding
+           WHERE binding."order_id" = OLD."id"
+       )
+       OR EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           WHERE payment."order_id" = OLD."id"
+       ) THEN
+        RAISE EXCEPTION 'order customer is immutable after ownership or commerce topology is attached'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_customer_ownership_immutable_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "orders_customer_ownership_protected"
+BEFORE UPDATE OF "customer_id" ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_order_customer_ownership();
+
+CREATE FUNCTION taven_lock_child_order_parent()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = NEW."order_id"
+    FOR UPDATE;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "delivery_destinations_parent_order_locked"
+BEFORE INSERT ON "delivery_destinations"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_child_order_parent();
+CREATE TRIGGER "order_phases_parent_order_locked"
+BEFORE INSERT ON "order_phases"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_child_order_parent();
+CREATE TRIGGER "jobs_parent_order_locked"
+BEFORE INSERT ON "jobs"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_child_order_parent();
+CREATE TRIGGER "shipments_parent_order_locked"
+BEFORE INSERT ON "shipments"
+FOR EACH ROW EXECUTE FUNCTION taven_lock_child_order_parent();
+
 CREATE FUNCTION taven_validate_automatic_order_origin()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1188,7 +1272,6 @@ BEGIN
         WHERE target_order."id" = NEW."order_id"
           AND target_order."status" = 'DRAFT'
           AND (session."customer_id" IS NULL
-               OR target_order."customer_id" IS NULL
                OR session."customer_id" = target_order."customer_id")
     ) THEN
         RAISE EXCEPTION 'automatic draft order must belong to its session customer'
@@ -1989,16 +2072,28 @@ BEGIN
             WHERE "order_id" = target_order_id
               AND ("status" <> 'PACKED' OR "packed_at" IS NULL)
         ) OR NOT EXISTS (
-            SELECT 1 FROM "shipments" WHERE "order_id" = target_order_id
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
         ) OR EXISTS (
             SELECT 1
-            FROM "shipments"
-            WHERE "order_id" = target_order_id
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
               AND (
-                  "status" <> 'LABEL_CREATED'
-                  OR "carrier" IS NULL
-                  OR "provider_shipment_id" IS NULL
-                  OR "label_created_at" IS NULL
+                  shipment."status" <> 'LABEL_CREATED'
+                  OR shipment."carrier" IS NULL
+                  OR shipment."provider_shipment_id" IS NULL
+                  OR shipment."label_created_at" IS NULL
               )
         ) THEN
             RAISE EXCEPTION 'ready-to-ship order requires every Job packed and every Shipment labelled'
@@ -2013,15 +2108,25 @@ BEGIN
               AND phase."shipped_at" IS NOT NULL
         ) OR NOT EXISTS (
             SELECT 1
-            FROM "shipments"
-            WHERE "order_id" = target_order_id
-              AND "status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
-              AND "handed_over_at" IS NOT NULL
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND shipment."handed_over_at" IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
         ) OR EXISTS (
             SELECT 1
-            FROM "shipments"
-            WHERE "order_id" = target_order_id
-              AND "status" NOT IN ('LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" NOT IN ('LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
         ) OR NOT EXISTS (
             SELECT 1
             FROM "jobs"
@@ -2038,6 +2143,11 @@ BEGIN
             FROM "shipments" shipment
             WHERE shipment."order_id" = target_order_id
               AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
               AND (
                   NOT EXISTS (
                       SELECT 1
@@ -2071,6 +2181,11 @@ BEGIN
                     AND shipment."shipment_plan_id" = job."shipment_plan_id"
                     AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
                     AND shipment."handed_over_at" IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM "shipments" replacement
+                        WHERE replacement."replaces_shipment_id" = shipment."id"
+                    )
               )
         ) THEN
             RAISE EXCEPTION 'shipped order requires plan-matched Job and Shipment handoff evidence'
@@ -2084,12 +2199,24 @@ BEGIN
               AND phase."status" = 'DELIVERED'
               AND phase."delivered_at" IS NOT NULL
         ) OR NOT EXISTS (
-            SELECT 1 FROM "shipments" WHERE "order_id" = target_order_id
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
         ) OR EXISTS (
             SELECT 1
-            FROM "shipments"
-            WHERE "order_id" = target_order_id
-              AND ("status" <> 'DELIVERED' OR "delivered_at" IS NULL)
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'DELIVERED' OR shipment."delivered_at" IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
         ) OR NOT EXISTS (
             SELECT 1 FROM "fulfilment_slots" WHERE "order_id" = target_order_id
         ) OR EXISTS (
@@ -2110,9 +2237,14 @@ BEGIN
               AND phase."completed_at" IS NOT NULL
         ) OR EXISTS (
             SELECT 1
-            FROM "shipments"
-            WHERE "order_id" = target_order_id
-              AND ("status" <> 'DELIVERED' OR "delivered_at" IS NULL)
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'DELIVERED' OR shipment."delivered_at" IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
         ) OR EXISTS (
             SELECT 1
             FROM "fulfilment_slots"
@@ -2143,9 +2275,14 @@ BEGIN
               AND "status" <> 'CANCELLED'
         ) OR EXISTS (
             SELECT 1
-            FROM "shipments"
-            WHERE "order_id" = target_order_id
-              AND ("status" <> 'CANCELLED' OR "cancelled_at" IS NULL)
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'CANCELLED' OR shipment."cancelled_at" IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
         ) OR EXISTS (
             SELECT 1
             FROM "fulfilment_slots"
@@ -2169,9 +2306,14 @@ BEGIN
               AND "status" <> 'CANCELLED'
         ) OR EXISTS (
             SELECT 1
-            FROM "shipments"
-            WHERE "order_id" = target_order_id
-              AND ("status" <> 'CANCELLED' OR "cancelled_at" IS NULL)
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'CANCELLED' OR shipment."cancelled_at" IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
         ) OR EXISTS (
             SELECT 1
             FROM "fulfilment_slots"
@@ -4105,8 +4247,9 @@ BEGIN
     IF NEW."order_id" IS DISTINCT FROM OLD."order_id"
        OR NEW."order_phase_id" IS DISTINCT FROM OLD."order_phase_id"
        OR NEW."shipment_plan_id" IS DISTINCT FROM OLD."shipment_plan_id"
-       OR NEW."delivery_destination_id" IS DISTINCT FROM OLD."delivery_destination_id" THEN
-        RAISE EXCEPTION 'shipment order, phase, plan, and destination cannot be changed'
+       OR NEW."delivery_destination_id" IS DISTINCT FROM OLD."delivery_destination_id"
+       OR NEW."replaces_shipment_id" IS DISTINCT FROM OLD."replaces_shipment_id" THEN
+        RAISE EXCEPTION 'shipment order, phase, plan, destination, and replacement lineage cannot be changed'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_topology_immutable_check';
     END IF;
 
@@ -4458,6 +4601,61 @@ AFTER INSERT OR UPDATE OF "payment_id", "amount_minor", "status" ON "refund_tran
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_payment_refund_status();
 
+CREATE FUNCTION taven_reconcile_customer_cancellation_refund_order()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_order_status "order_status";
+BEGIN
+    IF TG_TABLE_NAME = 'orders' THEN
+        target_order_id := NEW."id";
+    ELSIF TG_TABLE_NAME = 'payments' THEN
+        target_order_id := NEW."order_id";
+    ELSE
+        SELECT payment."order_id"
+        INTO target_order_id
+        FROM "payments" payment
+        WHERE payment."id" = NEW."payment_id";
+    END IF;
+
+    SELECT target_order."status"
+    INTO target_order_status
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id;
+
+    IF target_order_status NOT IN ('CANCELLED', 'REFUNDED')
+       AND EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           JOIN "refund_transactions" refund
+             ON refund."payment_id" = payment."id"
+           WHERE payment."order_id" = target_order_id
+             AND refund."reason" = 'CUSTOMER_CANCELLATION'
+             AND refund."status" IN ('PENDING', 'SUCCEEDED')
+       ) THEN
+        RAISE EXCEPTION 'customer-cancellation refund requires a cancelled order lifecycle'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_customer_cancellation_refund_lifecycle_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "orders_customer_cancellation_refund_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_customer_cancellation_refund_order();
+CREATE CONSTRAINT TRIGGER "payments_customer_cancellation_refund_reconciled"
+AFTER UPDATE OF "status" ON "payments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_customer_cancellation_refund_order();
+CREATE CONSTRAINT TRIGGER "refunds_customer_cancellation_order_reconciled"
+AFTER INSERT OR UPDATE OF "payment_id", "reason", "status" ON "refund_transactions"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_customer_cancellation_refund_order();
+
 CREATE FUNCTION taven_validate_payment_capture_against_refunds()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -4571,3 +4769,125 @@ $$;
 CREATE TRIGGER "refunds_cannot_exceed_capture"
 BEFORE INSERT OR UPDATE OF "payment_id", "amount_minor", "status" ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_refund_against_capture();
+
+CREATE FUNCTION taven_reconcile_shipment_plan_slot_terminal_state()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid := NEW."order_id";
+BEGIN
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "shipments" predecessor
+        JOIN "shipments" replacement
+          ON replacement."replaces_shipment_id" = predecessor."id"
+        WHERE predecessor."order_id" = target_order_id
+          AND (predecessor."status" <> 'CANCELLED'
+               OR predecessor."cancelled_at" IS NULL)
+    ) THEN
+        RAISE EXCEPTION 'a replaced Shipment must be terminally cancelled before its successor is attached'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_replacement_predecessor_terminal_check';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "fulfilment_slots" slot
+        WHERE slot."order_id" = target_order_id
+          AND slot."outcome" IN ('DELIVERED', 'CANCELLED', 'CANCELLED_REFUNDED')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              JOIN "shipment_plans" plan
+                ON plan."id" = allocation."shipment_plan_id"
+               AND plan."order_price_binding_id" = allocation."order_price_binding_id"
+              JOIN "order_active_price_bindings" active_binding
+                ON active_binding."order_id" = plan."order_id"
+               AND active_binding."order_price_binding_id" = plan."order_price_binding_id"
+              WHERE allocation."fulfilment_slot_id" = slot."id"
+                AND plan."order_id" = slot."order_id"
+                AND plan."order_phase_id" = slot."order_phase_id"
+                AND (
+                    (
+                        slot."outcome" = 'DELIVERED'
+                        AND EXISTS (
+                            SELECT 1
+                            FROM "shipments" shipment
+                            WHERE shipment."shipment_plan_id" = plan."id"
+                              AND shipment."status" = 'DELIVERED'
+                              AND shipment."delivered_at" IS NOT NULL
+                              AND NOT EXISTS (
+                                  SELECT 1
+                                  FROM "shipments" replacement
+                                  WHERE replacement."replaces_shipment_id" = shipment."id"
+                              )
+                        )
+                    )
+                    OR (
+                        slot."outcome" IN ('CANCELLED', 'CANCELLED_REFUNDED')
+                        AND EXISTS (
+                            SELECT 1
+                            FROM "shipments" shipment
+                            WHERE shipment."shipment_plan_id" = plan."id"
+                              AND shipment."status" = 'CANCELLED'
+                              AND shipment."cancelled_at" IS NOT NULL
+                              AND NOT EXISTS (
+                                  SELECT 1
+                                  FROM "shipments" replacement
+                                  WHERE replacement."replaces_shipment_id" = shipment."id"
+                              )
+                        )
+                    )
+                )
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM "shipments" shipment
+        WHERE shipment."order_id" = target_order_id
+          AND shipment."status" IN ('DELIVERED', 'CANCELLED')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipments" replacement
+              WHERE replacement."replaces_shipment_id" = shipment."id"
+          )
+          AND (
+              NOT EXISTS (
+                  SELECT 1
+                  FROM "shipment_plan_fulfilment_slots" allocation
+                  WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM "shipment_plan_fulfilment_slots" allocation
+                  JOIN "fulfilment_slots" slot
+                    ON slot."id" = allocation."fulfilment_slot_id"
+                  WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+                    AND (
+                        (shipment."status" = 'DELIVERED' AND slot."outcome" <> 'DELIVERED')
+                        OR (shipment."status" = 'CANCELLED'
+                            AND slot."outcome" NOT IN ('CANCELLED', 'CANCELLED_REFUNDED'))
+                    )
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION 'ShipmentPlan terminal Shipment and fulfilment slots must transition atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_plan_slot_terminal_reconciliation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "fulfilment_slots_shipment_plan_terminal_reconciled"
+AFTER UPDATE OF "outcome" ON "fulfilment_slots"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_shipment_plan_slot_terminal_state();
+CREATE CONSTRAINT TRIGGER "shipments_fulfilment_slots_terminal_reconciled"
+AFTER INSERT OR UPDATE OF "status", "delivered_at", "cancelled_at" ON "shipments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_shipment_plan_slot_terminal_state();

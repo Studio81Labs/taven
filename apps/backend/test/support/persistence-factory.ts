@@ -881,6 +881,8 @@ export class PersistenceFactory {
     checkoutCaptureExpiresAt: Date | null = new Date(
       Date.now() + 60 * 60 * 1_000,
     ),
+    providerIntentId:
+      string | null = `intent-${this.hash(foundation.paymentId)}`,
   ): Promise<void> {
     const schedule = await this.sql.query<{ gross_amount_minor: string }>(
       'SELECT "gross_amount_minor"::text FROM "payment_schedules" WHERE "id" = $1',
@@ -898,7 +900,7 @@ export class PersistenceFactory {
         foundation.priceSnapshotId,
         foundation.orderPriceBindingId,
         foundation.paymentScheduleId,
-        `intent-${this.hash(foundation.paymentId)}`,
+        providerIntentId,
         requestedAmountMinor,
         checkoutCaptureExpiresAt,
         createdAt,

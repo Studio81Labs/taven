@@ -231,6 +231,9 @@ async function forceOrderLifecycleConstraints(
        "orders_cancelled_reservations_reconciled",
        "phase_reservation_sets_cancelled_order_reconciled",
        "orders_quoted_cancellation_payments_reconciled",
+       "orders_customer_cancellation_refund_reconciled",
+       "payments_customer_cancellation_refund_reconciled",
+       "refunds_customer_cancellation_order_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
        "jobs_printing_reservation_group_reconciled",
@@ -238,7 +241,9 @@ async function forceOrderLifecycleConstraints(
        "inventory_reservations_job_printing_reconciled",
        "capacity_reservations_job_printing_reconciled",
        "shipments_parent_lifecycle_reconciled",
-       "fulfilment_slots_parent_lifecycle_reconciled" IMMEDIATE`,
+       "fulfilment_slots_parent_lifecycle_reconciled",
+       "fulfilment_slots_shipment_plan_terminal_reconciled",
+       "shipments_fulfilment_slots_terminal_reconciled" IMMEDIATE`,
   );
   await client.query(
     `SET CONSTRAINTS
@@ -247,6 +252,9 @@ async function forceOrderLifecycleConstraints(
        "orders_cancelled_reservations_reconciled",
        "phase_reservation_sets_cancelled_order_reconciled",
        "orders_quoted_cancellation_payments_reconciled",
+       "orders_customer_cancellation_refund_reconciled",
+       "payments_customer_cancellation_refund_reconciled",
+       "refunds_customer_cancellation_order_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
        "jobs_printing_reservation_group_reconciled",
@@ -254,7 +262,9 @@ async function forceOrderLifecycleConstraints(
        "inventory_reservations_job_printing_reconciled",
        "capacity_reservations_job_printing_reconciled",
        "shipments_parent_lifecycle_reconciled",
-       "fulfilment_slots_parent_lifecycle_reconciled" DEFERRED`,
+       "fulfilment_slots_parent_lifecycle_reconciled",
+       "fulfilment_slots_shipment_plan_terminal_reconciled",
+       "shipments_fulfilment_slots_terminal_reconciled" DEFERRED`,
   );
 }
 
@@ -394,7 +404,7 @@ async function advanceOrderLifecycleStep(
            provider_shipment_id = coalesce(provider_shipment_id, 'provider-' || id::text),
            tracking_code = coalesce(tracking_code, 'tracking-' || id::text),
            label_created_at = $2, updated_at = $2
-       WHERE order_id = $1`,
+       WHERE order_id = $1 AND status = 'PLANNED'`,
       [orderId, transitionedAt],
     );
   } else if (status === "SHIPPED") {
@@ -407,7 +417,7 @@ async function advanceOrderLifecycleStep(
     await client.query(
       `UPDATE shipments
        SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
-       WHERE order_id = $1`,
+       WHERE order_id = $1 AND status = 'LABEL_CREATED'`,
       [orderId, transitionedAt],
     );
     await client.query(
@@ -420,13 +430,13 @@ async function advanceOrderLifecycleStep(
     await client.query(
       `UPDATE shipments
        SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
-       WHERE order_id = $1`,
+       WHERE order_id = $1 AND status IN ('HANDED_OVER', 'IN_TRANSIT')`,
       [orderId, transitionedAt],
     );
     await client.query(
       `UPDATE fulfilment_slots
        SET outcome = 'DELIVERED', updated_at = $2
-       WHERE order_id = $1`,
+       WHERE order_id = $1 AND outcome = 'PENDING'`,
       [orderId, transitionedAt],
     );
     await client.query(
@@ -800,6 +810,219 @@ describe("commerce persistence foundations", () => {
           )
         ).rows[0]?.count,
       ).toBe("0");
+    });
+  });
+
+  it("freezes order ownership after initial anonymous draft attachment", async () => {
+    await rollback("order-ownership", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation("ownership-source");
+      const createdAt = new Date();
+      const otherCustomerId = fixtures.id("ownership-other-customer");
+      await client.query(
+        `INSERT INTO customers
+           (id, email, display_name, first_seen_at, created_at, updated_at)
+         VALUES ($1,$2,'Other owner',$3,$3,$3)`,
+        [otherCustomerId, `other-${randomUUID()}@example.test`, createdAt],
+      );
+
+      const anonymousSessionId = fixtures.id("anonymous-owner-session");
+      const anonymousOrderId = fixtures.id("anonymous-owner-order");
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$4)`,
+        [
+          anonymousSessionId,
+          randomUUID().replaceAll("-", "").padEnd(64, "0"),
+          new Date(Date.now() + 60 * 60 * 1_000),
+          createdAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO orders (id, public_reference, status, created_at, updated_at)
+         VALUES ($1,$2,'DRAFT',$3,$3)`,
+        [anonymousOrderId, `T-${randomUUID()}`, createdAt],
+      );
+      await client.query(
+        `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+         VALUES ($1,$2)`,
+        [anonymousOrderId, anonymousSessionId],
+      );
+      await client.query(`UPDATE orders SET customer_id = $2 WHERE id = $1`, [
+        anonymousOrderId,
+        foundation.customerId,
+      ]);
+      await client.query(
+        `SET CONSTRAINTS "orders_require_exactly_one_origin",
+                         "automatic_order_origins_require_exactly_one_origin" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "orders_require_exactly_one_origin",
+                         "automatic_order_origins_require_exactly_one_origin" DEFERRED`,
+      );
+
+      for (const [name, nextCustomerId] of [
+        ["reassign_owned_order", otherCustomerId],
+        ["orphan_owned_order", null],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            client.query(`UPDATE orders SET customer_id = $2 WHERE id = $1`, [
+              anonymousOrderId,
+              nextCustomerId,
+            ]),
+          {
+            code: "23514",
+            constraint: "order_customer_ownership_immutable_check",
+          },
+        );
+      }
+
+      const topologySessionId = fixtures.id("anonymous-topology-session");
+      const topologyOrderId = fixtures.id("anonymous-topology-order");
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$4)`,
+        [
+          topologySessionId,
+          randomUUID().replaceAll("-", "").padEnd(64, "1"),
+          new Date(Date.now() + 60 * 60 * 1_000),
+          createdAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO orders (id, public_reference, status, created_at, updated_at)
+         VALUES ($1,$2,'DRAFT',$3,$3)`,
+        [topologyOrderId, `T-${randomUUID()}`, createdAt],
+      );
+      await client.query(
+        `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+         VALUES ($1,$2)`,
+        [topologyOrderId, topologySessionId],
+      );
+      await client.query(
+        `INSERT INTO order_items
+           (id, order_id, ordinal, source_model_file_id, model_geometry_id,
+            print_config_revision_id, material, color, quantity, created_at)
+         VALUES ($1,$2,0,$3,$4,$5,'PLA','red',1,$6)`,
+        [
+          fixtures.id("anonymous-topology-item"),
+          topologyOrderId,
+          foundation.modelFileId,
+          foundation.modelGeometryId,
+          foundation.printConfigRevisionId,
+          createdAt,
+        ],
+      );
+      await expectQueryError(
+        client,
+        "attach_owner_after_item_topology",
+        () =>
+          client.query(`UPDATE orders SET customer_id = $2 WHERE id = $1`, [
+            topologyOrderId,
+            foundation.customerId,
+          ]),
+        {
+          code: "23514",
+          constraint: "order_customer_ownership_immutable_check",
+        },
+      );
+
+      for (const topology of ["delivery-destination", "order-phase"] as const) {
+        const sessionId = fixtures.id(`${topology}-ownership-session`);
+        const orderId = fixtures.id(`${topology}-ownership-order`);
+        await client.query(
+          `INSERT INTO quote_sessions
+             (id, public_token_hash, expires_at, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,$4)`,
+          [
+            sessionId,
+            randomUUID().replaceAll("-", "").padEnd(64, "3"),
+            new Date(Date.now() + 60 * 60 * 1_000),
+            createdAt,
+          ],
+        );
+        await client.query(
+          `INSERT INTO orders (id, public_reference, status, created_at, updated_at)
+           VALUES ($1,$2,'DRAFT',$3,$3)`,
+          [orderId, `T-${randomUUID()}`, createdAt],
+        );
+        await client.query(
+          `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+           VALUES ($1,$2)`,
+          [orderId, sessionId],
+        );
+        if (topology === "delivery-destination") {
+          await client.query(
+            `INSERT INTO delivery_destinations
+               (id, order_id, provider_endpoint_id, endpoint_type,
+                address_snapshot, capability_snapshot, created_at)
+             VALUES ($1,$2,'endpoint','HOME','{}'::jsonb,'{}'::jsonb,$3)`,
+            [fixtures.id("ownership-destination"), orderId, createdAt],
+          );
+        } else {
+          await client.query(
+            `INSERT INTO order_phases
+               (id, order_id, kind, status, created_at, updated_at)
+             VALUES ($1,$2,'SINGLE','QUOTED',$3,$3)`,
+            [fixtures.id("ownership-phase"), orderId, createdAt],
+          );
+        }
+        await expectQueryError(
+          client,
+          `attach_owner_after_${topology.replaceAll("-", "_")}`,
+          () =>
+            client.query(`UPDATE orders SET customer_id = $2 WHERE id = $1`, [
+              orderId,
+              foundation.customerId,
+            ]),
+          {
+            code: "23514",
+            constraint: "order_customer_ownership_immutable_check",
+          },
+        );
+      }
+
+      const ownedSessionId = fixtures.id("owned-session");
+      await client.query(
+        `INSERT INTO quote_sessions
+           (id, customer_id, public_token_hash, expires_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          ownedSessionId,
+          foundation.customerId,
+          randomUUID().replaceAll("-", "").padEnd(64, "2"),
+          new Date(Date.now() + 60 * 60 * 1_000),
+          createdAt,
+        ],
+      );
+      await expectQueryError(
+        client,
+        "owned_session_anonymous_order",
+        async () => {
+          const mismatchedOrderId = fixtures.id(
+            "owned-session-anonymous-order",
+          );
+          await client.query(
+            `INSERT INTO orders
+               (id, public_reference, status, created_at, updated_at)
+             VALUES ($1,$2,'DRAFT',$3,$3)`,
+            [mismatchedOrderId, `T-${randomUUID()}`, createdAt],
+          );
+          await client.query(
+            `INSERT INTO automatic_order_origins (order_id, quote_session_id)
+             VALUES ($1,$2)`,
+            [mismatchedOrderId, ownedSessionId],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "automatic_order_origin_owner_check",
+        },
+      );
     });
   });
 
@@ -1949,7 +2172,7 @@ describe("commerce persistence foundations", () => {
         },
         {
           code: "23514",
-          constraint: "order_post_confirmation_lifecycle_check",
+          constraint: "shipment_plan_slot_terminal_reconciliation_check",
         },
       );
 
@@ -2063,27 +2286,100 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("requires a stable provider intent before a payment becomes pending", async () => {
+    await rollback("payment-provider-intent", async (client, fixtures) => {
+      const createdFoundation = await fixtures.createFoundation(
+        "created-payment-without-intent",
+      );
+      await createCurrentPlan(client, fixtures, createdFoundation);
+      const createdAt = new Date();
+      const checkoutCaptureExpiresAt = new Date(
+        createdAt.getTime() + 60 * 60 * 1_000,
+      );
+      await client.query(
+        `INSERT INTO payments
+           (id, order_id, price_snapshot_id, order_price_binding_id,
+            payment_schedule_id, role, provider, requested_amount_minor,
+            currency, status, checkout_capture_expires_at, created_at, updated_at)
+         SELECT $1,$2,$3,$4,$5,'FULL','test',gross_amount_minor,
+                'EUR','CREATED',$6,$7,$7
+         FROM payment_schedules WHERE id = $5`,
+        [
+          createdFoundation.paymentId,
+          createdFoundation.orderId,
+          createdFoundation.priceSnapshotId,
+          createdFoundation.orderPriceBindingId,
+          createdFoundation.paymentScheduleId,
+          checkoutCaptureExpiresAt,
+          createdAt,
+        ],
+      );
+      await expectQueryError(
+        client,
+        "pending_without_provider_intent",
+        () =>
+          client.query(`UPDATE payments SET status = 'PENDING' WHERE id = $1`, [
+            createdFoundation.paymentId,
+          ]),
+        {
+          code: "23514",
+          constraint: "payments_provider_intent_identity_check",
+        },
+      );
+      await client.query(
+        `UPDATE payments
+         SET status = 'VOIDED', capture_authorized = false,
+             capture_cutoff_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [createdFoundation.paymentId, new Date()],
+      );
+
+      const pendingFoundation = await fixtures.createFoundation(
+        "pending-payment-provider-intent",
+      );
+      await createCurrentPlan(client, fixtures, pendingFoundation);
+      for (const [name, providerIntentId] of [
+        ["null_provider_intent", null],
+        ["blank_provider_intent", "   "],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () =>
+            fixtures.finalizePayment(
+              pendingFoundation,
+              checkoutCaptureExpiresAt,
+              providerIntentId,
+            ),
+          {
+            code: "23514",
+            constraint: "payments_provider_intent_identity_check",
+          },
+        );
+      }
+      await fixtures.finalizePayment(
+        pendingFoundation,
+        checkoutCaptureExpiresAt,
+        "stable-provider-intent",
+      );
+    });
+  });
+
   it("persists a pending compensation capture directly as refund pending", async () => {
     await rollback("pending-capture-compensation", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
         "pending-capture-compensation",
       );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
+      await cancelOrderBeforeHandoff(client, foundation.orderId);
       const capturedAt = new Date();
-      const captureCutoffAt = new Date(capturedAt.getTime() - 1);
       await client.query(
         `UPDATE payments
          SET status = 'REFUND_PENDING',
              captured_amount_minor = requested_amount_minor,
-             provider_capture_id = $2, captured_at = $3,
-             capture_authorized = false, capture_cutoff_at = $4
+             provider_capture_id = $2, captured_at = $3
          WHERE id = $1`,
-        [
-          foundation.paymentId,
-          "late-provider-capture",
-          capturedAt,
-          captureCutoffAt,
-        ],
+        [foundation.paymentId, "late-provider-capture", capturedAt],
       );
       await client.query(
         `INSERT INTO refund_transactions
@@ -2101,7 +2397,9 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `SET CONSTRAINTS "payments_refund_status_reconciled",
-                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+                         "refund_transactions_payment_status_reconciled",
+                         "payments_customer_cancellation_refund_reconciled",
+                         "refunds_customer_cancellation_order_reconciled" IMMEDIATE`,
       );
       expect(
         (
@@ -3205,6 +3503,238 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("transitions each Shipment and its exact fulfilment slots atomically", async () => {
+    await rollback("shipment-slot-delivery", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "shipment-slot-delivery",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        2,
+        [{ quantity: 2 }, { quantity: 1 }],
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      const firstPlanId = foundation.shipmentPlanIds[0];
+      const secondPlanId = foundation.shipmentPlanIds[1];
+      const replacedShipmentId = foundation.shipmentIds[0];
+      const firstShipmentId = fixtures.id("replacement-shipment");
+      if (!firstPlanId || !secondPlanId || !replacedShipmentId) {
+        throw new Error("multi-parcel delivery fixture is incomplete");
+      }
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+      ] as const) {
+        await advanceOrderLifecycleStep(client, foundation.orderId, status);
+      }
+      await expectQueryError(
+        client,
+        "replace_live_shipment",
+        async () => {
+          const attemptedAt = new Date();
+          await client.query(
+            `INSERT INTO shipments
+               (id, order_id, order_phase_id, shipment_plan_id,
+                delivery_destination_id, replaces_shipment_id, created_at, updated_at)
+             SELECT $1, order_id, order_phase_id, shipment_plan_id,
+                    delivery_destination_id, id, $3, $3
+             FROM shipments
+             WHERE id = $2`,
+            [
+              fixtures.id("invalid-live-replacement"),
+              replacedShipmentId,
+              attemptedAt,
+            ],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "shipments_fulfilment_slots_terminal_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_replacement_predecessor_terminal_check",
+        },
+      );
+      const cancelledAt = new Date();
+      await client.query(
+        `UPDATE shipments
+         SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [replacedShipmentId, cancelledAt],
+      );
+      await client.query(
+        `INSERT INTO shipments
+           (id, order_id, order_phase_id, shipment_plan_id,
+            delivery_destination_id, replaces_shipment_id, created_at, updated_at)
+         SELECT $1, order_id, order_phase_id, shipment_plan_id,
+                delivery_destination_id, id, $3, $3
+         FROM shipments
+         WHERE id = $2`,
+        [firstShipmentId, replacedShipmentId, cancelledAt],
+      );
+      await client.query(
+        `UPDATE shipments
+         SET status = 'LABEL_CREATED', carrier = 'test-carrier',
+             provider_shipment_id = 'provider-' || id::text,
+             tracking_code = 'tracking-' || id::text,
+             label_created_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [firstShipmentId, cancelledAt],
+      );
+      await forceOrderLifecycleConstraints(client);
+      await advanceOrderLifecycleStep(client, foundation.orderId, "SHIPPED");
+
+      await expectQueryError(
+        client,
+        "deliver_slot_from_live_other_parcel",
+        async () => {
+          await client.query(
+            `UPDATE fulfilment_slots
+             SET outcome = 'DELIVERED', updated_at = $2
+             WHERE id = (
+               SELECT allocation.fulfilment_slot_id
+               FROM shipment_plan_fulfilment_slots allocation
+               WHERE allocation.shipment_plan_id = $1
+               ORDER BY allocation.fulfilment_slot_id
+               LIMIT 1
+             )`,
+            [secondPlanId, new Date()],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "fulfilment_slots_shipment_plan_terminal_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_plan_slot_terminal_reconciliation_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "cancel_refund_slot_from_live_parcel",
+        async () => {
+          await client.query(
+            `UPDATE fulfilment_slots
+             SET outcome = 'CANCELLED_REFUNDED', updated_at = $2
+             WHERE id = (
+               SELECT allocation.fulfilment_slot_id
+               FROM shipment_plan_fulfilment_slots allocation
+               WHERE allocation.shipment_plan_id = $1
+               ORDER BY allocation.fulfilment_slot_id
+               LIMIT 1
+             )`,
+            [secondPlanId, new Date()],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "fulfilment_slots_shipment_plan_terminal_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_plan_slot_terminal_reconciliation_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "deliver_only_part_of_parcel",
+        async () => {
+          const deliveredAt = new Date();
+          await client.query(
+            `UPDATE shipments
+             SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [firstShipmentId, deliveredAt],
+          );
+          await client.query(
+            `UPDATE fulfilment_slots
+             SET outcome = 'DELIVERED', updated_at = $2
+             WHERE id = (
+               SELECT allocation.fulfilment_slot_id
+               FROM shipment_plan_fulfilment_slots allocation
+               WHERE allocation.shipment_plan_id = $1
+               ORDER BY allocation.fulfilment_slot_id
+               LIMIT 1
+             )`,
+            [firstPlanId, deliveredAt],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "fulfilment_slots_shipment_plan_terminal_reconciled",
+               "shipments_fulfilment_slots_terminal_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_plan_slot_terminal_reconciliation_check",
+        },
+      );
+
+      const deliveredAt = new Date();
+      await client.query(
+        `UPDATE shipments
+         SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [firstShipmentId, deliveredAt],
+      );
+      await client.query(
+        `UPDATE fulfilment_slots slot
+         SET outcome = 'DELIVERED', updated_at = $2
+         FROM shipment_plan_fulfilment_slots allocation
+         WHERE allocation.fulfilment_slot_id = slot.id
+           AND allocation.shipment_plan_id = $1`,
+        [firstPlanId, deliveredAt],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "fulfilment_slots_shipment_plan_terminal_reconciled",
+           "shipments_fulfilment_slots_terminal_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "fulfilment_slots_shipment_plan_terminal_reconciled",
+           "shipments_fulfilment_slots_terminal_reconciled" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM orders WHERE id = $1`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([{ status: "SHIPPED" }]);
+      expect(
+        (
+          await client.query<{ id: string; status: string }>(
+            `SELECT id::text, status::text
+             FROM shipments
+             WHERE id IN ($1, $2)
+             ORDER BY id`,
+            [replacedShipmentId, firstShipmentId],
+          )
+        ).rows,
+      ).toEqual(
+        [
+          { id: replacedShipmentId, status: "CANCELLED" },
+          { id: firstShipmentId, status: "DELIVERED" },
+        ].sort((left, right) => left.id.localeCompare(right.id)),
+      );
+
+      await advanceOrderLifecycleStep(client, foundation.orderId, "DELIVERED");
+    });
+  });
+
   it("settles exact reservation groups before completing an order", async () => {
     await rollback("completed-reservations", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -3671,14 +4201,16 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `INSERT INTO shipments (id, order_id, order_phase_id, shipment_plan_id,
-                                   delivery_destination_id, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$6)`,
+                                   delivery_destination_id, replaces_shipment_id,
+                                   created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
             [
               fixtures.id("bad-shipment"),
               foundation.orderId,
               foundation.orderPhaseId,
               other.shipmentPlanId,
               foundation.deliveryDestinationId,
+              other.shipmentId,
               new Date(),
             ],
           ),
@@ -3780,6 +4312,121 @@ describe("commerce persistence foundations", () => {
         foundation,
         foundationProductions,
       );
+      await expectQueryError(
+        client,
+        "active_order_pending_customer_cancellation_refund",
+        async () => {
+          const requestedAt = new Date();
+          await client.query(
+            `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                requested_at, created_at, updated_at)
+             VALUES ($1,$2,$3,1,'CUSTOMER_CANCELLATION','PENDING',$4,$4,$4)`,
+            [
+              fixtures.id("active-order-pending-refund"),
+              foundation.paymentId,
+              "active-order-pending-refund",
+              requestedAt,
+            ],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "payments_refund_status_reconciled",
+               "refund_transactions_payment_status_reconciled",
+               "payments_customer_cancellation_refund_reconciled",
+               "refunds_customer_cancellation_order_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "order_customer_cancellation_refund_lifecycle_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "active_order_partial_customer_cancellation_refund",
+        async () => {
+          const completedAt = new Date();
+          await client.query(
+            `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                provider_refund_id, requested_at, completed_at, created_at, updated_at)
+             VALUES ($1,$2,$3,1,'CUSTOMER_CANCELLATION','SUCCEEDED',$4,$5,$5,$5,$5)`,
+            [
+              fixtures.id("active-order-partial-refund"),
+              foundation.paymentId,
+              "active-order-partial-refund",
+              "provider-active-order-partial-refund",
+              completedAt,
+            ],
+          );
+          await client.query(
+            `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "payments_refund_status_reconciled",
+               "refund_transactions_payment_status_reconciled",
+               "payments_customer_cancellation_refund_reconciled",
+               "refunds_customer_cancellation_order_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "order_customer_cancellation_refund_lifecycle_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "active_order_full_customer_cancellation_refund",
+        async () => {
+          const completedAt = new Date();
+          await client.query(
+            `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                provider_refund_id, requested_at, completed_at, created_at, updated_at)
+             SELECT $1,id,$2,captured_amount_minor,'CUSTOMER_CANCELLATION',
+                    'SUCCEEDED',$3,$4,$4,$4,$4
+             FROM payments WHERE id = $5`,
+            [
+              fixtures.id("active-order-full-refund"),
+              "active-order-full-refund",
+              "provider-active-order-full-refund",
+              completedAt,
+              foundation.paymentId,
+            ],
+          );
+          await client.query(
+            `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "payments_refund_status_reconciled",
+               "refund_transactions_payment_status_reconciled",
+               "payments_customer_cancellation_refund_reconciled",
+               "refunds_customer_cancellation_order_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "order_customer_cancellation_refund_lifecycle_check",
+        },
+      );
+      await cancelOrderBeforeHandoff(client, foundation.orderId);
       await client.query(
         `INSERT INTO refund_transactions (id, payment_id, idempotency_key,
                                          amount_minor, reason, status, created_at, updated_at)
@@ -4256,10 +4903,15 @@ describe("commerce persistence foundations", () => {
         `SET CONSTRAINTS
            "payments_refund_status_reconciled",
            "refund_transactions_payment_status_reconciled",
+           "orders_customer_cancellation_refund_reconciled",
+           "payments_customer_cancellation_refund_reconciled",
+           "refunds_customer_cancellation_order_reconciled",
            "orders_refund_completion_reconciled",
            "orders_post_confirmation_lifecycle_reconciled",
            "order_phases_parent_lifecycle_reconciled",
-           "fulfilment_slots_parent_lifecycle_reconciled" IMMEDIATE`,
+           "fulfilment_slots_parent_lifecycle_reconciled",
+           "fulfilment_slots_shipment_plan_terminal_reconciled",
+           "shipments_fulfilment_slots_terminal_reconciled" IMMEDIATE`,
       );
       await client.query(`SET CONSTRAINTS ALL DEFERRED`);
       expect(

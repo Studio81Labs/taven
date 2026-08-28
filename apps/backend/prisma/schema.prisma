@@ -1387,6 +1387,7 @@ model Shipment {
   orderPhaseId          String         @map("order_phase_id") @db.Uuid
   shipmentPlanId        String         @map("shipment_plan_id") @db.Uuid
   deliveryDestinationId String         @map("delivery_destination_id") @db.Uuid
+  replacesShipmentId    String?        @map("replaces_shipment_id") @db.Uuid
   status                ShipmentStatus @default(PLANNED)
   carrier               String?        @db.VarChar(100)
   providerShipmentId    String?        @unique @map("provider_shipment_id") @db.VarChar(255)
@@ -1402,7 +1403,11 @@ model Shipment {
   orderPhase          OrderPhase          @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
   shipmentPlan        ShipmentPlan        @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
   deliveryDestination DeliveryDestination @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  replacesShipment    Shipment?           @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
+  replacementShipment Shipment?           @relation("ShipmentReplacementLineage")
 
+  @@unique([id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_lineage_scope_key")
+  @@unique([replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_replaces_shipment_id_key")
   @@index([orderId, status])
   @@index([shipmentPlanId, status])
   @@map("shipments")
