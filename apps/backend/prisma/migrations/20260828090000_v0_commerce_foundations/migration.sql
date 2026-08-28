@@ -6279,6 +6279,8 @@ BEGIN
        OR NEW."capture_cutoff_at" IS NOT NULL
        OR (NEW."role" = 'FULL' AND (
            NEW."checkout_capture_expires_at" IS NULL
+           OR NEW."checkout_capture_expires_at" IS DISTINCT FROM
+              NEW."created_at" + interval '60 minutes'
            OR NEW."checkout_capture_expires_at" <= clock_timestamp()
        )) THEN
         RAISE EXCEPTION 'new payment capture intent requires an open authorization window'
@@ -6387,6 +6389,10 @@ BEGIN
               WHERE reservation_set."phase_resource_plan_id" = resource_plan."id"
                 AND reservation_set."node_id" = resource_plan."node_id"
                 AND reservation_set."status" IN ('RESERVED', 'HELD')
+                AND reservation_set."created_at" <=
+                    clock_timestamp() + interval '5 seconds'
+                AND reservation_set."expires_at" =
+                    reservation_set."created_at" + interval '15 minutes'
                 AND reservation_set."expires_at" > clock_timestamp()
           )
           AND NOT EXISTS (
@@ -6491,6 +6497,13 @@ BEGIN
     IF NEW."capture_authorized" IS DISTINCT FROM (NEW."capture_cutoff_at" IS NULL) THEN
         RAISE EXCEPTION 'payment capture authorization and cutoff must change atomically'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+    END IF;
+
+    IF NEW."capture_cutoff_at" IS DISTINCT FROM OLD."capture_cutoff_at"
+       AND NEW."capture_cutoff_at" IS NOT NULL
+       AND NEW."capture_cutoff_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'payment capture cutoff evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_cutoff_evidence_check';
     END IF;
 
     IF NEW."status" IN ('FAILED', 'VOIDED')

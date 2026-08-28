@@ -71,6 +71,10 @@ export type SourceRetention = {
   hold?: "NONE" | "ACTIVE_ORDER" | "ACTIVE_CLAIM" | "LEGAL";
   quoteExpiresAt?: Date;
 };
+export type ReservationTiming = {
+  createdAt: Date;
+  expiresAt: Date;
+};
 export type GeometryBounds = {
   xMicrometers: number;
   yMicrometers: number;
@@ -995,6 +999,9 @@ export class PersistenceFactory {
     providerIntentId:
       string | null = `intent-${this.hash(foundation.paymentId)}`,
     provider = "test",
+    paymentCreatedAt = checkoutCaptureExpiresAt
+      ? new Date(checkoutCaptureExpiresAt.getTime() - 60 * 60 * 1_000)
+      : new Date(),
   ): Promise<void> {
     const schedule = await this.sql.query<{ gross_amount_minor: string }>(
       'SELECT "gross_amount_minor"::text FROM "payment_schedules" WHERE "id" = $1',
@@ -1016,7 +1023,7 @@ export class PersistenceFactory {
         providerIntentId,
         requestedAmountMinor,
         checkoutCaptureExpiresAt,
-        createdAt,
+        paymentCreatedAt,
       ],
     );
   }
@@ -1273,6 +1280,7 @@ export class PersistenceFactory {
     resourceSnapshot: unknown = {},
     jobId: string | null = null,
     reservationExpiresAt = expiresAt,
+    reservationCreatedAt = createdAt,
   ): Promise<void> {
     const topologyIndex = foundation.fulfilmentSlotIds.indexOf(
       planned.fulfilmentSlotId,
@@ -1308,8 +1316,8 @@ export class PersistenceFactory {
         JSON.stringify(resourceSnapshot),
         status,
         reservationExpiresAt,
-        createdAt,
-        createdAt,
+        reservationCreatedAt,
+        reservationCreatedAt,
         foundation.phaseResourcePlanId,
       ],
     );
@@ -1344,6 +1352,7 @@ export class PersistenceFactory {
     ],
     resourceSnapshot: unknown = {},
     sourceRetention: SourceRetention = {},
+    reservationTiming: ReservationTiming = { createdAt, expiresAt },
   ): Promise<{
     foundation: PersistenceFoundation;
     productions: ProductionReservationFixture[];
@@ -1371,13 +1380,21 @@ export class PersistenceFactory {
       );
     }
     await this.createResourcePlan(foundation, productions);
-    await this.createPhaseReservationSet(foundation);
+    await this.createPhaseReservationSet(
+      foundation,
+      reservationTiming.expiresAt,
+      "BUILDING",
+      reservationTiming.createdAt,
+    );
     for (const production of productions) {
       await this.createProductionReservation(
         foundation,
         production,
         "RESERVED",
         resourceSnapshot,
+        null,
+        reservationTiming.expiresAt,
+        reservationTiming.createdAt,
       );
     }
     return { foundation, productions };

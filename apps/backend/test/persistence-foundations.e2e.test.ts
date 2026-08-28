@@ -17,6 +17,14 @@ function factory(client: PoolClient, name: string): PersistenceFactory {
   return new PersistenceFactory(client, `${testScope}:${name}`);
 }
 
+function checkoutReservationTiming(): { createdAt: Date; expiresAt: Date } {
+  const createdAt = new Date();
+  return {
+    createdAt,
+    expiresAt: new Date(createdAt.getTime() + 15 * 60 * 1_000),
+  };
+}
+
 async function inRollbackTransaction<T>(
   name: string,
   work: (client: PoolClient, fixtures: PersistenceFactory) => Promise<T>,
@@ -42,11 +50,13 @@ async function createCompleteSingleReservationGraph(
   foundation: PersistenceFoundation;
   production: ProductionReservationFixture;
 }> {
+  const reservationTiming = checkoutReservationTiming();
   const { foundation, productions } = await fixtures.createReservationGraph(
     name,
     [interval],
     resourceSnapshot,
     sourceRetention,
+    reservationTiming,
   );
   const production = productions[0];
   if (!production) {
@@ -60,9 +70,9 @@ async function createCompleteSingleReservationGraph(
       production.productionReservationId,
       foundation.inventoryId,
       60,
-      testTimes.expiresAt,
-      testTimes.createdAt,
-      testTimes.createdAt,
+      reservationTiming.expiresAt,
+      reservationTiming.createdAt,
+      reservationTiming.createdAt,
     ],
   );
   await client.query(
@@ -75,9 +85,9 @@ async function createCompleteSingleReservationGraph(
       foundation.machineId,
       interval.startsAt,
       interval.endsAt,
-      testTimes.expiresAt,
-      testTimes.createdAt,
-      testTimes.createdAt,
+      reservationTiming.expiresAt,
+      reservationTiming.createdAt,
+      reservationTiming.createdAt,
     ],
   );
   return { foundation, production };
@@ -2250,9 +2260,23 @@ describe("persistence foundations", () => {
           "multi-plate-live",
           intervals,
         );
+        const reservationTiming = checkoutReservationTiming();
         await fixtures.createResourcePlan(foundation, [production]);
-        await fixtures.createPhaseReservationSet(foundation);
-        await fixtures.createProductionReservation(foundation, production);
+        await fixtures.createPhaseReservationSet(
+          foundation,
+          reservationTiming.expiresAt,
+          "BUILDING",
+          reservationTiming.createdAt,
+        );
+        await fixtures.createProductionReservation(
+          foundation,
+          production,
+          "RESERVED",
+          {},
+          null,
+          reservationTiming.expiresAt,
+          reservationTiming.createdAt,
+        );
         await client.query(
           'INSERT INTO "inventory_reservations" ("id", "node_id", "production_reservation_id", "inventory_id", "reserved_milligrams", "expires_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
           [
@@ -2261,9 +2285,9 @@ describe("persistence foundations", () => {
             production.productionReservationId,
             foundation.inventoryId,
             60,
-            testTimes.expiresAt,
-            testTimes.createdAt,
-            testTimes.createdAt,
+            reservationTiming.expiresAt,
+            reservationTiming.createdAt,
+            reservationTiming.createdAt,
           ],
         );
         const capacityReservationIds = intervals.map((interval, index) => {
@@ -2289,9 +2313,9 @@ describe("persistence foundations", () => {
               foundation.machineId,
               capacity.interval.startsAt,
               capacity.interval.endsAt,
-              testTimes.expiresAt,
-              testTimes.createdAt,
-              testTimes.createdAt,
+              reservationTiming.expiresAt,
+              reservationTiming.createdAt,
+              reservationTiming.createdAt,
             ],
           );
         }
@@ -2895,8 +2919,13 @@ describe("persistence foundations", () => {
     try {
       await client.query("BEGIN");
       const fixtures = factory(client, "reserved-child-phase");
+      const reservationTiming = checkoutReservationTiming();
       const { foundation, productions } = await fixtures.createReservationGraph(
         "reserved-child-phase",
+        undefined,
+        undefined,
+        undefined,
+        reservationTiming,
       );
       const production = productions[0];
       if (!production) {
@@ -2913,9 +2942,9 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           60,
-          testTimes.expiresAt,
-          testTimes.createdAt,
-          testTimes.createdAt,
+          reservationTiming.expiresAt,
+          reservationTiming.createdAt,
+          reservationTiming.createdAt,
         ],
       );
       await client.query(
@@ -2928,9 +2957,9 @@ describe("persistence foundations", () => {
           foundation.machineId,
           testTimes.capacityStart,
           testTimes.capacityEnd,
-          testTimes.expiresAt,
-          testTimes.createdAt,
-          testTimes.createdAt,
+          reservationTiming.expiresAt,
+          reservationTiming.createdAt,
+          reservationTiming.createdAt,
         ],
       );
       await client.query(
@@ -3088,8 +3117,13 @@ describe("persistence foundations", () => {
     try {
       await client.query("BEGIN");
       const fixtures = factory(client, "incomplete-held-set");
+      const reservationTiming = checkoutReservationTiming();
       const { foundation, productions } = await fixtures.createReservationGraph(
         "incomplete-held-set",
+        undefined,
+        undefined,
+        undefined,
+        reservationTiming,
       );
       const production = productions[0];
       if (!production) {
@@ -3105,9 +3139,9 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           60,
-          testTimes.expiresAt,
-          testTimes.createdAt,
-          testTimes.createdAt,
+          reservationTiming.expiresAt,
+          reservationTiming.createdAt,
+          reservationTiming.createdAt,
         ],
       );
       await client.query(
@@ -3120,9 +3154,9 @@ describe("persistence foundations", () => {
           foundation.machineId,
           testTimes.capacityStart,
           testTimes.capacityEnd,
-          testTimes.expiresAt,
-          testTimes.createdAt,
-          testTimes.createdAt,
+          reservationTiming.expiresAt,
+          reservationTiming.createdAt,
+          reservationTiming.createdAt,
         ],
       );
       await client.query(
@@ -3160,7 +3194,14 @@ describe("persistence foundations", () => {
     const capacityReservationId = fixtures.id("held-capacity");
     try {
       await client.query("BEGIN");
-      const graph = await fixtures.createReservationGraph("committed-held-set");
+      const reservationTiming = checkoutReservationTiming();
+      const graph = await fixtures.createReservationGraph(
+        "committed-held-set",
+        undefined,
+        undefined,
+        undefined,
+        reservationTiming,
+      );
       foundation = graph.foundation;
       production = graph.productions[0] ?? null;
       if (!production) {
@@ -3176,9 +3217,9 @@ describe("persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           60,
-          testTimes.expiresAt,
-          testTimes.createdAt,
-          testTimes.createdAt,
+          reservationTiming.expiresAt,
+          reservationTiming.createdAt,
+          reservationTiming.createdAt,
         ],
       );
       await client.query(
@@ -3191,9 +3232,9 @@ describe("persistence foundations", () => {
           foundation.machineId,
           testTimes.capacityStart,
           testTimes.capacityEnd,
-          testTimes.expiresAt,
-          testTimes.createdAt,
-          testTimes.createdAt,
+          reservationTiming.expiresAt,
+          reservationTiming.createdAt,
+          reservationTiming.createdAt,
         ],
       );
       await client.query(
@@ -3275,9 +3316,13 @@ describe("persistence foundations", () => {
     let heldCommitted = false;
     try {
       await client.query("BEGIN");
+      const reservationTiming = checkoutReservationTiming();
       graph = await fixtures.createReservationGraph(
         "mixed-held-groups",
         intervals,
+        undefined,
+        undefined,
+        reservationTiming,
       );
       await client.query(
         'UPDATE "inventories" SET "remaining_milligrams" = $2 WHERE "id" = $1',
@@ -3297,9 +3342,9 @@ describe("persistence foundations", () => {
             production.productionReservationId,
             graph.foundation.inventoryId,
             60,
-            testTimes.expiresAt,
-            testTimes.createdAt,
-            testTimes.createdAt,
+            reservationTiming.expiresAt,
+            reservationTiming.createdAt,
+            reservationTiming.createdAt,
           ],
         );
         await client.query(
@@ -3312,9 +3357,9 @@ describe("persistence foundations", () => {
             graph.foundation.machineId,
             interval.startsAt,
             interval.endsAt,
-            testTimes.expiresAt,
-            testTimes.createdAt,
-            testTimes.createdAt,
+            reservationTiming.expiresAt,
+            reservationTiming.createdAt,
+            reservationTiming.createdAt,
           ],
         );
       }
@@ -3683,14 +3728,30 @@ describe("persistence foundations", () => {
         terminalProduction,
         liveProduction,
       ]);
-      await fixtures.createPhaseReservationSet(foundation);
+      const reservationTiming = checkoutReservationTiming();
+      await fixtures.createPhaseReservationSet(
+        foundation,
+        reservationTiming.expiresAt,
+        "BUILDING",
+        reservationTiming.createdAt,
+      );
       await fixtures.createProductionReservation(
         foundation,
         terminalProduction,
+        "RESERVED",
+        {},
+        null,
+        reservationTiming.expiresAt,
+        reservationTiming.createdAt,
       );
       await fixtures.createProductionReservation(
         activeLiveFoundation,
         liveProduction,
+        "RESERVED",
+        {},
+        null,
+        reservationTiming.expiresAt,
+        reservationTiming.createdAt,
       );
 
       for (const [resource, production, capacityId] of [
@@ -3705,9 +3766,9 @@ describe("persistence foundations", () => {
             production.productionReservationId,
             resource.inventoryId,
             60,
-            testTimes.expiresAt,
-            testTimes.createdAt,
-            testTimes.createdAt,
+            reservationTiming.expiresAt,
+            reservationTiming.createdAt,
+            reservationTiming.createdAt,
           ],
         );
         await client.query(
@@ -3720,9 +3781,9 @@ describe("persistence foundations", () => {
             resource.machineId,
             testTimes.capacityStart,
             testTimes.capacityEnd,
-            testTimes.expiresAt,
-            testTimes.createdAt,
-            testTimes.createdAt,
+            reservationTiming.expiresAt,
+            reservationTiming.createdAt,
+            reservationTiming.createdAt,
           ],
         );
       }

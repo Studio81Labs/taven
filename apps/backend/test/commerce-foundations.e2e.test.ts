@@ -97,9 +97,12 @@ async function createCurrentPlan(
   client: PoolClient,
   fixtures: PersistenceFactory,
   foundation: PersistenceFoundation,
-  reservationExpiresAt = testTimes.expiresAt,
+  reservationExpiresAt = new Date(Date.now() + 15 * 60 * 1_000),
   planScope = foundation.orderId,
   capacityOffsetHours = 0,
+  reservationCreatedAt = new Date(
+    reservationExpiresAt.getTime() - 15 * 60 * 1_000,
+  ),
 ): Promise<
   Array<
     ProductionReservationFixture & {
@@ -140,7 +143,12 @@ async function createCurrentPlan(
     `UPDATE inventories SET remaining_milligrams = 1000 WHERE id = $1`,
     [foundation.inventoryId],
   );
-  await fixtures.createPhaseReservationSet(foundation, reservationExpiresAt);
+  await fixtures.createPhaseReservationSet(
+    foundation,
+    reservationExpiresAt,
+    "BUILDING",
+    reservationCreatedAt,
+  );
   for (const [index, production] of productions.entries()) {
     await fixtures.createProductionReservation(
       foundation,
@@ -149,6 +157,7 @@ async function createCurrentPlan(
       {},
       null,
       reservationExpiresAt,
+      reservationCreatedAt,
     );
     await client.query(
       `INSERT INTO inventory_reservations (id, node_id, production_reservation_id,
@@ -162,7 +171,7 @@ async function createCurrentPlan(
         foundation.inventoryId,
         production.requiredMaterialMilligrams,
         reservationExpiresAt,
-        testTimes.createdAt,
+        reservationCreatedAt,
       ],
     );
     await client.query(
@@ -179,7 +188,7 @@ async function createCurrentPlan(
         production.startsAt,
         production.endsAt,
         reservationExpiresAt,
-        testTimes.createdAt,
+        reservationCreatedAt,
       ],
     );
   }
@@ -2462,7 +2471,7 @@ describe("commerce persistence foundations", () => {
           client,
           fixtures,
           currentFoundation,
-          testTimes.expiresAt,
+          undefined,
           complete.bindingId,
           4,
         );
@@ -4707,6 +4716,9 @@ describe("commerce persistence foundations", () => {
         "created-payment-provider-retry",
       );
       const replacementCreatedAt = new Date();
+      const replacementExpiresAt = new Date(
+        replacementCreatedAt.getTime() + 60 * 60 * 1_000,
+      );
       await client.query(
         `INSERT INTO payments
            (id, order_id, price_snapshot_id, order_price_binding_id,
@@ -4715,11 +4727,12 @@ describe("commerce persistence foundations", () => {
             capture_cutoff_at, checkout_capture_expires_at, created_at, updated_at)
          SELECT $1,order_id,price_snapshot_id,order_price_binding_id,
                 payment_schedule_id,role,provider,$2,requested_amount_minor,
-                currency,'PENDING',true,NULL,checkout_capture_expires_at,$3,$3
-         FROM payments WHERE id = $4`,
+                currency,'PENDING',true,NULL,$3,$4,$4
+         FROM payments WHERE id = $5`,
         [
           replacementPaymentId,
           "created-payment-provider-retry-intent",
+          replacementExpiresAt,
           replacementCreatedAt,
           createdFoundation.paymentId,
         ],
@@ -5445,6 +5458,22 @@ describe("commerce persistence foundations", () => {
           ),
         { code: "23514", constraint: "payment_capture_window_check" },
       );
+      await expectQueryError(
+        client,
+        "future_capture_cutoff",
+        () =>
+          client.query(
+            `UPDATE payments
+             SET status = 'VOIDED', capture_authorized = false,
+                 capture_cutoff_at = clock_timestamp() + interval '1 hour'
+             WHERE id = $1`,
+            [unauthorized.paymentId],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_capture_cutoff_evidence_check",
+        },
+      );
       await client.query(
         `UPDATE payments
          SET capture_authorized = false, capture_cutoff_at = $2
@@ -5464,7 +5493,7 @@ describe("commerce persistence foundations", () => {
         `UPDATE payments
          SET capture_authorized = false, capture_cutoff_at = $2
          WHERE id = $1`,
-        [expired.paymentId, new Date(Date.now() - 1_000)],
+        [expired.paymentId, new Date()],
       );
       await expectQueryError(
         client,
@@ -5517,6 +5546,48 @@ describe("commerce persistence foundations", () => {
         { code: "23514", constraint: "payment_capture_window_check" },
       );
 
+      const extended = await fixtures.createFoundation(
+        "extended-capture-expiry",
+      );
+      await createCurrentPlan(client, fixtures, extended);
+      const extendedCreatedAt = new Date();
+      await expectQueryError(
+        client,
+        "create_extended_checkout_capture",
+        () =>
+          fixtures.finalizePayment(
+            extended,
+            new Date(extendedCreatedAt.getTime() + 61 * 60 * 1_000),
+            "extended-capture-intent",
+            "test",
+            extendedCreatedAt,
+          ),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+
+      const overlongReservation = await fixtures.createFoundation(
+        "overlong-payment-reservation",
+      );
+      const reservationCreatedAt = new Date();
+      await createCurrentPlan(
+        client,
+        fixtures,
+        overlongReservation,
+        new Date(reservationCreatedAt.getTime() + 16 * 60 * 1_000),
+        overlongReservation.orderId,
+        0,
+        reservationCreatedAt,
+      );
+      await expectQueryError(
+        client,
+        "create_payment_with_overlong_reservation",
+        () => fixtures.finalizePayment(overlongReservation),
+        {
+          code: "23514",
+          constraint: "payment_fulfilment_topology_check",
+        },
+      );
+
       const delayed = await fixtures.createFoundation(
         "wall-clock-capture-expiry",
       );
@@ -5560,9 +5631,26 @@ describe("commerce persistence foundations", () => {
         foundation,
         "uncaptured-production-job",
       );
+      const reservationCreatedAt = new Date();
+      const reservationExpiresAt = new Date(
+        reservationCreatedAt.getTime() + 15 * 60 * 1_000,
+      );
       await fixtures.createResourcePlan(foundation, [production]);
-      await fixtures.createPhaseReservationSet(foundation);
-      await fixtures.createProductionReservation(foundation, production);
+      await fixtures.createPhaseReservationSet(
+        foundation,
+        reservationExpiresAt,
+        "BUILDING",
+        reservationCreatedAt,
+      );
+      await fixtures.createProductionReservation(
+        foundation,
+        production,
+        "RESERVED",
+        {},
+        null,
+        reservationExpiresAt,
+        reservationCreatedAt,
+      );
       await client.query(
         `INSERT INTO inventory_reservations
            (id, node_id, production_reservation_id, inventory_id,
@@ -5574,8 +5662,8 @@ describe("commerce persistence foundations", () => {
           production.productionReservationId,
           foundation.inventoryId,
           production.requiredMaterialMilligrams,
-          testTimes.expiresAt,
-          testTimes.createdAt,
+          reservationExpiresAt,
+          reservationCreatedAt,
         ],
       );
       const capacityReservationId = fixtures.id(
@@ -5595,8 +5683,8 @@ describe("commerce persistence foundations", () => {
           foundation.machineId,
           testTimes.capacityStart,
           testTimes.capacityEnd,
-          testTimes.expiresAt,
-          testTimes.createdAt,
+          reservationExpiresAt,
+          reservationCreatedAt,
         ],
       );
       await client.query(
@@ -8587,8 +8675,9 @@ describe("commerce persistence foundations", () => {
       await expectQueryError(
         client,
         "cross_order_payment",
-        () =>
-          client.query(
+        () => {
+          const crossOrderPaymentCreatedAt = new Date();
+          return client.query(
             `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
                                   payment_schedule_id, role, provider, requested_amount_minor,
                                   currency, checkout_capture_expires_at,
@@ -8600,10 +8689,11 @@ describe("commerce persistence foundations", () => {
               other.priceSnapshotId,
               other.orderPriceBindingId,
               other.paymentScheduleId,
-              new Date(Date.now() + 60 * 60 * 1_000),
-              new Date(),
+              new Date(crossOrderPaymentCreatedAt.getTime() + 60 * 60 * 1_000),
+              crossOrderPaymentCreatedAt,
             ],
-          ),
+          );
+        },
         { code: "23514", constraint: "payment_fulfilment_topology_check" },
       );
       await expectQueryError(
@@ -8639,8 +8729,9 @@ describe("commerce persistence foundations", () => {
       await expectQueryError(
         client,
         "duplicate_provider",
-        () =>
-          client.query(
+        () => {
+          const duplicatePaymentCreatedAt = new Date();
+          return client.query(
             `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
                                   payment_schedule_id, role, provider, provider_intent_id,
                                   requested_amount_minor, currency,
@@ -8654,10 +8745,11 @@ describe("commerce persistence foundations", () => {
               foundation.paymentScheduleId,
               providerIntentId,
               capturedAmount,
-              new Date(Date.now() + 60 * 60 * 1_000),
-              new Date(),
+              new Date(duplicatePaymentCreatedAt.getTime() + 60 * 60 * 1_000),
+              duplicatePaymentCreatedAt,
             ],
-          ),
+          );
+        },
         { code: "23505" },
       );
       const remainingRefundAmount = Number(capturedAmount) - 600;
