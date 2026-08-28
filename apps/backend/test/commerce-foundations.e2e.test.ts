@@ -3965,6 +3965,51 @@ describe("commerce persistence foundations", () => {
         );
 
       const uninstantiated = await createWithoutShipments("no-shipment");
+      const existingAllocation = (
+        await client.query<{
+          fulfilment_slot_id: string;
+          order_price_binding_id: string;
+          shipment_plan_id: string;
+        }>(
+          `SELECT shipment_plan_id, order_price_binding_id, fulfilment_slot_id
+           FROM shipment_plan_fulfilment_slots
+           WHERE shipment_plan_id = $1`,
+          [uninstantiated.shipmentPlanId],
+        )
+      ).rows[0];
+      if (!existingAllocation) {
+        throw new Error("quoted ShipmentPlan allocation fixture is missing");
+      }
+      await expectQueryError(
+        client,
+        "reinsert_allocation_after_draft",
+        async () => {
+          await client.query(`SET LOCAL session_replication_role = 'replica'`);
+          await client.query(
+            `DELETE FROM shipment_plan_fulfilment_slots
+             WHERE shipment_plan_id = $1 AND fulfilment_slot_id = $2`,
+            [
+              existingAllocation.shipment_plan_id,
+              existingAllocation.fulfilment_slot_id,
+            ],
+          );
+          await client.query(`SET LOCAL session_replication_role = 'origin'`);
+          await client.query(
+            `INSERT INTO shipment_plan_fulfilment_slots
+               (shipment_plan_id, order_price_binding_id, fulfilment_slot_id)
+             VALUES ($1,$2,$3)`,
+            [
+              existingAllocation.shipment_plan_id,
+              existingAllocation.order_price_binding_id,
+              existingAllocation.fulfilment_slot_id,
+            ],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_plan_slot_order_status_guard",
+        },
+      );
       await createCurrentPlanAndPayment(client, fixtures, uninstantiated);
       await cancelOrderBeforeHandoff(client, uninstantiated.orderId);
 

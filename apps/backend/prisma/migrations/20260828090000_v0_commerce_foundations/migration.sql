@@ -6104,6 +6104,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     target_order_id uuid;
+    target_order_status "order_status";
 BEGIN
     SELECT plan."order_id"
     INTO target_order_id
@@ -6112,6 +6113,17 @@ BEGIN
 
     IF target_order_id IS NOT NULL THEN
         PERFORM taven_lock_automatic_order_session(target_order_id);
+
+        SELECT target_order."status"
+        INTO target_order_status
+        FROM "orders" target_order
+        WHERE target_order."id" = target_order_id
+        FOR UPDATE;
+
+        IF target_order_status IS DISTINCT FROM 'DRAFT'::"order_status" THEN
+            RAISE EXCEPTION 'shipment plan allocations can be added only while the order is draft'
+                USING ERRCODE = '23514', CONSTRAINT = 'shipment_plan_slot_order_status_guard';
+        END IF;
     END IF;
 
     IF NOT EXISTS (
