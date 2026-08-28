@@ -866,7 +866,12 @@ export class PersistenceFactory {
     }
   }
 
-  async finalizePayment(foundation: PersistenceFoundation): Promise<void> {
+  async finalizePayment(
+    foundation: PersistenceFoundation,
+    checkoutCaptureExpiresAt: Date | null = new Date(
+      Date.now() + 60 * 60 * 1_000,
+    ),
+  ): Promise<void> {
     const schedule = await this.sql.query<{ gross_amount_minor: string }>(
       'SELECT "gross_amount_minor"::text FROM "payment_schedules" WHERE "id" = $1',
       [foundation.paymentScheduleId],
@@ -876,7 +881,7 @@ export class PersistenceFactory {
       throw new Error("commerce topology payment schedule is missing");
     }
     await this.sql.query(
-      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, provider_intent_id, requested_amount_minor, currency, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR','PENDING',$8,$8)",
+      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, provider_intent_id, requested_amount_minor, currency, status, checkout_capture_expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR','PENDING',$8,$9,$9)",
       [
         foundation.paymentId,
         foundation.orderId,
@@ -885,6 +890,7 @@ export class PersistenceFactory {
         foundation.paymentScheduleId,
         `intent-${this.hash(foundation.paymentId)}`,
         requestedAmountMinor,
+        checkoutCaptureExpiresAt,
         createdAt,
       ],
     );

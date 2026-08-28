@@ -23,7 +23,7 @@ CREATE TYPE "order_phase_kind" AS ENUM ('SINGLE');
 CREATE TYPE "order_phase_status" AS ENUM ('QUOTED', 'ACTIVE', 'IN_PRODUCTION', 'QC_PASSED', 'SHIPPED', 'DELIVERED', 'COMPLETED', 'CANCELLED', 'CANCELLED_REFUNDED');
 
 -- CreateEnum
-CREATE TYPE "fulfilment_slot_outcome" AS ENUM ('PENDING', 'DELIVERED', 'CANCELLED_REFUNDED');
+CREATE TYPE "fulfilment_slot_outcome" AS ENUM ('PENDING', 'DELIVERED', 'CANCELLED', 'CANCELLED_REFUNDED');
 
 -- CreateEnum
 CREATE TYPE "shipment_status" AS ENUM ('PLANNED', 'LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED');
@@ -358,6 +358,7 @@ CREATE TABLE "payments" (
     "status" "payment_status" NOT NULL DEFAULT 'CREATED',
     "capture_authorized" BOOLEAN NOT NULL DEFAULT true,
     "capture_cutoff_at" TIMESTAMPTZ(3),
+    "checkout_capture_expires_at" TIMESTAMPTZ(3),
     "captured_at" TIMESTAMPTZ(3),
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL,
@@ -461,6 +462,7 @@ CREATE UNIQUE INDEX "payments_provider_capture_id_key" ON "payments"("provider_c
 CREATE UNIQUE INDEX "payments_one_nonfailed_attempt_per_schedule_key" ON "payments"("payment_schedule_id") WHERE "status" <> 'FAILED';
 CREATE INDEX "payments_order_id_status_idx" ON "payments"("order_id", "status");
 CREATE INDEX "payments_capture_cutoff_at_status_idx" ON "payments"("capture_cutoff_at", "status");
+CREATE INDEX "payments_checkout_capture_expires_at_status_idx" ON "payments"("checkout_capture_expires_at", "status");
 CREATE UNIQUE INDEX "refund_transactions_provider_refund_id_key" ON "refund_transactions"("provider_refund_id");
 CREATE UNIQUE INDEX "refund_transactions_payment_id_idempotency_key_key" ON "refund_transactions"("payment_id", "idempotency_key");
 CREATE INDEX "refund_transactions_payment_id_status_idx" ON "refund_transactions"("payment_id", "status");
@@ -597,7 +599,7 @@ ALTER TABLE "shipment_plans" ADD CONSTRAINT "shipment_plans_values_check" CHECK 
 ALTER TABLE "fulfilment_slots" ADD CONSTRAINT "fulfilment_slots_values_check" CHECK ("quantity_ordinal" >= 1 AND "settlement_amount_minor" >= 0);
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_timestamps_check" CHECK (("label_created_at" IS NULL OR "label_created_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at") AND ("delivered_at" IS NULL OR "delivered_at" >= "created_at") AND ("cancelled_at" IS NULL OR "cancelled_at" >= "created_at"));
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (("accepted_at" IS NULL OR "accepted_at" >= "created_at") AND ("printing_at" IS NULL OR "printing_at" >= "created_at") AND ("qc_approved_at" IS NULL OR "qc_approved_at" >= "created_at") AND ("packed_at" IS NULL OR "packed_at" >= "created_at") AND ("handed_over_at" IS NULL OR "handed_over_at" >= "created_at"));
-ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
+ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
     (
         "status" IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED')
@@ -1857,11 +1859,50 @@ BEGIN
     WHERE "id" = target_order_id
     FOR UPDATE;
 
-    IF target_status IS NULL OR target_status IN ('DRAFT', 'QUOTED') THEN
+    IF target_status IS NULL THEN
         RETURN NULL;
     END IF;
 
-    IF target_status = 'CONFIRMED' THEN
+    IF target_status IN ('DRAFT', 'QUOTED') THEN
+        IF EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND (
+                  phase."status" <> 'QUOTED'
+                  OR phase."activated_at" IS NOT NULL
+                  OR phase."qc_passed_at" IS NOT NULL
+                  OR phase."shipped_at" IS NOT NULL
+                  OR phase."delivered_at" IS NOT NULL
+                  OR phase."completed_at" IS NOT NULL
+                  OR phase."cancelled_at" IS NOT NULL
+              )
+        ) OR EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND (
+                  "status" <> 'PLANNED'
+                  OR "carrier" IS NOT NULL
+                  OR "provider_shipment_id" IS NOT NULL
+                  OR "tracking_code" IS NOT NULL
+                  OR "label_created_at" IS NOT NULL
+                  OR "handed_over_at" IS NOT NULL
+                  OR "delivered_at" IS NOT NULL
+                  OR "cancelled_at" IS NOT NULL
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
+        ) THEN
+            RAISE EXCEPTION 'pre-confirmation order requires only quoted phase and initial fulfilment facts'
+                USING ERRCODE = '23514', CONSTRAINT = 'pre_confirmation_fulfilment_state_check';
+        END IF;
+    ELSIF target_status = 'CONFIRMED' THEN
         IF NOT EXISTS (
             SELECT 1
             FROM "order_phases" phase
@@ -1876,8 +1917,18 @@ BEGIN
             FROM "jobs"
             WHERE "order_id" = target_order_id
               AND "status" NOT IN ('CREATED', 'ACCEPTED')
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND "status" <> 'PLANNED'
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
         ) THEN
-            RAISE EXCEPTION 'confirmed order requires its active phase and pre-production Jobs'
+            RAISE EXCEPTION 'confirmed order requires its active phase and initial pre-production fulfilment facts'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
         END IF;
     ELSIF target_status = 'IN_PRODUCTION' THEN
@@ -2056,8 +2107,13 @@ BEGIN
             FROM "shipments"
             WHERE "order_id" = target_order_id
               AND ("status" <> 'CANCELLED' OR "cancelled_at" IS NULL)
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'CANCELLED'
         ) THEN
-            RAISE EXCEPTION 'cancelled order requires its complete pre-handoff cancellation aggregate'
+            RAISE EXCEPTION 'cancelled order requires terminal phase, Jobs, Shipments, and slots'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
         END IF;
     ELSIF target_status = 'REFUNDED' THEN
@@ -2177,6 +2233,47 @@ AFTER INSERT OR UPDATE OF "status" ON "phase_reservation_sets"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION taven_reconcile_cancelled_order_reservation_terminal();
+
+CREATE FUNCTION taven_reconcile_quoted_order_cancellation_payments()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = NEW."id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "payments"
+    WHERE "order_id" = NEW."id"
+    ORDER BY "id"
+    FOR UPDATE;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "payments"
+        WHERE "order_id" = NEW."id"
+          AND (
+              "status" NOT IN ('FAILED', 'VOIDED', 'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED')
+              OR "capture_authorized"
+              OR "capture_cutoff_at" IS NULL
+          )
+    ) THEN
+        RAISE EXCEPTION 'quoted order cancellation requires every payment intent to be closed'
+            USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_payment_cancellation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "orders_quoted_cancellation_payments_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" = 'QUOTED' AND NEW."status" = 'CANCELLED')
+EXECUTE FUNCTION taven_reconcile_quoted_order_cancellation_payments();
 
 CREATE FUNCTION taven_validate_order_price_binding()
 RETURNS trigger
@@ -3538,8 +3635,10 @@ BEGIN
 
     IF NEW."outcome" IS DISTINCT FROM OLD."outcome"
        AND NOT (
-           OLD."outcome" = 'PENDING'
-           AND NEW."outcome" IN ('DELIVERED', 'CANCELLED_REFUNDED')
+           (OLD."outcome" = 'PENDING'
+            AND NEW."outcome" IN ('DELIVERED', 'CANCELLED', 'CANCELLED_REFUNDED'))
+           OR (OLD."outcome" = 'CANCELLED'
+               AND NEW."outcome" = 'CANCELLED_REFUNDED')
        ) THEN
         RAISE EXCEPTION 'fulfilment slot outcome is terminal once recorded'
             USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_outcome_transition_check';
@@ -3725,7 +3824,12 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_initial_status_check';
     END IF;
 
-    IF NOT NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NOT NULL THEN
+    IF NOT NEW."capture_authorized"
+       OR NEW."capture_cutoff_at" IS NOT NULL
+       OR (NEW."role" = 'FULL' AND (
+           NEW."checkout_capture_expires_at" IS NULL
+           OR NEW."checkout_capture_expires_at" <= clock_timestamp()
+       )) THEN
         RAISE EXCEPTION 'new payment capture intent requires an open authorization window'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
     END IF;
@@ -3897,7 +4001,7 @@ BEGIN
 
     IF NEW."status" IS DISTINCT FROM OLD."status"
        AND NOT (
-           (OLD."status" = 'CREATED' AND NEW."status" = 'PENDING')
+           (OLD."status" = 'CREATED' AND NEW."status" IN ('PENDING', 'VOIDED'))
            OR (OLD."status" = 'PENDING' AND NEW."status" IN ('CAPTURED', 'FAILED', 'VOIDED', 'REFUND_PENDING'))
            OR (OLD."status" = 'CAPTURED' AND NEW."status" = 'REFUND_PENDING')
            OR (OLD."status" = 'VOIDED' AND NEW."status" = 'REFUND_PENDING')
@@ -3915,7 +4019,12 @@ BEGIN
         WHERE "id" = NEW."order_id"
         FOR UPDATE;
 
-        IF NOT NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NOT NULL THEN
+        IF NOT NEW."capture_authorized"
+           OR NEW."capture_cutoff_at" IS NOT NULL
+           OR (NEW."role" = 'FULL' AND (
+               NEW."checkout_capture_expires_at" IS NULL
+               OR NEW."checkout_capture_expires_at" <= clock_timestamp()
+           )) THEN
             RAISE EXCEPTION 'ordinary payment capture requires an open authorization window'
                 USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
         END IF;
@@ -3928,6 +4037,12 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
     END IF;
 
+    IF NEW."status" = 'VOIDED'
+       AND (NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NULL) THEN
+        RAISE EXCEPTION 'voided payment requires a closed authorization window'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+    END IF;
+
     IF NEW."id" IS DISTINCT FROM OLD."id"
        OR NEW."order_id" IS DISTINCT FROM OLD."order_id"
        OR NEW."price_snapshot_id" IS DISTINCT FROM OLD."price_snapshot_id"
@@ -3937,6 +4052,7 @@ BEGIN
        OR NEW."provider" IS DISTINCT FROM OLD."provider"
        OR NEW."requested_amount_minor" IS DISTINCT FROM OLD."requested_amount_minor"
        OR NEW."currency" IS DISTINCT FROM OLD."currency"
+       OR NEW."checkout_capture_expires_at" IS DISTINCT FROM OLD."checkout_capture_expires_at"
        OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
        OR (
            OLD."captured_amount_minor" IS NOT NULL

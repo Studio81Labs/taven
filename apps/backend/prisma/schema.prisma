@@ -252,6 +252,7 @@ enum OrderPhaseStatus {
 enum FulfilmentSlotOutcome {
   PENDING
   DELIVERED
+  CANCELLED
   CANCELLED_REFUNDED
 
   @@map("fulfilment_slot_outcome")
@@ -1438,24 +1439,25 @@ model Job {
 }
 
 model Payment {
-  id                   String        @id @default(uuid()) @db.Uuid
-  orderId              String        @map("order_id") @db.Uuid
-  priceSnapshotId      String        @map("price_snapshot_id") @db.Uuid
-  orderPriceBindingId  String        @map("order_price_binding_id") @db.Uuid
-  paymentScheduleId    String        @map("payment_schedule_id") @db.Uuid
-  role                 PaymentRole
-  provider             String        @db.VarChar(100)
-  providerIntentId     String?       @unique @map("provider_intent_id") @db.VarChar(255)
-  providerCaptureId    String?       @unique @map("provider_capture_id") @db.VarChar(255)
-  requestedAmountMinor BigInt        @map("requested_amount_minor")
-  capturedAmountMinor  BigInt?       @map("captured_amount_minor")
-  currency             String        @db.Char(3)
-  status               PaymentStatus @default(CREATED)
-  captureAuthorized    Boolean       @default(true) @map("capture_authorized")
-  captureCutoffAt      DateTime?     @map("capture_cutoff_at") @db.Timestamptz(3)
-  capturedAt           DateTime?     @map("captured_at") @db.Timestamptz(3)
-  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                       String        @id @default(uuid()) @db.Uuid
+  orderId                  String        @map("order_id") @db.Uuid
+  priceSnapshotId          String        @map("price_snapshot_id") @db.Uuid
+  orderPriceBindingId      String        @map("order_price_binding_id") @db.Uuid
+  paymentScheduleId        String        @map("payment_schedule_id") @db.Uuid
+  role                     PaymentRole
+  provider                 String        @db.VarChar(100)
+  providerIntentId         String?       @unique @map("provider_intent_id") @db.VarChar(255)
+  providerCaptureId        String?       @unique @map("provider_capture_id") @db.VarChar(255)
+  requestedAmountMinor     BigInt        @map("requested_amount_minor")
+  capturedAmountMinor      BigInt?       @map("captured_amount_minor")
+  currency                 String        @db.Char(3)
+  status                   PaymentStatus @default(CREATED)
+  captureAuthorized        Boolean       @default(true) @map("capture_authorized")
+  captureCutoffAt          DateTime?     @map("capture_cutoff_at") @db.Timestamptz(3)
+  checkoutCaptureExpiresAt DateTime?     @map("checkout_capture_expires_at") @db.Timestamptz(3)
+  capturedAt               DateTime?     @map("captured_at") @db.Timestamptz(3)
+  createdAt                DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   orderPriceBinding OrderPriceBinding   @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
   priceSnapshot     PriceSnapshot       @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
@@ -1465,6 +1467,7 @@ model Payment {
 
   @@index([orderId, status])
   @@index([captureCutoffAt, status])
+  @@index([checkoutCaptureExpiresAt, status])
   @@map("payments")
 }
 

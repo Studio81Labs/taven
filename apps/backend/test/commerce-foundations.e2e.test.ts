@@ -229,6 +229,7 @@ async function forceOrderLifecycleConstraints(
        "orders_post_confirmation_lifecycle_reconciled",
        "orders_cancelled_reservations_reconciled",
        "phase_reservation_sets_cancelled_order_reconciled",
+       "orders_quoted_cancellation_payments_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
        "shipments_parent_lifecycle_reconciled",
@@ -239,6 +240,7 @@ async function forceOrderLifecycleConstraints(
        "orders_post_confirmation_lifecycle_reconciled",
        "orders_cancelled_reservations_reconciled",
        "phase_reservation_sets_cancelled_order_reconciled",
+       "orders_quoted_cancellation_payments_reconciled",
        "order_phases_parent_lifecycle_reconciled",
        "jobs_parent_lifecycle_reconciled",
        "shipments_parent_lifecycle_reconciled",
@@ -415,8 +417,26 @@ async function advanceOrderLifecycleStep(
 async function cancelOrderBeforeHandoff(
   client: PoolClient,
   orderId: string,
+  closePayments = true,
+  closeSlots = true,
 ): Promise<void> {
   const cancelledAt = new Date();
+  if (closePayments) {
+    await client.query(
+      `UPDATE payments
+       SET status = CASE
+             WHEN status IN ('CREATED', 'PENDING') THEN 'VOIDED'::payment_status
+             ELSE status
+           END,
+           capture_authorized = false,
+           capture_cutoff_at = coalesce(capture_cutoff_at, $2),
+           updated_at = $2
+       WHERE order_id = $1
+         AND captured_amount_minor IS NULL
+         AND status IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED')`,
+      [orderId, cancelledAt],
+    );
+  }
   await client.query(
     `UPDATE inventory_reservations inventory_reservation
      SET status = 'RELEASED', updated_at = $2
@@ -481,6 +501,14 @@ async function cancelOrderBeforeHandoff(
      WHERE order_id = $1`,
     [orderId, cancelledAt],
   );
+  if (closeSlots) {
+    await client.query(
+      `UPDATE fulfilment_slots
+       SET outcome = 'CANCELLED', updated_at = $2
+       WHERE order_id = $1 AND outcome = 'PENDING'`,
+      [orderId, cancelledAt],
+    );
+  }
   await client.query(
     `UPDATE order_phases
      SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
@@ -1711,6 +1739,174 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("keeps pre-confirmation fulfilment facts in their initial states", async () => {
+    await rollback("pre-confirmation-fulfilment", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "pre-confirmation-fulfilment",
+      );
+      const changedAt = new Date();
+
+      await expectQueryError(
+        client,
+        "quoted_shipment_label",
+        async () => {
+          await client.query(
+            `UPDATE shipments
+             SET status = 'LABEL_CREATED', carrier = 'test-carrier',
+                 provider_shipment_id = $2, label_created_at = $3,
+                 updated_at = $3
+             WHERE order_id = $1`,
+            [foundation.orderId, "premature-shipment-label", changedAt],
+          );
+          await client.query(
+            `SET CONSTRAINTS "shipments_parent_lifecycle_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "pre_confirmation_fulfilment_state_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "quoted_slot_delivery",
+        async () => {
+          await client.query(
+            `UPDATE fulfilment_slots
+             SET outcome = 'DELIVERED', updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, changedAt],
+          );
+          await client.query(
+            `SET CONSTRAINTS "fulfilment_slots_parent_lifecycle_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "pre_confirmation_fulfilment_state_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "capture_with_premature_shipment_fact",
+        async () => {
+          const productions = await createCurrentPlanAndPayment(
+            client,
+            fixtures,
+            foundation,
+          );
+          await client.query(
+            `UPDATE shipments
+             SET status = 'LABEL_CREATED', carrier = 'test-carrier',
+                 provider_shipment_id = $2, label_created_at = $3,
+                 updated_at = $3
+             WHERE order_id = $1`,
+            [foundation.orderId, "pre-capture-shipment-label", changedAt],
+          );
+          await activateCurrentPlan(client, fixtures, foundation, productions);
+          await forceOrderLifecycleConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "order_post_confirmation_lifecycle_check",
+        },
+      );
+    });
+  });
+
+  it("closes every checkout payment before cancelling a quoted order", async () => {
+    await rollback("quoted-payment-cancellation", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "quoted-payment-cancellation",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, foundation);
+
+      await expectQueryError(
+        client,
+        "cancel_with_open_payment",
+        () => cancelOrderBeforeHandoff(client, foundation.orderId, false),
+        {
+          code: "23514",
+          constraint: "quoted_order_payment_cancellation_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "cancel_with_partial_payment_close",
+        async () => {
+          await client.query(
+            `UPDATE payments
+             SET status = 'FAILED', capture_authorized = false
+             WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await cancelOrderBeforeHandoff(client, foundation.orderId, false);
+        },
+        {
+          code: "23514",
+          constraint: "quoted_order_payment_cancellation_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "cancel_with_pending_fulfilment_slots",
+        async () => {
+          await client.query(
+            `UPDATE payments
+             SET status = 'VOIDED', capture_authorized = false,
+                 capture_cutoff_at = $2
+             WHERE id = $1`,
+            [foundation.paymentId, new Date()],
+          );
+          await cancelOrderBeforeHandoff(
+            client,
+            foundation.orderId,
+            false,
+            false,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "order_post_confirmation_lifecycle_check",
+        },
+      );
+
+      await cancelOrderBeforeHandoff(client, foundation.orderId);
+      expect(
+        (
+          await client.query<{
+            capture_authorized: boolean;
+            capture_cutoff_at: Date;
+            status: string;
+          }>(
+            `SELECT status::text, capture_authorized, capture_cutoff_at
+             FROM payments WHERE id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          status: "VOIDED",
+          capture_authorized: false,
+          capture_cutoff_at: expect.any(Date),
+        },
+      ]);
+      expect(
+        (
+          await client.query<{ outcome: string }>(
+            `SELECT outcome::text FROM fulfilment_slots
+             WHERE order_id = $1 ORDER BY id`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([{ outcome: "CANCELLED" }]);
+    });
+  });
+
   it("allows a payment schedule retry only after a failed attempt", async () => {
     await rollback("payment-schedule-retry", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -1718,18 +1914,30 @@ describe("commerce persistence foundations", () => {
       );
       await createCurrentPlanAndPayment(client, fixtures, foundation);
 
-      const insertRetry = (id: string, providerIntentId: string) =>
-        client.query(
+      const insertRetry = (id: string, providerIntentId: string) => {
+        const retryCreatedAt = new Date();
+        const retryExpiresAt = new Date(
+          retryCreatedAt.getTime() + 60 * 60 * 1_000,
+        );
+        return client.query(
           `INSERT INTO payments
              (id, order_id, price_snapshot_id, order_price_binding_id,
               payment_schedule_id, role, provider, provider_intent_id,
-              requested_amount_minor, currency, status, created_at, updated_at)
+              requested_amount_minor, currency, status,
+              checkout_capture_expires_at, created_at, updated_at)
            SELECT $1, order_id, price_snapshot_id, order_price_binding_id,
                   payment_schedule_id, role, provider, $2,
-                  requested_amount_minor, currency, 'PENDING', $3, $3
-           FROM payments WHERE id = $4`,
-          [id, providerIntentId, new Date(), foundation.paymentId],
+                  requested_amount_minor, currency, 'PENDING', $3, $4, $4
+           FROM payments WHERE id = $5`,
+          [
+            id,
+            providerIntentId,
+            retryExpiresAt,
+            retryCreatedAt,
+            foundation.paymentId,
+          ],
         );
+      };
 
       await expectQueryError(
         client,
@@ -1755,8 +1963,11 @@ describe("commerce persistence foundations", () => {
       ).resolves.toBeDefined();
 
       await client.query(
-        `UPDATE payments SET status = 'VOIDED' WHERE id = $1`,
-        [retryPaymentId],
+        `UPDATE payments
+         SET status = 'VOIDED', capture_authorized = false,
+             capture_cutoff_at = $2
+         WHERE id = $1`,
+        [retryPaymentId, new Date()],
       );
       await expectQueryError(
         client,
@@ -1930,7 +2141,7 @@ describe("commerce persistence foundations", () => {
     });
   });
 
-  it("rejects ordinary capture after its authorization window closes", async () => {
+  it("rejects ordinary capture after its authorization or immutable checkout window closes", async () => {
     await rollback("closed-capture-window", async (client, fixtures) => {
       const capturePayment = async (
         foundation: PersistenceFoundation,
@@ -1983,6 +2194,82 @@ describe("commerce persistence foundations", () => {
         client,
         "capture_after_cutoff",
         () => capturePayment(expired, "expired-capture"),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+
+      const immutable = await fixtures.createFoundation(
+        "immutable-capture-expiry",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, immutable);
+      const immutableExpiry = (
+        await client.query<{ checkout_capture_expires_at: Date }>(
+          `SELECT checkout_capture_expires_at
+           FROM payments WHERE id = $1`,
+          [immutable.paymentId],
+        )
+      ).rows[0]?.checkout_capture_expires_at;
+      if (!immutableExpiry) {
+        throw new Error("checkout capture expiry was not persisted");
+      }
+      await expectQueryError(
+        client,
+        "extend_checkout_capture_expiry",
+        () =>
+          client.query(
+            `UPDATE payments
+             SET checkout_capture_expires_at = $2 WHERE id = $1`,
+            [immutable.paymentId, new Date(immutableExpiry.getTime() + 1_000)],
+          ),
+        { code: "23514", constraint: "payment_identity_immutable_check" },
+      );
+
+      const stale = await fixtures.createFoundation("stale-capture-expiry");
+      await createCurrentPlan(client, fixtures, stale);
+      await expectQueryError(
+        client,
+        "create_expired_checkout_capture",
+        () => fixtures.finalizePayment(stale, new Date(Date.now() - 1_000)),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+
+      const missing = await fixtures.createFoundation("missing-capture-expiry");
+      await createCurrentPlan(client, fixtures, missing);
+      await expectQueryError(
+        client,
+        "create_missing_checkout_capture_expiry",
+        () => fixtures.finalizePayment(missing, null),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+
+      const delayed = await fixtures.createFoundation(
+        "wall-clock-capture-expiry",
+      );
+      await createCurrentPlan(client, fixtures, delayed);
+      const checkoutCaptureExpiresAt = new Date(Date.now() + 2_000);
+      await fixtures.finalizePayment(delayed, checkoutCaptureExpiresAt);
+      await client.query(
+        `SELECT pg_sleep(
+           greatest(extract(epoch FROM $1::timestamptz - clock_timestamp()), 0)
+           + 0.05
+         )`,
+        [checkoutCaptureExpiresAt],
+      );
+      expect(
+        (
+          await client.query<{
+            transaction_time_accepts: boolean;
+            wall_clock_expired: boolean;
+          }>(
+            `SELECT $1::timestamptz > CURRENT_TIMESTAMP AS transaction_time_accepts,
+                    $1::timestamptz <= clock_timestamp() AS wall_clock_expired`,
+            [checkoutCaptureExpiresAt],
+          )
+        ).rows,
+      ).toEqual([{ transaction_time_accepts: true, wall_clock_expired: true }]);
+      await expectQueryError(
+        client,
+        "capture_after_checkout_expiry",
+        () => capturePayment(delayed, "delayed-checkout-capture"),
         { code: "23514", constraint: "payment_capture_window_check" },
       );
     });
@@ -2700,9 +2987,10 @@ describe("commerce persistence foundations", () => {
             `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
                                   payment_schedule_id, role, provider, provider_intent_id,
                                   provider_capture_id, requested_amount_minor,
-                                  captured_amount_minor, currency, status, captured_at,
+                                  captured_amount_minor, currency, status,
+                                  checkout_capture_expires_at, captured_at,
                                   created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,950,950,'EUR','CAPTURED',$8,$8,$8)`,
+             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,950,950,'EUR','CAPTURED',$9,$8,$8,$8)`,
             [
               fixtures.id("direct-captured-payment"),
               foundation.orderId,
@@ -2712,6 +3000,7 @@ describe("commerce persistence foundations", () => {
               "direct-captured-intent",
               "direct-captured-capture",
               new Date(),
+              new Date(Date.now() + 60 * 60 * 1_000),
             ],
           ),
         { code: "23514", constraint: "payment_initial_status_check" },
@@ -2827,14 +3116,16 @@ describe("commerce persistence foundations", () => {
           client.query(
             `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
                                   payment_schedule_id, role, provider, requested_amount_minor,
-                                  currency, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,'FULL','test',950,'EUR',$6,$6)`,
+                                  currency, checkout_capture_expires_at,
+                                  created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,'FULL','test',950,'EUR',$6,$7,$7)`,
             [
               fixtures.id("cross-order-payment"),
               foundation.orderId,
               other.priceSnapshotId,
               other.orderPriceBindingId,
               other.paymentScheduleId,
+              new Date(Date.now() + 60 * 60 * 1_000),
               new Date(),
             ],
           ),
@@ -2877,8 +3168,9 @@ describe("commerce persistence foundations", () => {
           client.query(
             `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
                                   payment_schedule_id, role, provider, provider_intent_id,
-                                  requested_amount_minor, currency, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR',$8,$8)`,
+                                  requested_amount_minor, currency,
+                                  checkout_capture_expires_at, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR',$8,$9,$9)`,
             [
               fixtures.id("duplicate-payment"),
               foundation.orderId,
@@ -2887,6 +3179,7 @@ describe("commerce persistence foundations", () => {
               foundation.paymentScheduleId,
               providerIntentId,
               capturedAmount,
+              new Date(Date.now() + 60 * 60 * 1_000),
               new Date(),
             ],
           ),

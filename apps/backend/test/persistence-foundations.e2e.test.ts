@@ -180,6 +180,12 @@ async function cancelConfirmedReservationOrder(
     [foundation.orderId, cancelledAt],
   );
   await client.query(
+    `UPDATE fulfilment_slots
+     SET outcome = 'CANCELLED', updated_at = $2
+     WHERE order_id = $1 AND outcome = 'PENDING'`,
+    [foundation.orderId, cancelledAt],
+  );
+  await client.query(
     `UPDATE order_phases
      SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
      WHERE id = $1`,
@@ -3938,7 +3944,9 @@ describe("persistence foundations", () => {
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
         await client.query(
-          'SET CONSTRAINTS "jobs_captured_reservation_reconciled" DEFERRED',
+          `SET CONSTRAINTS
+             "jobs_captured_reservation_reconciled",
+             "jobs_parent_lifecycle_reconciled" DEFERRED`,
         );
 
         await fixtures.createJob(foundation, production);
@@ -4010,7 +4018,9 @@ describe("persistence foundations", () => {
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
         await client.query(
-          'SET CONSTRAINTS "jobs_captured_reservation_reconciled" DEFERRED',
+          `SET CONSTRAINTS
+             "jobs_captured_reservation_reconciled",
+             "jobs_parent_lifecycle_reconciled" DEFERRED`,
         );
 
         await fixtures.createJob(foundation, production);
