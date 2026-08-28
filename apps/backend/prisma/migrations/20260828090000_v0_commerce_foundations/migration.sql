@@ -6245,8 +6245,8 @@ BEGIN
     END IF;
 
     IF NEW."occurred_at" > evidence_now + interval '5 seconds'
-       OR NEW."authenticated_at" > evidence_now + interval '5 milliseconds'
-       OR NEW."verified_at" > evidence_now + interval '5 milliseconds'
+       OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
+       OR NEW."verified_at" > evidence_now + interval '5 seconds'
        OR NEW."occurred_at" < target_label_created_at
        OR NEW."authenticated_at" < NEW."occurred_at"
        OR NEW."verified_at" < NEW."authenticated_at" THEN

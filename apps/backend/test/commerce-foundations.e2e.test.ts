@@ -660,7 +660,8 @@ async function confirmCarrierLabelVoid(
         provider_event_id, provider_transaction_id, kind, occurred_at,
         authenticated_at, verified_at, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'LABEL_VOIDED',statement_timestamp(),
-             statement_timestamp(),statement_timestamp() + interval '1 millisecond',
+             statement_timestamp() + interval '2 seconds',
+             statement_timestamp() + interval '2 seconds',
              statement_timestamp())`,
     [
       randomUUID(),
@@ -676,7 +677,7 @@ async function confirmCarrierLabelVoid(
     `UPDATE shipments shipment
      SET status = 'CANCELLED', provider_void_id = event.provider_event_id,
          provider_voided_at = event.verified_at,
-         cancelled_at = clock_timestamp(), updated_at = clock_timestamp()
+         cancelled_at = event.verified_at, updated_at = event.verified_at
      FROM shipment_provider_events event
      WHERE shipment.id = $1
        AND event.shipment_id = shipment.id
@@ -698,7 +699,7 @@ async function persistVerifiedAcceptanceScan(
         verified_at, created_at)
      SELECT $1, shipment.id, shipment.carrier, shipment.carrier_label_id,
             $3, $4, 'ACCEPTANCE_SCAN', statement_timestamp(), statement_timestamp(),
-            statement_timestamp() + interval '1 millisecond', statement_timestamp()
+            statement_timestamp() + interval '2 seconds', statement_timestamp()
      FROM shipments shipment
      WHERE shipment.id = $2
      RETURNING verified_at`,
@@ -7821,7 +7822,7 @@ describe("commerce persistence foundations", () => {
       );
       await expectQueryError(
         client,
-        "confirm_void_before_verification_time",
+        "confirm_void_beyond_clock_skew_tolerance",
         async () => {
           await client.query(
             `UPDATE outbox_messages
@@ -7839,8 +7840,9 @@ describe("commerce persistence foundations", () => {
              SELECT $1, shipment.id, message.id, shipment.carrier,
                     shipment.carrier_label_id, 'future-verification-void',
                     'future-verification-void:transaction', 'LABEL_VOIDED',
-                    statement_timestamp(), statement_timestamp(),
-                    statement_timestamp() + interval '2 seconds',
+                    statement_timestamp(),
+                    statement_timestamp() + interval '60 seconds',
+                    statement_timestamp() + interval '60 seconds',
                     statement_timestamp()
              FROM shipments shipment
              JOIN outbox_messages message
@@ -7986,7 +7988,7 @@ describe("commerce persistence foundations", () => {
         );
         await expectQueryError(
           client,
-          "handoff_before_scan_verification_time",
+          "handoff_beyond_clock_skew_tolerance",
           () =>
             client.query(
               `INSERT INTO shipment_provider_events
@@ -7997,7 +7999,7 @@ describe("commerce persistence foundations", () => {
                     shipment.carrier_label_id, 'future-verification-scan',
                     'future-verification-scan:transaction', 'ACCEPTANCE_SCAN',
                     statement_timestamp(), statement_timestamp(),
-                    statement_timestamp() + interval '2 seconds',
+                    statement_timestamp() + interval '60 seconds',
                     statement_timestamp()
              FROM shipments shipment
              WHERE shipment.id = $2`,
