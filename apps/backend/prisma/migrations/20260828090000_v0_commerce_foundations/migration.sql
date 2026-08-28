@@ -670,6 +670,9 @@ ALTER TABLE "jobs" ADD CONSTRAINT "jobs_timestamps_check" CHECK (
     AND ("failure_reason" IS NULL OR "failure_reason" ~ '[^[:space:]]')
 );
 ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
+ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_identity_check" CHECK (
+    "provider" ~ '[^[:space:]]'
+);
 ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_authorization_pair_check" CHECK (
     "capture_authorized" = ("capture_cutoff_at" IS NULL)
 );
@@ -694,6 +697,9 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
     )
 );
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_values_check" CHECK ("amount_minor" > 0 AND ("completed_at" IS NULL OR "completed_at" >= "requested_at"));
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_idempotency_key_identity_check" CHECK (
+    "idempotency_key" ~ '[^[:space:]]'
+);
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_provider_refund_identity_check" CHECK (
     "provider_refund_id" IS NULL OR "provider_refund_id" ~ '[^[:space:]]'
 );
@@ -1043,6 +1049,26 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'automatic order items cannot claim a QuoteItem source'
             USING ERRCODE = '23514', CONSTRAINT = 'automatic_order_item_source_check';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "order_active_price_bindings" active
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+        JOIN "price_snapshots" snapshot
+          ON snapshot."id" = binding."price_snapshot_id"
+        JOIN "payment_schedules" schedule
+          ON schedule."price_snapshot_id" = snapshot."id"
+         AND schedule."role" = 'FULL'
+        WHERE active."order_id" = NEW."id"
+          AND binding."order_id" = NEW."id"
+          AND binding."invalidated_at" IS NULL
+          AND snapshot."contract_total_minor" > 0
+          AND schedule."gross_amount_minor" > 0
+    ) THEN
+        RAISE EXCEPTION 'quoted order requires a positive contract total and full payment schedule'
+            USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_positive_payment_check';
     END IF;
 
     PERFORM taven_assert_order_fulfilment_money(NEW."id");
@@ -2875,6 +2901,54 @@ BEGIN
                   FROM "shipments" replacement
                   WHERE replacement."replaces_shipment_id" = shipment."id"
               )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+              AND (
+                  NOT EXISTS (
+                      SELECT 1
+                      FROM "jobs" job
+                      WHERE job."order_id" = shipment."order_id"
+                        AND job."order_phase_id" = shipment."order_phase_id"
+                        AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "jobs" job
+                      WHERE job."order_id" = shipment."order_id"
+                        AND job."order_phase_id" = shipment."order_phase_id"
+                        AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                        AND (
+                            job."status" NOT IN ('HANDED_OVER', 'SETTLED')
+                            OR job."handed_over_at" IS NULL
+                        )
+                  )
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs" job
+            WHERE job."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" shipment
+                  WHERE shipment."order_id" = job."order_id"
+                    AND shipment."order_phase_id" = job."order_phase_id"
+                    AND shipment."shipment_plan_id" = job."shipment_plan_id"
+                    AND shipment."status" = 'DELIVERED'
+                    AND shipment."handed_over_at" IS NOT NULL
+                    AND shipment."delivered_at" IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM "shipments" replacement
+                        WHERE replacement."replaces_shipment_id" = shipment."id"
+                    )
+              )
         ) OR NOT EXISTS (
             SELECT 1 FROM "fulfilment_slots" WHERE "order_id" = target_order_id
         ) OR EXISTS (
@@ -2883,7 +2957,7 @@ BEGIN
             WHERE "order_id" = target_order_id
               AND "outcome" <> 'DELIVERED'
         ) THEN
-            RAISE EXCEPTION 'delivered order requires every Shipment and fulfilment slot delivered'
+            RAISE EXCEPTION 'delivered order requires every Shipment, Job, and fulfilment slot delivered'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
         END IF;
     ELSIF target_status = 'COMPLETED' THEN

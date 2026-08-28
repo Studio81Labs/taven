@@ -88,6 +88,10 @@ export type CommerceItem = {
   sliceMetrics?: SliceMetrics;
   priced?: boolean;
 };
+type CommercePricing = {
+  orderMinimum?: number;
+  smallSurcharge?: number;
+};
 
 const defaultGeometryBounds: GeometryBounds = {
   xMicrometers: 1,
@@ -161,6 +165,7 @@ export class PersistenceFactory {
     commerceItems?: CommerceItem[],
     finalOrderStatus: "DRAFT" | "QUOTED" = "QUOTED",
     beforeOrderPricing?: (foundation: PersistenceFoundation) => Promise<void>,
+    pricing: CommercePricing = {},
   ): Promise<PersistenceFoundation> {
     const items: CommerceItem[] =
       commerceItems ?? Array.from({ length: slotCount }, () => ({}));
@@ -512,6 +517,7 @@ export class PersistenceFactory {
         sourceRetention.quoteExpiresAt ??
         new Date(testRunStartedAt + hourInMilliseconds),
       finalOrderStatus,
+      pricing,
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -549,6 +555,7 @@ export class PersistenceFactory {
     quoteSessionExpiresAt: Date;
     quoteExpiresAt: Date;
     finalOrderStatus: "DRAFT" | "QUOTED";
+    pricing: CommercePricing;
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
@@ -568,8 +575,8 @@ export class PersistenceFactory {
           }
         : { production: 0, quantity: 0, postprocessing: 0, shipment: 0 },
     );
-    const orderMinimum = 200;
-    const smallSurcharge = 100;
+    const orderMinimum = input.pricing.orderMinimum ?? 200;
+    const smallSurcharge = input.pricing.smallSurcharge ?? 100;
     const contractTotal =
       componentAmounts.reduce(
         (total, amount) =>
@@ -891,6 +898,7 @@ export class PersistenceFactory {
     ),
     providerIntentId:
       string | null = `intent-${this.hash(foundation.paymentId)}`,
+    provider = "test",
   ): Promise<void> {
     const schedule = await this.sql.query<{ gross_amount_minor: string }>(
       'SELECT "gross_amount_minor"::text FROM "payment_schedules" WHERE "id" = $1',
@@ -901,13 +909,14 @@ export class PersistenceFactory {
       throw new Error("commerce topology payment schedule is missing");
     }
     await this.sql.query(
-      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, provider_intent_id, requested_amount_minor, currency, status, checkout_capture_expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR','PENDING',$8,$9,$9)",
+      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, provider_intent_id, requested_amount_minor, currency, status, checkout_capture_expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL',$6,$7,$8,'EUR','PENDING',$9,$10,$10)",
       [
         foundation.paymentId,
         foundation.orderId,
         foundation.priceSnapshotId,
         foundation.orderPriceBindingId,
         foundation.paymentScheduleId,
+        provider,
         providerIntentId,
         requestedAmountMinor,
         checkoutCaptureExpiresAt,
