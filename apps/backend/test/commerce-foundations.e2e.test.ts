@@ -204,12 +204,176 @@ async function advanceOrderToCompleted(
     "SHIPPED",
     "DELIVERED",
     "COMPLETED",
-  ]) {
+  ] as const) {
+    await advanceOrderLifecycleStep(client, orderId, status);
+  }
+}
+
+async function forceOrderLifecycleConstraints(
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `SET CONSTRAINTS
+       "orders_post_confirmation_lifecycle_reconciled",
+       "order_phases_parent_lifecycle_reconciled",
+       "jobs_parent_lifecycle_reconciled",
+       "shipments_parent_lifecycle_reconciled",
+       "fulfilment_slots_parent_lifecycle_reconciled" IMMEDIATE`,
+  );
+  await client.query(
+    `SET CONSTRAINTS
+       "orders_post_confirmation_lifecycle_reconciled",
+       "order_phases_parent_lifecycle_reconciled",
+       "jobs_parent_lifecycle_reconciled",
+       "shipments_parent_lifecycle_reconciled",
+       "fulfilment_slots_parent_lifecycle_reconciled" DEFERRED`,
+  );
+}
+
+async function advanceOrderLifecycleStep(
+  client: PoolClient,
+  orderId: string,
+  status:
+    | "IN_PRODUCTION"
+    | "QC_PASSED"
+    | "READY_TO_SHIP"
+    | "SHIPPED"
+    | "DELIVERED"
+    | "COMPLETED",
+): Promise<void> {
+  const transitionedAt = new Date();
+  if (status === "IN_PRODUCTION") {
     await client.query(
-      `UPDATE orders SET status = $2::order_status WHERE id = $1`,
-      [orderId, status],
+      `UPDATE jobs
+       SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE jobs
+       SET status = 'PRINTING', printing_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE order_phases
+       SET status = 'IN_PRODUCTION', updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+  } else if (status === "QC_PASSED") {
+    await client.query(
+      `UPDATE jobs
+       SET status = 'QC_APPROVED', qc_approved_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE order_phases
+       SET status = 'QC_PASSED', qc_passed_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+  } else if (status === "READY_TO_SHIP") {
+    await client.query(
+      `UPDATE jobs
+       SET status = 'PACKED', packed_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE shipments
+       SET status = 'LABEL_CREATED', carrier = 'test-carrier',
+           provider_shipment_id = coalesce(provider_shipment_id, 'provider-' || id::text),
+           tracking_code = coalesce(tracking_code, 'tracking-' || id::text),
+           label_created_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+  } else if (status === "SHIPPED") {
+    await client.query(
+      `UPDATE jobs
+       SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE shipments
+       SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE order_phases
+       SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+  } else if (status === "DELIVERED") {
+    await client.query(
+      `UPDATE shipments
+       SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE fulfilment_slots
+       SET outcome = 'DELIVERED', updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE order_phases
+       SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+  } else {
+    await client.query(
+      `UPDATE jobs SET status = 'SETTLED', updated_at = $2 WHERE order_id = $1`,
+      [orderId, transitionedAt],
+    );
+    await client.query(
+      `UPDATE order_phases
+       SET status = 'COMPLETED', completed_at = $2, updated_at = $2
+       WHERE order_id = $1`,
+      [orderId, transitionedAt],
     );
   }
+
+  await client.query(
+    `UPDATE orders SET status = $2::order_status, updated_at = $3 WHERE id = $1`,
+    [orderId, status, transitionedAt],
+  );
+  await forceOrderLifecycleConstraints(client);
+}
+
+async function cancelOrderBeforeHandoff(
+  client: PoolClient,
+  orderId: string,
+): Promise<void> {
+  const cancelledAt = new Date();
+  await client.query(
+    `UPDATE jobs SET status = 'CANCELLED', updated_at = $2 WHERE order_id = $1`,
+    [orderId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE shipments
+     SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+     WHERE order_id = $1`,
+    [orderId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE order_phases
+     SET status = 'CANCELLED', cancelled_at = $2, updated_at = $2
+     WHERE order_id = $1`,
+    [orderId, cancelledAt],
+  );
+  await client.query(
+    `UPDATE orders SET status = 'CANCELLED', updated_at = $2 WHERE id = $1`,
+    [orderId, cancelledAt],
+  );
+  await forceOrderLifecycleConstraints(client);
 }
 
 describe("commerce persistence foundations", () => {
@@ -392,6 +556,15 @@ describe("commerce persistence foundations", () => {
           )
         ).rows[0]?.count,
       ).toBe("1");
+      await expectQueryError(
+        client,
+        "delete_persisted_shipment",
+        () =>
+          client.query(`DELETE FROM shipments WHERE id = $1`, [
+            foundation.shipmentIds[0],
+          ]),
+        { code: "23514", constraint: "shipment_topology_immutable_check" },
+      );
       expect(
         (
           await client.query(
@@ -1506,7 +1679,22 @@ describe("commerce persistence foundations", () => {
         ],
       );
       await client.query(
-        `SET CONSTRAINTS "payments_refund_status_reconciled" IMMEDIATE`,
+        `INSERT INTO refund_transactions
+         (id, payment_id, idempotency_key, amount_minor, reason, status,
+          requested_at, created_at, updated_at)
+         SELECT $1, id, $2, requested_amount_minor,
+                'CUSTOMER_CANCELLATION', 'PENDING', $3, $3, $3
+         FROM payments WHERE id = $4`,
+        [
+          fixtures.id("late-capture-refund"),
+          "late-capture-refund",
+          capturedAt,
+          foundation.paymentId,
+        ],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
       );
       expect(
         (
@@ -1531,6 +1719,95 @@ describe("commerce persistence foundations", () => {
           provider_capture_id: "late-provider-capture",
           captured_at: capturedAt,
         },
+      ]);
+    });
+  });
+
+  it("persists refund-pending status and refund work atomically", async () => {
+    await rollback("refund-pending-atomicity", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "refund-pending-atomicity",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+
+      await expectQueryError(
+        client,
+        "refund_pending_without_work",
+        async () => {
+          await client.query(
+            `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+            [foundation.paymentId],
+          );
+          await client.query(
+            `SET CONSTRAINTS "payments_refund_status_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_refund_status_reconciliation_check",
+        },
+      );
+
+      await expectQueryError(
+        client,
+        "refund_work_without_pending_status",
+        async () => {
+          await client.query(
+            `INSERT INTO refund_transactions
+             (id, payment_id, idempotency_key, amount_minor, reason, status,
+              created_at, updated_at)
+             VALUES ($1,$2,$3,1,'CUSTOMER_CANCELLATION','PENDING',$4,$4)`,
+            [
+              fixtures.id("orphan-pending-refund"),
+              foundation.paymentId,
+              "orphan-pending-refund",
+              new Date(),
+            ],
+          );
+          await client.query(
+            `SET CONSTRAINTS "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_refund_status_reconciliation_check",
+        },
+      );
+
+      const refundId = fixtures.id("atomic-pending-refund");
+      await client.query(
+        `INSERT INTO refund_transactions
+         (id, payment_id, idempotency_key, amount_minor, reason, status,
+          created_at, updated_at)
+         VALUES ($1,$2,$3,1,'CUSTOMER_CANCELLATION','PENDING',$4,$4)`,
+        [refundId, foundation.paymentId, "atomic-pending-refund", new Date()],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
+        [foundation.paymentId],
+      );
+      await client.query(
+        `SET CONSTRAINTS "payments_refund_status_reconciled",
+                         "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      expect(
+        (
+          await client.query<{ payment_status: string; refund_status: string }>(
+            `SELECT payment.status::text AS payment_status,
+                    refund.status::text AS refund_status
+             FROM payments payment
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE payment.id = $1 AND refund.id = $2`,
+            [foundation.paymentId, refundId],
+          )
+        ).rows,
+      ).toEqual([
+        { payment_status: "REFUND_PENDING", refund_status: "PENDING" },
       ]);
     });
   });
@@ -1709,6 +1986,197 @@ describe("commerce persistence foundations", () => {
              "jobs_captured_reservation_reconciled" IMMEDIATE`,
         ),
       ).resolves.toBeDefined();
+    });
+  });
+
+  it("requires aggregate evidence for every post-confirmation order edge", async () => {
+    await rollback("order-lifecycle-evidence", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "order-lifecycle-evidence",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+
+      await expectQueryError(
+        client,
+        "skip_phase_lifecycle",
+        () =>
+          client.query(
+            `UPDATE order_phases SET status = 'COMPLETED' WHERE order_id = $1`,
+            [foundation.orderId],
+          ),
+        { code: "23514", constraint: "order_phase_status_transition_check" },
+      );
+      await expectQueryError(
+        client,
+        "skip_job_lifecycle",
+        () =>
+          client.query(
+            `UPDATE jobs SET status = 'SETTLED' WHERE order_id = $1`,
+            [foundation.orderId],
+          ),
+        { code: "23514", constraint: "job_status_transition_check" },
+      );
+      await expectQueryError(
+        client,
+        "skip_shipment_lifecycle",
+        () =>
+          client.query(
+            `UPDATE shipments SET status = 'DELIVERED' WHERE order_id = $1`,
+            [foundation.orderId],
+          ),
+        { code: "23514", constraint: "shipment_status_transition_check" },
+      );
+      const prematureEvidenceAt = new Date();
+      await expectQueryError(
+        client,
+        "premature_phase_evidence",
+        () =>
+          client.query(
+            `UPDATE order_phases
+             SET status = 'IN_PRODUCTION', qc_passed_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, prematureEvidenceAt],
+          ),
+        {
+          code: "23514",
+          constraint: "order_phase_lifecycle_evidence_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "phase_cancellation_before_activation",
+        () =>
+          client.query(
+            `UPDATE order_phases
+             SET status = 'CANCELLED',
+                 cancelled_at = activated_at - interval '1 millisecond'
+             WHERE order_id = $1`,
+            [foundation.orderId],
+          ),
+        {
+          code: "23514",
+          constraint: "order_phase_lifecycle_evidence_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "premature_job_evidence",
+        () =>
+          client.query(
+            `UPDATE jobs
+             SET status = 'ACCEPTED', accepted_at = $2, printing_at = $2,
+                 qc_approved_at = $2, packed_at = $2, handed_over_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, prematureEvidenceAt],
+          ),
+        { code: "23514", constraint: "job_lifecycle_evidence_check" },
+      );
+      await expectQueryError(
+        client,
+        "premature_shipment_evidence",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'LABEL_CREATED', carrier = 'test-carrier',
+                 provider_shipment_id = 'premature-provider',
+                 label_created_at = $2, handed_over_at = $2, delivered_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, prematureEvidenceAt],
+          ),
+        { code: "23514", constraint: "shipment_lifecycle_evidence_check" },
+      );
+
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+        "SHIPPED",
+        "DELIVERED",
+        "COMPLETED",
+      ] as const) {
+        await expectQueryError(
+          client,
+          `order_${status.toLowerCase()}_without_evidence`,
+          async () => {
+            await client.query(
+              `UPDATE orders SET status = $2::order_status WHERE id = $1`,
+              [foundation.orderId, status],
+            );
+            await forceOrderLifecycleConstraints(client);
+          },
+          {
+            code: "23514",
+            constraint: "order_post_confirmation_lifecycle_check",
+          },
+        );
+        await advanceOrderLifecycleStep(client, foundation.orderId, status);
+        if (status === "READY_TO_SHIP") {
+          await expectQueryError(
+            client,
+            "shipment_cancellation_before_label",
+            () =>
+              client.query(
+                `UPDATE shipments
+                 SET status = 'CANCELLED',
+                     cancelled_at = label_created_at - interval '1 millisecond'
+                 WHERE order_id = $1`,
+                [foundation.orderId],
+              ),
+            {
+              code: "23514",
+              constraint: "shipment_lifecycle_evidence_check",
+            },
+          );
+        }
+      }
+
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM orders WHERE id = $1`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([{ status: "COMPLETED" }]);
+
+      await expectQueryError(
+        client,
+        "erase_job_lifecycle_evidence",
+        () =>
+          client.query(
+            `UPDATE jobs SET printing_at = NULL WHERE order_id = $1`,
+            [foundation.orderId],
+          ),
+        { code: "23514", constraint: "job_lifecycle_immutable_check" },
+      );
+      await expectQueryError(
+        client,
+        "erase_shipment_lifecycle_evidence",
+        () =>
+          client.query(
+            `UPDATE shipments SET delivered_at = NULL WHERE order_id = $1`,
+            [foundation.orderId],
+          ),
+        { code: "23514", constraint: "shipment_lifecycle_immutable_check" },
+      );
+      await expectQueryError(
+        client,
+        "erase_phase_lifecycle_evidence",
+        () =>
+          client.query(
+            `UPDATE order_phases SET qc_passed_at = NULL WHERE order_id = $1`,
+            [foundation.orderId],
+          ),
+        {
+          code: "23514",
+          constraint: "order_phase_lifecycle_immutable_check",
+        },
+      );
     });
   });
 
@@ -2325,10 +2793,7 @@ describe("commerce persistence foundations", () => {
         captured,
         capturedProductions,
       );
-      await client.query(
-        `UPDATE orders SET status = 'CANCELLED' WHERE id = $1`,
-        [captured.orderId],
-      );
+      await cancelOrderBeforeHandoff(client, captured.orderId);
       expect(
         (
           await client.query<{ retention_hold: string }>(
@@ -2375,6 +2840,18 @@ describe("commerce persistence foundations", () => {
         [captured.paymentId],
       );
       await client.query(
+        `UPDATE order_phases
+         SET status = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [captured.orderId, new Date()],
+      );
+      await client.query(
+        `UPDATE fulfilment_slots
+         SET outcome = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [captured.orderId, new Date()],
+      );
+      await client.query(
         `UPDATE orders SET status = 'REFUNDED' WHERE id = $1`,
         [captured.orderId],
       );
@@ -2382,8 +2859,12 @@ describe("commerce persistence foundations", () => {
         `SET CONSTRAINTS
            "payments_refund_status_reconciled",
            "refund_transactions_payment_status_reconciled",
-           "orders_refund_completion_reconciled" IMMEDIATE`,
+           "orders_refund_completion_reconciled",
+           "orders_post_confirmation_lifecycle_reconciled",
+           "order_phases_parent_lifecycle_reconciled",
+           "fulfilment_slots_parent_lifecycle_reconciled" IMMEDIATE`,
       );
+      await client.query(`SET CONSTRAINTS ALL DEFERRED`);
       expect(
         (
           await client.query<{ retention_hold: string }>(

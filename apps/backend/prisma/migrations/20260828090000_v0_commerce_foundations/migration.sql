@@ -1355,7 +1355,9 @@ BEGIN
            OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'CANCELLED'))
            OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED'))
            OR (OLD."status" = 'READY_TO_SHIP' AND NEW."status" IN ('SHIPPED', 'CANCELLED'))
-           OR (OLD."status" = 'SHIPPED' AND NEW."status" IN ('DELIVERED', 'PARTIALLY_FULFILLED', 'CANCELLED'))
+           -- Post-handoff cancellation/partial fulfilment remain unreachable
+           -- until the settlement and claim tranches persist their proof.
+           OR (OLD."status" = 'SHIPPED' AND NEW."status" = 'DELIVERED')
            OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
            -- CANCELLED_SETTLED stays unreachable until the deferred settlement
            -- tranche persists the immutable OrderSettlement that proves it.
@@ -1423,6 +1425,601 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 WHEN (OLD."status" IS DISTINCT FROM NEW."status" AND NEW."status" = 'REFUNDED')
 EXECUTE FUNCTION taven_reconcile_refunded_order();
+
+CREATE FUNCTION taven_protect_order_phase_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."status" <> 'QUOTED'
+           OR NEW."activated_at" IS NOT NULL
+           OR NEW."qc_passed_at" IS NOT NULL
+           OR NEW."shipped_at" IS NOT NULL
+           OR NEW."delivered_at" IS NOT NULL
+           OR NEW."completed_at" IS NOT NULL
+           OR NEW."cancelled_at" IS NOT NULL THEN
+            RAISE EXCEPTION 'new order phases must begin quoted without lifecycle evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_phase_initial_status_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'order phases are stable lifecycle topology and cannot be deleted'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_immutable_check';
+    END IF;
+
+    IF NEW."id" IS DISTINCT FROM OLD."id"
+       OR NEW."order_id" IS DISTINCT FROM OLD."order_id"
+       OR NEW."kind" IS DISTINCT FROM OLD."kind"
+       OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
+       OR (OLD."activated_at" IS NOT NULL AND NEW."activated_at" IS DISTINCT FROM OLD."activated_at")
+       OR (OLD."qc_passed_at" IS NOT NULL AND NEW."qc_passed_at" IS DISTINCT FROM OLD."qc_passed_at")
+       OR (OLD."shipped_at" IS NOT NULL AND NEW."shipped_at" IS DISTINCT FROM OLD."shipped_at")
+       OR (OLD."delivered_at" IS NOT NULL AND NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at")
+       OR (OLD."completed_at" IS NOT NULL AND NEW."completed_at" IS DISTINCT FROM OLD."completed_at")
+       OR (OLD."cancelled_at" IS NOT NULL AND NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at") THEN
+        RAISE EXCEPTION 'order phase identity and recorded lifecycle evidence are immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_immutable_check';
+    END IF;
+
+    IF NEW."status" IS NOT DISTINCT FROM OLD."status"
+       AND (
+           NEW."activated_at" IS DISTINCT FROM OLD."activated_at"
+           OR NEW."qc_passed_at" IS DISTINCT FROM OLD."qc_passed_at"
+           OR NEW."shipped_at" IS DISTINCT FROM OLD."shipped_at"
+           OR NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+           OR NEW."completed_at" IS DISTINCT FROM OLD."completed_at"
+           OR NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at"
+       ) THEN
+        RAISE EXCEPTION 'order phase lifecycle evidence must be assigned with its status transition'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
+    END IF;
+
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'QUOTED' AND NEW."status" IN ('ACTIVE', 'CANCELLED'))
+           OR (OLD."status" = 'ACTIVE' AND NEW."status" IN ('IN_PRODUCTION', 'CANCELLED'))
+           OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'CANCELLED'))
+           OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('SHIPPED', 'CANCELLED'))
+           OR (OLD."status" = 'SHIPPED' AND NEW."status" = 'DELIVERED')
+           OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'CANCELLED_REFUNDED')
+       ) THEN
+        RAISE EXCEPTION 'order phase status transition is not allowed'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_status_transition_check';
+    END IF;
+
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'QUOTED' AND NEW."status" = 'ACTIVE'
+            AND NEW."activated_at" IS DISTINCT FROM OLD."activated_at"
+            AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+            AND NEW."shipped_at" IS NOT DISTINCT FROM OLD."shipped_at"
+            AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+            AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+            AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'ACTIVE' AND NEW."status" = 'IN_PRODUCTION'
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS NOT DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" = 'QC_PASSED'
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS NOT DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'QC_PASSED' AND NEW."status" = 'SHIPPED'
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'SHIPPED' AND NEW."status" = 'DELIVERED'
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS NOT DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED'
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS NOT DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (NEW."status" = 'CANCELLED'
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS NOT DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'CANCELLED_REFUNDED'
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS NOT DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+       ) THEN
+        RAISE EXCEPTION 'order phase transition may assign only its own lifecycle evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
+    END IF;
+
+    IF (NEW."status" IN ('ACTIVE', 'IN_PRODUCTION', 'QC_PASSED', 'SHIPPED', 'DELIVERED', 'COMPLETED')
+        AND NEW."activated_at" IS NULL)
+       OR (NEW."status" IN ('QC_PASSED', 'SHIPPED', 'DELIVERED', 'COMPLETED')
+           AND NEW."qc_passed_at" IS NULL)
+       OR (NEW."status" IN ('SHIPPED', 'DELIVERED', 'COMPLETED')
+           AND NEW."shipped_at" IS NULL)
+       OR (NEW."status" IN ('DELIVERED', 'COMPLETED') AND NEW."delivered_at" IS NULL)
+       OR (NEW."status" = 'COMPLETED' AND NEW."completed_at" IS NULL)
+       OR (NEW."status" IN ('CANCELLED', 'CANCELLED_REFUNDED') AND NEW."cancelled_at" IS NULL) THEN
+        RAISE EXCEPTION 'order phase lifecycle state requires its complete timestamp evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
+    END IF;
+
+    IF (NEW."activated_at" IS NOT NULL AND NEW."qc_passed_at" IS NOT NULL
+        AND NEW."qc_passed_at" < NEW."activated_at")
+       OR (NEW."qc_passed_at" IS NOT NULL AND NEW."shipped_at" IS NOT NULL
+           AND NEW."shipped_at" < NEW."qc_passed_at")
+       OR (NEW."shipped_at" IS NOT NULL AND NEW."delivered_at" IS NOT NULL
+           AND NEW."delivered_at" < NEW."shipped_at")
+       OR (NEW."delivered_at" IS NOT NULL AND NEW."completed_at" IS NOT NULL
+           AND NEW."completed_at" < NEW."delivered_at")
+       OR (NEW."cancelled_at" IS NOT NULL AND NEW."activated_at" IS NOT NULL
+           AND NEW."cancelled_at" < NEW."activated_at")
+       OR (NEW."cancelled_at" IS NOT NULL AND NEW."qc_passed_at" IS NOT NULL
+           AND NEW."cancelled_at" < NEW."qc_passed_at")
+       OR (NEW."cancelled_at" IS NOT NULL AND NEW."shipped_at" IS NOT NULL
+           AND NEW."cancelled_at" < NEW."shipped_at")
+       OR (NEW."cancelled_at" IS NOT NULL AND NEW."delivered_at" IS NOT NULL
+           AND NEW."cancelled_at" < NEW."delivered_at") THEN
+        RAISE EXCEPTION 'order phase lifecycle timestamps must be chronological'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "order_phases_lifecycle_protected"
+BEFORE INSERT OR UPDATE OR DELETE ON "order_phases"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_order_phase_lifecycle();
+
+CREATE FUNCTION taven_protect_job_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."status" <> 'CREATED'
+           OR NEW."accepted_at" IS NOT NULL
+           OR NEW."printing_at" IS NOT NULL
+           OR NEW."qc_approved_at" IS NOT NULL
+           OR NEW."packed_at" IS NOT NULL
+           OR NEW."handed_over_at" IS NOT NULL THEN
+            RAISE EXCEPTION 'new Jobs must begin created without lifecycle evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'job_initial_status_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Jobs are stable production history and cannot be deleted'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_immutable_check';
+    END IF;
+
+    IF NEW."id" IS DISTINCT FROM OLD."id"
+       OR NEW."node_id" IS DISTINCT FROM OLD."node_id"
+       OR NEW."order_id" IS DISTINCT FROM OLD."order_id"
+       OR NEW."order_phase_id" IS DISTINCT FROM OLD."order_phase_id"
+       OR NEW."shipment_plan_id" IS DISTINCT FROM OLD."shipment_plan_id"
+       OR NEW."phase_resource_plan_job_id" IS DISTINCT FROM OLD."phase_resource_plan_job_id"
+       OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
+       OR (OLD."accepted_at" IS NOT NULL AND NEW."accepted_at" IS DISTINCT FROM OLD."accepted_at")
+       OR (OLD."printing_at" IS NOT NULL AND NEW."printing_at" IS DISTINCT FROM OLD."printing_at")
+       OR (OLD."qc_approved_at" IS NOT NULL AND NEW."qc_approved_at" IS DISTINCT FROM OLD."qc_approved_at")
+       OR (OLD."packed_at" IS NOT NULL AND NEW."packed_at" IS DISTINCT FROM OLD."packed_at")
+       OR (OLD."handed_over_at" IS NOT NULL AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at") THEN
+        RAISE EXCEPTION 'Job identity and recorded lifecycle evidence are immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_immutable_check';
+    END IF;
+
+    IF NEW."status" IS NOT DISTINCT FROM OLD."status"
+       AND (
+           NEW."accepted_at" IS DISTINCT FROM OLD."accepted_at"
+           OR NEW."printing_at" IS DISTINCT FROM OLD."printing_at"
+           OR NEW."qc_approved_at" IS DISTINCT FROM OLD."qc_approved_at"
+           OR NEW."packed_at" IS DISTINCT FROM OLD."packed_at"
+           OR NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
+       ) THEN
+        RAISE EXCEPTION 'Job lifecycle evidence must be assigned with its status transition'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
+    END IF;
+
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'CREATED' AND NEW."status" IN ('ACCEPTED', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'ACCEPTED' AND NEW."status" IN ('PRINTING', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'PRINTING' AND NEW."status" IN ('QC_APPROVED', 'CANCELLED', 'FAILED', 'QC_REJECTED'))
+           OR (OLD."status" = 'QC_APPROVED' AND NEW."status" IN ('PACKED', 'CANCELLED'))
+           OR (OLD."status" = 'PACKED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLED'))
+           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'SETTLED')
+       ) THEN
+        RAISE EXCEPTION 'Job status transition is not allowed'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_status_transition_check';
+    END IF;
+
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'CREATED' AND NEW."status" = 'ACCEPTED'
+            AND NEW."accepted_at" IS DISTINCT FROM OLD."accepted_at"
+            AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
+            AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
+            AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
+            AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
+           OR (OLD."status" = 'ACCEPTED' AND NEW."status" = 'PRINTING'
+               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
+               AND NEW."printing_at" IS DISTINCT FROM OLD."printing_at"
+               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
+               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
+           OR (OLD."status" = 'PRINTING' AND NEW."status" = 'QC_APPROVED'
+               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
+               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
+               AND NEW."qc_approved_at" IS DISTINCT FROM OLD."qc_approved_at"
+               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
+           OR (OLD."status" = 'QC_APPROVED' AND NEW."status" = 'PACKED'
+               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
+               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
+               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
+               AND NEW."packed_at" IS DISTINCT FROM OLD."packed_at"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
+           OR (OLD."status" = 'PACKED' AND NEW."status" = 'HANDED_OVER'
+               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
+               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
+               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
+               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
+               AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at")
+           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'SETTLED'
+               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
+               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
+               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
+               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
+           OR (NEW."status" IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
+               AND NEW."accepted_at" IS NOT DISTINCT FROM OLD."accepted_at"
+               AND NEW."printing_at" IS NOT DISTINCT FROM OLD."printing_at"
+               AND NEW."qc_approved_at" IS NOT DISTINCT FROM OLD."qc_approved_at"
+               AND NEW."packed_at" IS NOT DISTINCT FROM OLD."packed_at"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at")
+       ) THEN
+        RAISE EXCEPTION 'Job transition may assign only its own lifecycle evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
+    END IF;
+
+    IF (NEW."status" IN ('ACCEPTED', 'PRINTING', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+        AND NEW."accepted_at" IS NULL)
+       OR (NEW."status" IN ('PRINTING', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+           AND NEW."printing_at" IS NULL)
+       OR (NEW."status" IN ('QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+           AND NEW."qc_approved_at" IS NULL)
+       OR (NEW."status" IN ('PACKED', 'HANDED_OVER', 'SETTLED') AND NEW."packed_at" IS NULL)
+       OR (NEW."status" IN ('HANDED_OVER', 'SETTLED') AND NEW."handed_over_at" IS NULL) THEN
+        RAISE EXCEPTION 'Job lifecycle state requires its complete timestamp evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
+    END IF;
+
+    IF (NEW."accepted_at" IS NOT NULL AND NEW."printing_at" IS NOT NULL
+        AND NEW."printing_at" < NEW."accepted_at")
+       OR (NEW."printing_at" IS NOT NULL AND NEW."qc_approved_at" IS NOT NULL
+           AND NEW."qc_approved_at" < NEW."printing_at")
+       OR (NEW."qc_approved_at" IS NOT NULL AND NEW."packed_at" IS NOT NULL
+           AND NEW."packed_at" < NEW."qc_approved_at")
+       OR (NEW."packed_at" IS NOT NULL AND NEW."handed_over_at" IS NOT NULL
+           AND NEW."handed_over_at" < NEW."packed_at") THEN
+        RAISE EXCEPTION 'Job lifecycle timestamps must be chronological'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "jobs_lifecycle_protected"
+BEFORE INSERT OR UPDATE OR DELETE ON "jobs"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_job_lifecycle();
+
+CREATE FUNCTION taven_reconcile_order_post_confirmation_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_status "order_status";
+BEGIN
+    target_order_id := CASE TG_TABLE_NAME
+        WHEN 'orders' THEN (to_jsonb(NEW) ->> 'id')::uuid
+        WHEN 'order_phases' THEN (to_jsonb(NEW) ->> 'order_id')::uuid
+        WHEN 'jobs' THEN (to_jsonb(NEW) ->> 'order_id')::uuid
+        WHEN 'shipments' THEN (to_jsonb(NEW) ->> 'order_id')::uuid
+        ELSE (to_jsonb(NEW) ->> 'order_id')::uuid
+    END;
+
+    SELECT "status"
+    INTO target_status
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    IF target_status IS NULL OR target_status IN ('DRAFT', 'QUOTED') THEN
+        RETURN NULL;
+    END IF;
+
+    IF target_status = 'CONFIRMED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."kind" = 'SINGLE'
+              AND phase."status" = 'ACTIVE'
+              AND phase."activated_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" NOT IN ('CREATED', 'ACCEPTED')
+        ) THEN
+            RAISE EXCEPTION 'confirmed order requires its active phase and pre-production Jobs'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'IN_PRODUCTION' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."kind" = 'SINGLE'
+              AND phase."status" = 'IN_PRODUCTION'
+        ) OR NOT EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" IN ('PRINTING', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+              AND "printing_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
+        ) THEN
+            RAISE EXCEPTION 'in-production order requires atomic phase and Job production start'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'QC_PASSED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'QC_PASSED'
+              AND phase."qc_passed_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND (
+                  "status" NOT IN ('QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED')
+                  OR "qc_approved_at" IS NULL
+              )
+        ) THEN
+            RAISE EXCEPTION 'QC-passed order requires complete phase and Job QC evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'READY_TO_SHIP' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'QC_PASSED'
+              AND phase."qc_passed_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND ("status" <> 'PACKED' OR "packed_at" IS NULL)
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "shipments" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND (
+                  "status" <> 'LABEL_CREATED'
+                  OR "carrier" IS NULL
+                  OR "provider_shipment_id" IS NULL
+                  OR "label_created_at" IS NULL
+              )
+        ) THEN
+            RAISE EXCEPTION 'ready-to-ship order requires every Job packed and every Shipment labelled'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'SHIPPED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'SHIPPED'
+              AND phase."shipped_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND "status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND "handed_over_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND "status" NOT IN ('LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+        ) OR NOT EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" IN ('HANDED_OVER', 'SETTLED')
+              AND "handed_over_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" NOT IN ('PACKED', 'HANDED_OVER', 'SETTLED')
+        ) THEN
+            RAISE EXCEPTION 'shipped order requires atomic phase and physical handoff evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'DELIVERED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'DELIVERED'
+              AND phase."delivered_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "shipments" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND ("status" <> 'DELIVERED' OR "delivered_at" IS NULL)
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "fulfilment_slots" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'DELIVERED'
+        ) THEN
+            RAISE EXCEPTION 'delivered order requires every Shipment and fulfilment slot delivered'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'COMPLETED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'COMPLETED'
+              AND phase."completed_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND ("status" <> 'DELIVERED' OR "delivered_at" IS NULL)
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'DELIVERED'
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" <> 'SETTLED'
+        ) THEN
+            RAISE EXCEPTION 'completed order requires its complete settled delivery aggregate'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'CANCELLED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'CANCELLED'
+              AND phase."cancelled_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" <> 'CANCELLED'
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND ("status" <> 'CANCELLED' OR "cancelled_at" IS NULL)
+        ) THEN
+            RAISE EXCEPTION 'cancelled order requires its complete pre-handoff cancellation aggregate'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'REFUNDED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'CANCELLED_REFUNDED'
+              AND phase."cancelled_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" <> 'CANCELLED'
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND ("status" <> 'CANCELLED' OR "cancelled_at" IS NULL)
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'CANCELLED_REFUNDED'
+        ) THEN
+            RAISE EXCEPTION 'refunded order requires terminal cancelled phase, Jobs, Shipments, and slots'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSE
+        RAISE EXCEPTION 'order status requires persistence not available in this tranche'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "orders_post_confirmation_lifecycle_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_order_post_confirmation_lifecycle();
+CREATE CONSTRAINT TRIGGER "order_phases_parent_lifecycle_reconciled"
+AFTER UPDATE OF "status" ON "order_phases"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_order_post_confirmation_lifecycle();
+CREATE CONSTRAINT TRIGGER "jobs_parent_lifecycle_reconciled"
+AFTER INSERT OR UPDATE OF "status" ON "jobs"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_order_post_confirmation_lifecycle();
+CREATE CONSTRAINT TRIGGER "shipments_parent_lifecycle_reconciled"
+AFTER INSERT OR UPDATE OF "status" ON "shipments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_order_post_confirmation_lifecycle();
+CREATE CONSTRAINT TRIGGER "fulfilment_slots_parent_lifecycle_reconciled"
+AFTER UPDATE OF "outcome" ON "fulfilment_slots"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_order_post_confirmation_lifecycle();
 
 CREATE FUNCTION taven_validate_order_price_binding()
 RETURNS trigger
@@ -2480,6 +3077,11 @@ BEGIN
                 USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
         END IF;
 
+        IF NEW."outcome" <> 'PENDING' THEN
+            RAISE EXCEPTION 'new fulfilment slots must begin pending'
+                USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_initial_outcome_check';
+        END IF;
+
         RETURN NEW;
     END IF;
 
@@ -2500,6 +3102,15 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_settlement_payment_guard';
     END IF;
 
+    IF NEW."outcome" IS DISTINCT FROM OLD."outcome"
+       AND NOT (
+           OLD."outcome" = 'PENDING'
+           AND NEW."outcome" IN ('DELIVERED', 'CANCELLED_REFUNDED')
+       ) THEN
+        RAISE EXCEPTION 'fulfilment slot outcome is terminal once recorded'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_outcome_transition_check';
+    END IF;
+
     RETURN NEW;
 END;
 $$;
@@ -2508,11 +3119,150 @@ CREATE TRIGGER "fulfilment_slots_topology_protected"
 BEFORE INSERT OR UPDATE OR DELETE ON "fulfilment_slots"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_fulfilment_slot_topology();
 
+CREATE FUNCTION taven_protect_shipment_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."status" <> 'PLANNED'
+           OR NEW."carrier" IS NOT NULL
+           OR NEW."provider_shipment_id" IS NOT NULL
+           OR NEW."tracking_code" IS NOT NULL
+           OR NEW."label_created_at" IS NOT NULL
+           OR NEW."handed_over_at" IS NOT NULL
+           OR NEW."delivered_at" IS NOT NULL
+           OR NEW."cancelled_at" IS NOT NULL THEN
+            RAISE EXCEPTION 'new Shipments must begin planned without provider lifecycle evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'shipment_initial_status_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF (OLD."carrier" IS NOT NULL AND NEW."carrier" IS DISTINCT FROM OLD."carrier")
+       OR (OLD."provider_shipment_id" IS NOT NULL AND NEW."provider_shipment_id" IS DISTINCT FROM OLD."provider_shipment_id")
+       OR (OLD."tracking_code" IS NOT NULL AND NEW."tracking_code" IS DISTINCT FROM OLD."tracking_code")
+       OR (OLD."label_created_at" IS NOT NULL AND NEW."label_created_at" IS DISTINCT FROM OLD."label_created_at")
+       OR (OLD."handed_over_at" IS NOT NULL AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at")
+       OR (OLD."delivered_at" IS NOT NULL AND NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at")
+       OR (OLD."cancelled_at" IS NOT NULL AND NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at") THEN
+        RAISE EXCEPTION 'Shipment provider identity and lifecycle evidence are immutable after assignment'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_immutable_check';
+    END IF;
+
+    IF NEW."status" IS NOT DISTINCT FROM OLD."status"
+       AND (
+           NEW."carrier" IS DISTINCT FROM OLD."carrier"
+           OR NEW."provider_shipment_id" IS DISTINCT FROM OLD."provider_shipment_id"
+           OR NEW."tracking_code" IS DISTINCT FROM OLD."tracking_code"
+           OR NEW."label_created_at" IS DISTINCT FROM OLD."label_created_at"
+           OR NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
+           OR NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+           OR NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at"
+       ) THEN
+        RAISE EXCEPTION 'Shipment lifecycle evidence must be assigned with its status transition'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
+    END IF;
+
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'PLANNED' AND NEW."status" IN ('LABEL_CREATED', 'CANCELLED'))
+           OR (OLD."status" = 'LABEL_CREATED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLED'))
+           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" IN ('IN_TRANSIT', 'DELIVERED'))
+           OR (OLD."status" = 'IN_TRANSIT' AND NEW."status" = 'DELIVERED')
+       ) THEN
+        RAISE EXCEPTION 'Shipment status transition is not allowed'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_status_transition_check';
+    END IF;
+
+    IF NEW."status" IS DISTINCT FROM OLD."status"
+       AND NOT (
+           (OLD."status" = 'PLANNED' AND NEW."status" = 'LABEL_CREATED'
+            AND NEW."carrier" IS DISTINCT FROM OLD."carrier"
+            AND NEW."provider_shipment_id" IS DISTINCT FROM OLD."provider_shipment_id"
+            AND NEW."label_created_at" IS DISTINCT FROM OLD."label_created_at"
+            AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
+            AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+            AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'LABEL_CREATED' AND NEW."status" = 'HANDED_OVER'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'IN_TRANSIT'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" IN ('HANDED_OVER', 'IN_TRANSIT') AND NEW."status" = 'DELIVERED'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (NEW."status" = 'CANCELLED'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at")
+       ) THEN
+        RAISE EXCEPTION 'Shipment transition may assign only its own lifecycle evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
+    END IF;
+
+    IF (NEW."status" IN ('LABEL_CREATED', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+        AND (
+            NEW."carrier" IS NULL
+            OR NEW."provider_shipment_id" IS NULL
+            OR NEW."label_created_at" IS NULL
+        ))
+       OR (NEW."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+           AND NEW."handed_over_at" IS NULL)
+       OR (NEW."status" = 'DELIVERED' AND NEW."delivered_at" IS NULL)
+       OR (NEW."status" = 'CANCELLED' AND NEW."cancelled_at" IS NULL) THEN
+        RAISE EXCEPTION 'Shipment lifecycle state requires its complete provider evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
+    END IF;
+
+    IF (NEW."label_created_at" IS NOT NULL AND NEW."handed_over_at" IS NOT NULL
+        AND NEW."handed_over_at" < NEW."label_created_at")
+       OR (NEW."handed_over_at" IS NOT NULL AND NEW."delivered_at" IS NOT NULL
+           AND NEW."delivered_at" < NEW."handed_over_at")
+       OR (NEW."cancelled_at" IS NOT NULL AND NEW."label_created_at" IS NOT NULL
+           AND NEW."cancelled_at" < NEW."label_created_at") THEN
+        RAISE EXCEPTION 'Shipment lifecycle timestamps must be chronological'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "shipments_lifecycle_protected"
+BEFORE INSERT OR UPDATE ON "shipments"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_shipment_lifecycle();
+
 CREATE FUNCTION taven_protect_shipment_topology()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'shipments are stable operational history and cannot be deleted'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_topology_immutable_check';
+    END IF;
+
     IF NEW."order_id" IS DISTINCT FROM OLD."order_id"
        OR NEW."order_phase_id" IS DISTINCT FROM OLD."order_phase_id"
        OR NEW."shipment_plan_id" IS DISTINCT FROM OLD."shipment_plan_id"
@@ -2526,7 +3276,7 @@ END;
 $$;
 
 CREATE TRIGGER "shipments_topology_protected"
-BEFORE UPDATE ON "shipments"
+BEFORE UPDATE OR DELETE ON "shipments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_shipment_topology();
 
 CREATE FUNCTION taven_require_payment_fulfilment_topology()
@@ -2799,6 +3549,7 @@ DECLARE
     payment_status "payment_status";
     captured_amount bigint;
     succeeded_refunds bigint;
+    pending_refunds bigint;
 BEGIN
     target_payment_id := CASE
         WHEN TG_TABLE_NAME = 'payments' THEN (to_jsonb(NEW) ->> 'id')::uuid
@@ -2811,13 +3562,16 @@ BEGIN
     WHERE "id" = target_payment_id
     FOR UPDATE;
 
-    SELECT coalesce(sum("amount_minor"), 0)
-    INTO succeeded_refunds
+    SELECT coalesce(sum("amount_minor") FILTER (WHERE "status" = 'SUCCEEDED'), 0),
+           count(*) FILTER (WHERE "status" = 'PENDING')
+    INTO succeeded_refunds, pending_refunds
     FROM "refund_transactions"
-    WHERE "payment_id" = target_payment_id
-      AND "status" = 'SUCCEEDED';
+    WHERE "payment_id" = target_payment_id;
 
-    IF payment_status IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED', 'CAPTURED')
+    IF (payment_status = 'REFUND_PENDING') IS DISTINCT FROM (pending_refunds > 0) THEN
+        RAISE EXCEPTION 'refund-pending payment and pending refund work must be persisted atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_refund_status_reconciliation_check';
+    ELSIF payment_status IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED', 'CAPTURED')
        AND succeeded_refunds <> 0 THEN
         RAISE EXCEPTION 'payment status cannot hide successful refunds'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_refund_status_reconciliation_check';
