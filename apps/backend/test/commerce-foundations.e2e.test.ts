@@ -3944,6 +3944,171 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("cancels quoted checkout without fabricating Shipments", async () => {
+    await rollback("pre-shipment-cancellation", async (client, fixtures) => {
+      const createWithoutShipments = (name: string, slotCount = 1) =>
+        fixtures.createFoundation(
+          name,
+          {},
+          undefined,
+          undefined,
+          undefined,
+          slotCount,
+          undefined,
+          "QUOTED",
+          undefined,
+          {},
+          "AUTOMATIC",
+          true,
+          true,
+          false,
+        );
+
+      const uninstantiated = await createWithoutShipments("no-shipment");
+      await createCurrentPlanAndPayment(client, fixtures, uninstantiated);
+      await cancelOrderBeforeHandoff(client, uninstantiated.orderId);
+
+      expect(
+        (
+          await client.query<{
+            order_status: string;
+            payment_status: string;
+            phase_status: string;
+            shipment_count: string;
+            slot_outcome: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    phase.status::text AS phase_status,
+                    slot.outcome::text AS slot_outcome,
+                    payment.status::text AS payment_status,
+                    (SELECT count(*)::text
+                     FROM shipments shipment
+                     WHERE shipment.order_id = target_order.id) AS shipment_count
+             FROM orders target_order
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             JOIN fulfilment_slots slot ON slot.order_id = target_order.id
+             JOIN payments payment ON payment.order_id = target_order.id
+             WHERE target_order.id = $1`,
+            [uninstantiated.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "CANCELLED",
+          phase_status: "CANCELLED",
+          slot_outcome: "CANCELLED",
+          payment_status: "VOIDED",
+          shipment_count: "0",
+        },
+      ]);
+
+      const mixed = await createWithoutShipments("mixed-plans", 2);
+      const instantiatedPlanId = mixed.shipmentPlanIds[0];
+      const uninstantiatedPlanId = mixed.shipmentPlanIds[1];
+      const instantiatedShipmentId = mixed.shipmentIds[0];
+      if (
+        !instantiatedPlanId ||
+        !uninstantiatedPlanId ||
+        !instantiatedShipmentId
+      ) {
+        throw new Error(
+          "mixed pre-shipment cancellation fixture is incomplete",
+        );
+      }
+      const shipmentCreatedAt = new Date();
+      await client.query(
+        `INSERT INTO shipments
+           (id, order_id, order_phase_id, shipment_plan_id,
+            delivery_destination_id, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$6)`,
+        [
+          instantiatedShipmentId,
+          mixed.orderId,
+          mixed.orderPhaseId,
+          instantiatedPlanId,
+          mixed.deliveryDestinationId,
+          shipmentCreatedAt,
+        ],
+      );
+      await createCurrentPlanAndPayment(client, fixtures, mixed);
+
+      await expectQueryError(
+        client,
+        "cancel_slot_from_instantiated_live_plan",
+        async () => {
+          await client.query(
+            `UPDATE fulfilment_slots slot
+             SET outcome = 'CANCELLED', updated_at = clock_timestamp()
+             FROM shipment_plan_fulfilment_slots allocation
+             WHERE allocation.fulfilment_slot_id = slot.id
+               AND allocation.shipment_plan_id = $1`,
+            [instantiatedPlanId],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "fulfilment_slots_shipment_plan_terminal_reconciled" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_plan_slot_terminal_reconciliation_check",
+        },
+      );
+
+      await client.query(`SAVEPOINT "cancel_uninstantiated_plan_slot"`);
+      try {
+        await client.query(
+          `UPDATE fulfilment_slots slot
+           SET outcome = 'CANCELLED', updated_at = clock_timestamp()
+           FROM shipment_plan_fulfilment_slots allocation
+           WHERE allocation.fulfilment_slot_id = slot.id
+             AND allocation.shipment_plan_id = $1`,
+          [uninstantiatedPlanId],
+        );
+        await client.query(
+          `SET CONSTRAINTS
+             "fulfilment_slots_shipment_plan_terminal_reconciled" IMMEDIATE`,
+        );
+      } finally {
+        await client.query(
+          `ROLLBACK TO SAVEPOINT "cancel_uninstantiated_plan_slot"`,
+        );
+        await client.query(
+          `RELEASE SAVEPOINT "cancel_uninstantiated_plan_slot"`,
+        );
+        await client.query(
+          `SET CONSTRAINTS
+             "fulfilment_slots_shipment_plan_terminal_reconciled" DEFERRED`,
+        );
+      }
+
+      await cancelOrderBeforeHandoff(client, mixed.orderId);
+      expect(
+        (
+          await client.query<{
+            cancelled_slot_count: string;
+            shipment_status: string;
+          }>(
+            `SELECT shipment.status::text AS shipment_status,
+                    count(*) FILTER (WHERE slot.outcome = 'CANCELLED')::text
+                      AS cancelled_slot_count
+             FROM shipments shipment
+             JOIN orders target_order ON target_order.id = shipment.order_id
+             JOIN fulfilment_slots slot ON slot.order_id = target_order.id
+             WHERE target_order.id = $1
+             GROUP BY shipment.id`,
+            [mixed.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          shipment_status: "CANCELLED",
+          cancelled_slot_count: "2",
+        },
+      ]);
+    });
+  });
+
   it("closes every checkout payment before cancelling a quoted order", async () => {
     await rollback("quoted-payment-cancellation", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(

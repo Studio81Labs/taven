@@ -7720,17 +7720,24 @@ BEGIN
                     )
                     OR (
                         slot."outcome" IN ('CANCELLED', 'CANCELLED_REFUNDED')
-                        AND EXISTS (
-                            SELECT 1
-                            FROM "shipments" shipment
-                            WHERE shipment."shipment_plan_id" = plan."id"
-                              AND shipment."status" = 'CANCELLED'
-                              AND shipment."cancelled_at" IS NOT NULL
-                              AND NOT EXISTS (
-                                  SELECT 1
-                                  FROM "shipments" replacement
-                                  WHERE replacement."replaces_shipment_id" = shipment."id"
-                              )
+                        AND (
+                            NOT EXISTS (
+                                SELECT 1
+                                FROM "shipments" shipment
+                                WHERE shipment."shipment_plan_id" = plan."id"
+                            )
+                            OR EXISTS (
+                                SELECT 1
+                                FROM "shipments" shipment
+                                WHERE shipment."shipment_plan_id" = plan."id"
+                                  AND shipment."status" = 'CANCELLED'
+                                  AND shipment."cancelled_at" IS NOT NULL
+                                  AND NOT EXISTS (
+                                      SELECT 1
+                                      FROM "shipments" replacement
+                                      WHERE replacement."replaces_shipment_id" = shipment."id"
+                                  )
+                            )
                         )
                     )
                 )
