@@ -1252,11 +1252,18 @@ CREATE FUNCTION taven_validate_issued_quote()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    evidence_now timestamptz := clock_timestamp();
 BEGIN
     PERFORM 1
     FROM "quote_requests"
     WHERE "id" = NEW."quote_request_id"
     FOR UPDATE;
+
+    IF NEW."issued_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'Quote issuance evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_issuance_evidence_check';
+    END IF;
 
     IF NOT EXISTS (
         SELECT 1
@@ -2186,6 +2193,8 @@ CREATE FUNCTION taven_validate_order_status_transition()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    evidence_now timestamptz := clock_timestamp();
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'DRAFT'
@@ -2196,6 +2205,12 @@ BEGIN
         END IF;
 
         RETURN NEW;
+    END IF;
+
+    IF greatest(NEW."quoted_at", NEW."confirmed_at")
+       > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'Order lifecycle evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_lifecycle_timestamp_check';
     END IF;
 
     IF NEW."id" IS DISTINCT FROM OLD."id"
@@ -2314,6 +2329,8 @@ CREATE FUNCTION taven_protect_order_phase_lifecycle()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    evidence_now timestamptz := clock_timestamp();
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'QUOTED'
@@ -2332,6 +2349,14 @@ BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'order phases are stable lifecycle topology and cannot be deleted'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_immutable_check';
+    END IF;
+
+    IF greatest(
+        NEW."activated_at", NEW."qc_passed_at", NEW."shipped_at",
+        NEW."delivered_at", NEW."completed_at", NEW."cancelled_at"
+    ) > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'OrderPhase lifecycle evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
     END IF;
 
     IF NEW."id" IS DISTINCT FROM OLD."id"
@@ -3827,13 +3852,15 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     previous_binding_id uuid;
+    target_order_status "order_status";
 BEGIN
     IF TG_OP = 'UPDATE' AND NEW."order_id" IS DISTINCT FROM OLD."order_id" THEN
         RAISE EXCEPTION 'active order price binding cannot be reparented'
             USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_owner_immutable_check';
     END IF;
 
-    PERFORM 1
+    SELECT "status"
+    INTO target_order_status
     FROM "orders"
     WHERE "id" = NEW."order_id"
     FOR UPDATE;
@@ -3852,6 +3879,62 @@ BEGIN
     IF EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = NEW."order_id") THEN
         RAISE EXCEPTION 'active destination and price binding cannot change after payment intent creation'
             USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_payment_guard';
+    END IF;
+
+    IF target_order_status <> 'DRAFT'
+       AND (CASE WHEN TG_OP = 'INSERT' THEN true
+                 ELSE NEW."order_price_binding_id" IS DISTINCT FROM OLD."order_price_binding_id"
+            END)
+       AND (
+           NOT EXISTS (
+               SELECT 1
+               FROM "shipment_plans" plan
+               JOIN "order_phases" phase
+                 ON phase."id" = plan."order_phase_id"
+                AND phase."order_id" = plan."order_id"
+               WHERE plan."order_id" = NEW."order_id"
+                 AND plan."order_price_binding_id" = NEW."order_price_binding_id"
+                 AND phase."kind" = 'SINGLE'
+                 AND phase."status" = 'QUOTED'
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM "fulfilment_slots" slot
+               WHERE slot."order_id" = NEW."order_id"
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM "shipment_plan_fulfilment_slots" allocation
+                     WHERE allocation."fulfilment_slot_id" = slot."id"
+                       AND allocation."order_price_binding_id" = NEW."order_price_binding_id"
+                 )
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM "shipment_plans" plan
+               WHERE plan."order_id" = NEW."order_id"
+                 AND plan."order_price_binding_id" = NEW."order_price_binding_id"
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM "shipment_plan_fulfilment_slots" allocation
+                     WHERE allocation."shipment_plan_id" = plan."id"
+                       AND allocation."order_price_binding_id" = NEW."order_price_binding_id"
+                 )
+           )
+           OR NOT EXISTS (
+               SELECT 1
+               FROM "order_price_bindings" binding
+               JOIN "price_snapshots" snapshot
+                 ON snapshot."id" = binding."price_snapshot_id"
+               JOIN "payment_schedules" schedule
+                 ON schedule."price_snapshot_id" = snapshot."id"
+                AND schedule."role" = 'FULL'
+               WHERE binding."id" = NEW."order_price_binding_id"
+                 AND snapshot."contract_total_minor" > 0
+                 AND schedule."gross_amount_minor" = snapshot."contract_total_minor"
+           )
+       ) THEN
+        RAISE EXCEPTION 'non-draft active binding requires complete quote-ready shipment topology'
+            USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_quote_topology_check';
     END IF;
 
     IF TG_OP = 'UPDATE' AND NEW."order_price_binding_id" IS DISTINCT FROM OLD."order_price_binding_id" THEN

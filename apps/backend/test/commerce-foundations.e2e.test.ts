@@ -1888,6 +1888,281 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("requires quote-ready shipment topology when moving an active binding", async () => {
+    await rollback(
+      "active-binding-quote-topology",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "active-binding-quote-topology",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          1,
+          undefined,
+          "DRAFT",
+        );
+        const sourceComponents = (
+          await client.query<{
+            allocation: unknown;
+            amount_minor: string;
+            kind: string;
+            order_item_id: string | null;
+            quote_item_id: string | null;
+            scope: string;
+          }>(
+            `SELECT kind::text, scope::text, quote_item_id, order_item_id,
+                  amount_minor::text, allocation
+           FROM price_snapshot_components
+           WHERE price_snapshot_id = $1
+           ORDER BY kind::text`,
+            [foundation.priceSnapshotId],
+          )
+        ).rows;
+        const shipmentAmount = sourceComponents
+          .filter((component) => component.kind === "SHIPMENT")
+          .reduce(
+            (total, component) => total + BigInt(component.amount_minor),
+            0n,
+          );
+
+        const createReplacement = async (
+          name: string,
+          includeShipmentPlan: boolean,
+        ): Promise<{ bindingId: string; planId: string | null }> => {
+          const snapshotId = fixtures.id(`${name}:snapshot`);
+          const bindingId = fixtures.id(`${name}:binding`);
+          const planId = includeShipmentPlan
+            ? fixtures.id(`${name}:shipment-plan`)
+            : null;
+          const createdAt = new Date();
+          await client.query(
+            `INSERT INTO price_snapshots
+             (id, currency, contract_total_minor, pricing_revision,
+              input_snapshot, snapshot_hash, created_at)
+           SELECT $1, currency, contract_total_minor, $2,
+                  input_snapshot, $3, $4
+           FROM price_snapshots WHERE id = $5`,
+            [
+              snapshotId,
+              `replacement-${name}`,
+              randomUUID().replaceAll("-", "").repeat(2),
+              createdAt,
+              foundation.priceSnapshotId,
+            ],
+          );
+          await client.query(
+            `INSERT INTO payment_schedules
+             (id, price_snapshot_id, sequence, role, gross_amount_minor,
+              fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+           SELECT $1, $2, sequence, role, gross_amount_minor,
+                  fee_rate_basis_points, fee_fixed_minor, provider_config, $3
+           FROM payment_schedules WHERE id = $4`,
+            [
+              fixtures.id(`${name}:payment-schedule`),
+              snapshotId,
+              createdAt,
+              foundation.paymentScheduleId,
+            ],
+          );
+          await client.query(
+            `INSERT INTO order_price_bindings
+             (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
+           VALUES ($1,$2,$3,$4,$5)`,
+            [
+              bindingId,
+              foundation.orderId,
+              snapshotId,
+              foundation.deliveryDestinationId,
+              createdAt,
+            ],
+          );
+
+          if (planId) {
+            await client.query(
+              `INSERT INTO shipment_plans
+               (id, order_id, order_phase_id, price_snapshot_id,
+                order_price_binding_id, delivery_destination_id, ordinal,
+                category, planned_volume_cubic_mm, planned_weight_milligrams,
+                shipping_amount_minor, packaging_amount_minor,
+                handling_amount_minor, allocation_snapshot, created_at)
+             SELECT $1, order_id, order_phase_id, $2, $3,
+                    delivery_destination_id, ordinal, category,
+                    planned_volume_cubic_mm, planned_weight_milligrams,
+                    shipping_amount_minor, packaging_amount_minor,
+                    handling_amount_minor, allocation_snapshot, $4
+             FROM shipment_plans WHERE id = $5`,
+              [
+                planId,
+                snapshotId,
+                bindingId,
+                createdAt,
+                foundation.shipmentPlanId,
+              ],
+            );
+            await client.query(
+              `INSERT INTO shipment_plan_fulfilment_slots
+               (shipment_plan_id, order_price_binding_id, fulfilment_slot_id)
+             VALUES ($1,$2,$3)`,
+              [planId, bindingId, foundation.fulfilmentSlotId],
+            );
+          }
+
+          const replacementComponents = includeShipmentPlan
+            ? sourceComponents
+            : sourceComponents
+                .filter((component) => component.kind !== "SHIPMENT")
+                .map((component) => ({
+                  ...component,
+                  amount_minor:
+                    component.kind === "ORDER_MIN_PRINT"
+                      ? (
+                          BigInt(component.amount_minor) + shipmentAmount
+                        ).toString()
+                      : component.amount_minor,
+                }));
+          for (const [index, component] of replacementComponents.entries()) {
+            const componentId = fixtures.id(`${name}:component:${index}`);
+            const mappedPlanId = component.kind === "SHIPMENT" ? planId : null;
+            await client.query(
+              `INSERT INTO price_snapshot_components
+               (id, price_snapshot_id, kind, scope, quote_item_id,
+                order_item_id, shipment_plan_id, amount_minor,
+                allocation, created_at)
+             VALUES ($1,$2,$3::price_component_kind,$4::price_component_scope,
+                     $5,$6,$7,$8,$9::jsonb,$10)`,
+              [
+                componentId,
+                snapshotId,
+                component.kind,
+                component.scope,
+                component.quote_item_id,
+                component.order_item_id,
+                mappedPlanId,
+                component.amount_minor,
+                JSON.stringify(component.allocation),
+                createdAt,
+              ],
+            );
+            await client.query(
+              `INSERT INTO price_component_fulfilment_allocations
+               (price_snapshot_component_id, fulfilment_slot_id, amount_minor)
+             VALUES ($1,$2,$3)`,
+              [
+                componentId,
+                foundation.fulfilmentSlotId,
+                component.amount_minor,
+              ],
+            );
+          }
+          return { bindingId, planId };
+        };
+
+        const incomplete = await createReplacement("incomplete", false);
+        const complete = await createReplacement("complete", true);
+        await client.query(
+          `SET CONSTRAINTS
+           "price_snapshots_total_reconciled",
+           "price_snapshot_components_total_reconciled",
+           "payment_schedules_total_reconciled",
+           "order_price_bindings_snapshot_sealed",
+           "price_component_fulfilment_allocations_reconciled" IMMEDIATE`,
+        );
+        await client.query(
+          `SET CONSTRAINTS
+           "price_snapshots_total_reconciled",
+           "price_snapshot_components_total_reconciled",
+           "payment_schedules_total_reconciled",
+           "order_price_bindings_snapshot_sealed",
+           "price_component_fulfilment_allocations_reconciled" DEFERRED`,
+        );
+        await client.query(
+          `UPDATE orders
+         SET status = 'QUOTED', quoted_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+          [foundation.orderId],
+        );
+        await client.query(
+          `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" IMMEDIATE`,
+        );
+        await client.query(
+          `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" DEFERRED`,
+        );
+
+        await expectQueryError(
+          client,
+          "move_without_shipment_topology",
+          () =>
+            client.query(
+              `UPDATE order_active_price_bindings
+             SET order_price_binding_id = $2 WHERE order_id = $1`,
+              [foundation.orderId, incomplete.bindingId],
+            ),
+          {
+            code: "23514",
+            constraint: "active_order_price_binding_quote_topology_check",
+          },
+        );
+        expect(
+          (
+            await client.query<{
+              active_binding_id: string;
+              original_invalidated_at: Date | null;
+            }>(
+              `SELECT active.order_price_binding_id AS active_binding_id,
+                    binding.invalidated_at AS original_invalidated_at
+             FROM order_active_price_bindings active
+             JOIN order_price_bindings binding
+               ON binding.id = $2
+             WHERE active.order_id = $1`,
+              [foundation.orderId, foundation.orderPriceBindingId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            active_binding_id: foundation.orderPriceBindingId,
+            original_invalidated_at: null,
+          },
+        ]);
+
+        await client.query(
+          `UPDATE order_active_price_bindings
+         SET order_price_binding_id = $2 WHERE order_id = $1`,
+          [foundation.orderId, complete.bindingId],
+        );
+        await client.query(
+          `SET CONSTRAINTS "order_active_price_bindings_quoted_reconciled" IMMEDIATE`,
+        );
+        expect(
+          (
+            await client.query<{
+              active_binding_id: string;
+              original_invalidated: boolean;
+              plan_id: string;
+            }>(
+              `SELECT active.order_price_binding_id AS active_binding_id,
+                    binding.invalidated_at IS NOT NULL AS original_invalidated,
+                    plan.id AS plan_id
+             FROM order_active_price_bindings active
+             JOIN order_price_bindings binding ON binding.id = $2
+             JOIN shipment_plans plan
+               ON plan.order_price_binding_id = active.order_price_binding_id
+             WHERE active.order_id = $1`,
+              [foundation.orderId, foundation.orderPriceBindingId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            active_binding_id: complete.bindingId,
+            original_invalidated: true,
+            plan_id: complete.planId,
+          },
+        ]);
+      },
+    );
+  });
+
   it("serializes binding invalidation and active moves with payment insertion", async () => {
     const setup = await pool.connect();
     const paying = await pool.connect();
@@ -6473,6 +6748,141 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("bounds Order and OrderPhase lifecycle evidence by the database clock", async () => {
+    await rollback("future-order-evidence", async (client, fixtures) => {
+      const order = await fixtures.createFoundation(
+        "future-order-evidence",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      await expectQueryError(
+        client,
+        "future_order_quoted",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET status = 'QUOTED',
+                 quoted_at = clock_timestamp() + interval '60 seconds',
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [order.orderId],
+          ),
+        {
+          code: "23514",
+          constraint: "order_lifecycle_timestamp_check",
+        },
+      );
+      await client.query(
+        `UPDATE orders
+         SET status = 'QUOTED',
+             quoted_at = clock_timestamp() + interval '2 seconds',
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [order.orderId],
+      );
+      await expectQueryError(
+        client,
+        "future_order_confirmed",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET status = 'CONFIRMED',
+                 confirmed_at = clock_timestamp() + interval '60 seconds',
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [order.orderId],
+          ),
+        {
+          code: "23514",
+          constraint: "order_lifecycle_timestamp_check",
+        },
+      );
+      await client.query(
+        `UPDATE orders
+         SET status = 'CONFIRMED',
+             confirmed_at = clock_timestamp() + interval '2 seconds',
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [order.orderId],
+      );
+
+      const phase = await fixtures.createFoundation(
+        "future-order-phase-evidence",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "DRAFT",
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'ACTIVE',
+             activated_at = clock_timestamp() + interval '2 seconds',
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [phase.orderPhaseId],
+      );
+      const futurePhaseEvidenceColumns = [
+        "activated_at",
+        "qc_passed_at",
+        "shipped_at",
+        "delivered_at",
+        "completed_at",
+        "cancelled_at",
+      ] as const;
+      for (const column of futurePhaseEvidenceColumns) {
+        await expectQueryError(
+          client,
+          `future_phase_${column}`,
+          () =>
+            client.query(
+              `UPDATE order_phases
+               SET "${column}" = clock_timestamp() + interval '60 seconds',
+                   updated_at = clock_timestamp()
+               WHERE id = $1`,
+              [phase.orderPhaseId],
+            ),
+          {
+            code: "23514",
+            constraint: "order_phase_lifecycle_evidence_check",
+            message: "OrderPhase lifecycle evidence cannot be in the future",
+          },
+        );
+      }
+
+      expect(
+        (
+          await client.query<{
+            confirmed_at: Date;
+            order_status: string;
+            phase_status: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    target_order.confirmed_at,
+                    phase.status::text AS phase_status
+             FROM orders target_order
+             JOIN order_phases phase ON phase.id = $2
+             WHERE target_order.id = $1`,
+            [order.orderId, phase.orderPhaseId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          confirmed_at: expect.any(Date),
+          order_status: "CONFIRMED",
+          phase_status: "ACTIVE",
+        },
+      ]);
+    });
+  });
+
   it("requires a current Shipment for every active ShipmentPlan before ready-to-ship", async () => {
     await rollback(
       "ready-to-ship-shipment-coverage",
@@ -8824,25 +9234,62 @@ describe("commerce persistence foundations", () => {
           },
         );
 
-        const futureIssuedAt = new Date(now.getTime() + 60 * 60 * 1_000);
-        const futureRequestId = await createPricedOffer(
-          "future-offer",
-          futureIssuedAt,
-          new Date(now.getTime() + 2 * 60 * 60 * 1_000),
-          "3".repeat(64),
+        const toleratedRequestId = fixtures.id(
+          "tolerated-future-offer:request",
         );
+        const toleratedQuoteId = fixtures.id("tolerated-future-offer:quote");
+        await client.query(
+          `INSERT INTO quote_requests
+             (id, customer_id, status, created_at, updated_at)
+           VALUES ($1,$2,'NEW',clock_timestamp(),clock_timestamp())`,
+          [toleratedRequestId, foundation.customerId],
+        );
+        await advanceQuoteRequestToQuoted(client, toleratedRequestId, now);
+        await client.query(
+          `INSERT INTO quotes
+             (id, quote_request_id, customer_id, expires_at, issued_at, created_at)
+           VALUES ($1,$2,$3,clock_timestamp() + interval '1 hour',
+                   clock_timestamp() + interval '2 seconds',clock_timestamp())`,
+          [toleratedQuoteId, toleratedRequestId, foundation.customerId],
+        );
+        expect(
+          (
+            await client.query<{ quote_exists: boolean }>(
+              `SELECT EXISTS (
+                   SELECT 1 FROM quotes WHERE id = $1
+               ) AS quote_exists`,
+              [toleratedQuoteId],
+            )
+          ).rows,
+        ).toEqual([{ quote_exists: true }]);
+
+        const futureRequestId = fixtures.id("future-offer:request");
+        await client.query(
+          `INSERT INTO quote_requests
+             (id, customer_id, status, created_at, updated_at)
+           VALUES ($1,$2,'NEW',clock_timestamp(),clock_timestamp())`,
+          [futureRequestId, foundation.customerId],
+        );
+        await advanceQuoteRequestToQuoted(client, futureRequestId, now);
         await expectQueryError(
           client,
-          "accept_future_offer",
+          "future_quote_issuance",
           () =>
             client.query(
-              `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
-               WHERE id = $1`,
-              [futureRequestId, now],
+              `INSERT INTO quotes
+                 (id, quote_request_id, customer_id, expires_at,
+                  issued_at, created_at)
+               VALUES ($1,$2,$3,clock_timestamp() + interval '1 hour',
+                       clock_timestamp() + interval '60 seconds',clock_timestamp())`,
+              [
+                fixtures.id("future-offer:quote"),
+                futureRequestId,
+                foundation.customerId,
+              ],
             ),
           {
             code: "23514",
-            constraint: "quote_price_binding_acceptance_check",
+            constraint: "quote_issuance_evidence_check",
           },
         );
       },
