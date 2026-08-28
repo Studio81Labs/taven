@@ -606,10 +606,34 @@ describe("commerce persistence foundations", () => {
         );
       }
 
+      const mutableQuoteRequestId = fixtures.id(
+        "reference-inputs:quote-request",
+      );
+      const mutableQuoteId = fixtures.id("reference-inputs:quote");
+      const quoteCreatedAt = new Date();
+      await client.query(
+        `INSERT INTO quote_requests
+           (id, customer_id, status, created_at, updated_at)
+         VALUES ($1,$2,'QUOTED',$3,$3)`,
+        [mutableQuoteRequestId, foundation.customerId, quoteCreatedAt],
+      );
+      await client.query(
+        `INSERT INTO quotes
+           (id, quote_request_id, customer_id, expires_at, issued_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          mutableQuoteId,
+          mutableQuoteRequestId,
+          foundation.customerId,
+          new Date(quoteCreatedAt.getTime() + 60 * 60 * 1_000),
+          quoteCreatedAt,
+        ],
+      );
+
       for (const table of ["quote_items", "order_items"] as const) {
         const parentColumn = table === "quote_items" ? "quote_id" : "order_id";
         const parentId =
-          table === "quote_items" ? foundation.quoteId : foundation.orderId;
+          table === "quote_items" ? mutableQuoteId : foundation.orderId;
         const constraint =
           table === "quote_items"
             ? "quote_item_reference_slice_input_check"
@@ -1158,6 +1182,91 @@ describe("commerce persistence foundations", () => {
           captured_at: capturedAt,
         },
       ]);
+    });
+  });
+
+  it("rejects ordinary capture after its authorization window closes", async () => {
+    await rollback("closed-capture-window", async (client, fixtures) => {
+      const capturePayment = async (
+        foundation: PersistenceFoundation,
+        providerCaptureId: string,
+      ): Promise<void> => {
+        await client.query(
+          `UPDATE payments
+           SET status = 'CAPTURED',
+               captured_amount_minor = requested_amount_minor,
+               provider_capture_id = $2, captured_at = $3
+           WHERE id = $1`,
+          [foundation.paymentId, providerCaptureId, new Date()],
+        );
+      };
+
+      const unauthorized = await fixtures.createFoundation(
+        "unauthorized-capture",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, unauthorized);
+      await expectQueryError(
+        client,
+        "cutoff_without_closing_authorization",
+        () =>
+          client.query(
+            `UPDATE payments SET capture_cutoff_at = $2 WHERE id = $1`,
+            [unauthorized.paymentId, new Date()],
+          ),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+      await client.query(
+        `UPDATE payments SET capture_authorized = false WHERE id = $1`,
+        [unauthorized.paymentId],
+      );
+      await expectQueryError(
+        client,
+        "capture_without_authorization",
+        () => capturePayment(unauthorized, "unauthorized-capture"),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+
+      const expired = await fixtures.createFoundation("expired-capture");
+      await createCurrentPlanAndPayment(client, fixtures, expired);
+      await client.query(
+        `UPDATE payments
+         SET capture_authorized = false, capture_cutoff_at = $2
+         WHERE id = $1`,
+        [expired.paymentId, new Date(Date.now() - 1_000)],
+      );
+      await expectQueryError(
+        client,
+        "capture_after_cutoff",
+        () => capturePayment(expired, "expired-capture"),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+    });
+  });
+
+  it("requires a captured held production reservation for every job", async () => {
+    await rollback("uncaptured-production-job", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "uncaptured-production-job",
+      );
+      const production = await fixtures.planProduction(
+        foundation,
+        "uncaptured-production-job",
+      );
+      await fixtures.createResourcePlan(foundation, [production]);
+      await fixtures.createPhaseReservationSet(foundation);
+      await fixtures.createProductionReservation(foundation, production);
+
+      await expectQueryError(
+        client,
+        "uncaptured_production_job",
+        async () => {
+          await fixtures.createJob(foundation, production);
+          await client.query(
+            `SET CONSTRAINTS "jobs_captured_reservation_reconciled" IMMEDIATE`,
+          );
+        },
+        { code: "23514", constraint: "job_capture_reconciliation_check" },
+      );
     });
   });
 
@@ -1857,6 +1966,29 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id) VALUES ($1,$2)`,
         [quoteId, snapshotId],
+      );
+      await expectQueryError(
+        client,
+        "price_bound_quote_item_insert",
+        () =>
+          client.query(
+            `INSERT INTO quote_items (id, quote_id, ordinal, source_model_file_id,
+                                     model_geometry_id, print_config_revision_id, material,
+                                     color, quantity, created_at)
+             VALUES ($1,$2,1,$3,$4,$5,'PLA','white',1,$6)`,
+            [
+              fixtures.id("price-bound-quote-item"),
+              quoteId,
+              foundation.modelFileId,
+              foundation.modelGeometryId,
+              foundation.printConfigRevisionId,
+              now,
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "quote_item_price_binding_immutable_check",
+        },
       );
       await client.query(
         `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1`,

@@ -662,6 +662,15 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quote_item_accepted_immutable_check';
     END IF;
 
+    IF EXISTS (
+        SELECT 1
+        FROM "quote_price_bindings"
+        WHERE "quote_id" = NEW."quote_id"
+    ) THEN
+        RAISE EXCEPTION 'quote items cannot be inserted after their immutable price binding exists'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_item_price_binding_immutable_check';
+    END IF;
+
     RETURN NEW;
 END;
 $$;
@@ -1808,6 +1817,38 @@ CREATE TRIGGER "jobs_planning_scope"
 BEFORE INSERT OR UPDATE ON "jobs"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_job_planning_scope();
 
+CREATE FUNCTION taven_require_captured_reservation_for_job()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "phase_resource_plan_jobs"
+    WHERE "id" = NEW."phase_resource_plan_job_id"
+      AND "node_id" = NEW."node_id"
+    FOR UPDATE;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "production_reservations" production
+        WHERE production."job_id" = NEW."id"
+          AND production."node_id" = NEW."node_id"
+          AND production."phase_resource_plan_job_id" = NEW."phase_resource_plan_job_id"
+          AND production."status" = 'HELD'
+    ) THEN
+        RAISE EXCEPTION 'job requires its captured held production reservation'
+            USING ERRCODE = '23514', CONSTRAINT = 'job_capture_reconciliation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "jobs_captured_reservation_reconciled"
+AFTER INSERT ON "jobs"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_require_captured_reservation_for_job();
+
 CREATE FUNCTION taven_extend_quote_source_retention()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2122,6 +2163,11 @@ AS $$
 DECLARE
     quoted_phase_count integer;
 BEGIN
+    IF NOT NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NOT NULL THEN
+        RAISE EXCEPTION 'new payment capture intent requires an open authorization window'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+    END IF;
+
     PERFORM 1
     FROM "orders"
     WHERE "id" = NEW."order_id"
@@ -2298,6 +2344,20 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'payment status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_status_transition_check';
+    END IF;
+
+    IF OLD."status" = 'PENDING'
+       AND NEW."status" = 'CAPTURED'
+       AND (NOT NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NOT NULL) THEN
+        RAISE EXCEPTION 'ordinary payment capture requires an open authorization window'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+    END IF;
+
+    IF OLD."capture_cutoff_at" IS NULL
+       AND NEW."capture_cutoff_at" IS NOT NULL
+       AND NEW."capture_authorized" THEN
+        RAISE EXCEPTION 'payment capture cutoff must close authorization atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
     END IF;
 
     IF NEW."id" IS DISTINCT FROM OLD."id"

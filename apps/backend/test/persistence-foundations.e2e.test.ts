@@ -3239,6 +3239,9 @@ describe("persistence foundations", () => {
         'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
         [graph.foundation.phaseReservationSetId, "HELD"],
       );
+      await client.query(
+        'SET CONSTRAINTS "jobs_captured_reservation_reconciled" IMMEDIATE',
+      );
 
       const terminalProduction = graph.productions[0];
       const liveProduction = graph.productions[1];
@@ -3637,6 +3640,9 @@ describe("persistence foundations", () => {
         [foundation.phaseReservationSetId, "HELD"],
       );
       await client.query(
+        'SET CONSTRAINTS "jobs_captured_reservation_reconciled" IMMEDIATE',
+      );
+      await client.query(
         'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
         [terminalProduction.productionReservationId, "RELEASED"],
       );
@@ -3866,6 +3872,9 @@ describe("persistence foundations", () => {
           [foundation.phaseReservationSetId, "RESERVED"],
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query(
+          'SET CONSTRAINTS "jobs_captured_reservation_reconciled" DEFERRED',
+        );
 
         await fixtures.createJob(foundation, production);
         await expect(
@@ -3935,6 +3944,9 @@ describe("persistence foundations", () => {
           [foundation.phaseReservationSetId, "RELEASED"],
         );
         await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query(
+          'SET CONSTRAINTS "jobs_captured_reservation_reconciled" DEFERRED',
+        );
 
         await fixtures.createJob(foundation, production);
         await expect(
