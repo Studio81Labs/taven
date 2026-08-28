@@ -1283,6 +1283,16 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_issued_quote_check';
     END IF;
 
+    UPDATE "photo_assets" photo
+    SET "photo_delete_after" = greatest(
+        photo."photo_delete_after",
+        NEW."expires_at" + make_interval(days => photo."retention_days")
+    )
+    WHERE photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+      AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+      AND photo."scope_id" = NEW."quote_request_id"
+      AND photo."deleted_at" IS NULL;
+
     RETURN NEW;
 END;
 $$;
@@ -3080,9 +3090,30 @@ CREATE FUNCTION taven_hold_active_order_quote_reference()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    issued_quote_expires_at timestamptz;
 BEGIN
     IF NEW."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
        AND NEW."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind" THEN
+        -- Quote issuance takes this lock before extending existing photos. A
+        -- separate lookup after the lock wait sees a concurrently issued Quote.
+        PERFORM 1
+        FROM "quote_requests" request
+        WHERE request."id" = NEW."scope_id"
+        FOR UPDATE;
+
+        SELECT quote."expires_at"
+        INTO issued_quote_expires_at
+        FROM "quotes" quote
+        WHERE quote."quote_request_id" = NEW."scope_id";
+
+        IF issued_quote_expires_at IS NOT NULL THEN
+            NEW."photo_delete_after" := greatest(
+                NEW."photo_delete_after",
+                issued_quote_expires_at + make_interval(days => NEW."retention_days")
+            );
+        END IF;
+
         PERFORM 1
         FROM "individual_order_origins" origin
         JOIN "quotes" quote ON quote."id" = origin."quote_id"

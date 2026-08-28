@@ -10178,6 +10178,20 @@ describe("commerce persistence foundations", () => {
       const requestId = fixtures.id("quote-issuance-request");
       const quoteId = fixtures.id("quote-issuance-quote");
       const snapshotId = fixtures.id("quote-issuance-snapshot");
+      const oldReferencePhotoId = fixtures.id(
+        "quote-issuance-old-reference-photo",
+      );
+      const longReferencePhotoId = fixtures.id(
+        "quote-issuance-long-reference-photo",
+      );
+      const uploadedAt = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1_000);
+      const initialPhotoDeadline = new Date(
+        now.getTime() - 24 * 60 * 60 * 1_000,
+      );
+      const longPhotoDeadline = new Date(
+        now.getTime() + 120 * 24 * 60 * 60 * 1_000,
+      );
+      const quoteExpiresAt = new Date(now.getTime() + 60 * 60 * 1_000);
 
       await expectQueryError(
         client,
@@ -10222,6 +10236,27 @@ describe("commerce persistence foundations", () => {
          WHERE id = $1`,
         [requestId, now],
       );
+      await client.query(
+        `INSERT INTO photo_assets
+           (id, kind, scope_kind, scope_id, storage_object_key, content_hash,
+            media_type, size_bytes, uploaded_at, photo_delete_after,
+            retention_hold, created_at)
+         VALUES
+           ($1,'QUOTE_REFERENCE','QUOTE_REQUEST',$3,$4,$5,'image/jpeg',1,$6,$7,'NONE',$6),
+           ($2,'QUOTE_REFERENCE','QUOTE_REQUEST',$3,$8,$9,'image/jpeg',1,$6,$10,'NONE',$6)`,
+        [
+          oldReferencePhotoId,
+          longReferencePhotoId,
+          requestId,
+          `quote-reference/${oldReferencePhotoId}`,
+          "8".repeat(64),
+          uploadedAt,
+          initialPhotoDeadline,
+          `quote-reference/${longReferencePhotoId}`,
+          "9".repeat(64),
+          longPhotoDeadline,
+        ],
+      );
 
       await expectQueryError(
         client,
@@ -10256,13 +10291,7 @@ describe("commerce persistence foundations", () => {
                (id, quote_request_id, customer_id, expires_at,
                 issued_at, created_at)
              VALUES ($1,$2,$3,$4,$5,$5)`,
-            [
-              quoteId,
-              requestId,
-              foundation.customerId,
-              new Date(now.getTime() + 60 * 60 * 1_000),
-              now,
-            ],
+            [quoteId, requestId, foundation.customerId, quoteExpiresAt, now],
           );
           await forceQuoteIssuanceConstraints(client);
         },
@@ -10270,6 +10299,29 @@ describe("commerce persistence foundations", () => {
           code: "23514",
           constraint: "quote_request_issuance_atomic_check",
         },
+      );
+      expect(
+        (
+          await client.query<{ id: string; photo_delete_after: Date }>(
+            `SELECT id, photo_delete_after
+             FROM photo_assets WHERE id IN ($1,$2) ORDER BY id`,
+            [oldReferencePhotoId, longReferencePhotoId],
+          )
+        ).rows.map(({ id, photo_delete_after }) => ({
+          id,
+          photoDeleteAfter: photo_delete_after.getTime(),
+        })),
+      ).toEqual(
+        [
+          {
+            id: oldReferencePhotoId,
+            photoDeleteAfter: initialPhotoDeadline.getTime(),
+          },
+          {
+            id: longReferencePhotoId,
+            photoDeleteAfter: longPhotoDeadline.getTime(),
+          },
+        ].sort((left, right) => left.id.localeCompare(right.id)),
       );
 
       await client.query(
@@ -10283,13 +10335,7 @@ describe("commerce persistence foundations", () => {
            (id, quote_request_id, customer_id, expires_at,
             issued_at, created_at)
          VALUES ($1,$2,$3,$4,$5,$5)`,
-        [
-          quoteId,
-          requestId,
-          foundation.customerId,
-          new Date(now.getTime() + 60 * 60 * 1_000),
-          now,
-        ],
+        [quoteId, requestId, foundation.customerId, quoteExpiresAt, now],
       );
       await client.query(
         `INSERT INTO price_snapshots
@@ -10311,6 +10357,51 @@ describe("commerce persistence foundations", () => {
         [quoteId, snapshotId],
       );
       await forceQuoteIssuanceConstraints(client);
+      const issuedPhotoDeadlines = (
+        await client.query<{ id: string; photo_delete_after: Date }>(
+          `SELECT id, photo_delete_after
+           FROM photo_assets WHERE id IN ($1,$2) ORDER BY id`,
+          [oldReferencePhotoId, longReferencePhotoId],
+        )
+      ).rows;
+      expect(
+        issuedPhotoDeadlines
+          .find(({ id }) => id === oldReferencePhotoId)
+          ?.photo_delete_after.getTime(),
+      ).toBe(quoteExpiresAt.getTime() + 90 * 24 * 60 * 60 * 1_000);
+      expect(
+        issuedPhotoDeadlines
+          .find(({ id }) => id === longReferencePhotoId)
+          ?.photo_delete_after.getTime(),
+      ).toBe(longPhotoDeadline.getTime());
+
+      const lateReferencePhotoId = fixtures.id(
+        "quote-issuance-late-reference-photo",
+      );
+      await client.query(
+        `INSERT INTO photo_assets
+           (id, kind, scope_kind, scope_id, storage_object_key, content_hash,
+            media_type, size_bytes, uploaded_at, photo_delete_after,
+            retention_hold, created_at)
+         VALUES ($1,'QUOTE_REFERENCE','QUOTE_REQUEST',$2,$3,$4,'image/jpeg',1,
+                 $5,$6,'NONE',$5)`,
+        [
+          lateReferencePhotoId,
+          requestId,
+          `quote-reference/${lateReferencePhotoId}`,
+          "b".repeat(64),
+          uploadedAt,
+          initialPhotoDeadline,
+        ],
+      );
+      expect(
+        (
+          await client.query<{ photo_delete_after: Date }>(
+            `SELECT photo_delete_after FROM photo_assets WHERE id = $1`,
+            [lateReferencePhotoId],
+          )
+        ).rows[0]?.photo_delete_after.getTime(),
+      ).toBe(quoteExpiresAt.getTime() + 90 * 24 * 60 * 60 * 1_000);
 
       await expectQueryError(
         client,
@@ -10361,6 +10452,137 @@ describe("commerce persistence foundations", () => {
         );
       }
     });
+  });
+
+  it("serializes Quote issuance with concurrent reference-photo uploads", async () => {
+    const setup = await pool.connect();
+    const issuing = await pool.connect();
+    const uploading = await pool.connect();
+    try {
+      const fixtures = new PersistenceFactory(
+        setup,
+        `${scope}:quote-photo-issuance-concurrency`,
+      );
+      const createdAt = new Date();
+      const quoteExpiresAt = new Date(
+        createdAt.getTime() + 24 * 60 * 60 * 1_000,
+      );
+      const initialPhotoDeadline = new Date(
+        createdAt.getTime() + 2 * 24 * 60 * 60 * 1_000,
+      );
+      const requestId = fixtures.id("concurrent-reference-request");
+      const quoteId = fixtures.id("concurrent-reference-quote");
+      const snapshotId = fixtures.id("concurrent-reference-snapshot");
+      const photoId = fixtures.id("concurrent-reference-photo");
+
+      await setup.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "quote-photo-issuance-concurrency",
+      );
+      await setup.query(
+        `INSERT INTO quote_requests
+           (id, customer_id, status, created_at, updated_at)
+         VALUES ($1,$2,'NEW',$3,$3)`,
+        [requestId, foundation.customerId, createdAt],
+      );
+      await setup.query(
+        `UPDATE quote_requests SET status = 'IN_REVIEW', updated_at = $2
+         WHERE id = $1`,
+        [requestId, createdAt],
+      );
+      await setup.query("COMMIT");
+
+      await issuing.query("BEGIN");
+      await issuing.query(
+        `UPDATE quote_requests SET status = 'QUOTED', updated_at = $2
+         WHERE id = $1`,
+        [requestId, createdAt],
+      );
+      await issuing.query(
+        `INSERT INTO quotes
+           (id, quote_request_id, customer_id, expires_at, issued_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [quoteId, requestId, foundation.customerId, quoteExpiresAt, createdAt],
+      );
+      await issuing.query(
+        `INSERT INTO price_snapshots
+           (id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         VALUES ($1,'EUR',0,'concurrent-reference-v0','{}'::jsonb,$2,$3)`,
+        [snapshotId, randomUUID().replaceAll("-", "").repeat(2), createdAt],
+      );
+      await issuing.query(
+        `INSERT INTO payment_schedules
+           (id, price_snapshot_id, sequence, role, gross_amount_minor,
+            fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+         VALUES ($1,$2,0,'FULL',0,0,0,'{}'::jsonb,$3)`,
+        [fixtures.id("concurrent-reference-schedule"), snapshotId, createdAt],
+      );
+      await issuing.query(
+        `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id)
+         VALUES ($1,$2)`,
+        [quoteId, snapshotId],
+      );
+
+      await uploading.query("BEGIN");
+      await uploading.query("SET LOCAL statement_timeout = '2s'");
+      const uploadingPid = (
+        await uploading.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`)
+      ).rows[0]?.pid;
+      if (!uploadingPid) {
+        throw new Error("quote-reference upload backend pid is unavailable");
+      }
+      const blockedUpload = uploading.query(
+        `INSERT INTO photo_assets
+           (id, kind, scope_kind, scope_id, storage_object_key, content_hash,
+            media_type, size_bytes, uploaded_at, photo_delete_after,
+            retention_hold, created_at)
+         VALUES ($1,'QUOTE_REFERENCE','QUOTE_REQUEST',$2,$3,$4,'image/jpeg',1,
+                 $5,$6,'NONE',$5)`,
+        [
+          photoId,
+          requestId,
+          `quote-reference/${photoId}`,
+          "f".repeat(64),
+          createdAt,
+          initialPhotoDeadline,
+        ],
+      );
+
+      let uploadIsWaitingForIssuance = false;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const activity = await setup.query<{ wait_event_type: string | null }>(
+          `SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1`,
+          [uploadingPid],
+        );
+        if (activity.rows[0]?.wait_event_type === "Lock") {
+          uploadIsWaitingForIssuance = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(uploadIsWaitingForIssuance).toBe(true);
+
+      await issuing.query("COMMIT");
+      await expect(blockedUpload).resolves.toBeDefined();
+      await uploading.query("COMMIT");
+
+      expect(
+        (
+          await setup.query<{ photo_delete_after: Date }>(
+            `SELECT photo_delete_after FROM photo_assets WHERE id = $1`,
+            [photoId],
+          )
+        ).rows[0]?.photo_delete_after.getTime(),
+      ).toBe(quoteExpiresAt.getTime() + 90 * 24 * 60 * 60 * 1_000);
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await issuing.query("ROLLBACK").catch(() => undefined);
+      await uploading.query("ROLLBACK").catch(() => undefined);
+      setup.release();
+      issuing.release();
+      uploading.release();
+    }
   });
 
   it("accepts only currently quoted and unexpired individual offers", async () => {
