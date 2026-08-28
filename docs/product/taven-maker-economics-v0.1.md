@@ -411,6 +411,8 @@ MakerCompensationSnapshot
 - id
 - production_assignment_id
 - policy_version
+- production_inputs (immutable material, time, plates, handling,
+  post-processing, handoff and special-requirement inputs)
 - base_compensation
 - performance_modifier
 - surcharges
@@ -467,12 +469,25 @@ MakerSettlementLine
 - created_at
 ```
 
+### MakerSelfBillingDocument
+
+``` text
+MakerSelfBillingDocument
+- id
+- settlement_id (unique)
+- document_number (unique)
+- artifact_ref
+- issued_at
+- status
+```
+
 ### MakerPayout
 
 ``` text
 MakerPayout
 - id
 - settlement_id
+- self_billing_document_id
 - amount
 - payment_reference
 - paid_at
@@ -574,6 +589,11 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 16. Každý způsobilý assignment patří nejvýše do jednoho immutable
     settlement line; řádek odkazuje jeho compensation snapshot i zdrojové
     claim adjustments.
+17. Compensation snapshot uchovává immutable vstupy výpočtu dostatečné k
+    reprodukci `base_compensation`, i když se zdrojová job data později
+    změní nebo expirují.
+18. Každý payout odkazuje přesný platformou vystavený self-billing doklad
+    pro svůj settlement.
 
 ------------------------------------------------------------------------
 
