@@ -1,7 +1,7 @@
 # Taven — identita v1.1
 
 **Frekvence změn:** zřídka. Změna zde je změnou značky, ne parametru — patří do rozhodovacího logu.
-**Vztah k ostatním souborům:** `taven-design-brief.md` tenhle dokument cituje, nekopíruje.
+**Vztah k ostatním souborům:** `taven-design-brief-v1.2.md` tenhle dokument cituje, nekopíruje.
 **Status:** identita a hlavní vizuální systém odsouhlaseny z aktuální sady mockupů.
 **Datum:** 2026-08-28
 

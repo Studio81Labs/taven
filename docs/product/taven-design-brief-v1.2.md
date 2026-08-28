@@ -1,7 +1,7 @@
 # Taven — zadání pro design v1.2
 
-**Nahrazuje část B dokumentu `taven-identita-a-design-brief.md`**, který je tím celý překonaný — identita žije v `taven-identita.md`.
-**Cituje:** `taven-identita.md` (tokeny, tón, zákazy), `taven-specifikace.md` (chování), `taven-parametry.md` (čísla).
+**Nahrazuje část B dokumentu `taven-identita-a-design-brief.md`**, který je tím celý překonaný — identita žije v `taven-identita-v1.1.md`.
+**Cituje:** `taven-identita-v1.1.md` (tokeny, tón, zákazy), `taven-specifikace-v1.3.md` (chování), `taven-parametry.md` (čísla).
 **Datum:** 2026-08-28
 **Status:** produkční design baseline po iteracích landing page, objednávkového flow a zákaznického archivu.
 
@@ -160,8 +160,8 @@ Body, které se v první iteraci rozešly se specifikací nebo s parametry:
 
 ## 12. Kontrola před odevzdáním
 
-Seznam v `taven-identita.md` §9, plus:
+Seznam v `taven-identita-v1.1.md` §9, plus:
 
 - Je první akcí nahrání souboru? → musí být ano
 - Sedí ceny na obrazovkách s `taven-parametry.md`? → musí být ano
-- Prošel návrh seznamem z §6? → žádná položka
+- Prošel návrh seznamem z §7? → žádná položka
