@@ -1256,7 +1256,9 @@ Po vystavení self-billing dokladu běží uložené
 přejde settlement z `issued` do `payable` explicitním potvrzením makera nebo
 idempotentně po deadline; spor otevřený před touto tranzicí má přednost.
 Payout smí vzniknout jen nad `payable` settlementem a jeho aktivním `issued`
-dokladem.
+dokladem. Otevření sporu pod stejným zámkem vyžaduje autoritativní serverové
+`opened_at <= dispute_deadline_at` a maker ID vlastníka settlementu; opožděný
+worker tedy neprodlouží okno a cizí maker nemůže settlement zablokovat.
 
 Replacement settlement po uznaném sporu zachovává makera a měnu superseded
 settlementu a jako immutable `origin_dispute_id` ukládá spor, který právě

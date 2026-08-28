@@ -1,7 +1,7 @@
 # Taven --- maker economics a settlement v0.1
 
 **Status:** gate-scoped produktová baseline; rozhodnutí zapsána v
-`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#198; aktivace až po kapacitní
+`taven-rozhodovaci-log.md` #177–#179, #181 a #183–#200; aktivace až po kapacitní
 bráně v `taven-specifikace-v1.3.md` §11\
 **Datum:** 2026-08-28
 
@@ -439,15 +439,25 @@ zůstává `issued`. `MakerPayout` smí vzniknout nebo pokračovat jen pro
 worker zamykají stejné řádky; spor přijatý před touto tranzicí má přednost a
 pozdní námitka už toto běžné dispute window znovu neotevře a používá
 samostatný auditovaný correction proces podle stavu bankovního převodu.
+Transakce otevření sporu odvodí `opened_at` z autoritativního serverového
+času a pod stejným zámkem vyžaduje `opened_at <= dispute_deadline_at`; pozdější
+žádost odmítne, i kdyby zpožděný deadline worker ještě ponechal settlement ve
+stavu `issued`. Deadline worker naopak přechod provede při
+`now > dispute_deadline_at` jen tehdy, když pod zámkem neexistuje včas
+vytvořený `MakerDispute`.
 
 #### Oprava sporu před payoutem
 
 Otevření sporu vytvoří immutable `MakerDispute`, který jako
 `challenged_settlement_id` a `challenged_document_id` odkazuje právě napadený
 settlement a jeho doklad, přepne oba do `disputed` a zablokuje vytvoření nebo
-provedení payoutu. Jeden settlement lze tímto běžným window napadnout nejvýše
-jednou. Je-li spor zamítnut, auditované rozhodnutí vrátí nezměněný settlement
-do `payable` a jeho doklad do `issued`; rejected `MakerDispute` zůstane v
+provedení payoutu. Kompozitní reference
+`(challenged_settlement_id, maker_id, dispute_deadline_at)` současně vyžaduje,
+aby spor podával právě vlastník settlementu a převzal jeho immutable deadline;
+cizí maker nesmí změnit stav ani zablokovat jeho payout. Jeden settlement lze
+tímto běžným window napadnout nejvýše jednou.
+Je-li spor zamítnut, auditované rozhodnutí vrátí nezměněný settlement do
+`payable` a jeho doklad do `issued`; rejected `MakerDispute` zůstane v
 historii. Je-li spor uznán ještě před zahájením bankovního převodu, jedna
 transakce:
 
@@ -632,10 +642,12 @@ MakerDispute
 - maker_id
 - challenged_settlement_id (unique)
 - challenged_document_id (unique)
+- constraint `(challenged_settlement_id, maker_id, dispute_deadline_at)`
+  → `MakerSettlement.(id, maker_id, dispute_deadline_at)`
 - constraint `(challenged_document_id, challenged_settlement_id)`
   → `MakerSelfBillingDocument.(id, settlement_id)`
-- opened_at
-- dispute_deadline_at
+- opened_at (autoritativní serverový čas; musí být ≤ uložený deadline)
+- dispute_deadline_at (= immutable deadline challenged settlementu a dokladu)
 - resolved_at (nullable)
 - status (`opened` | `rejected` | `accepted`)
 ```
@@ -862,6 +874,12 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 39. Každý settlement má nejvýše jeden vlastní `MakerDispute`; replacement
     immutable uchová spor svého vzniku jako `origin_dispute_id`, zatímco jeho
     případné napadení vytváří nový dispute a další článek correction chain.
+40. `MakerDispute.maker_id` se musí kompozitní referencí rovnat makerovi
+    challenged settlementu a challenged dokument musí patřit právě tomuto
+    settlementu.
+41. Otevření sporu pod zámkem vyžaduje autoritativní
+    `opened_at <= dispute_deadline_at`; zpoždění deadline workeru nesmí
+    prodloužit uložené dispute window.
 
 ------------------------------------------------------------------------
 
@@ -870,7 +888,7 @@ jako každý další maker; výjimka pro interní dogfooding nevzniká.
 Záznamy #176 a #180 byly zrušeny rozhodnutím #183. Záznamy #177–#179 a
 #181 platí až po aktivační bráně #183. Vlastnictví uzlů, první ruční
 payout fázi, immutable payout eligibility a settlement membership doplňují
-#184–#198.
+#184–#200.
 
   ------------------------------------------------------------------------------------------
   \#             Rozhodnutí                Zdůvodnění       Zamítnutá         Stav
