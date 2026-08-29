@@ -6082,35 +6082,174 @@ describe("commerce persistence foundations", () => {
         { code: "23514", constraint: "payment_capture_window_check" },
       );
       const intentFailureAt = new Date();
+      await expectQueryError(
+        client,
+        "fail_created_payment_without_attempt_evidence",
+        () =>
+          client.query(
+            `UPDATE payments
+             SET status = 'FAILED', capture_authorized = false,
+                 capture_cutoff_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [createdFoundation.paymentId, intentFailureAt],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_intent_creation_failure_evidence_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "leave_intent_failure_attempt_unconsumed",
+        async () => {
+          await fixtures.persistPaymentIntentCreationFailure(
+            createdFoundation.paymentId,
+            intentFailureAt,
+            "unconsumed-intent-attempt",
+          );
+          await client.query(
+            `SET CONSTRAINTS "payment_intent_creation_failures_consumed" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_intent_creation_failure_consumption_check",
+        },
+      );
+      const intentFailureResultId =
+        await fixtures.persistPaymentIntentCreationFailure(
+          createdFoundation.paymentId,
+          intentFailureAt,
+          "created-payment-intent-attempt",
+        );
+      await expectQueryError(
+        client,
+        "fail_created_payment_with_foreign_attempt_result",
+        () =>
+          client.query(
+            `UPDATE payments
+             SET status = 'FAILED', capture_authorized = false,
+                 capture_cutoff_at = $2,
+                 intent_creation_failure_result_id = $3,
+                 updated_at = $2
+             WHERE id = $1`,
+            [createdFoundation.paymentId, intentFailureAt, randomUUID()],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_intent_creation_failure_evidence_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "fail_created_payment_with_mismatched_attempt_time",
+        () =>
+          client.query(
+            `UPDATE payments
+             SET status = 'FAILED', capture_authorized = false,
+                 capture_cutoff_at = $2,
+                 intent_creation_failure_result_id = $3,
+                 updated_at = $2
+             WHERE id = $1`,
+            [
+              createdFoundation.paymentId,
+              new Date(intentFailureAt.getTime() + 1),
+              intentFailureResultId,
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_intent_creation_failure_evidence_check",
+        },
+      );
       await client.query(
         `UPDATE payments
          SET status = 'FAILED', capture_authorized = false,
-             capture_cutoff_at = $2, updated_at = $2
+             capture_cutoff_at = $2,
+             intent_creation_failure_result_id = $3,
+             updated_at = $2
          WHERE id = $1`,
-        [createdFoundation.paymentId, intentFailureAt],
+        [createdFoundation.paymentId, intentFailureAt, intentFailureResultId],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_intent_creation_failures_consumed",
+           "payments_intent_creation_failure_reconciled",
+           "payments_intent_creation_failure_result_fkey",
+           "payment_intent_creation_failures_payment_id_fkey"
+         IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_intent_creation_failures_consumed",
+           "payments_intent_creation_failure_reconciled",
+           "payments_intent_creation_failure_result_fkey",
+           "payment_intent_creation_failures_payment_id_fkey"
+         DEFERRED`,
       );
       expect(
         (
           await client.query<{
+            attempt_key: string;
             capture_authorized: boolean;
             capture_cutoff_at: Date;
+            intent_creation_failure_result_id: string;
+            outcome: string;
             provider_intent_id: string | null;
             status: string;
           }>(
-            `SELECT status::text, provider_intent_id, capture_authorized,
-                    capture_cutoff_at
-             FROM payments WHERE id = $1`,
+            `SELECT payment.status::text, payment.provider_intent_id,
+                    payment.capture_authorized, payment.capture_cutoff_at,
+                    payment.intent_creation_failure_result_id,
+                    failure.attempt_key, failure.outcome::text
+             FROM payments payment
+             JOIN payment_intent_creation_failures failure
+               ON failure.id = payment.intent_creation_failure_result_id
+              AND failure.payment_id = payment.id
+              AND failure.provider = payment.provider
+             WHERE payment.id = $1`,
             [createdFoundation.paymentId],
           )
         ).rows,
       ).toEqual([
         {
+          attempt_key: "created-payment-intent-attempt",
           status: "FAILED",
           provider_intent_id: null,
           capture_authorized: false,
           capture_cutoff_at: intentFailureAt,
+          intent_creation_failure_result_id: intentFailureResultId,
+          outcome: "FAILED",
         },
       ]);
+      await expectQueryError(
+        client,
+        "mutate_intent_failure_evidence",
+        () =>
+          client.query(
+            `UPDATE payment_intent_creation_failures
+             SET attempt_key = 'rewritten-attempt'
+             WHERE id = $1`,
+            [intentFailureResultId],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_intent_creation_failure_immutable_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "delete_intent_failure_evidence",
+        () =>
+          client.query(
+            `DELETE FROM payment_intent_creation_failures WHERE id = $1`,
+            [intentFailureResultId],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_intent_creation_failure_immutable_check",
+        },
+      );
       await expectQueryError(
         client,
         "assign_provider_intent_after_created_failure",
@@ -13516,6 +13655,111 @@ describe("commerce persistence foundations", () => {
       }
       expect(receiptWaitsForOrder).toBe(true);
 
+      await expect(
+        orderHolder.query(
+          `SELECT 1 FROM payments WHERE id = $1 FOR UPDATE NOWAIT`,
+          [foundation.paymentId],
+        ),
+      ).resolves.toBeDefined();
+
+      await orderHolder.query("ROLLBACK");
+      await expect(receiptInsert).resolves.toBeDefined();
+      await receiptWriter.query("ROLLBACK");
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await orderHolder.query("ROLLBACK").catch(() => undefined);
+      await receiptWriter.query("ROLLBACK").catch(() => undefined);
+      await receiptInsert?.catch(() => undefined);
+      setup.release();
+      orderHolder.release();
+      receiptWriter.release();
+    }
+  });
+
+  it("reserves intent-failure attempts before locking their order envelope", async () => {
+    const setup = await pool.connect();
+    const orderHolder = await pool.connect();
+    const receiptWriter = await pool.connect();
+    let receiptInsert: Promise<string> | undefined;
+    try {
+      const fixtureScope = `${scope}:intent-failure-receipt-lock-order`;
+      const fixtures = new PersistenceFactory(setup, fixtureScope);
+      await setup.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "intent-failure-receipt-lock-order",
+      );
+      await createCurrentPlan(setup, fixtures, foundation);
+      const paymentCreatedAt = new Date();
+      await setup.query(
+        `INSERT INTO payments
+           (id, order_id, price_snapshot_id, order_price_binding_id,
+            payment_schedule_id, role, provider, requested_amount_minor,
+            currency, status, checkout_capture_expires_at,
+            created_at, updated_at)
+         SELECT $1,$2,$3,$4,$5,'FULL','test',gross_amount_minor,
+                'EUR','CREATED',$6,$7,$7
+         FROM payment_schedules WHERE id = $5`,
+        [
+          foundation.paymentId,
+          foundation.orderId,
+          foundation.priceSnapshotId,
+          foundation.orderPriceBindingId,
+          foundation.paymentScheduleId,
+          new Date(paymentCreatedAt.getTime() + 60 * 60 * 1_000),
+          paymentCreatedAt,
+        ],
+      );
+      await setup.query("COMMIT");
+
+      await orderHolder.query("BEGIN");
+      await orderHolder.query(`SELECT 1 FROM orders WHERE id = $1 FOR UPDATE`, [
+        foundation.orderId,
+      ]);
+
+      await receiptWriter.query("BEGIN");
+      await receiptWriter.query("SET LOCAL statement_timeout = '3s'");
+      const receiptWriterPid = (
+        await receiptWriter.query<{ pid: number }>(
+          `SELECT pg_backend_pid() AS pid`,
+        )
+      ).rows[0]?.pid;
+      if (!receiptWriterPid) {
+        throw new Error("intent-failure receipt backend pid is unavailable");
+      }
+      const writerFixtures = new PersistenceFactory(
+        receiptWriter,
+        fixtureScope,
+      );
+      receiptInsert = writerFixtures.persistPaymentIntentCreationFailure(
+        foundation.paymentId,
+        new Date(),
+        "lock-ordered-intent-attempt",
+      );
+
+      let receiptWaitsForOrder = false;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const activity = await orderHolder.query<{
+          wait_event_type: string | null;
+        }>(
+          `SELECT wait_event_type
+           FROM pg_stat_activity
+           WHERE pid = $1`,
+          [receiptWriterPid],
+        );
+        if (activity.rows[0]?.wait_event_type === "Lock") {
+          receiptWaitsForOrder = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(receiptWaitsForOrder).toBe(true);
+
+      await expect(
+        orderHolder.query(
+          `SELECT 1 FROM order_phases WHERE order_id = $1 FOR UPDATE NOWAIT`,
+          [foundation.orderId],
+        ),
+      ).resolves.toBeDefined();
       await expect(
         orderHolder.query(
           `SELECT 1 FROM payments WHERE id = $1 FOR UPDATE NOWAIT`,

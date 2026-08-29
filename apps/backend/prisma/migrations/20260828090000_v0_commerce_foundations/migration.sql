@@ -35,6 +35,9 @@ CREATE TYPE "shipment_provider_event_kind" AS ENUM ('LABEL_VOIDED', 'ACCEPTANCE_
 CREATE TYPE "payment_provider_event_kind" AS ENUM ('PAYMENT_CAPTURED', 'PAYMENT_FAILED', 'REFUND_SUCCEEDED', 'REFUND_FAILED');
 
 -- CreateEnum
+CREATE TYPE "payment_intent_creation_outcome" AS ENUM ('FAILED');
+
+-- CreateEnum
 CREATE TYPE "job_status" AS ENUM ('CREATED', 'ACCEPTED', 'GCODE_READY', 'PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED', 'CANCELLED', 'FAILED', 'QC_REJECTED');
 
 -- CreateEnum
@@ -407,6 +410,7 @@ CREATE TABLE "payments" (
     "provider" VARCHAR(100) NOT NULL,
     "provider_intent_id" VARCHAR(255),
     "provider_capture_id" VARCHAR(255),
+    "intent_creation_failure_result_id" UUID,
     "requested_amount_minor" BIGINT NOT NULL,
     "captured_amount_minor" BIGINT,
     "currency" CHAR(3) NOT NULL,
@@ -418,6 +422,19 @@ CREATE TABLE "payments" (
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL,
     CONSTRAINT "payments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "payment_intent_creation_failures" (
+    "id" UUID NOT NULL,
+    "payment_id" UUID NOT NULL,
+    "provider" VARCHAR(100) NOT NULL,
+    "attempt_key" VARCHAR(255) NOT NULL,
+    "outcome" "payment_intent_creation_outcome" NOT NULL DEFAULT 'FAILED',
+    "provider_intent_id" VARCHAR(255),
+    "failed_at" TIMESTAMPTZ(3) NOT NULL,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT "payment_intent_creation_failures_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -547,10 +564,15 @@ CREATE INDEX "jobs_node_id_status_idx" ON "jobs"("node_id", "status");
 CREATE INDEX "jobs_production_slice_result_id_idx" ON "jobs"("production_slice_result_id");
 CREATE UNIQUE INDEX "payments_provider_provider_intent_id_key" ON "payments"("provider", "provider_intent_id");
 CREATE UNIQUE INDEX "payments_provider_provider_capture_id_key" ON "payments"("provider", "provider_capture_id");
+CREATE UNIQUE INDEX "payments_intent_creation_failure_result_id_key" ON "payments"("intent_creation_failure_result_id");
+CREATE UNIQUE INDEX "payments_intent_creation_failure_scope_key" ON "payments"("intent_creation_failure_result_id", "id", "provider");
 CREATE UNIQUE INDEX "payments_one_nonfailed_attempt_per_schedule_key" ON "payments"("payment_schedule_id") WHERE "status" <> 'FAILED';
 CREATE INDEX "payments_order_id_status_idx" ON "payments"("order_id", "status");
 CREATE INDEX "payments_capture_cutoff_at_status_idx" ON "payments"("capture_cutoff_at", "status");
 CREATE INDEX "payments_checkout_capture_expires_at_status_idx" ON "payments"("checkout_capture_expires_at", "status");
+CREATE UNIQUE INDEX "payment_intent_creation_failures_payment_id_key" ON "payment_intent_creation_failures"("payment_id");
+CREATE UNIQUE INDEX "payment_intent_creation_failures_provider_attempt_key_key" ON "payment_intent_creation_failures"("provider", "attempt_key");
+CREATE UNIQUE INDEX "payment_intent_creation_failures_id_payment_id_provider_key" ON "payment_intent_creation_failures"("id", "payment_id", "provider");
 CREATE UNIQUE INDEX "refund_transactions_provider_provider_refund_id_key" ON "refund_transactions"("provider", "provider_refund_id");
 CREATE UNIQUE INDEX "refund_transactions_payment_id_idempotency_key_key" ON "refund_transactions"("payment_id", "idempotency_key");
 CREATE INDEX "refund_transactions_payment_id_status_idx" ON "refund_transactions"("payment_id", "status");
@@ -631,6 +653,8 @@ ALTER TABLE "jobs" ADD CONSTRAINT "jobs_qc_photo_asset_id_fkey" FOREIGN KEY ("qc
 ALTER TABLE "payments" ADD CONSTRAINT "payments_order_snapshot_fkey" FOREIGN KEY ("order_price_binding_id", "order_id", "price_snapshot_id") REFERENCES "order_price_bindings"("id", "order_id", "price_snapshot_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payments" ADD CONSTRAINT "payments_snapshot_currency_fkey" FOREIGN KEY ("price_snapshot_id", "currency") REFERENCES "price_snapshots"("id", "currency") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payments" ADD CONSTRAINT "payments_schedule_contract_fkey" FOREIGN KEY ("payment_schedule_id", "price_snapshot_id", "role", "requested_amount_minor") REFERENCES "payment_schedules"("id", "price_snapshot_id", "role", "gross_amount_minor") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "payments" ADD CONSTRAINT "payments_intent_creation_failure_result_fkey" FOREIGN KEY ("intent_creation_failure_result_id", "id", "provider") REFERENCES "payment_intent_creation_failures"("id", "payment_id", "provider") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "payment_intent_creation_failures" ADD CONSTRAINT "payment_intent_creation_failures_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_refund_transaction_id_fkey" FOREIGN KEY ("refund_transaction_id") REFERENCES "refund_transactions"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
@@ -792,6 +816,10 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_intent_identity_check" 
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_capture_identity_check" CHECK (
     "provider_capture_id" IS NULL OR "provider_capture_id" ~ '[^[:space:]]'
 );
+ALTER TABLE "payments" ADD CONSTRAINT "payments_intent_creation_failure_result_check" CHECK (
+    ("intent_creation_failure_result_id" IS NOT NULL) =
+    ("status" = 'FAILED' AND "provider_intent_id" IS NULL)
+);
 ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
     (
         "status" IN ('CREATED', 'PENDING', 'FAILED', 'VOIDED')
@@ -833,6 +861,13 @@ ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_va
 ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_scope_check" CHECK (
     ("kind" IN ('PAYMENT_CAPTURED', 'PAYMENT_FAILED') AND "refund_transaction_id" IS NULL)
     OR ("kind" IN ('REFUND_SUCCEEDED', 'REFUND_FAILED') AND "refund_transaction_id" IS NOT NULL)
+);
+ALTER TABLE "payment_intent_creation_failures" ADD CONSTRAINT "payment_intent_creation_failures_values_check" CHECK (
+    "provider" ~ '[^[:space:]]'
+    AND "attempt_key" ~ '[^[:space:]]'
+    AND "outcome" = 'FAILED'
+    AND "provider_intent_id" IS NULL
+    AND "created_at" >= "failed_at"
 );
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_scope_check" CHECK ("quote_id" IS NOT NULL OR "order_id" IS NOT NULL OR "payment_id" IS NOT NULL OR "refund_transaction_id" IS NOT NULL);
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_identity_check" CHECK (
@@ -7374,6 +7409,129 @@ CREATE TRIGGER "payments_require_fulfilment_topology"
 BEFORE INSERT ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_require_payment_fulfilment_topology();
 
+CREATE FUNCTION taven_protect_payment_intent_creation_failure()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Payment intent creation failures are immutable provider attempt evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_intent_creation_failure_immutable_check';
+    END IF;
+
+    IF NEW."failed_at" > clock_timestamp() + interval '5 seconds'
+       OR NEW."created_at" > clock_timestamp() + interval '5 seconds' THEN
+        RAISE EXCEPTION 'Payment intent creation failure evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_intent_creation_failure_evidence_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "payment_intent_creation_failures_protected"
+BEFORE INSERT OR UPDATE OR DELETE ON "payment_intent_creation_failures"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_intent_creation_failure();
+
+CREATE FUNCTION taven_validate_payment_intent_creation_failure_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_provider varchar(100);
+    target_status "payment_status";
+    target_provider_intent_id varchar(255);
+    target_failure_result_id uuid;
+    target_capture_authorized boolean;
+    target_capture_cutoff_at timestamptz;
+    target_created_at timestamptz;
+BEGIN
+    SELECT payment."order_id"
+    INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = NEW."payment_id";
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Payment intent creation failure parent Payment does not exist'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_intent_creation_failure_scope_check';
+    END IF;
+
+    -- The rank-0 provider-attempt identity is reserved by the row and unique
+    -- indexes before this AFTER trigger acquires every parent in rank order.
+    PERFORM taven_lock_automatic_order_session(target_order_id);
+
+    PERFORM 1
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "order_phases" phase
+    WHERE phase."order_id" = target_order_id
+    ORDER BY phase."id"
+    FOR UPDATE;
+
+    SELECT payment."provider", payment."status", payment."provider_intent_id",
+           payment."intent_creation_failure_result_id",
+           payment."capture_authorized", payment."capture_cutoff_at",
+           payment."created_at"
+    INTO target_provider, target_status, target_provider_intent_id,
+         target_failure_result_id, target_capture_authorized,
+         target_capture_cutoff_at, target_created_at
+    FROM "payments" payment
+    WHERE payment."id" = NEW."payment_id"
+    FOR UPDATE;
+
+    IF NOT FOUND
+       OR target_provider IS DISTINCT FROM NEW."provider"
+       OR target_status <> 'CREATED'
+       OR target_provider_intent_id IS NOT NULL
+       OR target_failure_result_id IS NOT NULL
+       OR NOT target_capture_authorized
+       OR target_capture_cutoff_at IS NOT NULL
+       OR NEW."failed_at" < target_created_at THEN
+        RAISE EXCEPTION 'Payment intent creation failure does not match its exact created Payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_intent_creation_failure_scope_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "payment_intent_creation_failures_scope_validated"
+AFTER INSERT ON "payment_intent_creation_failures"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_payment_intent_creation_failure_scope();
+
+CREATE FUNCTION taven_reconcile_payment_intent_creation_failure_consumption()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "payments" payment
+        WHERE payment."id" = NEW."payment_id"
+          AND payment."provider" = NEW."provider"
+          AND payment."status" = 'FAILED'
+          AND payment."provider_intent_id" IS NULL
+          AND payment."intent_creation_failure_result_id" = NEW."id"
+          AND NOT payment."capture_authorized"
+          AND payment."capture_cutoff_at" = NEW."failed_at"
+    ) THEN
+        RAISE EXCEPTION 'Payment intent creation failure and failed Payment must commit atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_intent_creation_failure_consumption_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "payment_intent_creation_failures_consumed"
+AFTER INSERT ON "payment_intent_creation_failures"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_payment_intent_creation_failure_consumption();
+
 CREATE FUNCTION taven_protect_payment_provider_event()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -7671,6 +7829,18 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payments_provider_intent_identity_check';
     END IF;
 
+    IF NEW."intent_creation_failure_result_id" IS DISTINCT FROM
+          OLD."intent_creation_failure_result_id"
+       AND NOT (
+           OLD."intent_creation_failure_result_id" IS NULL
+           AND NEW."intent_creation_failure_result_id" IS NOT NULL
+           AND OLD."status" = 'CREATED'
+           AND NEW."status" = 'FAILED'
+       ) THEN
+        RAISE EXCEPTION 'intent creation failure result may be assigned only as a created Payment fails'
+            USING ERRCODE = '23514', CONSTRAINT = 'payments_intent_creation_failure_identity_check';
+    END IF;
+
     IF OLD."status" IN ('PENDING', 'REFUND_PENDING')
        AND NEW."status" = 'CAPTURED' THEN
         PERFORM taven_lock_automatic_order_session(NEW."order_id");
@@ -7796,6 +7966,22 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_failure_provider_receipt_check';
     END IF;
 
+    IF OLD."status" = 'CREATED'
+       AND NEW."status" = 'FAILED'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payment_intent_creation_failures" failure
+           WHERE failure."id" = NEW."intent_creation_failure_result_id"
+             AND failure."payment_id" = NEW."id"
+             AND failure."provider" = NEW."provider"
+             AND failure."outcome" = 'FAILED'
+             AND failure."provider_intent_id" IS NULL
+             AND failure."failed_at" = NEW."capture_cutoff_at"
+       ) THEN
+        RAISE EXCEPTION 'created Payment failure requires its exact immutable provider attempt failure'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_intent_creation_failure_evidence_check';
+    END IF;
+
     IF OLD."status" = 'PENDING' AND NEW."status" = 'VOIDED' THEN
         INSERT INTO "outbox_messages" (
             "id", "deduplication_key", "aggregate_type", "aggregate_id",
@@ -7852,6 +8038,36 @@ $$;
 CREATE TRIGGER "payments_identity_protected"
 BEFORE UPDATE OR DELETE ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_identity();
+
+CREATE FUNCTION taven_reconcile_payment_intent_creation_failure_result()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD."status" = 'CREATED'
+       AND NEW."status" = 'FAILED'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payment_intent_creation_failures" failure
+           WHERE failure."id" = NEW."intent_creation_failure_result_id"
+             AND failure."payment_id" = NEW."id"
+             AND failure."provider" = NEW."provider"
+             AND failure."outcome" = 'FAILED'
+             AND failure."provider_intent_id" IS NULL
+             AND failure."failed_at" = NEW."capture_cutoff_at"
+       ) THEN
+        RAISE EXCEPTION 'created Payment failure and provider attempt evidence must commit atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_intent_creation_failure_consumption_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "payments_intent_creation_failure_reconciled"
+AFTER UPDATE ON "payments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_payment_intent_creation_failure_result();
 
 CREATE FUNCTION taven_reconcile_quoted_payment_void_closure()
 RETURNS trigger

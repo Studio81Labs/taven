@@ -1264,6 +1264,43 @@ export class PersistenceFactory {
     );
   }
 
+  async persistPaymentIntentCreationFailure(
+    paymentId: string,
+    failedAt = new Date(),
+    attemptKey = `intent-attempt-${this.hash(paymentId).slice(0, 48)}`,
+    resultId = this.id(`intent-creation-failure:${attemptKey}`),
+  ): Promise<string> {
+    const payment = await this.sql.query<{
+      provider: string;
+      provider_intent_id: string | null;
+      status: string;
+    }>(
+      `SELECT provider, provider_intent_id, status::text
+       FROM payments WHERE id = $1`,
+      [paymentId],
+    );
+    const target = payment.rows[0];
+    if (
+      !target ||
+      target.status !== "CREATED" ||
+      target.provider_intent_id !== null
+    ) {
+      throw new Error(
+        "payment intent creation failure fixture requires a created Payment without a provider intent",
+      );
+    }
+
+    await this.sql.query(
+      `INSERT INTO payment_intent_creation_failures (
+           id, payment_id, provider, attempt_key, outcome,
+           provider_intent_id, failed_at, created_at
+       ) VALUES ($1, $2, $3, $4, 'FAILED', NULL, $5, $5)`,
+      [resultId, paymentId, target.provider, attemptKey, failedAt],
+    );
+
+    return resultId;
+  }
+
   async persistRefundProviderEvent(
     refundTransactionId: string,
     kind: "REFUND_SUCCEEDED" | "REFUND_FAILED",
