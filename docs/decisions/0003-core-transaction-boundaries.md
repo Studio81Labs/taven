@@ -83,8 +83,10 @@ event IDs for one transaction.
 
 ### Refund retry dispatch and late receipts
 
-A refund dispatcher durably claims an attempt while holding the canonical
-refund lock set before its first provider call. If a failed source attempt
+A refund dispatcher durably claims an attempt through the database claim
+function, which acquires the canonical order, phase, refund, and payment lock
+set before recording the database claim time and making its first provider
+call. Direct dispatch-claim updates are rejected. If a failed source attempt
 later succeeds, an unclaimed linked retry is atomically `SUPERSEDED` and is no
 longer included in committed refund totals. A claimed retry is instead
 `SUSPENDED`: the source receipt is retained, Payment remains

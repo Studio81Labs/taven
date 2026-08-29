@@ -123,21 +123,29 @@ CREATE TRIGGER "payment_provider_events_refund_retries_locked"
 BEFORE INSERT ON "payment_provider_events"
 FOR EACH ROW EXECUTE FUNCTION taven_lock_refund_provider_event_retries();
 
-CREATE FUNCTION taven_lock_refund_dispatch_claim()
-RETURNS trigger
+CREATE FUNCTION taven_claim_refund_dispatch(target_refund_id uuid)
+RETURNS timestamptz
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    target_payment_id uuid;
     target_order_id uuid;
+    prior_claim_authorization text;
+    claim_time timestamptz;
+    claimed_at timestamptz;
 BEGIN
-    IF NEW."dispatch_claimed_at" IS NOT DISTINCT FROM OLD."dispatch_claimed_at" THEN
-        RETURN NEW;
-    END IF;
+    -- Read only immutable identities before taking the canonical lock set.
+    -- UPDATE cannot be used here: PostgreSQL would lock the target refund row
+    -- before any BEFORE UPDATE trigger could serialize on its order.
+    SELECT refund."payment_id", payment."order_id"
+    INTO target_payment_id, target_order_id
+    FROM "refund_transactions" refund
+    JOIN "payments" payment ON payment."id" = refund."payment_id"
+    WHERE refund."id" = target_refund_id;
 
-    SELECT payment."order_id"
-    INTO target_order_id
-    FROM "payments" payment
-    WHERE payment."id" = NEW."payment_id";
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
 
     PERFORM taven_lock_automatic_order_session(target_order_id);
 
@@ -154,22 +162,44 @@ BEGIN
 
     PERFORM 1
     FROM "refund_transactions" refund
-    WHERE refund."payment_id" = NEW."payment_id"
+    WHERE refund."payment_id" = target_payment_id
     ORDER BY refund."id"
     FOR UPDATE;
 
     PERFORM 1
     FROM "payments" payment
-    WHERE payment."id" = NEW."payment_id"
+    WHERE payment."id" = target_payment_id
     FOR UPDATE;
 
-    RETURN NEW;
+    prior_claim_authorization :=
+        current_setting('taven.refund_dispatch_claim_id', true);
+    PERFORM set_config(
+        'taven.refund_dispatch_claim_id',
+        target_refund_id::text,
+        true
+    );
+    claim_time := clock_timestamp();
+
+    UPDATE "refund_transactions"
+    SET "dispatch_claimed_at" = claim_time,
+        "updated_at" = claim_time
+    WHERE "id" = target_refund_id
+      AND "payment_id" = target_payment_id
+      AND "status" = 'PENDING'
+      AND "dispatch_claimed_at" IS NULL
+      AND "provider_result_event_id" IS NULL
+      AND "source_success_provider_event_id" IS NULL
+    RETURNING "dispatch_claimed_at" INTO claimed_at;
+
+    PERFORM set_config(
+        'taven.refund_dispatch_claim_id',
+        coalesce(prior_claim_authorization, ''),
+        true
+    );
+
+    RETURN claimed_at;
 END;
 $$;
-
-CREATE TRIGGER "refund_transactions_dispatch_claim_locked"
-BEFORE UPDATE OF "dispatch_claimed_at" ON "refund_transactions"
-FOR EACH ROW EXECUTE FUNCTION taven_lock_refund_dispatch_claim();
 
 CREATE OR REPLACE FUNCTION taven_protect_refund_transaction_identity()
 RETURNS trigger
@@ -197,6 +227,13 @@ BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'refund transactions are append-only financial history'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_append_only_check';
+    END IF;
+
+    IF NEW."dispatch_claimed_at" IS DISTINCT FROM OLD."dispatch_claimed_at"
+       AND current_setting('taven.refund_dispatch_claim_id', true)
+           IS DISTINCT FROM OLD."id"::text THEN
+        RAISE EXCEPTION 'refund dispatch must be claimed through the canonical claim function'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_dispatch_claim_protocol_check';
     END IF;
 
     IF NEW."dispatch_claimed_at" IS DISTINCT FROM OLD."dispatch_claimed_at"

@@ -9065,12 +9065,37 @@ describe("commerce persistence foundations", () => {
 
         await client.query(`SAVEPOINT "suspend_claimed_refund_retry"`);
         try {
-          await client.query(
-            `UPDATE refund_transactions
-             SET dispatch_claimed_at = $2, updated_at = $2
-             WHERE id = $1`,
-            [retryRefundId, lateRecoveryAt],
+          await expectQueryError(
+            client,
+            "reject_direct_refund_dispatch_claim",
+            () =>
+              client.query(
+                `UPDATE refund_transactions
+                 SET dispatch_claimed_at = $2, updated_at = $2
+                 WHERE id = $1`,
+                [retryRefundId, lateRecoveryAt],
+              ),
+            {
+              code: "23514",
+              constraint: "refund_dispatch_claim_protocol_check",
+            },
           );
+          expect(
+            (
+              await client.query<{ claimed_at: Date | null }>(
+                `SELECT taven_claim_refund_dispatch($1) AS claimed_at`,
+                [retryRefundId],
+              )
+            ).rows[0]?.claimed_at,
+          ).toBeInstanceOf(Date);
+          expect(
+            (
+              await client.query<{ claimed_at: Date | null }>(
+                `SELECT taven_claim_refund_dispatch($1) AS claimed_at`,
+                [retryRefundId],
+              )
+            ).rows,
+          ).toEqual([{ claimed_at: null }]);
           await fixtures.persistRefundProviderEvent(
             affectedRefundId,
             "REFUND_SUCCEEDED",
@@ -19298,6 +19323,104 @@ describe("commerce persistence foundations", () => {
       setup.release();
       refundHolder.release();
       receiptWriter.release();
+    }
+  });
+
+  it("claims refund dispatch only after acquiring the canonical order lock", async () => {
+    const setup = await pool.connect();
+    const orderHolder = await pool.connect();
+    const claimant = await pool.connect();
+    let claim: Promise<unknown> | undefined;
+    try {
+      const fixtureScope = `${scope}:refund-dispatch-claim-lock-order`;
+      const fixtures = new PersistenceFactory(setup, fixtureScope);
+      await setup.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "refund-dispatch-claim-lock-order",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        setup,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(setup, fixtures, foundation, productions);
+      await cancelOrderBeforeHandoff(setup, foundation.orderId);
+      const refundId = (
+        await setup.query<{ id: string }>(
+          `SELECT id FROM refund_transactions
+           WHERE payment_id = $1
+             AND reason = 'CUSTOMER_CANCELLATION'
+             AND status = 'PENDING'`,
+          [foundation.paymentId],
+        )
+      ).rows[0]?.id;
+      if (!refundId) {
+        throw new Error("refund dispatch claim fixture is missing");
+      }
+      await setup.query("COMMIT");
+
+      await orderHolder.query("BEGIN");
+      await orderHolder.query(`SELECT 1 FROM orders WHERE id = $1 FOR UPDATE`, [
+        foundation.orderId,
+      ]);
+
+      await claimant.query("BEGIN");
+      await claimant.query("SET LOCAL statement_timeout = '3s'");
+      const claimantPid = (
+        await claimant.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`)
+      ).rows[0]?.pid;
+      if (!claimantPid) {
+        throw new Error("refund dispatch claimant backend pid is unavailable");
+      }
+      claim = claimant.query(
+        `SELECT taven_claim_refund_dispatch($1) AS claimed_at`,
+        [refundId],
+      );
+
+      let claimWaitsForOrder = false;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const activity = await orderHolder.query<{
+          wait_event_type: string | null;
+        }>(
+          `SELECT wait_event_type
+           FROM pg_stat_activity
+           WHERE pid = $1`,
+          [claimantPid],
+        );
+        if (activity.rows[0]?.wait_event_type === "Lock") {
+          claimWaitsForOrder = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(claimWaitsForOrder).toBe(true);
+      await expect(
+        orderHolder.query(
+          `SELECT 1 FROM refund_transactions WHERE id = $1 FOR UPDATE NOWAIT`,
+          [refundId],
+        ),
+      ).resolves.toBeDefined();
+      await expect(
+        orderHolder.query(
+          `SELECT 1 FROM payments WHERE id = $1 FOR UPDATE NOWAIT`,
+          [foundation.paymentId],
+        ),
+      ).resolves.toBeDefined();
+
+      await orderHolder.query("ROLLBACK");
+      await expect(claim).resolves.toMatchObject({
+        rows: [{ claimed_at: expect.any(Date) }],
+      });
+      await claimant.query("ROLLBACK");
+      claim = undefined;
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await orderHolder.query("ROLLBACK").catch(() => undefined);
+      await claimant.query("ROLLBACK").catch(() => undefined);
+      await claim?.catch(() => undefined);
+      setup.release();
+      orderHolder.release();
+      claimant.release();
     }
   });
 
