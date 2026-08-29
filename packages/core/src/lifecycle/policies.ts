@@ -2402,6 +2402,12 @@ function requireExactPaymentRefundCompletion<S extends string>(
   const context = command.context;
   const nonBlank = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
   const paymentId = context?.paymentId;
   const orderId = context?.orderId;
   const phaseId = context?.phaseId;
@@ -2411,31 +2417,139 @@ function requireExactPaymentRefundCompletion<S extends string>(
   const previousResultId = context?.refundCompletionPreviousPaymentResultId;
   const resultId = context?.refundCompletionResultId;
   const stateKey = context?.refundCompletionCurrentStateCommandKey;
-  const expectedValue = context?.refundCompletionExpectedPayment;
-  const expected =
-    typeof expectedValue === "object" &&
-    expectedValue !== null &&
-    !Array.isArray(expectedValue)
-      ? (expectedValue as Readonly<Record<string, unknown>>)
-      : undefined;
-  const refundValue = context?.refundCompletionRefundTransaction;
-  const refund =
-    typeof refundValue === "object" &&
-    refundValue !== null &&
-    !Array.isArray(refundValue)
-      ? (refundValue as Readonly<Record<string, unknown>>)
-      : undefined;
-  const eventValue = context?.refundCompletionProviderEvent;
-  const event =
-    typeof eventValue === "object" &&
-    eventValue !== null &&
-    !Array.isArray(eventValue)
-      ? (eventValue as Readonly<Record<string, unknown>>)
-      : undefined;
+  const refundSetBeforeId = context?.refundCompletionRefundSetBeforeId;
+  const refundSetBeforeResultId =
+    context?.refundCompletionRefundSetBeforeResultId;
+  const refundSetAfterId = context?.refundCompletionRefundSetAfterId;
+  const refundSetAfterResultId =
+    context?.refundCompletionRefundSetAfterResultId;
+  const expected = record(context?.refundCompletionExpectedPayment);
+  const reconciled = record(context?.refundCompletionReconciledPayment);
+  const refund = record(context?.refundCompletionRefundTransaction);
+  const event = record(context?.refundCompletionProviderEvent);
   const lateSuccess = context?.paymentCaptureKind === "late_refund_success";
   if (lateSuccess) {
     requireExactLateRefundSuccessReconciliation(lifecycle, command, "complete");
+    return;
   }
+  const parseRefundSet = (
+    value: unknown,
+    expectedId: unknown,
+    expectedResultId: unknown,
+  ) => {
+    const snapshot = record(value);
+    const refundIds = snapshot?.refundIds;
+    const refunds = snapshot?.refundSnapshots;
+    if (
+      !nonBlank(expectedId) ||
+      !nonBlank(expectedResultId) ||
+      snapshot?.id !== expectedId ||
+      snapshot.paymentId !== paymentId ||
+      snapshot.resultId !== expectedResultId ||
+      snapshot.immutable !== true ||
+      !Array.isArray(refundIds) ||
+      !Array.isArray(refunds) ||
+      refundIds.length !== refunds.length ||
+      refundIds.some((id) => !nonBlank(id)) ||
+      new Set(refundIds).size !== refundIds.length
+    ) {
+      return undefined;
+    }
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    let succeededAmountMinor = 0n;
+    let pendingCount = 0;
+    for (const value of refunds) {
+      const row = record(value);
+      const id = row?.id;
+      const status = row?.status;
+      const amountMinor = row?.amountMinor;
+      if (
+        row === undefined ||
+        !nonBlank(id) ||
+        !refundIds.includes(id) ||
+        rows.has(id) ||
+        row.paymentId !== paymentId ||
+        (status !== "pending" &&
+          status !== "succeeded" &&
+          status !== "failed") ||
+        typeof amountMinor !== "bigint" ||
+        amountMinor <= 0n ||
+        !nonBlank(row.resultId) ||
+        row.immutable !== true
+      ) {
+        return undefined;
+      }
+      rows.set(id, row);
+      if (status === "succeeded") succeededAmountMinor += amountMinor;
+      if (status === "pending") pendingCount += 1;
+    }
+    if (refundIds.some((id) => !rows.has(id))) return undefined;
+    return { pendingCount, rows, succeededAmountMinor };
+  };
+  const refundSetBefore = parseRefundSet(
+    context?.refundCompletionRefundSetBefore,
+    refundSetBeforeId,
+    refundSetBeforeResultId,
+  );
+  const refundSetAfter = parseRefundSet(
+    context?.refundCompletionRefundSetAfter,
+    refundSetAfterId,
+    refundSetAfterResultId,
+  );
+  const refundAmountMinor = refund?.amountMinor;
+  const refundPreviousResultId = refund?.previousResultId;
+  let exactRefundSetTransition = false;
+  if (
+    refundSetBefore !== undefined &&
+    refundSetAfter !== undefined &&
+    refundSetBefore.rows.size === refundSetAfter.rows.size &&
+    nonBlank(refundTransactionId) &&
+    refundSetBefore.rows.has(refundTransactionId) &&
+    refundSetAfter.rows.has(refundTransactionId)
+  ) {
+    exactRefundSetTransition = true;
+    for (const [id, before] of refundSetBefore.rows) {
+      const after = refundSetAfter.rows.get(id);
+      if (
+        after === undefined ||
+        after.paymentId !== before.paymentId ||
+        after.amountMinor !== before.amountMinor ||
+        after.immutable !== true ||
+        (id === refundTransactionId
+          ? before.status !== "pending" ||
+            before.amountMinor !== refundAmountMinor ||
+            before.resultId !== refundPreviousResultId ||
+            after.status !== "succeeded" ||
+            after.resultId !== resultId
+          : after.status !== before.status ||
+            after.resultId !== before.resultId)
+      ) {
+        exactRefundSetTransition = false;
+        break;
+      }
+    }
+  }
+  const capturedAmountMinor = expected?.capturedAmountMinor;
+  const succeededBefore = refundSetBefore?.succeededAmountMinor;
+  const succeededAfter = refundSetAfter?.succeededAmountMinor;
+  const expectedTarget =
+    typeof capturedAmountMinor === "bigint" &&
+    succeededAfter === capturedAmountMinor
+      ? "refunded"
+      : typeof capturedAmountMinor === "bigint" &&
+          succeededAfter !== undefined &&
+          succeededAfter > 0n &&
+          succeededAfter < capturedAmountMinor
+        ? "partially_refunded"
+        : undefined;
+  const provider = expected?.provider;
+  const currency = expected?.currency;
+  const providerTransactionId = refund?.providerTransactionId;
+  const requestedAt = refund?.requestedAt;
+  const completedAt = refund?.completedAt;
+  const occurredAt = event?.occurredAt;
+  const authenticatedAt = event?.authenticatedAt;
+  const verifiedAt = event?.verifiedAt;
   if (
     !nonBlank(paymentId) ||
     !nonBlank(orderId) ||
@@ -2446,6 +2560,30 @@ function requireExactPaymentRefundCompletion<S extends string>(
     !nonBlank(previousResultId) ||
     !nonBlank(resultId) ||
     !nonBlank(stateKey) ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    typeof currency !== "string" ||
+    !/^[A-Z]{3}$/.test(currency) ||
+    typeof refundAmountMinor !== "bigint" ||
+    refundAmountMinor <= 0n ||
+    !nonBlank(refundPreviousResultId) ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n ||
+    !exactRefundSetTransition ||
+    refundSetBefore?.pendingCount !== 1 ||
+    refundSetAfter?.pendingCount !== 0 ||
+    succeededBefore === undefined ||
+    succeededBefore < 0n ||
+    succeededAfter === undefined ||
+    succeededAfter !== succeededBefore + refundAmountMinor ||
+    succeededAfter > capturedAmountMinor ||
+    expectedTarget === undefined ||
+    !nonBlank(refundSetBeforeId) ||
+    !nonBlank(refundSetBeforeResultId) ||
+    !nonBlank(refundSetAfterId) ||
+    !nonBlank(refundSetAfterResultId) ||
+    refundSetBeforeId === refundSetAfterId ||
+    refundSetBeforeResultId === refundSetAfterResultId ||
     command.aggregateId !== paymentId ||
     !nonBlank(command.currentStateResultId) ||
     command.currentStateResultId !== previousResultId ||
@@ -2453,37 +2591,76 @@ function requireExactPaymentRefundCompletion<S extends string>(
     context?.refundWebhookPaymentId !== paymentId ||
     context?.refundWebhookRefundTransactionId !== refundTransactionId ||
     context?.refundWebhookStatus !== "succeeded" ||
-    context?.refundWebhookProjectedTarget !== command.target ||
+    context?.refundWebhookProjectedTarget !== expectedTarget ||
     context?.refundWebhookAuthenticated !== true ||
     context?.refundWebhookVerified !== true ||
     expected?.id !== paymentId ||
     expected.orderId !== orderId ||
     expected.phaseId !== phaseId ||
     expected.role !== role ||
+    expected.provider !== provider ||
+    expected.currency !== currency ||
     expected.status !== "refund_pending" ||
     expected.activeRefundTransactionId !== refundTransactionId ||
+    expected.succeededRefundAmountMinor !== succeededBefore ||
+    expected.authoritativeRefundSetId !== refundSetBeforeId ||
+    expected.authoritativeRefundSetResultId !== refundSetBeforeResultId ||
     expected.resultId !== previousResultId ||
     expected.currentStateCommandKey !== stateKey ||
     expected.immutable !== true ||
+    reconciled?.id !== paymentId ||
+    reconciled.orderId !== orderId ||
+    reconciled.phaseId !== phaseId ||
+    reconciled.role !== role ||
+    reconciled.provider !== provider ||
+    reconciled.currency !== currency ||
+    reconciled.previousStatus !== "refund_pending" ||
+    reconciled.targetStatus !== expectedTarget ||
+    reconciled.activeRefundTransactionId !== null ||
+    reconciled.capturedAmountMinor !== capturedAmountMinor ||
+    reconciled.succeededRefundAmountMinor !== succeededAfter ||
+    reconciled.refundTransactionId !== refundTransactionId ||
+    reconciled.authoritativeRefundSetId !== refundSetAfterId ||
+    reconciled.authoritativeRefundSetResultId !== refundSetAfterResultId ||
+    reconciled.resultId !== resultId ||
+    reconciled.immutable !== true ||
     refund?.id !== refundTransactionId ||
     refund.paymentId !== paymentId ||
     refund.orderId !== orderId ||
     refund.phaseId !== phaseId ||
-    refund.previousStatus !== (lateSuccess ? "failed" : "pending") ||
+    refund.previousStatus !== "pending" ||
     refund.targetStatus !== "succeeded" ||
     refund.status !== "succeeded" ||
+    refund.provider !== provider ||
+    refund.currency !== currency ||
     refund.providerEventId !== providerEventId ||
+    !(requestedAt instanceof Instant) ||
+    !(completedAt instanceof Instant) ||
+    completedAt.epochMilliseconds < requestedAt.epochMilliseconds - 5_000 ||
     refund.resultId !== resultId ||
     refund.immutable !== true ||
     event?.id !== providerEventId ||
     event.paymentId !== paymentId ||
     event.refundTransactionId !== refundTransactionId ||
+    event.provider !== provider ||
+    event.providerTransactionId !== providerTransactionId ||
+    event.kind !== "refund_succeeded" ||
+    event.amountMinor !== refundAmountMinor ||
+    event.currency !== currency ||
     event.status !== "succeeded" ||
-    event.projectedTarget !== command.target ||
+    event.projectedTarget !== expectedTarget ||
     event.authenticated !== true ||
     event.verified !== true ||
+    !(occurredAt instanceof Instant) ||
+    !(authenticatedAt instanceof Instant) ||
+    !(verifiedAt instanceof Instant) ||
+    occurredAt.epochMilliseconds < requestedAt.epochMilliseconds - 5_000 ||
+    authenticatedAt.epochMilliseconds < occurredAt.epochMilliseconds - 5_000 ||
+    verifiedAt.compare(authenticatedAt) < 0 ||
+    !completedAt.equals(verifiedAt) ||
     event.resultId !== resultId ||
     event.immutable !== true ||
+    command.target !== expectedTarget ||
     context?.refundCompletionPaymentResultId !== resultId ||
     context?.refundCompletionRefundTransactionResultId !== resultId ||
     context?.refundCompletionProviderEventResultId !== resultId ||

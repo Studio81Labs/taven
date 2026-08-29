@@ -487,10 +487,54 @@ const permittedContext = {
     orderId: "order-1",
     phaseId: "phase-1",
     role: "full",
+    provider: "sandbox",
+    currency: "EUR",
     status: "refund_pending",
     activeRefundTransactionId: "refund-1",
+    capturedAmountMinor: 10_000n,
+    succeededRefundAmountMinor: 0n,
+    authoritativeRefundSetId: "refund-set-before-1",
+    authoritativeRefundSetResultId: "refund-set-before-result-1",
     resultId: "refund-pending-result-1",
     currentStateCommandKey: "payment-refund-pending-command-1",
+    immutable: true,
+  },
+  refundCompletionRefundSetBeforeId: "refund-set-before-1",
+  refundCompletionRefundSetBeforeResultId: "refund-set-before-result-1",
+  refundCompletionRefundSetBefore: {
+    id: "refund-set-before-1",
+    paymentId: "payment-1",
+    refundIds: ["refund-1"],
+    refundSnapshots: [
+      {
+        id: "refund-1",
+        paymentId: "payment-1",
+        status: "pending",
+        amountMinor: 10_000n,
+        resultId: "refund-transaction-pending-result-1",
+        immutable: true,
+      },
+    ],
+    resultId: "refund-set-before-result-1",
+    immutable: true,
+  },
+  refundCompletionRefundSetAfterId: "refund-set-after-1",
+  refundCompletionRefundSetAfterResultId: "refund-set-after-result-1",
+  refundCompletionRefundSetAfter: {
+    id: "refund-set-after-1",
+    paymentId: "payment-1",
+    refundIds: ["refund-1"],
+    refundSnapshots: [
+      {
+        id: "refund-1",
+        paymentId: "payment-1",
+        status: "succeeded",
+        amountMinor: 10_000n,
+        resultId: "refund-completion-result-1",
+        immutable: true,
+      },
+    ],
+    resultId: "refund-set-after-result-1",
     immutable: true,
   },
   refundCompletionRefundTransaction: {
@@ -499,8 +543,15 @@ const permittedContext = {
     orderId: "order-1",
     phaseId: "phase-1",
     previousStatus: "pending",
+    previousResultId: "refund-transaction-pending-result-1",
     targetStatus: "succeeded",
     status: "succeeded",
+    provider: "sandbox",
+    providerTransactionId: "provider-refund-1",
+    amountMinor: 10_000n,
+    currency: "EUR",
+    requestedAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    completedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
     providerEventId: "refund-provider-event-1",
     resultId: "refund-completion-result-1",
     immutable: true,
@@ -509,10 +560,36 @@ const permittedContext = {
     id: "refund-provider-event-1",
     paymentId: "payment-1",
     refundTransactionId: "refund-1",
+    provider: "sandbox",
+    providerTransactionId: "provider-refund-1",
+    kind: "refund_succeeded",
+    amountMinor: 10_000n,
+    currency: "EUR",
     status: "succeeded",
     projectedTarget: "refunded",
     authenticated: true,
     verified: true,
+    occurredAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    authenticatedAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    verifiedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+    resultId: "refund-completion-result-1",
+    immutable: true,
+  },
+  refundCompletionReconciledPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    provider: "sandbox",
+    currency: "EUR",
+    previousStatus: "refund_pending",
+    targetStatus: "refunded",
+    activeRefundTransactionId: null,
+    capturedAmountMinor: 10_000n,
+    succeededRefundAmountMinor: 10_000n,
+    refundTransactionId: "refund-1",
+    authoritativeRefundSetId: "refund-set-after-1",
+    authoritativeRefundSetResultId: "refund-set-after-result-1",
     resultId: "refund-completion-result-1",
     immutable: true,
   },
@@ -4333,6 +4410,10 @@ function contextForTransition(target: string, current?: string) {
   const reshipmentSetupPreviousResultId = `claim-resolution-${current}-result-1`;
   const ordinaryRefundState =
     current === "partially_refunded" ? "partially_refunded" : "captured";
+  const refundCompletionTarget =
+    target === "partially_refunded" ? "partially_refunded" : "refunded";
+  const refundCompletionAmountMinor =
+    refundCompletionTarget === "partially_refunded" ? 1_000n : 10_000n;
   const claimRefundSetupPreviousResultId = `claim-resolution-${current ?? "pending"}-result-1`;
   const claimRefundSetupCurrentStateCommandKey = `claim-resolution-${current ?? "pending"}-command-1`;
   const shipmentReadinessPreviousOrderResultId = `order-${current ?? "qc_passed"}-result-1`;
@@ -4474,9 +4555,38 @@ function contextForTransition(target: string, current?: string) {
       ...permittedContext.refundCompletionExpectedPayment,
       role: permittedContext.paymentRole,
     },
+    refundCompletionRefundSetBefore: {
+      ...permittedContext.refundCompletionRefundSetBefore,
+      refundSnapshots: [
+        {
+          ...permittedContext.refundCompletionRefundSetBefore
+            .refundSnapshots[0],
+          amountMinor: refundCompletionAmountMinor,
+        },
+      ],
+    },
+    refundCompletionRefundSetAfter: {
+      ...permittedContext.refundCompletionRefundSetAfter,
+      refundSnapshots: [
+        {
+          ...permittedContext.refundCompletionRefundSetAfter.refundSnapshots[0],
+          amountMinor: refundCompletionAmountMinor,
+        },
+      ],
+    },
+    refundCompletionRefundTransaction: {
+      ...permittedContext.refundCompletionRefundTransaction,
+      amountMinor: refundCompletionAmountMinor,
+    },
     refundCompletionProviderEvent: {
       ...permittedContext.refundCompletionProviderEvent,
-      projectedTarget: target,
+      amountMinor: refundCompletionAmountMinor,
+      projectedTarget: refundCompletionTarget,
+    },
+    refundCompletionReconciledPayment: {
+      ...permittedContext.refundCompletionReconciledPayment,
+      targetStatus: refundCompletionTarget,
+      succeededRefundAmountMinor: refundCompletionAmountMinor,
     },
     shipmentProviderOutcomePreviousResultId: `shipment-${shipmentProviderOutcomeSource}-result-1`,
     shipmentProviderOutcomeResultId,
@@ -28072,6 +28182,10 @@ describe("v0 lifecycle policy tables", () => {
     ["refundCompletionPreviousPaymentResultId", "another-result"],
     ["refundCompletionResultId", " "],
     ["refundCompletionCurrentStateCommandKey", "another-command"],
+    ["refundCompletionRefundSetBeforeId", "another-set"],
+    ["refundCompletionRefundSetBeforeResultId", "another-result"],
+    ["refundCompletionRefundSetAfterId", "another-set"],
+    ["refundCompletionRefundSetAfterResultId", "another-result"],
     ["refundCompletionPaymentResultId", "another-result"],
     ["refundCompletionRefundTransactionResultId", "another-result"],
     ["refundCompletionProviderEventResultId", "another-result"],
@@ -28103,16 +28217,72 @@ describe("v0 lifecycle policy tables", () => {
       "refund-2",
     ],
     ["refundCompletionExpectedPayment", "status", "captured"],
+    ["refundCompletionExpectedPayment", "provider", "other"],
+    ["refundCompletionExpectedPayment", "currency", "USD"],
+    ["refundCompletionExpectedPayment", "currency", "eur"],
+    ["refundCompletionExpectedPayment", "capturedAmountMinor", 9_000n],
+    ["refundCompletionExpectedPayment", "succeededRefundAmountMinor", 1n],
+    [
+      "refundCompletionExpectedPayment",
+      "authoritativeRefundSetId",
+      "another-set",
+    ],
     ["refundCompletionExpectedPayment", "immutable", false],
     ["refundCompletionRefundTransaction", "paymentId", "payment-2"],
     ["refundCompletionRefundTransaction", "providerEventId", "event-2"],
     ["refundCompletionRefundTransaction", "status", "failed"],
+    ["refundCompletionRefundTransaction", "previousResultId", "another-result"],
+    ["refundCompletionRefundTransaction", "provider", "other"],
+    [
+      "refundCompletionRefundTransaction",
+      "providerTransactionId",
+      "another-transaction",
+    ],
+    ["refundCompletionRefundTransaction", "amountMinor", 999n],
+    ["refundCompletionRefundTransaction", "amountMinor", 0n],
+    ["refundCompletionRefundTransaction", "currency", "USD"],
+    ["refundCompletionRefundTransaction", "requestedAt", undefined],
+    ["refundCompletionRefundTransaction", "completedAt", undefined],
+    [
+      "refundCompletionRefundTransaction",
+      "completedAt",
+      Instant.parse("2026-01-01T00:11:00.001Z"),
+    ],
     ["refundCompletionRefundTransaction", "resultId", "another-result"],
     ["refundCompletionProviderEvent", "paymentId", "payment-2"],
     ["refundCompletionProviderEvent", "refundTransactionId", "refund-2"],
+    ["refundCompletionProviderEvent", "provider", "other"],
+    [
+      "refundCompletionProviderEvent",
+      "providerTransactionId",
+      "another-transaction",
+    ],
+    ["refundCompletionProviderEvent", "kind", "refund_failed"],
+    ["refundCompletionProviderEvent", "amountMinor", 999n],
+    ["refundCompletionProviderEvent", "currency", "USD"],
+    ["refundCompletionProviderEvent", "occurredAt", undefined],
+    ["refundCompletionProviderEvent", "authenticatedAt", undefined],
+    ["refundCompletionProviderEvent", "verifiedAt", undefined],
     ["refundCompletionProviderEvent", "projectedTarget", "partially_refunded"],
     ["refundCompletionProviderEvent", "verified", false],
     ["refundCompletionProviderEvent", "resultId", "another-result"],
+    ["refundCompletionReconciledPayment", "id", "payment-2"],
+    ["refundCompletionReconciledPayment", "provider", "other"],
+    ["refundCompletionReconciledPayment", "currency", "USD"],
+    ["refundCompletionReconciledPayment", "targetStatus", "partially_refunded"],
+    [
+      "refundCompletionReconciledPayment",
+      "activeRefundTransactionId",
+      "refund-1",
+    ],
+    ["refundCompletionReconciledPayment", "capturedAmountMinor", 9_000n],
+    ["refundCompletionReconciledPayment", "succeededRefundAmountMinor", 9_000n],
+    [
+      "refundCompletionReconciledPayment",
+      "authoritativeRefundSetId",
+      "another-set",
+    ],
+    ["refundCompletionReconciledPayment", "immutable", false],
   ] as const)(
     "rejects refund completion with mismatched %s.%s",
     (recordField, field, value) => {
@@ -28132,6 +28302,210 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("derives closing refund status from the complete immutable refund set", () => {
+    const expectRejected = (
+      idempotencyKey: string,
+      context: ReturnType<typeof contextForTransition>,
+      target: "partially_refunded" | "refunded" = "refunded",
+    ) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "refund_pending", target),
+          current: "refund_pending",
+          target,
+          idempotencyKey,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+    };
+
+    const receiptSkewBoundary = contextForTransition(
+      "refunded",
+      "refund_pending",
+    );
+    const boundaryOccurredAt = Instant.parse("2026-01-01T00:09:55.000Z");
+    const boundaryAuthenticatedAt = Instant.parse("2026-01-01T00:09:50.000Z");
+    expect(
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "refund_pending", "refunded"),
+        current: "refund_pending",
+        target: "refunded",
+        idempotencyKey: "refund-completion-receipt-skew-boundary",
+        context: {
+          ...receiptSkewBoundary,
+          refundCompletionProviderEvent: {
+            ...receiptSkewBoundary.refundCompletionProviderEvent,
+            occurredAt: boundaryOccurredAt,
+            authenticatedAt: boundaryAuthenticatedAt,
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "refund_pending",
+      current: "refunded",
+    });
+    expectRejected("refund-completion-occurrence-beyond-skew", {
+      ...receiptSkewBoundary,
+      refundCompletionProviderEvent: {
+        ...receiptSkewBoundary.refundCompletionProviderEvent,
+        occurredAt: Instant.parse("2026-01-01T00:09:54.999Z"),
+      },
+    });
+    expectRejected("refund-completion-authentication-beyond-skew", {
+      ...receiptSkewBoundary,
+      refundCompletionProviderEvent: {
+        ...receiptSkewBoundary.refundCompletionProviderEvent,
+        occurredAt: boundaryOccurredAt,
+        authenticatedAt: Instant.parse("2026-01-01T00:09:49.999Z"),
+      },
+    });
+
+    const remainingPending = contextForTransition(
+      "partially_refunded",
+      "refund_pending",
+    );
+    const pendingSibling = {
+      id: "refund-2",
+      paymentId: "payment-1",
+      status: "pending",
+      amountMinor: 500n,
+      resultId: "refund-2-pending-result-1",
+      immutable: true,
+    };
+    expectRejected(
+      "refund-completion-remaining-pending",
+      {
+        ...remainingPending,
+        refundCompletionRefundSetBefore: {
+          ...remainingPending.refundCompletionRefundSetBefore,
+          refundIds: ["refund-1", "refund-2"],
+          refundSnapshots: [
+            ...remainingPending.refundCompletionRefundSetBefore.refundSnapshots,
+            pendingSibling,
+          ],
+        },
+        refundCompletionRefundSetAfter: {
+          ...remainingPending.refundCompletionRefundSetAfter,
+          refundIds: ["refund-1", "refund-2"],
+          refundSnapshots: [
+            ...remainingPending.refundCompletionRefundSetAfter.refundSnapshots,
+            pendingSibling,
+          ],
+        },
+      },
+      "partially_refunded",
+    );
+
+    const omittedSibling = contextForTransition(
+      "partially_refunded",
+      "refund_pending",
+    );
+    expectRejected(
+      "refund-completion-omitted-sibling",
+      {
+        ...omittedSibling,
+        refundCompletionRefundSetBefore: {
+          ...omittedSibling.refundCompletionRefundSetBefore,
+          refundIds: ["refund-1", "refund-2"],
+          refundSnapshots: [
+            ...omittedSibling.refundCompletionRefundSetBefore.refundSnapshots,
+            {
+              ...pendingSibling,
+              status: "failed",
+              resultId: "refund-2-failed-result-1",
+            },
+          ],
+        },
+      },
+      "partially_refunded",
+    );
+
+    const wrongCapturedTotal = contextForTransition(
+      "refunded",
+      "refund_pending",
+    );
+    expectRejected("refund-completion-spoofed-full-target", {
+      ...wrongCapturedTotal,
+      refundCompletionExpectedPayment: {
+        ...wrongCapturedTotal.refundCompletionExpectedPayment,
+        capturedAmountMinor: 20_000n,
+      },
+      refundCompletionReconciledPayment: {
+        ...wrongCapturedTotal.refundCompletionReconciledPayment,
+        capturedAmountMinor: 20_000n,
+      },
+    });
+
+    const staleSelectedRefund = contextForTransition(
+      "refunded",
+      "refund_pending",
+    );
+    expectRejected("refund-completion-stale-selected-refund", {
+      ...staleSelectedRefund,
+      refundCompletionRefundSetBefore: {
+        ...staleSelectedRefund.refundCompletionRefundSetBefore,
+        refundSnapshots: [
+          {
+            ...staleSelectedRefund.refundCompletionRefundSetBefore
+              .refundSnapshots[0],
+            resultId: "stale-refund-result",
+          },
+        ],
+      },
+    });
+
+    const overCapture = contextForTransition("refunded", "refund_pending");
+    const overCaptureAmount = 10_001n;
+    expectRejected("refund-completion-over-capture", {
+      ...overCapture,
+      refundCompletionRefundSetBefore: {
+        ...overCapture.refundCompletionRefundSetBefore,
+        refundSnapshots: [
+          {
+            ...overCapture.refundCompletionRefundSetBefore.refundSnapshots[0],
+            amountMinor: overCaptureAmount,
+          },
+        ],
+      },
+      refundCompletionRefundSetAfter: {
+        ...overCapture.refundCompletionRefundSetAfter,
+        refundSnapshots: [
+          {
+            ...overCapture.refundCompletionRefundSetAfter.refundSnapshots[0],
+            amountMinor: overCaptureAmount,
+          },
+        ],
+      },
+      refundCompletionRefundTransaction: {
+        ...overCapture.refundCompletionRefundTransaction,
+        amountMinor: overCaptureAmount,
+      },
+      refundCompletionProviderEvent: {
+        ...overCapture.refundCompletionProviderEvent,
+        amountMinor: overCaptureAmount,
+      },
+      refundCompletionReconciledPayment: {
+        ...overCapture.refundCompletionReconciledPayment,
+        succeededRefundAmountMinor: overCaptureAmount,
+      },
+    });
+
+    const staleCompletion = contextForTransition("refunded", "refund_pending");
+    const staleCompletedAt = Instant.parse("2026-01-01T00:09:54.999Z");
+    expectRejected("refund-completion-before-request-skew", {
+      ...staleCompletion,
+      refundCompletionRefundTransaction: {
+        ...staleCompletion.refundCompletionRefundTransaction,
+        completedAt: staleCompletedAt,
+      },
+      refundCompletionProviderEvent: {
+        ...staleCompletion.refundCompletionProviderEvent,
+        verifiedAt: staleCompletedAt,
+      },
+    });
+  });
 
   it("rejects a coordinated foreign Payment refund substitution", () => {
     const context = contextForTransition("refunded", "refund_pending");
