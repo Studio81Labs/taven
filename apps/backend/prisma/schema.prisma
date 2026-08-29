@@ -1490,7 +1490,7 @@ model ShipmentProviderEvent {
   outboxMessage OutboxMessage? @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
 
   @@unique([carrier, providerEventId], map: "shipment_provider_events_carrier_provider_event_id_key")
-  @@unique([carrier, providerTransactionId], map: "shipment_provider_events_carrier_provider_transaction_id_key")
+  @@index([carrier, providerTransactionId], map: "shipment_provider_events_carrier_provider_transaction_id_idx")
   @@index([shipmentId, kind])
   @@map("shipment_provider_events")
 }

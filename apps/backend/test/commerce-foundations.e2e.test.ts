@@ -366,6 +366,7 @@ async function persistVerifiedShipmentOutcome(
   shipmentId: string,
   kind: "TRANSIT_SCAN" | "DELIVERY_SCAN",
   verifiedAt = new Date(),
+  providerTransactionId?: string,
 ): Promise<void> {
   const evidence = (
     await client.query<{ carrier: string; carrier_label_id: string }>(
@@ -392,7 +393,7 @@ async function persistVerifiedShipmentOutcome(
       evidence.carrier,
       evidence.carrier_label_id,
       providerEventId,
-      `${providerEventId}:transaction`,
+      providerTransactionId ?? `${providerEventId}:transaction`,
       kind,
       verifiedAt,
     ],
@@ -8186,18 +8187,61 @@ describe("commerce persistence foundations", () => {
       );
 
       const deliveredAt = new Date();
+      const duplicateProviderEventId = `duplicate-provider-event:${randomUUID()}`;
+      await expectQueryError(
+        client,
+        "duplicate_carrier_provider_event",
+        async () => {
+          for (const transactionId of ["first", "second"]) {
+            await client.query(
+              `INSERT INTO shipment_provider_events
+                 (id, shipment_id, carrier, carrier_label_id,
+                  provider_event_id, provider_transaction_id, kind,
+                  occurred_at, authenticated_at, verified_at, created_at)
+               SELECT $1, shipment.id, shipment.carrier,
+                      shipment.carrier_label_id, $3, $4, 'TRANSIT_SCAN',
+                      $5, $5, $5, $5
+               FROM shipments shipment WHERE shipment.id = $2`,
+              [
+                randomUUID(),
+                firstShipmentId,
+                duplicateProviderEventId,
+                `duplicate-event:${transactionId}`,
+                deliveredAt,
+              ],
+            );
+          }
+        },
+        {
+          code: "23505",
+          constraint: "shipment_provider_events_carrier_provider_event_id_key",
+        },
+      );
+      const sharedProviderTransactionId = `shipment-delivery:${randomUUID()}`;
       await persistVerifiedShipmentOutcome(
         client,
         firstShipmentId,
         "TRANSIT_SCAN",
         deliveredAt,
+        sharedProviderTransactionId,
       );
       await persistVerifiedShipmentOutcome(
         client,
         firstShipmentId,
         "DELIVERY_SCAN",
         deliveredAt,
+        sharedProviderTransactionId,
       );
+      expect(
+        (
+          await client.query<{ event_count: string }>(
+            `SELECT count(*)::text AS event_count
+             FROM shipment_provider_events
+             WHERE shipment_id = $1 AND provider_transaction_id = $2`,
+            [firstShipmentId, sharedProviderTransactionId],
+          )
+        ).rows,
+      ).toEqual([{ event_count: "2" }]);
       await client.query(
         `UPDATE fulfilment_slots slot
          SET outcome = 'DELIVERED', updated_at = $2

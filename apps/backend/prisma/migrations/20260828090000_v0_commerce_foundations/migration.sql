@@ -514,7 +514,7 @@ CREATE INDEX "shipments_order_id_status_idx" ON "shipments"("order_id", "status"
 CREATE INDEX "shipments_shipment_plan_id_status_idx" ON "shipments"("shipment_plan_id", "status");
 CREATE UNIQUE INDEX "shipment_provider_events_outbox_message_id_key" ON "shipment_provider_events"("outbox_message_id");
 CREATE UNIQUE INDEX "shipment_provider_events_carrier_provider_event_id_key" ON "shipment_provider_events"("carrier", "provider_event_id");
-CREATE UNIQUE INDEX "shipment_provider_events_carrier_provider_transaction_id_key" ON "shipment_provider_events"("carrier", "provider_transaction_id");
+CREATE INDEX "shipment_provider_events_carrier_provider_transaction_id_idx" ON "shipment_provider_events"("carrier", "provider_transaction_id");
 CREATE INDEX "shipment_provider_events_shipment_id_kind_idx" ON "shipment_provider_events"("shipment_id", "kind");
 CREATE UNIQUE INDEX "jobs_id_node_id_phase_resource_plan_job_id_key" ON "jobs"("id", "node_id", "phase_resource_plan_job_id");
 CREATE UNIQUE INDEX "jobs_phase_resource_plan_job_id_key" ON "jobs"("phase_resource_plan_job_id");
