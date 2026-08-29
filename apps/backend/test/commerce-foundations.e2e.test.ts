@@ -438,8 +438,8 @@ async function advanceOrderLifecycleStep(
     | "SHIPPED"
     | "DELIVERED"
     | "COMPLETED",
+  transitionedAt = new Date(),
 ): Promise<void> {
-  const transitionedAt = new Date();
   if (status === "IN_PRODUCTION") {
     await client.query(
       `UPDATE inventory_reservations inventory_reservation
@@ -12355,6 +12355,703 @@ describe("commerce persistence foundations", () => {
     ]);
   });
 
+  it("reconciles a pre-void acceptance scan after its cancellation refund commits", async () => {
+    let foundation: PersistenceFoundation | undefined;
+    let providerVoidOccurredAts: Date[] | undefined;
+    let refundId: string | undefined;
+    let refundProviderEventRowId: string | undefined;
+    let reconciledAts: Date[] | undefined;
+    let settlementId: string | undefined;
+
+    const cancellationClient = await pool.connect();
+    await cancellationClient.query("BEGIN");
+    try {
+      const fixtures = new PersistenceFactory(
+        cancellationClient,
+        `${scope}:refunded-committed-scan`,
+      );
+      foundation = await fixtures.createFoundation(
+        "refunded-committed-scan",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        2,
+      );
+      const productions = await createCurrentPlanAndPayment(
+        cancellationClient,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(
+        cancellationClient,
+        fixtures,
+        foundation,
+        productions,
+      );
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+      ] as const) {
+        await advanceOrderLifecycleStep(
+          cancellationClient,
+          foundation.orderId,
+          status,
+        );
+      }
+      await cancellationClient.query(
+        `UPDATE shipments
+         SET status = 'CANCELLATION_PENDING',
+             cancellation_requested_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+         WHERE order_id = $1`,
+        [foundation.orderId],
+      );
+      providerVoidOccurredAts = [];
+      for (const [index, shipmentId] of foundation.shipmentIds.entries()) {
+        const providerVoidId = `${scope}:refunded-committed-delayed-scan-provider-void-${index}`;
+        await confirmCarrierLabelVoid(
+          cancellationClient,
+          shipmentId,
+          providerVoidId,
+        );
+        const voidEvent = (
+          await cancellationClient.query<{ occurred_at: Date }>(
+            `SELECT occurred_at
+             FROM shipment_provider_events
+             WHERE shipment_id = $1
+               AND kind = 'LABEL_VOIDED'
+               AND provider_event_id = $2`,
+            [shipmentId, providerVoidId],
+          )
+        ).rows[0];
+        if (!voidEvent) {
+          throw new Error("refunded committed cancellation has no void event");
+        }
+        providerVoidOccurredAts.push(voidEvent.occurred_at);
+      }
+
+      await cancelOrderBeforeHandoff(cancellationClient, foundation.orderId);
+      const refund = (
+        await cancellationClient.query<{ id: string }>(
+          `SELECT refund.id
+           FROM refund_transactions refund
+           WHERE refund.payment_id = $1
+             AND refund.reason = 'CUSTOMER_CANCELLATION'
+             AND refund.status = 'PENDING'`,
+          [foundation.paymentId],
+        )
+      ).rows[0];
+      if (!refund) {
+        throw new Error("refunded committed cancellation has no refund");
+      }
+      refundId = refund.id;
+      const refundedAt = new Date();
+      const refundProviderId = `${scope}:refunded-committed-delayed-scan-refund`;
+      const refundProviderEventId = await fixtures.persistRefundProviderEvent(
+        refund.id,
+        "REFUND_SUCCEEDED",
+        refundProviderId,
+        refundedAt,
+      );
+      refundProviderEventRowId = (
+        await cancellationClient.query<{ id: string }>(
+          `SELECT id
+           FROM payment_provider_events
+           WHERE payment_id = $1
+             AND refund_transaction_id = $2
+             AND kind = 'REFUND_SUCCEEDED'
+             AND provider_event_id = $3`,
+          [foundation.paymentId, refund.id, refundProviderEventId],
+        )
+      ).rows[0]?.id;
+      if (!refundProviderEventRowId) {
+        throw new Error("refunded cancellation has no provider refund receipt");
+      }
+      await cancellationClient.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [refund.id, refundProviderId, refundedAt],
+      );
+      await cancellationClient.query(
+        `UPDATE payments
+         SET status = 'REFUNDED', updated_at = $2
+         WHERE id = $1`,
+        [foundation.paymentId, refundedAt],
+      );
+      await cancellationClient.query(
+        `UPDATE order_phases
+         SET status = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, refundedAt],
+      );
+      await cancellationClient.query(
+        `UPDATE fulfilment_slots
+         SET outcome = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, refundedAt],
+      );
+      await cancellationClient.query(
+        `UPDATE orders SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [foundation.orderId, refundedAt],
+      );
+      await forceOrderLifecycleConstraints(cancellationClient);
+      await cancellationClient.query("COMMIT");
+    } catch (error) {
+      await cancellationClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      cancellationClient.release();
+    }
+
+    if (
+      !foundation ||
+      !providerVoidOccurredAts ||
+      providerVoidOccurredAts.length !== foundation.shipmentIds.length ||
+      !refundId ||
+      !refundProviderEventRowId
+    ) {
+      throw new Error("refunded committed cancellation fixture is incomplete");
+    }
+
+    const recoveryClient = await pool.connect();
+    await recoveryClient.query("BEGIN");
+    try {
+      const firstWinningScanOccurredAt = new Date(
+        providerVoidOccurredAts[0]!.getTime() - 1,
+      );
+      await expectQueryError(
+        recoveryClient,
+        "refunded_committed_scan_without_settlement",
+        async () => {
+          const verifiedAt = await persistVerifiedAcceptanceScan(
+            recoveryClient,
+            foundation.shipmentId,
+            `${scope}:orphaned-refunded-committed-scan`,
+            firstWinningScanOccurredAt,
+          );
+          await recoveryClient.query(
+            `UPDATE shipments
+             SET status = 'HANDED_OVER',
+                 provider_acceptance_scan_id = $2,
+                 handed_over_at = $3, updated_at = $3
+             WHERE id = $1`,
+            [
+              foundation.shipmentId,
+              `${scope}:orphaned-refunded-committed-scan`,
+              verifiedAt,
+            ],
+          );
+          await forceOrderLifecycleConstraints(recoveryClient);
+        },
+        {
+          code: "23514",
+          constraint: "shipment_plan_slot_terminal_reconciliation_check",
+        },
+      );
+
+      const recoveryEvidence: Array<{
+        acceptanceEventId: string;
+        handedOverAt: Date;
+        providerScanId: string;
+        shipmentId: string;
+        shipmentPlanId: string;
+      }> = [];
+      for (const [index, shipmentId] of foundation.shipmentIds
+        .slice(0, 1)
+        .entries()) {
+        const providerScanId = `${scope}:refunded-committed-delayed-pre-void-scan-${index}`;
+        const handedOverAt = await persistVerifiedAcceptanceScan(
+          recoveryClient,
+          shipmentId,
+          providerScanId,
+          new Date(providerVoidOccurredAts[index]!.getTime() - 1),
+        );
+        const acceptanceEventId = (
+          await recoveryClient.query<{ id: string }>(
+            `SELECT id
+             FROM shipment_provider_events
+             WHERE shipment_id = $1
+               AND kind = 'ACCEPTANCE_SCAN'
+               AND provider_event_id = $2`,
+            [shipmentId, providerScanId],
+          )
+        ).rows[0]?.id;
+        if (!acceptanceEventId) {
+          throw new Error("refunded recovery has no acceptance receipt");
+        }
+        recoveryEvidence.push({
+          acceptanceEventId,
+          handedOverAt,
+          providerScanId,
+          shipmentId,
+          shipmentPlanId: foundation.shipmentPlanIds[index]!,
+        });
+      }
+      reconciledAts = recoveryEvidence.map(({ handedOverAt }) => handedOverAt);
+      const settlementAt = recoveryEvidence[0]!.handedOverAt;
+
+      await recoveryClient.query(
+        `UPDATE payments
+         SET capture_authorized = false, capture_cutoff_at = $2,
+             updated_at = $2
+         WHERE id = $1`,
+        [foundation.paymentId, settlementAt],
+      );
+      settlementId = randomUUID();
+      await recoveryClient.query(
+        `INSERT INTO order_settlements (
+             id, order_id, order_phase_id, order_price_binding_id,
+             price_snapshot_id, payment_id, refund_transaction_id, kind,
+             currency, contract_total_minor, captured_total_minor,
+             earned_amount_minor, retained_amount_minor, refund_amount_minor,
+             written_off_amount_minor, unearned_cancelled_amount_minor,
+             amount_due_minor, refundable_balance_minor, cutoff_at, settled_at
+         )
+         SELECT $1, target_order.id, phase.id,
+                payment.order_price_binding_id, payment.price_snapshot_id,
+                payment.id, refund.id, 'UNAUTHORIZED_HANDOFF',
+                payment.currency, price.contract_total_minor,
+                payment.captured_amount_minor, 0, 0,
+                payment.captured_amount_minor, 0,
+                price.contract_total_minor, 0, 0, $4, $4
+         FROM orders target_order
+         JOIN order_phases phase ON phase.order_id = target_order.id
+         JOIN payments payment ON payment.order_id = target_order.id
+         JOIN price_snapshots price ON price.id = payment.price_snapshot_id
+         JOIN refund_transactions refund
+           ON refund.id = $3 AND refund.payment_id = payment.id
+         WHERE target_order.id = $2`,
+        [settlementId, foundation.orderId, refundId, settlementAt],
+      );
+
+      await expectQueryError(
+        recoveryClient,
+        "refunded_reconciliation_wrong_shipment",
+        () =>
+          recoveryClient.query(
+            `INSERT INTO handoff_reconciliations (
+                 id, order_id, order_phase_id, shipment_id, shipment_plan_id,
+                 delivery_destination_id, acceptance_event_id, void_event_id,
+                 payment_id, refund_transaction_id, refund_provider_event_id,
+                 order_settlement_id, status, cancellation_requested_at,
+                 reconciled_at
+             )
+             SELECT $1, shipment.order_id, shipment.order_phase_id, shipment.id,
+                    shipment.shipment_plan_id,
+                    shipment.delivery_destination_id, $2, void_event.id,
+                    payment.id, refund.id, $3, $4, 'COMPLETED',
+                    shipment.cancellation_requested_at, $5
+             FROM shipments shipment
+             JOIN shipment_provider_events void_event
+               ON void_event.shipment_id = shipment.id
+              AND void_event.kind = 'LABEL_VOIDED'
+              AND void_event.provider_event_id = shipment.provider_void_id
+             JOIN payments payment ON payment.order_id = shipment.order_id
+             JOIN refund_transactions refund
+               ON refund.id = $6 AND refund.payment_id = payment.id
+             WHERE shipment.id = $7`,
+            [
+              randomUUID(),
+              recoveryEvidence[0]!.acceptanceEventId,
+              refundProviderEventRowId,
+              settlementId,
+              recoveryEvidence[0]!.handedOverAt,
+              refundId,
+              foundation.shipmentIds[1],
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "refunded_handoff_source_state_check",
+        },
+      );
+
+      for (const evidence of recoveryEvidence) {
+        await recoveryClient.query(
+          `INSERT INTO handoff_reconciliations (
+               id, order_id, order_phase_id, shipment_id, shipment_plan_id,
+               delivery_destination_id, acceptance_event_id, void_event_id,
+               payment_id, refund_transaction_id, refund_provider_event_id,
+               order_settlement_id, status, cancellation_requested_at,
+               reconciled_at
+           )
+           SELECT $1, shipment.order_id, shipment.order_phase_id, shipment.id,
+                  shipment.shipment_plan_id, shipment.delivery_destination_id,
+                  $2, void_event.id, payment.id, refund.id, $3, $4,
+                  'COMPLETED', shipment.cancellation_requested_at, $5
+           FROM shipments shipment
+           JOIN shipment_provider_events void_event
+             ON void_event.shipment_id = shipment.id
+            AND void_event.kind = 'LABEL_VOIDED'
+            AND void_event.provider_event_id = shipment.provider_void_id
+           JOIN payments payment ON payment.order_id = shipment.order_id
+           JOIN refund_transactions refund
+             ON refund.id = $6 AND refund.payment_id = payment.id
+           WHERE shipment.id = $7`,
+          [
+            randomUUID(),
+            evidence.acceptanceEventId,
+            refundProviderEventRowId,
+            settlementId,
+            evidence.handedOverAt,
+            refundId,
+            evidence.shipmentId,
+          ],
+        );
+        await recoveryClient.query(
+          `UPDATE shipments
+           SET status = 'HANDED_OVER', provider_acceptance_scan_id = $2,
+               handed_over_at = $3, updated_at = $3
+           WHERE id = $1`,
+          [evidence.shipmentId, evidence.providerScanId, evidence.handedOverAt],
+        );
+        await recoveryClient.query(
+          `UPDATE fulfilment_slots slot
+           SET outcome = 'PENDING', updated_at = $2
+           FROM shipment_plan_fulfilment_slots allocation
+           WHERE allocation.fulfilment_slot_id = slot.id
+             AND allocation.shipment_plan_id = $1`,
+          [evidence.shipmentPlanId, evidence.handedOverAt],
+        );
+        expect(
+          (
+            await recoveryClient.query<{ job_proof: boolean }>(
+              `SELECT taven_has_refunded_post_void_handoff_reconciliation(
+                        job.order_id, job.order_phase_id,
+                        job.shipment_plan_id, NULL, job.id, $2
+                      ) AS job_proof
+               FROM jobs job
+               WHERE job.shipment_plan_id = $1`,
+              [evidence.shipmentPlanId, evidence.handedOverAt],
+            )
+          ).rows,
+        ).toEqual([{ job_proof: true }]);
+        await recoveryClient.query(
+          `UPDATE jobs
+           SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+           WHERE shipment_plan_id = $1`,
+          [evidence.shipmentPlanId, evidence.handedOverAt],
+        );
+      }
+      expect(
+        (
+          await recoveryClient.query<{ aggregate_proof: boolean }>(
+            `SELECT taven_has_refunded_post_void_handoff_reconciliation($1)
+                      AS aggregate_proof`,
+            [foundation.orderId],
+          )
+        ).rows[0],
+      ).toEqual({ aggregate_proof: true });
+      const shippedAt = new Date(
+        Math.max(
+          ...recoveryEvidence.map(({ handedOverAt }) => handedOverAt.getTime()),
+        ),
+      );
+      await recoveryClient.query(
+        `UPDATE order_phases
+         SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, shippedAt],
+      );
+      await recoveryClient.query(
+        `UPDATE orders SET status = 'SHIPPED', updated_at = $2 WHERE id = $1`,
+        [foundation.orderId, shippedAt],
+      );
+      await forceOrderLifecycleConstraints(recoveryClient);
+      await recoveryClient.query("COMMIT");
+    } catch (error) {
+      await recoveryClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      recoveryClient.release();
+    }
+
+    if (!settlementId || !reconciledAts) {
+      throw new Error("refunded handoff has no shared settlement");
+    }
+    expect(
+      (
+        await pool.query<{
+          cancelled_jobs: string;
+          cancelled_shipments: string;
+          cancelled_slots: string;
+          handed_over_jobs: string;
+          handed_over_shipments: string;
+          order_status: string;
+          pending_slots: string;
+        }>(
+          `SELECT target_order.status::text AS order_status,
+                  count(*) FILTER (WHERE shipment.status = 'HANDED_OVER')::text
+                    AS handed_over_shipments,
+                  count(*) FILTER (WHERE shipment.status = 'CANCELLED')::text
+                    AS cancelled_shipments,
+                  (SELECT count(*)::text FROM jobs
+                   WHERE order_id = target_order.id
+                     AND status = 'HANDED_OVER') AS handed_over_jobs,
+                  (SELECT count(*)::text FROM jobs
+                   WHERE order_id = target_order.id
+                     AND status = 'CANCELLED') AS cancelled_jobs,
+                  (SELECT count(*)::text FROM fulfilment_slots
+                   WHERE order_id = target_order.id
+                     AND outcome = 'PENDING') AS pending_slots,
+                  (SELECT count(*)::text FROM fulfilment_slots
+                   WHERE order_id = target_order.id
+                     AND outcome = 'CANCELLED_REFUNDED') AS cancelled_slots
+           FROM orders target_order
+           JOIN shipments shipment ON shipment.order_id = target_order.id
+           WHERE target_order.id = $1
+           GROUP BY target_order.id`,
+          [foundation.orderId],
+        )
+      ).rows[0],
+    ).toEqual({
+      order_status: "SHIPPED",
+      handed_over_shipments: "1",
+      cancelled_shipments: "1",
+      handed_over_jobs: "1",
+      cancelled_jobs: "1",
+      pending_slots: "1",
+      cancelled_slots: "1",
+    });
+    const secondRecoveryClient = await pool.connect();
+    await secondRecoveryClient.query("BEGIN");
+    try {
+      const shipmentId = foundation.shipmentIds[1]!;
+      const shipmentPlanId = foundation.shipmentPlanIds[1]!;
+      const providerScanId = `${scope}:refunded-committed-delayed-pre-void-scan-1`;
+      const handedOverAt = await persistVerifiedAcceptanceScan(
+        secondRecoveryClient,
+        shipmentId,
+        providerScanId,
+        new Date(providerVoidOccurredAts[1]!.getTime() - 1),
+      );
+      const acceptanceEventId = (
+        await secondRecoveryClient.query<{ id: string }>(
+          `SELECT id
+           FROM shipment_provider_events
+           WHERE shipment_id = $1
+             AND kind = 'ACCEPTANCE_SCAN'
+             AND provider_event_id = $2`,
+          [shipmentId, providerScanId],
+        )
+      ).rows[0]?.id;
+      if (!acceptanceEventId) {
+        throw new Error("second refunded recovery has no acceptance receipt");
+      }
+      await secondRecoveryClient.query(
+        `INSERT INTO handoff_reconciliations (
+             id, order_id, order_phase_id, shipment_id, shipment_plan_id,
+             delivery_destination_id, acceptance_event_id, void_event_id,
+             payment_id, refund_transaction_id, refund_provider_event_id,
+             order_settlement_id, status, cancellation_requested_at,
+             reconciled_at
+         )
+         SELECT $1, shipment.order_id, shipment.order_phase_id, shipment.id,
+                shipment.shipment_plan_id, shipment.delivery_destination_id,
+                $2, void_event.id, payment.id, refund.id, $3, $4,
+                'COMPLETED', shipment.cancellation_requested_at, $5
+         FROM shipments shipment
+         JOIN shipment_provider_events void_event
+           ON void_event.shipment_id = shipment.id
+          AND void_event.kind = 'LABEL_VOIDED'
+          AND void_event.provider_event_id = shipment.provider_void_id
+         JOIN payments payment ON payment.order_id = shipment.order_id
+         JOIN refund_transactions refund
+           ON refund.id = $6 AND refund.payment_id = payment.id
+         WHERE shipment.id = $7`,
+        [
+          randomUUID(),
+          acceptanceEventId,
+          refundProviderEventRowId,
+          settlementId,
+          handedOverAt,
+          refundId,
+          shipmentId,
+        ],
+      );
+      await secondRecoveryClient.query(
+        `UPDATE shipments
+         SET status = 'HANDED_OVER', provider_acceptance_scan_id = $2,
+             handed_over_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [shipmentId, providerScanId, handedOverAt],
+      );
+      await secondRecoveryClient.query(
+        `UPDATE fulfilment_slots slot
+         SET outcome = 'PENDING', updated_at = $2
+         FROM shipment_plan_fulfilment_slots allocation
+         WHERE allocation.fulfilment_slot_id = slot.id
+           AND allocation.shipment_plan_id = $1`,
+        [shipmentPlanId, handedOverAt],
+      );
+      expect(
+        (
+          await secondRecoveryClient.query<{ job_proof: boolean }>(
+            `SELECT taven_has_refunded_post_void_handoff_reconciliation(
+                      job.order_id, job.order_phase_id,
+                      job.shipment_plan_id, NULL, job.id, $2
+                    ) AS job_proof
+             FROM jobs job
+             WHERE job.shipment_plan_id = $1`,
+            [shipmentPlanId, handedOverAt],
+          )
+        ).rows,
+      ).toEqual([{ job_proof: true }]);
+      await secondRecoveryClient.query(
+        `UPDATE jobs
+         SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+         WHERE shipment_plan_id = $1`,
+        [shipmentPlanId, handedOverAt],
+      );
+      await forceOrderLifecycleConstraints(secondRecoveryClient);
+      await secondRecoveryClient.query("COMMIT");
+      reconciledAts.push(handedOverAt);
+    } catch (error) {
+      await secondRecoveryClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      secondRecoveryClient.release();
+    }
+
+    const replayClient = await pool.connect();
+    await replayClient.query("BEGIN");
+    try {
+      const replay = await replayClient.query(
+        `INSERT INTO shipment_provider_events (
+             id, shipment_id, carrier, carrier_label_id, provider_event_id,
+             provider_transaction_id, kind, occurred_at, authenticated_at,
+             verified_at, created_at
+         )
+         SELECT $1, event.shipment_id, event.carrier, event.carrier_label_id,
+                event.provider_event_id, event.provider_transaction_id,
+                event.kind, event.occurred_at, event.authenticated_at,
+                event.verified_at, event.created_at
+         FROM shipment_provider_events event
+         WHERE event.shipment_id = $2
+           AND event.provider_event_id = $3
+         ON CONFLICT (carrier, provider_event_id) DO NOTHING
+         RETURNING id`,
+        [
+          randomUUID(),
+          foundation.shipmentIds[0],
+          `${scope}:refunded-committed-delayed-pre-void-scan-0`,
+        ],
+      );
+      expect(replay.rows).toEqual([]);
+      expect(
+        (
+          await replayClient.query<{
+            reconciliation_count: string;
+            settlement_count: string;
+          }>(
+            `SELECT
+                 (SELECT count(*)::text
+                  FROM handoff_reconciliations
+                  WHERE order_id = $1) AS reconciliation_count,
+                 (SELECT count(*)::text
+                  FROM order_settlements
+                  WHERE order_id = $1) AS settlement_count`,
+            [foundation.orderId],
+          )
+        ).rows[0],
+      ).toEqual({ reconciliation_count: "2", settlement_count: "1" });
+      await replayClient.query("COMMIT");
+    } catch (error) {
+      await replayClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      replayClient.release();
+    }
+
+    const completionClient = await pool.connect();
+    await completionClient.query("BEGIN");
+    try {
+      if (!reconciledAts || reconciledAts.length === 0) {
+        throw new Error("refunded handoff has no reconciliation time");
+      }
+      const lastReconciledAt = new Date(
+        Math.max(...reconciledAts.map((value) => value.getTime())),
+      );
+      await advanceOrderLifecycleStep(
+        completionClient,
+        foundation.orderId,
+        "DELIVERED",
+        new Date(lastReconciledAt.getTime() + 1),
+      );
+      await advanceOrderLifecycleStep(
+        completionClient,
+        foundation.orderId,
+        "COMPLETED",
+        new Date(lastReconciledAt.getTime() + 2),
+      );
+      await completionClient.query("COMMIT");
+    } catch (error) {
+      await completionClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      completionClient.release();
+    }
+
+    const completedRecovery = (
+      await pool.query<{
+        captured_total_minor: string;
+        order_status: string;
+        payment_status: string;
+        reconciliation_status: string;
+        refund_amount_minor: string;
+        refund_status: string;
+        retained_amount_minor: string;
+      }>(
+        `SELECT target_order.status::text AS order_status,
+                  payment.status::text AS payment_status,
+                  refund.status::text AS refund_status,
+                  reconciliation.status::text AS reconciliation_status,
+                  settlement.captured_total_minor::text,
+                  settlement.refund_amount_minor::text,
+                  settlement.retained_amount_minor::text
+           FROM orders target_order
+           JOIN payments payment ON payment.order_id = target_order.id
+           JOIN refund_transactions refund ON refund.id = $2
+           JOIN handoff_reconciliations reconciliation
+             ON reconciliation.order_id = target_order.id
+           JOIN order_settlements settlement
+             ON settlement.id = reconciliation.order_settlement_id
+           WHERE target_order.id = $1`,
+        [foundation.orderId, refundId],
+      )
+    ).rows;
+    expect(completedRecovery).toHaveLength(2);
+    expect(completedRecovery).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          order_status: "COMPLETED",
+          payment_status: "REFUNDED",
+          refund_status: "SUCCEEDED",
+          reconciliation_status: "COMPLETED",
+          retained_amount_minor: "0",
+        }),
+        expect.objectContaining({
+          order_status: "COMPLETED",
+          payment_status: "REFUNDED",
+          refund_status: "SUCCEEDED",
+          reconciliation_status: "COMPLETED",
+          retained_amount_minor: "0",
+        }),
+      ]),
+    );
+    expect(
+      completedRecovery.every(
+        ({ captured_total_minor, refund_amount_minor }) =>
+          captured_total_minor === refund_amount_minor &&
+          BigInt(captured_total_minor) > 0n,
+      ),
+    ).toBe(true);
+  });
+
   it("accepts a carrier scan before handoff and records later scans as no-ops", async () => {
     await rollback("delayed-acceptance-scan", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
@@ -12886,10 +13583,12 @@ describe("commerce persistence foundations", () => {
         "customers",
         "delivery_destinations",
         "fulfilment_slots",
+        "handoff_reconciliations",
         "jobs",
         "order_items",
         "order_phases",
         "order_price_bindings",
+        "order_settlements",
         "orders",
         "payment_schedules",
         "payments",

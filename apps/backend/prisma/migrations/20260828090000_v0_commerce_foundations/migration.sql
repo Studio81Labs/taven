@@ -79,6 +79,12 @@ CREATE TYPE "refund_status" AS ENUM ('PENDING', 'SUCCEEDED', 'FAILED');
 CREATE TYPE "refund_reason" AS ENUM ('CUSTOMER_CANCELLATION', 'PRODUCTION_FAILURE', 'LATE_CAPTURE_COMPENSATION');
 
 -- CreateEnum
+CREATE TYPE "order_settlement_kind" AS ENUM ('UNAUTHORIZED_HANDOFF');
+
+-- CreateEnum
+CREATE TYPE "handoff_reconciliation_status" AS ENUM ('COMPLETED');
+
+-- CreateEnum
 CREATE TYPE "audit_actor_kind" AS ENUM ('SYSTEM', 'CUSTOMER', 'OPERATOR');
 
 -- CreateTable
@@ -479,6 +485,53 @@ CREATE TABLE "refund_transactions" (
 );
 
 -- CreateTable
+CREATE TABLE "order_settlements" (
+    "id" UUID NOT NULL,
+    "order_id" UUID NOT NULL,
+    "order_phase_id" UUID NOT NULL,
+    "order_price_binding_id" UUID NOT NULL,
+    "price_snapshot_id" UUID NOT NULL,
+    "payment_id" UUID NOT NULL,
+    "refund_transaction_id" UUID NOT NULL,
+    "kind" "order_settlement_kind" NOT NULL DEFAULT 'UNAUTHORIZED_HANDOFF',
+    "currency" CHAR(3) NOT NULL,
+    "contract_total_minor" BIGINT NOT NULL,
+    "captured_total_minor" BIGINT NOT NULL,
+    "earned_amount_minor" BIGINT NOT NULL,
+    "retained_amount_minor" BIGINT NOT NULL,
+    "refund_amount_minor" BIGINT NOT NULL,
+    "written_off_amount_minor" BIGINT NOT NULL,
+    "unearned_cancelled_amount_minor" BIGINT NOT NULL,
+    "amount_due_minor" BIGINT NOT NULL,
+    "refundable_balance_minor" BIGINT NOT NULL,
+    "cutoff_at" TIMESTAMPTZ(3) NOT NULL,
+    "settled_at" TIMESTAMPTZ(3) NOT NULL,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT "order_settlements_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "handoff_reconciliations" (
+    "id" UUID NOT NULL,
+    "order_id" UUID NOT NULL,
+    "order_phase_id" UUID NOT NULL,
+    "shipment_id" UUID NOT NULL,
+    "shipment_plan_id" UUID NOT NULL,
+    "delivery_destination_id" UUID NOT NULL,
+    "acceptance_event_id" UUID NOT NULL,
+    "void_event_id" UUID NOT NULL,
+    "payment_id" UUID NOT NULL,
+    "refund_transaction_id" UUID NOT NULL,
+    "refund_provider_event_id" UUID NOT NULL,
+    "order_settlement_id" UUID NOT NULL,
+    "status" "handoff_reconciliation_status" NOT NULL DEFAULT 'COMPLETED',
+    "cancellation_requested_at" TIMESTAMPTZ(3) NOT NULL,
+    "reconciled_at" TIMESTAMPTZ(3) NOT NULL,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT "handoff_reconciliations_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "payment_provider_events" (
     "id" UUID NOT NULL,
     "payment_id" UUID NOT NULL,
@@ -580,6 +633,7 @@ CREATE INDEX "shipment_provider_events_outbox_message_id_idx" ON "shipment_provi
 CREATE UNIQUE INDEX "shipment_provider_events_carrier_provider_event_id_key" ON "shipment_provider_events"("carrier", "provider_event_id");
 CREATE INDEX "shipment_provider_events_carrier_provider_transaction_id_idx" ON "shipment_provider_events"("carrier", "provider_transaction_id");
 CREATE INDEX "shipment_provider_events_shipment_id_kind_idx" ON "shipment_provider_events"("shipment_id", "kind");
+CREATE UNIQUE INDEX "shipment_provider_events_id_shipment_id_key" ON "shipment_provider_events"("id", "shipment_id");
 CREATE UNIQUE INDEX "jobs_id_node_id_phase_resource_plan_job_id_key" ON "jobs"("id", "node_id", "phase_resource_plan_job_id");
 CREATE UNIQUE INDEX "jobs_phase_resource_plan_job_id_key" ON "jobs"("phase_resource_plan_job_id");
 CREATE UNIQUE INDEX "jobs_qc_photo_asset_id_key" ON "jobs"("qc_photo_asset_id");
@@ -590,6 +644,7 @@ CREATE UNIQUE INDEX "payments_provider_provider_intent_id_key" ON "payments"("pr
 CREATE UNIQUE INDEX "payments_provider_provider_capture_id_key" ON "payments"("provider", "provider_capture_id");
 CREATE UNIQUE INDEX "payments_intent_creation_failure_result_id_key" ON "payments"("intent_creation_failure_result_id");
 CREATE UNIQUE INDEX "payments_intent_creation_failure_scope_key" ON "payments"("intent_creation_failure_result_id", "id", "provider");
+CREATE UNIQUE INDEX "payments_id_order_id_key" ON "payments"("id", "order_id");
 CREATE UNIQUE INDEX "payments_one_active_attempt_per_schedule_key" ON "payments"("payment_schedule_id") WHERE "status" IN ('CREATED', 'PENDING', 'CAPTURED');
 CREATE INDEX "payments_order_id_status_idx" ON "payments"("order_id", "status");
 CREATE INDEX "payments_capture_cutoff_at_status_idx" ON "payments"("capture_cutoff_at", "status");
@@ -599,11 +654,29 @@ CREATE UNIQUE INDEX "payment_intent_creation_failures_provider_attempt_key_key" 
 CREATE UNIQUE INDEX "payment_intent_creation_failures_id_payment_id_provider_key" ON "payment_intent_creation_failures"("id", "payment_id", "provider");
 CREATE UNIQUE INDEX "refund_transactions_provider_provider_refund_id_key" ON "refund_transactions"("provider", "provider_refund_id");
 CREATE UNIQUE INDEX "refund_transactions_payment_id_idempotency_key_key" ON "refund_transactions"("payment_id", "idempotency_key");
+CREATE UNIQUE INDEX "refund_transactions_id_payment_id_key" ON "refund_transactions"("id", "payment_id");
 CREATE INDEX "refund_transactions_payment_id_status_idx" ON "refund_transactions"("payment_id", "status");
+CREATE UNIQUE INDEX "order_settlements_refund_transaction_id_key" ON "order_settlements"("refund_transaction_id");
+CREATE UNIQUE INDEX "order_settlements_order_id_kind_key" ON "order_settlements"("order_id", "kind");
+CREATE UNIQUE INDEX "order_settlements_refund_transaction_id_payment_id_key" ON "order_settlements"("refund_transaction_id", "payment_id");
+CREATE UNIQUE INDEX "order_settlements_reconciliation_scope_key" ON "order_settlements"("id", "order_id", "order_phase_id");
+CREATE INDEX "order_settlements_order_id_settled_at_idx" ON "order_settlements"("order_id", "settled_at");
+CREATE UNIQUE INDEX "handoff_reconciliations_shipment_id_key" ON "handoff_reconciliations"("shipment_id");
+CREATE UNIQUE INDEX "handoff_reconciliations_acceptance_event_id_key" ON "handoff_reconciliations"("acceptance_event_id");
+CREATE UNIQUE INDEX "handoff_reconciliations_void_event_id_key" ON "handoff_reconciliations"("void_event_id");
+CREATE UNIQUE INDEX "handoff_reconciliations_order_id_shipment_id_key" ON "handoff_reconciliations"("order_id", "shipment_id");
+CREATE UNIQUE INDEX "handoff_reconciliations_shipment_scope_key" ON "handoff_reconciliations"("shipment_id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id");
+CREATE UNIQUE INDEX "handoff_reconciliations_acceptance_event_scope_key" ON "handoff_reconciliations"("acceptance_event_id", "shipment_id");
+CREATE UNIQUE INDEX "handoff_reconciliations_void_event_scope_key" ON "handoff_reconciliations"("void_event_id", "shipment_id");
+CREATE INDEX "handoff_reconciliations_refund_scope_idx" ON "handoff_reconciliations"("refund_transaction_id", "payment_id");
+CREATE INDEX "handoff_reconciliations_refund_provider_event_scope_idx" ON "handoff_reconciliations"("refund_provider_event_id", "refund_transaction_id");
+CREATE INDEX "handoff_reconciliations_settlement_scope_idx" ON "handoff_reconciliations"("order_settlement_id", "order_id", "order_phase_id");
+CREATE INDEX "handoff_reconciliations_order_id_reconciled_at_idx" ON "handoff_reconciliations"("order_id", "reconciled_at");
 CREATE UNIQUE INDEX "payment_provider_events_provider_provider_event_id_key" ON "payment_provider_events"("provider", "provider_event_id");
 CREATE INDEX "payment_provider_events_provider_provider_transaction_id_idx" ON "payment_provider_events"("provider", "provider_transaction_id");
 CREATE INDEX "payment_provider_events_payment_id_kind_idx" ON "payment_provider_events"("payment_id", "kind");
 CREATE INDEX "payment_provider_events_refund_transaction_id_kind_idx" ON "payment_provider_events"("refund_transaction_id", "kind");
+CREATE UNIQUE INDEX "payment_provider_events_id_refund_transaction_id_key" ON "payment_provider_events"("id", "refund_transaction_id");
 CREATE INDEX "audit_events_quote_id_created_at_idx" ON "audit_events"("quote_id", "created_at");
 CREATE INDEX "audit_events_order_id_created_at_idx" ON "audit_events"("order_id", "created_at");
 CREATE INDEX "audit_events_payment_id_created_at_idx" ON "audit_events"("payment_id", "created_at");
@@ -680,6 +753,21 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_schedule_contract_fkey" FOREIGN 
 ALTER TABLE "payments" ADD CONSTRAINT "payments_intent_creation_failure_result_fkey" FOREIGN KEY ("intent_creation_failure_result_id", "id", "provider") REFERENCES "payment_intent_creation_failures"("id", "payment_id", "provider") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "payment_intent_creation_failures" ADD CONSTRAINT "payment_intent_creation_failures_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_order_phase_scope_fkey" FOREIGN KEY ("order_phase_id", "order_id") REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_order_snapshot_fkey" FOREIGN KEY ("order_price_binding_id", "order_id", "price_snapshot_id") REFERENCES "order_price_bindings"("id", "order_id", "price_snapshot_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_snapshot_currency_fkey" FOREIGN KEY ("price_snapshot_id", "currency") REFERENCES "price_snapshots"("id", "currency") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_payment_scope_fkey" FOREIGN KEY ("payment_id", "order_id") REFERENCES "payments"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_refund_scope_fkey" FOREIGN KEY ("refund_transaction_id", "payment_id") REFERENCES "refund_transactions"("id", "payment_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_order_phase_scope_fkey" FOREIGN KEY ("order_phase_id", "order_id") REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_shipment_scope_fkey" FOREIGN KEY ("shipment_id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") REFERENCES "shipments"("id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_acceptance_event_scope_fkey" FOREIGN KEY ("acceptance_event_id", "shipment_id") REFERENCES "shipment_provider_events"("id", "shipment_id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_void_event_scope_fkey" FOREIGN KEY ("void_event_id", "shipment_id") REFERENCES "shipment_provider_events"("id", "shipment_id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_payment_scope_fkey" FOREIGN KEY ("payment_id", "order_id") REFERENCES "payments"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_refund_scope_fkey" FOREIGN KEY ("refund_transaction_id", "payment_id") REFERENCES "refund_transactions"("id", "payment_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_refund_provider_event_scope_fkey" FOREIGN KEY ("refund_provider_event_id", "refund_transaction_id") REFERENCES "payment_provider_events"("id", "refund_transaction_id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_settlement_scope_fkey" FOREIGN KEY ("order_settlement_id", "order_id", "order_phase_id") REFERENCES "order_settlements"("id", "order_id", "order_phase_id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_refund_transaction_id_fkey" FOREIGN KEY ("refund_transaction_id") REFERENCES "refund_transactions"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_quote_id_fkey" FOREIGN KEY ("quote_id") REFERENCES "quotes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -848,6 +936,39 @@ ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_success_fa
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_completion_status_check" CHECK (
     "completed_at" IS NULL OR "status" = 'SUCCEEDED'
 );
+ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_values_check" CHECK (
+    "currency" ~ '^[A-Z]{3}$'
+    AND "contract_total_minor" >= 0
+    AND "captured_total_minor" > 0
+    AND "earned_amount_minor" >= 0
+    AND "earned_amount_minor" <= "contract_total_minor"
+    AND "retained_amount_minor" >= 0
+    AND "refund_amount_minor" >= 0
+    AND "written_off_amount_minor" >= 0
+    AND "unearned_cancelled_amount_minor" >= 0
+    AND "amount_due_minor" >= 0
+    AND "refundable_balance_minor" >= 0
+    AND "settled_at" = "cutoff_at"
+    AND "settled_at" <= "created_at" + interval '5 seconds'
+);
+ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_unauthorized_handoff_formula_check" CHECK (
+    "kind" <> 'UNAUTHORIZED_HANDOFF'
+    OR (
+        "captured_total_minor" = "contract_total_minor"
+        AND "earned_amount_minor" = 0
+        AND "retained_amount_minor" = least("captured_total_minor", "earned_amount_minor")
+        AND "refund_amount_minor" = "captured_total_minor" - "retained_amount_minor"
+        AND "written_off_amount_minor" = greatest(0, "earned_amount_minor" - "captured_total_minor")
+        AND "unearned_cancelled_amount_minor" = "contract_total_minor" - "earned_amount_minor"
+        AND "amount_due_minor" = 0
+        AND "refundable_balance_minor" = 0
+    )
+);
+ALTER TABLE "handoff_reconciliations" ADD CONSTRAINT "handoff_reconciliations_values_check" CHECK (
+    "status" = 'COMPLETED'
+    AND "reconciled_at" >= "cancellation_requested_at"
+    AND "reconciled_at" <= "created_at" + interval '5 seconds'
+);
 ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_values_check" CHECK (
     "provider" ~ '[^[:space:]]'
     AND "provider_event_id" ~ '[^[:space:]]'
@@ -952,6 +1073,12 @@ BEFORE INSERT ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 CREATE TRIGGER "commerce_creation_evidence_bounded"
 BEFORE INSERT ON "refund_transactions"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "order_settlements"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
+CREATE TRIGGER "commerce_creation_evidence_bounded"
+BEFORE INSERT ON "handoff_reconciliations"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_commerce_creation_evidence();
 
 CREATE FUNCTION taven_protect_customer_chronology()
@@ -2897,6 +3024,358 @@ AS $$
     );
 $$;
 
+CREATE FUNCTION taven_has_refunded_post_void_handoff_reconciliation(
+    target_order_id uuid,
+    target_phase_id uuid DEFAULT NULL,
+    target_shipment_plan_id uuid DEFAULT NULL,
+    target_slot_id uuid DEFAULT NULL,
+    target_job_id uuid DEFAULT NULL,
+    target_verified_at timestamptz DEFAULT NULL,
+    target_shipment_id uuid DEFAULT NULL,
+    target_settlement_id uuid DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "handoff_reconciliations" reconciliation
+        JOIN "order_settlements" settlement
+          ON settlement."id" = reconciliation."order_settlement_id"
+         AND settlement."order_id" = reconciliation."order_id"
+         AND settlement."order_phase_id" = reconciliation."order_phase_id"
+         AND settlement."payment_id" = reconciliation."payment_id"
+         AND settlement."refund_transaction_id" =
+             reconciliation."refund_transaction_id"
+        JOIN "orders" target_order
+          ON target_order."id" = reconciliation."order_id"
+        JOIN "order_phases" phase
+          ON phase."id" = reconciliation."order_phase_id"
+         AND phase."order_id" = reconciliation."order_id"
+        JOIN "shipments" shipment
+          ON shipment."id" = reconciliation."shipment_id"
+         AND shipment."shipment_plan_id" = reconciliation."shipment_plan_id"
+         AND shipment."order_id" = reconciliation."order_id"
+         AND shipment."order_phase_id" = reconciliation."order_phase_id"
+         AND shipment."delivery_destination_id" =
+             reconciliation."delivery_destination_id"
+        JOIN "shipment_provider_events" acceptance_event
+          ON acceptance_event."id" = reconciliation."acceptance_event_id"
+         AND acceptance_event."shipment_id" = reconciliation."shipment_id"
+        JOIN "shipment_provider_events" void_event
+          ON void_event."id" = reconciliation."void_event_id"
+         AND void_event."shipment_id" = reconciliation."shipment_id"
+        JOIN "payments" payment
+          ON payment."id" = reconciliation."payment_id"
+         AND payment."order_id" = reconciliation."order_id"
+        JOIN "refund_transactions" refund
+          ON refund."id" = reconciliation."refund_transaction_id"
+         AND refund."payment_id" = reconciliation."payment_id"
+        JOIN "payment_provider_events" refund_event
+          ON refund_event."id" = reconciliation."refund_provider_event_id"
+         AND refund_event."refund_transaction_id" = reconciliation."refund_transaction_id"
+         AND refund_event."payment_id" = reconciliation."payment_id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = settlement."order_price_binding_id"
+         AND binding."order_id" = settlement."order_id"
+         AND binding."price_snapshot_id" = settlement."price_snapshot_id"
+        JOIN "price_snapshots" price
+          ON price."id" = settlement."price_snapshot_id"
+         AND price."currency" = settlement."currency"
+        WHERE reconciliation."order_id" = target_order_id
+          AND reconciliation."status" = 'COMPLETED'
+          AND reconciliation."cancellation_requested_at" =
+              shipment."cancellation_requested_at"
+          AND reconciliation."reconciled_at" = shipment."handed_over_at"
+          AND settlement."kind" = 'UNAUTHORIZED_HANDOFF'
+          AND settlement."cutoff_at" = settlement."settled_at"
+          AND settlement."settled_at" <= reconciliation."reconciled_at"
+          AND settlement."order_price_binding_id" =
+              target_order."accepted_order_price_binding_id"
+          AND payment."order_price_binding_id" =
+              settlement."order_price_binding_id"
+          AND payment."price_snapshot_id" = settlement."price_snapshot_id"
+          AND payment."currency" = settlement."currency"
+          AND payment."status" = 'REFUNDED'
+          AND NOT payment."capture_authorized"
+          AND payment."capture_cutoff_at" = settlement."cutoff_at"
+          AND payment."captured_at" IS NOT NULL
+          AND payment."captured_at" < settlement."cutoff_at"
+          AND payment."captured_amount_minor" = settlement."captured_total_minor"
+          AND price."contract_total_minor" = settlement."contract_total_minor"
+          AND refund."reason" = 'CUSTOMER_CANCELLATION'
+          AND refund."status" = 'SUCCEEDED'
+          AND refund."amount_minor" = payment."captured_amount_minor"
+          AND refund."amount_minor" = settlement."refund_amount_minor"
+          AND refund."completed_at" IS NOT NULL
+          AND refund."completed_at" <= reconciliation."reconciled_at"
+          AND refund_event."kind" = 'REFUND_SUCCEEDED'
+          AND refund_event."provider" = payment."provider"
+          AND refund_event."provider" = refund."provider"
+          AND refund_event."provider_transaction_id" = refund."provider_refund_id"
+          AND refund_event."amount_minor" = refund."amount_minor"
+          AND refund_event."currency" = payment."currency"
+          AND refund_event."verified_at" = refund."completed_at"
+          AND settlement."earned_amount_minor" = 0
+          AND settlement."retained_amount_minor" = 0
+          AND settlement."written_off_amount_minor" = 0
+          AND settlement."unearned_cancelled_amount_minor" =
+              settlement."contract_total_minor"
+          AND settlement."amount_due_minor" = 0
+          AND settlement."refundable_balance_minor" = 0
+          AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+          AND shipment."cancelled_at" IS NOT NULL
+          AND acceptance_event."outbox_message_id" IS NULL
+          AND acceptance_event."kind" = 'ACCEPTANCE_SCAN'
+          AND acceptance_event."source_shipment_status" = 'CANCELLED'
+          AND acceptance_event."carrier" = shipment."carrier"
+          AND acceptance_event."carrier_label_id" = shipment."carrier_label_id"
+          AND acceptance_event."provider_event_id" =
+              shipment."provider_acceptance_scan_id"
+          AND acceptance_event."verified_at" = reconciliation."reconciled_at"
+          AND void_event."kind" = 'LABEL_VOIDED'
+          AND void_event."carrier" = shipment."carrier"
+          AND void_event."carrier_label_id" = shipment."carrier_label_id"
+          AND void_event."provider_event_id" = shipment."provider_void_id"
+          AND void_event."verified_at" = shipment."provider_voided_at"
+          AND acceptance_event."occurred_at" < void_event."occurred_at"
+          AND (target_phase_id IS NULL
+               OR reconciliation."order_phase_id" = target_phase_id)
+          AND (target_shipment_plan_id IS NULL
+               OR reconciliation."shipment_plan_id" = target_shipment_plan_id)
+          AND (target_verified_at IS NULL
+               OR reconciliation."reconciled_at" = target_verified_at)
+          AND (target_shipment_id IS NULL
+               OR reconciliation."shipment_id" = target_shipment_id)
+          AND (target_settlement_id IS NULL
+               OR reconciliation."order_settlement_id" = target_settlement_id)
+          AND (
+              target_slot_id IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM "shipment_plan_fulfilment_slots" allocation
+                  JOIN "fulfilment_slots" slot
+                    ON slot."id" = allocation."fulfilment_slot_id"
+                  WHERE allocation."shipment_plan_id" =
+                        reconciliation."shipment_plan_id"
+                    AND slot."id" = target_slot_id
+                    AND slot."order_id" = reconciliation."order_id"
+                    AND slot."order_phase_id" = reconciliation."order_phase_id"
+              )
+          )
+          AND (
+              target_job_id IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM "jobs" job
+                  WHERE job."id" = target_job_id
+                    AND job."order_id" = reconciliation."order_id"
+                    AND job."order_phase_id" = reconciliation."order_phase_id"
+                    AND job."shipment_plan_id" = reconciliation."shipment_plan_id"
+                    AND job."status" = 'CANCELLED'
+                    AND job."cancellation_reason" = 'ORDER_CANCELLED'
+                    AND job."cancelled_at" IS NOT NULL
+                    AND job."cancelled_at" >= shipment."cancelled_at"
+              )
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "payments" other_payment
+              WHERE other_payment."order_id" = reconciliation."order_id"
+                AND other_payment."id" <> payment."id"
+                AND other_payment."captured_at" IS NOT NULL
+                AND other_payment."captured_at" < settlement."cutoff_at"
+                AND coalesce(other_payment."captured_amount_minor", 0) > 0
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "refund_transactions" pending_refund
+              JOIN "payments" pending_payment
+                ON pending_payment."id" = pending_refund."payment_id"
+              WHERE pending_payment."order_id" = reconciliation."order_id"
+                AND pending_refund."status" = 'PENDING'
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipments" replacement
+              WHERE replacement."replaces_shipment_id" = shipment."id"
+          )
+    );
+$$;
+
+CREATE TRIGGER "order_settlements_immutable"
+BEFORE UPDATE OR DELETE ON "order_settlements"
+FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
+
+CREATE TRIGGER "handoff_reconciliations_immutable"
+BEFORE UPDATE OR DELETE ON "handoff_reconciliations"
+FOR EACH ROW EXECUTE FUNCTION taven_prevent_commerce_row_mutation();
+
+CREATE FUNCTION taven_validate_refunded_handoff_source_state()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM "orders" target_order
+    WHERE target_order."id" = NEW."order_id"
+    FOR UPDATE;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "orders" target_order
+        JOIN "order_phases" phase
+          ON phase."id" = NEW."order_phase_id"
+         AND phase."order_id" = target_order."id"
+        JOIN "shipments" shipment
+          ON shipment."id" = NEW."shipment_id"
+         AND shipment."shipment_plan_id" = NEW."shipment_plan_id"
+         AND shipment."order_id" = target_order."id"
+         AND shipment."order_phase_id" = phase."id"
+         AND shipment."delivery_destination_id" =
+             NEW."delivery_destination_id"
+        JOIN "shipment_provider_events" acceptance_event
+          ON acceptance_event."id" = NEW."acceptance_event_id"
+         AND acceptance_event."shipment_id" = shipment."id"
+        JOIN "shipment_provider_events" void_event
+          ON void_event."id" = NEW."void_event_id"
+         AND void_event."shipment_id" = shipment."id"
+        JOIN "order_settlements" settlement
+          ON settlement."id" = NEW."order_settlement_id"
+         AND settlement."order_id" = target_order."id"
+         AND settlement."order_phase_id" = phase."id"
+         AND settlement."payment_id" = NEW."payment_id"
+         AND settlement."refund_transaction_id" =
+             NEW."refund_transaction_id"
+        JOIN "payments" payment
+          ON payment."id" = settlement."payment_id"
+         AND payment."order_id" = target_order."id"
+        JOIN "refund_transactions" refund
+          ON refund."id" = settlement."refund_transaction_id"
+         AND refund."payment_id" = payment."id"
+        JOIN "payment_provider_events" refund_event
+          ON refund_event."id" = NEW."refund_provider_event_id"
+         AND refund_event."payment_id" = payment."id"
+         AND refund_event."refund_transaction_id" = refund."id"
+        WHERE NEW."status" = 'COMPLETED'
+          AND NEW."cancellation_requested_at" =
+              shipment."cancellation_requested_at"
+          AND shipment."status" = 'CANCELLED'
+          AND shipment."cancelled_at" IS NOT NULL
+          AND shipment."provider_void_id" = void_event."provider_event_id"
+          AND shipment."provider_voided_at" = void_event."verified_at"
+          AND acceptance_event."kind" = 'ACCEPTANCE_SCAN'
+          AND acceptance_event."source_shipment_status" = 'CANCELLED'
+          AND acceptance_event."occurred_at" < void_event."occurred_at"
+          AND acceptance_event."verified_at" = NEW."reconciled_at"
+          AND void_event."kind" = 'LABEL_VOIDED'
+          AND settlement."kind" = 'UNAUTHORIZED_HANDOFF'
+          AND payment."status" = 'REFUNDED'
+          AND refund."reason" = 'CUSTOMER_CANCELLATION'
+          AND refund."status" = 'SUCCEEDED'
+          AND refund_event."kind" = 'REFUND_SUCCEEDED'
+          AND (
+              (target_order."status" = 'REFUNDED'
+               AND phase."status" = 'CANCELLED_REFUNDED')
+              OR
+              (target_order."status" = 'SHIPPED'
+               AND phase."status" = 'SHIPPED'
+               AND EXISTS (
+                   SELECT 1
+                   FROM "handoff_reconciliations" prior
+                   WHERE prior."order_id" = target_order."id"
+                     AND prior."order_settlement_id" = settlement."id"
+                     AND prior."status" = 'COMPLETED'
+               ))
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              JOIN "fulfilment_slots" slot
+                ON slot."id" = allocation."fulfilment_slot_id"
+              WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+                AND slot."order_id" = shipment."order_id"
+                AND slot."order_phase_id" = shipment."order_phase_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              JOIN "fulfilment_slots" slot
+                ON slot."id" = allocation."fulfilment_slot_id"
+              WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+                AND (slot."order_id" <> shipment."order_id"
+                     OR slot."order_phase_id" <> shipment."order_phase_id"
+                     OR slot."outcome" <> 'CANCELLED_REFUNDED')
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "jobs" job
+              WHERE job."order_id" = shipment."order_id"
+                AND job."order_phase_id" = shipment."order_phase_id"
+                AND job."shipment_plan_id" = shipment."shipment_plan_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "jobs" job
+              WHERE job."order_id" = shipment."order_id"
+                AND job."order_phase_id" = shipment."order_phase_id"
+                AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                AND (job."status" <> 'CANCELLED'
+                     OR job."cancellation_reason" <> 'ORDER_CANCELLED'
+                     OR job."cancelled_at" IS NULL
+                     OR job."cancelled_at" < shipment."cancelled_at")
+          )
+    ) THEN
+        RAISE EXCEPTION 'handoff reconciliation must capture an exact refunded cancellation source before recovery'
+            USING ERRCODE = '23514', CONSTRAINT = 'refunded_handoff_source_state_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "handoff_reconciliations_source_state_valid"
+BEFORE INSERT ON "handoff_reconciliations"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_refunded_handoff_source_state();
+
+CREATE FUNCTION taven_reconcile_refunded_handoff_record()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_TABLE_NAME = 'order_settlements' THEN
+        IF NOT taven_has_refunded_post_void_handoff_reconciliation(
+            NEW."order_id", NULL, NULL, NULL, NULL, NULL, NULL, NEW."id"
+        ) THEN
+            RAISE EXCEPTION 'handoff reconciliation and settlement must bind the exact refunded post-void custody outcome atomically'
+                USING ERRCODE = '23514', CONSTRAINT = 'refunded_handoff_record_reconciliation_check';
+        END IF;
+    ELSIF TG_TABLE_NAME = 'handoff_reconciliations' THEN
+        IF NOT taven_has_refunded_post_void_handoff_reconciliation(
+            NEW."order_id", NEW."order_phase_id", NEW."shipment_plan_id",
+            NULL, NULL, NEW."reconciled_at", NEW."shipment_id",
+            NEW."order_settlement_id"
+        ) THEN
+            RAISE EXCEPTION 'handoff reconciliation and settlement must bind the exact refunded post-void custody outcome atomically'
+                USING ERRCODE = '23514', CONSTRAINT = 'refunded_handoff_record_reconciliation_check';
+        END IF;
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "order_settlements_refunded_handoff_reconciled"
+AFTER INSERT ON "order_settlements"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_refunded_handoff_record();
+
+CREATE CONSTRAINT TRIGGER "handoff_reconciliations_refunded_handoff_reconciled"
+AFTER INSERT ON "handoff_reconciliations"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_refunded_handoff_record();
+
 CREATE FUNCTION taven_validate_order_status_transition()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -3004,6 +3483,8 @@ BEGIN
            OR (OLD."status" = 'READY_TO_SHIP' AND NEW."status" IN ('SHIPPED', 'CANCELLED'))
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'SHIPPED'
                AND taven_has_reconciled_post_void_handoff(NEW."id"))
+           OR (OLD."status" = 'REFUNDED' AND NEW."status" = 'SHIPPED'
+               AND taven_has_refunded_post_void_handoff_reconciliation(NEW."id"))
            -- Post-handoff cancellation/partial fulfilment remain unreachable
            -- until the settlement and claim tranches persist their proof.
            OR (OLD."status" = 'SHIPPED' AND NEW."status" = 'DELIVERED')
@@ -3146,6 +3627,7 @@ AS $$
 DECLARE
     evidence_now timestamptz := clock_timestamp();
     reconciled_post_void_handoff boolean := false;
+    reconciled_refunded_post_void_handoff boolean := false;
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'QUOTED'
@@ -3169,6 +3651,13 @@ BEGIN
     reconciled_post_void_handoff :=
         NEW."cancelled_at" IS NOT NULL
         AND taven_has_reconciled_post_void_handoff(
+            NEW."order_id", NEW."id", NULL, NULL, NULL,
+            NEW."shipped_at"
+        );
+    reconciled_refunded_post_void_handoff :=
+        OLD."status" = 'CANCELLED_REFUNDED'
+        AND NEW."cancelled_at" IS NOT NULL
+        AND taven_has_refunded_post_void_handoff_reconciliation(
             NEW."order_id", NEW."id", NULL, NULL, NULL,
             NEW."shipped_at"
         );
@@ -3219,6 +3708,9 @@ BEGIN
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'CANCELLED_REFUNDED')
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'SHIPPED'
                AND reconciled_post_void_handoff)
+           OR (OLD."status" = 'CANCELLED_REFUNDED'
+               AND NEW."status" = 'SHIPPED'
+               AND reconciled_refunded_post_void_handoff)
        ) THEN
         RAISE EXCEPTION 'order phase status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_status_transition_check';
@@ -3290,6 +3782,15 @@ BEGIN
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'CANCELLED_REFUNDED'
+               AND NEW."status" = 'SHIPPED'
+               AND reconciled_refunded_post_void_handoff
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
        ) THEN
         RAISE EXCEPTION 'order phase transition may assign only its own lifecycle evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
@@ -3322,10 +3823,12 @@ BEGIN
            AND NEW."cancelled_at" < NEW."qc_passed_at")
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."shipped_at" IS NOT NULL
            AND NEW."cancelled_at" < NEW."shipped_at"
-           AND NOT reconciled_post_void_handoff)
+           AND NOT reconciled_post_void_handoff
+           AND NOT reconciled_refunded_post_void_handoff)
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."delivered_at" IS NOT NULL
            AND NEW."cancelled_at" < NEW."delivered_at"
-           AND NOT reconciled_post_void_handoff) THEN
+           AND NOT reconciled_post_void_handoff
+           AND NOT reconciled_refunded_post_void_handoff) THEN
         RAISE EXCEPTION 'order phase lifecycle timestamps must be chronological'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
     END IF;
@@ -3406,10 +3909,26 @@ BEGIN
            OR (OLD."status" = 'QC_APPROVED' AND NEW."status" IN ('PACKED', 'CANCELLED', 'FAILED'))
            OR (OLD."status" = 'PACKED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLED', 'FAILED'))
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'HANDED_OVER'
-               AND taven_has_reconciled_post_void_handoff(
-                   NEW."order_id", NEW."order_phase_id",
-                   NEW."shipment_plan_id", NULL, NEW."id",
-                   NEW."handed_over_at"
+               AND (
+                   (EXISTS (
+                       SELECT 1 FROM "orders" target_order
+                       WHERE target_order."id" = NEW."order_id"
+                         AND target_order."status" = 'CANCELLED'
+                    ) AND taven_has_reconciled_post_void_handoff(
+                       NEW."order_id", NEW."order_phase_id",
+                       NEW."shipment_plan_id", NULL, NEW."id",
+                       NEW."handed_over_at"
+                   ))
+                   OR
+                   (EXISTS (
+                       SELECT 1 FROM "orders" target_order
+                       WHERE target_order."id" = NEW."order_id"
+                         AND target_order."status" IN ('REFUNDED', 'SHIPPED')
+                    ) AND taven_has_refunded_post_void_handoff_reconciliation(
+                       NEW."order_id", NEW."order_phase_id",
+                       NEW."shipment_plan_id", NULL, NEW."id",
+                       NEW."handed_over_at"
+                   ))
                ))
            OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'SETTLED')
        ) THEN
@@ -3823,6 +4342,24 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    IF target_status IN ('SHIPPED', 'DELIVERED', 'COMPLETED')
+       AND EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           JOIN "refund_transactions" refund
+             ON refund."payment_id" = payment."id"
+           WHERE payment."order_id" = target_order_id
+             AND payment."status" = 'REFUNDED'
+             AND refund."reason" = 'CUSTOMER_CANCELLATION'
+             AND refund."status" = 'SUCCEEDED'
+       )
+       AND NOT taven_has_refunded_post_void_handoff_reconciliation(
+           target_order_id
+       ) THEN
+        RAISE EXCEPTION 'fulfilled order with a completed cancellation refund requires exact immutable handoff reconciliation and settlement proof'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_refunded_handoff_reconciliation_check';
+    END IF;
+
     IF EXISTS (
         SELECT 1
         FROM "jobs" job
@@ -4119,6 +4656,12 @@ BEGIN
             FROM "shipments" shipment
             WHERE shipment."order_id" = target_order_id
               AND shipment."status" NOT IN ('LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND NOT (
+                  shipment."status" = 'CANCELLED'
+                  AND taven_has_refunded_post_void_handoff_reconciliation(
+                      target_order_id
+                  )
+              )
               AND NOT EXISTS (
                   SELECT 1
                   FROM "shipments" replacement
@@ -4135,6 +4678,12 @@ BEGIN
             FROM "jobs"
             WHERE "order_id" = target_order_id
               AND "status" NOT IN ('PACKED', 'HANDED_OVER')
+              AND NOT (
+                  "status" = 'CANCELLED'
+                  AND taven_has_refunded_post_void_handoff_reconciliation(
+                      target_order_id
+                  )
+              )
         ) OR EXISTS (
             SELECT 1
             FROM "shipments" shipment
@@ -4470,7 +5019,15 @@ BEGIN
                         AND production."node_id" = job."node_id"
                         AND production."phase_resource_plan_job_id" = job."phase_resource_plan_job_id"
                         AND production."status" = 'CONSUMED'
-                        AND reservation_set."status" = 'SETTLED'
+                        AND (
+                            reservation_set."status" = 'SETTLED'
+                            OR (
+                                reservation_set."status" = 'RELEASED'
+                                AND taven_has_refunded_post_void_handoff_reconciliation(
+                                    target_order_id
+                                )
+                            )
+                        )
                         AND EXISTS (
                             SELECT 1
                             FROM "inventory_reservations" inventory_reservation
@@ -6272,6 +6829,7 @@ DECLARE
     terminal_at timestamptz := clock_timestamp();
     old_is_terminal boolean;
     new_is_terminal boolean;
+    refunded_handoff_recovery boolean;
 BEGIN
     old_is_terminal := OLD."status" IN ('EXPIRED', 'COMPLETED', 'REFUNDED', 'PARTIALLY_FULFILLED', 'CANCELLED_SETTLED')
         OR (
@@ -6293,15 +6851,21 @@ BEGIN
                   AND coalesce(payment."captured_amount_minor", 0) > 0
             )
         );
+    refunded_handoff_recovery :=
+        OLD."status" = 'REFUNDED'
+        AND NEW."status" = 'SHIPPED'
+        AND taven_has_refunded_post_void_handoff_reconciliation(NEW."id");
 
-    IF old_is_terminal AND NOT new_is_terminal THEN
+    IF old_is_terminal AND NOT new_is_terminal
+       AND NOT refunded_handoff_recovery THEN
         RAISE EXCEPTION 'terminal orders cannot return to an active status'
             USING ERRCODE = '23514', CONSTRAINT = 'order_terminal_status_check';
     END IF;
 
-    IF OLD."status" IN ('DRAFT', 'QUOTED')
-       AND NEW."status" NOT IN ('DRAFT', 'QUOTED')
-       AND NOT new_is_terminal THEN
+    IF ((OLD."status" IN ('DRAFT', 'QUOTED')
+         AND NEW."status" NOT IN ('DRAFT', 'QUOTED')
+         AND NOT new_is_terminal)
+        OR refunded_handoff_recovery) THEN
         UPDATE "model_files" source
         SET "retention_hold" = CASE
             WHEN source."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL') THEN source."retention_hold"
@@ -6642,6 +7206,13 @@ BEGIN
            OR (OLD."outcome" = 'CANCELLED'
                AND NEW."outcome" = 'PENDING'
                AND taven_has_reconciled_post_void_handoff(
+                   NEW."order_id", NEW."order_phase_id", NULL,
+                   NEW."id", NULL, NEW."updated_at"
+               ))
+           OR (OLD."outcome" = 'CANCELLED_REFUNDED'
+               AND NEW."outcome" = 'PENDING'
+               AND target_order_status IN ('REFUNDED', 'SHIPPED')
+               AND taven_has_refunded_post_void_handoff_reconciliation(
                    NEW."order_id", NEW."order_phase_id", NULL,
                    NEW."id", NULL, NEW."updated_at"
                ))
@@ -8612,6 +9183,12 @@ BEGIN
     INTO has_failed_job;
 
     IF target_order_status NOT IN ('CANCELLED', 'REFUNDED')
+       AND NOT (
+           target_order_status IN ('SHIPPED', 'DELIVERED', 'COMPLETED')
+           AND taven_has_refunded_post_void_handoff_reconciliation(
+               target_order_id
+           )
+       )
        AND EXISTS (
            SELECT 1
            FROM "payments" payment

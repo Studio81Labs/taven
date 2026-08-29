@@ -5,6 +5,41 @@ import {
   type TransitionPolicy,
 } from "./transition.js";
 
+function hasExactRefundedCancellationRecoveryMarker(
+  context: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const reconciliation = record(context?.handoffRefundedReconciliation);
+  const settlement = record(context?.handoffRefundedSettlement);
+  const reconciliationId = context?.handoffReconciliationId;
+  const settlementId = context?.handoffSettlementId;
+  return (
+    context?.cancellationRaceRefundedAggregate === true &&
+    context.cancellationRaceHandoffKind === "unauthorized_reconciliation" &&
+    context.cancellationRaceResultKind === "unauthorized_reconciliation" &&
+    context.handoffReconciliation === true &&
+    context.handoffSettlementCompleted === true &&
+    context.handoffReconciliationAtomic === true &&
+    context.handoffSettlementImmutable === true &&
+    nonBlank(reconciliationId) &&
+    nonBlank(settlementId) &&
+    reconciliation?.id === reconciliationId &&
+    reconciliation.orderSettlementId === settlementId &&
+    reconciliation.status === "completed" &&
+    reconciliation.immutable === true &&
+    settlement?.id === settlementId &&
+    settlement.kind === "unauthorized_handoff" &&
+    settlement.immutable === true
+  );
+}
+
 function requireFlag<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -7252,12 +7287,13 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
   terminal: [
     "completed",
     "partially_fulfilled",
-    "refunded",
     "cancelled_settled",
     "expired",
   ],
   contextualTerminal: (state, context) =>
-    state === "cancelled" && context?.paymentStatus === "unpaid",
+    (state === "refunded" &&
+      !hasExactRefundedCancellationRecoveryMarker(context)) ||
+    (state === "cancelled" && context?.paymentStatus === "unpaid"),
   transitions: {
     draft: ["quoted"],
     quoted: ["confirmed", "expired", "cancelled"],
@@ -7281,6 +7317,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     delivered: ["completed"],
     recovery_pending: ["qc_passed", "cancelled", "partially_fulfilled"],
     cancelled: ["shipped", "refunded", "cancelled_settled"],
+    refunded: ["shipped"],
   },
   guard: (command) => {
     if (command.current === "draft" && command.target === "quoted") {
@@ -7342,6 +7379,10 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       requireZeroBalances("Order", command);
     }
     if (command.current === "cancelled" && command.target === "shipped") {
+      requireVerifiedMatchingCancellationRaceScan("Order", command);
+      requireExactCancellationRaceHandoffResult("Order", command);
+    }
+    if (command.current === "refunded" && command.target === "shipped") {
       requireVerifiedMatchingCancellationRaceScan("Order", command);
       requireExactCancellationRaceHandoffResult("Order", command);
     }
@@ -7463,14 +7504,11 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
   {
     name: "OrderPhase(single)",
     initial: ["quoted"],
-    terminal: [
-      "completed",
-      "cancelled_refunded",
-      "cancelled_settled",
-      "partially_fulfilled",
-    ],
+    terminal: ["completed", "cancelled_settled", "partially_fulfilled"],
     contextualTerminal: (state, context) =>
-      state === "cancelled" && context?.paymentStatus === "unpaid",
+      (state === "cancelled_refunded" &&
+        !hasExactRefundedCancellationRecoveryMarker(context)) ||
+      (state === "cancelled" && context?.paymentStatus === "unpaid"),
     transitions: {
       quoted: ["active", "cancelled"],
       active: ["in_production", "cancelled"],
@@ -7484,6 +7522,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         "cancelled_refunded",
       ],
       cancelled: ["shipped", "cancelled_refunded", "cancelled_settled"],
+      cancelled_refunded: ["shipped"],
     },
     guard: (command) => {
       if (command.current === "quoted" && command.target === "active") {
@@ -7510,6 +7549,19 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         requireZeroBalances("OrderPhase(single)", command);
       }
       if (command.current === "cancelled" && command.target === "shipped") {
+        requireVerifiedMatchingCancellationRaceScan(
+          "OrderPhase(single)",
+          command,
+        );
+        requireExactCancellationRaceHandoffResult(
+          "OrderPhase(single)",
+          command,
+        );
+      }
+      if (
+        command.current === "cancelled_refunded" &&
+        command.target === "shipped"
+      ) {
         requireVerifiedMatchingCancellationRaceScan(
           "OrderPhase(single)",
           command,
@@ -7907,11 +7959,10 @@ function requireExactJobHandoff<S extends string>(
     typeof value === "string" && value.trim().length > 0;
   const kind = context?.jobHandoffKind;
   const jobId = context?.jobId;
-  const expectedJobStatus =
-    context?.cancellationRaceCommittedCancellation === true
-      ? "cancelled"
-      : "packed";
-  const committedCancellation = expectedJobStatus === "cancelled";
+  const cancelledSourceRecovery =
+    context?.cancellationRaceCommittedCancellation === true ||
+    context?.cancellationRaceRefundedAggregate === true;
+  const expectedJobStatus = cancelledSourceRecovery ? "cancelled" : "packed";
   const expectedValue = context?.jobHandoffExpectedJob;
   const expected =
     typeof expectedValue === "object" &&
@@ -7934,7 +7985,7 @@ function requireExactJobHandoff<S extends string>(
     expected?.id !== jobId ||
     expected.kind !== kind ||
     expected.status !== expectedJobStatus ||
-    (committedCancellation &&
+    (cancelledSourceRecovery &&
       (!(jobCancelledAt instanceof Instant) ||
         expected.cancellationReason !== "order_cancelled" ||
         !(shipmentCancelledAt instanceof Instant) ||
@@ -7961,7 +8012,8 @@ function requireExactJobHandoff<S extends string>(
       const stateKey = context?.jobHandoffCurrentStateCommandKey;
       const previousResultId = context?.jobHandoffPreviousResultId;
       if (
-        raceKind !== "ordinary" ||
+        (raceKind !== "ordinary" &&
+          raceKind !== "unauthorized_reconciliation") ||
         !nonBlank(raceResultId) ||
         !nonBlank(stateKey) ||
         !nonBlank(previousResultId) ||
@@ -7985,7 +8037,7 @@ function requireExactJobHandoff<S extends string>(
           lifecycle,
           command.current,
           command.target,
-          "ordinary Job cancellation-race handoff must bind the command-selected packed Job to the exact race result",
+          "Job cancellation-race handoff must bind the command-selected source Job to the exact race result",
         );
       }
       requireVerifiedMatchingCancellationRaceScan(lifecycle, command);
@@ -8139,7 +8191,8 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
   terminal: ["settled", "qc_rejected", "failed"],
   contextualTerminal: (state, context) =>
     state === "cancelled" &&
-    context?.cancellationRaceCommittedCancellation !== true,
+    context?.cancellationRaceCommittedCancellation !== true &&
+    !hasExactRefundedCancellationRecoveryMarker(context),
   transitions: {
     created: ["accepted", "cancelled"],
     accepted: ["gcode_ready", "failed", "cancelled"],
@@ -9117,9 +9170,16 @@ function requireAtomicOrdinaryHandoff<S extends string>(
   expectedStatuses: Readonly<{
     shipmentPrevious: "label_created" | "cancellation_pending" | "cancelled";
     orderPrevious:
-      "ready_to_ship" | "awaiting_balance" | "shipped" | "cancelled";
-    phasePrevious: "qc_passed" | "shipped" | "cancelled";
+      | "ready_to_ship"
+      | "awaiting_balance"
+      | "shipped"
+      | "cancelled"
+      | "refunded";
+    phasePrevious: "qc_passed" | "shipped" | "cancelled" | "cancelled_refunded";
     jobPrevious?: "packed" | "cancelled";
+    slotPrevious?: "cancelled" | "cancelled_refunded";
+    orderTarget?: "shipped" | "partially_fulfilled";
+    phaseTarget?: "shipped" | "partially_fulfilled";
     allowLaterParcel?: boolean;
     resultProof?: "ordinary" | "cancellation_race";
   }> = {
@@ -9153,11 +9213,16 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     : undefined;
   const jobs = Array.isArray(jobsValue) ? [...jobsValue] : undefined;
   const jobPrevious = expectedStatuses.jobPrevious ?? "packed";
+  const slotPrevious =
+    expectedStatuses.slotPrevious ??
+    (jobPrevious === "cancelled" ? "cancelled" : undefined);
+  const orderTarget = expectedStatuses.orderTarget ?? "shipped";
+  const phaseTarget = expectedStatuses.phaseTarget ?? "shipped";
   const firstParcelStatusesMatch =
     context?.handoffOrderPreviousStatus === expectedStatuses.orderPrevious &&
-    context?.handoffOrderTargetStatus === "shipped" &&
+    context?.handoffOrderTargetStatus === orderTarget &&
     context?.handoffPhasePreviousStatus === expectedStatuses.phasePrevious &&
-    context?.handoffPhaseTargetStatus === "shipped";
+    context?.handoffPhaseTargetStatus === phaseTarget;
   const laterParcelStatusesMatch =
     expectedStatuses.allowLaterParcel === true &&
     context?.handoffOrderPreviousStatus === "shipped" &&
@@ -9313,8 +9378,8 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       typeof slotJobId !== "string" ||
       slotJobId.trim().length === 0 ||
       !authoritativeJobIds.includes(slotJobId) ||
-      (jobPrevious === "cancelled" &&
-        (slot.previousOutcome !== "cancelled" ||
+      (slotPrevious !== undefined &&
+        (slot.previousOutcome !== slotPrevious ||
           slot.targetOutcome !== "pending"))
     ) {
       throw new TransitionGuardError(
@@ -9598,6 +9663,243 @@ function requireExactSelectedLabelledShipmentAggregate<S extends string>(
   }
 }
 
+function requireExactRefundedHandoffFinancialProof<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const reconciliation = record(context?.handoffRefundedReconciliation);
+  const settlement = record(context?.handoffRefundedSettlement);
+  const payment = record(context?.handoffRefundedPayment);
+  const refund = record(context?.handoffRefundedRefund);
+  const refundEvent = record(context?.handoffRefundedProviderEvent);
+  const priorReconciliation = record(
+    context?.handoffRefundedPriorReconciliation,
+  );
+  const laterRefundedParcel =
+    context?.cancellationRaceLaterRefundedParcel === true;
+  const payments = Array.isArray(context?.handoffSettlementOrderPayments)
+    ? context.handoffSettlementOrderPayments.map(record)
+    : [];
+  const refunds = Array.isArray(context?.handoffSettlementOrderRefunds)
+    ? context.handoffSettlementOrderRefunds.map(record)
+    : [];
+  const authoritativePaymentIds = Array.isArray(
+    context?.handoffSettlementPaymentIds,
+  )
+    ? context.handoffSettlementPaymentIds
+    : [];
+  const authoritativeRefundIds = Array.isArray(
+    context?.handoffSettlementRefundIds,
+  )
+    ? context.handoffSettlementRefundIds
+    : [];
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const shipmentId = context?.shipmentId;
+  const resultId = context?.cancellationRaceHandoffResultId;
+  const reconciliationId = context?.handoffReconciliationId;
+  const settlementId = context?.handoffSettlementId;
+  const paymentId = payment?.id;
+  const refundId = refund?.id;
+  const refundEventId = refundEvent?.id;
+  const currency = settlement?.currency;
+  const settlementResultId = settlement?.resultId;
+  const contractTotal = settlement?.contractTotalMinor;
+  const capturedTotal = settlement?.capturedTotalMinor;
+  const refundAmount = settlement?.refundAmountMinor;
+  const cutoffAt = settlement?.cutoffAt;
+  const settledAt = settlement?.settledAt;
+  const capturedAt = payment?.capturedAt;
+  const refundCompletedAt = refund?.completedAt;
+  const refundVerifiedAt = refundEvent?.verifiedAt;
+  const exactPaymentCount = payments.filter(
+    (candidate) => candidate?.id === paymentId,
+  ).length;
+  const exactRefundCount = refunds.filter(
+    (candidate) => candidate?.id === refundId,
+  ).length;
+  const omittedCapturedPayment = payments.some((candidate) => {
+    const amount = candidate?.capturedAmountMinor;
+    const at = candidate?.capturedAt;
+    return (
+      candidate?.id !== paymentId &&
+      typeof amount === "bigint" &&
+      amount > 0n &&
+      at instanceof Instant &&
+      cutoffAt instanceof Instant &&
+      at.compare(cutoffAt) < 0
+    );
+  });
+  const pendingRefund = refunds.some(
+    (candidate) => candidate?.status === "pending",
+  );
+  const invalidPaymentRow = payments.some((candidate) => {
+    const amount = candidate?.capturedAmountMinor;
+    return (
+      candidate === undefined ||
+      !nonBlank(candidate.id) ||
+      candidate.orderId !== orderId ||
+      typeof amount !== "bigint" ||
+      amount < 0n ||
+      (amount > 0n && !(candidate.capturedAt instanceof Instant)) ||
+      candidate.immutable !== true
+    );
+  });
+  const invalidRefundRow = refunds.some(
+    (candidate) =>
+      candidate === undefined ||
+      !nonBlank(candidate.id) ||
+      !nonBlank(candidate.paymentId) ||
+      !authoritativePaymentIds.includes(candidate.paymentId) ||
+      (candidate.status !== "pending" &&
+        candidate.status !== "succeeded" &&
+        candidate.status !== "failed") ||
+      typeof candidate.amountMinor !== "bigint" ||
+      candidate.amountMinor < 0n ||
+      candidate.immutable !== true,
+  );
+
+  if (
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(shipmentId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(reconciliationId) ||
+    !nonBlank(settlementId) ||
+    !nonBlank(paymentId) ||
+    !nonBlank(refundId) ||
+    !nonBlank(refundEventId) ||
+    reconciliation?.id !== reconciliationId ||
+    reconciliation.orderId !== orderId ||
+    reconciliation.phaseId !== phaseId ||
+    reconciliation.shipmentId !== shipmentId ||
+    reconciliation.providerEventId !== context?.providerEventId ||
+    reconciliation.providerTransactionId !==
+      context?.shipmentProviderTransactionId ||
+    reconciliation.orderSettlementId !== settlementId ||
+    reconciliation.paymentId !== paymentId ||
+    reconciliation.refundTransactionId !== refundId ||
+    reconciliation.refundProviderEventId !== refundEventId ||
+    reconciliation.status !== "completed" ||
+    reconciliation.resultId !== resultId ||
+    reconciliation.immutable !== true ||
+    (laterRefundedParcel &&
+      (!nonBlank(priorReconciliation?.id) ||
+        priorReconciliation.id === reconciliationId ||
+        priorReconciliation.orderId !== orderId ||
+        priorReconciliation.phaseId !== phaseId ||
+        !nonBlank(priorReconciliation.shipmentId) ||
+        priorReconciliation.shipmentId === shipmentId ||
+        priorReconciliation.orderSettlementId !== settlementId ||
+        !nonBlank(priorReconciliation.resultId) ||
+        priorReconciliation.resultId !== settlementResultId ||
+        priorReconciliation.status !== "completed" ||
+        priorReconciliation.immutable !== true)) ||
+    settlement?.id !== settlementId ||
+    settlement.orderId !== orderId ||
+    settlement.phaseId !== phaseId ||
+    !nonBlank(settlement.orderPriceBindingId) ||
+    !nonBlank(settlement.priceSnapshotId) ||
+    settlement.paymentId !== paymentId ||
+    settlement.refundTransactionId !== refundId ||
+    settlement.kind !== "unauthorized_handoff" ||
+    !nonBlank(currency) ||
+    typeof contractTotal !== "bigint" ||
+    contractTotal <= 0n ||
+    typeof capturedTotal !== "bigint" ||
+    capturedTotal <= 0n ||
+    capturedTotal !== contractTotal ||
+    settlement.earnedAmountMinor !== 0n ||
+    settlement.retainedAmountMinor !== 0n ||
+    refundAmount !== capturedTotal ||
+    settlement.writtenOffAmountMinor !== 0n ||
+    settlement.unearnedCancelledAmountMinor !== contractTotal ||
+    settlement.amountDueMinor !== 0n ||
+    settlement.refundableBalanceMinor !== 0n ||
+    !(cutoffAt instanceof Instant) ||
+    !(settledAt instanceof Instant) ||
+    cutoffAt.compare(settledAt) !== 0 ||
+    !nonBlank(settlementResultId) ||
+    (laterRefundedParcel
+      ? settlementResultId === resultId
+      : settlementResultId !== resultId) ||
+    settlement.immutable !== true ||
+    payment?.orderId !== orderId ||
+    payment.orderPriceBindingId !== settlement.orderPriceBindingId ||
+    payment.priceSnapshotId !== settlement.priceSnapshotId ||
+    payment.status !== "refunded" ||
+    payment.currency !== currency ||
+    payment.capturedAmountMinor !== capturedTotal ||
+    payment.captureAuthorized !== false ||
+    !(capturedAt instanceof Instant) ||
+    capturedAt.compare(cutoffAt) >= 0 ||
+    !(payment.captureCutoffAt instanceof Instant) ||
+    payment.captureCutoffAt.compare(cutoffAt) !== 0 ||
+    payment.immutable !== true ||
+    refund?.paymentId !== paymentId ||
+    refund.reason !== "customer_cancellation" ||
+    refund.status !== "succeeded" ||
+    refund.amountMinor !== refundAmount ||
+    !nonBlank(refund.provider) ||
+    !nonBlank(refund.providerRefundId) ||
+    !(refundCompletedAt instanceof Instant) ||
+    refundCompletedAt.compare(settledAt) > 0 ||
+    refund.immutable !== true ||
+    refundEvent?.paymentId !== paymentId ||
+    refundEvent.refundTransactionId !== refundId ||
+    refundEvent.kind !== "refund_succeeded" ||
+    refundEvent.provider !== refund.provider ||
+    refundEvent.providerTransactionId !== refund.providerRefundId ||
+    refundEvent.amountMinor !== refundAmount ||
+    refundEvent.currency !== currency ||
+    !(refundVerifiedAt instanceof Instant) ||
+    refundVerifiedAt.compare(refundCompletedAt) !== 0 ||
+    refundEvent.immutable !== true ||
+    context?.handoffSettlementPaymentSetComplete !== true ||
+    context?.handoffSettlementRefundSetComplete !== true ||
+    authoritativePaymentIds.length === 0 ||
+    authoritativeRefundIds.length === 0 ||
+    authoritativePaymentIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    authoritativeRefundIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(authoritativePaymentIds).size !== authoritativePaymentIds.length ||
+    new Set(authoritativeRefundIds).size !== authoritativeRefundIds.length ||
+    invalidPaymentRow ||
+    invalidRefundRow ||
+    !hasSameNonEmptyStringSet(
+      authoritativePaymentIds,
+      payments.map((candidate) => candidate?.id),
+    ) ||
+    !hasSameNonEmptyStringSet(
+      authoritativeRefundIds,
+      refunds.map((candidate) => candidate?.id),
+    ) ||
+    exactPaymentCount !== 1 ||
+    exactRefundCount !== 1 ||
+    omittedCapturedPayment ||
+    pendingRefund
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "refunded handoff recovery requires exact immutable order-level payment, refund, receipt, and settlement proof",
+    );
+  }
+}
+
 function requireExactCancellationRaceHandoffResult<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -9641,13 +9943,26 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
       : undefined;
   const committedCancellation =
     context?.cancellationRaceCommittedCancellation === true;
+  const refundedAggregate = context?.cancellationRaceRefundedAggregate === true;
+  const laterRefundedParcel =
+    context?.cancellationRaceLaterRefundedParcel === true;
   const expectedOrderStatus =
     kind === "unauthorized_reconciliation"
-      ? "awaiting_balance"
+      ? refundedAggregate
+        ? laterRefundedParcel
+          ? "shipped"
+          : "refunded"
+        : "awaiting_balance"
       : committedCancellation
         ? "cancelled"
         : "ready_to_ship";
-  const expectedPhaseStatus = committedCancellation ? "cancelled" : "qc_passed";
+  const expectedPhaseStatus = refundedAggregate
+    ? laterRefundedParcel
+      ? "shipped"
+      : "cancelled_refunded"
+    : committedCancellation
+      ? "cancelled"
+      : "qc_passed";
   if (
     typeof kind !== "string" ||
     !cancellationRaceHandoffKinds.has(kind) ||
@@ -9667,6 +9982,12 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     sourceStatus === undefined ||
     (committedCancellation &&
       (sourceStatus !== "cancelled" || kind !== "ordinary")) ||
+    (refundedAggregate &&
+      (sourceStatus !== "cancelled" ||
+        kind !== "unauthorized_reconciliation")) ||
+    (laterRefundedParcel &&
+      (!refundedAggregate ||
+        (lifecycle !== "Shipment" && lifecycle !== "Job"))) ||
     !nonBlank(previousShipmentResultId) ||
     !nonBlank(stateKey) ||
     expectedShipment?.id !== shipmentId ||
@@ -9813,9 +10134,20 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     requireZeroBalances(lifecycle, command);
     requireAtomicOrdinaryHandoff(lifecycle, command, {
       shipmentPrevious: sourceStatus,
-      orderPrevious: committedCancellation ? "cancelled" : "ready_to_ship",
-      phasePrevious: committedCancellation ? "cancelled" : "qc_passed",
-      jobPrevious: committedCancellation ? "cancelled" : "packed",
+      orderPrevious: refundedAggregate
+        ? "refunded"
+        : committedCancellation
+          ? "cancelled"
+          : "ready_to_ship",
+      phasePrevious: refundedAggregate
+        ? "cancelled_refunded"
+        : committedCancellation
+          ? "cancelled"
+          : "qc_passed",
+      jobPrevious:
+        committedCancellation || refundedAggregate ? "cancelled" : "packed",
+      orderTarget: "shipped",
+      phaseTarget: "shipped",
       resultProof: "cancellation_race",
     });
     return;
@@ -9824,6 +10156,7 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
   if (kind === "unauthorized_reconciliation") {
     const reconciliationId = context?.handoffReconciliationId;
     const settlementId = context?.handoffSettlementId;
+    const refundedSettlement = record(context?.handoffRefundedSettlement);
     if (
       context?.cancellationRaceAggregateResultStatus !==
         "order_phase_shipped" ||
@@ -9846,12 +10179,14 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
       context?.handoffReconciliationAtomic !== true ||
       typeof settlementId !== "string" ||
       settlementId.trim().length === 0 ||
-      context?.handoffSettlementShipmentId !== shipmentId ||
+      (!refundedAggregate &&
+        context?.handoffSettlementShipmentId !== shipmentId) ||
       context?.handoffSettlementOrderId !== orderId ||
       context?.handoffSettlementPhaseId !== phaseId ||
       context?.handoffSettlementKind !== "handoff_reconciliation" ||
       context?.handoffSettlementImmutable !== true ||
-      context?.handoffSettlementResultId !== resultId
+      context?.handoffSettlementResultId !==
+        (refundedAggregate ? refundedSettlement?.resultId : resultId)
     ) {
       throw new TransitionGuardError(
         lifecycle,
@@ -9872,12 +10207,20 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
       "handoffSettlementCompleted",
       "unauthorized cancellation-race handoff requires its settlement",
     );
+    if (refundedAggregate) {
+      requireExactRefundedHandoffFinancialProof(lifecycle, command);
+    }
     requireZeroAmountDue(lifecycle, command);
     requireReconciliationRefundAllocation(lifecycle, command);
     requireAtomicOrdinaryHandoff(lifecycle, command, {
       shipmentPrevious: sourceStatus,
-      orderPrevious: "awaiting_balance",
-      phasePrevious: "qc_passed",
+      orderPrevious: refundedAggregate ? "refunded" : "awaiting_balance",
+      phasePrevious: refundedAggregate ? "cancelled_refunded" : "qc_passed",
+      jobPrevious: refundedAggregate ? "cancelled" : "packed",
+      ...(refundedAggregate
+        ? { slotPrevious: "cancelled_refunded" as const }
+        : {}),
+      allowLaterParcel: laterRefundedParcel,
       resultProof: "cancellation_race",
     });
     return;

@@ -1032,6 +1032,113 @@ const permittedContext = {
   handoffSettlementKind: "handoff_reconciliation",
   handoffSettlementImmutable: true,
   handoffSettlementResultId: "cancellation-race-result-1",
+  handoffRefundedReconciliation: {
+    id: "handoff-reconciliation-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    shipmentId: "shipment-1",
+    providerEventId: "shipment-provider-event-1",
+    providerTransactionId: "shipment-provider-transaction-1",
+    orderSettlementId: "handoff-settlement-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    refundProviderEventId: "refund-provider-event-1",
+    status: "completed",
+    resultId: "cancellation-race-result-1",
+    immutable: true,
+  },
+  handoffRefundedSettlement: {
+    id: "handoff-settlement-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    orderPriceBindingId: "order-price-binding-1",
+    priceSnapshotId: "price-snapshot-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    kind: "unauthorized_handoff",
+    currency: "CZK",
+    contractTotalMinor: 1_000n,
+    capturedTotalMinor: 1_000n,
+    earnedAmountMinor: 0n,
+    retainedAmountMinor: 0n,
+    refundAmountMinor: 1_000n,
+    writtenOffAmountMinor: 0n,
+    unearnedCancelledAmountMinor: 1_000n,
+    amountDueMinor: 0n,
+    refundableBalanceMinor: 0n,
+    cutoffAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    settledAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    resultId: "cancellation-race-result-1",
+    immutable: true,
+  },
+  handoffRefundedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    orderPriceBindingId: "order-price-binding-1",
+    priceSnapshotId: "price-snapshot-1",
+    status: "refunded",
+    currency: "CZK",
+    capturedAmountMinor: 1_000n,
+    captureAuthorized: false,
+    capturedAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    captureCutoffAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    immutable: true,
+  },
+  handoffRefundedRefund: {
+    id: "refund-1",
+    paymentId: "payment-1",
+    reason: "customer_cancellation",
+    status: "succeeded",
+    amountMinor: 1_000n,
+    provider: "mock-payments",
+    providerRefundId: "provider-refund-1",
+    completedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+    immutable: true,
+  },
+  handoffRefundedProviderEvent: {
+    id: "refund-provider-event-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    kind: "refund_succeeded",
+    provider: "mock-payments",
+    providerTransactionId: "provider-refund-1",
+    amountMinor: 1_000n,
+    currency: "CZK",
+    verifiedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+    immutable: true,
+  },
+  handoffSettlementOrderPayments: [
+    {
+      id: "payment-1",
+      orderId: "order-1",
+      capturedAmountMinor: 1_000n,
+      capturedAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+      immutable: true,
+    },
+  ],
+  handoffSettlementOrderRefunds: [
+    {
+      id: "refund-1",
+      paymentId: "payment-1",
+      status: "succeeded",
+      amountMinor: 1_000n,
+      immutable: true,
+    },
+  ],
+  handoffSettlementPaymentIds: ["payment-1"],
+  handoffSettlementRefundIds: ["refund-1"],
+  handoffSettlementPaymentSetComplete: true,
+  handoffSettlementRefundSetComplete: true,
+  handoffRefundedPriorReconciliation: {
+    id: "handoff-reconciliation-prior",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    shipmentId: "shipment-prior",
+    orderSettlementId: "handoff-settlement-1",
+    status: "completed",
+    resultId: "cancellation-race-result-1",
+    immutable: true,
+  },
   amountDueMinor: 0n,
   refundableBalanceMinor: 0n,
   reconciliationRefundAllocated: true,
@@ -3970,6 +4077,9 @@ function contextForTransition(target: string, current?: string) {
   const committedCancellationRecovery =
     current === "cancelled" &&
     (target === "handed_over" || target === "shipped");
+  const refundedCancellationRecovery =
+    (current === "refunded" || current === "cancelled_refunded") &&
+    target === "shipped";
   const completionTopologyStatus =
     current === "awaiting_balance" && target === "cancelled_settled"
       ? "qc_passed"
@@ -4710,7 +4820,9 @@ function contextForTransition(target: string, current?: string) {
       ? "lost"
       : permittedContext.currentRemedyShipmentLineageLeafStatus,
     providerEventStatus:
-      unauthorizedHandoffReconciliation || committedCancellationRecovery
+      unauthorizedHandoffReconciliation ||
+      committedCancellationRecovery ||
+      refundedCancellationRecovery
         ? "handed_over"
         : remedyIncident
           ? "lost"
@@ -4766,141 +4878,195 @@ function contextForTransition(target: string, current?: string) {
       : permittedContext.remedyIncidentShipmentTargetStatus,
     handoffShipmentPreviousStatus: unauthorizedHandoffReconciliation
       ? "cancellation_pending"
+      : refundedCancellationRecovery
+        ? "cancelled"
+        : committedCancellationRecovery
+          ? "cancelled"
+          : (current === "cancellation_pending" || current === "cancelled") &&
+              target === "handed_over"
+            ? current
+            : permittedContext.handoffShipmentPreviousStatus,
+    handoffOrderPreviousStatus: refundedCancellationRecovery
+      ? "refunded"
+      : unauthorizedHandoffReconciliation
+        ? "awaiting_balance"
+        : committedCancellationRecovery
+          ? "cancelled"
+          : permittedContext.handoffOrderPreviousStatus,
+    handoffPhasePreviousStatus: refundedCancellationRecovery
+      ? "cancelled_refunded"
       : committedCancellationRecovery
         ? "cancelled"
-        : (current === "cancellation_pending" || current === "cancelled") &&
-            target === "handed_over"
-          ? current
-          : permittedContext.handoffShipmentPreviousStatus,
-    handoffOrderPreviousStatus: unauthorizedHandoffReconciliation
-      ? "awaiting_balance"
+        : "qc_passed",
+    handoffPhasePreviousResultId: refundedCancellationRecovery
+      ? "phase-cancelled_refunded-result-1"
       : committedCancellationRecovery
-        ? "cancelled"
-        : permittedContext.handoffOrderPreviousStatus,
-    handoffPhasePreviousStatus: committedCancellationRecovery
-      ? "cancelled"
-      : "qc_passed",
-    handoffPhasePreviousResultId: committedCancellationRecovery
-      ? "phase-cancelled-result-1"
-      : permittedContext.handoffPhasePreviousResultId,
-    handoffPhaseCurrentStateCommandKey: committedCancellationRecovery
-      ? "phase-cancelled-command-1"
-      : permittedContext.handoffPhaseCurrentStateCommandKey,
-    handoffExpectedPhase: committedCancellationRecovery
+        ? "phase-cancelled-result-1"
+        : permittedContext.handoffPhasePreviousResultId,
+    handoffPhaseCurrentStateCommandKey: refundedCancellationRecovery
+      ? "phase-cancelled_refunded-command-1"
+      : committedCancellationRecovery
+        ? "phase-cancelled-command-1"
+        : permittedContext.handoffPhaseCurrentStateCommandKey,
+    handoffExpectedPhase: refundedCancellationRecovery
       ? {
           ...permittedContext.handoffExpectedPhase,
-          status: "cancelled",
-          resultId: "phase-cancelled-result-1",
-          currentStateCommandKey: "phase-cancelled-command-1",
+          status: "cancelled_refunded",
+          resultId: "phase-cancelled_refunded-result-1",
+          currentStateCommandKey: "phase-cancelled_refunded-command-1",
         }
-      : permittedContext.handoffExpectedPhase,
-    handoffJobPreviousStatus: committedCancellationRecovery
-      ? "cancelled"
-      : permittedContext.handoffJobPreviousStatus,
-    handoffSlots: committedCancellationRecovery
+      : committedCancellationRecovery
+        ? {
+            ...permittedContext.handoffExpectedPhase,
+            status: "cancelled",
+            resultId: "phase-cancelled-result-1",
+            currentStateCommandKey: "phase-cancelled-command-1",
+          }
+        : permittedContext.handoffExpectedPhase,
+    handoffJobPreviousStatus:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "cancelled"
+        : permittedContext.handoffJobPreviousStatus,
+    handoffSlots: refundedCancellationRecovery
       ? permittedContext.handoffSlots.map((slot) => ({
           ...slot,
-          previousOutcome: "cancelled",
+          previousOutcome: "cancelled_refunded",
           targetOutcome: "pending",
         }))
-      : permittedContext.handoffSlots,
-    handoffJobs: committedCancellationRecovery
+      : committedCancellationRecovery
+        ? permittedContext.handoffSlots.map((slot) => ({
+            ...slot,
+            previousOutcome: "cancelled",
+            targetOutcome: "pending",
+          }))
+        : permittedContext.handoffSlots,
+    handoffJobs: refundedCancellationRecovery
       ? permittedContext.handoffJobs.map((job) => ({
           ...job,
           previousStatus: "cancelled",
         }))
-      : permittedContext.handoffJobs,
-    jobHandoffExpectedJob: committedCancellationRecovery
-      ? {
-          ...permittedContext.jobHandoffExpectedJob,
-          status: "cancelled",
-          cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
-          cancellationReason: "order_cancelled",
-          currentStateCommandKey: "job-cancelled-command-1",
-          resultId: "job-cancelled-result-1",
-        }
-      : permittedContext.jobHandoffExpectedJob,
-    jobHandoffPreviousStatus: committedCancellationRecovery
-      ? "cancelled"
-      : permittedContext.jobHandoffPreviousStatus,
-    jobHandoffCurrentStateCommandKey: committedCancellationRecovery
-      ? "job-cancelled-command-1"
-      : permittedContext.jobHandoffCurrentStateCommandKey,
-    jobHandoffPreviousResultId: committedCancellationRecovery
-      ? "job-cancelled-result-1"
-      : permittedContext.jobHandoffPreviousResultId,
-    jobHandoffResultId: committedCancellationRecovery
-      ? permittedContext.cancellationRaceHandoffResultId
-      : permittedContext.jobHandoffResultId,
-    jobHandoffJobResultId: committedCancellationRecovery
-      ? permittedContext.cancellationRaceHandoffResultId
-      : permittedContext.jobHandoffJobResultId,
-    cancellationRacePreviousOrderResultId: unauthorizedHandoffReconciliation
-      ? "order-awaiting_balance-result-1"
       : committedCancellationRecovery
-        ? "order-cancelled-result-1"
-        : permittedContext.cancellationRacePreviousOrderResultId,
-    cancellationRaceCurrentOrderStateCommandKey:
-      unauthorizedHandoffReconciliation
+        ? permittedContext.handoffJobs.map((job) => ({
+            ...job,
+            previousStatus: "cancelled",
+          }))
+        : permittedContext.handoffJobs,
+    jobHandoffExpectedJob:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? {
+            ...permittedContext.jobHandoffExpectedJob,
+            status: "cancelled",
+            cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+            cancellationReason: "order_cancelled",
+            currentStateCommandKey: "job-cancelled-command-1",
+            resultId: "job-cancelled-result-1",
+          }
+        : permittedContext.jobHandoffExpectedJob,
+    jobHandoffPreviousStatus:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "cancelled"
+        : permittedContext.jobHandoffPreviousStatus,
+    jobHandoffCurrentStateCommandKey:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "job-cancelled-command-1"
+        : permittedContext.jobHandoffCurrentStateCommandKey,
+    jobHandoffPreviousResultId:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "job-cancelled-result-1"
+        : permittedContext.jobHandoffPreviousResultId,
+    jobHandoffResultId:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? permittedContext.cancellationRaceHandoffResultId
+        : permittedContext.jobHandoffResultId,
+    jobHandoffJobResultId:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? permittedContext.cancellationRaceHandoffResultId
+        : permittedContext.jobHandoffJobResultId,
+    cancellationRacePreviousOrderResultId: refundedCancellationRecovery
+      ? "order-refunded-result-1"
+      : unauthorizedHandoffReconciliation
+        ? "order-awaiting_balance-result-1"
+        : committedCancellationRecovery
+          ? "order-cancelled-result-1"
+          : permittedContext.cancellationRacePreviousOrderResultId,
+    cancellationRaceCurrentOrderStateCommandKey: refundedCancellationRecovery
+      ? "order-refunded-command-1"
+      : unauthorizedHandoffReconciliation
         ? "order-awaiting_balance-command-1"
         : committedCancellationRecovery
           ? "order-cancelled-command-1"
           : permittedContext.cancellationRaceCurrentOrderStateCommandKey,
     cancellationRaceExpectedOrder: {
       ...permittedContext.cancellationRaceExpectedOrder,
-      status: unauthorizedHandoffReconciliation
-        ? "awaiting_balance"
-        : committedCancellationRecovery
-          ? "cancelled"
-          : permittedContext.cancellationRaceExpectedOrder.status,
-      resultId: unauthorizedHandoffReconciliation
-        ? "order-awaiting_balance-result-1"
-        : committedCancellationRecovery
-          ? "order-cancelled-result-1"
-          : permittedContext.cancellationRaceExpectedOrder.resultId,
-      currentStateCommandKey: unauthorizedHandoffReconciliation
-        ? "order-awaiting_balance-command-1"
-        : committedCancellationRecovery
-          ? "order-cancelled-command-1"
-          : permittedContext.cancellationRaceExpectedOrder
-              .currentStateCommandKey,
+      status: refundedCancellationRecovery
+        ? "refunded"
+        : unauthorizedHandoffReconciliation
+          ? "awaiting_balance"
+          : committedCancellationRecovery
+            ? "cancelled"
+            : permittedContext.cancellationRaceExpectedOrder.status,
+      resultId: refundedCancellationRecovery
+        ? "order-refunded-result-1"
+        : unauthorizedHandoffReconciliation
+          ? "order-awaiting_balance-result-1"
+          : committedCancellationRecovery
+            ? "order-cancelled-result-1"
+            : permittedContext.cancellationRaceExpectedOrder.resultId,
+      currentStateCommandKey: refundedCancellationRecovery
+        ? "order-refunded-command-1"
+        : unauthorizedHandoffReconciliation
+          ? "order-awaiting_balance-command-1"
+          : committedCancellationRecovery
+            ? "order-cancelled-command-1"
+            : permittedContext.cancellationRaceExpectedOrder
+                .currentStateCommandKey,
     },
-    cancellationRacePreviousShipmentResultId: committedCancellationRecovery
-      ? "shipment-cancelled-result-1"
-      : permittedContext.cancellationRacePreviousShipmentResultId,
-    cancellationRaceCurrentStateCommandKey: committedCancellationRecovery
-      ? "shipment-cancelled-command-1"
-      : permittedContext.cancellationRaceCurrentStateCommandKey,
-    cancellationRaceExpectedShipment: committedCancellationRecovery
-      ? {
-          ...permittedContext.cancellationRaceExpectedShipment,
-          status: "cancelled",
-          providerVoidId: permittedContext.cancellationRaceSelectedVoidEvent.id,
-          providerVoidedAt:
-            permittedContext.cancellationRaceSelectedVoidEvent.verifiedAt,
-          cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
-          resultId: "shipment-cancelled-result-1",
-          currentStateCommandKey: "shipment-cancelled-command-1",
-        }
-      : permittedContext.cancellationRaceExpectedShipment,
-    cancellationRaceResultShipmentPreviousStatus: committedCancellationRecovery
-      ? "cancelled"
-      : permittedContext.cancellationRaceResultShipmentPreviousStatus,
+    cancellationRacePreviousShipmentResultId:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "shipment-cancelled-result-1"
+        : permittedContext.cancellationRacePreviousShipmentResultId,
+    cancellationRaceCurrentStateCommandKey:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "shipment-cancelled-command-1"
+        : permittedContext.cancellationRaceCurrentStateCommandKey,
+    cancellationRaceExpectedShipment:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? {
+            ...permittedContext.cancellationRaceExpectedShipment,
+            status: "cancelled",
+            providerVoidId:
+              permittedContext.cancellationRaceSelectedVoidEvent.id,
+            providerVoidedAt:
+              permittedContext.cancellationRaceSelectedVoidEvent.verifiedAt,
+            cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+            resultId: "shipment-cancelled-result-1",
+            currentStateCommandKey: "shipment-cancelled-command-1",
+          }
+        : permittedContext.cancellationRaceExpectedShipment,
+    cancellationRaceResultShipmentPreviousStatus:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "cancelled"
+        : permittedContext.cancellationRaceResultShipmentPreviousStatus,
+    cancellationRaceRefundedAggregate: refundedCancellationRecovery,
     cancellationRaceCommittedCancellation: committedCancellationRecovery,
-    cancellationRaceHandoffKind: unauthorizedHandoffReconciliation
-      ? "unauthorized_reconciliation"
-      : current === "packed" && target === "handed_over"
-        ? undefined
-        : permittedContext.cancellationRaceHandoffKind,
-    cancellationRaceResultKind: unauthorizedHandoffReconciliation
-      ? "unauthorized_reconciliation"
-      : permittedContext.cancellationRaceResultKind,
-    cancellationRaceFinancialResultStatus: unauthorizedHandoffReconciliation
-      ? "unauthorized_handoff_settled"
-      : permittedContext.cancellationRaceFinancialResultStatus,
-    cancellationRaceAuthorizationResultStatus: unauthorizedHandoffReconciliation
-      ? "unauthorized_reconciliation"
-      : permittedContext.cancellationRaceAuthorizationResultStatus,
+    cancellationRaceHandoffKind:
+      refundedCancellationRecovery || unauthorizedHandoffReconciliation
+        ? "unauthorized_reconciliation"
+        : current === "packed" && target === "handed_over"
+          ? undefined
+          : permittedContext.cancellationRaceHandoffKind,
+    cancellationRaceResultKind:
+      refundedCancellationRecovery || unauthorizedHandoffReconciliation
+        ? "unauthorized_reconciliation"
+        : permittedContext.cancellationRaceResultKind,
+    cancellationRaceFinancialResultStatus:
+      refundedCancellationRecovery || unauthorizedHandoffReconciliation
+        ? "unauthorized_handoff_settled"
+        : permittedContext.cancellationRaceFinancialResultStatus,
+    cancellationRaceAuthorizationResultStatus:
+      refundedCancellationRecovery || unauthorizedHandoffReconciliation
+        ? "unauthorized_reconciliation"
+        : permittedContext.cancellationRaceAuthorizationResultStatus,
     reshipmentSetupResolutionPreviousStatus:
       target === "reship_pending"
         ? current
@@ -5005,6 +5171,70 @@ function unauthorizedHandoffReconciliationContext() {
     cancellationRaceFinancialResultStatus: "unauthorized_handoff_settled",
     cancellationRaceAuthorizationResultStatus: "unauthorized_reconciliation",
     cancellationRaceJobResultStatus: "complete_job_set_handed_over",
+  } as const;
+}
+
+function laterRefundedParcelContext() {
+  const base = contextForTransition("shipped", "refunded");
+  const resultId = "cancellation-race-result-later";
+  const providerEventId = "shipment-provider-event-later";
+  const providerTransactionId = "shipment-provider-transaction-later";
+  return {
+    ...base,
+    cancellationRaceLaterRefundedParcel: true,
+    cancellationRaceHandoffResultId: resultId,
+    cancellationRaceAggregateResultId: resultId,
+    cancellationRaceShipmentResultId: resultId,
+    cancellationRaceSlotSetResultId: resultId,
+    cancellationRaceFinancialResultId: resultId,
+    cancellationRaceAuthorizationResultId: resultId,
+    cancellationRaceJobResultId: resultId,
+    cancellationRaceBarrierResultId: resultId,
+    jobHandoffResultId: resultId,
+    jobHandoffJobResultId: resultId,
+    providerEventId,
+    providerEventTransactionId: providerTransactionId,
+    shipmentProviderTransactionId: providerTransactionId,
+    shipmentProviderScanEventId: providerEventId,
+    cancellationRaceResultProviderEventId: providerEventId,
+    cancellationRaceResultProviderTransactionId: providerTransactionId,
+    cancellationRaceAcceptanceEvent: {
+      ...base.cancellationRaceAcceptanceEvent,
+      id: providerEventId,
+      transactionId: providerTransactionId,
+    },
+    cancellationRaceResultShipment: {
+      ...base.cancellationRaceResultShipment,
+      providerAcceptanceScanId: providerEventId,
+      resultId,
+    },
+    handoffReconciliationResultId: resultId,
+    handoffReconciliationProviderEventId: providerEventId,
+    handoffReconciliationProviderTransactionId: providerTransactionId,
+    handoffRefundedReconciliation: {
+      ...base.handoffRefundedReconciliation,
+      providerEventId,
+      providerTransactionId,
+      resultId,
+    },
+    handoffOrderPreviousStatus: "shipped",
+    handoffPhasePreviousStatus: "shipped",
+    cancellationRacePreviousOrderResultId: "order-shipped-result-1",
+    cancellationRaceCurrentOrderStateCommandKey: "order-shipped-command-1",
+    cancellationRaceExpectedOrder: {
+      ...base.cancellationRaceExpectedOrder,
+      status: "shipped",
+      resultId: "order-shipped-result-1",
+      currentStateCommandKey: "order-shipped-command-1",
+    },
+    handoffPhasePreviousResultId: "phase-shipped-result-1",
+    handoffPhaseCurrentStateCommandKey: "phase-shipped-command-1",
+    handoffExpectedPhase: {
+      ...base.handoffExpectedPhase,
+      status: "shipped",
+      resultId: "phase-shipped-result-1",
+      currentStateCommandKey: "phase-shipped-command-1",
+    },
   } as const;
 }
 
@@ -5322,6 +5552,17 @@ function commandAnchors(
     };
   }
   if (
+    policy.name === "Order" &&
+    current === "refunded" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "order-1",
+      currentStateCommandKey: "order-refunded-command-1",
+      currentStateResultId: "order-refunded-result-1",
+    };
+  }
+  if (
     policy.name === "OrderPhase(single)" &&
     current === "cancelled" &&
     target === "shipped"
@@ -5330,6 +5571,17 @@ function commandAnchors(
       aggregateId: "phase-1",
       currentStateCommandKey: "phase-cancelled-command-1",
       currentStateResultId: "phase-cancelled-result-1",
+    };
+  }
+  if (
+    policy.name === "OrderPhase(single)" &&
+    current === "cancelled_refunded" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "phase-1",
+      currentStateCommandKey: "phase-cancelled_refunded-command-1",
+      currentStateResultId: "phase-cancelled_refunded-result-1",
     };
   }
   if (
@@ -10041,6 +10293,302 @@ describe("v0 lifecycle policy tables", () => {
       current: "shipped",
     });
   });
+
+  it.each([
+    ["refunded aggregate proof", { cancellationRaceRefundedAggregate: false }],
+    ["unauthorized route", { cancellationRaceHandoffKind: "ordinary" }],
+    ["completed settlement", { handoffSettlementCompleted: false }],
+    ["exact settlement result", { handoffSettlementResultId: "other-result" }],
+  ] as const)(
+    "rejects refunded cancellation recovery without its %s",
+    (_name, override) => {
+      const context = contextForTransition("shipped", "refunded");
+      expect(() =>
+        transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, "refunded", "shipped"),
+          current: "refunded",
+          target: "shipped",
+          idempotencyKey: "refunded-cancellation-race-proof",
+          context: { ...context, ...override },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "reconciliation settlement link",
+      "handoffRefundedReconciliation",
+      "orderSettlementId",
+      "other-settlement",
+    ],
+    [
+      "reconciliation refund receipt",
+      "handoffRefundedReconciliation",
+      "refundProviderEventId",
+      "other-event",
+    ],
+    [
+      "settlement payment",
+      "handoffRefundedSettlement",
+      "paymentId",
+      "other-payment",
+    ],
+    ["settlement kind", "handoffRefundedSettlement", "kind", "balance_timeout"],
+    [
+      "settlement retained amount",
+      "handoffRefundedSettlement",
+      "retainedAmountMinor",
+      1n,
+    ],
+    ["settlement currency", "handoffRefundedSettlement", "currency", "EUR"],
+    ["payment state", "handoffRefundedPayment", "status", "captured"],
+    [
+      "capture authorization",
+      "handoffRefundedPayment",
+      "captureAuthorized",
+      true,
+    ],
+    ["refund state", "handoffRefundedRefund", "status", "pending"],
+    ["refund reason", "handoffRefundedRefund", "reason", "claim_refund"],
+    [
+      "refund receipt identity",
+      "handoffRefundedProviderEvent",
+      "refundTransactionId",
+      "other-refund",
+    ],
+    [
+      "refund receipt amount",
+      "handoffRefundedProviderEvent",
+      "amountMinor",
+      999n,
+    ],
+  ] as const)(
+    "rejects refunded recovery with a mismatched %s",
+    (_name, recordName, field, value) => {
+      const context = contextForTransition("shipped", "refunded");
+      const source = context[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, "refunded", "shipped"),
+          current: "refunded",
+          target: "shipped",
+          idempotencyKey: `refunded-financial-${_name}`,
+          context: {
+            ...context,
+            [recordName]: { ...source, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "another pre-cutoff capture",
+      {
+        handoffSettlementOrderPayments: [
+          ...permittedContext.handoffSettlementOrderPayments,
+          {
+            id: "payment-2",
+            orderId: "order-1",
+            capturedAmountMinor: 1n,
+            capturedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+            immutable: true,
+          },
+        ],
+      },
+    ],
+    [
+      "a pending order refund",
+      {
+        handoffSettlementOrderRefunds: [
+          ...permittedContext.handoffSettlementOrderRefunds,
+          {
+            id: "refund-2",
+            paymentId: "payment-2",
+            status: "pending",
+            amountMinor: 1n,
+            immutable: true,
+          },
+        ],
+      },
+    ],
+    [
+      "an incomplete authoritative payment row",
+      {
+        handoffSettlementOrderPayments: [
+          ...permittedContext.handoffSettlementOrderPayments,
+          {
+            id: "payment-2",
+            orderId: "order-1",
+            immutable: true,
+          },
+        ],
+        handoffSettlementPaymentIds: ["payment-1", "payment-2"],
+      },
+    ],
+    [
+      "an incomplete authoritative refund row",
+      {
+        handoffSettlementOrderRefunds: [
+          ...permittedContext.handoffSettlementOrderRefunds,
+          {
+            id: "refund-2",
+            paymentId: "payment-1",
+            amountMinor: 1n,
+            immutable: true,
+          },
+        ],
+        handoffSettlementRefundIds: ["refund-1", "refund-2"],
+      },
+    ],
+    [
+      "an incomplete payment set",
+      { handoffSettlementPaymentSetComplete: false },
+    ],
+    ["an incomplete refund set", { handoffSettlementRefundSetComplete: false }],
+    [
+      "an omitted authoritative payment",
+      { handoffSettlementPaymentIds: ["payment-1", "payment-2"] },
+    ],
+    [
+      "an omitted authoritative refund",
+      { handoffSettlementRefundIds: ["refund-1", "refund-2"] },
+    ],
+  ] as const)("rejects refunded recovery with %s", (_name, invalid) => {
+    expect(() =>
+      transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "refunded", "shipped"),
+        current: "refunded",
+        target: "shipped",
+        idempotencyKey: `refunded-financial-set-${_name}`,
+        context: {
+          ...contextForTransition("shipped", "refunded"),
+          ...invalid,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("keeps refunded aggregates terminal outside exact cancellation-race recovery", () => {
+    expect(isTerminal(orderPolicy, "refunded")).toBe(true);
+    expect(
+      isTerminal(
+        orderPolicy,
+        "refunded",
+        contextForTransition("shipped", "refunded"),
+      ),
+    ).toBe(false);
+    expect(
+      isTerminal(orderPolicy, "refunded", {
+        cancellationRaceRefundedAggregate: true,
+      }),
+    ).toBe(true);
+    expect(
+      isTerminal(singleOrderPhasePolicy, "cancelled_refunded", {
+        cancellationRaceRefundedAggregate: true,
+      }),
+    ).toBe(true);
+    expect(
+      isTerminal(jobPolicy, "cancelled", {
+        cancellationRaceRefundedAggregate: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("reconciles a cancelled Job from the exact refunded aggregate", () => {
+    expect(
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "refunded-cancellation-race-job",
+        context: contextForTransition("shipped", "refunded"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancelled",
+      current: "handed_over",
+    });
+  });
+
+  it.each([
+    ["Shipment", shipmentPolicy],
+    ["Job", jobPolicy],
+  ] as const)(
+    "reconciles a later cancelled %s through the shared refunded settlement",
+    (_name, policy) => {
+      expect(
+        transition(policy, {
+          ...commandAnchors(policy, "cancelled", "handed_over"),
+          current: "cancelled",
+          target: "handed_over",
+          idempotencyKey: `later-refunded-parcel-${_name}`,
+          context: laterRefundedParcelContext(),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "cancelled",
+        current: "handed_over",
+      });
+    },
+  );
+
+  it("rejects a later refunded parcel without its prior reconciliation", () => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "later-refunded-parcel-without-prior",
+        context: {
+          ...laterRefundedParcelContext(),
+          handoffRefundedPriorReconciliation: undefined,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a later refunded parcel that reuses the current reconciliation identity", () => {
+    const context = laterRefundedParcelContext();
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "later-refunded-parcel-reused-reconciliation-id",
+        context: {
+          ...context,
+          handoffRefundedPriorReconciliation: {
+            ...context.handoffRefundedPriorReconciliation,
+            id: context.handoffReconciliationId,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["Shipment", shipmentPolicy],
+    ["Job", jobPolicy],
+  ] as const)(
+    "rejects SHIPPED source snapshots for a refunded %s without the later-parcel route",
+    (_name, policy) => {
+      expect(() =>
+        transition(policy, {
+          ...commandAnchors(policy, "cancelled", "handed_over"),
+          current: "cancelled",
+          target: "handed_over",
+          idempotencyKey: `refunded-shipped-source-without-later-route-${_name}`,
+          context: {
+            ...laterRefundedParcelContext(),
+            cancellationRaceLaterRefundedParcel: false,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it("rejects a cancelled Order recovery presented as an active-state race", () => {
     const context = contextForTransition("shipped", "cancelled");

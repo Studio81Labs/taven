@@ -363,6 +363,18 @@ enum RefundReason {
   @@map("refund_reason")
 }
 
+enum OrderSettlementKind {
+  UNAUTHORIZED_HANDOFF
+
+  @@map("order_settlement_kind")
+}
+
+enum HandoffReconciliationStatus {
+  COMPLETED
+
+  @@map("handoff_reconciliation_status")
+}
+
 enum AuditActorKind {
   SYSTEM
   CUSTOMER
@@ -1129,6 +1141,7 @@ model PriceSnapshot {
   paymentSchedules PaymentSchedule[]
   shipmentPlans    ShipmentPlan[]
   payments         Payment[]
+  orderSettlements OrderSettlement[]
 
   @@unique([id, currency], map: "price_snapshots_id_currency_key")
   @@map("price_snapshots")
@@ -1216,20 +1229,22 @@ model Order {
   createdAt                         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  customer             Customer?                @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  automaticOrigin      AutomaticOrderOrigin?
-  individualOrigin     IndividualOrderOrigin?
-  priceBindings        OrderPriceBinding[]      @relation("OrderPriceBindings")
-  acceptedPriceBinding OrderPriceBinding?       @relation("CheckoutAcceptanceBinding", fields: [acceptedOrderPriceBindingId], references: [id], onDelete: Restrict)
-  activePriceBinding   OrderActivePriceBinding?
-  deliveryDestinations DeliveryDestination[]
-  items                OrderItem[]
-  phases               OrderPhase[]
-  shipmentPlans        ShipmentPlan[]
-  shipments            Shipment[]
-  jobs                 Job[]
-  auditEvents          AuditEvent[]
-  fulfilmentSlots      FulfilmentSlot[]
+  customer               Customer?                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  automaticOrigin        AutomaticOrderOrigin?
+  individualOrigin       IndividualOrderOrigin?
+  priceBindings          OrderPriceBinding[]      @relation("OrderPriceBindings")
+  acceptedPriceBinding   OrderPriceBinding?       @relation("CheckoutAcceptanceBinding", fields: [acceptedOrderPriceBindingId], references: [id], onDelete: Restrict)
+  activePriceBinding     OrderActivePriceBinding?
+  deliveryDestinations   DeliveryDestination[]
+  items                  OrderItem[]
+  phases                 OrderPhase[]
+  shipmentPlans          ShipmentPlan[]
+  shipments              Shipment[]
+  jobs                   Job[]
+  auditEvents            AuditEvent[]
+  fulfilmentSlots        FulfilmentSlot[]
+  settlements            OrderSettlement[]
+  handoffReconciliations HandoffReconciliation[]
 
   @@index([customerId, createdAt])
   @@index([status, createdAt])
@@ -1272,6 +1287,7 @@ model OrderPriceBinding {
   shipmentPlans             ShipmentPlan[]
   fulfilmentSlotAllocations ShipmentPlanFulfilmentSlot[]
   payments                  Payment[]
+  orderSettlements          OrderSettlement[]
 
   @@unique([orderId, priceSnapshotId], map: "order_price_bindings_order_snapshot_key")
   @@unique([id, orderId, priceSnapshotId], map: "order_price_bindings_payment_contract_key")
@@ -1360,12 +1376,14 @@ model OrderPhase {
   createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order                Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  eligibilitySnapshots EligibilitySnapshot[]
-  fulfilmentSlots      FulfilmentSlot[]
-  shipmentPlans        ShipmentPlan[]
-  shipments            Shipment[]
-  jobs                 Job[]
+  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  eligibilitySnapshots   EligibilitySnapshot[]
+  fulfilmentSlots        FulfilmentSlot[]
+  shipmentPlans          ShipmentPlan[]
+  shipments              Shipment[]
+  jobs                   Job[]
+  settlements            OrderSettlement[]
+  handoffReconciliations HandoffReconciliation[]
 
   @@unique([id, orderId])
   @@map("order_phases")
@@ -1469,13 +1487,14 @@ model Shipment {
   createdAt                DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order               Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderPhase          OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
-  shipmentPlan        ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
-  deliveryDestination DeliveryDestination     @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
-  replacesShipment    Shipment?               @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
-  replacementShipment Shipment?               @relation("ShipmentReplacementLineage")
-  providerEvents      ShipmentProviderEvent[]
+  order                 Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase            OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan          ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
+  deliveryDestination   DeliveryDestination     @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  replacesShipment      Shipment?               @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
+  replacementShipment   Shipment?               @relation("ShipmentReplacementLineage")
+  providerEvents        ShipmentProviderEvent[]
+  handoffReconciliation HandoffReconciliation?
 
   @@unique([id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_lineage_scope_key")
   @@unique([carrier, providerShipmentId], map: "shipments_carrier_provider_shipment_id_key")
@@ -1485,6 +1504,83 @@ model Shipment {
   @@index([orderId, status])
   @@index([shipmentPlanId, status])
   @@map("shipments")
+}
+
+model OrderSettlement {
+  id                           String              @id @default(uuid()) @db.Uuid
+  orderId                      String              @map("order_id") @db.Uuid
+  orderPhaseId                 String              @map("order_phase_id") @db.Uuid
+  orderPriceBindingId          String              @map("order_price_binding_id") @db.Uuid
+  priceSnapshotId              String              @map("price_snapshot_id") @db.Uuid
+  paymentId                    String              @map("payment_id") @db.Uuid
+  refundTransactionId          String              @unique @map("refund_transaction_id") @db.Uuid
+  kind                         OrderSettlementKind @default(UNAUTHORIZED_HANDOFF)
+  currency                     String              @db.Char(3)
+  contractTotalMinor           BigInt              @map("contract_total_minor")
+  capturedTotalMinor           BigInt              @map("captured_total_minor")
+  earnedAmountMinor            BigInt              @map("earned_amount_minor")
+  retainedAmountMinor          BigInt              @map("retained_amount_minor")
+  refundAmountMinor            BigInt              @map("refund_amount_minor")
+  writtenOffAmountMinor        BigInt              @map("written_off_amount_minor")
+  unearnedCancelledAmountMinor BigInt              @map("unearned_cancelled_amount_minor")
+  amountDueMinor               BigInt              @map("amount_due_minor")
+  refundableBalanceMinor       BigInt              @map("refundable_balance_minor")
+  cutoffAt                     DateTime            @map("cutoff_at") @db.Timestamptz(3)
+  settledAt                    DateTime            @map("settled_at") @db.Timestamptz(3)
+  createdAt                    DateTime            @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+
+  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase             OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_settlements_order_phase_scope_fkey")
+  orderPriceBinding      OrderPriceBinding       @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "order_settlements_order_snapshot_fkey")
+  priceSnapshot          PriceSnapshot           @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "order_settlements_snapshot_currency_fkey")
+  payment                Payment                 @relation(fields: [paymentId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_settlements_payment_scope_fkey")
+  refundTransaction      RefundTransaction       @relation(fields: [refundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "order_settlements_refund_scope_fkey")
+  handoffReconciliations HandoffReconciliation[]
+
+  @@unique([orderId, kind])
+  @@unique([refundTransactionId, paymentId], map: "order_settlements_refund_transaction_id_payment_id_key")
+  @@unique([id, orderId, orderPhaseId], map: "order_settlements_reconciliation_scope_key")
+  @@index([orderId, settledAt])
+  @@map("order_settlements")
+}
+
+model HandoffReconciliation {
+  id                      String                      @id @default(uuid()) @db.Uuid
+  orderId                 String                      @map("order_id") @db.Uuid
+  orderPhaseId            String                      @map("order_phase_id") @db.Uuid
+  shipmentId              String                      @unique @map("shipment_id") @db.Uuid
+  shipmentPlanId          String                      @map("shipment_plan_id") @db.Uuid
+  deliveryDestinationId   String                      @map("delivery_destination_id") @db.Uuid
+  acceptanceEventId       String                      @unique @map("acceptance_event_id") @db.Uuid
+  voidEventId             String                      @unique @map("void_event_id") @db.Uuid
+  paymentId               String                      @map("payment_id") @db.Uuid
+  refundTransactionId     String                      @map("refund_transaction_id") @db.Uuid
+  refundProviderEventId   String                      @map("refund_provider_event_id") @db.Uuid
+  orderSettlementId       String                      @map("order_settlement_id") @db.Uuid
+  status                  HandoffReconciliationStatus @default(COMPLETED)
+  cancellationRequestedAt DateTime                    @map("cancellation_requested_at") @db.Timestamptz(3)
+  reconciledAt            DateTime                    @map("reconciled_at") @db.Timestamptz(3)
+  createdAt               DateTime                    @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+
+  order               Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase          OrderPhase            @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict, map: "handoff_reconciliations_order_phase_scope_fkey")
+  shipment            Shipment              @relation(fields: [shipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "handoff_reconciliations_shipment_scope_fkey")
+  acceptanceEvent     ShipmentProviderEvent @relation("HandoffAcceptanceEvent", fields: [acceptanceEventId, shipmentId], references: [id, shipmentId], onDelete: Restrict, map: "handoff_reconciliations_acceptance_event_scope_fkey")
+  voidEvent           ShipmentProviderEvent @relation("HandoffVoidEvent", fields: [voidEventId, shipmentId], references: [id, shipmentId], onDelete: Restrict, map: "handoff_reconciliations_void_event_scope_fkey")
+  payment             Payment               @relation(fields: [paymentId, orderId], references: [id, orderId], onDelete: Restrict, map: "handoff_reconciliations_payment_scope_fkey")
+  refundTransaction   RefundTransaction     @relation(fields: [refundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "handoff_reconciliations_refund_scope_fkey")
+  refundProviderEvent PaymentProviderEvent  @relation("HandoffRefundProviderEvent", fields: [refundProviderEventId, refundTransactionId], references: [id, refundTransactionId], onDelete: Restrict, map: "handoff_reconciliations_refund_provider_event_scope_fkey")
+  orderSettlement     OrderSettlement       @relation(fields: [orderSettlementId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict, map: "handoff_reconciliations_settlement_scope_fkey")
+
+  @@unique([orderId, shipmentId])
+  @@unique([shipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "handoff_reconciliations_shipment_scope_key")
+  @@unique([acceptanceEventId, shipmentId], map: "handoff_reconciliations_acceptance_event_scope_key")
+  @@unique([voidEventId, shipmentId], map: "handoff_reconciliations_void_event_scope_key")
+  @@index([refundTransactionId, paymentId], map: "handoff_reconciliations_refund_scope_idx")
+  @@index([refundProviderEventId, refundTransactionId], map: "handoff_reconciliations_refund_provider_event_scope_idx")
+  @@index([orderSettlementId, orderId, orderPhaseId], map: "handoff_reconciliations_settlement_scope_idx")
+  @@index([orderId, reconciledAt])
+  @@map("handoff_reconciliations")
 }
 
 model ShipmentProviderEvent {
@@ -1502,9 +1598,12 @@ model ShipmentProviderEvent {
   verifiedAt            DateTime                  @map("verified_at") @db.Timestamptz(3)
   createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  shipment      Shipment       @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
-  outboxMessage OutboxMessage? @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
+  shipment                        Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  outboxMessage                   OutboxMessage?         @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
+  acceptanceHandoffReconciliation HandoffReconciliation? @relation("HandoffAcceptanceEvent")
+  voidHandoffReconciliation       HandoffReconciliation? @relation("HandoffVoidEvent")
 
+  @@unique([id, shipmentId])
   @@unique([carrier, providerEventId], map: "shipment_provider_events_carrier_provider_event_id_key")
   @@index([carrier, providerTransactionId], map: "shipment_provider_events_carrier_provider_transaction_id_idx")
   @@index([outboxMessageId], map: "shipment_provider_events_outbox_message_id_idx")
@@ -1590,7 +1689,10 @@ model Payment {
   refunds                       RefundTransaction[]
   providerEvents                PaymentProviderEvent[]
   auditEvents                   AuditEvent[]
+  handoffReconciliations        HandoffReconciliation[]
+  orderSettlements              OrderSettlement[]
 
+  @@unique([id, orderId])
   @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
   @@unique([provider, providerCaptureId], map: "payments_provider_provider_capture_id_key")
   @@unique([intentCreationFailureResultId, id, provider], map: "payments_intent_creation_failure_scope_key")
@@ -1632,10 +1734,13 @@ model RefundTransaction {
   createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  payment        Payment                @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  providerEvents PaymentProviderEvent[]
-  auditEvents    AuditEvent[]
+  payment                Payment                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  providerEvents         PaymentProviderEvent[]
+  auditEvents            AuditEvent[]
+  handoffReconciliations HandoffReconciliation[]
+  orderSettlement        OrderSettlement?
 
+  @@unique([id, paymentId])
   @@unique([paymentId, idempotencyKey])
   @@unique([provider, providerRefundId], map: "refund_transactions_provider_provider_refund_id_key")
   @@index([paymentId, status])
@@ -1659,9 +1764,11 @@ model PaymentProviderEvent {
   verifiedAt            DateTime                 @map("verified_at") @db.Timestamptz(3)
   createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  payment           Payment            @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  refundTransaction RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
+  payment                      Payment                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  refundTransaction            RefundTransaction?      @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
+  handoffRefundReconciliations HandoffReconciliation[] @relation("HandoffRefundProviderEvent")
 
+  @@unique([id, refundTransactionId])
   @@unique([provider, providerEventId], map: "payment_provider_events_provider_provider_event_id_key")
   @@index([provider, providerTransactionId], map: "payment_provider_events_provider_provider_transaction_id_idx")
   @@index([paymentId, kind])
