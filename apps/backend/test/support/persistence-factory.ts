@@ -1141,17 +1141,148 @@ export class PersistenceFactory {
       );
     }
 
+    const resolvedProviderCaptureId =
+      providerCaptureId ??
+      `capture-${this.hash(foundation.paymentId).slice(0, 32)}`;
+    await this.persistPaymentProviderEvent(
+      foundation.paymentId,
+      "PAYMENT_CAPTURED",
+      resolvedProviderCaptureId,
+      capturedAt,
+    );
+
     await this.sql.query(
       `UPDATE payments
        SET status = 'CAPTURED', captured_amount_minor = requested_amount_minor,
            provider_capture_id = $2, captured_at = $3
        WHERE id = $1`,
+      [foundation.paymentId, resolvedProviderCaptureId, capturedAt],
+    );
+  }
+
+  async persistPaymentProviderEvent(
+    paymentId: string,
+    kind:
+      | "PAYMENT_CAPTURED"
+      | "PAYMENT_FAILED"
+      | "REFUND_SUCCEEDED"
+      | "REFUND_FAILED",
+    providerTransactionId: string,
+    verifiedAt = new Date(),
+    refundTransactionId: string | null = null,
+    providerEventId = `event-${this.hash(
+      `${paymentId}:${kind}:${providerTransactionId}:${verifiedAt.toISOString()}`,
+    ).slice(0, 48)}`,
+  ): Promise<string> {
+    const evidence = await this.sql.query<{
+      provider: string;
+      currency: string;
+      amount_minor: string;
+    }>(
+      `SELECT payment.provider, payment.currency,
+              CASE WHEN $2::uuid IS NULL
+                   THEN payment.requested_amount_minor
+                   ELSE refund.amount_minor
+              END::text AS amount_minor
+       FROM payments payment
+       LEFT JOIN refund_transactions refund
+         ON refund.id = $2::uuid
+        AND refund.payment_id = payment.id
+       WHERE payment.id = $1`,
+      [paymentId, refundTransactionId],
+    );
+    const target = evidence.rows[0];
+    if (!target?.amount_minor) {
+      throw new Error("payment provider event parent evidence is missing");
+    }
+
+    const payload: Record<string, string> = {
+      paymentId,
+      providerEventId,
+      providerTransactionId,
+      kind,
+      amountMinor: target.amount_minor,
+      currency: target.currency,
+    };
+    if (refundTransactionId) {
+      payload.refundTransactionId = refundTransactionId;
+    }
+
+    await this.sql.query(
+      `INSERT INTO payment_provider_events (
+           id, payment_id, refund_transaction_id, provider,
+           provider_event_id, provider_transaction_id, kind,
+           amount_minor, currency, payload, payload_hash,
+           occurred_at, authenticated_at, verified_at, created_at
+       ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10::jsonb,
+           encode(sha256(convert_to($10::jsonb::text, 'UTF8')), 'hex'),
+           $11, $11, $11, $11
+       )`,
       [
-        foundation.paymentId,
-        providerCaptureId ??
-          `capture-${this.hash(foundation.paymentId).slice(0, 32)}`,
-        capturedAt,
+        this.id(`provider-event:${providerEventId}`),
+        paymentId,
+        refundTransactionId,
+        target.provider,
+        providerEventId,
+        providerTransactionId,
+        kind,
+        target.amount_minor,
+        target.currency,
+        JSON.stringify(payload),
+        verifiedAt,
       ],
+    );
+
+    return providerEventId;
+  }
+
+  async persistPaymentFailureEvent(
+    paymentId: string,
+    verifiedAt = new Date(),
+    providerEventId?: string,
+  ): Promise<string> {
+    const payment = await this.sql.query<{ provider_intent_id: string | null }>(
+      `SELECT provider_intent_id FROM payments WHERE id = $1`,
+      [paymentId],
+    );
+    const providerIntentId = payment.rows[0]?.provider_intent_id;
+    if (!providerIntentId) {
+      throw new Error("payment failure fixture has no provider intent");
+    }
+    return this.persistPaymentProviderEvent(
+      paymentId,
+      "PAYMENT_FAILED",
+      providerIntentId,
+      verifiedAt,
+      null,
+      providerEventId,
+    );
+  }
+
+  async persistRefundProviderEvent(
+    refundTransactionId: string,
+    kind: "REFUND_SUCCEEDED" | "REFUND_FAILED",
+    providerRefundId: string,
+    verifiedAt = new Date(),
+    providerEventId?: string,
+  ): Promise<string> {
+    const refund = await this.sql.query<{ payment_id: string }>(
+      `SELECT payment_id FROM refund_transactions WHERE id = $1`,
+      [refundTransactionId],
+    );
+    const paymentId = refund.rows[0]?.payment_id;
+    if (!paymentId) {
+      throw new Error("refund provider event fixture has no payment");
+    }
+    return this.persistPaymentProviderEvent(
+      paymentId,
+      kind,
+      providerRefundId,
+      verifiedAt,
+      refundTransactionId,
+      providerEventId,
     );
   }
 

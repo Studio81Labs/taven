@@ -280,6 +280,15 @@ enum ShipmentProviderEventKind {
   @@map("shipment_provider_event_kind")
 }
 
+enum PaymentProviderEventKind {
+  PAYMENT_CAPTURED
+  PAYMENT_FAILED
+  REFUND_SUCCEEDED
+  REFUND_FAILED
+
+  @@map("payment_provider_event_kind")
+}
+
 enum JobStatus {
   CREATED
   ACCEPTED
@@ -1564,10 +1573,11 @@ model Payment {
   createdAt                DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  orderPriceBinding OrderPriceBinding   @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
-  priceSnapshot     PriceSnapshot       @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
-  paymentSchedule   PaymentSchedule     @relation(fields: [paymentScheduleId, priceSnapshotId, role, requestedAmountMinor], references: [id, priceSnapshotId, role, grossAmountMinor], onDelete: Restrict, map: "payments_schedule_contract_fkey")
+  orderPriceBinding OrderPriceBinding      @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
+  priceSnapshot     PriceSnapshot          @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
+  paymentSchedule   PaymentSchedule        @relation(fields: [paymentScheduleId, priceSnapshotId, role, requestedAmountMinor], references: [id, priceSnapshotId, role, grossAmountMinor], onDelete: Restrict, map: "payments_schedule_contract_fkey")
   refunds           RefundTransaction[]
+  providerEvents    PaymentProviderEvent[]
   auditEvents       AuditEvent[]
 
   @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
@@ -1592,13 +1602,41 @@ model RefundTransaction {
   createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  payment     Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  auditEvents AuditEvent[]
+  payment        Payment                @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  providerEvents PaymentProviderEvent[]
+  auditEvents    AuditEvent[]
 
   @@unique([paymentId, idempotencyKey])
   @@unique([provider, providerRefundId], map: "refund_transactions_provider_provider_refund_id_key")
   @@index([paymentId, status])
   @@map("refund_transactions")
+}
+
+model PaymentProviderEvent {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  paymentId             String                   @map("payment_id") @db.Uuid
+  refundTransactionId   String?                  @map("refund_transaction_id") @db.Uuid
+  provider              String                   @db.VarChar(100)
+  providerEventId       String                   @map("provider_event_id") @db.VarChar(255)
+  providerTransactionId String                   @map("provider_transaction_id") @db.VarChar(255)
+  kind                  PaymentProviderEventKind
+  amountMinor           BigInt                   @map("amount_minor")
+  currency              String                   @db.Char(3)
+  payload               Json                     @db.JsonB
+  payloadHash           String                   @map("payload_hash") @db.Char(64)
+  occurredAt            DateTime                 @map("occurred_at") @db.Timestamptz(3)
+  authenticatedAt       DateTime                 @map("authenticated_at") @db.Timestamptz(3)
+  verifiedAt            DateTime                 @map("verified_at") @db.Timestamptz(3)
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  payment           Payment            @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  refundTransaction RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerEventId], map: "payment_provider_events_provider_provider_event_id_key")
+  @@index([provider, providerTransactionId], map: "payment_provider_events_provider_provider_transaction_id_idx")
+  @@index([paymentId, kind])
+  @@index([refundTransactionId, kind])
+  @@map("payment_provider_events")
 }
 
 model AuditEvent {

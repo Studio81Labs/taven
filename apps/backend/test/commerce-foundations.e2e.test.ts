@@ -251,6 +251,7 @@ async function forceCaptureActivationConstraints(
 ): Promise<void> {
   await client.query(
     `SET CONSTRAINTS
+       "payment_provider_events_consumed",
        "payments_capture_activation_reconciled",
        "orders_capture_activation_reconciled",
        "order_phases_capture_activation_reconciled",
@@ -259,6 +260,7 @@ async function forceCaptureActivationConstraints(
   );
   await client.query(
     `SET CONSTRAINTS
+       "payment_provider_events_consumed",
        "payments_capture_activation_reconciled",
        "orders_capture_activation_reconciled",
        "order_phases_capture_activation_reconciled",
@@ -303,6 +305,7 @@ async function forceOrderLifecycleConstraints(
        "production_reservations_job_printing_reconciled",
        "inventory_reservations_job_printing_reconciled",
        "capacity_reservations_job_printing_reconciled",
+       "payment_provider_events_consumed",
        "shipment_provider_events_consumed",
        "shipments_label_void_outbox_reconciled",
        "shipments_parent_lifecycle_reconciled",
@@ -331,6 +334,7 @@ async function forceOrderLifecycleConstraints(
        "production_reservations_job_printing_reconciled",
        "inventory_reservations_job_printing_reconciled",
        "capacity_reservations_job_printing_reconciled",
+       "payment_provider_events_consumed",
        "shipment_provider_events_consumed",
        "shipments_label_void_outbox_reconciled",
        "shipments_parent_lifecycle_reconciled",
@@ -4587,6 +4591,19 @@ describe("commerce persistence foundations", () => {
         },
       );
 
+      expect(
+        (
+          await client.query<{ count: string }>(
+            `SELECT count(*)::text AS count
+             FROM outbox_messages
+             WHERE aggregate_type = 'Payment'
+               AND aggregate_id = $1
+               AND message_type = 'void_payment'`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([{ count: "0" }]);
+
       await cancelOrderBeforeHandoff(client, foundation.orderId);
       expect(
         (
@@ -4616,6 +4633,47 @@ describe("commerce persistence foundations", () => {
           )
         ).rows,
       ).toEqual([{ outcome: "CANCELLED" }]);
+      expect(
+        (
+          await client.query<{
+            aggregate_id: string;
+            aggregate_type: string;
+            attempts: number;
+            available_at: Date;
+            deduplication_key: string;
+            message_type: string;
+            payload: Record<string, string>;
+            schema_version: number;
+            status: string;
+          }>(
+            `SELECT deduplication_key, aggregate_type, aggregate_id,
+                    message_type, schema_version, payload, status::text,
+                    attempts, available_at
+             FROM outbox_messages
+             WHERE aggregate_type = 'Payment'
+               AND aggregate_id = $1
+               AND message_type = 'void_payment'`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          deduplication_key: `void_payment:v1:${foundation.paymentId}`,
+          aggregate_type: "Payment",
+          aggregate_id: foundation.paymentId,
+          message_type: "void_payment",
+          schema_version: 1,
+          payload: {
+            action: "void_payment",
+            paymentId: foundation.paymentId,
+            provider: "test",
+            providerIntentId: expect.stringMatching(/^intent-/),
+          },
+          status: "PENDING",
+          attempts: 0,
+          available_at: expect.any(Date),
+        },
+      ]);
     });
   });
 
@@ -4631,6 +4689,10 @@ describe("commerce persistence foundations", () => {
       );
       await createCurrentPlanAndPayment(client, fixtures, failedPayment);
       const failedAt = new Date();
+      await fixtures.persistPaymentFailureEvent(
+        failedPayment.paymentId,
+        failedAt,
+      );
       await client.query(
         `UPDATE payments
          SET status = 'FAILED', capture_authorized = false,
@@ -4878,6 +4940,12 @@ describe("commerce persistence foundations", () => {
         client,
         "partially_compensate_expired_late_capture",
         async () => {
+          await fixtures.persistPaymentProviderEvent(
+            foundation.paymentId,
+            "PAYMENT_CAPTURED",
+            "partial-expired-late-capture",
+            lateCapturedAt,
+          );
           await client.query(
             `UPDATE payments
              SET status = 'REFUND_PENDING',
@@ -4910,6 +4978,12 @@ describe("commerce persistence foundations", () => {
       );
 
       const refundId = fixtures.id("expired-late-capture-refund");
+      await fixtures.persistPaymentProviderEvent(
+        foundation.paymentId,
+        "PAYMENT_CAPTURED",
+        "expired-late-capture",
+        lateCapturedAt,
+      );
       await client.query(
         `UPDATE payments
          SET status = 'REFUND_PENDING',
@@ -4978,6 +5052,12 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `SET CONSTRAINTS "payments_refund_status_reconciled",
                          "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      await fixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_SUCCEEDED",
+        "expired-late-capture-refund",
+        refundedAt,
       );
       await client.query(
         `UPDATE refund_transactions
@@ -5250,10 +5330,18 @@ describe("commerce persistence foundations", () => {
         ]);
 
         const refundFailedAt = new Date(failedAt.getTime() + 500);
+        const failedProviderRefundId = "production-failure-refund-failed";
+        await fixtures.persistRefundProviderEvent(
+          refundId,
+          "REFUND_FAILED",
+          failedProviderRefundId,
+          refundFailedAt,
+        );
         await client.query(
           `UPDATE refund_transactions
-           SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
-          [refundId, refundFailedAt],
+           SET status = 'FAILED', provider_refund_id = $2,
+               updated_at = $3 WHERE id = $1`,
+          [refundId, failedProviderRefundId, refundFailedAt],
         );
         await client.query(
           `UPDATE payments SET status = 'CAPTURED', updated_at = $2 WHERE id = $1`,
@@ -5356,6 +5444,12 @@ describe("commerce persistence foundations", () => {
         await forceOrderLifecycleConstraints(client);
 
         const refundedAt = new Date(failedAt.getTime() + 1_000);
+        await fixtures.persistRefundProviderEvent(
+          retryRefundId,
+          "REFUND_SUCCEEDED",
+          "production-failure-refund-retry",
+          refundedAt,
+        );
         await client.query(
           `UPDATE refund_transactions
          SET status = 'SUCCEEDED', provider_refund_id = $2,
@@ -5452,17 +5546,25 @@ describe("commerce persistence foundations", () => {
         throw new Error("customer cancellation refund fixture is missing");
       }
 
+      const failedAt = new Date();
+      const failedProviderRefundId = "provider-cancellation-refund-failed";
+      await fixtures.persistRefundProviderEvent(
+        failedRefund.id,
+        "REFUND_FAILED",
+        failedProviderRefundId,
+        failedAt,
+      );
       await client.query(
         `UPDATE refund_transactions
-           SET status = 'FAILED', updated_at = clock_timestamp()
+           SET status = 'FAILED', provider_refund_id = $2, updated_at = $3
            WHERE id = $1`,
-        [failedRefund.id],
+        [failedRefund.id, failedProviderRefundId, failedAt],
       );
       await client.query(
         `UPDATE payments
-           SET status = 'CAPTURED', updated_at = clock_timestamp()
+           SET status = 'CAPTURED', updated_at = $2
            WHERE id = $1`,
-        [captured.paymentId],
+        [captured.paymentId, failedAt],
       );
       await client.query(
         `SET CONSTRAINTS
@@ -5645,18 +5747,42 @@ describe("commerce persistence foundations", () => {
       if (!latestPartialRefund || !succeededPartialRefund) {
         throw new Error("split cancellation refund fixture is incomplete");
       }
-      await client.query(
-        `UPDATE refund_transactions
-           SET status = 'SUCCEEDED', provider_refund_id = $2,
-               completed_at = clock_timestamp(), updated_at = clock_timestamp()
-           WHERE id = $1`,
-        [succeededPartialRefund.id, "provider-partial-cancellation-refund"],
+      const partialRefundedAt = new Date();
+      await fixtures.persistRefundProviderEvent(
+        succeededPartialRefund.id,
+        "REFUND_SUCCEEDED",
+        "provider-partial-cancellation-refund",
+        partialRefundedAt,
       );
       await client.query(
         `UPDATE refund_transactions
-           SET status = 'FAILED', updated_at = clock_timestamp()
+           SET status = 'SUCCEEDED', provider_refund_id = $2,
+               completed_at = $3, updated_at = $3
            WHERE id = $1`,
-        [latestPartialRefund.id],
+        [
+          succeededPartialRefund.id,
+          "provider-partial-cancellation-refund",
+          partialRefundedAt,
+        ],
+      );
+      const partialFailureAt = new Date();
+      const partialFailedProviderRefundId =
+        "provider-partial-cancellation-refund-failed";
+      await fixtures.persistRefundProviderEvent(
+        latestPartialRefund.id,
+        "REFUND_FAILED",
+        partialFailedProviderRefundId,
+        partialFailureAt,
+      );
+      await client.query(
+        `UPDATE refund_transactions
+           SET status = 'FAILED', provider_refund_id = $2, updated_at = $3
+           WHERE id = $1`,
+        [
+          latestPartialRefund.id,
+          partialFailedProviderRefundId,
+          partialFailureAt,
+        ],
       );
       await client.query(
         `UPDATE payments
@@ -5767,6 +5893,7 @@ describe("commerce persistence foundations", () => {
         { code: "23514", constraint: "payment_capture_window_check" },
       );
       const failedAt = new Date();
+      await fixtures.persistPaymentFailureEvent(foundation.paymentId, failedAt);
       await client.query(
         `UPDATE payments
          SET status = 'FAILED', capture_authorized = false,
@@ -5899,6 +6026,45 @@ describe("commerce persistence foundations", () => {
           capture_cutoff_at: intentFailureAt,
         },
       ]);
+
+      const noIntentVoid = await fixtures.createFoundation(
+        "created-payment-no-intent-void",
+      );
+      await createCurrentPlan(client, fixtures, noIntentVoid);
+      const noIntentCreatedAt = new Date();
+      await client.query(
+        `INSERT INTO payments
+           (id, order_id, price_snapshot_id, order_price_binding_id,
+            payment_schedule_id, role, provider, requested_amount_minor,
+            currency, status, checkout_capture_expires_at, created_at, updated_at)
+         SELECT $1,$2,$3,$4,$5,'FULL','test',gross_amount_minor,
+                'EUR','CREATED',$6,$7,$7
+         FROM payment_schedules WHERE id = $5`,
+        [
+          noIntentVoid.paymentId,
+          noIntentVoid.orderId,
+          noIntentVoid.priceSnapshotId,
+          noIntentVoid.orderPriceBindingId,
+          noIntentVoid.paymentScheduleId,
+          new Date(noIntentCreatedAt.getTime() + 60 * 60 * 1_000),
+          noIntentCreatedAt,
+        ],
+      );
+      await cancelOrderBeforeHandoff(client, noIntentVoid.orderId);
+      expect(
+        (
+          await client.query<{ outbox_count: string; status: string }>(
+            `SELECT payment.status::text,
+                    (SELECT count(*)::text FROM outbox_messages message
+                     WHERE message.aggregate_type = 'Payment'
+                       AND message.aggregate_id = payment.id
+                       AND message.message_type = 'void_payment') AS outbox_count
+             FROM payments payment WHERE payment.id = $1`,
+            [noIntentVoid.paymentId],
+          )
+        ).rows,
+      ).toEqual([{ status: "VOIDED", outbox_count: "0" }]);
+
       const replacementPaymentId = fixtures.id(
         "created-payment-provider-retry",
       );
@@ -5983,6 +6149,221 @@ describe("commerce persistence foundations", () => {
         checkoutCaptureExpiresAt,
         "stable-provider-intent",
       );
+    });
+  });
+
+  it("requires immutable provider receipts before terminal payment outcomes", async () => {
+    await rollback("payment-provider-receipts", async (client, fixtures) => {
+      const captured = await fixtures.createFoundation(
+        "receipt-backed-capture",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        captured,
+      );
+      await holdCurrentPlan(client, fixtures, captured, productions);
+      await client.query(
+        `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" DEFERRED`,
+      );
+      const activatedAt = new Date();
+      await client.query(
+        `UPDATE orders
+         SET status = 'CONFIRMED', confirmed_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [captured.orderId, activatedAt],
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'ACTIVE', activated_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [captured.orderPhaseId, activatedAt],
+      );
+
+      const capturedAt = new Date();
+      const providerCaptureId = "receipt-backed-provider-capture";
+      const capturePayment = () =>
+        client.query(
+          `UPDATE payments
+           SET status = 'CAPTURED',
+               captured_amount_minor = requested_amount_minor,
+               provider_capture_id = $2, captured_at = $3, updated_at = $3
+           WHERE id = $1`,
+          [captured.paymentId, providerCaptureId, capturedAt],
+        );
+      await expectQueryError(
+        client,
+        "capture_without_provider_receipt",
+        capturePayment,
+        {
+          code: "23514",
+          constraint: "payment_capture_provider_receipt_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "capture_with_mismatched_provider_receipt",
+        async () => {
+          await fixtures.persistPaymentProviderEvent(
+            captured.paymentId,
+            "PAYMENT_CAPTURED",
+            "different-provider-capture",
+            capturedAt,
+          );
+          await capturePayment();
+        },
+        {
+          code: "23514",
+          constraint: "payment_capture_provider_receipt_check",
+        },
+      );
+
+      const providerEventId = "receipt-backed-capture-event";
+      await fixtures.persistPaymentProviderEvent(
+        captured.paymentId,
+        "PAYMENT_CAPTURED",
+        providerCaptureId,
+        capturedAt,
+        null,
+        providerEventId,
+      );
+      await capturePayment();
+      await forceCaptureActivationConstraints(client);
+      expect(
+        (
+          await client.query<{
+            kind: string;
+            payload_matches_hash: boolean;
+            provider_event_id: string;
+            provider_transaction_id: string;
+          }>(
+            `SELECT kind::text, provider_event_id, provider_transaction_id,
+                    payload_hash = encode(
+                      sha256(convert_to(payload::text, 'UTF8')), 'hex'
+                    ) AS payload_matches_hash
+             FROM payment_provider_events
+             WHERE payment_id = $1`,
+            [captured.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          kind: "PAYMENT_CAPTURED",
+          provider_event_id: providerEventId,
+          provider_transaction_id: providerCaptureId,
+          payload_matches_hash: true,
+        },
+      ]);
+
+      await expectQueryError(
+        client,
+        "mutate_payment_provider_receipt",
+        () =>
+          client.query(
+            `UPDATE payment_provider_events
+             SET payload = payload || '{"tampered":true}'::jsonb
+             WHERE payment_id = $1`,
+            [captured.paymentId],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_provider_event_immutable_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "delete_payment_provider_receipt",
+        () =>
+          client.query(
+            `DELETE FROM payment_provider_events WHERE payment_id = $1`,
+            [captured.paymentId],
+          ),
+        {
+          code: "23514",
+          constraint: "payment_provider_event_immutable_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "duplicate_payment_provider_event",
+        () =>
+          client.query(
+            `INSERT INTO payment_provider_events
+             SELECT gen_random_uuid(), payment_id, refund_transaction_id,
+                    provider, provider_event_id, provider_transaction_id, kind,
+                    amount_minor, currency, payload, payload_hash, occurred_at,
+                    authenticated_at, verified_at, created_at
+             FROM payment_provider_events
+             WHERE payment_id = $1`,
+            [captured.paymentId],
+          ),
+        {
+          code: "23505",
+          constraint: "payment_provider_events_provider_provider_event_id_key",
+        },
+      );
+
+      const orphan = await fixtures.createFoundation("orphan-capture-event");
+      await createCurrentPlanAndPayment(client, fixtures, orphan);
+      await expectQueryError(
+        client,
+        "orphan_payment_provider_event",
+        async () => {
+          await fixtures.persistPaymentProviderEvent(
+            orphan.paymentId,
+            "PAYMENT_CAPTURED",
+            "orphan-provider-capture",
+            new Date(),
+          );
+          await client.query(
+            `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_provider_event_consumption_check",
+        },
+      );
+
+      const failed = await fixtures.createFoundation("receipt-backed-failure");
+      await createCurrentPlanAndPayment(client, fixtures, failed);
+      const failedAt = new Date();
+      const failPayment = () =>
+        client.query(
+          `UPDATE payments
+           SET status = 'FAILED', capture_authorized = false,
+               capture_cutoff_at = $2, updated_at = $2
+           WHERE id = $1`,
+          [failed.paymentId, failedAt],
+        );
+      await expectQueryError(
+        client,
+        "failure_without_provider_receipt",
+        failPayment,
+        {
+          code: "23514",
+          constraint: "payment_failure_provider_receipt_check",
+        },
+      );
+      await fixtures.persistPaymentFailureEvent(failed.paymentId, failedAt);
+      await failPayment();
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{ status: string }>(
+            `SELECT status::text FROM payments WHERE id = $1`,
+            [failed.paymentId],
+          )
+        ).rows,
+      ).toEqual([{ status: "FAILED" }]);
     });
   });
 
@@ -6301,6 +6682,12 @@ describe("commerce persistence foundations", () => {
         client,
         "misclassify_late_capture_as_customer_cancellation",
         async () => {
+          await fixtures.persistPaymentProviderEvent(
+            foundation.paymentId,
+            "PAYMENT_CAPTURED",
+            "misclassified-late-provider-capture",
+            capturedAt,
+          );
           await client.query(
             `UPDATE payments
              SET status = 'REFUND_PENDING',
@@ -6332,6 +6719,12 @@ describe("commerce persistence foundations", () => {
           code: "23514",
           constraint: "late_capture_compensation_reason_check",
         },
+      );
+      await fixtures.persistPaymentProviderEvent(
+        foundation.paymentId,
+        "PAYMENT_CAPTURED",
+        "late-provider-capture",
+        capturedAt,
       );
       await client.query(
         `UPDATE payments
@@ -6482,14 +6875,38 @@ describe("commerce persistence foundations", () => {
         `SET CONSTRAINTS "payments_refund_status_reconciled",
                          "refund_transactions_payment_status_reconciled" DEFERRED`,
       );
+      const failedAt = new Date();
+      const failedProviderRefundId = "atomic-pending-refund-failed";
+      await expectQueryError(
+        client,
+        "fail_refund_without_provider_receipt",
+        () =>
+          client.query(
+            `UPDATE refund_transactions
+             SET status = 'FAILED', provider_refund_id = $2,
+                 updated_at = $3 WHERE id = $1`,
+            [refundId, failedProviderRefundId, failedAt],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_failure_provider_receipt_check",
+        },
+      );
       await expectQueryError(
         client,
         "fail_refund_without_payment_restore",
         async () => {
+          await fixtures.persistRefundProviderEvent(
+            refundId,
+            "REFUND_FAILED",
+            failedProviderRefundId,
+            failedAt,
+          );
           await client.query(
             `UPDATE refund_transactions
-             SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
-            [refundId, new Date()],
+             SET status = 'FAILED', provider_refund_id = $2,
+                 updated_at = $3 WHERE id = $1`,
+            [refundId, failedProviderRefundId, failedAt],
           );
           await client.query(
             `SET CONSTRAINTS "refund_transactions_payment_status_reconciled" IMMEDIATE`,
@@ -6501,11 +6918,17 @@ describe("commerce persistence foundations", () => {
         },
       );
 
-      const failedAt = new Date();
+      await fixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_FAILED",
+        failedProviderRefundId,
+        failedAt,
+      );
       await client.query(
         `UPDATE refund_transactions
-         SET status = 'FAILED', updated_at = $2 WHERE id = $1`,
-        [refundId, failedAt],
+         SET status = 'FAILED', provider_refund_id = $2,
+             updated_at = $3 WHERE id = $1`,
+        [refundId, failedProviderRefundId, failedAt],
       );
       await client.query(
         `UPDATE payments SET status = 'CAPTURED', updated_at = $2 WHERE id = $1`,
@@ -7076,6 +7499,10 @@ describe("commerce persistence foundations", () => {
       );
       await createCurrentPlanAndPayment(client, fixtures, failedCheckout);
       const failedAt = new Date();
+      await fixtures.persistPaymentFailureEvent(
+        failedCheckout.paymentId,
+        failedAt,
+      );
       await client.query(
         `UPDATE payments
          SET status = 'FAILED', capture_authorized = false,
@@ -9729,15 +10156,22 @@ describe("commerce persistence foundations", () => {
           constraint: "payment_capture_evidence_check",
         },
       );
+      const toleratedPaymentCapturedAt = new Date(Date.now() + 2_000);
+      await fixtures.persistPaymentProviderEvent(
+        financial.paymentId,
+        "PAYMENT_CAPTURED",
+        "tolerated-payment-capture",
+        toleratedPaymentCapturedAt,
+      );
       await client.query(
         `UPDATE payments
          SET status = 'CAPTURED',
              captured_amount_minor = requested_amount_minor,
              provider_capture_id = 'tolerated-payment-capture',
-             captured_at = clock_timestamp() + interval '2 seconds',
+             captured_at = $2,
              updated_at = clock_timestamp()
          WHERE id = $1`,
-        [financial.paymentId],
+        [financial.paymentId, toleratedPaymentCapturedAt],
       );
 
       await expectQueryError(
@@ -9911,14 +10345,23 @@ describe("commerce persistence foundations", () => {
           constraint: "refund_completion_evidence_check",
         },
       );
+      const toleratedRefundCompletedAt = new Date(
+        toleratedPaymentCapturedAt.getTime() + 1,
+      );
+      await fixtures.persistRefundProviderEvent(
+        fixtures.id("pending-refund-completion"),
+        "REFUND_SUCCEEDED",
+        "tolerated-refund-update",
+        toleratedRefundCompletedAt,
+      );
       await client.query(
         `UPDATE refund_transactions
          SET status = 'SUCCEEDED',
              provider_refund_id = 'tolerated-refund-update',
-             completed_at = clock_timestamp() + interval '2 seconds',
+             completed_at = $2,
              updated_at = clock_timestamp()
          WHERE id = $1`,
-        [fixtures.id("pending-refund-completion")],
+        [fixtures.id("pending-refund-completion"), toleratedRefundCompletedAt],
       );
     });
   });
@@ -11655,6 +12098,32 @@ describe("commerce persistence foundations", () => {
         },
       );
       const refundCompletedAt = new Date();
+      await expectQueryError(
+        client,
+        "succeed_refund_without_provider_receipt",
+        () =>
+          client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED', provider_refund_id = $2,
+                 completed_at = $3, updated_at = $3
+             WHERE id = $1`,
+            [
+              fixtures.id("refund-first"),
+              "provider-refund-first",
+              refundCompletedAt,
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_success_provider_receipt_check",
+        },
+      );
+      await fixtures.persistRefundProviderEvent(
+        fixtures.id("refund-first"),
+        "REFUND_SUCCEEDED",
+        "provider-refund-first",
+        refundCompletedAt,
+      );
       await client.query(
         `UPDATE refund_transactions
          SET status = 'SUCCEEDED', provider_refund_id = $2,
@@ -11747,6 +12216,13 @@ describe("commerce persistence foundations", () => {
           constraint: "payment_refund_status_reconciliation_check",
         },
       );
+      const remainderRefundedAt = new Date();
+      await fixtures.persistRefundProviderEvent(
+        fixtures.id("refund-remainder"),
+        "REFUND_SUCCEEDED",
+        "provider-refund-remainder",
+        remainderRefundedAt,
+      );
       await client.query(
         `UPDATE refund_transactions
          SET status = 'SUCCEEDED', provider_refund_id = $2,
@@ -11755,7 +12231,7 @@ describe("commerce persistence foundations", () => {
         [
           fixtures.id("refund-remainder"),
           "provider-refund-remainder",
-          new Date(),
+          remainderRefundedAt,
         ],
       );
       await client.query(
@@ -12454,6 +12930,16 @@ describe("commerce persistence foundations", () => {
         throw new Error("refund concurrency backend pid is unavailable");
       }
       const completedAt = new Date();
+      const refundingFixtures = new PersistenceFactory(
+        refunding,
+        `${scope}:refund-completion-concurrency`,
+      );
+      await refundingFixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_SUCCEEDED",
+        "concurrent-provider-refund",
+        completedAt,
+      );
       await refunding.query(
         `UPDATE refund_transactions
          SET status = 'SUCCEEDED', provider_refund_id = $2,
@@ -12651,14 +13137,31 @@ describe("commerce persistence foundations", () => {
         },
         { code: "23514", constraint: "order_refund_completion_check" },
       );
+      const retentionRefund = (
+        await client.query<{ id: string }>(
+          `SELECT id FROM refund_transactions
+           WHERE payment_id = $1
+             AND reason = 'CUSTOMER_CANCELLATION'
+             AND status = 'PENDING'`,
+          [captured.paymentId],
+        )
+      ).rows[0];
+      if (!retentionRefund) {
+        throw new Error("retention refund fixture is missing");
+      }
+      const retentionRefundedAt = new Date();
+      await fixtures.persistRefundProviderEvent(
+        retentionRefund.id,
+        "REFUND_SUCCEEDED",
+        "retention-full-refund",
+        retentionRefundedAt,
+      );
       await client.query(
         `UPDATE refund_transactions
          SET status = 'SUCCEEDED', provider_refund_id = $2,
              completed_at = $3, updated_at = $3
-         WHERE payment_id = $1
-           AND reason = 'CUSTOMER_CANCELLATION'
-           AND status = 'PENDING'`,
-        [captured.paymentId, "retention-full-refund", new Date()],
+         WHERE id = $1`,
+        [retentionRefund.id, "retention-full-refund", retentionRefundedAt],
       );
       await client.query(
         `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,

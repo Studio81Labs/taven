@@ -32,6 +32,9 @@ CREATE TYPE "shipment_status" AS ENUM ('PLANNED', 'LABEL_CREATED', 'CANCELLATION
 CREATE TYPE "shipment_provider_event_kind" AS ENUM ('LABEL_VOIDED', 'ACCEPTANCE_SCAN', 'TRANSIT_SCAN', 'DELIVERY_SCAN');
 
 -- CreateEnum
+CREATE TYPE "payment_provider_event_kind" AS ENUM ('PAYMENT_CAPTURED', 'PAYMENT_FAILED', 'REFUND_SUCCEEDED', 'REFUND_FAILED');
+
+-- CreateEnum
 CREATE TYPE "job_status" AS ENUM ('CREATED', 'ACCEPTED', 'GCODE_READY', 'PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED', 'CANCELLED', 'FAILED', 'QC_REJECTED');
 
 -- CreateEnum
@@ -435,6 +438,26 @@ CREATE TABLE "refund_transactions" (
 );
 
 -- CreateTable
+CREATE TABLE "payment_provider_events" (
+    "id" UUID NOT NULL,
+    "payment_id" UUID NOT NULL,
+    "refund_transaction_id" UUID,
+    "provider" VARCHAR(100) NOT NULL,
+    "provider_event_id" VARCHAR(255) NOT NULL,
+    "provider_transaction_id" VARCHAR(255) NOT NULL,
+    "kind" "payment_provider_event_kind" NOT NULL,
+    "amount_minor" BIGINT NOT NULL,
+    "currency" CHAR(3) NOT NULL,
+    "payload" JSONB NOT NULL,
+    "payload_hash" CHAR(64) NOT NULL,
+    "occurred_at" TIMESTAMPTZ(3) NOT NULL,
+    "authenticated_at" TIMESTAMPTZ(3) NOT NULL,
+    "verified_at" TIMESTAMPTZ(3) NOT NULL,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "payment_provider_events_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "audit_events" (
     "id" UUID NOT NULL,
     "quote_id" UUID,
@@ -531,6 +554,10 @@ CREATE INDEX "payments_checkout_capture_expires_at_status_idx" ON "payments"("ch
 CREATE UNIQUE INDEX "refund_transactions_provider_provider_refund_id_key" ON "refund_transactions"("provider", "provider_refund_id");
 CREATE UNIQUE INDEX "refund_transactions_payment_id_idempotency_key_key" ON "refund_transactions"("payment_id", "idempotency_key");
 CREATE INDEX "refund_transactions_payment_id_status_idx" ON "refund_transactions"("payment_id", "status");
+CREATE UNIQUE INDEX "payment_provider_events_provider_provider_event_id_key" ON "payment_provider_events"("provider", "provider_event_id");
+CREATE INDEX "payment_provider_events_provider_provider_transaction_id_idx" ON "payment_provider_events"("provider", "provider_transaction_id");
+CREATE INDEX "payment_provider_events_payment_id_kind_idx" ON "payment_provider_events"("payment_id", "kind");
+CREATE INDEX "payment_provider_events_refund_transaction_id_kind_idx" ON "payment_provider_events"("refund_transaction_id", "kind");
 CREATE INDEX "audit_events_quote_id_created_at_idx" ON "audit_events"("quote_id", "created_at");
 CREATE INDEX "audit_events_order_id_created_at_idx" ON "audit_events"("order_id", "created_at");
 CREATE INDEX "audit_events_payment_id_created_at_idx" ON "audit_events"("payment_id", "created_at");
@@ -605,6 +632,8 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_order_snapshot_fkey" FOREIGN KEY
 ALTER TABLE "payments" ADD CONSTRAINT "payments_snapshot_currency_fkey" FOREIGN KEY ("price_snapshot_id", "currency") REFERENCES "price_snapshots"("id", "currency") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payments" ADD CONSTRAINT "payments_schedule_contract_fkey" FOREIGN KEY ("payment_schedule_id", "price_snapshot_id", "role", "requested_amount_minor") REFERENCES "payment_schedules"("id", "price_snapshot_id", "role", "gross_amount_minor") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_refund_transaction_id_fkey" FOREIGN KEY ("refund_transaction_id") REFERENCES "refund_transactions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_quote_id_fkey" FOREIGN KEY ("quote_id") REFERENCES "quotes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -787,6 +816,21 @@ ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_success_fa
 );
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_completion_status_check" CHECK (
     "completed_at" IS NULL OR "status" = 'SUCCEEDED'
+);
+ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_values_check" CHECK (
+    "provider" ~ '[^[:space:]]'
+    AND "provider_event_id" ~ '[^[:space:]]'
+    AND "provider_transaction_id" ~ '[^[:space:]]'
+    AND "amount_minor" > 0
+    AND "currency" ~ '^[A-Z]{3}$'
+    AND jsonb_typeof("payload") = 'object'
+    AND "payload_hash" ~ '^[0-9a-f]{64}$'
+    AND "authenticated_at" >= "occurred_at"
+    AND "verified_at" >= "authenticated_at"
+);
+ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_scope_check" CHECK (
+    ("kind" IN ('PAYMENT_CAPTURED', 'PAYMENT_FAILED') AND "refund_transaction_id" IS NULL)
+    OR ("kind" IN ('REFUND_SUCCEEDED', 'REFUND_FAILED') AND "refund_transaction_id" IS NOT NULL)
 );
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_scope_check" CHECK ("quote_id" IS NOT NULL OR "order_id" IS NOT NULL OR "payment_id" IS NOT NULL OR "refund_transaction_id" IS NOT NULL);
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_identity_check" CHECK (
@@ -7219,6 +7263,178 @@ CREATE TRIGGER "payments_require_fulfilment_topology"
 BEFORE INSERT ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_require_payment_fulfilment_topology();
 
+CREATE FUNCTION taven_protect_payment_provider_event()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_provider varchar(100);
+    target_payment_status "payment_status";
+    target_requested_amount bigint;
+    target_currency char(3);
+    target_provider_intent_id varchar(255);
+    target_provider_capture_id varchar(255);
+    target_payment_created_at timestamptz;
+    target_refund_payment_id uuid;
+    target_refund_status "refund_status";
+    target_refund_amount bigint;
+    target_provider_refund_id varchar(255);
+    target_refund_requested_at timestamptz;
+    evidence_now timestamptz := clock_timestamp();
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Payment provider events are immutable audit evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_immutable_check';
+    END IF;
+
+    SELECT payment."provider", payment."status", payment."requested_amount_minor",
+           payment."currency", payment."provider_intent_id",
+           payment."provider_capture_id", payment."created_at"
+    INTO target_provider, target_payment_status, target_requested_amount,
+         target_currency, target_provider_intent_id,
+         target_provider_capture_id, target_payment_created_at
+    FROM "payments" payment
+    WHERE payment."id" = NEW."payment_id"
+    FOR UPDATE;
+
+    IF NOT FOUND
+       OR NEW."provider" IS DISTINCT FROM target_provider
+       OR NEW."occurred_at" < target_payment_created_at
+       OR NEW."occurred_at" > evidence_now + interval '5 seconds'
+       OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
+       OR NEW."verified_at" > evidence_now + interval '5 seconds'
+       OR NEW."created_at" > evidence_now + interval '5 seconds'
+       OR NEW."payload_hash" IS DISTINCT FROM
+          encode(sha256(convert_to(NEW."payload"::text, 'UTF8')), 'hex')
+       OR NEW."payload" ->> 'paymentId' IS DISTINCT FROM NEW."payment_id"::text
+       OR NEW."payload" ->> 'providerEventId' IS DISTINCT FROM NEW."provider_event_id"
+       OR NEW."payload" ->> 'providerTransactionId' IS DISTINCT FROM NEW."provider_transaction_id"
+       OR NEW."payload" ->> 'kind' IS DISTINCT FROM NEW."kind"::text
+       OR NEW."payload" ->> 'amountMinor' IS DISTINCT FROM NEW."amount_minor"::text
+       OR NEW."payload" ->> 'currency' IS DISTINCT FROM NEW."currency" THEN
+        RAISE EXCEPTION 'Payment provider event must contain exact verified parent and payload evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+    END IF;
+
+    IF NEW."kind" IN ('PAYMENT_CAPTURED', 'PAYMENT_FAILED') THEN
+        IF NEW."refund_transaction_id" IS NOT NULL
+           OR NEW."amount_minor" IS DISTINCT FROM target_requested_amount
+           OR NEW."currency" IS DISTINCT FROM target_currency
+           OR NEW."payload" ? 'refundTransactionId'
+           OR (NEW."kind" = 'PAYMENT_CAPTURED' AND (
+               target_payment_status NOT IN (
+                   'PENDING', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
+                   'PARTIALLY_REFUNDED', 'REFUNDED'
+               )
+               OR (target_provider_capture_id IS NOT NULL
+                   AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_capture_id)
+           ))
+           OR (NEW."kind" = 'PAYMENT_FAILED' AND (
+               target_payment_status NOT IN ('PENDING', 'FAILED')
+               OR NEW."provider_transaction_id" IS DISTINCT FROM target_provider_intent_id
+           )) THEN
+            RAISE EXCEPTION 'Payment provider event does not match its exact Payment outcome scope'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
+    ELSE
+        SELECT refund."payment_id", refund."status", refund."amount_minor",
+               refund."provider_refund_id", refund."requested_at"
+        INTO target_refund_payment_id, target_refund_status, target_refund_amount,
+             target_provider_refund_id, target_refund_requested_at
+        FROM "refund_transactions" refund
+        WHERE refund."id" = NEW."refund_transaction_id"
+        FOR UPDATE;
+
+        IF NOT FOUND
+           OR target_refund_payment_id IS DISTINCT FROM NEW."payment_id"
+           OR NEW."amount_minor" IS DISTINCT FROM target_refund_amount
+           OR NEW."currency" IS DISTINCT FROM target_currency
+           OR NEW."occurred_at" < target_refund_requested_at
+           OR NEW."payload" ->> 'refundTransactionId' IS DISTINCT FROM
+              NEW."refund_transaction_id"::text
+           OR (target_provider_refund_id IS NOT NULL
+               AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_refund_id)
+           OR (NEW."kind" = 'REFUND_SUCCEEDED'
+               AND target_refund_status NOT IN ('PENDING', 'SUCCEEDED'))
+           OR (NEW."kind" = 'REFUND_FAILED'
+               AND target_refund_status NOT IN ('PENDING', 'FAILED')) THEN
+            RAISE EXCEPTION 'Payment provider event does not match its exact RefundTransaction outcome scope'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "payment_provider_events_protected"
+BEFORE INSERT OR UPDATE OR DELETE ON "payment_provider_events"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_provider_event();
+
+CREATE FUNCTION taven_reconcile_payment_provider_event_consumption()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (NEW."kind" = 'PAYMENT_CAPTURED'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM "payments" payment
+            WHERE payment."id" = NEW."payment_id"
+              AND payment."status" IN (
+                  'CAPTURED', 'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'
+              )
+              AND payment."provider" = NEW."provider"
+              AND payment."provider_capture_id" = NEW."provider_transaction_id"
+              AND payment."captured_amount_minor" = NEW."amount_minor"
+              AND payment."currency" = NEW."currency"
+              AND payment."captured_at" = NEW."verified_at"
+        ))
+       OR (NEW."kind" = 'PAYMENT_FAILED'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "payments" payment
+               WHERE payment."id" = NEW."payment_id"
+                 AND payment."status" = 'FAILED'
+                 AND payment."provider" = NEW."provider"
+                 AND payment."provider_intent_id" = NEW."provider_transaction_id"
+           ))
+       OR (NEW."kind" = 'REFUND_SUCCEEDED'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "refund_transactions" refund
+               WHERE refund."id" = NEW."refund_transaction_id"
+                 AND refund."payment_id" = NEW."payment_id"
+                 AND refund."status" = 'SUCCEEDED'
+                 AND refund."provider" = NEW."provider"
+                 AND refund."provider_refund_id" = NEW."provider_transaction_id"
+                 AND refund."amount_minor" = NEW."amount_minor"
+                 AND refund."completed_at" = NEW."verified_at"
+           ))
+       OR (NEW."kind" = 'REFUND_FAILED'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "refund_transactions" refund
+               WHERE refund."id" = NEW."refund_transaction_id"
+                 AND refund."payment_id" = NEW."payment_id"
+                 AND refund."status" = 'FAILED'
+                 AND refund."provider" = NEW."provider"
+                 AND refund."provider_refund_id" = NEW."provider_transaction_id"
+                 AND refund."amount_minor" = NEW."amount_minor"
+           )) THEN
+        RAISE EXCEPTION 'Payment provider event and its financial outcome must commit atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_consumption_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "payment_provider_events_consumed"
+AFTER INSERT ON "payment_provider_events"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_payment_provider_event_consumption();
+
 CREATE FUNCTION taven_protect_payment_identity()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -7326,6 +7542,96 @@ BEGIN
        AND NEW."captured_at" > evidence_now + interval '5 seconds' THEN
         RAISE EXCEPTION 'payment capture evidence cannot be in the future'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_evidence_check';
+    END IF;
+
+    IF OLD."captured_amount_minor" IS NULL
+       AND NEW."status" IN ('CAPTURED', 'REFUND_PENDING')
+       AND NEW."captured_amount_minor" IS NOT NULL
+       AND NEW."captured_amount_minor" > 0
+       AND NEW."captured_amount_minor" <= NEW."requested_amount_minor"
+       AND NEW."provider_capture_id" IS NOT NULL
+       AND NEW."provider_capture_id" ~ '[^[:space:]]'
+       AND NEW."captured_at" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payment_provider_events" event
+           WHERE event."payment_id" = NEW."id"
+             AND event."refund_transaction_id" IS NULL
+             AND event."provider" = NEW."provider"
+             AND event."kind" = 'PAYMENT_CAPTURED'
+             AND event."provider_transaction_id" = NEW."provider_capture_id"
+             AND event."amount_minor" = NEW."captured_amount_minor"
+             AND event."currency" = NEW."currency"
+             AND event."verified_at" = NEW."captured_at"
+       ) THEN
+        RAISE EXCEPTION 'payment capture requires its exact verified provider event receipt'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_provider_receipt_check';
+    END IF;
+
+    IF OLD."status" = 'PENDING'
+       AND NEW."status" = 'FAILED'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payment_provider_events" event
+           WHERE event."payment_id" = NEW."id"
+             AND event."refund_transaction_id" IS NULL
+             AND event."provider" = NEW."provider"
+             AND event."kind" = 'PAYMENT_FAILED'
+             AND event."provider_transaction_id" = NEW."provider_intent_id"
+             AND event."amount_minor" = NEW."requested_amount_minor"
+             AND event."currency" = NEW."currency"
+       ) THEN
+        RAISE EXCEPTION 'payment failure requires its exact verified provider event receipt'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_failure_provider_receipt_check';
+    END IF;
+
+    IF OLD."status" = 'PENDING' AND NEW."status" = 'VOIDED' THEN
+        INSERT INTO "outbox_messages" (
+            "id", "deduplication_key", "aggregate_type", "aggregate_id",
+            "message_type", "schema_version", "payload", "status", "attempts",
+            "available_at", "created_at", "updated_at"
+        ) VALUES (
+            gen_random_uuid(),
+            'void_payment:v1:' || NEW."id"::text,
+            'Payment',
+            NEW."id",
+            'void_payment',
+            1,
+            jsonb_build_object(
+                'paymentId', NEW."id"::text,
+                'provider', NEW."provider",
+                'providerIntentId', NEW."provider_intent_id",
+                'action', 'void_payment'
+            ),
+            'PENDING',
+            0,
+            evidence_now,
+            evidence_now,
+            evidence_now
+        )
+        ON CONFLICT ("deduplication_key") DO NOTHING;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "outbox_messages" message
+            WHERE message."deduplication_key" =
+                  'void_payment:v1:' || NEW."id"::text
+              AND message."aggregate_type" = 'Payment'
+              AND message."aggregate_id" = NEW."id"
+              AND message."message_type" = 'void_payment'
+              AND message."schema_version" = 1
+              AND message."status" = 'PENDING'
+              AND message."attempts" = 0
+              AND message."payload" = jsonb_build_object(
+                  'paymentId', NEW."id"::text,
+                  'provider', NEW."provider",
+                  'providerIntentId', NEW."provider_intent_id",
+                  'action', 'void_payment'
+              )
+        ) THEN
+            RAISE EXCEPTION 'pending payment void requires its exact durable provider command'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_void_outbox_check';
+        END IF;
     END IF;
 
     RETURN NEW;
@@ -7772,6 +8078,51 @@ BEGIN
        AND NEW."status" IS DISTINCT FROM OLD."status" THEN
         RAISE EXCEPTION 'failed refund transactions are terminal attempts'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_failed_immutable_check';
+    END IF;
+
+    IF OLD."status" = 'PENDING'
+       AND NEW."status" = 'SUCCEEDED'
+       AND NEW."provider_refund_id" IS NOT NULL
+       AND NEW."provider_refund_id" ~ '[^[:space:]]'
+       AND NEW."completed_at" IS NOT NULL
+       AND NEW."completed_at" >= NEW."requested_at"
+       AND NEW."completed_at" <= clock_timestamp() + interval '5 seconds'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payment_provider_events" event
+           JOIN "payments" payment ON payment."id" = NEW."payment_id"
+           WHERE event."payment_id" = NEW."payment_id"
+             AND event."refund_transaction_id" = NEW."id"
+             AND event."provider" = payment."provider"
+             AND event."kind" = 'REFUND_SUCCEEDED'
+             AND event."provider_transaction_id" = NEW."provider_refund_id"
+             AND event."amount_minor" = NEW."amount_minor"
+             AND event."currency" = payment."currency"
+             AND event."verified_at" = NEW."completed_at"
+       ) THEN
+        RAISE EXCEPTION 'successful refund requires its exact verified provider event receipt'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_success_provider_receipt_check';
+    END IF;
+
+    IF OLD."status" = 'PENDING'
+       AND NEW."status" = 'FAILED'
+       AND (
+           NEW."provider_refund_id" IS NULL
+           OR NOT EXISTS (
+               SELECT 1
+               FROM "payment_provider_events" event
+               JOIN "payments" payment ON payment."id" = NEW."payment_id"
+               WHERE event."payment_id" = NEW."payment_id"
+                 AND event."refund_transaction_id" = NEW."id"
+                 AND event."provider" = payment."provider"
+                 AND event."kind" = 'REFUND_FAILED'
+                 AND event."provider_transaction_id" = NEW."provider_refund_id"
+                 AND event."amount_minor" = NEW."amount_minor"
+                 AND event."currency" = payment."currency"
+           )
+       ) THEN
+        RAISE EXCEPTION 'failed refund requires its exact verified provider event receipt'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_failure_provider_receipt_check';
     END IF;
 
     IF NEW."id" IS DISTINCT FROM OLD."id"
