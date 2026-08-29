@@ -11991,6 +11991,311 @@ describe("commerce persistence foundations", () => {
     );
   });
 
+  it("reconciles a pre-void acceptance scan after the cancellation commits", async () => {
+    let foundation: PersistenceFoundation | undefined;
+    let providerVoidOccurredAt: Date | undefined;
+
+    const cancellationClient = await pool.connect();
+    await cancellationClient.query("BEGIN");
+    try {
+      const fixtures = new PersistenceFactory(
+        cancellationClient,
+        `${scope}:committed-scan`,
+      );
+      foundation = await fixtures.createFoundation("committed-scan");
+      const productions = await createCurrentPlanAndPayment(
+        cancellationClient,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(
+        cancellationClient,
+        fixtures,
+        foundation,
+        productions,
+      );
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+      ] as const) {
+        await advanceOrderLifecycleStep(
+          cancellationClient,
+          foundation.orderId,
+          status,
+        );
+      }
+      await cancellationClient.query(
+        `UPDATE shipments
+         SET status = 'CANCELLATION_PENDING',
+             cancellation_requested_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [foundation.shipmentId],
+      );
+      const providerVoidId = "committed-delayed-scan-provider-void";
+      await confirmCarrierLabelVoid(
+        cancellationClient,
+        foundation.shipmentId,
+        providerVoidId,
+      );
+      providerVoidOccurredAt = (
+        await cancellationClient.query<{ occurred_at: Date }>(
+          `SELECT occurred_at
+           FROM shipment_provider_events
+           WHERE shipment_id = $1
+             AND kind = 'LABEL_VOIDED'
+             AND provider_event_id = $2`,
+          [foundation.shipmentId, providerVoidId],
+        )
+      ).rows[0]?.occurred_at;
+      if (!providerVoidOccurredAt) {
+        throw new Error("committed cancellation has no provider void event");
+      }
+
+      await cancelOrderBeforeHandoff(cancellationClient, foundation.orderId);
+      const failedRefund = (
+        await cancellationClient.query<{ id: string }>(
+          `SELECT refund.id
+           FROM refund_transactions refund
+           WHERE refund.payment_id = $1
+             AND refund.reason = 'CUSTOMER_CANCELLATION'
+             AND refund.status = 'PENDING'`,
+          [foundation.paymentId],
+        )
+      ).rows[0];
+      if (!failedRefund) {
+        throw new Error("committed cancellation has no refund attempt");
+      }
+      const refundFailedAt = new Date();
+      await fixtures.persistRefundProviderEvent(
+        failedRefund.id,
+        "REFUND_FAILED",
+        "committed-delayed-scan-refund-failed",
+        refundFailedAt,
+      );
+      await cancellationClient.query(
+        `UPDATE refund_transactions
+         SET status = 'FAILED', provider_refund_id = $2, updated_at = $3
+         WHERE id = $1`,
+        [
+          failedRefund.id,
+          "committed-delayed-scan-refund-failed",
+          refundFailedAt,
+        ],
+      );
+      await cancellationClient.query(
+        `UPDATE payments
+         SET status = 'CAPTURED', updated_at = $2
+         WHERE id = $1`,
+        [foundation.paymentId, refundFailedAt],
+      );
+      await forceOrderLifecycleConstraints(cancellationClient);
+      await cancellationClient.query("COMMIT");
+    } catch (error) {
+      await cancellationClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      cancellationClient.release();
+    }
+
+    if (!foundation || !providerVoidOccurredAt) {
+      throw new Error("committed cancellation fixture is incomplete");
+    }
+
+    expect(
+      (
+        await pool.query<{
+          job_status: string;
+          order_status: string;
+          phase_status: string;
+          shipment_status: string;
+          slot_outcome: string;
+        }>(
+          `SELECT target_order.status::text AS order_status,
+                  phase.status::text AS phase_status,
+                  job.status::text AS job_status,
+                  shipment.status::text AS shipment_status,
+                  slot.outcome::text AS slot_outcome
+           FROM orders target_order
+           JOIN order_phases phase ON phase.order_id = target_order.id
+           JOIN jobs job ON job.order_id = target_order.id
+           JOIN shipments shipment ON shipment.order_id = target_order.id
+           JOIN fulfilment_slots slot ON slot.order_id = target_order.id
+           WHERE target_order.id = $1`,
+          [foundation.orderId],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        order_status: "CANCELLED",
+        phase_status: "CANCELLED",
+        job_status: "CANCELLED",
+        shipment_status: "CANCELLED",
+        slot_outcome: "CANCELLED",
+      },
+    ]);
+
+    const recoveryClient = await pool.connect();
+    await recoveryClient.query("BEGIN");
+    try {
+      for (const [name, offset] of [
+        ["equal", 0],
+        ["later", 1],
+      ] as const) {
+        await expectQueryError(
+          recoveryClient,
+          `committed_cancelled_acceptance_scan_${name}_to_void`,
+          () =>
+            persistVerifiedAcceptanceScan(
+              recoveryClient,
+              foundation.shipmentId,
+              `committed-cancelled-acceptance-scan-${name}`,
+              new Date(providerVoidOccurredAt.getTime() + offset),
+            ),
+          {
+            code: "23514",
+            constraint: "shipment_provider_event_scope_check",
+          },
+        );
+      }
+
+      const winningScanOccurredAt = new Date(
+        providerVoidOccurredAt.getTime() - 1,
+      );
+      await expectQueryError(
+        recoveryClient,
+        "committed_cancelled_pre_void_scan_without_recovery",
+        async () => {
+          await persistVerifiedAcceptanceScan(
+            recoveryClient,
+            foundation.shipmentId,
+            "orphaned-committed-cancelled-pre-void-scan",
+            winningScanOccurredAt,
+          );
+          await recoveryClient.query(
+            `SET CONSTRAINTS "shipment_provider_events_consumed" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_provider_event_consumption_check",
+        },
+      );
+
+      const providerScanId = "committed-delayed-pre-void-acceptance-scan";
+      const handedOverAt = await persistVerifiedAcceptanceScan(
+        recoveryClient,
+        foundation.shipmentId,
+        providerScanId,
+        winningScanOccurredAt,
+      );
+      await recoveryClient.query(
+        `UPDATE shipments
+         SET status = 'HANDED_OVER', provider_acceptance_scan_id = $2,
+             handed_over_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [foundation.shipmentId, providerScanId, handedOverAt],
+      );
+      await recoveryClient.query(
+        `UPDATE fulfilment_slots
+         SET outcome = 'PENDING', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, handedOverAt],
+      );
+      await recoveryClient.query(
+        `UPDATE jobs
+         SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, handedOverAt],
+      );
+      await expectQueryError(
+        recoveryClient,
+        "committed_cancelled_phase_requires_exact_handoff_time",
+        () =>
+          recoveryClient.query(
+            `UPDATE order_phases
+             SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+             WHERE order_id = $1`,
+            [foundation.orderId, new Date(handedOverAt.getTime() + 1)],
+          ),
+        {
+          code: "23514",
+          constraint: "order_phase_status_transition_check",
+        },
+      );
+      await recoveryClient.query(
+        `UPDATE order_phases
+         SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, handedOverAt],
+      );
+      await recoveryClient.query(
+        `UPDATE orders
+         SET status = 'SHIPPED', updated_at = $2
+         WHERE id = $1`,
+        [foundation.orderId, handedOverAt],
+      );
+      await forceOrderLifecycleConstraints(recoveryClient);
+      await recoveryClient.query("COMMIT");
+    } catch (error) {
+      await recoveryClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      recoveryClient.release();
+    }
+
+    expect(
+      (
+        await pool.query<{
+          job_cancelled_at: Date;
+          job_cancellation_reason: string;
+          job_status: string;
+          order_status: string;
+          phase_cancelled_at: Date;
+          phase_status: string;
+          refund_status: string;
+          shipment_cancelled_at: Date;
+          shipment_status: string;
+          slot_outcome: string;
+        }>(
+          `SELECT target_order.status::text AS order_status,
+                  phase.status::text AS phase_status,
+                  phase.cancelled_at AS phase_cancelled_at,
+                  job.status::text AS job_status,
+                  job.cancelled_at AS job_cancelled_at,
+                  job.cancellation_reason::text AS job_cancellation_reason,
+                  shipment.status::text AS shipment_status,
+                  shipment.cancelled_at AS shipment_cancelled_at,
+                  slot.outcome::text AS slot_outcome,
+                  refund.status::text AS refund_status
+           FROM orders target_order
+           JOIN order_phases phase ON phase.order_id = target_order.id
+           JOIN jobs job ON job.order_id = target_order.id
+           JOIN shipments shipment ON shipment.order_id = target_order.id
+           JOIN fulfilment_slots slot ON slot.order_id = target_order.id
+           JOIN payments payment ON payment.order_id = target_order.id
+           JOIN refund_transactions refund ON refund.payment_id = payment.id
+           WHERE target_order.id = $1`,
+          [foundation.orderId],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        order_status: "SHIPPED",
+        phase_status: "SHIPPED",
+        phase_cancelled_at: expect.any(Date),
+        job_status: "HANDED_OVER",
+        job_cancelled_at: expect.any(Date),
+        job_cancellation_reason: "ORDER_CANCELLED",
+        shipment_status: "HANDED_OVER",
+        shipment_cancelled_at: expect.any(Date),
+        slot_outcome: "PENDING",
+        refund_status: "FAILED",
+      },
+    ]);
+  });
+
   it("accepts a carrier scan before handoff and records later scans as no-ops", async () => {
     await rollback("delayed-acceptance-scan", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(

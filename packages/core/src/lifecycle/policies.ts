@@ -6654,6 +6654,7 @@ function requireCreatedPaymentVoidClosure<S extends string>(
     voidedPayment.targetStatus !== "voided" ||
     voidedPayment.providerIntentId !== null ||
     voidedPayment.captureAuthorized !== false ||
+    !(voidedPayment.captureCutoffAt instanceof Instant) ||
     voidedPayment.resultId !== resultId ||
     voidedPayment.immutable !== true ||
     expectedOrder?.id !== orderId ||
@@ -7279,7 +7280,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     shipped: ["delivered", "partially_fulfilled", "cancelled"],
     delivered: ["completed"],
     recovery_pending: ["qc_passed", "cancelled", "partially_fulfilled"],
-    cancelled: ["refunded", "cancelled_settled"],
+    cancelled: ["shipped", "refunded", "cancelled_settled"],
   },
   guard: (command) => {
     if (command.current === "draft" && command.target === "quoted") {
@@ -7339,6 +7340,10 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     if (command.current === "ready_to_ship" && command.target === "shipped") {
       requireAtomicOrdinaryHandoff("Order", command);
       requireZeroBalances("Order", command);
+    }
+    if (command.current === "cancelled" && command.target === "shipped") {
+      requireVerifiedMatchingCancellationRaceScan("Order", command);
+      requireExactCancellationRaceHandoffResult("Order", command);
     }
     if (
       command.current === "awaiting_balance" &&
@@ -7478,7 +7483,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         "partially_fulfilled",
         "cancelled_refunded",
       ],
-      cancelled: ["cancelled_refunded", "cancelled_settled"],
+      cancelled: ["shipped", "cancelled_refunded", "cancelled_settled"],
     },
     guard: (command) => {
       if (command.current === "quoted" && command.target === "active") {
@@ -7503,6 +7508,16 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
       if (command.current === "qc_passed" && command.target === "shipped") {
         requireAtomicOrdinaryHandoff("OrderPhase(single)", command);
         requireZeroBalances("OrderPhase(single)", command);
+      }
+      if (command.current === "cancelled" && command.target === "shipped") {
+        requireVerifiedMatchingCancellationRaceScan(
+          "OrderPhase(single)",
+          command,
+        );
+        requireExactCancellationRaceHandoffResult(
+          "OrderPhase(single)",
+          command,
+        );
       }
       if (command.current === "shipped" && command.target === "delivered") {
         requireAllShipmentLineageLeavesDelivered("OrderPhase(single)", command);
@@ -7892,6 +7907,11 @@ function requireExactJobHandoff<S extends string>(
     typeof value === "string" && value.trim().length > 0;
   const kind = context?.jobHandoffKind;
   const jobId = context?.jobId;
+  const expectedJobStatus =
+    context?.cancellationRaceCommittedCancellation === true
+      ? "cancelled"
+      : "packed";
+  const committedCancellation = expectedJobStatus === "cancelled";
   const expectedValue = context?.jobHandoffExpectedJob;
   const expected =
     typeof expectedValue === "object" &&
@@ -7899,15 +7919,30 @@ function requireExactJobHandoff<S extends string>(
     !Array.isArray(expectedValue)
       ? (expectedValue as Readonly<Record<string, unknown>>)
       : undefined;
+  const expectedShipmentValue = context?.cancellationRaceExpectedShipment;
+  const expectedShipment =
+    typeof expectedShipmentValue === "object" &&
+    expectedShipmentValue !== null &&
+    !Array.isArray(expectedShipmentValue)
+      ? (expectedShipmentValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobCancelledAt = expected?.cancelledAt;
+  const shipmentCancelledAt = expectedShipment?.cancelledAt;
   if (
     !nonBlank(jobId) ||
+    command.current !== expectedJobStatus ||
     expected?.id !== jobId ||
     expected.kind !== kind ||
-    expected.status !== "packed" ||
+    expected.status !== expectedJobStatus ||
+    (committedCancellation &&
+      (!(jobCancelledAt instanceof Instant) ||
+        expected.cancellationReason !== "order_cancelled" ||
+        !(shipmentCancelledAt instanceof Instant) ||
+        jobCancelledAt.compare(shipmentCancelledAt) < 0)) ||
     expected.currentLineageLeaf !== true ||
     expected.immutable !== true ||
     context?.jobHandoffJobId !== jobId ||
-    context?.jobHandoffPreviousStatus !== "packed" ||
+    context?.jobHandoffPreviousStatus !== expectedJobStatus ||
     context?.jobHandoffTargetStatus !== "handed_over" ||
     context?.jobHandoffCompleted !== true ||
     context?.jobHandoffAtomic !== true
@@ -7916,7 +7951,7 @@ function requireExactJobHandoff<S extends string>(
       lifecycle,
       command.current,
       command.target,
-      "Job handoff must bind the exact current packed Job and result",
+      "Job handoff must bind the exact current Job and result",
     );
   }
   if (kind === "ordinary") {
@@ -8101,7 +8136,10 @@ function requireExactJobHandoff<S extends string>(
 export const jobPolicy: TransitionPolicy<JobStatus> = {
   name: "Job",
   initial: ["created"],
-  terminal: ["settled", "qc_rejected", "failed", "cancelled"],
+  terminal: ["settled", "qc_rejected", "failed"],
+  contextualTerminal: (state, context) =>
+    state === "cancelled" &&
+    context?.cancellationRaceCommittedCancellation !== true,
   transitions: {
     created: ["accepted", "cancelled"],
     accepted: ["gcode_ready", "failed", "cancelled"],
@@ -8111,6 +8149,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
     photo_submitted: ["qc_approved", "qc_rejected", "failed", "cancelled"],
     qc_approved: ["packed", "failed", "cancelled"],
     packed: ["handed_over", "failed", "cancelled"],
+    cancelled: ["handed_over"],
     handed_over: ["settled"],
   },
   guard: (command) => {
@@ -8266,7 +8305,10 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
       }
       requireJobReplacementObligation("Job", command);
     }
-    if (command.current === "packed" && command.target === "handed_over") {
+    if (
+      (command.current === "packed" || command.current === "cancelled") &&
+      command.target === "handed_over"
+    ) {
       requireExactJobHandoff("Job", command);
     }
     if (command.current === "handed_over" && command.target === "settled") {
@@ -8905,11 +8947,28 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
     const voidOccurredAt = voidEvent?.occurredAt;
     const voidVerifiedAt = voidEvent?.verifiedAt;
     const voidEventId = voidEvent?.id;
+    const resultShipment = record(
+      command.context?.cancellationRaceResultShipment,
+    );
+    const resultCarrier = resultShipment?.carrier;
+    const resultHandedOverAt = resultShipment?.handedOverAt;
     if (
       typeof carrierLabelId !== "string" ||
       carrierLabelId.trim().length === 0 ||
+      typeof resultCarrier !== "string" ||
+      resultCarrier.trim().length === 0 ||
+      resultShipment?.id !== shipmentId ||
+      resultShipment.previousStatus !== "cancelled" ||
+      resultShipment.targetStatus !== "handed_over" ||
+      resultShipment.carrierLabelId !== carrierLabelId ||
+      resultShipment.providerAcceptanceScanId !== providerEventId ||
+      !(resultHandedOverAt instanceof Instant) ||
+      resultShipment.resultId !==
+        command.context?.cancellationRaceHandoffResultId ||
+      resultShipment.immutable !== true ||
       acceptanceEvent?.id !== providerEventId ||
       acceptanceEvent.shipmentId !== shipmentId ||
+      acceptanceEvent.carrier !== resultCarrier ||
       acceptanceEvent.carrierLabelId !== carrierLabelId ||
       acceptanceEvent.transactionId !== providerTransactionId ||
       acceptanceEvent.kind !== "acceptance_scan" ||
@@ -8921,6 +8980,7 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
       typeof voidEventId !== "string" ||
       voidEventId.trim().length === 0 ||
       voidEvent?.shipmentId !== shipmentId ||
+      voidEvent.carrier !== resultCarrier ||
       voidEvent.carrierLabelId !== carrierLabelId ||
       voidEvent.kind !== "label_voided" ||
       voidEvent.authenticated !== true ||
@@ -8928,6 +8988,7 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
       voidEvent.immutable !== true ||
       !(voidOccurredAt instanceof Instant) ||
       !(voidVerifiedAt instanceof Instant) ||
+      !resultHandedOverAt.equals(acceptanceVerifiedAt) ||
       acceptanceOccurredAt.compare(voidOccurredAt) >= 0 ||
       expectedShipment?.providerVoidId !== voidEventId ||
       !(expectedShipment.providerVoidedAt instanceof Instant) ||
@@ -9055,8 +9116,10 @@ function requireAtomicOrdinaryHandoff<S extends string>(
   command: TransitionCommand<S>,
   expectedStatuses: Readonly<{
     shipmentPrevious: "label_created" | "cancellation_pending" | "cancelled";
-    orderPrevious: "ready_to_ship" | "awaiting_balance" | "shipped";
-    phasePrevious: "qc_passed" | "shipped";
+    orderPrevious:
+      "ready_to_ship" | "awaiting_balance" | "shipped" | "cancelled";
+    phasePrevious: "qc_passed" | "shipped" | "cancelled";
+    jobPrevious?: "packed" | "cancelled";
     allowLaterParcel?: boolean;
     resultProof?: "ordinary" | "cancellation_race";
   }> = {
@@ -9089,6 +9152,7 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     ? [...expectedJobIdsValue]
     : undefined;
   const jobs = Array.isArray(jobsValue) ? [...jobsValue] : undefined;
+  const jobPrevious = expectedStatuses.jobPrevious ?? "packed";
   const firstParcelStatusesMatch =
     context?.handoffOrderPreviousStatus === expectedStatuses.orderPrevious &&
     context?.handoffOrderTargetStatus === "shipped" &&
@@ -9122,7 +9186,7 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     context?.handoffShipmentPreviousStatus !==
       expectedStatuses.shipmentPrevious ||
     context?.handoffShipmentTargetStatus !== "handed_over" ||
-    context?.handoffJobPreviousStatus !== "packed" ||
+    context?.handoffJobPreviousStatus !== jobPrevious ||
     context?.handoffJobTargetStatus !== "handed_over" ||
     expectedSlotIds === undefined ||
     expectedSlotIds.length === 0 ||
@@ -9248,7 +9312,10 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       slot.phaseId !== phaseId ||
       typeof slotJobId !== "string" ||
       slotJobId.trim().length === 0 ||
-      !authoritativeJobIds.includes(slotJobId)
+      !authoritativeJobIds.includes(slotJobId) ||
+      (jobPrevious === "cancelled" &&
+        (slot.previousOutcome !== "cancelled" ||
+          slot.targetOutcome !== "pending"))
     ) {
       throw new TransitionGuardError(
         lifecycle,
@@ -9300,7 +9367,7 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       job.shipmentId !== shipmentId ||
       job.orderId !== orderId ||
       job.phaseId !== phaseId ||
-      job.previousStatus !== "packed" ||
+      job.previousStatus !== jobPrevious ||
       job.targetStatus !== "handed_over"
     ) {
       throw new TransitionGuardError(
@@ -9560,6 +9627,9 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
   const previousOrderResultId = context?.cancellationRacePreviousOrderResultId;
   const orderStateKey = context?.cancellationRaceCurrentOrderStateCommandKey;
   const expectedOrder = record(context?.cancellationRaceExpectedOrder);
+  const previousPhaseResultId = context?.handoffPhasePreviousResultId;
+  const phaseStateKey = context?.handoffPhaseCurrentStateCommandKey;
+  const expectedPhase = record(context?.handoffExpectedPhase);
   const cancellationRequestId = context?.shipmentCancellationRequestId;
   const cancellationRequest = record(context?.shipmentCancellationRequest);
   const carrierLabelId = context?.carrierLabelId;
@@ -9569,6 +9639,15 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     sourceStatusValue === "cancellation_pending"
       ? sourceStatusValue
       : undefined;
+  const committedCancellation =
+    context?.cancellationRaceCommittedCancellation === true;
+  const expectedOrderStatus =
+    kind === "unauthorized_reconciliation"
+      ? "awaiting_balance"
+      : committedCancellation
+        ? "cancelled"
+        : "ready_to_ship";
+  const expectedPhaseStatus = committedCancellation ? "cancelled" : "qc_passed";
   if (
     typeof kind !== "string" ||
     !cancellationRaceHandoffKinds.has(kind) ||
@@ -9586,6 +9665,8 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     providerTransactionId.trim().length === 0 ||
     !nonBlank(carrierLabelId) ||
     sourceStatus === undefined ||
+    (committedCancellation &&
+      (sourceStatus !== "cancelled" || kind !== "ordinary")) ||
     !nonBlank(previousShipmentResultId) ||
     !nonBlank(stateKey) ||
     expectedShipment?.id !== shipmentId ||
@@ -9617,15 +9698,29 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     (lifecycle === "Order" &&
       (!nonBlank(previousOrderResultId) ||
         !nonBlank(orderStateKey) ||
+        command.current !== expectedOrderStatus ||
         command.aggregateId !== orderId ||
         command.currentStateResultId !== previousOrderResultId ||
         command.currentStateCommandKey !== orderStateKey ||
         expectedOrder?.id !== orderId ||
         expectedOrder.phaseId !== phaseId ||
-        expectedOrder.status !== "awaiting_balance" ||
+        expectedOrder.status !== command.current ||
         expectedOrder.resultId !== previousOrderResultId ||
         expectedOrder.currentStateCommandKey !== orderStateKey ||
         expectedOrder.immutable !== true)) ||
+    (lifecycle === "OrderPhase(single)" &&
+      (!nonBlank(previousPhaseResultId) ||
+        !nonBlank(phaseStateKey) ||
+        command.current !== expectedPhaseStatus ||
+        command.aggregateId !== phaseId ||
+        command.currentStateResultId !== previousPhaseResultId ||
+        command.currentStateCommandKey !== phaseStateKey ||
+        expectedPhase?.id !== phaseId ||
+        expectedPhase.orderId !== orderId ||
+        expectedPhase.status !== command.current ||
+        expectedPhase.resultId !== previousPhaseResultId ||
+        expectedPhase.currentStateCommandKey !== phaseStateKey ||
+        expectedPhase.immutable !== true)) ||
     context?.cancellationRaceResultKind !== kind ||
     context?.cancellationRaceResultShipmentId !== shipmentId ||
     context?.cancellationRaceResultOrderId !== orderId ||
@@ -9718,8 +9813,9 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     requireZeroBalances(lifecycle, command);
     requireAtomicOrdinaryHandoff(lifecycle, command, {
       shipmentPrevious: sourceStatus,
-      orderPrevious: "ready_to_ship",
-      phasePrevious: "qc_passed",
+      orderPrevious: committedCancellation ? "cancelled" : "ready_to_ship",
+      phasePrevious: committedCancellation ? "cancelled" : "qc_passed",
+      jobPrevious: committedCancellation ? "cancelled" : "packed",
       resultProof: "cancellation_race",
     });
     return;

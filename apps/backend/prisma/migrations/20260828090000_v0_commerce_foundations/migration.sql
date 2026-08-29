@@ -2824,6 +2824,75 @@ CREATE TRIGGER "order_items_draft_mutability"
 BEFORE INSERT OR UPDATE OR DELETE ON "order_items"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_order_item_mutation();
 
+CREATE FUNCTION taven_has_reconciled_post_void_handoff(
+    target_order_id uuid,
+    target_phase_id uuid DEFAULT NULL,
+    target_shipment_plan_id uuid DEFAULT NULL,
+    target_slot_id uuid DEFAULT NULL,
+    target_job_id uuid DEFAULT NULL,
+    target_verified_at timestamptz DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "shipments" shipment
+        JOIN "shipment_provider_events" acceptance_event
+          ON acceptance_event."shipment_id" = shipment."id"
+         AND acceptance_event."outbox_message_id" IS NULL
+         AND acceptance_event."kind" = 'ACCEPTANCE_SCAN'
+         AND acceptance_event."source_shipment_status" = 'CANCELLED'
+         AND acceptance_event."carrier" = shipment."carrier"
+         AND acceptance_event."carrier_label_id" = shipment."carrier_label_id"
+         AND acceptance_event."provider_event_id" = shipment."provider_acceptance_scan_id"
+         AND acceptance_event."verified_at" = shipment."handed_over_at"
+        JOIN "shipment_provider_events" void_event
+          ON void_event."shipment_id" = shipment."id"
+         AND void_event."kind" = 'LABEL_VOIDED'
+         AND void_event."carrier" = shipment."carrier"
+         AND void_event."carrier_label_id" = shipment."carrier_label_id"
+         AND void_event."provider_event_id" = shipment."provider_void_id"
+         AND void_event."verified_at" = shipment."provider_voided_at"
+        WHERE shipment."order_id" = target_order_id
+          AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+          AND shipment."cancelled_at" IS NOT NULL
+          AND acceptance_event."occurred_at" < void_event."occurred_at"
+          AND (target_phase_id IS NULL
+               OR shipment."order_phase_id" = target_phase_id)
+          AND (target_shipment_plan_id IS NULL
+               OR shipment."shipment_plan_id" = target_shipment_plan_id)
+          AND (target_verified_at IS NULL
+               OR acceptance_event."verified_at" = target_verified_at)
+          AND (
+              target_slot_id IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM "shipment_plan_fulfilment_slots" allocation
+                  WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+                    AND allocation."fulfilment_slot_id" = target_slot_id
+              )
+          )
+          AND (
+              target_job_id IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM "jobs" job
+                  WHERE job."id" = target_job_id
+                    AND job."order_id" = shipment."order_id"
+                    AND job."order_phase_id" = shipment."order_phase_id"
+                    AND job."shipment_plan_id" = shipment."shipment_plan_id"
+              )
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipments" replacement
+              WHERE replacement."replaces_shipment_id" = shipment."id"
+          )
+    );
+$$;
+
 CREATE FUNCTION taven_validate_order_status_transition()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -2929,6 +2998,8 @@ BEGIN
            OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'CANCELLED'))
            OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED'))
            OR (OLD."status" = 'READY_TO_SHIP' AND NEW."status" IN ('SHIPPED', 'CANCELLED'))
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'SHIPPED'
+               AND taven_has_reconciled_post_void_handoff(NEW."id"))
            -- Post-handoff cancellation/partial fulfilment remain unreachable
            -- until the settlement and claim tranches persist their proof.
            OR (OLD."status" = 'SHIPPED' AND NEW."status" = 'DELIVERED')
@@ -3070,6 +3141,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     evidence_now timestamptz := clock_timestamp();
+    reconciled_post_void_handoff boolean := false;
 BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW."status" <> 'QUOTED'
@@ -3089,6 +3161,13 @@ BEGIN
         RAISE EXCEPTION 'order phases are stable lifecycle topology and cannot be deleted'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_immutable_check';
     END IF;
+
+    reconciled_post_void_handoff :=
+        NEW."cancelled_at" IS NOT NULL
+        AND taven_has_reconciled_post_void_handoff(
+            NEW."order_id", NEW."id", NULL, NULL, NULL,
+            NEW."shipped_at"
+        );
 
     IF greatest(
         NEW."activated_at", NEW."qc_passed_at", NEW."shipped_at",
@@ -3134,6 +3213,8 @@ BEGIN
            OR (OLD."status" = 'SHIPPED' AND NEW."status" = 'DELIVERED')
            OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'CANCELLED_REFUNDED')
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'SHIPPED'
+               AND reconciled_post_void_handoff)
        ) THEN
         RAISE EXCEPTION 'order phase status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_status_transition_check';
@@ -3197,6 +3278,14 @@ BEGIN
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'SHIPPED'
+               AND reconciled_post_void_handoff
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
        ) THEN
         RAISE EXCEPTION 'order phase transition may assign only its own lifecycle evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
@@ -3228,9 +3317,11 @@ BEGIN
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."qc_passed_at" IS NOT NULL
            AND NEW."cancelled_at" < NEW."qc_passed_at")
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."shipped_at" IS NOT NULL
-           AND NEW."cancelled_at" < NEW."shipped_at")
+           AND NEW."cancelled_at" < NEW."shipped_at"
+           AND NOT reconciled_post_void_handoff)
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."delivered_at" IS NOT NULL
-           AND NEW."cancelled_at" < NEW."delivered_at") THEN
+           AND NEW."cancelled_at" < NEW."delivered_at"
+           AND NOT reconciled_post_void_handoff) THEN
         RAISE EXCEPTION 'order phase lifecycle timestamps must be chronological'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
     END IF;
@@ -3310,6 +3401,12 @@ BEGIN
            OR (OLD."status" = 'PHOTO_SUBMITTED' AND NEW."status" IN ('QC_APPROVED', 'QC_REJECTED', 'CANCELLED', 'FAILED'))
            OR (OLD."status" = 'QC_APPROVED' AND NEW."status" IN ('PACKED', 'CANCELLED', 'FAILED'))
            OR (OLD."status" = 'PACKED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLED', 'FAILED'))
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'HANDED_OVER'
+               AND taven_has_reconciled_post_void_handoff(
+                   NEW."order_id", NEW."order_phase_id",
+                   NEW."shipment_plan_id", NULL, NEW."id",
+                   NEW."handed_over_at"
+               ))
            OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'SETTLED')
        ) THEN
         RAISE EXCEPTION 'Job status transition is not allowed'
@@ -6538,6 +6635,12 @@ BEGIN
             AND NEW."outcome" IN ('DELIVERED', 'CANCELLED', 'CANCELLED_REFUNDED'))
            OR (OLD."outcome" = 'CANCELLED'
                AND NEW."outcome" = 'CANCELLED_REFUNDED')
+           OR (OLD."outcome" = 'CANCELLED'
+               AND NEW."outcome" = 'PENDING'
+               AND taven_has_reconciled_post_void_handoff(
+                   NEW."order_id", NEW."order_phase_id", NULL,
+                   NEW."id", NULL, NEW."updated_at"
+               ))
        ) THEN
         RAISE EXCEPTION 'fulfilment slot outcome is terminal once recorded'
             USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_outcome_transition_check';

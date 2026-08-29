@@ -273,6 +273,7 @@ const permittedContext = {
     targetStatus: "voided",
     providerIntentId: null,
     captureAuthorized: false,
+    captureCutoffAt: Instant.parse("2026-01-01T00:06:00.000Z"),
     resultId: "created-payment-void-result-1",
     immutable: true,
   },
@@ -3386,6 +3387,7 @@ const permittedContext = {
   cancellationRaceAcceptanceEvent: {
     id: "shipment-provider-event-1",
     shipmentId: "shipment-1",
+    carrier: "carrier-1",
     carrierLabelId: "label-1",
     transactionId: "shipment-provider-transaction-1",
     kind: "acceptance_scan",
@@ -3398,12 +3400,24 @@ const permittedContext = {
   cancellationRaceSelectedVoidEvent: {
     id: "void-event-1",
     shipmentId: "shipment-1",
+    carrier: "carrier-1",
     carrierLabelId: "label-1",
     kind: "label_voided",
     occurredAt: Instant.parse("2026-01-01T00:10:00.001Z"),
     verifiedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
     authenticated: true,
     verified: true,
+    immutable: true,
+  },
+  cancellationRaceResultShipment: {
+    id: "shipment-1",
+    previousStatus: "cancelled",
+    targetStatus: "handed_over",
+    carrier: "carrier-1",
+    carrierLabelId: "label-1",
+    providerAcceptanceScanId: "shipment-provider-event-1",
+    handedOverAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    resultId: "cancellation-race-result-1",
     immutable: true,
   },
   cancellationRaceCancellationRequestId: "shipment-cancellation-request-1",
@@ -3953,6 +3967,9 @@ function contextForTransition(target: string, current?: string) {
   const lateCaptureCurrentStateCommandKey = `payment-${current ?? "voided"}-command-1`;
   const unauthorizedHandoffReconciliation =
     current === "awaiting_balance" && target === "shipped";
+  const committedCancellationRecovery =
+    current === "cancelled" &&
+    (target === "handed_over" || target === "shipped");
   const completionTopologyStatus =
     current === "awaiting_balance" && target === "cancelled_settled"
       ? "qc_passed"
@@ -4692,13 +4709,14 @@ function contextForTransition(target: string, current?: string) {
     currentRemedyShipmentLineageLeafStatus: remedyIncident
       ? "lost"
       : permittedContext.currentRemedyShipmentLineageLeafStatus,
-    providerEventStatus: unauthorizedHandoffReconciliation
-      ? "handed_over"
-      : remedyIncident
-        ? "lost"
-        : target === "delivered_reship" || target === "delivered_reprint"
-          ? "delivered"
-          : target,
+    providerEventStatus:
+      unauthorizedHandoffReconciliation || committedCancellationRecovery
+        ? "handed_over"
+        : remedyIncident
+          ? "lost"
+          : target === "delivered_reship" || target === "delivered_reprint"
+            ? "delivered"
+            : target,
     remedyDeliveryKind:
       current === "replacement_shipped" && target === "delivered_reprint"
         ? "reprint"
@@ -4748,58 +4766,127 @@ function contextForTransition(target: string, current?: string) {
       : permittedContext.remedyIncidentShipmentTargetStatus,
     handoffShipmentPreviousStatus: unauthorizedHandoffReconciliation
       ? "cancellation_pending"
-      : (current === "cancellation_pending" || current === "cancelled") &&
-          target === "handed_over"
-        ? current
-        : permittedContext.handoffShipmentPreviousStatus,
+      : committedCancellationRecovery
+        ? "cancelled"
+        : (current === "cancellation_pending" || current === "cancelled") &&
+            target === "handed_over"
+          ? current
+          : permittedContext.handoffShipmentPreviousStatus,
     handoffOrderPreviousStatus: unauthorizedHandoffReconciliation
       ? "awaiting_balance"
-      : permittedContext.handoffOrderPreviousStatus,
+      : committedCancellationRecovery
+        ? "cancelled"
+        : permittedContext.handoffOrderPreviousStatus,
+    handoffPhasePreviousStatus: committedCancellationRecovery
+      ? "cancelled"
+      : "qc_passed",
+    handoffPhasePreviousResultId: committedCancellationRecovery
+      ? "phase-cancelled-result-1"
+      : permittedContext.handoffPhasePreviousResultId,
+    handoffPhaseCurrentStateCommandKey: committedCancellationRecovery
+      ? "phase-cancelled-command-1"
+      : permittedContext.handoffPhaseCurrentStateCommandKey,
+    handoffExpectedPhase: committedCancellationRecovery
+      ? {
+          ...permittedContext.handoffExpectedPhase,
+          status: "cancelled",
+          resultId: "phase-cancelled-result-1",
+          currentStateCommandKey: "phase-cancelled-command-1",
+        }
+      : permittedContext.handoffExpectedPhase,
+    handoffJobPreviousStatus: committedCancellationRecovery
+      ? "cancelled"
+      : permittedContext.handoffJobPreviousStatus,
+    handoffSlots: committedCancellationRecovery
+      ? permittedContext.handoffSlots.map((slot) => ({
+          ...slot,
+          previousOutcome: "cancelled",
+          targetOutcome: "pending",
+        }))
+      : permittedContext.handoffSlots,
+    handoffJobs: committedCancellationRecovery
+      ? permittedContext.handoffJobs.map((job) => ({
+          ...job,
+          previousStatus: "cancelled",
+        }))
+      : permittedContext.handoffJobs,
+    jobHandoffExpectedJob: committedCancellationRecovery
+      ? {
+          ...permittedContext.jobHandoffExpectedJob,
+          status: "cancelled",
+          cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+          cancellationReason: "order_cancelled",
+          currentStateCommandKey: "job-cancelled-command-1",
+          resultId: "job-cancelled-result-1",
+        }
+      : permittedContext.jobHandoffExpectedJob,
+    jobHandoffPreviousStatus: committedCancellationRecovery
+      ? "cancelled"
+      : permittedContext.jobHandoffPreviousStatus,
+    jobHandoffCurrentStateCommandKey: committedCancellationRecovery
+      ? "job-cancelled-command-1"
+      : permittedContext.jobHandoffCurrentStateCommandKey,
+    jobHandoffPreviousResultId: committedCancellationRecovery
+      ? "job-cancelled-result-1"
+      : permittedContext.jobHandoffPreviousResultId,
+    jobHandoffResultId: committedCancellationRecovery
+      ? permittedContext.cancellationRaceHandoffResultId
+      : permittedContext.jobHandoffResultId,
+    jobHandoffJobResultId: committedCancellationRecovery
+      ? permittedContext.cancellationRaceHandoffResultId
+      : permittedContext.jobHandoffJobResultId,
     cancellationRacePreviousOrderResultId: unauthorizedHandoffReconciliation
       ? "order-awaiting_balance-result-1"
-      : permittedContext.cancellationRacePreviousOrderResultId,
+      : committedCancellationRecovery
+        ? "order-cancelled-result-1"
+        : permittedContext.cancellationRacePreviousOrderResultId,
     cancellationRaceCurrentOrderStateCommandKey:
       unauthorizedHandoffReconciliation
         ? "order-awaiting_balance-command-1"
-        : permittedContext.cancellationRaceCurrentOrderStateCommandKey,
+        : committedCancellationRecovery
+          ? "order-cancelled-command-1"
+          : permittedContext.cancellationRaceCurrentOrderStateCommandKey,
     cancellationRaceExpectedOrder: {
       ...permittedContext.cancellationRaceExpectedOrder,
       status: unauthorizedHandoffReconciliation
         ? "awaiting_balance"
-        : permittedContext.cancellationRaceExpectedOrder.status,
+        : committedCancellationRecovery
+          ? "cancelled"
+          : permittedContext.cancellationRaceExpectedOrder.status,
       resultId: unauthorizedHandoffReconciliation
         ? "order-awaiting_balance-result-1"
-        : permittedContext.cancellationRaceExpectedOrder.resultId,
+        : committedCancellationRecovery
+          ? "order-cancelled-result-1"
+          : permittedContext.cancellationRaceExpectedOrder.resultId,
       currentStateCommandKey: unauthorizedHandoffReconciliation
         ? "order-awaiting_balance-command-1"
-        : permittedContext.cancellationRaceExpectedOrder.currentStateCommandKey,
+        : committedCancellationRecovery
+          ? "order-cancelled-command-1"
+          : permittedContext.cancellationRaceExpectedOrder
+              .currentStateCommandKey,
     },
-    cancellationRacePreviousShipmentResultId:
-      current === "cancelled" && target === "handed_over"
-        ? "shipment-cancelled-result-1"
-        : permittedContext.cancellationRacePreviousShipmentResultId,
-    cancellationRaceCurrentStateCommandKey:
-      current === "cancelled" && target === "handed_over"
-        ? "shipment-cancelled-command-1"
-        : permittedContext.cancellationRaceCurrentStateCommandKey,
-    cancellationRaceExpectedShipment:
-      current === "cancelled" && target === "handed_over"
-        ? {
-            ...permittedContext.cancellationRaceExpectedShipment,
-            status: "cancelled",
-            providerVoidId:
-              permittedContext.cancellationRaceSelectedVoidEvent.id,
-            providerVoidedAt:
-              permittedContext.cancellationRaceSelectedVoidEvent.verifiedAt,
-            cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
-            resultId: "shipment-cancelled-result-1",
-            currentStateCommandKey: "shipment-cancelled-command-1",
-          }
-        : permittedContext.cancellationRaceExpectedShipment,
-    cancellationRaceResultShipmentPreviousStatus:
-      current === "cancelled" && target === "handed_over"
-        ? "cancelled"
-        : permittedContext.cancellationRaceResultShipmentPreviousStatus,
+    cancellationRacePreviousShipmentResultId: committedCancellationRecovery
+      ? "shipment-cancelled-result-1"
+      : permittedContext.cancellationRacePreviousShipmentResultId,
+    cancellationRaceCurrentStateCommandKey: committedCancellationRecovery
+      ? "shipment-cancelled-command-1"
+      : permittedContext.cancellationRaceCurrentStateCommandKey,
+    cancellationRaceExpectedShipment: committedCancellationRecovery
+      ? {
+          ...permittedContext.cancellationRaceExpectedShipment,
+          status: "cancelled",
+          providerVoidId: permittedContext.cancellationRaceSelectedVoidEvent.id,
+          providerVoidedAt:
+            permittedContext.cancellationRaceSelectedVoidEvent.verifiedAt,
+          cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+          resultId: "shipment-cancelled-result-1",
+          currentStateCommandKey: "shipment-cancelled-command-1",
+        }
+      : permittedContext.cancellationRaceExpectedShipment,
+    cancellationRaceResultShipmentPreviousStatus: committedCancellationRecovery
+      ? "cancelled"
+      : permittedContext.cancellationRaceResultShipmentPreviousStatus,
+    cancellationRaceCommittedCancellation: committedCancellationRecovery,
     cancellationRaceHandoffKind: unauthorizedHandoffReconciliation
       ? "unauthorized_reconciliation"
       : current === "packed" && target === "handed_over"
@@ -4988,6 +5075,7 @@ function postVoidCancellationRaceShipmentSource(
   const currentStateCommandKey = `shipment-cancelled-command-${suffix}`;
   return {
     ...source,
+    cancellationRaceCommittedCancellation: false,
     cancellationRacePreviousShipmentResultId: previousShipmentResultId,
     cancellationRaceCurrentStateCommandKey: currentStateCommandKey,
     cancellationRaceExpectedShipment: {
@@ -5006,6 +5094,10 @@ function postVoidCancellationRaceShipmentSource(
     cancellationRaceSelectedVoidEvent: {
       ...permittedContext.cancellationRaceSelectedVoidEvent,
       shipmentId,
+    },
+    cancellationRaceResultShipment: {
+      ...permittedContext.cancellationRaceResultShipment,
+      id: shipmentId,
     },
   } as const;
 }
@@ -5216,6 +5308,28 @@ function commandAnchors(
       aggregateId: "phase-1",
       currentStateCommandKey: "phase-qc_passed-command-1",
       currentStateResultId: "phase-qc_passed-result-1",
+    };
+  }
+  if (
+    policy.name === "Order" &&
+    current === "cancelled" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "order-1",
+      currentStateCommandKey: "order-cancelled-command-1",
+      currentStateResultId: "order-cancelled-result-1",
+    };
+  }
+  if (
+    policy.name === "OrderPhase(single)" &&
+    current === "cancelled" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "phase-1",
+      currentStateCommandKey: "phase-cancelled-command-1",
+      currentStateResultId: "phase-cancelled-result-1",
     };
   }
   if (
@@ -5521,6 +5635,17 @@ function commandAnchors(
       aggregateId: "job-1",
       currentStateCommandKey: "job-packed-command-1",
       currentStateResultId: "job-packed-result-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
+    current === "cancelled" &&
+    target === "handed_over"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-cancelled-command-1",
+      currentStateResultId: "job-cancelled-result-1",
     };
   }
   if (
@@ -9288,6 +9413,7 @@ describe("v0 lifecycle policy tables", () => {
       ["createdPaymentVoidVoidedPayment", "targetStatus", "failed"],
       ["createdPaymentVoidVoidedPayment", "providerIntentId", "intent-1"],
       ["createdPaymentVoidVoidedPayment", "captureAuthorized", true],
+      ["createdPaymentVoidVoidedPayment", "captureCutoffAt", null],
       ["createdPaymentVoidVoidedPayment", "immutable", false],
       ["initialCaptureCloseExpectedOrder", "id", "order-2"],
       ["initialCaptureCloseExpectedOrder", "status", "draft"],
@@ -9914,6 +10040,55 @@ describe("v0 lifecycle policy tables", () => {
       previous: "awaiting_balance",
       current: "shipped",
     });
+  });
+
+  it("rejects a cancelled Order recovery presented as an active-state race", () => {
+    const context = contextForTransition("shipped", "cancelled");
+    expect(() =>
+      transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "cancelled", "shipped"),
+        current: "cancelled",
+        target: "shipped",
+        idempotencyKey: "cancelled-order-active-race-bypass",
+        context: {
+          ...context,
+          cancellationRaceCommittedCancellation: false,
+          cancellationRacePreviousOrderResultId: "order-ready_to_ship-result-1",
+          cancellationRaceCurrentOrderStateCommandKey:
+            "order-ready_to_ship-command-1",
+          cancellationRaceExpectedOrder: {
+            ...context.cancellationRaceExpectedOrder,
+            status: "ready_to_ship",
+            resultId: "order-ready_to_ship-result-1",
+            currentStateCommandKey: "order-ready_to_ship-command-1",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a cancelled phase recovery presented as an active-state race", () => {
+    const context = contextForTransition("shipped", "cancelled");
+    expect(() =>
+      transition(singleOrderPhasePolicy, {
+        ...commandAnchors(singleOrderPhasePolicy, "cancelled", "shipped"),
+        current: "cancelled",
+        target: "shipped",
+        idempotencyKey: "cancelled-phase-active-race-bypass",
+        context: {
+          ...context,
+          cancellationRaceCommittedCancellation: false,
+          handoffPhasePreviousResultId: "phase-qc_passed-result-1",
+          handoffPhaseCurrentStateCommandKey: "phase-qc_passed-command-1",
+          handoffExpectedPhase: {
+            ...context.handoffExpectedPhase,
+            status: "qc_passed",
+            resultId: "phase-qc_passed-result-1",
+            currentStateCommandKey: "phase-qc_passed-command-1",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it("requires zero amount due before reconciling an unauthorized handoff", () => {
@@ -11763,6 +11938,27 @@ describe("v0 lifecycle policy tables", () => {
               cancellationRaceAuthorizationResultStatus:
                 "unauthorized_reconciliation",
               handoffOrderPreviousStatus: "awaiting_balance",
+              handoffPhasePreviousStatus: "qc_passed",
+              handoffJobPreviousStatus: "packed",
+              handoffSlots: base.handoffSlots.map(
+                ({ id, shipmentId, orderId, phaseId, jobId }) => ({
+                  id,
+                  shipmentId,
+                  orderId,
+                  phaseId,
+                  jobId,
+                }),
+              ),
+              handoffJobs: base.handoffJobs.map(
+                ({ id, shipmentId, orderId, phaseId }) => ({
+                  id,
+                  shipmentId,
+                  orderId,
+                  phaseId,
+                  previousStatus: "packed",
+                  targetStatus: "handed_over",
+                }),
+              ),
             }
           : kind === "replacement"
             ? {
@@ -11870,6 +12066,42 @@ describe("v0 lifecycle policy tables", () => {
           ...contextForTransition("handed_over", "cancelled")
             .cancellationRaceExpectedShipment,
           cancelledAt: Instant.parse("2026-01-01T00:10:59.999Z"),
+        },
+      },
+    ],
+    [
+      "a mismatched resulting handoff timestamp",
+      {
+        cancellationRaceResultShipment: {
+          ...permittedContext.cancellationRaceResultShipment,
+          handedOverAt: Instant.parse("2026-01-01T00:12:00.001Z"),
+        },
+      },
+    ],
+    [
+      "a foreign resulting Shipment",
+      {
+        cancellationRaceResultShipment: {
+          ...permittedContext.cancellationRaceResultShipment,
+          id: "shipment-2",
+        },
+      },
+    ],
+    [
+      "a foreign acceptance carrier",
+      {
+        cancellationRaceAcceptanceEvent: {
+          ...permittedContext.cancellationRaceAcceptanceEvent,
+          carrier: "carrier-2",
+        },
+      },
+    ],
+    [
+      "a foreign void carrier",
+      {
+        cancellationRaceSelectedVoidEvent: {
+          ...permittedContext.cancellationRaceSelectedVoidEvent,
+          carrier: "carrier-2",
         },
       },
     ],
@@ -27350,6 +27582,44 @@ describe("v0 lifecycle policy tables", () => {
       current: "handed_over",
     });
   });
+
+  it("treats cancelled Jobs as terminal except during committed scan recovery", () => {
+    expect(isTerminal(jobPolicy, "cancelled")).toBe(true);
+    expect(
+      isTerminal(
+        jobPolicy,
+        "cancelled",
+        contextForTransition("handed_over", "cancelled"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["cancelledAt", undefined],
+    ["cancellationReason", undefined],
+    ["cancellationReason", "claim_withdrawn"],
+    ["cancelledAt", Instant.parse("2026-01-01T00:10:59.999Z")],
+  ] as const)(
+    "rejects committed cancellation Job recovery without %s evidence",
+    (field, value) => {
+      const context = contextForTransition("handed_over", "cancelled");
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "cancelled", "handed_over"),
+          current: "cancelled",
+          target: "handed_over",
+          idempotencyKey: `job-committed-cancellation-missing-${field}`,
+          context: {
+            ...context,
+            jobHandoffExpectedJob: {
+              ...context.jobHandoffExpectedJob,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each([
     ["id", "shipment-2"],
