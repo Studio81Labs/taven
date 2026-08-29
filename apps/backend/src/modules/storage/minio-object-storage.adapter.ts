@@ -91,6 +91,9 @@ export class MinioObjectStorageAdapter implements ObjectStorage {
     input: ObjectStorageUploadRequest,
   ): Promise<SignedObjectUrl> {
     assertStorageObjectKey(input.objectKey);
+    if (!Number.isSafeInteger(input.contentLength) || input.contentLength < 1) {
+      throw new Error("upload content length must be a positive safe integer");
+    }
     const { signingDate, expiresIn, signedExpiresAt } = signingWindow(
       input.expiresAt,
     );
@@ -99,6 +102,7 @@ export class MinioObjectStorageAdapter implements ObjectStorage {
       Bucket: this.config.bucket,
       Key: input.objectKey,
       ContentType: input.contentType,
+      ContentLength: input.contentLength,
       ChecksumAlgorithm: "SHA256",
       ChecksumSHA256: checksum,
     });
@@ -112,6 +116,7 @@ export class MinioObjectStorageAdapter implements ObjectStorage {
       method: "PUT",
       requiredHeaders: {
         "content-type": input.contentType,
+        "content-length": String(input.contentLength),
         "x-amz-checksum-sha256": checksum,
       },
       expiresAt: signedExpiresAt,

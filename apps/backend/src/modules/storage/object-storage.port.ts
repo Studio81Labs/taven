@@ -8,6 +8,7 @@ export interface ObjectStorageUploadRequest {
   objectKey: string;
   contentType: string;
   contentHash: string;
+  contentLength: number;
   expiresAt: Date;
 }
 

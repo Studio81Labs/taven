@@ -34,13 +34,14 @@ describe("MinioObjectStorageAdapter", () => {
     vi.mocked(getSignedUrl).mockResolvedValue("https://signed.example/object");
   });
 
-  it("binds type and SHA-256 checksum into a signed upload", async () => {
+  it("binds size and SHA-256 checksum into a signed upload", async () => {
     const storage = new MinioObjectStorageAdapter(config, client);
     const expiresAt = new Date(Date.now() + 60_000);
     const result = await storage.createUploadUrl({
       objectKey,
       contentType: "model/stl",
       contentHash: hash,
+      contentLength: 12,
       expiresAt,
     });
 
@@ -49,6 +50,7 @@ describe("MinioObjectStorageAdapter", () => {
       method: "PUT",
       requiredHeaders: {
         "content-type": "model/stl",
+        "content-length": "12",
         "x-amz-checksum-sha256": Buffer.from(hash, "hex").toString("base64"),
       },
     });
@@ -58,6 +60,9 @@ describe("MinioObjectStorageAdapter", () => {
       expect.any(PutObjectCommand),
       expect.objectContaining({ expiresIn: expect.any(Number) }),
     );
+    expect(
+      (vi.mocked(getSignedUrl).mock.calls[0]?.[1] as PutObjectCommand).input,
+    ).toMatchObject({ ContentLength: 12 });
     expect(
       vi.mocked(getSignedUrl).mock.calls[0]?.[2]?.expiresIn,
     ).toBeGreaterThan(0);

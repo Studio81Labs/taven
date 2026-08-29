@@ -545,6 +545,7 @@ export class UploadService {
       objectKey: quarantineKey,
       contentType: metadata.contentType,
       contentHash: metadata.sha256,
+      contentLength: metadata.sizeBytes,
       expiresAt,
     });
     return {
@@ -553,10 +554,7 @@ export class UploadService {
       accessToken: token,
       uploadUrl: signed.url,
       expiresAt: expiresAt.toISOString(),
-      requiredHeaders: {
-        ...signed.requiredHeaders,
-        "content-length": String(metadata.sizeBytes),
-      },
+      requiredHeaders: signed.requiredHeaders,
     };
   }
 

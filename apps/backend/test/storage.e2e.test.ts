@@ -76,6 +76,9 @@ describe("secure object storage and retention", () => {
       "STL",
       "model/stl",
     );
+    expect(
+      new URL(created.uploadUrl).searchParams.get("X-Amz-SignedHeaders"),
+    ).toContain("content-length");
     cleanupKeys.add(modelSourceObjectKey(created.assetId));
     await putSigned(created, bytes);
 
