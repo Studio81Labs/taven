@@ -7778,7 +7778,12 @@ BEGIN
                    AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_capture_id)
            ))
            OR (NEW."kind" = 'PAYMENT_FAILED' AND (
-               target_payment_status NOT IN ('PENDING', 'FAILED')
+               target_payment_status NOT IN (
+                   'PENDING', 'FAILED', 'VOIDED', 'CAPTURED',
+                   'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'
+               )
+               OR target_provider_intent_id IS NULL
+               OR target_provider_intent_id !~ '[^[:space:]]'
                OR NEW."provider_transaction_id" IS DISTINCT FROM target_provider_intent_id
            )) THEN
             RAISE EXCEPTION 'Payment provider event does not match its exact Payment outcome scope'
@@ -7849,9 +7854,14 @@ BEGIN
                SELECT 1
                FROM "payments" payment
                WHERE payment."id" = NEW."payment_id"
-                 AND payment."status" = 'FAILED'
+                 AND payment."status" IN (
+                     'FAILED', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
+                     'PARTIALLY_REFUNDED', 'REFUNDED'
+                 )
                  AND payment."provider" = NEW."provider"
                  AND payment."provider_intent_id" = NEW."provider_transaction_id"
+                 AND payment."requested_amount_minor" = NEW."amount_minor"
+                 AND payment."currency" = NEW."currency"
            ))
        OR (NEW."kind" = 'REFUND_SUCCEEDED'
            AND NOT EXISTS (
