@@ -1126,6 +1126,7 @@ export class PersistenceFactory {
     foundation: PersistenceFoundation,
     providerCaptureId?: string,
     capturedAt = new Date(),
+    providerEventAlreadyPersisted = false,
   ): Promise<void> {
     const existing = await this.sql.query<{ status: string }>(
       'SELECT "status"::text FROM "payments" WHERE "id" = $1',
@@ -1144,12 +1145,14 @@ export class PersistenceFactory {
     const resolvedProviderCaptureId =
       providerCaptureId ??
       `capture-${this.hash(foundation.paymentId).slice(0, 32)}`;
-    await this.persistPaymentProviderEvent(
-      foundation.paymentId,
-      "PAYMENT_CAPTURED",
-      resolvedProviderCaptureId,
-      capturedAt,
-    );
+    if (!providerEventAlreadyPersisted) {
+      await this.persistPaymentProviderEvent(
+        foundation.paymentId,
+        "PAYMENT_CAPTURED",
+        resolvedProviderCaptureId,
+        capturedAt,
+      );
+    }
 
     await this.sql.query(
       `UPDATE payments
@@ -1297,13 +1300,22 @@ export class PersistenceFactory {
     if (!existing.rows[0]) {
       await this.finalizePayment(foundation);
     }
+    const activatedAt = new Date();
+    const resolvedProviderCaptureId =
+      providerCaptureId ??
+      `capture-${this.hash(foundation.paymentId).slice(0, 32)}`;
+    await this.persistPaymentProviderEvent(
+      foundation.paymentId,
+      "PAYMENT_CAPTURED",
+      resolvedProviderCaptureId,
+      activatedAt,
+    );
     await this.sql.query(
       `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" IMMEDIATE`,
     );
     await this.sql.query(
       `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" DEFERRED`,
     );
-    const activatedAt = new Date();
     await this.sql.query(
       `UPDATE orders
        SET status = 'CONFIRMED', confirmed_at = $2, updated_at = $2
@@ -1316,7 +1328,12 @@ export class PersistenceFactory {
        WHERE id = $1`,
       [foundation.orderPhaseId, activatedAt],
     );
-    await this.capturePayment(foundation, providerCaptureId, activatedAt);
+    await this.capturePayment(
+      foundation,
+      resolvedProviderCaptureId,
+      activatedAt,
+      true,
+    );
   }
 
   async planProduction(

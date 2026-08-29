@@ -632,8 +632,8 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_order_snapshot_fkey" FOREIGN KEY
 ALTER TABLE "payments" ADD CONSTRAINT "payments_snapshot_currency_fkey" FOREIGN KEY ("price_snapshot_id", "currency") REFERENCES "price_snapshots"("id", "currency") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payments" ADD CONSTRAINT "payments_schedule_contract_fkey" FOREIGN KEY ("payment_schedule_id", "price_snapshot_id", "role", "requested_amount_minor") REFERENCES "payment_schedules"("id", "price_snapshot_id", "role", "gross_amount_minor") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_refund_transaction_id_fkey" FOREIGN KEY ("refund_transaction_id") REFERENCES "refund_transactions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_refund_transaction_id_fkey" FOREIGN KEY ("refund_transaction_id") REFERENCES "refund_transactions"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_quote_id_fkey" FOREIGN KEY ("quote_id") REFERENCES "quotes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -7268,6 +7268,58 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    evidence_now timestamptz := clock_timestamp();
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Payment provider events are immutable audit evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_immutable_check';
+    END IF;
+
+    IF NEW."occurred_at" > evidence_now + interval '5 seconds'
+       OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
+       OR NEW."verified_at" > evidence_now + interval '5 seconds'
+       OR NEW."created_at" > evidence_now + interval '5 seconds'
+       OR NEW."payload_hash" IS DISTINCT FROM
+          encode(sha256(convert_to(NEW."payload"::text, 'UTF8')), 'hex')
+       OR NEW."payload" ->> 'paymentId' IS DISTINCT FROM NEW."payment_id"::text
+       OR NEW."payload" ->> 'providerEventId' IS DISTINCT FROM NEW."provider_event_id"
+       OR NEW."payload" ->> 'providerTransactionId' IS DISTINCT FROM NEW."provider_transaction_id"
+       OR NEW."payload" ->> 'kind' IS DISTINCT FROM NEW."kind"::text
+       OR NEW."payload" ->> 'amountMinor' IS DISTINCT FROM NEW."amount_minor"::text
+       OR NEW."payload" ->> 'currency' IS DISTINCT FROM NEW."currency"
+       OR (
+           NEW."kind" IN ('PAYMENT_CAPTURED', 'PAYMENT_FAILED')
+           AND (
+               NEW."refund_transaction_id" IS NOT NULL
+               OR NEW."payload" ? 'refundTransactionId'
+           )
+       )
+       OR (
+           NEW."kind" IN ('REFUND_SUCCEEDED', 'REFUND_FAILED')
+           AND (
+               NEW."refund_transaction_id" IS NULL
+               OR NEW."payload" ->> 'refundTransactionId' IS DISTINCT FROM
+                  NEW."refund_transaction_id"::text
+           )
+       ) THEN
+        RAISE EXCEPTION 'Payment provider event must contain exact immutable payload evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "payment_provider_events_protected"
+BEFORE INSERT OR UPDATE OR DELETE ON "payment_provider_events"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_provider_event();
+
+CREATE FUNCTION taven_validate_payment_provider_event_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
     target_provider varchar(100);
     target_payment_status "payment_status";
     target_requested_amount bigint;
@@ -7280,11 +7332,44 @@ DECLARE
     target_refund_amount bigint;
     target_provider_refund_id varchar(255);
     target_refund_requested_at timestamptz;
-    evidence_now timestamptz := clock_timestamp();
 BEGIN
-    IF TG_OP <> 'INSERT' THEN
-        RAISE EXCEPTION 'Payment provider events are immutable audit evidence'
-            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_immutable_check';
+    SELECT payment."order_id"
+    INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = NEW."payment_id";
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Payment provider event parent Payment does not exist'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+    END IF;
+
+    -- The rank-0 receipt identity is reserved by the row and unique index
+    -- before this AFTER trigger acquires every parent in global rank order.
+    PERFORM 1
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "order_phases" phase
+    WHERE phase."order_id" = target_order_id
+    ORDER BY phase."id"
+    FOR UPDATE;
+
+    IF NEW."kind" IN ('REFUND_SUCCEEDED', 'REFUND_FAILED') THEN
+        -- Rank-6 canonical ordering places refund_transaction before payment.
+        SELECT refund."payment_id", refund."status", refund."amount_minor",
+               refund."provider_refund_id", refund."requested_at"
+        INTO target_refund_payment_id, target_refund_status, target_refund_amount,
+             target_provider_refund_id, target_refund_requested_at
+        FROM "refund_transactions" refund
+        WHERE refund."id" = NEW."refund_transaction_id"
+        FOR UPDATE;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Payment provider event parent RefundTransaction does not exist'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
     END IF;
 
     SELECT payment."provider", payment."status", payment."requested_amount_minor",
@@ -7299,28 +7384,14 @@ BEGIN
 
     IF NOT FOUND
        OR NEW."provider" IS DISTINCT FROM target_provider
-       OR NEW."occurred_at" < target_payment_created_at
-       OR NEW."occurred_at" > evidence_now + interval '5 seconds'
-       OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
-       OR NEW."verified_at" > evidence_now + interval '5 seconds'
-       OR NEW."created_at" > evidence_now + interval '5 seconds'
-       OR NEW."payload_hash" IS DISTINCT FROM
-          encode(sha256(convert_to(NEW."payload"::text, 'UTF8')), 'hex')
-       OR NEW."payload" ->> 'paymentId' IS DISTINCT FROM NEW."payment_id"::text
-       OR NEW."payload" ->> 'providerEventId' IS DISTINCT FROM NEW."provider_event_id"
-       OR NEW."payload" ->> 'providerTransactionId' IS DISTINCT FROM NEW."provider_transaction_id"
-       OR NEW."payload" ->> 'kind' IS DISTINCT FROM NEW."kind"::text
-       OR NEW."payload" ->> 'amountMinor' IS DISTINCT FROM NEW."amount_minor"::text
-       OR NEW."payload" ->> 'currency' IS DISTINCT FROM NEW."currency" THEN
-        RAISE EXCEPTION 'Payment provider event must contain exact verified parent and payload evidence'
+       OR NEW."occurred_at" < target_payment_created_at THEN
+        RAISE EXCEPTION 'Payment provider event does not match its exact Payment parent'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
     END IF;
 
     IF NEW."kind" IN ('PAYMENT_CAPTURED', 'PAYMENT_FAILED') THEN
-        IF NEW."refund_transaction_id" IS NOT NULL
-           OR NEW."amount_minor" IS DISTINCT FROM target_requested_amount
+        IF NEW."amount_minor" IS DISTINCT FROM target_requested_amount
            OR NEW."currency" IS DISTINCT FROM target_currency
-           OR NEW."payload" ? 'refundTransactionId'
            OR (NEW."kind" = 'PAYMENT_CAPTURED' AND (
                target_payment_status NOT IN (
                    'PENDING', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
@@ -7337,21 +7408,10 @@ BEGIN
                 USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
         END IF;
     ELSE
-        SELECT refund."payment_id", refund."status", refund."amount_minor",
-               refund."provider_refund_id", refund."requested_at"
-        INTO target_refund_payment_id, target_refund_status, target_refund_amount,
-             target_provider_refund_id, target_refund_requested_at
-        FROM "refund_transactions" refund
-        WHERE refund."id" = NEW."refund_transaction_id"
-        FOR UPDATE;
-
-        IF NOT FOUND
-           OR target_refund_payment_id IS DISTINCT FROM NEW."payment_id"
+        IF target_refund_payment_id IS DISTINCT FROM NEW."payment_id"
            OR NEW."amount_minor" IS DISTINCT FROM target_refund_amount
            OR NEW."currency" IS DISTINCT FROM target_currency
            OR NEW."occurred_at" < target_refund_requested_at
-           OR NEW."payload" ->> 'refundTransactionId' IS DISTINCT FROM
-              NEW."refund_transaction_id"::text
            OR (target_provider_refund_id IS NOT NULL
                AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_refund_id)
            OR (NEW."kind" = 'REFUND_SUCCEEDED'
@@ -7363,13 +7423,13 @@ BEGIN
         END IF;
     END IF;
 
-    RETURN NEW;
+    RETURN NULL;
 END;
 $$;
 
-CREATE TRIGGER "payment_provider_events_protected"
-BEFORE INSERT OR UPDATE OR DELETE ON "payment_provider_events"
-FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_provider_event();
+CREATE TRIGGER "payment_provider_events_scope_validated"
+AFTER INSERT ON "payment_provider_events"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_payment_provider_event_scope();
 
 CREATE FUNCTION taven_reconcile_payment_provider_event_consumption()
 RETURNS trigger

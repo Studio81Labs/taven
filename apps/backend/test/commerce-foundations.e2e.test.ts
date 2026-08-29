@@ -12879,10 +12879,189 @@ describe("commerce persistence foundations", () => {
     }
   });
 
+  it("reserves payment receipts before locking their parents in rank order", async () => {
+    const setup = await pool.connect();
+    const orderHolder = await pool.connect();
+    const receiptWriter = await pool.connect();
+    let receiptInsert: Promise<string> | undefined;
+    try {
+      const fixtureScope = `${scope}:payment-receipt-lock-order`;
+      const fixtures = new PersistenceFactory(setup, fixtureScope);
+      await setup.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "payment-receipt-lock-order",
+      );
+      await createCurrentPlanAndPayment(setup, fixtures, foundation);
+      await setup.query("COMMIT");
+
+      await orderHolder.query("BEGIN");
+      await orderHolder.query(`SELECT 1 FROM orders WHERE id = $1 FOR UPDATE`, [
+        foundation.orderId,
+      ]);
+
+      await receiptWriter.query("BEGIN");
+      await receiptWriter.query("SET LOCAL statement_timeout = '3s'");
+      const receiptWriterPid = (
+        await receiptWriter.query<{ pid: number }>(
+          `SELECT pg_backend_pid() AS pid`,
+        )
+      ).rows[0]?.pid;
+      if (!receiptWriterPid) {
+        throw new Error("payment receipt backend pid is unavailable");
+      }
+      const writerFixtures = new PersistenceFactory(
+        receiptWriter,
+        fixtureScope,
+      );
+      receiptInsert = writerFixtures.persistPaymentProviderEvent(
+        foundation.paymentId,
+        "PAYMENT_CAPTURED",
+        "lock-ordered-provider-capture",
+        new Date(),
+      );
+
+      let receiptWaitsForOrder = false;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const activity = await orderHolder.query<{
+          wait_event_type: string | null;
+        }>(
+          `SELECT wait_event_type
+           FROM pg_stat_activity
+           WHERE pid = $1`,
+          [receiptWriterPid],
+        );
+        if (activity.rows[0]?.wait_event_type === "Lock") {
+          receiptWaitsForOrder = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(receiptWaitsForOrder).toBe(true);
+
+      await expect(
+        orderHolder.query(
+          `SELECT 1 FROM payments WHERE id = $1 FOR UPDATE NOWAIT`,
+          [foundation.paymentId],
+        ),
+      ).resolves.toBeDefined();
+
+      await orderHolder.query("ROLLBACK");
+      await expect(receiptInsert).resolves.toBeDefined();
+      await receiptWriter.query("ROLLBACK");
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await orderHolder.query("ROLLBACK").catch(() => undefined);
+      await receiptWriter.query("ROLLBACK").catch(() => undefined);
+      await receiptInsert?.catch(() => undefined);
+      setup.release();
+      orderHolder.release();
+      receiptWriter.release();
+    }
+  });
+
+  it("locks refund receipts before their parent payment at the shared rank", async () => {
+    const setup = await pool.connect();
+    const refundHolder = await pool.connect();
+    const receiptWriter = await pool.connect();
+    let receiptInsert: Promise<string> | undefined;
+    try {
+      const fixtureScope = `${scope}:refund-receipt-lock-order`;
+      const fixtures = new PersistenceFactory(setup, fixtureScope);
+      await setup.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "refund-receipt-lock-order",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        setup,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(setup, fixtures, foundation, productions);
+      await cancelOrderBeforeHandoff(setup, foundation.orderId);
+      const refundId = (
+        await setup.query<{ id: string }>(
+          `SELECT id FROM refund_transactions
+           WHERE payment_id = $1
+             AND reason = 'CUSTOMER_CANCELLATION'
+             AND status = 'PENDING'`,
+          [foundation.paymentId],
+        )
+      ).rows[0]?.id;
+      if (!refundId) {
+        throw new Error("refund lock-order fixture is missing");
+      }
+      await setup.query("COMMIT");
+
+      await refundHolder.query("BEGIN");
+      await refundHolder.query(
+        `SELECT 1 FROM refund_transactions WHERE id = $1 FOR UPDATE`,
+        [refundId],
+      );
+
+      await receiptWriter.query("BEGIN");
+      await receiptWriter.query("SET LOCAL statement_timeout = '3s'");
+      const receiptWriterPid = (
+        await receiptWriter.query<{ pid: number }>(
+          `SELECT pg_backend_pid() AS pid`,
+        )
+      ).rows[0]?.pid;
+      if (!receiptWriterPid) {
+        throw new Error("refund receipt backend pid is unavailable");
+      }
+      const writerFixtures = new PersistenceFactory(
+        receiptWriter,
+        fixtureScope,
+      );
+      receiptInsert = writerFixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_SUCCEEDED",
+        "lock-ordered-provider-refund",
+        new Date(),
+      );
+
+      let receiptWaitsForRefund = false;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const activity = await refundHolder.query<{
+          wait_event_type: string | null;
+        }>(
+          `SELECT wait_event_type
+           FROM pg_stat_activity
+           WHERE pid = $1`,
+          [receiptWriterPid],
+        );
+        if (activity.rows[0]?.wait_event_type === "Lock") {
+          receiptWaitsForRefund = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(receiptWaitsForRefund).toBe(true);
+      await expect(
+        refundHolder.query(
+          `SELECT 1 FROM payments WHERE id = $1 FOR UPDATE NOWAIT`,
+          [foundation.paymentId],
+        ),
+      ).resolves.toBeDefined();
+
+      await refundHolder.query("ROLLBACK");
+      await expect(receiptInsert).resolves.toBeDefined();
+      await receiptWriter.query("ROLLBACK");
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await refundHolder.query("ROLLBACK").catch(() => undefined);
+      await receiptWriter.query("ROLLBACK").catch(() => undefined);
+      await receiptInsert?.catch(() => undefined);
+      setup.release();
+      refundHolder.release();
+      receiptWriter.release();
+    }
+  });
+
   it("serializes refunded order closure with concurrent refund completion without deadlocking", async () => {
     const setup = await pool.connect();
     const closing = await pool.connect();
     const refunding = await pool.connect();
+    let refundEventInsert: Promise<string> | undefined;
     try {
       const fixtures = new PersistenceFactory(
         setup,
@@ -12934,26 +13113,11 @@ describe("commerce persistence foundations", () => {
         refunding,
         `${scope}:refund-completion-concurrency`,
       );
-      await refundingFixtures.persistRefundProviderEvent(
+      refundEventInsert = refundingFixtures.persistRefundProviderEvent(
         refundId,
         "REFUND_SUCCEEDED",
         "concurrent-provider-refund",
         completedAt,
-      );
-      await refunding.query(
-        `UPDATE refund_transactions
-         SET status = 'SUCCEEDED', provider_refund_id = $2,
-             completed_at = $3, updated_at = $3
-         WHERE id = $1`,
-        [refundId, "concurrent-provider-refund", completedAt],
-      );
-      await refunding.query(
-        `UPDATE payments SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
-        [foundation.paymentId, completedAt],
-      );
-      const blockedRefundReconciliation = refunding.query(
-        `SET CONSTRAINTS
-           "refunds_customer_cancellation_order_reconciled" IMMEDIATE`,
       );
 
       let refundIsWaitingForOrder = false;
@@ -12971,6 +13135,18 @@ describe("commerce persistence foundations", () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       expect(refundIsWaitingForOrder).toBe(true);
+      await expect(
+        closing.query(
+          `SELECT 1 FROM refund_transactions WHERE id = $1 FOR UPDATE NOWAIT`,
+          [refundId],
+        ),
+      ).resolves.toBeDefined();
+      await expect(
+        closing.query(
+          `SELECT 1 FROM payments WHERE id = $1 FOR UPDATE NOWAIT`,
+          [foundation.paymentId],
+        ),
+      ).resolves.toBeDefined();
 
       await expect(
         closing.query(
@@ -12981,7 +13157,18 @@ describe("commerce persistence foundations", () => {
         constraint: "order_refund_completion_check",
       });
       await closing.query("ROLLBACK");
-      await expect(blockedRefundReconciliation).resolves.toBeDefined();
+      await expect(refundEventInsert).resolves.toBeDefined();
+      await refunding.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [refundId, "concurrent-provider-refund", completedAt],
+      );
+      await refunding.query(
+        `UPDATE payments SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [foundation.paymentId, completedAt],
+      );
       await refunding.query(
         `SET CONSTRAINTS
            "payments_refund_status_reconciled",
@@ -12992,6 +13179,7 @@ describe("commerce persistence foundations", () => {
       await setup.query("ROLLBACK").catch(() => undefined);
       await closing.query("ROLLBACK").catch(() => undefined);
       await refunding.query("ROLLBACK").catch(() => undefined);
+      await refundEventInsert?.catch(() => undefined);
       setup.release();
       closing.release();
       refunding.release();
