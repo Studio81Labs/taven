@@ -6258,6 +6258,460 @@ describe("v0 lifecycle policy tables", () => {
   });
 
   it.each([
+    ["captured", "refunded", 0n, 10_000n],
+    ["partially_refunded", "partially_refunded", 4_000n, 1_000n],
+  ] as const)(
+    "reconciles an exact late refund success from %s through %s",
+    (source, target, succeededBefore, amountMinor) => {
+      const capturedAmountMinor = 10_000n;
+      const succeededAfter = succeededBefore + amountMinor;
+      const sourceResultId = `payment-${source}-late-refund-source-result-1`;
+      const sourceStateKey = `payment-${source}-late-refund-command-1`;
+      const interimResultId = "late-refund-success-interim-result-1";
+      const interimStateKey = "late-refund-success-interim-command-1";
+      const finalResultId = "late-refund-success-result-1";
+      const refundSetBeforeId = `late-refund-set-before-${source}`;
+      const refundSetBeforeResultId = `${refundSetBeforeId}-result`;
+      const refundSetAfterId = `late-refund-set-after-${source}`;
+      const refundSetAfterResultId = `${refundSetAfterId}-result`;
+      const failureVerifiedAt = Instant.parse("2026-01-01T00:10:00.000Z");
+      const successVerifiedAt = Instant.parse("2026-01-01T00:11:00.000Z");
+      const existingSucceededRefunds =
+        succeededBefore === 0n
+          ? []
+          : [
+              {
+                id: "existing-refund-1",
+                paymentId: "payment-1",
+                status: "succeeded",
+                amountMinor: succeededBefore,
+                resultId: "existing-refund-result-1",
+                immutable: true,
+              },
+            ];
+      const refundSetBefore = {
+        id: refundSetBeforeId,
+        paymentId: "payment-1",
+        refundIds: [
+          ...existingSucceededRefunds.map(({ id }) => id),
+          "refund-1",
+        ],
+        refundSnapshots: [
+          ...existingSucceededRefunds,
+          {
+            id: "refund-1",
+            paymentId: "payment-1",
+            status: "failed",
+            amountMinor,
+            resultId: "refund-failure-event-1",
+            immutable: true,
+          },
+        ],
+        resultId: refundSetBeforeResultId,
+        immutable: true,
+      };
+      const refundSetAfter = {
+        id: refundSetAfterId,
+        paymentId: "payment-1",
+        refundIds: refundSetBefore.refundIds,
+        refundSnapshots: [
+          ...existingSucceededRefunds,
+          {
+            id: "refund-1",
+            paymentId: "payment-1",
+            status: "succeeded",
+            amountMinor,
+            resultId: finalResultId,
+            immutable: true,
+          },
+        ],
+        resultId: refundSetAfterResultId,
+        immutable: true,
+      };
+      const base = contextForTransition(target, "refund_pending");
+      const context = {
+        ...base,
+        paymentCaptureKind: "late_refund_success",
+        refundCompletionPreviousPaymentResultId: interimResultId,
+        refundCompletionCurrentStateCommandKey: interimStateKey,
+        refundCompletionResultId: finalResultId,
+        refundCompletionPaymentResultId: finalResultId,
+        refundCompletionRefundTransactionResultId: finalResultId,
+        refundCompletionProviderEventResultId: finalResultId,
+        lateRefundSuccessFailureProviderEventId: "refund-failure-event-1",
+        lateRefundSuccessProvider: "sandbox",
+        lateRefundSuccessProviderTransactionId: "provider-refund-1",
+        lateRefundSuccessAmountMinor: amountMinor,
+        lateRefundSuccessCurrency: "EUR",
+        lateRefundSuccessAttemptKey: "refund-attempt-1",
+        lateRefundSuccessCapturedAmountMinor: capturedAmountMinor,
+        lateRefundSuccessSucceededBeforeMinor: succeededBefore,
+        lateRefundSuccessSucceededAfterMinor: succeededAfter,
+        lateRefundSuccessRefundSetBeforeId: refundSetBeforeId,
+        lateRefundSuccessRefundSetBeforeResultId: refundSetBeforeResultId,
+        lateRefundSuccessRefundSetBefore: refundSetBefore,
+        lateRefundSuccessRefundSetAfterId: refundSetAfterId,
+        lateRefundSuccessRefundSetAfterResultId: refundSetAfterResultId,
+        lateRefundSuccessRefundSetAfter: refundSetAfter,
+        lateRefundSuccessSourcePaymentResultId: sourceResultId,
+        lateRefundSuccessSourceCurrentStateCommandKey: sourceStateKey,
+        lateRefundSuccessSourcePayment: {
+          id: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          role: "full",
+          status: source,
+          capturedAmountMinor,
+          succeededRefundAmountMinor: succeededBefore,
+          failedRefundTransactionId: "refund-1",
+          authoritativeRefundSetId: refundSetBeforeId,
+          authoritativeRefundSetResultId: refundSetBeforeResultId,
+          resultId: sourceResultId,
+          currentStateCommandKey: sourceStateKey,
+          immutable: true,
+        },
+        refundCompletionExpectedPayment: {
+          id: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          role: "full",
+          status: "refund_pending",
+          activeRefundTransactionId: "refund-1",
+          capturedAmountMinor,
+          succeededRefundAmountMinor: succeededAfter,
+          authoritativeRefundSetId: refundSetAfterId,
+          authoritativeRefundSetResultId: refundSetAfterResultId,
+          resultId: interimResultId,
+          currentStateCommandKey: interimStateKey,
+          immutable: true,
+        },
+        refundCompletionRefundTransaction: {
+          id: "refund-1",
+          paymentId: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          previousStatus: "failed",
+          targetStatus: "succeeded",
+          status: "succeeded",
+          provider: "sandbox",
+          providerTransactionId: "provider-refund-1",
+          amountMinor,
+          currency: "EUR",
+          idempotencyKey: "refund-attempt-1",
+          failureProviderEventId: "refund-failure-event-1",
+          providerEventId: "refund-provider-event-1",
+          completedAt: successVerifiedAt,
+          resultId: finalResultId,
+          immutable: true,
+        },
+        lateRefundSuccessFailureProviderEvent: {
+          id: "refund-failure-event-1",
+          paymentId: "payment-1",
+          refundTransactionId: "refund-1",
+          provider: "sandbox",
+          providerTransactionId: "provider-refund-1",
+          kind: "refund_failed",
+          amountMinor,
+          currency: "EUR",
+          authenticated: true,
+          verified: true,
+          verifiedAt: failureVerifiedAt,
+          immutable: true,
+        },
+        refundCompletionProviderEvent: {
+          id: "refund-provider-event-1",
+          paymentId: "payment-1",
+          refundTransactionId: "refund-1",
+          provider: "sandbox",
+          providerTransactionId: "provider-refund-1",
+          kind: "refund_succeeded",
+          amountMinor,
+          currency: "EUR",
+          status: "succeeded",
+          projectedTarget: target,
+          authenticated: true,
+          verified: true,
+          verifiedAt: successVerifiedAt,
+          resultId: finalResultId,
+          immutable: true,
+        },
+        lateRefundSuccessReconciledPayment: {
+          id: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          role: "full",
+          previousStatus: source,
+          intermediateStatus: "refund_pending",
+          targetStatus: target,
+          capturedAmountMinor,
+          succeededRefundAmountMinor: succeededAfter,
+          refundTransactionId: "refund-1",
+          authoritativeRefundSetId: refundSetAfterId,
+          authoritativeRefundSetResultId: refundSetAfterResultId,
+          resultId: finalResultId,
+          immutable: true,
+        },
+        lateRefundSuccessPaymentResultId: finalResultId,
+        lateRefundSuccessRefundTransactionResultId: finalResultId,
+        lateRefundSuccessProviderEventResultId: finalResultId,
+        lateRefundSuccessCompleted: true,
+        lateRefundSuccessAtomic: true,
+      };
+
+      expect(
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: source,
+          target: "refund_pending",
+          idempotencyKey: `late-refund-success-start-${source}`,
+          currentStateResultId: sourceResultId,
+          currentStateCommandKey: sourceStateKey,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: source,
+        current: "refund_pending",
+      });
+      expect(
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: "refund_pending",
+          target,
+          idempotencyKey: `late-refund-success-complete-${source}`,
+          currentStateResultId: interimResultId,
+          currentStateCommandKey: interimStateKey,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "refund_pending",
+        current: target,
+      });
+    },
+  );
+
+  it("rejects late refund success with pending refund work or a foreign failure receipt", () => {
+    const base = contextForTransition("refunded", "refund_pending");
+    const failureVerifiedAt = Instant.parse("2026-01-01T00:10:00.000Z");
+    const successVerifiedAt = Instant.parse("2026-01-01T00:11:00.000Z");
+    const refundSetBefore = {
+      id: "late-refund-set-before-1",
+      paymentId: "payment-1",
+      refundIds: ["refund-1"],
+      refundSnapshots: [
+        {
+          id: "refund-1",
+          paymentId: "payment-1",
+          status: "failed",
+          amountMinor: 10_000n,
+          resultId: "refund-failure-event-1",
+          immutable: true,
+        },
+      ],
+      resultId: "late-refund-set-before-result-1",
+      immutable: true,
+    };
+    const refundSetAfter = {
+      id: "late-refund-set-after-1",
+      paymentId: "payment-1",
+      refundIds: ["refund-1"],
+      refundSnapshots: [
+        {
+          id: "refund-1",
+          paymentId: "payment-1",
+          status: "succeeded",
+          amountMinor: 10_000n,
+          resultId: "late-final-result",
+          immutable: true,
+        },
+      ],
+      resultId: "late-refund-set-after-result-1",
+      immutable: true,
+    };
+    const context = {
+      ...base,
+      paymentCaptureKind: "late_refund_success",
+      refundCompletionPreviousPaymentResultId: "late-interim-result",
+      refundCompletionCurrentStateCommandKey: "late-interim-command",
+      refundCompletionResultId: "late-final-result",
+      lateRefundSuccessFailureProviderEventId: "refund-failure-event-1",
+      lateRefundSuccessProvider: "sandbox",
+      lateRefundSuccessProviderTransactionId: "provider-refund-1",
+      lateRefundSuccessAmountMinor: 10_000n,
+      lateRefundSuccessCurrency: "EUR",
+      lateRefundSuccessAttemptKey: "refund-attempt-1",
+      lateRefundSuccessCapturedAmountMinor: 10_000n,
+      lateRefundSuccessSucceededBeforeMinor: 0n,
+      lateRefundSuccessSucceededAfterMinor: 10_000n,
+      lateRefundSuccessRefundSetBeforeId: refundSetBefore.id,
+      lateRefundSuccessRefundSetBeforeResultId: refundSetBefore.resultId,
+      lateRefundSuccessRefundSetBefore: refundSetBefore,
+      lateRefundSuccessRefundSetAfterId: refundSetAfter.id,
+      lateRefundSuccessRefundSetAfterResultId: refundSetAfter.resultId,
+      lateRefundSuccessRefundSetAfter: refundSetAfter,
+      lateRefundSuccessSourcePaymentResultId: "late-source-result",
+      lateRefundSuccessSourceCurrentStateCommandKey: "late-source-command",
+      lateRefundSuccessSourcePayment: {
+        id: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        role: "full",
+        status: "captured",
+        capturedAmountMinor: 10_000n,
+        succeededRefundAmountMinor: 0n,
+        failedRefundTransactionId: "refund-1",
+        authoritativeRefundSetId: refundSetBefore.id,
+        authoritativeRefundSetResultId: refundSetBefore.resultId,
+        resultId: "late-source-result",
+        currentStateCommandKey: "late-source-command",
+        immutable: true,
+      },
+      refundCompletionExpectedPayment: {
+        ...base.refundCompletionExpectedPayment,
+        capturedAmountMinor: 10_000n,
+        succeededRefundAmountMinor: 10_000n,
+        authoritativeRefundSetId: refundSetAfter.id,
+        authoritativeRefundSetResultId: refundSetAfter.resultId,
+        resultId: "late-interim-result",
+        currentStateCommandKey: "late-interim-command",
+      },
+      refundCompletionRefundTransaction: {
+        ...base.refundCompletionRefundTransaction,
+        previousStatus: "failed",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        amountMinor: 10_000n,
+        currency: "EUR",
+        idempotencyKey: "refund-attempt-1",
+        failureProviderEventId: "refund-failure-event-1",
+        completedAt: successVerifiedAt,
+        resultId: "late-final-result",
+      },
+      lateRefundSuccessFailureProviderEvent: {
+        id: "refund-failure-event-1",
+        paymentId: "payment-1",
+        refundTransactionId: "refund-1",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        kind: "refund_failed",
+        amountMinor: 10_000n,
+        currency: "EUR",
+        authenticated: true,
+        verified: true,
+        verifiedAt: failureVerifiedAt,
+        immutable: true,
+      },
+      refundCompletionProviderEvent: {
+        ...base.refundCompletionProviderEvent,
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        kind: "refund_succeeded",
+        amountMinor: 10_000n,
+        currency: "EUR",
+        verifiedAt: successVerifiedAt,
+        resultId: "late-final-result",
+      },
+      lateRefundSuccessReconciledPayment: {
+        id: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        role: "full",
+        previousStatus: "captured",
+        intermediateStatus: "refund_pending",
+        targetStatus: "refunded",
+        capturedAmountMinor: 10_000n,
+        succeededRefundAmountMinor: 10_000n,
+        refundTransactionId: "refund-1",
+        authoritativeRefundSetId: refundSetAfter.id,
+        authoritativeRefundSetResultId: refundSetAfter.resultId,
+        resultId: "late-final-result",
+        immutable: true,
+      },
+      lateRefundSuccessPaymentResultId: "late-final-result",
+      lateRefundSuccessRefundTransactionResultId: "late-final-result",
+      lateRefundSuccessProviderEventResultId: "late-final-result",
+      lateRefundSuccessCompleted: true,
+      lateRefundSuccessAtomic: true,
+    };
+    const command = {
+      aggregateId: "payment-1",
+      current: "captured" as const,
+      target: "refund_pending" as const,
+      idempotencyKey: "late-refund-success-invalid",
+      currentStateResultId: "late-source-result",
+      currentStateCommandKey: "late-source-command",
+      context,
+    };
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessRefundSetBefore: {
+            ...refundSetBefore,
+            refundIds: [...refundSetBefore.refundIds, "pending-refund-2"],
+            refundSnapshots: [
+              ...refundSetBefore.refundSnapshots,
+              {
+                id: "pending-refund-2",
+                paymentId: "payment-1",
+                status: "pending",
+                amountMinor: 1_000n,
+                resultId: "pending-refund-result-2",
+                immutable: true,
+              },
+            ],
+          },
+          lateRefundSuccessRefundSetAfter: {
+            ...refundSetAfter,
+            refundIds: [...refundSetAfter.refundIds, "pending-refund-2"],
+            refundSnapshots: [
+              ...refundSetAfter.refundSnapshots,
+              {
+                id: "pending-refund-2",
+                paymentId: "payment-1",
+                status: "pending",
+                amountMinor: 1_000n,
+                resultId: "pending-refund-result-2",
+                immutable: true,
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessRefundSetAfterId: refundSetBefore.id,
+          lateRefundSuccessRefundSetAfterResultId: refundSetBefore.resultId,
+          lateRefundSuccessRefundSetAfter: {
+            ...refundSetAfter,
+            id: refundSetBefore.id,
+            resultId: refundSetBefore.resultId,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessFailureProviderEvent: {
+            ...context.lateRefundSuccessFailureProviderEvent,
+            providerTransactionId: "foreign-provider-refund",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
     ["reprint_pending", "replacement_in_production"],
     ["replacement_in_production", "recovery_pending"],
   ] as const)(
@@ -12555,6 +13009,29 @@ describe("v0 lifecycle policy tables", () => {
     });
   });
 
+  it("accepts cancellation evidence at the provider clock-skew boundary", () => {
+    const context = contextForTransition("handed_over", "cancelled");
+    expect(
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "post-void-cancellation-race-at-skew-boundary",
+        context: {
+          ...context,
+          cancellationRaceExpectedShipment: {
+            ...context.cancellationRaceExpectedShipment,
+            cancelledAt: Instant.parse("2026-01-01T00:10:55.000Z"),
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancelled",
+      current: "handed_over",
+    });
+  });
+
   it.each(["unauthorized_reconciliation", "replacement", "reship"] as const)(
     "dispatches a post-void acceptance receipt through the %s handler",
     (kind) => {
@@ -12699,12 +13176,12 @@ describe("v0 lifecycle policy tables", () => {
       },
     ],
     [
-      "cancellation before void verification",
+      "cancellation beyond the provider clock-skew boundary",
       {
         cancellationRaceExpectedShipment: {
           ...contextForTransition("handed_over", "cancelled")
             .cancellationRaceExpectedShipment,
-          cancelledAt: Instant.parse("2026-01-01T00:10:59.999Z"),
+          cancelledAt: Instant.parse("2026-01-01T00:10:54.999Z"),
         },
       },
     ],

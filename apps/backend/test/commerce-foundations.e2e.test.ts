@@ -5847,6 +5847,317 @@ describe("commerce persistence foundations", () => {
     );
   });
 
+  it("reconciles a late provider success for the same failed refund attempt", async () => {
+    await rollback("late-refund-success", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation("late-refund-success");
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      const capturedAmount = Number(
+        (
+          await client.query<{ captured_amount_minor: string }>(
+            `SELECT captured_amount_minor::text
+             FROM payments WHERE id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows[0]?.captured_amount_minor,
+      );
+      if (!Number.isSafeInteger(capturedAmount) || capturedAmount <= 0) {
+        throw new Error("late refund success fixture has no captured amount");
+      }
+      const refundId = fixtures.id("late-refund-success-attempt");
+      await cancelOrderBeforeHandoff(
+        client,
+        foundation.orderId,
+        true,
+        true,
+        "CANCELLED",
+        [
+          {
+            id: refundId,
+            idempotencyKey: "late-refund-success-attempt",
+            amountMinor: capturedAmount,
+          },
+        ],
+      );
+      const requestedAt = (
+        await client.query<{ requested_at: Date }>(
+          `SELECT requested_at FROM refund_transactions WHERE id = $1`,
+          [refundId],
+        )
+      ).rows[0]?.requested_at;
+      if (!requestedAt) {
+        throw new Error("late refund success attempt was not persisted");
+      }
+
+      const providerRefundId = "late-refund-success-provider-attempt";
+      const failedAt = new Date();
+      await fixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_FAILED",
+        providerRefundId,
+        failedAt,
+        "late-refund-failure-receipt",
+      );
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'FAILED', provider_refund_id = $2, updated_at = $3
+         WHERE id = $1`,
+        [refundId, providerRefundId, failedAt],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'CAPTURED', updated_at = $2 WHERE id = $1`,
+        [foundation.paymentId, failedAt],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      await forceOrderLifecycleConstraints(client);
+
+      const successAt = new Date(Math.max(Date.now(), failedAt.getTime() + 1));
+      await expectQueryError(
+        client,
+        "late_refund_success_wrong_provider_transaction",
+        () =>
+          fixtures.persistRefundProviderEvent(
+            refundId,
+            "REFUND_SUCCEEDED",
+            "foreign-provider-refund-attempt",
+            successAt,
+            "late-refund-success-wrong-provider-transaction",
+          ),
+        {
+          code: "23514",
+          constraint: "payment_provider_event_scope_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "late_refund_success_must_follow_failure",
+        async () => {
+          await fixtures.persistRefundProviderEvent(
+            refundId,
+            "REFUND_SUCCEEDED",
+            providerRefundId,
+            failedAt,
+            "non-late-refund-success-receipt",
+          );
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED', completed_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [refundId, failedAt],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "refund_late_success_failure_receipt_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "late_refund_success_receipt_without_reconciliation",
+        async () => {
+          await fixtures.persistRefundProviderEvent(
+            refundId,
+            "REFUND_SUCCEEDED",
+            providerRefundId,
+            successAt,
+            "orphaned-late-refund-success-receipt",
+          );
+          await client.query(
+            `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_provider_event_consumption_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "late_refund_success_without_receipt",
+        () =>
+          client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED', completed_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [refundId, successAt],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_success_provider_receipt_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "late_refund_success_rejects_overcommitted_independent_refund",
+        async () => {
+          const retryId = fixtures.id("late-refund-success-independent-refund");
+          await client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                requested_at, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','PENDING',$5,$5,$5)`,
+            [
+              retryId,
+              foundation.paymentId,
+              "late-refund-success-independent-refund",
+              capturedAmount,
+              successAt,
+            ],
+          );
+          await client.query(
+            `UPDATE payments
+             SET status = 'REFUND_PENDING', updated_at = $2 WHERE id = $1`,
+            [foundation.paymentId, successAt],
+          );
+          await fixtures.persistRefundProviderEvent(
+            refundId,
+            "REFUND_SUCCEEDED",
+            providerRefundId,
+            successAt,
+            "late-refund-success-with-overcommitted-refund",
+          );
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED', completed_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [refundId, successAt],
+          );
+        },
+        { code: "23514", constraint: "refund_captured_payment_check" },
+      );
+
+      await fixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_SUCCEEDED",
+        providerRefundId,
+        successAt,
+        "late-refund-success-receipt",
+      );
+      await client.query(
+        `UPDATE payments
+         SET status = 'REFUND_PENDING', updated_at = $2 WHERE id = $1`,
+        [foundation.paymentId, successAt],
+      );
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', completed_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [refundId, successAt],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [foundation.paymentId, successAt],
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, successAt],
+      );
+      await client.query(
+        `UPDATE fulfilment_slots
+         SET outcome = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, successAt],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [foundation.orderId, successAt],
+      );
+      await forceOrderLifecycleConstraints(client);
+      await client.query(
+        `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "orders_refund_completion_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "orders_refund_completion_reconciled" DEFERRED`,
+      );
+
+      const replayedAt = new Date(successAt.getTime() + 1);
+      await fixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_SUCCEEDED",
+        providerRefundId,
+        replayedAt,
+        "late-refund-success-replayed-receipt",
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" DEFERRED`,
+      );
+
+      expect(
+        (
+          await client.query<{
+            completed_at: Date;
+            failed_receipts: string;
+            payment_status: string;
+            provider_refund_id: string;
+            refund_count: string;
+            refund_status: string;
+            refunded_amount: string;
+            requested_at: Date;
+            success_receipts: string;
+          }>(
+            `SELECT payment.status::text AS payment_status,
+                    refund.status::text AS refund_status,
+                    refund.provider_refund_id, refund.requested_at,
+                    refund.completed_at,
+                    count(DISTINCT refund.id)::text AS refund_count,
+                    sum(DISTINCT refund.amount_minor)::text AS refunded_amount,
+                    count(DISTINCT event.id) FILTER (
+                      WHERE event.kind = 'REFUND_FAILED'
+                    )::text AS failed_receipts,
+                    count(DISTINCT event.id) FILTER (
+                      WHERE event.kind = 'REFUND_SUCCEEDED'
+                    )::text AS success_receipts
+             FROM payments payment
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             JOIN payment_provider_events event
+               ON event.refund_transaction_id = refund.id
+             WHERE payment.id = $1
+             GROUP BY payment.id, payment.status, refund.id, refund.status,
+                      refund.provider_refund_id, refund.requested_at,
+                      refund.completed_at`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          payment_status: "REFUNDED",
+          refund_status: "SUCCEEDED",
+          provider_refund_id: providerRefundId,
+          requested_at: requestedAt,
+          completed_at: successAt,
+          refund_count: "1",
+          refunded_amount: capturedAmount.toString(),
+          failed_receipts: "1",
+          success_receipts: "2",
+        },
+      ]);
+    });
+  });
+
   it("retains failed customer-cancellation refund attempts for later retry", async () => {
     await rollback("cancel-refund-retry", async (client, fixtures) => {
       const captured = await fixtures.createFoundation("retry-captured");
@@ -8559,21 +8870,34 @@ describe("commerce persistence foundations", () => {
         ).rows,
       ).toEqual([{ payment_status: "CAPTURED", refund_status: "FAILED" }]);
 
-      for (const status of ["PENDING", "SUCCEEDED"] as const) {
-        await expectQueryError(
-          client,
-          `reopen_failed_refund_${status.toLowerCase()}`,
-          () =>
-            client.query(
-              `UPDATE refund_transactions SET status = $2 WHERE id = $1`,
-              [refundId, status],
-            ),
-          {
-            code: "23514",
-            constraint: "refund_transaction_failed_immutable_check",
-          },
-        );
-      }
+      await expectQueryError(
+        client,
+        "reopen_failed_refund_pending",
+        () =>
+          client.query(
+            `UPDATE refund_transactions SET status = 'PENDING' WHERE id = $1`,
+            [refundId],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_transaction_failed_immutable_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "reconcile_failed_refund_without_success_receipt",
+        () =>
+          client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED', completed_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [refundId, new Date()],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_success_provider_receipt_check",
+        },
+      );
 
       await client.query(
         `SET CONSTRAINTS "payments_refund_status_reconciled",
@@ -13559,6 +13883,256 @@ describe("commerce persistence foundations", () => {
         },
       ]);
     });
+  });
+
+  it("composes Shipment receipt and lifecycle clock-skew bounds", async () => {
+    await rollback(
+      "shipment-lifecycle-clock-skew",
+      async (client, fixtures) => {
+        const prepareLabelledShipment = async (name: string) => {
+          const foundation = await fixtures.createFoundation(name);
+          const productions = await createCurrentPlanAndPayment(
+            client,
+            fixtures,
+            foundation,
+          );
+          await activateCurrentPlan(client, fixtures, foundation, productions);
+          const productionAt = new Date();
+          await advanceOrderLifecycleStep(
+            client,
+            foundation.orderId,
+            "IN_PRODUCTION",
+            productionAt,
+          );
+          await advanceOrderLifecycleStep(
+            client,
+            foundation.orderId,
+            "QC_PASSED",
+            productionAt,
+          );
+          const packedAt = productionAt;
+          const labelCreatedAt = new Date(packedAt.getTime() + 5_000);
+          await client.query(
+            `UPDATE jobs
+           SET status = 'PACKED', packed_at = $2, updated_at = $2
+           WHERE order_id = $1`,
+            [foundation.orderId, packedAt],
+          );
+          await client.query(
+            `UPDATE shipments
+           SET status = 'LABEL_CREATED', carrier = 'skew-carrier',
+               provider_shipment_id = 'skew-provider-' || id::text,
+               carrier_label_id = 'skew-label-' || id::text,
+               tracking_code = 'skew-tracking-' || id::text,
+               label_created_at = $2, updated_at = $2
+           WHERE id = $1`,
+            [foundation.shipmentId, labelCreatedAt],
+          );
+          await client.query(
+            `UPDATE orders
+           SET status = 'READY_TO_SHIP', updated_at = $2 WHERE id = $1`,
+            [foundation.orderId, packedAt],
+          );
+          await forceOrderLifecycleConstraints(client);
+          return { foundation, labelCreatedAt, packedAt };
+        };
+
+        const persistAcceptance = async (
+          shipmentId: string,
+          providerEventId: string,
+          occurredAt: Date,
+          verifiedAt: Date,
+        ) => {
+          await client.query(
+            `INSERT INTO shipment_provider_events
+             (id, shipment_id, carrier, carrier_label_id, provider_event_id,
+              provider_transaction_id, kind, occurred_at, authenticated_at,
+              verified_at, created_at)
+           SELECT $1, shipment.id, shipment.carrier,
+                  shipment.carrier_label_id, $3, $4, 'ACCEPTANCE_SCAN',
+                  $5, $6, $6, statement_timestamp()
+           FROM shipments shipment
+           WHERE shipment.id = $2`,
+            [
+              randomUUID(),
+              shipmentId,
+              providerEventId,
+              `${providerEventId}:transaction`,
+              occurredAt,
+              verifiedAt,
+            ],
+          );
+        };
+
+        const boundary = await prepareLabelledShipment("handoff-skew-boundary");
+        const beyond = await prepareLabelledShipment("handoff-skew-beyond");
+        const cancellation = await prepareLabelledShipment(
+          "cancellation-skew-boundary",
+        );
+        const cancellationRequestedAt = new Date(
+          cancellation.labelCreatedAt.getTime() - 5_000,
+        );
+        const voidOccurredAt = cancellationRequestedAt;
+        const voidVerifiedAt = new Date(voidOccurredAt.getTime() - 5_000);
+        const cancelledAt = new Date(voidVerifiedAt.getTime() - 5_000);
+        await client.query(
+          `UPDATE shipments
+           SET status = 'CANCELLATION_PENDING',
+               cancellation_requested_at = $2, updated_at = $2
+           WHERE id = $1`,
+          [cancellation.foundation.shipmentId, cancellationRequestedAt],
+        );
+        const voidCommandId = (
+          await client.query<{ id: string }>(
+            `UPDATE outbox_messages message
+             SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+             FROM shipments shipment
+             WHERE shipment.id = $1
+               AND message.deduplication_key =
+                   'void_carrier_label:' || shipment.id::text || ':' ||
+                   shipment.carrier_label_id
+             RETURNING message.id`,
+            [cancellation.foundation.shipmentId, voidOccurredAt],
+          )
+        ).rows[0]?.id;
+        if (!voidCommandId) {
+          throw new Error("clock-skew void command was not persisted");
+        }
+        await client.query(
+          `INSERT INTO shipment_provider_events
+             (id, shipment_id, outbox_message_id, carrier, carrier_label_id,
+              provider_event_id, provider_transaction_id, kind, occurred_at,
+              authenticated_at, verified_at, created_at)
+           SELECT $1, shipment.id, $3, shipment.carrier,
+                  shipment.carrier_label_id, $4, $5, 'LABEL_VOIDED',
+                  $6, $7, $7, statement_timestamp()
+           FROM shipments shipment
+           WHERE shipment.id = $2`,
+          [
+            randomUUID(),
+            cancellation.foundation.shipmentId,
+            voidCommandId,
+            "cancellation-skew-boundary-void",
+            "cancellation-skew-boundary-void:transaction",
+            voidOccurredAt,
+            voidVerifiedAt,
+          ],
+        );
+        await client.query(
+          `UPDATE shipments
+           SET status = 'CANCELLED',
+               provider_void_id = 'cancellation-skew-boundary-void',
+               provider_voided_at = $2, cancelled_at = $3, updated_at = $3
+           WHERE id = $1`,
+          [cancellation.foundation.shipmentId, voidVerifiedAt, cancelledAt],
+        );
+        await cancelOrderBeforeHandoff(client, cancellation.foundation.orderId);
+        expect(
+          (
+            await client.query<{
+              cancelled_at: Date;
+              label_created_at: Date;
+              provider_voided_at: Date;
+            }>(
+              `SELECT label_created_at, provider_voided_at, cancelled_at
+               FROM shipments WHERE id = $1`,
+              [cancellation.foundation.shipmentId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            label_created_at: cancellation.labelCreatedAt,
+            provider_voided_at: voidVerifiedAt,
+            cancelled_at: cancelledAt,
+          },
+        ]);
+        const boundaryOccurredAt = new Date(
+          boundary.labelCreatedAt.getTime() - 5_000,
+        );
+        const boundaryHandoffAt = new Date(
+          boundaryOccurredAt.getTime() - 5_000,
+        );
+        await persistAcceptance(
+          boundary.foundation.shipmentId,
+          "handoff-skew-boundary-acceptance",
+          boundaryOccurredAt,
+          boundaryHandoffAt,
+        );
+        await client.query(
+          `UPDATE jobs
+           SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+           WHERE order_id = $1`,
+          [boundary.foundation.orderId, boundaryHandoffAt],
+        );
+        await client.query(
+          `UPDATE shipments
+         SET status = 'HANDED_OVER',
+             provider_acceptance_scan_id = 'handoff-skew-boundary-acceptance',
+             handed_over_at = $2, updated_at = $2
+         WHERE id = $1`,
+          [boundary.foundation.shipmentId, boundaryHandoffAt],
+        );
+        await client.query(
+          `UPDATE order_phases
+           SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+           WHERE id = $1`,
+          [boundary.foundation.orderPhaseId, boundaryHandoffAt],
+        );
+        await client.query(
+          `UPDATE orders
+           SET status = 'SHIPPED', updated_at = $2 WHERE id = $1`,
+          [boundary.foundation.orderId, boundaryHandoffAt],
+        );
+        await forceOrderLifecycleConstraints(client);
+        expect(
+          (
+            await client.query<{
+              acceptance_verified_at: Date;
+              acceptance_occurred_at: Date;
+              handed_over_at: Date;
+              label_created_at: Date;
+            }>(
+              `SELECT shipment.label_created_at, shipment.handed_over_at,
+                    event.occurred_at AS acceptance_occurred_at,
+                    event.verified_at AS acceptance_verified_at
+             FROM shipments shipment
+             JOIN shipment_provider_events event
+               ON event.shipment_id = shipment.id
+              AND event.provider_event_id =
+                  shipment.provider_acceptance_scan_id
+             WHERE shipment.id = $1`,
+              [boundary.foundation.shipmentId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            label_created_at: boundary.labelCreatedAt,
+            handed_over_at: boundaryHandoffAt,
+            acceptance_occurred_at: boundaryOccurredAt,
+            acceptance_verified_at: boundaryHandoffAt,
+          },
+        ]);
+
+        const beyondOccurredAt = new Date(
+          beyond.labelCreatedAt.getTime() - 5_001,
+        );
+        await expectQueryError(
+          client,
+          "shipment_acceptance_beyond_clock_skew",
+          () =>
+            persistAcceptance(
+              beyond.foundation.shipmentId,
+              "handoff-skew-beyond-acceptance",
+              beyondOccurredAt,
+              beyondOccurredAt,
+            ),
+          {
+            code: "23514",
+            constraint: "shipment_provider_event_evidence_check",
+          },
+        );
+      },
+    );
   });
 
   it("rejects future evidence for every Shipment lifecycle timestamp", async () => {

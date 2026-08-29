@@ -3812,11 +3812,11 @@ BEGIN
     IF (NEW."activated_at" IS NOT NULL AND NEW."qc_passed_at" IS NOT NULL
         AND NEW."qc_passed_at" < NEW."activated_at")
        OR (NEW."qc_passed_at" IS NOT NULL AND NEW."shipped_at" IS NOT NULL
-           AND NEW."shipped_at" < NEW."qc_passed_at")
+           AND NEW."shipped_at" < NEW."qc_passed_at" - interval '5 seconds')
        OR (NEW."shipped_at" IS NOT NULL AND NEW."delivered_at" IS NOT NULL
-           AND NEW."delivered_at" < NEW."shipped_at")
+           AND NEW."delivered_at" < NEW."shipped_at" - interval '10 seconds')
        OR (NEW."delivered_at" IS NOT NULL AND NEW."completed_at" IS NOT NULL
-           AND NEW."completed_at" < NEW."delivered_at")
+           AND NEW."completed_at" < NEW."delivered_at" - interval '5 seconds')
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."activated_at" IS NOT NULL
            AND NEW."cancelled_at" < NEW."activated_at")
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."qc_passed_at" IS NOT NULL
@@ -4037,9 +4037,9 @@ BEGIN
        OR (NEW."qc_approved_at" IS NOT NULL AND NEW."packed_at" IS NOT NULL
            AND NEW."packed_at" < NEW."qc_approved_at")
        OR (NEW."packed_at" IS NOT NULL AND NEW."handed_over_at" IS NOT NULL
-           AND NEW."handed_over_at" < NEW."packed_at")
+           AND NEW."handed_over_at" < NEW."packed_at" - interval '5 seconds')
        OR (NEW."handed_over_at" IS NOT NULL AND NEW."settled_at" IS NOT NULL
-           AND NEW."settled_at" < NEW."handed_over_at") THEN
+           AND NEW."settled_at" < NEW."handed_over_at" - interval '5 seconds') THEN
         RAISE EXCEPTION 'Job lifecycle timestamps must be chronological'
             USING ERRCODE = '23514', CONSTRAINT = 'job_lifecycle_evidence_check';
     END IF;
@@ -7871,18 +7871,22 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
     END IF;
 
+    -- A provider event may occur five seconds before the preceding lifecycle
+    -- timestamp and be verified another five seconds before its occurrence.
+    -- Provider-backed state timestamps therefore use the composed bound.
     IF (NEW."label_created_at" IS NOT NULL AND NEW."handed_over_at" IS NOT NULL
-        AND NEW."handed_over_at" < NEW."label_created_at")
+        AND NEW."handed_over_at" < NEW."label_created_at" - interval '10 seconds')
        OR (NEW."label_created_at" IS NOT NULL AND NEW."cancellation_requested_at" IS NOT NULL
-           AND NEW."cancellation_requested_at" < NEW."label_created_at")
+           AND NEW."cancellation_requested_at" < NEW."label_created_at" - interval '5 seconds')
        OR (NEW."cancellation_requested_at" IS NOT NULL AND NEW."provider_voided_at" IS NOT NULL
-           AND NEW."provider_voided_at" < NEW."cancellation_requested_at")
+           AND NEW."provider_voided_at" <
+               NEW."cancellation_requested_at" - interval '10 seconds')
        OR (NEW."provider_voided_at" IS NOT NULL AND NEW."cancelled_at" IS NOT NULL
-           AND NEW."cancelled_at" < NEW."provider_voided_at")
+           AND NEW."cancelled_at" < NEW."provider_voided_at" - interval '5 seconds')
        OR (NEW."handed_over_at" IS NOT NULL AND NEW."delivered_at" IS NOT NULL
-           AND NEW."delivered_at" < NEW."handed_over_at")
+           AND NEW."delivered_at" < NEW."handed_over_at" - interval '10 seconds')
        OR (NEW."cancelled_at" IS NOT NULL AND NEW."label_created_at" IS NOT NULL
-           AND NEW."cancelled_at" < NEW."label_created_at") THEN
+           AND NEW."cancelled_at" < NEW."label_created_at" - interval '15 seconds') THEN
         RAISE EXCEPTION 'Shipment lifecycle timestamps must be chronological'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_lifecycle_evidence_check';
     END IF;
@@ -8609,7 +8613,9 @@ BEGIN
            OR (target_provider_refund_id IS NOT NULL
                AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_refund_id)
            OR (NEW."kind" = 'REFUND_SUCCEEDED'
-               AND target_refund_status NOT IN ('PENDING', 'SUCCEEDED'))
+               AND target_refund_status NOT IN (
+                   'PENDING', 'FAILED', 'SUCCEEDED'
+               ))
            OR (NEW."kind" = 'REFUND_FAILED'
                AND target_refund_status NOT IN (
                    'PENDING', 'FAILED', 'SUCCEEDED'
@@ -9519,12 +9525,31 @@ BEGIN
     END IF;
 
     IF OLD."status" = 'FAILED'
-       AND NEW."status" IS DISTINCT FROM OLD."status" THEN
-        RAISE EXCEPTION 'failed refund transactions are terminal attempts'
+       AND NEW."status" NOT IN ('FAILED', 'SUCCEEDED') THEN
+        RAISE EXCEPTION 'failed refund transactions may only reconcile a late provider success'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_failed_immutable_check';
     END IF;
 
-    IF OLD."status" = 'PENDING'
+    IF OLD."status" = 'FAILED'
+       AND NEW."status" = 'SUCCEEDED'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payment_provider_events" event
+           JOIN "payments" payment ON payment."id" = NEW."payment_id"
+           WHERE event."payment_id" = NEW."payment_id"
+             AND event."refund_transaction_id" = NEW."id"
+             AND event."provider" = payment."provider"
+             AND event."kind" = 'REFUND_FAILED'
+             AND event."provider_transaction_id" = OLD."provider_refund_id"
+             AND event."amount_minor" = NEW."amount_minor"
+             AND event."currency" = payment."currency"
+             AND event."verified_at" < NEW."completed_at"
+       ) THEN
+        RAISE EXCEPTION 'late successful refund requires its exact prior provider failure receipt'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_late_success_failure_receipt_check';
+    END IF;
+
+    IF OLD."status" IN ('PENDING', 'FAILED')
        AND NEW."status" = 'SUCCEEDED'
        AND NEW."provider_refund_id" IS NOT NULL
        AND NEW."provider_refund_id" ~ '[^[:space:]]'
