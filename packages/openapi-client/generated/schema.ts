@@ -21,10 +21,124 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storage/model-files/{modelFileId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a short-lived source-file download URL */
+        post: operations["StorageController_createModelDownload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/model-files/{modelFileId}/reorder-eligibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report whether the retained source can support a fresh reorder */
+        get: operations["StorageController_reorderEligibility"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/photos/{photoAssetId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a short-lived photo download URL */
+        post: operations["StorageController_createPhotoDownload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/uploads/{uploadId}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Verify and promote a quarantined upload */
+        post: operations["StorageController_confirmUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/uploads/model-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a direct model-file upload intent */
+        post: operations["StorageController_initiateModelUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/uploads/photos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a direct quote-reference photo upload intent */
+        post: operations["StorageController_initiatePhotoUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ConfirmedUploadResponseDto: {
+            /** Format: uuid */
+            assetId: string;
+            /** @enum {string} */
+            assetKind: "MODEL_FILE" | "PHOTO_ASSET";
+            /** Format: date-time */
+            deleteAfter: string;
+            /** Format: date-time */
+            uploadedAt: string;
+            /** Format: uuid */
+            uploadId: string;
+        };
         HealthResponseDto: {
             /**
              * @example taven-backend
@@ -36,6 +150,71 @@ export interface components {
              * @enum {string}
              */
             status: "ok";
+        };
+        InitiateModelUploadDto: {
+            /** @example model/stl */
+            contentType: string;
+            /**
+             * @example STL
+             * @enum {string}
+             */
+            format: "STL" | "3MF" | "STEP";
+            /** @example bracket.stl */
+            originalFilename: string;
+            /** @example aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa */
+            sha256: string;
+            /** @example 128000 */
+            sizeBytes: number;
+        };
+        InitiatePhotoUploadDto: {
+            /** @enum {string} */
+            contentType: "image/jpeg" | "image/png" | "image/webp";
+            /** @enum {string} */
+            kind: "QUOTE_REFERENCE";
+            /** @example reference.jpg */
+            originalFilename: string;
+            /** Format: uuid */
+            scopeId: string;
+            /** @enum {string} */
+            scopeKind: "QUOTE_REQUEST";
+            /** @example bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb */
+            sha256: string;
+            /** @example 256000 */
+            sizeBytes: number;
+        };
+        ReorderEligibilityResponseDto: {
+            eligible: boolean;
+            /** @enum {string} */
+            reason: "AVAILABLE" | "SOURCE_EXPIRED" | "SOURCE_DELETED" | "SOURCE_MISSING";
+            /** @description True only when the original source is retained. Claim-recovery artifacts never satisfy this value. */
+            sourceAvailable: boolean;
+        };
+        SignedDownloadResponseDto: {
+            /** Format: uri */
+            downloadUrl: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        UploadIntentResponseDto: {
+            /** @description One-time capability used to confirm and later read this upload. It is returned only when the intent is created. */
+            accessToken: string;
+            /** Format: uuid */
+            assetId: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /**
+             * @example {
+             *       "content-type": "model/stl",
+             *       "x-amz-checksum-sha256": "base64-checksum"
+             *     }
+             */
+            requiredHeaders: {
+                [key: string]: string;
+            };
+            /** Format: uuid */
+            uploadId: string;
+            /** Format: uri */
+            uploadUrl: string;
         };
     };
     responses: never;
@@ -61,6 +240,192 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponseDto"];
+                };
+            };
+        };
+    };
+    StorageController_createModelDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                modelFileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedDownloadResponseDto"];
+                };
+            };
+            /** @description Capability token is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Model source is expired or deleted */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    StorageController_reorderEligibility: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                modelFileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReorderEligibilityResponseDto"];
+                };
+            };
+            /** @description Capability token is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    StorageController_createPhotoDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                photoAssetId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedDownloadResponseDto"];
+                };
+            };
+            /** @description Capability token is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Photo is expired or deleted */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    StorageController_confirmUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                uploadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmedUploadResponseDto"];
+                };
+            };
+            /** @description Capability token is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stored bytes do not match the declared upload contract */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upload intent or signed URL expired */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    StorageController_initiateModelUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InitiateModelUploadDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadIntentResponseDto"];
+                };
+            };
+        };
+    };
+    StorageController_initiatePhotoUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InitiatePhotoUploadDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadIntentResponseDto"];
                 };
             };
         };

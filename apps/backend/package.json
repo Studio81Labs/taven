@@ -9,6 +9,8 @@
     "dev": "nest start --watch",
     "start": "nest start",
     "start:prod": "node dist/main.js",
+    "start:retention-worker": "node dist/src/retention-worker.js",
+    "retention-worker:dev": "tsx src/retention-worker.ts",
     "lint": "eslint .",
     "typecheck": "pnpm db:generate && tsc -p tsconfig.json --noEmit",
     "test": "vitest run --exclude 'test/**'",
@@ -22,6 +24,8 @@
     "openapi:export": "tsx scripts/export-openapi.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1121.0",
+    "@aws-sdk/s3-request-presigner": "^3.1121.0",
     "@nestjs/common": "^11.1.19",
     "@nestjs/core": "^11.1.19",
     "@nestjs/platform-express": "^11.1.19",

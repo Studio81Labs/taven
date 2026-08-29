@@ -69,6 +69,42 @@ enum PhotoScopeKind {
   @@map("photo_scope_kind")
 }
 
+enum UploadAssetKind {
+  MODEL_FILE
+  PHOTO_ASSET
+
+  @@map("upload_asset_kind")
+}
+
+enum UploadIntentStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  EXPIRED
+  CANCELLED
+
+  @@map("upload_intent_status")
+}
+
+enum RetentionAssetKind {
+  UPLOAD_INTENT
+  MODEL_FILE
+  MODEL_GEOMETRY
+  PHOTO_ASSET
+
+  @@map("retention_asset_kind")
+}
+
+enum RetentionDeletionJobStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  STALE
+  FAILED
+
+  @@map("retention_deletion_job_status")
+}
+
 enum PreflightSeverity {
   INFO
   WARNING
@@ -400,23 +436,26 @@ model RevisionIdentity {
 }
 
 model ModelFile {
-  id                  String          @id @default(uuid()) @db.Uuid
-  format              ModelFileFormat
-  originalFilename    String          @map("original_filename") @db.VarChar(255)
-  storageObjectKey    String          @unique @map("storage_object_key") @db.Text
-  contentHash         String          @map("content_hash") @db.VarChar(64)
-  sizeBytes           BigInt          @map("size_bytes")
-  uploadedAt          DateTime        @map("uploaded_at") @db.Timestamptz(3)
-  sourceDeleteAfter   DateTime        @map("source_delete_after") @db.Timestamptz(3)
-  sourceRetentionDays Int             @default(90) @map("source_retention_days")
-  retentionHold       RetentionHold   @default(NONE) @map("retention_hold")
-  deletedAt           DateTime?       @map("deleted_at") @db.Timestamptz(3)
-  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                     String          @id @default(uuid()) @db.Uuid
+  format                 ModelFileFormat
+  originalFilename       String          @map("original_filename") @db.VarChar(255)
+  storageObjectKey       String          @unique @map("storage_object_key") @db.Text
+  contentHash            String          @map("content_hash") @db.VarChar(64)
+  sizeBytes              BigInt          @map("size_bytes")
+  uploadedAt             DateTime        @map("uploaded_at") @db.Timestamptz(3)
+  sourceDeleteAfter      DateTime        @map("source_delete_after") @db.Timestamptz(3)
+  sourceRetentionDays    Int             @default(90) @map("source_retention_days")
+  retentionHold          RetentionHold   @default(NONE) @map("retention_hold")
+  deletedAt              DateTime?       @map("deleted_at") @db.Timestamptz(3)
+  retentionDeletionJobId String?         @unique @map("retention_deletion_job_id") @db.Uuid
+  createdAt              DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  geometries        ModelGeometry[]
-  preflightFindings PreflightFinding[]
-  quoteItems        QuoteItem[]        @relation("QuoteItemSourceModelFile")
-  orderItems        OrderItem[]        @relation("OrderItemSourceModelFile")
+  geometries             ModelGeometry[]
+  preflightFindings      PreflightFinding[]
+  quoteItems             QuoteItem[]           @relation("QuoteItemSourceModelFile")
+  orderItems             OrderItem[]           @relation("OrderItemSourceModelFile")
+  confirmedUploadIntents UploadIntent[]        @relation("UploadIntentModelFile")
+  retentionDeletionJob   RetentionDeletionJob? @relation("ModelFileRetentionDeletionJob", fields: [retentionDeletionJobId], references: [id], onDelete: Restrict)
 
   @@index([contentHash])
   @@index([sourceDeleteAfter, retentionHold, deletedAt])
@@ -473,27 +512,88 @@ model PreflightFinding {
 }
 
 model PhotoAsset {
-  id               String         @id @default(uuid()) @db.Uuid
-  kind             PhotoAssetKind
-  scopeKind        PhotoScopeKind @map("scope_kind")
-  scopeId          String         @map("scope_id") @db.Uuid
-  storageObjectKey String         @unique @map("storage_object_key") @db.Text
-  contentHash      String         @map("content_hash") @db.VarChar(64)
-  mediaType        String         @map("media_type") @db.VarChar(100)
-  sizeBytes        BigInt         @map("size_bytes")
-  uploadedAt       DateTime       @map("uploaded_at") @db.Timestamptz(3)
-  retentionDays    Int            @default(90) @map("retention_days")
-  photoDeleteAfter DateTime       @map("photo_delete_after") @db.Timestamptz(3)
-  retentionHold    RetentionHold  @default(NONE) @map("retention_hold")
-  deletedAt        DateTime?      @map("deleted_at") @db.Timestamptz(3)
-  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                     String         @id @default(uuid()) @db.Uuid
+  kind                   PhotoAssetKind
+  scopeKind              PhotoScopeKind @map("scope_kind")
+  scopeId                String         @map("scope_id") @db.Uuid
+  storageObjectKey       String         @unique @map("storage_object_key") @db.Text
+  contentHash            String         @map("content_hash") @db.VarChar(64)
+  mediaType              String         @map("media_type") @db.VarChar(100)
+  sizeBytes              BigInt         @map("size_bytes")
+  uploadedAt             DateTime       @map("uploaded_at") @db.Timestamptz(3)
+  retentionDays          Int            @default(90) @map("retention_days")
+  photoDeleteAfter       DateTime       @map("photo_delete_after") @db.Timestamptz(3)
+  retentionHold          RetentionHold  @default(NONE) @map("retention_hold")
+  deletedAt              DateTime?      @map("deleted_at") @db.Timestamptz(3)
+  retentionDeletionJobId String?        @unique @map("retention_deletion_job_id") @db.Uuid
+  createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  qcJobs Job[] @relation("JobQcPhotoAsset")
+  qcJobs                 Job[]                 @relation("JobQcPhotoAsset")
+  confirmedUploadIntents UploadIntent[]        @relation("UploadIntentPhotoAsset")
+  retentionDeletionJob   RetentionDeletionJob? @relation("PhotoAssetRetentionDeletionJob", fields: [retentionDeletionJobId], references: [id], onDelete: Restrict)
 
   @@index([contentHash])
   @@index([scopeKind, scopeId])
   @@index([photoDeleteAfter, retentionHold, deletedAt])
   @@map("photo_assets")
+}
+
+model UploadIntent {
+  id                    String             @id @default(uuid()) @db.Uuid
+  customerId            String?            @map("customer_id") @db.Uuid
+  assetKind             UploadAssetKind    @map("asset_kind")
+  capabilityTokenHash   String             @unique @map("capability_token_hash") @db.VarChar(64)
+  originalFilename      String?            @map("original_filename") @db.VarChar(255)
+  modelFormat           ModelFileFormat?   @map("model_format")
+  photoKind             PhotoAssetKind?    @map("photo_kind")
+  photoScopeKind        PhotoScopeKind?    @map("photo_scope_kind")
+  photoScopeId          String?            @map("photo_scope_id") @db.Uuid
+  intendedAssetId       String             @map("intended_asset_id") @db.Uuid
+  expectedContentType   String             @map("expected_content_type") @db.VarChar(100)
+  expectedSizeBytes     BigInt             @map("expected_size_bytes")
+  expectedContentHash   String             @map("expected_content_hash") @db.VarChar(64)
+  quarantineObjectKey   String             @unique @map("quarantine_object_key") @db.Text
+  finalObjectKey        String             @unique @map("final_object_key") @db.Text
+  expiresAt             DateTime           @map("expires_at") @db.Timestamptz(3)
+  status                UploadIntentStatus @default(PENDING)
+  confirmedModelFileId  String?            @unique @map("confirmed_model_file_id") @db.Uuid
+  confirmedPhotoAssetId String?            @unique @map("confirmed_photo_asset_id") @db.Uuid
+  confirmedAt           DateTime?          @map("confirmed_at") @db.Timestamptz(3)
+  failureReason         String?            @map("failure_reason") @db.Text
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customer            Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  confirmedModelFile  ModelFile?  @relation("UploadIntentModelFile", fields: [confirmedModelFileId], references: [id], onDelete: Restrict)
+  confirmedPhotoAsset PhotoAsset? @relation("UploadIntentPhotoAsset", fields: [confirmedPhotoAssetId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, createdAt])
+  @@index([status, expiresAt])
+  @@map("upload_intents")
+}
+
+model RetentionDeletionJob {
+  id                  String                     @id @default(uuid()) @db.Uuid
+  assetKind           RetentionAssetKind         @map("asset_kind")
+  assetId             String                     @map("asset_id") @db.Uuid
+  expectedDeleteAfter DateTime                   @map("expected_delete_after") @db.Timestamptz(3)
+  status              RetentionDeletionJobStatus @default(PENDING)
+  attempts            Int                        @default(0)
+  availableAt         DateTime                   @default(now()) @map("available_at") @db.Timestamptz(3)
+  leaseUntil          DateTime?                  @map("lease_until") @db.Timestamptz(3)
+  leaseToken          String?                    @map("lease_token") @db.VarChar(64)
+  lastError           String?                    @map("last_error") @db.Text
+  completedAt         DateTime?                  @map("completed_at") @db.Timestamptz(3)
+  createdAt           DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  modelFile  ModelFile?  @relation("ModelFileRetentionDeletionJob")
+  photoAsset PhotoAsset? @relation("PhotoAssetRetentionDeletionJob")
+
+  @@unique([assetKind, assetId, expectedDeleteAfter], map: "retention_deletion_jobs_asset_deadline_key")
+  @@index([status, availableAt])
+  @@index([assetKind, assetId, status])
+  @@map("retention_deletion_jobs")
 }
 
 model PrintConfigRevision {
@@ -1041,6 +1141,7 @@ model Customer {
   quotes        Quote[]
   orders        Order[]
   quoteRequests QuoteRequest[]
+  uploadIntents UploadIntent[]
 
   @@map("customers")
 }
@@ -1767,8 +1868,8 @@ model RefundTransaction {
 
 model RefundDispatchClaim {
   refundTransactionId String   @id @map("refund_transaction_id") @db.Uuid
-  claimedAt            DateTime @default(dbgenerated("clock_timestamp()")) @map("claimed_at") @db.Timestamptz(3)
-  createdAt            DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+  claimedAt           DateTime @default(dbgenerated("clock_timestamp()")) @map("claimed_at") @db.Timestamptz(3)
+  createdAt           DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
 
   refundTransaction RefundTransaction @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
 

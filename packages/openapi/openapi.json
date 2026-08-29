@@ -1,6 +1,41 @@
 {
   "components": {
     "schemas": {
+      "ConfirmedUploadResponseDto": {
+        "properties": {
+          "assetId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "assetKind": {
+            "enum": [
+              "MODEL_FILE",
+              "PHOTO_ASSET"
+            ],
+            "type": "string"
+          },
+          "deleteAfter": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "uploadedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "uploadId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "assetId",
+          "assetKind",
+          "uploadedAt",
+          "deleteAfter"
+        ],
+        "type": "object"
+      },
       "HealthResponseDto": {
         "properties": {
           "service": {
@@ -23,6 +58,197 @@
           "service"
         ],
         "type": "object"
+      },
+      "InitiateModelUploadDto": {
+        "properties": {
+          "contentType": {
+            "example": "model/stl",
+            "maxLength": 100,
+            "type": "string"
+          },
+          "format": {
+            "enum": [
+              "STL",
+              "3MF",
+              "STEP"
+            ],
+            "example": "STL",
+            "type": "string"
+          },
+          "originalFilename": {
+            "example": "bracket.stl",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "sha256": {
+            "example": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "maxLength": 64,
+            "minLength": 64,
+            "type": "string"
+          },
+          "sizeBytes": {
+            "example": 128000,
+            "maximum": 104857600,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "format",
+          "originalFilename",
+          "contentType",
+          "sizeBytes",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "InitiatePhotoUploadDto": {
+        "properties": {
+          "contentType": {
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ],
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "QUOTE_REFERENCE"
+            ],
+            "type": "string"
+          },
+          "originalFilename": {
+            "example": "reference.jpg",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "scopeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "scopeKind": {
+            "enum": [
+              "QUOTE_REQUEST"
+            ],
+            "type": "string"
+          },
+          "sha256": {
+            "example": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "maxLength": 64,
+            "minLength": 64,
+            "type": "string"
+          },
+          "sizeBytes": {
+            "example": 256000,
+            "maximum": 20971520,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "scopeKind",
+          "scopeId",
+          "originalFilename",
+          "contentType",
+          "sizeBytes",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "ReorderEligibilityResponseDto": {
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          },
+          "reason": {
+            "enum": [
+              "AVAILABLE",
+              "SOURCE_EXPIRED",
+              "SOURCE_DELETED",
+              "SOURCE_MISSING"
+            ],
+            "type": "string"
+          },
+          "sourceAvailable": {
+            "description": "True only when the original source is retained. Claim-recovery artifacts never satisfy this value.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "eligible",
+          "reason",
+          "sourceAvailable"
+        ],
+        "type": "object"
+      },
+      "SignedDownloadResponseDto": {
+        "properties": {
+          "downloadUrl": {
+            "format": "uri",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "downloadUrl",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "UploadIntentResponseDto": {
+        "properties": {
+          "accessToken": {
+            "description": "One-time capability used to confirm and later read this upload. It is returned only when the intent is created.",
+            "type": "string"
+          },
+          "assetId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "requiredHeaders": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "example": {
+              "content-type": "model/stl",
+              "x-amz-checksum-sha256": "base64-checksum"
+            },
+            "type": "object"
+          },
+          "uploadId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "uploadUrl": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadId",
+          "assetId",
+          "accessToken",
+          "uploadUrl",
+          "expiresAt",
+          "requiredHeaders"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "bearerFormat": "opaque",
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -53,6 +279,247 @@
         "summary": "Report API process health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/storage/model-files/{modelFileId}/download": {
+      "post": {
+        "operationId": "StorageController_createModelDownload",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "modelFileId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedDownloadResponseDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Capability token is invalid"
+          },
+          "410": {
+            "description": "Model source is expired or deleted"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a short-lived source-file download URL",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/model-files/{modelFileId}/reorder-eligibility": {
+      "get": {
+        "operationId": "StorageController_reorderEligibility",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "modelFileId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReorderEligibilityResponseDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Capability token is invalid"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Report whether the retained source can support a fresh reorder",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/photos/{photoAssetId}/download": {
+      "post": {
+        "operationId": "StorageController_createPhotoDownload",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "photoAssetId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedDownloadResponseDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Capability token is invalid"
+          },
+          "410": {
+            "description": "Photo is expired or deleted"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a short-lived photo download URL",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/uploads/{uploadId}/confirm": {
+      "post": {
+        "operationId": "StorageController_confirmUpload",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uploadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmedUploadResponseDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Capability token is invalid"
+          },
+          "409": {
+            "description": "Stored bytes do not match the declared upload contract"
+          },
+          "410": {
+            "description": "Upload intent or signed URL expired"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Verify and promote a quarantined upload",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/uploads/model-files": {
+      "post": {
+        "operationId": "StorageController_initiateModelUpload",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitiateModelUploadDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadIntentResponseDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Create a direct model-file upload intent",
+        "tags": [
+          "storage"
+        ]
+      }
+    },
+    "/storage/uploads/photos": {
+      "post": {
+        "operationId": "StorageController_initiatePhotoUpload",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitiatePhotoUploadDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadIntentResponseDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a direct quote-reference photo upload intent",
+        "tags": [
+          "storage"
         ]
       }
     }
