@@ -200,6 +200,44 @@ const permittedContext = {
   paymentIntentSetupPhaseResultId: "payment-intent-setup-result-1",
   paymentIntentSetupCompleted: true,
   paymentIntentSetupAtomic: true,
+  paymentIntentFailureResultId: "payment-intent-failure-result-1",
+  paymentIntentFailurePreviousPaymentResultId: "payment-created-result-1",
+  paymentIntentFailureCurrentStateCommandKey: "payment-created-command-1",
+  paymentIntentFailureAttemptKey: "payment-intent-attempt-1",
+  paymentIntentFailureExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "created",
+    providerIntentId: null,
+    resultId: "payment-created-result-1",
+    currentStateCommandKey: "payment-created-command-1",
+    immutable: true,
+  },
+  paymentIntentFailureFailedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    previousStatus: "created",
+    targetStatus: "failed",
+    providerIntentId: null,
+    resultId: "payment-intent-failure-result-1",
+    immutable: true,
+  },
+  paymentIntentFailureEvidence: {
+    attemptKey: "payment-intent-attempt-1",
+    provider: "sandbox",
+    outcome: "failed",
+    providerIntentId: null,
+    resultId: "payment-intent-failure-result-1",
+    immutable: true,
+  },
+  paymentIntentFailurePaymentResultId: "payment-intent-failure-result-1",
+  paymentIntentFailureEvidenceResultId: "payment-intent-failure-result-1",
+  paymentIntentFailureCompleted: true,
+  paymentIntentFailureAtomic: true,
   checkoutCaptureExpiresAt: Instant.parse("2026-01-01T01:00:00.000Z"),
   paymentCaptureWindowId: "capture-window-1",
   paymentCaptureWindowResultId: "capture-window-result-1",
@@ -4976,7 +5014,7 @@ function commandAnchors(
   if (
     policy.name === "Payment" &&
     current === "created" &&
-    target === "pending"
+    (target === "pending" || target === "failed")
   ) {
     return {
       aggregateId: "payment-1",
@@ -15062,6 +15100,112 @@ describe("v0 lifecycle policy tables", () => {
           captureAuthorized: true,
           providerPaymentTransactionId: base.providerPaymentTransactionId,
           paymentCaptureWindow: base.paymentCaptureWindow,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each(["full", "deposit", "balance"] as const)(
+    "fails a created %s Payment from its exact durable intent-creation failure",
+    (paymentRole) => {
+      const base = contextForTransition("failed", "created");
+      const context = {
+        ...base,
+        paymentRole,
+        paymentIntentFailureExpectedPayment: {
+          ...base.paymentIntentFailureExpectedPayment,
+          role: paymentRole,
+        },
+        paymentIntentFailureFailedPayment: {
+          ...base.paymentIntentFailureFailedPayment,
+          role: paymentRole,
+        },
+      };
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "created", "failed"),
+          current: "created",
+          target: "failed",
+          idempotencyKey: `payment-intent-failure-${paymentRole}`,
+          context,
+        }),
+      ).toEqual({ kind: "changed", previous: "created", current: "failed" });
+    },
+  );
+
+  it("rejects incomplete or mismatched created Payment intent failures", () => {
+    const base = contextForTransition("failed", "created");
+    const command = {
+      ...commandAnchors(paymentPolicy, "created", "failed"),
+      current: "created" as const,
+      target: "failed" as const,
+      idempotencyKey: "payment-intent-failure-invalid",
+      context: base,
+    };
+
+    for (const [field, value] of [
+      ["paymentId", "payment-2"],
+      ["orderId", "order-2"],
+      ["phaseId", "phase-2"],
+      ["paymentRole", "unknown"],
+      ["paymentIntentFailurePreviousPaymentResultId", "foreign-result"],
+      ["paymentIntentFailureCurrentStateCommandKey", "foreign-command"],
+      ["paymentIntentFailureResultId", " "],
+      ["paymentIntentFailureAttemptKey", " "],
+      ["paymentIntentFailurePaymentResultId", "foreign-result"],
+      ["paymentIntentFailureEvidenceResultId", "foreign-result"],
+      ["paymentIntentFailureCompleted", false],
+      ["paymentIntentFailureAtomic", false],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: { ...base, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    for (const [recordName, field, value] of [
+      ["paymentIntentFailureExpectedPayment", "id", "payment-2"],
+      ["paymentIntentFailureExpectedPayment", "status", "pending"],
+      ["paymentIntentFailureExpectedPayment", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureExpectedPayment", "immutable", false],
+      ["paymentIntentFailureFailedPayment", "id", "payment-2"],
+      ["paymentIntentFailureFailedPayment", "previousStatus", "pending"],
+      ["paymentIntentFailureFailedPayment", "targetStatus", "voided"],
+      ["paymentIntentFailureFailedPayment", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureFailedPayment", "immutable", false],
+      ["paymentIntentFailureEvidence", "attemptKey", "foreign-attempt"],
+      ["paymentIntentFailureEvidence", "provider", " "],
+      ["paymentIntentFailureEvidence", "outcome", "pending"],
+      ["paymentIntentFailureEvidence", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureEvidence", "immutable", false],
+    ] as const) {
+      const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: {
+            ...base,
+            [recordName]: { ...snapshot, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          paymentId: base.paymentId,
+          orderId: base.orderId,
+          phaseId: base.phaseId,
+          paymentRole: base.paymentRole,
+          ...Object.fromEntries(
+            Object.entries(base).filter(([key]) =>
+              key.startsWith("paymentFailure"),
+            ),
+          ),
         },
       }),
     ).toThrow(TransitionGuardError);

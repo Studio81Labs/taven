@@ -361,6 +361,65 @@ async function advanceAcceptedJobToGcodeReady(
   );
 }
 
+async function persistVerifiedShipmentOutcome(
+  client: PoolClient,
+  shipmentId: string,
+  kind: "TRANSIT_SCAN" | "DELIVERY_SCAN",
+  verifiedAt = new Date(),
+): Promise<void> {
+  const evidence = (
+    await client.query<{ carrier: string; carrier_label_id: string }>(
+      `SELECT carrier, carrier_label_id
+       FROM shipments
+       WHERE id = $1`,
+      [shipmentId],
+    )
+  ).rows[0];
+  if (!evidence) {
+    throw new Error("shipment carrier outcome scope is unavailable");
+  }
+  const providerEventId = `${kind.toLowerCase()}:${randomUUID()}`;
+  await client.query(
+    `INSERT INTO shipment_provider_events
+       (id, shipment_id, carrier, carrier_label_id, provider_event_id,
+        provider_transaction_id, kind, occurred_at, authenticated_at,
+        verified_at, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::shipment_provider_event_kind,
+             $8,$8,$8,$8)`,
+    [
+      randomUUID(),
+      shipmentId,
+      evidence.carrier,
+      evidence.carrier_label_id,
+      providerEventId,
+      `${providerEventId}:transaction`,
+      kind,
+      verifiedAt,
+    ],
+  );
+  if (kind === "TRANSIT_SCAN") {
+    await client.query(
+      `UPDATE shipments
+       SET status = 'IN_TRANSIT', updated_at = $2
+       WHERE id = $1`,
+      [shipmentId, verifiedAt],
+    );
+  } else {
+    await client.query(
+      `UPDATE shipments
+       SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+       WHERE id = $1`,
+      [shipmentId, verifiedAt],
+    );
+  }
+  await client.query(
+    `SET CONSTRAINTS "shipment_provider_events_consumed" IMMEDIATE`,
+  );
+  await client.query(
+    `SET CONSTRAINTS "shipment_provider_events_consumed" DEFERRED`,
+  );
+}
+
 async function advanceOrderLifecycleStep(
   client: PoolClient,
   orderId: string,
@@ -563,12 +622,28 @@ async function advanceOrderLifecycleStep(
       [orderId, transitionedAt],
     );
   } else if (status === "DELIVERED") {
-    await client.query(
-      `UPDATE shipments
-       SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
-       WHERE order_id = $1 AND status IN ('HANDED_OVER', 'IN_TRANSIT')`,
-      [orderId, transitionedAt],
-    );
+    const shipmentIds = (
+      await client.query<{ id: string }>(
+        `SELECT id FROM shipments
+         WHERE order_id = $1 AND status = 'HANDED_OVER'
+         ORDER BY id`,
+        [orderId],
+      )
+    ).rows.map(({ id }) => id);
+    for (const shipmentId of shipmentIds) {
+      await persistVerifiedShipmentOutcome(
+        client,
+        shipmentId,
+        "TRANSIT_SCAN",
+        transitionedAt,
+      );
+      await persistVerifiedShipmentOutcome(
+        client,
+        shipmentId,
+        "DELIVERY_SCAN",
+        transitionedAt,
+      );
+    }
     await client.query(
       `UPDATE fulfilment_slots
        SET outcome = 'DELIVERED', updated_at = $2
@@ -2106,6 +2181,105 @@ describe("commerce persistence foundations", () => {
           code: "23514",
           constraint: "fulfilment_slot_settlement_payment_guard",
         },
+      );
+    });
+  });
+
+  it("reconciles the exact per-capture gateway fee before sealing a price snapshot", async () => {
+    await rollback("payment-schedule-fee", async (client, fixtures) => {
+      const insertSnapshot = async (
+        name: string,
+        feeComponents: readonly number[],
+        rateBasisPoints = 1,
+        fixedMinor = 2,
+      ) => {
+        const snapshotId = fixtures.id(`${name}:snapshot`);
+        const grossAmountMinor = 10_001;
+        const expectedFee = 4;
+        const now = new Date();
+        await client.query(
+          `INSERT INTO price_snapshots
+             (id, currency, contract_total_minor, pricing_revision,
+              input_snapshot, snapshot_hash, created_at)
+           VALUES ($1,'EUR',$2,'fee-v0','{}'::jsonb,$3,$4)`,
+          [
+            snapshotId,
+            grossAmountMinor,
+            randomUUID().replaceAll("-", "").repeat(2),
+            now,
+          ],
+        );
+        await client.query(
+          `INSERT INTO payment_schedules
+             (id, price_snapshot_id, sequence, role, gross_amount_minor,
+              fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+           VALUES ($1,$2,0,'FULL',$3,$4,$5,'{}'::jsonb,$6)`,
+          [
+            fixtures.id(`${name}:schedule`),
+            snapshotId,
+            grossAmountMinor,
+            rateBasisPoints,
+            fixedMinor,
+            now,
+          ],
+        );
+        await client.query(
+          `INSERT INTO price_snapshot_components
+             (id, price_snapshot_id, kind, scope, amount_minor,
+              allocation, created_at)
+           VALUES ($1,$2,'ORDER_MIN_PRINT','ORDER',$3,'{}'::jsonb,$4)`,
+          [
+            fixtures.id(`${name}:base`),
+            snapshotId,
+            grossAmountMinor - expectedFee,
+            now,
+          ],
+        );
+        for (const [index, amount] of feeComponents.entries()) {
+          await client.query(
+            `INSERT INTO price_snapshot_components
+               (id, price_snapshot_id, kind, scope, amount_minor,
+                allocation, created_at)
+             VALUES ($1,$2,'PAYMENT_FEE','ORDER',$3,'{}'::jsonb,$4)`,
+            [fixtures.id(`${name}:fee:${index}`), snapshotId, amount, now],
+          );
+        }
+        await client.query(
+          `SET CONSTRAINTS
+             "price_snapshots_total_reconciled",
+             "price_snapshot_components_total_reconciled",
+             "payment_schedules_total_reconciled" IMMEDIATE`,
+        );
+        await client.query(
+          `SET CONSTRAINTS
+             "price_snapshots_total_reconciled",
+             "price_snapshot_components_total_reconciled",
+             "payment_schedules_total_reconciled" DEFERRED`,
+        );
+      };
+
+      await insertSnapshot("valid-fractional-fee", [4]);
+      for (const [name, components] of [
+        ["missing_fee", []],
+        ["wrong_fee", [3]],
+        ["split_fee", [2, 2]],
+      ] as const) {
+        await expectQueryError(
+          client,
+          name,
+          () => insertSnapshot(name, components),
+          {
+            code: "23514",
+            constraint: "payment_schedule_fee_component_reconciliation_check",
+          },
+        );
+      }
+
+      await expectQueryError(
+        client,
+        "non_finite_fee_rate",
+        () => insertSnapshot("non_finite_fee_rate", [4], 10_000),
+        { code: "23514", constraint: "payment_schedules_values_check" },
       );
     });
   });
@@ -7659,12 +7833,20 @@ describe("commerce persistence foundations", () => {
              WHERE id = $1`,
             [secondShipmentId, deliveredAt],
           );
-          await client.query(
-            `UPDATE shipments
-             SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
-             WHERE order_id = $1 AND status = 'HANDED_OVER'`,
-            [foundation.orderId, deliveredAt],
-          );
+          for (const targetShipmentId of [firstShipmentId, secondShipmentId]) {
+            await persistVerifiedShipmentOutcome(
+              client,
+              targetShipmentId,
+              "TRANSIT_SCAN",
+              deliveredAt,
+            );
+            await persistVerifiedShipmentOutcome(
+              client,
+              targetShipmentId,
+              "DELIVERY_SCAN",
+              deliveredAt,
+            );
+          }
           await client.query(
             `UPDATE fulfilment_slots
              SET outcome = 'DELIVERED', updated_at = $2
@@ -7758,6 +7940,57 @@ describe("commerce persistence foundations", () => {
       );
 
       await advanceOrderLifecycleStep(client, foundation.orderId, "SHIPPED");
+
+      await expectQueryError(
+        client,
+        "skip_transit_before_delivery",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'DELIVERED', delivered_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [shipmentId],
+          ),
+        { code: "23514", constraint: "shipment_status_transition_check" },
+      );
+      await expectQueryError(
+        client,
+        "transit_without_provider_scan",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'IN_TRANSIT', updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [shipmentId],
+          ),
+        {
+          code: "23514",
+          constraint: "shipment_transit_scan_confirmation_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "delivery_without_provider_scan",
+        async () => {
+          await persistVerifiedShipmentOutcome(
+            client,
+            shipmentId,
+            "TRANSIT_SCAN",
+          );
+          await client.query(
+            `UPDATE shipments
+             SET status = 'DELIVERED', delivered_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [shipmentId],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_delivery_scan_confirmation_check",
+        },
+      );
     });
   });
 
@@ -7916,11 +8149,17 @@ describe("commerce persistence foundations", () => {
         "deliver_only_part_of_parcel",
         async () => {
           const deliveredAt = new Date();
-          await client.query(
-            `UPDATE shipments
-             SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
-             WHERE id = $1`,
-            [firstShipmentId, deliveredAt],
+          await persistVerifiedShipmentOutcome(
+            client,
+            firstShipmentId,
+            "TRANSIT_SCAN",
+            deliveredAt,
+          );
+          await persistVerifiedShipmentOutcome(
+            client,
+            firstShipmentId,
+            "DELIVERY_SCAN",
+            deliveredAt,
           );
           await client.query(
             `UPDATE fulfilment_slots
@@ -7947,11 +8186,17 @@ describe("commerce persistence foundations", () => {
       );
 
       const deliveredAt = new Date();
-      await client.query(
-        `UPDATE shipments
-         SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
-         WHERE id = $1`,
-        [firstShipmentId, deliveredAt],
+      await persistVerifiedShipmentOutcome(
+        client,
+        firstShipmentId,
+        "TRANSIT_SCAN",
+        deliveredAt,
+      );
+      await persistVerifiedShipmentOutcome(
+        client,
+        firstShipmentId,
+        "DELIVERY_SCAN",
+        deliveredAt,
       );
       await client.query(
         `UPDATE fulfilment_slots slot
@@ -8001,12 +8246,27 @@ describe("commerce persistence foundations", () => {
         "finish_delivery_without_parent_transition",
         async () => {
           const finalDeliveredAt = new Date();
-          await client.query(
-            `UPDATE shipments
-             SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
-             WHERE order_id = $1 AND status IN ('HANDED_OVER', 'IN_TRANSIT')`,
-            [foundation.orderId, finalDeliveredAt],
-          );
+          const remainingShipmentIds = (
+            await client.query<{ id: string }>(
+              `SELECT id FROM shipments
+               WHERE order_id = $1 AND status = 'HANDED_OVER'`,
+              [foundation.orderId],
+            )
+          ).rows.map(({ id }) => id);
+          for (const shipmentId of remainingShipmentIds) {
+            await persistVerifiedShipmentOutcome(
+              client,
+              shipmentId,
+              "TRANSIT_SCAN",
+              finalDeliveredAt,
+            );
+            await persistVerifiedShipmentOutcome(
+              client,
+              shipmentId,
+              "DELIVERY_SCAN",
+              finalDeliveredAt,
+            );
+          }
           await client.query(
             `UPDATE fulfilment_slots
              SET outcome = 'DELIVERED', updated_at = $2
@@ -8357,12 +8617,20 @@ describe("commerce persistence foundations", () => {
                  WHERE order_id = $1`,
                 [foundation.orderId, deliveredAt],
               );
-              await client.query(
-                `UPDATE shipments
-                 SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
-                 WHERE order_id = $1`,
-                [foundation.orderId, deliveredAt],
-              );
+              for (const shipmentId of foundation.shipmentIds) {
+                await persistVerifiedShipmentOutcome(
+                  client,
+                  shipmentId,
+                  "TRANSIT_SCAN",
+                  deliveredAt,
+                );
+                await persistVerifiedShipmentOutcome(
+                  client,
+                  shipmentId,
+                  "DELIVERY_SCAN",
+                  deliveredAt,
+                );
+              }
               await client.query(
                 `UPDATE fulfilment_slots
                  SET outcome = 'DELIVERED', updated_at = $2
@@ -9111,6 +9379,12 @@ describe("commerce persistence foundations", () => {
                  SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
                  WHERE id = $1`,
                 [shipmentId, past],
+              );
+              await persistVerifiedShipmentOutcome(
+                client,
+                shipmentId,
+                "TRANSIT_SCAN",
+                past,
               );
               await client.query(
                 `UPDATE shipments

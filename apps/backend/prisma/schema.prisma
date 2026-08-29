@@ -274,6 +274,8 @@ enum ShipmentStatus {
 enum ShipmentProviderEventKind {
   LABEL_VOIDED
   ACCEPTANCE_SCAN
+  TRANSIT_SCAN
+  DELIVERY_SCAN
 
   @@map("shipment_provider_event_kind")
 }

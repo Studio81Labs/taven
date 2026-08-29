@@ -29,7 +29,7 @@ CREATE TYPE "fulfilment_slot_outcome" AS ENUM ('PENDING', 'DELIVERED', 'CANCELLE
 CREATE TYPE "shipment_status" AS ENUM ('PLANNED', 'LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED');
 
 -- CreateEnum
-CREATE TYPE "shipment_provider_event_kind" AS ENUM ('LABEL_VOIDED', 'ACCEPTANCE_SCAN');
+CREATE TYPE "shipment_provider_event_kind" AS ENUM ('LABEL_VOIDED', 'ACCEPTANCE_SCAN', 'TRANSIT_SCAN', 'DELIVERY_SCAN');
 
 -- CreateEnum
 CREATE TYPE "job_status" AS ENUM ('CREATED', 'ACCEPTED', 'GCODE_READY', 'PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED', 'HANDED_OVER', 'SETTLED', 'CANCELLED', 'FAILED', 'QC_REJECTED');
@@ -662,7 +662,7 @@ ALTER TABLE "price_snapshot_components" ADD CONSTRAINT "price_snapshot_component
     )
 );
 ALTER TABLE "price_component_fulfilment_allocations" ADD CONSTRAINT "price_component_fulfilment_allocations_amount_check" CHECK ("amount_minor" >= 0);
-ALTER TABLE "payment_schedules" ADD CONSTRAINT "payment_schedules_values_check" CHECK ("sequence" >= 0 AND "gross_amount_minor" >= 0 AND "fee_rate_basis_points" >= 0 AND "fee_fixed_minor" >= 0);
+ALTER TABLE "payment_schedules" ADD CONSTRAINT "payment_schedules_values_check" CHECK ("sequence" >= 0 AND "gross_amount_minor" >= 0 AND "fee_rate_basis_points" >= 0 AND "fee_rate_basis_points" < 10000 AND "fee_fixed_minor" >= 0);
 ALTER TABLE "orders" ADD CONSTRAINT "orders_public_reference_identity_check" CHECK ("public_reference" ~ '[^[:space:]]');
 ALTER TABLE "orders" ADD CONSTRAINT "orders_checkout_acceptance_shape_check" CHECK (
     (
@@ -4944,6 +4944,41 @@ AFTER UPDATE OF "settlement_amount_minor" ON "fulfilment_slots"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_quoted_order_fulfilment_money();
 
+CREATE FUNCTION taven_assert_payment_schedule_fee_component(target_snapshot_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    expected_fee numeric;
+    actual_fee numeric;
+    fee_component_count integer;
+BEGIN
+    SELECT coalesce(sum(
+               ceil(
+                   schedule."gross_amount_minor"::numeric
+                   * schedule."fee_rate_basis_points"::numeric
+                   / 10000::numeric
+               ) + schedule."fee_fixed_minor"::numeric
+           ), 0)
+    INTO expected_fee
+    FROM "payment_schedules" schedule
+    WHERE schedule."price_snapshot_id" = target_snapshot_id;
+
+    SELECT count(*), coalesce(sum(component."amount_minor"::numeric), 0)
+    INTO fee_component_count, actual_fee
+    FROM "price_snapshot_components" component
+    WHERE component."price_snapshot_id" = target_snapshot_id
+      AND component."kind" = 'PAYMENT_FEE'
+      AND component."scope" = 'ORDER';
+
+    IF actual_fee <> expected_fee
+       OR fee_component_count <> (CASE WHEN expected_fee > 0 THEN 1 ELSE 0 END) THEN
+        RAISE EXCEPTION 'price snapshot % requires one exact payment fee component for its complete schedule', target_snapshot_id
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_schedule_fee_component_reconciliation_check';
+    END IF;
+END;
+$$;
+
 CREATE FUNCTION taven_validate_price_snapshot_totals()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -4985,6 +5020,8 @@ BEGIN
     FROM "payment_schedules"
     WHERE "price_snapshot_id" = target_snapshot_id
       AND "role" = 'FULL';
+
+    PERFORM taven_assert_payment_schedule_fee_component(target_snapshot_id);
 
     IF component_total <> contract_total
        OR schedule_count <> 1
@@ -6319,6 +6356,7 @@ DECLARE
     target_label_id varchar(255);
     target_label_created_at timestamptz;
     target_cancellation_requested_at timestamptz;
+    target_handed_over_at timestamptz;
     evidence_now timestamptz := clock_timestamp();
 BEGIN
     IF TG_OP <> 'INSERT' THEN
@@ -6327,14 +6365,21 @@ BEGIN
     END IF;
 
     SELECT shipment."status", shipment."carrier", shipment."carrier_label_id",
-           shipment."label_created_at", shipment."cancellation_requested_at"
+           shipment."label_created_at", shipment."cancellation_requested_at",
+           shipment."handed_over_at"
     INTO target_status, target_carrier, target_label_id,
-         target_label_created_at, target_cancellation_requested_at
+         target_label_created_at, target_cancellation_requested_at,
+         target_handed_over_at
     FROM "shipments" shipment
     WHERE shipment."id" = NEW."shipment_id"
     FOR UPDATE;
 
-    IF target_status IS DISTINCT FROM 'CANCELLATION_PENDING'::"shipment_status"
+    IF ((NEW."kind" IN ('LABEL_VOIDED', 'ACCEPTANCE_SCAN')
+         AND target_status IS DISTINCT FROM 'CANCELLATION_PENDING'::"shipment_status")
+        OR (NEW."kind" = 'TRANSIT_SCAN'
+            AND target_status IS DISTINCT FROM 'HANDED_OVER'::"shipment_status")
+        OR (NEW."kind" = 'DELIVERY_SCAN'
+            AND target_status IS DISTINCT FROM 'IN_TRANSIT'::"shipment_status"))
        OR NEW."carrier" IS DISTINCT FROM target_carrier
        OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id
        OR NEW."carrier" !~ '[^[:space:]]'
@@ -6349,6 +6394,9 @@ BEGIN
        OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
        OR NEW."verified_at" > evidence_now + interval '5 seconds'
        OR NEW."occurred_at" < target_label_created_at
+       OR (NEW."kind" IN ('TRANSIT_SCAN', 'DELIVERY_SCAN')
+           AND (target_handed_over_at IS NULL
+                OR NEW."occurred_at" < target_handed_over_at))
        OR NEW."authenticated_at" < NEW."occurred_at"
        OR NEW."verified_at" < NEW."authenticated_at" THEN
         RAISE EXCEPTION 'Shipment provider event timestamps must be current and chronological'
@@ -6380,9 +6428,9 @@ BEGIN
             RAISE EXCEPTION 'Provider label void must prove the exact delivered outbox command'
                 USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_outbox_check';
         END IF;
-    ELSIF NEW."kind" = 'ACCEPTANCE_SCAN' THEN
+    ELSIF NEW."kind" IN ('ACCEPTANCE_SCAN', 'TRANSIT_SCAN', 'DELIVERY_SCAN') THEN
         IF NEW."outbox_message_id" IS NOT NULL THEN
-            RAISE EXCEPTION 'Carrier acceptance scan cannot consume a provider-void outbox command'
+            RAISE EXCEPTION 'Carrier outcome scans cannot consume a provider-void outbox command'
                 USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_outbox_check';
         END IF;
     END IF;
@@ -6417,6 +6465,21 @@ BEGIN
                  AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
                  AND shipment."provider_acceptance_scan_id" = NEW."provider_event_id"
                  AND shipment."handed_over_at" = NEW."verified_at"
+           ))
+       OR (NEW."kind" = 'TRANSIT_SCAN'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "shipments" shipment
+               WHERE shipment."id" = NEW."shipment_id"
+                 AND shipment."status" = 'IN_TRANSIT'
+           ))
+       OR (NEW."kind" = 'DELIVERY_SCAN'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "shipments" shipment
+               WHERE shipment."id" = NEW."shipment_id"
+                 AND shipment."status" = 'DELIVERED'
+                 AND shipment."delivered_at" = NEW."verified_at"
            )) THEN
         RAISE EXCEPTION 'Shipment provider event and its complete lifecycle outcome must commit atomically'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_consumption_check';
@@ -6514,7 +6577,7 @@ BEGIN
            (OLD."status" = 'PLANNED' AND NEW."status" IN ('LABEL_CREATED', 'CANCELLED'))
            OR (OLD."status" = 'LABEL_CREATED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLATION_PENDING'))
            OR (OLD."status" = 'CANCELLATION_PENDING' AND NEW."status" IN ('CANCELLED', 'HANDED_OVER'))
-           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" IN ('IN_TRANSIT', 'DELIVERED'))
+           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'IN_TRANSIT')
            OR (OLD."status" = 'IN_TRANSIT' AND NEW."status" = 'DELIVERED')
        ) THEN
         RAISE EXCEPTION 'Shipment status transition is not allowed'
@@ -6561,7 +6624,7 @@ BEGIN
                AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
-           OR (OLD."status" IN ('HANDED_OVER', 'IN_TRANSIT') AND NEW."status" = 'DELIVERED'
+           OR (OLD."status" = 'IN_TRANSIT' AND NEW."status" = 'DELIVERED'
                AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
                AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
                AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
@@ -6746,6 +6809,39 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'pending cancellation may hand off only from its exact verified carrier acceptance scan'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_acceptance_scan_confirmation_check';
+    END IF;
+
+    IF OLD."status" = 'HANDED_OVER'
+       AND NEW."status" = 'IN_TRANSIT'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "shipment_provider_events" event
+           WHERE event."shipment_id" = NEW."id"
+             AND event."outbox_message_id" IS NULL
+             AND event."kind" = 'TRANSIT_SCAN'
+             AND event."carrier" = NEW."carrier"
+             AND event."carrier_label_id" = NEW."carrier_label_id"
+             AND event."occurred_at" >= NEW."handed_over_at"
+       ) THEN
+        RAISE EXCEPTION 'Shipment transit requires its exact authenticated carrier scan'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_transit_scan_confirmation_check';
+    END IF;
+
+    IF OLD."status" = 'IN_TRANSIT'
+       AND NEW."status" = 'DELIVERED'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "shipment_provider_events" event
+           WHERE event."shipment_id" = NEW."id"
+             AND event."outbox_message_id" IS NULL
+             AND event."kind" = 'DELIVERY_SCAN'
+             AND event."carrier" = NEW."carrier"
+             AND event."carrier_label_id" = NEW."carrier_label_id"
+             AND event."occurred_at" >= NEW."handed_over_at"
+             AND event."verified_at" = NEW."delivered_at"
+       ) THEN
+        RAISE EXCEPTION 'Shipment delivery requires its exact authenticated carrier scan'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_delivery_scan_confirmation_check';
     END IF;
 
     IF OLD."status" = 'LABEL_CREATED'

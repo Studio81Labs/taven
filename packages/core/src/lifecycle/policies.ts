@@ -2226,6 +2226,81 @@ function requireVerifiedMatchingProviderPaymentEvent<S extends string>(
   }
 }
 
+function requireExactPaymentIntentCreationFailure<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const previousResultId = context?.paymentIntentFailurePreviousPaymentResultId;
+  const stateKey = context?.paymentIntentFailureCurrentStateCommandKey;
+  const resultId = context?.paymentIntentFailureResultId;
+  const attemptKey = context?.paymentIntentFailureAttemptKey;
+  const expectedPayment = record(context?.paymentIntentFailureExpectedPayment);
+  const failedPayment = record(context?.paymentIntentFailureFailedPayment);
+  const failure = record(context?.paymentIntentFailureEvidence);
+
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(resultId) ||
+    !nonBlank(attemptKey) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedPayment?.id !== paymentId ||
+    expectedPayment.orderId !== orderId ||
+    expectedPayment.phaseId !== phaseId ||
+    expectedPayment.role !== role ||
+    expectedPayment.status !== "created" ||
+    expectedPayment.providerIntentId !== null ||
+    expectedPayment.resultId !== previousResultId ||
+    expectedPayment.currentStateCommandKey !== stateKey ||
+    expectedPayment.immutable !== true ||
+    failedPayment?.id !== paymentId ||
+    failedPayment.orderId !== orderId ||
+    failedPayment.phaseId !== phaseId ||
+    failedPayment.role !== role ||
+    failedPayment.previousStatus !== "created" ||
+    failedPayment.targetStatus !== "failed" ||
+    failedPayment.providerIntentId !== null ||
+    failedPayment.resultId !== resultId ||
+    failedPayment.immutable !== true ||
+    failure?.attemptKey !== attemptKey ||
+    !nonBlank(failure.provider) ||
+    failure.outcome !== "failed" ||
+    failure.providerIntentId !== null ||
+    failure.resultId !== resultId ||
+    failure.immutable !== true ||
+    context?.paymentIntentFailurePaymentResultId !== resultId ||
+    context?.paymentIntentFailureEvidenceResultId !== resultId ||
+    context?.paymentIntentFailureCompleted !== true ||
+    context?.paymentIntentFailureAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Payment intent creation failure requires the exact created Payment, durable provider attempt failure, and atomic result",
+    );
+  }
+}
+
 function requireExactPendingPaymentFailure<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -6540,7 +6615,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   initial: ["created"],
   terminal: ["failed", "refunded"],
   transitions: {
-    created: ["pending"],
+    created: ["pending", "failed"],
     pending: ["captured", "failed", "voided", "refund_pending"],
     captured: ["refund_pending"],
     partially_refunded: ["refund_pending"],
@@ -6550,6 +6625,9 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   guard: (command) => {
     if (command.current === "created" && command.target === "pending") {
       requireExactPaymentIntentSetup("Payment", command);
+    }
+    if (command.current === "created" && command.target === "failed") {
+      requireExactPaymentIntentCreationFailure("Payment", command);
     }
     if (command.current === "pending" && command.target === "captured") {
       if (command.context?.paymentCaptureKind !== "settlement") {
