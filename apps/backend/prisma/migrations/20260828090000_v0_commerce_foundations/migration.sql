@@ -6549,7 +6549,7 @@ BEGIN
                'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'
            ))
        OR (NEW."kind" = 'TRANSIT_SCAN'
-           AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT'))
+           AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'))
        OR (NEW."kind" = 'DELIVERY_SCAN'
            AND target_status NOT IN ('IN_TRANSIT', 'DELIVERED'))
        OR NEW."carrier" IS DISTINCT FROM target_carrier
@@ -6638,7 +6638,7 @@ BEGIN
                SELECT 1
                FROM "shipments" shipment
                WHERE shipment."id" = NEW."shipment_id"
-                 AND shipment."status" = 'IN_TRANSIT'
+                 AND shipment."status" IN ('IN_TRANSIT', 'DELIVERED')
            ))
        OR (NEW."kind" = 'DELIVERY_SCAN'
            AND NOT EXISTS (
@@ -7535,7 +7535,23 @@ BEGIN
               AND payment."provider_capture_id" = NEW."provider_transaction_id"
               AND payment."captured_amount_minor" = NEW."amount_minor"
               AND payment."currency" = NEW."currency"
-              AND payment."captured_at" = NEW."verified_at"
+              AND (
+                  payment."captured_at" = NEW."verified_at"
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "payment_provider_events" exact_event
+                      WHERE exact_event."id" <> NEW."id"
+                        AND exact_event."payment_id" = NEW."payment_id"
+                        AND exact_event."refund_transaction_id" IS NULL
+                        AND exact_event."provider" = NEW."provider"
+                        AND exact_event."kind" = 'PAYMENT_CAPTURED'
+                        AND exact_event."provider_transaction_id" =
+                            NEW."provider_transaction_id"
+                        AND exact_event."amount_minor" = NEW."amount_minor"
+                        AND exact_event."currency" = NEW."currency"
+                        AND exact_event."verified_at" = payment."captured_at"
+                  )
+              )
         ))
        OR (NEW."kind" = 'PAYMENT_FAILED'
            AND NOT EXISTS (
@@ -7556,7 +7572,24 @@ BEGIN
                  AND refund."provider" = NEW."provider"
                  AND refund."provider_refund_id" = NEW."provider_transaction_id"
                  AND refund."amount_minor" = NEW."amount_minor"
-                 AND refund."completed_at" = NEW."verified_at"
+                 AND (
+                     refund."completed_at" = NEW."verified_at"
+                     OR EXISTS (
+                         SELECT 1
+                         FROM "payment_provider_events" exact_event
+                         WHERE exact_event."id" <> NEW."id"
+                           AND exact_event."payment_id" = NEW."payment_id"
+                           AND exact_event."refund_transaction_id" =
+                               NEW."refund_transaction_id"
+                           AND exact_event."provider" = NEW."provider"
+                           AND exact_event."kind" = 'REFUND_SUCCEEDED'
+                           AND exact_event."provider_transaction_id" =
+                               NEW."provider_transaction_id"
+                           AND exact_event."amount_minor" = NEW."amount_minor"
+                           AND exact_event."currency" = NEW."currency"
+                           AND exact_event."verified_at" = refund."completed_at"
+                     )
+                 )
            ))
        OR (NEW."kind" = 'REFUND_FAILED'
            AND NOT EXISTS (

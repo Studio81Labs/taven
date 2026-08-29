@@ -6309,6 +6309,41 @@ describe("commerce persistence foundations", () => {
         },
       ]);
 
+      const repeatedCaptureVerifiedAt = new Date(capturedAt.getTime() + 1);
+      expect(repeatedCaptureVerifiedAt).not.toEqual(capturedAt);
+      await fixtures.persistPaymentProviderEvent(
+        captured.paymentId,
+        "PAYMENT_CAPTURED",
+        providerCaptureId,
+        repeatedCaptureVerifiedAt,
+        null,
+        "receipt-backed-capture-event-repeat",
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{
+            captured_at: Date;
+            event_count: string;
+          }>(
+            `SELECT payment.captured_at,
+                    count(event.id)::text AS event_count
+             FROM payments payment
+             JOIN payment_provider_events event
+               ON event.payment_id = payment.id
+              AND event.kind = 'PAYMENT_CAPTURED'
+             WHERE payment.id = $1
+             GROUP BY payment.captured_at`,
+            [captured.paymentId],
+          )
+        ).rows,
+      ).toEqual([{ captured_at: capturedAt, event_count: "2" }]);
+
       await expectQueryError(
         client,
         "mutate_payment_provider_receipt",
@@ -10037,6 +10072,66 @@ describe("commerce persistence foundations", () => {
           );
         }
       }
+
+      const delivered = (
+        await client.query<{
+          delivered_at: Date;
+          handed_over_at: Date;
+          provider_acceptance_scan_id: string | null;
+          status: string;
+        }>(
+          `SELECT status::text, handed_over_at, delivered_at,
+                  provider_acceptance_scan_id
+           FROM shipments
+           WHERE id = $1`,
+          [foundation.shipmentId],
+        )
+      ).rows[0];
+      if (!delivered?.delivered_at) {
+        throw new Error("delivered shipment evidence is unavailable");
+      }
+      await persistVerifiedShipmentOutcome(
+        client,
+        foundation.shipmentId,
+        "TRANSIT_SCAN",
+        new Date(),
+        "delayed-post-delivery-transit",
+        false,
+      );
+      expect(
+        (
+          await client.query<{
+            delivered_at: Date;
+            handed_over_at: Date;
+            provider_acceptance_scan_id: string | null;
+            status: string;
+            transit_event_count: string;
+          }>(
+            `SELECT shipment.status::text AS status,
+                    shipment.handed_over_at,
+                    shipment.delivered_at,
+                    shipment.provider_acceptance_scan_id,
+                    count(event.id)::text AS transit_event_count
+             FROM shipments shipment
+             JOIN shipment_provider_events event
+               ON event.shipment_id = shipment.id
+              AND event.kind = 'TRANSIT_SCAN'
+             WHERE shipment.id = $1
+             GROUP BY shipment.status, shipment.handed_over_at,
+                      shipment.delivered_at,
+                      shipment.provider_acceptance_scan_id`,
+            [foundation.shipmentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          delivered_at: delivered.delivered_at,
+          handed_over_at: delivered.handed_over_at,
+          provider_acceptance_scan_id: delivered.provider_acceptance_scan_id,
+          status: "DELIVERED",
+          transit_event_count: "2",
+        },
+      ]);
     });
   });
 
@@ -12358,6 +12453,41 @@ describe("commerce persistence foundations", () => {
                          "refund_transactions_payment_status_reconciled",
                          "refunds_customer_cancellation_order_reconciled" DEFERRED`,
       );
+      const repeatedRefundVerifiedAt = new Date(
+        refundCompletedAt.getTime() + 1,
+      );
+      expect(repeatedRefundVerifiedAt).not.toEqual(refundCompletedAt);
+      await fixtures.persistRefundProviderEvent(
+        fixtures.id("refund-first"),
+        "REFUND_SUCCEEDED",
+        "provider-refund-first",
+        repeatedRefundVerifiedAt,
+        "provider-refund-first-event-repeat",
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{
+            completed_at: Date;
+            event_count: string;
+          }>(
+            `SELECT refund.completed_at,
+                    count(event.id)::text AS event_count
+             FROM refund_transactions refund
+             JOIN payment_provider_events event
+               ON event.refund_transaction_id = refund.id
+              AND event.kind = 'REFUND_SUCCEEDED'
+             WHERE refund.id = $1
+             GROUP BY refund.completed_at`,
+            [fixtures.id("refund-first")],
+          )
+        ).rows,
+      ).toEqual([{ completed_at: refundCompletedAt, event_count: "2" }]);
       await expectQueryError(
         client,
         "partial_status_while_cancellation_work_pending",
