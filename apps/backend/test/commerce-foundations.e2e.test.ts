@@ -9857,6 +9857,45 @@ describe("commerce persistence foundations", () => {
             provider_acceptance_scan_id: providerScanId,
           },
         ]);
+        const delayedProviderScanId = "delayed-provider-acceptance-scan";
+        await persistVerifiedAcceptanceScan(
+          client,
+          foundation.shipmentId,
+          delayedProviderScanId,
+        );
+        await client.query(
+          `SET CONSTRAINTS "shipment_provider_events_consumed" IMMEDIATE`,
+        );
+        await client.query(
+          `SET CONSTRAINTS "shipment_provider_events_consumed" DEFERRED`,
+        );
+        expect(
+          (
+            await client.query<{
+              acceptance_event_count: string;
+              handed_over_at: Date;
+              provider_acceptance_scan_id: string;
+            }>(
+              `SELECT count(event.id)::text AS acceptance_event_count,
+                      shipment.handed_over_at,
+                      shipment.provider_acceptance_scan_id
+               FROM shipments shipment
+               JOIN shipment_provider_events event
+                 ON event.shipment_id = shipment.id
+                AND event.kind = 'ACCEPTANCE_SCAN'
+               WHERE shipment.id = $1
+               GROUP BY shipment.handed_over_at,
+                        shipment.provider_acceptance_scan_id`,
+              [foundation.shipmentId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            acceptance_event_count: "2",
+            handed_over_at: handedOverAt,
+            provider_acceptance_scan_id: providerScanId,
+          },
+        ]);
         expect(
           (
             await client.query<{ count: string }>(
@@ -9882,6 +9921,123 @@ describe("commerce persistence foundations", () => {
         );
       },
     );
+  });
+
+  it("records delayed acceptance scans as no-ops after ordinary handoff", async () => {
+    await rollback("delayed-acceptance-scan", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "delayed-acceptance-scan",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+      ] as const) {
+        await advanceOrderLifecycleStep(client, foundation.orderId, status);
+      }
+      await expectQueryError(
+        client,
+        "acceptance_scan_before_handoff",
+        () =>
+          persistVerifiedAcceptanceScan(
+            client,
+            foundation.shipmentId,
+            "pre-handoff-acceptance-scan",
+          ),
+        { code: "23514", constraint: "shipment_provider_event_scope_check" },
+      );
+      await advanceOrderLifecycleStep(client, foundation.orderId, "SHIPPED");
+
+      const original = (
+        await client.query<{
+          handed_over_at: Date;
+          provider_acceptance_scan_id: string | null;
+        }>(
+          `SELECT handed_over_at, provider_acceptance_scan_id
+           FROM shipments
+           WHERE id = $1`,
+          [foundation.shipmentId],
+        )
+      ).rows[0];
+      if (!original?.handed_over_at) {
+        throw new Error("ordinary handoff evidence is unavailable");
+      }
+      expect(original.provider_acceptance_scan_id).toBeNull();
+
+      for (const status of [
+        "HANDED_OVER",
+        "IN_TRANSIT",
+        "DELIVERED",
+      ] as const) {
+        const providerEventId = `delayed-${status.toLowerCase()}-acceptance`;
+        await persistVerifiedAcceptanceScan(
+          client,
+          foundation.shipmentId,
+          providerEventId,
+        );
+        await client.query(
+          `SET CONSTRAINTS "shipment_provider_events_consumed" IMMEDIATE`,
+        );
+        await client.query(
+          `SET CONSTRAINTS "shipment_provider_events_consumed" DEFERRED`,
+        );
+        expect(
+          (
+            await client.query<{
+              event_count: string;
+              handed_over_at: Date;
+              provider_acceptance_scan_id: string | null;
+              status: string;
+            }>(
+              `SELECT shipment.status::text AS status,
+                      shipment.handed_over_at,
+                      shipment.provider_acceptance_scan_id,
+                      count(event.id)::text AS event_count
+               FROM shipments shipment
+               JOIN shipment_provider_events event
+                 ON event.shipment_id = shipment.id
+                AND event.kind = 'ACCEPTANCE_SCAN'
+               WHERE shipment.id = $1
+               GROUP BY shipment.status, shipment.handed_over_at,
+                        shipment.provider_acceptance_scan_id`,
+              [foundation.shipmentId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            event_count:
+              status === "HANDED_OVER"
+                ? "1"
+                : status === "IN_TRANSIT"
+                  ? "2"
+                  : "3",
+            handed_over_at: original.handed_over_at,
+            provider_acceptance_scan_id: null,
+            status,
+          },
+        ]);
+
+        if (status === "HANDED_OVER") {
+          await persistVerifiedShipmentOutcome(
+            client,
+            foundation.shipmentId,
+            "TRANSIT_SCAN",
+          );
+        } else if (status === "IN_TRANSIT") {
+          await persistVerifiedShipmentOutcome(
+            client,
+            foundation.shipmentId,
+            "DELIVERY_SCAN",
+          );
+        }
+      }
+    });
   });
 
   it("rejects future evidence for every Shipment lifecycle timestamp", async () => {
@@ -12933,6 +13089,115 @@ describe("commerce persistence foundations", () => {
       setup.release();
       holdingSession.release();
       mutatingOrder.release();
+    }
+  });
+
+  it("reserves shipment receipts before locking their order envelope", async () => {
+    const setup = await pool.connect();
+    const orderHolder = await pool.connect();
+    const receiptWriter = await pool.connect();
+    let receiptInsert: Promise<Date> | undefined;
+    try {
+      const fixtureScope = `${scope}:shipment-receipt-lock-order`;
+      const fixtures = new PersistenceFactory(setup, fixtureScope);
+      await setup.query("BEGIN");
+      const foundation = await fixtures.createFoundation(
+        "shipment-receipt-lock-order",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        setup,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(setup, fixtures, foundation, productions);
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+      ] as const) {
+        await advanceOrderLifecycleStep(setup, foundation.orderId, status);
+      }
+      await setup.query(
+        `UPDATE shipments
+         SET status = 'CANCELLATION_PENDING',
+             cancellation_requested_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [foundation.shipmentId],
+      );
+      await setup.query(
+        `UPDATE phase_reservation_sets
+         SET status = 'SETTLED', updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [foundation.phaseReservationSetId],
+      );
+      await setup.query("COMMIT");
+
+      await orderHolder.query("BEGIN");
+      await orderHolder.query(`SELECT 1 FROM orders WHERE id = $1 FOR UPDATE`, [
+        foundation.orderId,
+      ]);
+
+      await receiptWriter.query("BEGIN");
+      await receiptWriter.query("SET LOCAL statement_timeout = '3s'");
+      const receiptWriterPid = (
+        await receiptWriter.query<{ pid: number }>(
+          `SELECT pg_backend_pid() AS pid`,
+        )
+      ).rows[0]?.pid;
+      if (!receiptWriterPid) {
+        throw new Error("shipment receipt backend pid is unavailable");
+      }
+      receiptInsert = persistVerifiedAcceptanceScan(
+        receiptWriter,
+        foundation.shipmentId,
+        "lock-ordered-acceptance-scan",
+      );
+
+      let receiptWaitsForOrder = false;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const activity = await orderHolder.query<{
+          wait_event_type: string | null;
+        }>(
+          `SELECT wait_event_type
+           FROM pg_stat_activity
+           WHERE pid = $1`,
+          [receiptWriterPid],
+        );
+        if (activity.rows[0]?.wait_event_type === "Lock") {
+          receiptWaitsForOrder = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(receiptWaitsForOrder).toBe(true);
+
+      for (const table of [
+        "order_phases",
+        "fulfilment_slots",
+        "shipment_plans",
+        "jobs",
+        "shipments",
+      ] as const) {
+        await expect(
+          orderHolder.query(
+            `SELECT 1 FROM ${table} WHERE order_id = $1 FOR UPDATE NOWAIT`,
+            [foundation.orderId],
+          ),
+        ).resolves.toBeDefined();
+      }
+
+      await orderHolder.query("ROLLBACK");
+      await expect(receiptInsert).resolves.toBeInstanceOf(Date);
+      await receiptWriter.query("ROLLBACK");
+    } finally {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      await orderHolder.query("ROLLBACK").catch(() => undefined);
+      await receiptWriter.query("ROLLBACK").catch(() => undefined);
+      await receiptInsert?.catch(() => undefined);
+      setup.release();
+      orderHolder.release();
+      receiptWriter.release();
     }
   });
 

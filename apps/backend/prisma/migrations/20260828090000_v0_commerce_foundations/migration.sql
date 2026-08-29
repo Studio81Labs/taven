@@ -619,8 +619,8 @@ ALTER TABLE "shipments" ADD CONSTRAINT "shipments_order_phase_id_order_id_fkey" 
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_shipment_plan_id_order_id_order_phase_id_deliver_fkey" FOREIGN KEY ("shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") REFERENCES "shipment_plans"("id", "order_id", "order_phase_id", "delivery_destination_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_delivery_destination_id_order_id_fkey" FOREIGN KEY ("delivery_destination_id", "order_id") REFERENCES "delivery_destinations"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "shipments" ADD CONSTRAINT "shipments_replacement_scope_fkey" FOREIGN KEY ("replaces_shipment_id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") REFERENCES "shipments"("id", "shipment_plan_id", "order_id", "order_phase_id", "delivery_destination_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "shipment_provider_events" ADD CONSTRAINT "shipment_provider_events_shipment_id_fkey" FOREIGN KEY ("shipment_id") REFERENCES "shipments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "shipment_provider_events" ADD CONSTRAINT "shipment_provider_events_outbox_message_id_fkey" FOREIGN KEY ("outbox_message_id") REFERENCES "outbox_messages"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "shipment_provider_events" ADD CONSTRAINT "shipment_provider_events_shipment_id_fkey" FOREIGN KEY ("shipment_id") REFERENCES "shipments"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "shipment_provider_events" ADD CONSTRAINT "shipment_provider_events_outbox_message_id_fkey" FOREIGN KEY ("outbox_message_id") REFERENCES "outbox_messages"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "nodes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "jobs" ADD CONSTRAINT "jobs_order_phase_id_order_id_fkey" FOREIGN KEY ("order_phase_id", "order_id") REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -6431,18 +6431,107 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    target_status "shipment_status";
-    target_carrier varchar(100);
-    target_label_id varchar(255);
-    target_label_created_at timestamptz;
-    target_cancellation_requested_at timestamptz;
-    target_handed_over_at timestamptz;
     evidence_now timestamptz := clock_timestamp();
 BEGIN
     IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'Shipment provider events are immutable audit evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_immutable_check';
     END IF;
+
+    IF NEW."carrier" !~ '[^[:space:]]'
+       OR NEW."carrier_label_id" !~ '[^[:space:]]'
+       OR NEW."provider_event_id" !~ '[^[:space:]]'
+       OR NEW."provider_transaction_id" !~ '[^[:space:]]' THEN
+        RAISE EXCEPTION 'Shipment provider event must contain exact provider identity evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
+    END IF;
+
+    IF NEW."occurred_at" > evidence_now + interval '5 seconds'
+       OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
+       OR NEW."verified_at" > evidence_now + interval '5 seconds'
+       OR NEW."authenticated_at" < NEW."occurred_at"
+       OR NEW."verified_at" < NEW."authenticated_at" THEN
+        RAISE EXCEPTION 'Shipment provider event timestamps must be current and chronological'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_evidence_check';
+    END IF;
+
+    IF (NEW."kind" = 'LABEL_VOIDED' AND NEW."outbox_message_id" IS NULL)
+       OR (NEW."kind" IN ('ACCEPTANCE_SCAN', 'TRANSIT_SCAN', 'DELIVERY_SCAN')
+           AND NEW."outbox_message_id" IS NOT NULL) THEN
+        RAISE EXCEPTION 'Shipment provider event has invalid outbox command scope'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_outbox_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "shipment_provider_events_protected"
+BEFORE INSERT OR UPDATE OR DELETE ON "shipment_provider_events"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_shipment_provider_event();
+
+CREATE FUNCTION taven_validate_shipment_provider_event_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_status "shipment_status";
+    target_carrier varchar(100);
+    target_label_id varchar(255);
+    target_label_created_at timestamptz;
+    target_cancellation_requested_at timestamptz;
+    target_handed_over_at timestamptz;
+BEGIN
+    -- Resolve immutable topology without taking a parent lock. The inserted row
+    -- and its unique provider identity have already reserved rank 0.
+    SELECT shipment."order_id"
+    INTO target_order_id
+    FROM "shipments" shipment
+    WHERE shipment."id" = NEW."shipment_id";
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Shipment provider event parent Shipment does not exist'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
+    END IF;
+
+    -- Lock the complete order-scoped carrier-outcome envelope by global rank.
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "order_phases"
+    WHERE "order_id" = target_order_id
+    ORDER BY "id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "fulfilment_slots"
+    WHERE "order_id" = target_order_id
+    ORDER BY "id"
+    FOR UPDATE;
+
+    -- The core length-prefixed tie-break orders rank 5 as ShipmentPlan, Job,
+    -- then Shipment. UUID ordering is canonical within each kind.
+    PERFORM 1
+    FROM "shipment_plans"
+    WHERE "order_id" = target_order_id
+    ORDER BY "id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "jobs"
+    WHERE "order_id" = target_order_id
+    ORDER BY "node_id", "id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "shipments"
+    WHERE "order_id" = target_order_id
+    ORDER BY "id"
+    FOR UPDATE;
 
     SELECT shipment."status", shipment."carrier", shipment."carrier_label_id",
            shipment."label_created_at", shipment."cancellation_requested_at",
@@ -6451,41 +6540,35 @@ BEGIN
          target_label_created_at, target_cancellation_requested_at,
          target_handed_over_at
     FROM "shipments" shipment
-    WHERE shipment."id" = NEW."shipment_id"
-    FOR UPDATE;
+    WHERE shipment."id" = NEW."shipment_id";
 
-    IF ((NEW."kind" IN ('LABEL_VOIDED', 'ACCEPTANCE_SCAN')
-         AND target_status IS DISTINCT FROM 'CANCELLATION_PENDING'::"shipment_status")
-        OR (NEW."kind" = 'TRANSIT_SCAN'
-            AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT'))
-        OR (NEW."kind" = 'DELIVERY_SCAN'
-            AND target_status NOT IN ('IN_TRANSIT', 'DELIVERED')))
+    IF (NEW."kind" = 'LABEL_VOIDED'
+        AND target_status IS DISTINCT FROM 'CANCELLATION_PENDING'::"shipment_status")
+       OR (NEW."kind" = 'ACCEPTANCE_SCAN'
+           AND target_status NOT IN (
+               'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'
+           ))
+       OR (NEW."kind" = 'TRANSIT_SCAN'
+           AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT'))
+       OR (NEW."kind" = 'DELIVERY_SCAN'
+           AND target_status NOT IN ('IN_TRANSIT', 'DELIVERED'))
        OR NEW."carrier" IS DISTINCT FROM target_carrier
-       OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id
-       OR NEW."carrier" !~ '[^[:space:]]'
-       OR NEW."carrier_label_id" !~ '[^[:space:]]'
-       OR NEW."provider_event_id" !~ '[^[:space:]]'
-       OR NEW."provider_transaction_id" !~ '[^[:space:]]' THEN
-        RAISE EXCEPTION 'Shipment provider event must match the exact pending cancellation scope'
+       OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id THEN
+        RAISE EXCEPTION 'Shipment provider event must match the exact lifecycle scope'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
     END IF;
 
-    IF NEW."occurred_at" > evidence_now + interval '5 seconds'
-       OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
-       OR NEW."verified_at" > evidence_now + interval '5 seconds'
-       OR NEW."occurred_at" < target_label_created_at
+    IF NEW."occurred_at" < target_label_created_at
        OR (NEW."kind" IN ('TRANSIT_SCAN', 'DELIVERY_SCAN')
            AND (target_handed_over_at IS NULL
-                OR NEW."occurred_at" < target_handed_over_at))
-       OR NEW."authenticated_at" < NEW."occurred_at"
-       OR NEW."verified_at" < NEW."authenticated_at" THEN
-        RAISE EXCEPTION 'Shipment provider event timestamps must be current and chronological'
+                OR NEW."occurred_at" < target_handed_over_at)) THEN
+        RAISE EXCEPTION 'Shipment provider event timestamps must match its lifecycle chronology'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_evidence_check';
     END IF;
 
-    IF NEW."kind" = 'LABEL_VOIDED' THEN
-        IF NEW."occurred_at" < target_cancellation_requested_at
-           OR NEW."outbox_message_id" IS NULL
+    IF NEW."kind" = 'LABEL_VOIDED'
+       AND (
+           NEW."occurred_at" < target_cancellation_requested_at
            OR NOT EXISTS (
                SELECT 1
                FROM "outbox_messages" message
@@ -6504,24 +6587,19 @@ BEGIN
                      'carrierLabelId', NEW."carrier_label_id",
                      'action', 'void_carrier_label'
                  )
-           ) THEN
-            RAISE EXCEPTION 'Provider label void must prove the exact delivered outbox command'
-                USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_outbox_check';
-        END IF;
-    ELSIF NEW."kind" IN ('ACCEPTANCE_SCAN', 'TRANSIT_SCAN', 'DELIVERY_SCAN') THEN
-        IF NEW."outbox_message_id" IS NOT NULL THEN
-            RAISE EXCEPTION 'Carrier outcome scans cannot consume a provider-void outbox command'
-                USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_outbox_check';
-        END IF;
+           )
+       ) THEN
+        RAISE EXCEPTION 'Provider label void must prove the exact delivered outbox command'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_outbox_check';
     END IF;
 
-    RETURN NEW;
+    RETURN NULL;
 END;
 $$;
 
-CREATE TRIGGER "shipment_provider_events_protected"
-BEFORE INSERT OR UPDATE OR DELETE ON "shipment_provider_events"
-FOR EACH ROW EXECUTE FUNCTION taven_protect_shipment_provider_event();
+CREATE TRIGGER "shipment_provider_events_scope_validated"
+AFTER INSERT ON "shipment_provider_events"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_shipment_provider_event_scope();
 
 CREATE FUNCTION taven_reconcile_shipment_provider_event_consumption()
 RETURNS trigger
@@ -6543,8 +6621,17 @@ BEGIN
                FROM "shipments" shipment
                WHERE shipment."id" = NEW."shipment_id"
                  AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
-                 AND shipment."provider_acceptance_scan_id" = NEW."provider_event_id"
-                 AND shipment."handed_over_at" = NEW."verified_at"
+                 AND (
+                     (
+                         shipment."provider_acceptance_scan_id" = NEW."provider_event_id"
+                         AND shipment."handed_over_at" = NEW."verified_at"
+                     )
+                     OR (
+                         shipment."handed_over_at" IS NOT NULL
+                         AND shipment."provider_acceptance_scan_id"
+                             IS DISTINCT FROM NEW."provider_event_id"
+                     )
+                 )
            ))
        OR (NEW."kind" = 'TRANSIT_SCAN'
            AND NOT EXISTS (
