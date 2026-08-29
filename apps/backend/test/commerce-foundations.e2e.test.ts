@@ -702,20 +702,25 @@ type CustomerCancellationRefundWork =
       id: string;
       idempotencyKey: string;
       amountMinor: number;
+      requestedAt?: Date;
     }>;
 
 async function confirmCarrierLabelVoid(
   client: PoolClient,
   shipmentId: string,
   providerEventId: string,
+  negativeSkewMilliseconds = 0,
+  deliverAtCancellationRequest = false,
 ): Promise<void> {
   const evidence = (
     await client.query<{
       carrier: string;
       carrier_label_id: string;
+      cancellation_requested_at: Date;
       outbox_message_id: string;
     }>(
       `SELECT shipment.carrier, shipment.carrier_label_id,
+              shipment.cancellation_requested_at,
               message.id AS outbox_message_id
        FROM shipments shipment
        JOIN outbox_messages message
@@ -728,21 +733,34 @@ async function confirmCarrierLabelVoid(
   if (!evidence) {
     throw new Error("shipment carrier-void evidence scope is unavailable");
   }
-  await client.query(
-    `UPDATE outbox_messages
-     SET status = 'DELIVERED', delivered_at = clock_timestamp(),
-         updated_at = clock_timestamp()
-     WHERE id = $1`,
-    [evidence.outbox_message_id],
+  const deliveredAt = (
+    await client.query<{ delivered_at: Date }>(
+      `UPDATE outbox_messages
+       SET status = 'DELIVERED',
+           delivered_at = coalesce($2::timestamptz, clock_timestamp()),
+           updated_at = coalesce($2::timestamptz, clock_timestamp())
+       WHERE id = $1
+       RETURNING delivered_at`,
+      [
+        evidence.outbox_message_id,
+        deliverAtCancellationRequest
+          ? evidence.cancellation_requested_at
+          : null,
+      ],
+    )
+  ).rows[0]?.delivered_at;
+  if (!deliveredAt) {
+    throw new Error("shipment carrier-void delivery evidence is unavailable");
+  }
+  const providerOccurredAt = new Date(
+    deliveredAt.getTime() - negativeSkewMilliseconds,
   );
   await client.query(
     `INSERT INTO shipment_provider_events
        (id, shipment_id, outbox_message_id, carrier, carrier_label_id,
         provider_event_id, provider_transaction_id, kind, occurred_at,
         authenticated_at, verified_at, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'LABEL_VOIDED',statement_timestamp(),
-             statement_timestamp() + interval '2 seconds',
-             statement_timestamp() + interval '2 seconds',
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'LABEL_VOIDED',$8,$9,$9,
              statement_timestamp())`,
     [
       randomUUID(),
@@ -752,6 +770,8 @@ async function confirmCarrierLabelVoid(
       evidence.carrier_label_id,
       providerEventId,
       `${providerEventId}:transaction`,
+      providerOccurredAt,
+      deliveredAt,
     ],
   );
   await client.query(
@@ -958,7 +978,9 @@ async function cancelOrderBeforeHandoff(
           refund.paymentId,
           refund.idempotencyKey,
           refund.amountMinor,
-          cancelledAt,
+          "requestedAt" in refund
+            ? (refund.requestedAt ?? cancelledAt)
+            : cancelledAt,
         ],
       );
     }
@@ -6478,7 +6500,16 @@ describe("commerce persistence foundations", () => {
         [captured.orderPhaseId, activatedAt],
       );
 
-      const capturedAt = new Date();
+      const paymentCreatedAt = (
+        await client.query<{ created_at: Date }>(
+          `SELECT created_at FROM payments WHERE id = $1`,
+          [captured.paymentId],
+        )
+      ).rows[0]?.created_at;
+      if (!paymentCreatedAt) {
+        throw new Error("receipt-backed Payment creation time is unavailable");
+      }
+      const capturedAt = new Date(paymentCreatedAt.getTime() - 5_000);
       const providerCaptureId = "receipt-backed-provider-capture";
       const capturePayment = () =>
         client.query(
@@ -9713,6 +9744,23 @@ describe("commerce persistence foundations", () => {
         foundation,
       );
       await activateCurrentPlan(client, fixtures, foundation, productions);
+      await expectQueryError(
+        client,
+        "planned_shipment_cancellation_before_creation",
+        () =>
+          client.query(
+            `UPDATE shipments
+             SET status = 'CANCELLED',
+                 cancelled_at = created_at - interval '1 millisecond',
+                 updated_at = created_at
+             WHERE id = $1`,
+            [foundation.shipmentId],
+          ),
+        {
+          code: "23514",
+          constraint: "shipments_timestamps_check",
+        },
+      );
       await advanceOrderLifecycleStep(
         client,
         foundation.orderId,
@@ -9999,10 +10047,28 @@ describe("commerce persistence foundations", () => {
         },
       );
 
+      await expectQueryError(
+        client,
+        "confirm_void_beyond_negative_clock_skew_tolerance",
+        () =>
+          confirmCarrierLabelVoid(
+            client,
+            foundation.shipmentId,
+            "provider-void-beyond-negative-skew",
+            5_001,
+            true,
+          ),
+        {
+          code: "23514",
+          constraint: "shipment_provider_event_outbox_check",
+        },
+      );
       await confirmCarrierLabelVoid(
         client,
         foundation.shipmentId,
         "provider-void-confirmed",
+        5_000,
+        true,
       );
       const originalVoid = (
         await client.query<{
@@ -10019,6 +10085,39 @@ describe("commerce persistence foundations", () => {
       if (!originalVoid?.provider_voided_at || !originalVoid.cancelled_at) {
         throw new Error("confirmed carrier-void evidence is unavailable");
       }
+      expect(
+        (
+          await client.query<{
+            exact_outbox_link: boolean;
+            exact_verified_timestamp: boolean;
+            negative_cancellation_skew_at_boundary: boolean;
+            negative_skew_at_boundary: boolean;
+          }>(
+            `SELECT event.outbox_message_id = message.id AS exact_outbox_link,
+                    event.verified_at = shipment.provider_voided_at
+                      AS exact_verified_timestamp,
+                    event.occurred_at =
+                      shipment.cancellation_requested_at - interval '5 seconds'
+                      AS negative_cancellation_skew_at_boundary,
+                    event.occurred_at = message.delivered_at - interval '5 seconds'
+                      AS negative_skew_at_boundary
+             FROM shipment_provider_events event
+             JOIN shipments shipment ON shipment.id = event.shipment_id
+             JOIN outbox_messages message ON message.id = event.outbox_message_id
+             WHERE event.shipment_id = $1
+               AND event.kind = 'LABEL_VOIDED'
+               AND event.provider_event_id = 'provider-void-confirmed'`,
+            [foundation.shipmentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          exact_outbox_link: true,
+          exact_verified_timestamp: true,
+          negative_cancellation_skew_at_boundary: true,
+          negative_skew_at_boundary: true,
+        },
+      ]);
       await client.query(
         `INSERT INTO shipment_provider_events
            (id, shipment_id, outbox_message_id, carrier, carrier_label_id,
@@ -12650,6 +12749,18 @@ describe("commerce persistence foundations", () => {
           },
         );
       }
+      const paymentCapturedAt = (
+        await client.query<{ captured_at: Date }>(
+          `SELECT captured_at FROM payments WHERE id = $1`,
+          [foundation.paymentId],
+        )
+      ).rows[0]?.captured_at;
+      if (!paymentCapturedAt) {
+        throw new Error("fixture Payment capture time is unavailable");
+      }
+      const boundaryRefundRequestedAt = new Date(
+        paymentCapturedAt.getTime() + 5_000,
+      );
       await cancelOrderBeforeHandoff(
         client,
         foundation.orderId,
@@ -12661,6 +12772,7 @@ describe("commerce persistence foundations", () => {
             id: fixtures.id("refund-first"),
             idempotencyKey: "refund-first",
             amountMinor: 600,
+            requestedAt: boundaryRefundRequestedAt,
           },
           {
             id: fixtures.id("refund-remainder"),
@@ -12847,7 +12959,7 @@ describe("commerce persistence foundations", () => {
       if (!refundRequestedAt) {
         throw new Error("refund request timestamp is unavailable");
       }
-      const refundCompletedAt = new Date();
+      const refundCompletedAt = new Date(refundRequestedAt.getTime() - 5_000);
       await expectQueryError(
         client,
         "refund_event_beyond_negative_skew",

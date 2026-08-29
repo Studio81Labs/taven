@@ -801,7 +801,7 @@ ALTER TABLE "jobs" ADD CONSTRAINT "jobs_payout_acceptance_check" CHECK (
         AND "payout_currency" ~ '^[A-Z]{3}$'
     )
 );
-ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at" - interval '5 seconds') AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
+ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at" - interval '5 seconds') AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at" - interval '5 seconds'));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_identity_check" CHECK (
     "provider" ~ '[^[:space:]]'
 );
@@ -834,7 +834,7 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
         AND "captured_at" IS NOT NULL
     )
 );
-ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_values_check" CHECK ("amount_minor" > 0 AND ("completed_at" IS NULL OR "completed_at" >= "requested_at"));
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_values_check" CHECK ("amount_minor" > 0 AND ("completed_at" IS NULL OR "completed_at" >= "requested_at" - interval '5 seconds'));
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_idempotency_key_identity_check" CHECK (
     "idempotency_key" ~ '[^[:space:]]'
 );
@@ -6696,7 +6696,10 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
     END IF;
 
-    IF NEW."occurred_at" < target_label_created_at
+    IF (NEW."kind" = 'LABEL_VOIDED'
+        AND NEW."occurred_at" < target_label_created_at - interval '5 seconds')
+       OR (NEW."kind" <> 'LABEL_VOIDED'
+           AND NEW."occurred_at" < target_label_created_at)
        OR (NEW."kind" IN ('TRANSIT_SCAN', 'DELIVERY_SCAN')
            AND (target_handed_over_at IS NULL
                 OR NEW."occurred_at" < target_handed_over_at)) THEN
@@ -6706,7 +6709,7 @@ BEGIN
 
     IF NEW."kind" = 'LABEL_VOIDED'
        AND (
-           NEW."occurred_at" < target_cancellation_requested_at
+           NEW."occurred_at" < target_cancellation_requested_at - interval '5 seconds'
            OR NOT EXISTS (
                SELECT 1
                FROM "outbox_messages" message
@@ -6719,7 +6722,7 @@ BEGIN
                  AND message."schema_version" = 1
                  AND message."status" = 'DELIVERED'
                  AND message."delivered_at" IS NOT NULL
-                 AND message."delivered_at" <= NEW."occurred_at"
+                 AND message."delivered_at" <= NEW."occurred_at" + interval '5 seconds'
                  AND message."payload" = jsonb_build_object(
                      'shipmentId', NEW."shipment_id"::text,
                      'carrierLabelId', NEW."carrier_label_id",
@@ -8627,7 +8630,7 @@ BEGIN
        AND NEW."provider_refund_id" IS NOT NULL
        AND NEW."provider_refund_id" ~ '[^[:space:]]'
        AND NEW."completed_at" IS NOT NULL
-       AND NEW."completed_at" >= NEW."requested_at"
+       AND NEW."completed_at" >= NEW."requested_at" - interval '5 seconds'
        AND NEW."completed_at" <= clock_timestamp() + interval '5 seconds'
        AND NOT EXISTS (
            SELECT 1
