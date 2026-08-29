@@ -801,7 +801,7 @@ ALTER TABLE "jobs" ADD CONSTRAINT "jobs_payout_acceptance_check" CHECK (
         AND "payout_currency" ~ '^[A-Z]{3}$'
     )
 );
-ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at") AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
+ALTER TABLE "payments" ADD CONSTRAINT "payments_values_check" CHECK ("requested_amount_minor" > 0 AND ("captured_amount_minor" IS NULL OR ("captured_amount_minor" > 0 AND "captured_amount_minor" <= "requested_amount_minor")) AND "currency" ~ '^[A-Z]{3}$' AND ("capture_cutoff_at" IS NULL OR "capture_cutoff_at" >= "created_at" - interval '5 seconds') AND ("checkout_capture_expires_at" IS NULL OR "checkout_capture_expires_at" > "created_at") AND ("captured_at" IS NULL OR "captured_at" >= "created_at"));
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_identity_check" CHECK (
     "provider" ~ '[^[:space:]]'
 );
@@ -7507,7 +7507,7 @@ BEGIN
        OR target_failure_result_id IS NOT NULL
        OR NOT target_capture_authorized
        OR target_capture_cutoff_at IS NOT NULL
-       OR NEW."failed_at" < target_created_at THEN
+       OR NEW."failed_at" < target_created_at - interval '5 seconds' THEN
         RAISE EXCEPTION 'Payment intent creation failure does not match its exact created Payment'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_intent_creation_failure_scope_check';
     END IF;

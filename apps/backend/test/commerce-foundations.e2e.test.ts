@@ -5984,20 +5984,18 @@ describe("commerce persistence foundations", () => {
         "created-payment-without-intent",
       );
       await createCurrentPlan(client, fixtures, createdFoundation);
-      const createdAt = new Date();
-      const checkoutCaptureExpiresAt = new Date(
-        createdAt.getTime() + 60 * 60 * 1_000,
-      );
       const insertCreatedPayment = (providerIntentId: string | null) =>
-        client.query(
+        client.query<{ created_at: Date }>(
           `INSERT INTO payments
              (id, order_id, price_snapshot_id, order_price_binding_id,
               payment_schedule_id, role, provider, provider_intent_id,
               requested_amount_minor, currency, status,
-              checkout_capture_expires_at, created_at, updated_at)
+              checkout_capture_expires_at, updated_at)
            SELECT $1,$2,$3,$4,$5,'FULL','test',$6,gross_amount_minor,
-                  'EUR','CREATED',$7,$8,$8
-           FROM payment_schedules WHERE id = $5`,
+                  'EUR','CREATED',CURRENT_TIMESTAMP + interval '60 minutes',
+                  CURRENT_TIMESTAMP
+           FROM payment_schedules WHERE id = $5
+           RETURNING created_at`,
           [
             createdFoundation.paymentId,
             createdFoundation.orderId,
@@ -6005,8 +6003,6 @@ describe("commerce persistence foundations", () => {
             createdFoundation.orderPriceBindingId,
             createdFoundation.paymentScheduleId,
             providerIntentId,
-            checkoutCaptureExpiresAt,
-            createdAt,
           ],
         );
       await expectQueryError(
@@ -6018,7 +6014,25 @@ describe("commerce persistence foundations", () => {
           constraint: "payments_provider_intent_identity_check",
         },
       );
-      await insertCreatedPayment(null);
+      const persistedCreatedAt = (await insertCreatedPayment(null)).rows[0]
+        ?.created_at;
+      if (!persistedCreatedAt) {
+        throw new Error("database-created Payment timestamp is unavailable");
+      }
+      await expectQueryError(
+        client,
+        "intent_failure_beyond_negative_skew",
+        () =>
+          fixtures.persistPaymentIntentCreationFailure(
+            createdFoundation.paymentId,
+            new Date(persistedCreatedAt.getTime() - 5_001),
+            "excessive-negative-skew-intent-attempt",
+          ),
+        {
+          code: "23514",
+          constraint: "payment_intent_creation_failure_scope_check",
+        },
+      );
       await expectQueryError(
         client,
         "pending_without_provider_intent",
@@ -6081,7 +6095,7 @@ describe("commerce persistence foundations", () => {
           ]),
         { code: "23514", constraint: "payment_capture_window_check" },
       );
-      const intentFailureAt = new Date(Date.now() + 2_000);
+      const intentFailureAt = new Date(persistedCreatedAt.getTime() - 5_000);
       await expectQueryError(
         client,
         "fail_created_payment_without_attempt_evidence",
@@ -6089,7 +6103,7 @@ describe("commerce persistence foundations", () => {
           client.query(
             `UPDATE payments
              SET status = 'FAILED', capture_authorized = false,
-                 capture_cutoff_at = $2, updated_at = $2
+                 capture_cutoff_at = $2, updated_at = clock_timestamp()
              WHERE id = $1`,
             [createdFoundation.paymentId, intentFailureAt],
           ),
@@ -6131,7 +6145,7 @@ describe("commerce persistence foundations", () => {
              SET status = 'FAILED', capture_authorized = false,
                  capture_cutoff_at = $2,
                  intent_creation_failure_result_id = $3,
-                 updated_at = $2
+                 updated_at = clock_timestamp()
              WHERE id = $1`,
             [createdFoundation.paymentId, intentFailureAt, randomUUID()],
           ),
@@ -6149,7 +6163,7 @@ describe("commerce persistence foundations", () => {
              SET status = 'FAILED', capture_authorized = false,
                  capture_cutoff_at = $2,
                  intent_creation_failure_result_id = $3,
-                 updated_at = $2
+                 updated_at = clock_timestamp()
              WHERE id = $1`,
             [
               createdFoundation.paymentId,
@@ -6167,7 +6181,7 @@ describe("commerce persistence foundations", () => {
          SET status = 'FAILED', capture_authorized = false,
              capture_cutoff_at = $2,
              intent_creation_failure_result_id = $3,
-             updated_at = $2
+             updated_at = clock_timestamp()
          WHERE id = $1`,
         [createdFoundation.paymentId, intentFailureAt, intentFailureResultId],
       );
@@ -6340,6 +6354,7 @@ describe("commerce persistence foundations", () => {
         "pending-payment-provider-intent",
       );
       await createCurrentPlan(client, fixtures, pendingFoundation);
+      const checkoutCaptureExpiresAt = new Date(Date.now() + 60 * 60 * 1_000);
       for (const [name, provider] of [
         ["empty_payment_provider", ""],
         ["blank_payment_provider", "   "],
