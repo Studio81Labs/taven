@@ -4274,16 +4274,34 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_payment_cancellation_check';
     END IF;
 
-    IF NEW."status" = 'EXPIRED' AND NOT EXISTS (
-        SELECT 1
-        FROM "payments"
-        WHERE "order_id" = NEW."id"
-          AND "role" = 'FULL'
-          AND "checkout_capture_expires_at" IS NOT NULL
-          AND "checkout_capture_expires_at" <= clock_timestamp()
-          AND "capture_cutoff_at" >= "checkout_capture_expires_at"
-    ) THEN
-        RAISE EXCEPTION 'quoted order expiry requires its immutable checkout capture deadline to pass'
+    IF NEW."status" = 'EXPIRED'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payments"
+           WHERE "order_id" = NEW."id"
+             AND "role" = 'FULL'
+             AND "checkout_capture_expires_at" IS NOT NULL
+             AND "checkout_capture_expires_at" <= clock_timestamp()
+             AND "capture_cutoff_at" >= "checkout_capture_expires_at"
+       )
+       AND NOT (
+           NOT EXISTS (
+               SELECT 1
+               FROM "payments"
+               WHERE "order_id" = NEW."id"
+                 AND "status" <> 'FAILED'
+           )
+           AND EXISTS (
+               SELECT 1
+               FROM "automatic_order_origins" origin
+               JOIN "quote_sessions" session
+                 ON session."id" = origin."quote_session_id"
+               WHERE origin."order_id" = NEW."id"
+                 AND session."status" = 'CONVERTED'
+                 AND session."expires_at" <= clock_timestamp()
+           )
+       ) THEN
+        RAISE EXCEPTION 'quoted order expiry requires its immutable checkout or converted-session deadline to pass'
             USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_expiry_deadline_check';
     END IF;
 

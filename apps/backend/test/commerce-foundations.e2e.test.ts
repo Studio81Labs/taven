@@ -4447,6 +4447,34 @@ describe("commerce persistence foundations", () => {
     await rollback("quoted-order-expiry", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation("quoted-order-expiry");
       await createCurrentPlan(client, fixtures, foundation);
+      const noPayment = await fixtures.createFoundation(
+        "quoted-session-expiry-without-payment",
+      );
+      const failedPayment = await fixtures.createFoundation(
+        "quoted-session-expiry-after-failed-payment",
+      );
+      await createCurrentPlanAndPayment(client, fixtures, failedPayment);
+      const failedAt = new Date();
+      await client.query(
+        `UPDATE payments
+         SET status = 'FAILED', capture_authorized = false,
+             capture_cutoff_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [failedPayment.paymentId, failedAt],
+      );
+      const individualNoPayment = await fixtures.createFoundation(
+        "individual-expiry-without-payment",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "QUOTED",
+        undefined,
+        {},
+        "INDIVIDUAL",
+      );
       const checkoutExpiresAt = (
         await client.query<{ checkout_expires_at: Date }>(
           `SELECT clock_timestamp() + interval '2 seconds' AS checkout_expires_at`,
@@ -4456,6 +4484,21 @@ describe("commerce persistence foundations", () => {
         throw new Error("database checkout deadline is missing");
       }
       await fixtures.finalizePayment(foundation, checkoutExpiresAt);
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await client.query(
+        `UPDATE quote_sessions
+         SET expires_at = $1
+         WHERE id = ANY($2::uuid[])`,
+        [
+          checkoutExpiresAt,
+          [
+            foundation.quoteSessionId,
+            noPayment.quoteSessionId,
+            failedPayment.quoteSessionId,
+          ],
+        ],
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
 
       await expectQueryError(
         client,
@@ -4464,6 +4507,38 @@ describe("commerce persistence foundations", () => {
           cancelOrderBeforeHandoff(
             client,
             foundation.orderId,
+            true,
+            true,
+            "EXPIRED",
+          ),
+        {
+          code: "23514",
+          constraint: "quoted_order_expiry_deadline_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "expire_without_payment_before_session_deadline",
+        () =>
+          cancelOrderBeforeHandoff(
+            client,
+            noPayment.orderId,
+            true,
+            true,
+            "EXPIRED",
+          ),
+        {
+          code: "23514",
+          constraint: "quoted_order_expiry_deadline_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "expire_failed_payment_before_session_deadline",
+        () =>
+          cancelOrderBeforeHandoff(
+            client,
+            failedPayment.orderId,
             true,
             true,
             "EXPIRED",
@@ -4506,6 +4581,66 @@ describe("commerce persistence foundations", () => {
         true,
         "EXPIRED",
       );
+      await cancelOrderBeforeHandoff(
+        client,
+        noPayment.orderId,
+        true,
+        true,
+        "EXPIRED",
+      );
+      await cancelOrderBeforeHandoff(
+        client,
+        failedPayment.orderId,
+        true,
+        true,
+        "EXPIRED",
+      );
+      await expectQueryError(
+        client,
+        "expire_individual_without_payment",
+        () =>
+          cancelOrderBeforeHandoff(
+            client,
+            individualNoPayment.orderId,
+            true,
+            true,
+            "EXPIRED",
+          ),
+        {
+          code: "23514",
+          constraint: "quoted_order_expiry_deadline_check",
+        },
+      );
+
+      expect(
+        (
+          await client.query<{
+            expired_order_count: string;
+            failed_payment_status: string;
+            no_payment_count: string;
+          }>(
+            `SELECT
+               (SELECT count(*)::text FROM orders
+                WHERE id = ANY($1::uuid[]) AND status = 'EXPIRED')
+                  AS expired_order_count,
+               (SELECT count(*)::text FROM payments WHERE order_id = $2)
+                  AS no_payment_count,
+               (SELECT status::text FROM payments WHERE order_id = $3 LIMIT 1)
+                  AS failed_payment_status`,
+            [
+              [foundation.orderId, noPayment.orderId, failedPayment.orderId],
+              noPayment.orderId,
+              failedPayment.orderId,
+            ],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          expired_order_count: "3",
+          failed_payment_status: "FAILED",
+          no_payment_count: "0",
+        },
+      ]);
 
       expect(
         (
