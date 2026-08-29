@@ -204,11 +204,14 @@ const permittedContext = {
   paymentIntentFailurePreviousPaymentResultId: "payment-created-result-1",
   paymentIntentFailureCurrentStateCommandKey: "payment-created-command-1",
   paymentIntentFailureAttemptKey: "payment-intent-attempt-1",
+  paymentIntentFailureEvidenceId: "payment-intent-failure-1",
+  paymentIntentFailureProvider: "sandbox",
   paymentIntentFailureExpectedPayment: {
     id: "payment-1",
     orderId: "order-1",
     phaseId: "phase-1",
     role: "full",
+    provider: "sandbox",
     status: "created",
     providerIntentId: null,
     resultId: "payment-created-result-1",
@@ -220,6 +223,7 @@ const permittedContext = {
     orderId: "order-1",
     phaseId: "phase-1",
     role: "full",
+    provider: "sandbox",
     previousStatus: "created",
     targetStatus: "failed",
     providerIntentId: null,
@@ -229,6 +233,8 @@ const permittedContext = {
     immutable: true,
   },
   paymentIntentFailureEvidence: {
+    id: "payment-intent-failure-1",
+    paymentId: "payment-1",
     attemptKey: "payment-intent-attempt-1",
     provider: "sandbox",
     outcome: "failed",
@@ -15441,6 +15447,8 @@ describe("v0 lifecycle policy tables", () => {
       ["paymentIntentFailureCurrentStateCommandKey", "foreign-command"],
       ["paymentIntentFailureResultId", " "],
       ["paymentIntentFailureAttemptKey", " "],
+      ["paymentIntentFailureEvidenceId", "foreign-failure"],
+      ["paymentIntentFailureProvider", "foreign-provider"],
       ["paymentIntentFailurePaymentResultId", "foreign-result"],
       ["paymentIntentFailureEvidenceResultId", "foreign-result"],
       ["paymentIntentFailureCompleted", false],
@@ -15458,11 +15466,13 @@ describe("v0 lifecycle policy tables", () => {
       ["paymentIntentFailureExpectedPayment", "id", "payment-2"],
       ["paymentIntentFailureExpectedPayment", "status", "pending"],
       ["paymentIntentFailureExpectedPayment", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureExpectedPayment", "provider", "other"],
       ["paymentIntentFailureExpectedPayment", "immutable", false],
       ["paymentIntentFailureFailedPayment", "id", "payment-2"],
       ["paymentIntentFailureFailedPayment", "previousStatus", "pending"],
       ["paymentIntentFailureFailedPayment", "targetStatus", "voided"],
       ["paymentIntentFailureFailedPayment", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureFailedPayment", "provider", "other"],
       ["paymentIntentFailureFailedPayment", "captureAuthorized", true],
       ["paymentIntentFailureFailedPayment", "captureCutoffAt", null],
       ["paymentIntentFailureFailedPayment", "captureCutoffAt", "2026-01-01"],
@@ -15472,8 +15482,11 @@ describe("v0 lifecycle policy tables", () => {
         Instant.parse("2026-01-01T00:06:00.000Z"),
       ],
       ["paymentIntentFailureFailedPayment", "immutable", false],
+      ["paymentIntentFailureEvidence", "id", "foreign-failure"],
+      ["paymentIntentFailureEvidence", "paymentId", "payment-2"],
       ["paymentIntentFailureEvidence", "attemptKey", "foreign-attempt"],
       ["paymentIntentFailureEvidence", "provider", " "],
+      ["paymentIntentFailureEvidence", "provider", "other"],
       ["paymentIntentFailureEvidence", "outcome", "pending"],
       ["paymentIntentFailureEvidence", "providerIntentId", "intent-1"],
       ["paymentIntentFailureEvidence", "failedAt", null],
@@ -15496,6 +15509,29 @@ describe("v0 lifecycle policy tables", () => {
         }),
       ).toThrow(TransitionGuardError);
     }
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        idempotencyKey: "payment-intent-failure-foreign-payment",
+        context: {
+          ...base,
+          paymentId: "payment-2",
+          paymentIntentFailureExpectedPayment: {
+            ...base.paymentIntentFailureExpectedPayment,
+            id: "payment-2",
+          },
+          paymentIntentFailureFailedPayment: {
+            ...base.paymentIntentFailureFailedPayment,
+            id: "payment-2",
+          },
+          paymentIntentFailureEvidence: {
+            ...base.paymentIntentFailureEvidence,
+            paymentId: "payment-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
 
     expect(() =>
       transition(paymentPolicy, {

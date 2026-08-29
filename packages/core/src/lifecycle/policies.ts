@@ -2385,6 +2385,8 @@ function requireExactPaymentIntentCreationFailure<S extends string>(
   const stateKey = context?.paymentIntentFailureCurrentStateCommandKey;
   const resultId = context?.paymentIntentFailureResultId;
   const attemptKey = context?.paymentIntentFailureAttemptKey;
+  const failureId = context?.paymentIntentFailureEvidenceId;
+  const provider = context?.paymentIntentFailureProvider;
   const expectedPayment = record(context?.paymentIntentFailureExpectedPayment);
   const failedPayment = record(context?.paymentIntentFailureFailedPayment);
   const failure = record(context?.paymentIntentFailureEvidence);
@@ -2400,6 +2402,8 @@ function requireExactPaymentIntentCreationFailure<S extends string>(
     !nonBlank(stateKey) ||
     !nonBlank(resultId) ||
     !nonBlank(attemptKey) ||
+    !nonBlank(failureId) ||
+    !nonBlank(provider) ||
     command.aggregateId !== paymentId ||
     command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
@@ -2407,6 +2411,7 @@ function requireExactPaymentIntentCreationFailure<S extends string>(
     expectedPayment.orderId !== orderId ||
     expectedPayment.phaseId !== phaseId ||
     expectedPayment.role !== role ||
+    expectedPayment.provider !== provider ||
     expectedPayment.status !== "created" ||
     expectedPayment.providerIntentId !== null ||
     expectedPayment.resultId !== previousResultId ||
@@ -2416,6 +2421,7 @@ function requireExactPaymentIntentCreationFailure<S extends string>(
     failedPayment.orderId !== orderId ||
     failedPayment.phaseId !== phaseId ||
     failedPayment.role !== role ||
+    failedPayment.provider !== provider ||
     failedPayment.previousStatus !== "created" ||
     failedPayment.targetStatus !== "failed" ||
     failedPayment.providerIntentId !== null ||
@@ -2423,8 +2429,10 @@ function requireExactPaymentIntentCreationFailure<S extends string>(
     !(captureCutoffAt instanceof Instant) ||
     failedPayment.resultId !== resultId ||
     failedPayment.immutable !== true ||
-    failure?.attemptKey !== attemptKey ||
-    !nonBlank(failure.provider) ||
+    failure?.id !== failureId ||
+    failure.paymentId !== paymentId ||
+    failure.provider !== provider ||
+    failure.attemptKey !== attemptKey ||
     failure.outcome !== "failed" ||
     failure.providerIntentId !== null ||
     !(failedAt instanceof Instant) ||
