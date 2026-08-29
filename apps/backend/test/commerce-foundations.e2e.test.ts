@@ -5961,7 +5961,7 @@ describe("commerce persistence foundations", () => {
         },
         {
           code: "23514",
-          constraint: "refund_late_success_failure_receipt_check",
+          constraint: "refund_result_event_order_check",
         },
       );
       await expectQueryError(
@@ -8050,6 +8050,255 @@ describe("commerce persistence foundations", () => {
         },
       ]);
 
+      const replayedSuccessOccurredAt = new Date(
+        firstRefundCompletedAt.getTime() + 2,
+      );
+      const replayedSuccessVerifiedAt = new Date(
+        Math.max(Date.now(), replayedSuccessOccurredAt.getTime()),
+      );
+      await fixtures.persistRefundProviderEvent(
+        firstDelayedFailureRefundId,
+        "REFUND_SUCCEEDED",
+        "delayed-failure-provider-refund-first",
+        replayedSuccessVerifiedAt,
+        "newer-same-outcome-refund-success-replay",
+        replayedSuccessOccurredAt,
+      );
+      await fixtures.persistRefundProviderEvent(
+        firstDelayedFailureRefundId,
+        "REFUND_FAILED",
+        "delayed-failure-provider-refund-first",
+        new Date(replayedSuccessVerifiedAt.getTime() + 1),
+        "intermediate-refund-failure-after-success-replay",
+        new Date(firstRefundCompletedAt.getTime() + 1),
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" DEFERRED`,
+      );
+
+      const refundFailureReconciledAt = new Date(
+        Math.max(Date.now(), firstRefundCompletedAt.getTime() + 4),
+      );
+      const refundFailureProviderEventId = "newer-refund-failure-after-success";
+      await fixtures.persistRefundProviderEvent(
+        firstDelayedFailureRefundId,
+        "REFUND_FAILED",
+        "delayed-failure-provider-refund-first",
+        refundFailureReconciledAt,
+        refundFailureProviderEventId,
+        refundFailureReconciledAt,
+      );
+      const refundFailureResultEventId = fixtures.id(
+        `provider-event:${refundFailureProviderEventId}`,
+      );
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'FAILED', provider_result_event_id = $2,
+             completed_at = NULL, updated_at = $3
+         WHERE id = $1`,
+        [
+          firstDelayedFailureRefundId,
+          refundFailureResultEventId,
+          refundFailureReconciledAt,
+        ],
+      );
+      await client.query(
+        `UPDATE payments
+         SET status = 'PARTIALLY_REFUNDED', updated_at = $2
+         WHERE id = $1`,
+        [captured.paymentId, refundFailureReconciledAt],
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'CANCELLED', updated_at = $2
+         WHERE order_id = $1`,
+        [captured.orderId, refundFailureReconciledAt],
+      );
+      await client.query(
+        `UPDATE fulfilment_slots
+         SET outcome = 'CANCELLED', updated_at = $2
+         WHERE order_id = $1`,
+        [captured.orderId, refundFailureReconciledAt],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'CANCELLED', updated_at = $2 WHERE id = $1`,
+        [captured.orderId, refundFailureReconciledAt],
+      );
+      await forceOrderLifecycleConstraints(client);
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "payments_refunded_order_reconciled",
+           "refund_transactions_refunded_order_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "payments_refunded_order_reconciled",
+           "refund_transactions_refunded_order_reconciled" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{
+            completed_at: Date | null;
+            order_status: string;
+            payment_status: string;
+            provider_result_event_id: string;
+            refund_status: string;
+          }>(
+            `SELECT refund.status::text AS refund_status,
+                    refund.completed_at, refund.provider_result_event_id,
+                    payment.status::text AS payment_status,
+                    target_order.status::text AS order_status
+             FROM refund_transactions refund
+             JOIN payments payment ON payment.id = refund.payment_id
+             JOIN orders target_order ON target_order.id = payment.order_id
+             WHERE refund.id = $1`,
+            [firstDelayedFailureRefundId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          refund_status: "FAILED",
+          completed_at: null,
+          provider_result_event_id: refundFailureResultEventId,
+          payment_status: "PARTIALLY_REFUNDED",
+          order_status: "CANCELLED",
+        },
+      ]);
+
+      await fixtures.persistRefundProviderEvent(
+        firstDelayedFailureRefundId,
+        "REFUND_SUCCEEDED",
+        "delayed-failure-provider-refund-first",
+        new Date(refundFailureReconciledAt.getTime() + 1),
+        "older-refund-success-after-failure",
+        new Date(refundFailureReconciledAt.getTime() - 1),
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" DEFERRED`,
+      );
+      await expectQueryError(
+        client,
+        "reject_equal_refund_outcome_order",
+        async () => {
+          await fixtures.persistRefundProviderEvent(
+            firstDelayedFailureRefundId,
+            "REFUND_SUCCEEDED",
+            "delayed-failure-provider-refund-first",
+            new Date(refundFailureReconciledAt.getTime() + 2),
+            "equal-refund-success-after-failure",
+            refundFailureReconciledAt,
+          );
+          await client.query(
+            `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_provider_event_consumption_check",
+        },
+      );
+
+      const refundRecoveredAt = new Date(
+        refundFailureReconciledAt.getTime() + 3,
+      );
+      const refundRecoveryProviderEventId =
+        "newer-refund-success-after-failure";
+      await fixtures.persistRefundProviderEvent(
+        firstDelayedFailureRefundId,
+        "REFUND_SUCCEEDED",
+        "delayed-failure-provider-refund-first",
+        refundRecoveredAt,
+        refundRecoveryProviderEventId,
+        refundRecoveredAt,
+      );
+      const refundRecoveryResultEventId = fixtures.id(
+        `provider-event:${refundRecoveryProviderEventId}`,
+      );
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_result_event_id = $2,
+             completed_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [
+          firstDelayedFailureRefundId,
+          refundRecoveryResultEventId,
+          refundRecoveredAt,
+        ],
+      );
+      await client.query(
+        `UPDATE payments SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [captured.paymentId, refundRecoveredAt],
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [captured.orderId, refundRecoveredAt],
+      );
+      await client.query(
+        `UPDATE fulfilment_slots
+         SET outcome = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [captured.orderId, refundRecoveredAt],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [captured.orderId, refundRecoveredAt],
+      );
+      await forceOrderLifecycleConstraints(client);
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "payments_refunded_order_reconciled",
+           "refund_transactions_refunded_order_reconciled" IMMEDIATE`,
+      );
+      expect(
+        (
+          await client.query<{
+            order_status: string;
+            payment_status: string;
+            refund_status: string;
+          }>(
+            `SELECT refund.status::text AS refund_status,
+                    payment.status::text AS payment_status,
+                    target_order.status::text AS order_status
+             FROM refund_transactions refund
+             JOIN payments payment ON payment.id = refund.payment_id
+             JOIN orders target_order ON target_order.id = payment.order_id
+             WHERE refund.id = $1`,
+            [firstDelayedFailureRefundId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          refund_status: "SUCCEEDED",
+          payment_status: "REFUNDED",
+          order_status: "REFUNDED",
+        },
+      ]);
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled",
+           "payments_refunded_order_reconciled",
+           "refund_transactions_refunded_order_reconciled" DEFERRED`,
+      );
+
       await expectQueryError(
         client,
         "mutate_payment_provider_receipt",
@@ -8284,6 +8533,270 @@ describe("commerce persistence foundations", () => {
         ).rows,
       ).toEqual([{ status: "FAILED", event_count: "2" }]);
     });
+  });
+
+  it("reopens a committed refunded order after a newer refund failure", async () => {
+    let foundation: PersistenceFoundation | undefined;
+    let refundId: string | undefined;
+    let refundSucceededAt: Date | undefined;
+    let providerRefundId: string | undefined;
+
+    const refunding = await pool.connect();
+    await refunding.query("BEGIN");
+    try {
+      const fixtures = new PersistenceFactory(
+        refunding,
+        `${scope}:committed-refund-failure`,
+      );
+      foundation = await fixtures.createFoundation("committed-refund-failure");
+      const productions = await createCurrentPlanAndPayment(
+        refunding,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(refunding, fixtures, foundation, productions);
+      await cancelOrderBeforeHandoff(refunding, foundation.orderId);
+
+      const refund = (
+        await refunding.query<{ id: string }>(
+          `SELECT id
+           FROM refund_transactions
+           WHERE payment_id = $1
+             AND reason = 'CUSTOMER_CANCELLATION'
+             AND status = 'PENDING'`,
+          [foundation.paymentId],
+        )
+      ).rows[0];
+      if (!refund) {
+        throw new Error("committed refund failure fixture has no refund");
+      }
+      refundId = refund.id;
+      refundSucceededAt = new Date();
+      providerRefundId = `${scope}:committed-refund-provider-id`;
+      const successProviderEventId = await fixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_SUCCEEDED",
+        providerRefundId,
+        refundSucceededAt,
+        `${scope}:committed-refund-success`,
+        refundSucceededAt,
+      );
+      const successResultEventId = (
+        await refunding.query<{ id: string }>(
+          `SELECT id
+           FROM payment_provider_events
+           WHERE payment_id = $1
+             AND refund_transaction_id = $2
+             AND provider_event_id = $3`,
+          [foundation.paymentId, refundId, successProviderEventId],
+        )
+      ).rows[0]?.id;
+      if (!successResultEventId) {
+        throw new Error("committed refund success receipt is unavailable");
+      }
+      await refunding.query(
+        `UPDATE refund_transactions
+         SET status = 'SUCCEEDED', provider_refund_id = $2,
+             provider_result_event_id = $3, completed_at = $4, updated_at = $4
+         WHERE id = $1`,
+        [refundId, providerRefundId, successResultEventId, refundSucceededAt],
+      );
+      await refunding.query(
+        `UPDATE payments SET status = 'REFUNDED', updated_at = $2
+         WHERE id = $1`,
+        [foundation.paymentId, refundSucceededAt],
+      );
+      await refunding.query(
+        `UPDATE order_phases
+         SET status = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, refundSucceededAt],
+      );
+      await refunding.query(
+        `UPDATE fulfilment_slots
+         SET outcome = 'CANCELLED_REFUNDED', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, refundSucceededAt],
+      );
+      await refunding.query(
+        `UPDATE orders SET status = 'REFUNDED', updated_at = $2 WHERE id = $1`,
+        [foundation.orderId, refundSucceededAt],
+      );
+      await forceOrderLifecycleConstraints(refunding);
+      await refunding.query("COMMIT");
+    } catch (error) {
+      await refunding.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      refunding.release();
+    }
+
+    if (!foundation || !refundId || !refundSucceededAt || !providerRefundId) {
+      throw new Error("committed refund failure fixture is incomplete");
+    }
+    expect(
+      (
+        await pool.query<{
+          order_status: string;
+          payment_status: string;
+          phase_status: string;
+          refund_status: string;
+          refunded_slots: string;
+        }>(
+          `SELECT target_order.status::text AS order_status,
+                  payment.status::text AS payment_status,
+                  phase.status::text AS phase_status,
+                  refund.status::text AS refund_status,
+                  (SELECT count(*)::text
+                   FROM fulfilment_slots slot
+                   WHERE slot.order_id = target_order.id
+                     AND slot.outcome = 'CANCELLED_REFUNDED') AS refunded_slots
+           FROM orders target_order
+           JOIN order_phases phase ON phase.order_id = target_order.id
+           JOIN payments payment ON payment.order_id = target_order.id
+           JOIN refund_transactions refund ON refund.id = $2
+           WHERE target_order.id = $1`,
+          [foundation.orderId, refundId],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        order_status: "REFUNDED",
+        payment_status: "REFUNDED",
+        phase_status: "CANCELLED_REFUNDED",
+        refund_status: "SUCCEEDED",
+        refunded_slots: "1",
+      },
+    ]);
+
+    const reconciling = await pool.connect();
+    await reconciling.query("BEGIN");
+    let failureResultEventId: string | undefined;
+    try {
+      const fixtures = new PersistenceFactory(
+        reconciling,
+        `${scope}:committed-refund-failure`,
+      );
+      const refundFailedAt = new Date(
+        Math.max(Date.now(), refundSucceededAt.getTime() + 1),
+      );
+      const failureProviderEventId = `${scope}:committed-refund-failure`;
+      await fixtures.persistRefundProviderEvent(
+        refundId,
+        "REFUND_FAILED",
+        providerRefundId,
+        refundFailedAt,
+        failureProviderEventId,
+        refundFailedAt,
+      );
+      failureResultEventId = (
+        await reconciling.query<{ id: string }>(
+          `SELECT id
+           FROM payment_provider_events
+           WHERE payment_id = $1
+             AND refund_transaction_id = $2
+             AND provider_event_id = $3`,
+          [foundation.paymentId, refundId, failureProviderEventId],
+        )
+      ).rows[0]?.id;
+      if (!failureResultEventId) {
+        throw new Error("committed refund failure receipt is unavailable");
+      }
+
+      await expectQueryError(
+        reconciling,
+        "duplicate_committed_refund_failure_receipt",
+        () =>
+          reconciling.query(
+            `INSERT INTO payment_provider_events
+             SELECT gen_random_uuid(), payment_id, refund_transaction_id,
+                    provider, provider_event_id, provider_transaction_id, kind,
+                    amount_minor, currency, payload, payload_hash, occurred_at,
+                    authenticated_at, verified_at, created_at
+             FROM payment_provider_events
+             WHERE id = $1`,
+            [failureResultEventId],
+          ),
+        {
+          code: "23505",
+          constraint: "payment_provider_events_provider_provider_event_id_key",
+        },
+      );
+      await reconciling.query(
+        `UPDATE refund_transactions
+         SET status = 'FAILED', provider_result_event_id = $2,
+             completed_at = NULL, updated_at = $3
+         WHERE id = $1`,
+        [refundId, failureResultEventId, refundFailedAt],
+      );
+      await reconciling.query(
+        `UPDATE payments SET status = 'CAPTURED', updated_at = $2
+         WHERE id = $1`,
+        [foundation.paymentId, refundFailedAt],
+      );
+      await reconciling.query(
+        `UPDATE order_phases SET status = 'CANCELLED', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, refundFailedAt],
+      );
+      await reconciling.query(
+        `UPDATE fulfilment_slots SET outcome = 'CANCELLED', updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, refundFailedAt],
+      );
+      await reconciling.query(
+        `UPDATE orders SET status = 'CANCELLED', updated_at = $2 WHERE id = $1`,
+        [foundation.orderId, refundFailedAt],
+      );
+      await forceOrderLifecycleConstraints(reconciling);
+      await reconciling.query("COMMIT");
+    } catch (error) {
+      await reconciling.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      reconciling.release();
+    }
+
+    expect(failureResultEventId).toBeDefined();
+    expect(
+      (
+        await pool.query<{
+          cancelled_slots: string;
+          completed_at: Date | null;
+          order_status: string;
+          payment_status: string;
+          phase_status: string;
+          provider_result_event_id: string;
+          refund_status: string;
+        }>(
+          `SELECT target_order.status::text AS order_status,
+                  payment.status::text AS payment_status,
+                  phase.status::text AS phase_status,
+                  refund.status::text AS refund_status,
+                  refund.completed_at, refund.provider_result_event_id,
+                  (SELECT count(*)::text
+                   FROM fulfilment_slots slot
+                   WHERE slot.order_id = target_order.id
+                     AND slot.outcome = 'CANCELLED') AS cancelled_slots
+           FROM orders target_order
+           JOIN order_phases phase ON phase.order_id = target_order.id
+           JOIN payments payment ON payment.order_id = target_order.id
+           JOIN refund_transactions refund ON refund.id = $2
+           WHERE target_order.id = $1`,
+          [foundation.orderId, refundId],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        order_status: "CANCELLED",
+        payment_status: "CAPTURED",
+        phase_status: "CANCELLED",
+        refund_status: "FAILED",
+        completed_at: null,
+        provider_result_event_id: failureResultEventId,
+        cancelled_slots: "1",
+      },
+    ]);
   });
 
   it("scopes external payment identities to their provider", async () => {
@@ -16733,7 +17246,10 @@ describe("commerce persistence foundations", () => {
             ),
           {
             code: "23514",
-            constraint: "refund_transaction_succeeded_immutable_check",
+            constraint:
+              status === "PENDING"
+                ? "refund_transaction_succeeded_immutable_check"
+                : "refund_failure_provider_receipt_check",
           },
         );
       }

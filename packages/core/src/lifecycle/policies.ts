@@ -40,6 +40,14 @@ function hasExactRefundedCancellationRecoveryMarker(
   );
 }
 
+function hasExactLateRefundFailureMarker(
+  context: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  return (
+    readExactLateRefundFailureProof(context)?.expectedSource === "refunded"
+  );
+}
+
 function hasExactNoIntentPaymentTerminalSnapshot(
   state: string,
   context: Readonly<Record<string, unknown>> | undefined,
@@ -2089,6 +2097,1085 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
   );
 }
 
+function readExactLateRefundFailureProof(
+  context: Readonly<Record<string, unknown>> | undefined,
+):
+  | Readonly<{
+      expectedSource: string;
+      expectedTarget: string;
+      orderId: string;
+      paymentId: string;
+      paymentStateKey: string;
+      phaseId: string;
+      previousPaymentResultId: string;
+      resultId: string;
+      sourceOrderResultId: string;
+      sourceOrderStateKey: string;
+      sourcePhaseResultId: string;
+      sourcePhaseStateKey: string;
+    }>
+  | undefined {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    context?.paymentCaptureKind !== "late_refund_failure" ||
+    context.lateRefundFailureCompleted !== true ||
+    context.lateRefundFailureAtomic !== true
+  ) {
+    return undefined;
+  }
+
+  const paymentId = context.paymentId;
+  const orderId = context.orderId;
+  const phaseId = context.phaseId;
+  const role = context.paymentRole;
+  const refundId = context.refundTransactionId;
+  const provider = context.lateRefundFailureProvider;
+  const providerTransactionId = context.lateRefundFailureProviderTransactionId;
+  const amountMinor = context.lateRefundFailureAmountMinor;
+  const currency = context.lateRefundFailureCurrency;
+  const attemptKey = context.lateRefundFailureAttemptKey;
+  const capturedAmountMinor = context.lateRefundFailureCapturedAmountMinor;
+  const resultId = context.lateRefundFailureResultId;
+  const previousPaymentResultId =
+    context.lateRefundFailurePreviousPaymentResultId;
+  const paymentStateKey =
+    context.lateRefundFailureCurrentPaymentStateCommandKey;
+  const sourceOrderResultId = context.lateRefundFailureSourceOrderResultId;
+  const sourceOrderStateKey =
+    context.lateRefundFailureCurrentOrderStateCommandKey;
+  const sourcePhaseResultId = context.lateRefundFailureSourcePhaseResultId;
+  const sourcePhaseStateKey =
+    context.lateRefundFailureCurrentPhaseStateCommandKey;
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(refundId) ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(currency) ||
+    !nonBlank(attemptKey) ||
+    !nonBlank(resultId) ||
+    !nonBlank(previousPaymentResultId) ||
+    !nonBlank(paymentStateKey) ||
+    !nonBlank(sourceOrderResultId) ||
+    !nonBlank(sourceOrderStateKey) ||
+    !nonBlank(sourcePhaseResultId) ||
+    !nonBlank(sourcePhaseStateKey) ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n
+  ) {
+    return undefined;
+  }
+
+  const parseRefundSet = (
+    value: unknown,
+    expectedId: unknown,
+    expectedResultId: unknown,
+  ) => {
+    const snapshot = record(value);
+    const refundIds = snapshot?.refundIds;
+    const refunds = snapshot?.refundSnapshots;
+    if (
+      !nonBlank(expectedId) ||
+      !nonBlank(expectedResultId) ||
+      snapshot?.id !== expectedId ||
+      snapshot.paymentId !== paymentId ||
+      snapshot.resultId !== expectedResultId ||
+      snapshot.authoritative !== true ||
+      snapshot.complete !== true ||
+      snapshot.immutable !== true ||
+      !Array.isArray(refundIds) ||
+      !Array.isArray(refunds) ||
+      refundIds.length !== refunds.length ||
+      refundIds.some((id) => !nonBlank(id)) ||
+      new Set(refundIds).size !== refundIds.length
+    ) {
+      return undefined;
+    }
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    let succeededAmountMinor = 0n;
+    let pendingCount = 0;
+    for (const value of refunds) {
+      const row = record(value);
+      const id = row?.id;
+      const status = row?.status;
+      const rowAmountMinor = row?.amountMinor;
+      if (
+        row === undefined ||
+        !nonBlank(id) ||
+        !refundIds.includes(id) ||
+        rows.has(id) ||
+        row.paymentId !== paymentId ||
+        (status !== "pending" &&
+          status !== "succeeded" &&
+          status !== "failed") ||
+        typeof rowAmountMinor !== "bigint" ||
+        rowAmountMinor <= 0n ||
+        !nonBlank(row.resultId) ||
+        row.immutable !== true
+      ) {
+        return undefined;
+      }
+      rows.set(id, row);
+      if (status === "succeeded") succeededAmountMinor += rowAmountMinor;
+      if (status === "pending") pendingCount += 1;
+    }
+    return refundIds.some((id) => !rows.has(id))
+      ? undefined
+      : { pendingCount, rows, succeededAmountMinor };
+  };
+  const beforeSetId = context.lateRefundFailureRefundSetBeforeId;
+  const beforeSetResultId = context.lateRefundFailureRefundSetBeforeResultId;
+  const afterSetId = context.lateRefundFailureRefundSetAfterId;
+  const afterSetResultId = context.lateRefundFailureRefundSetAfterResultId;
+  const before = parseRefundSet(
+    context.lateRefundFailureRefundSetBefore,
+    beforeSetId,
+    beforeSetResultId,
+  );
+  const after = parseRefundSet(
+    context.lateRefundFailureRefundSetAfter,
+    afterSetId,
+    afterSetResultId,
+  );
+  if (
+    before === undefined ||
+    after === undefined ||
+    before.rows.size !== after.rows.size ||
+    beforeSetId === afterSetId ||
+    beforeSetResultId === afterSetResultId
+  ) {
+    return undefined;
+  }
+  for (const [id, source] of before.rows) {
+    const target = after.rows.get(id);
+    if (
+      target === undefined ||
+      target.paymentId !== source.paymentId ||
+      target.amountMinor !== source.amountMinor ||
+      target.immutable !== true ||
+      (id === refundId
+        ? source.status !== "succeeded" ||
+          source.amountMinor !== amountMinor ||
+          source.resultId !==
+            context.lateRefundFailureSuccessProviderEventResultId ||
+          target.status !== "failed" ||
+          target.resultId !== resultId
+        : target.status !== source.status ||
+          target.resultId !== source.resultId)
+    ) {
+      return undefined;
+    }
+  }
+  const succeededBefore = before.succeededAmountMinor;
+  const succeededAfter = after.succeededAmountMinor;
+  const expectedSource =
+    before.pendingCount !== 0
+      ? "refund_pending"
+      : succeededBefore === capturedAmountMinor
+        ? "refunded"
+        : "partially_refunded";
+  const expectedTarget =
+    after.pendingCount !== 0
+      ? "refund_pending"
+      : succeededAfter === 0n
+        ? "captured"
+        : "partially_refunded";
+  if (
+    succeededAfter !== succeededBefore - amountMinor ||
+    succeededAfter < 0n ||
+    succeededBefore > capturedAmountMinor ||
+    before.pendingCount !== after.pendingCount ||
+    expectedSource === expectedTarget
+  ) {
+    return undefined;
+  }
+
+  const successEventId = context.lateRefundFailureSuccessProviderEventId;
+  const failureEventId = context.lateRefundFailureProviderEventId;
+  const latestPriorEventId =
+    context.lateRefundFailureLatestPriorProviderEventId;
+  const eventSetId = context.lateRefundFailureProviderEventSetId;
+  const eventSetResultId = context.lateRefundFailureProviderEventSetResultId;
+  const eventSet = record(context.lateRefundFailureProviderEventSet);
+  const eventIds = eventSet?.providerEventIds;
+  const events = eventSet?.providerEvents;
+  if (
+    !nonBlank(successEventId) ||
+    !nonBlank(failureEventId) ||
+    !nonBlank(latestPriorEventId) ||
+    !nonBlank(eventSetId) ||
+    !nonBlank(eventSetResultId) ||
+    eventSet?.id !== eventSetId ||
+    eventSet.paymentId !== paymentId ||
+    eventSet.refundTransactionId !== refundId ||
+    eventSet.resultId !== eventSetResultId ||
+    eventSet.authoritative !== true ||
+    eventSet.complete !== true ||
+    eventSet.immutable !== true ||
+    !Array.isArray(eventIds) ||
+    !Array.isArray(events) ||
+    eventIds.length < 2 ||
+    eventIds.length !== events.length ||
+    eventIds.some((id) => !nonBlank(id)) ||
+    new Set(eventIds).size !== eventIds.length
+  ) {
+    return undefined;
+  }
+  const eventRows = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const value of events) {
+    const event = record(value);
+    const id = event?.id;
+    const occurredAt = event?.occurredAt;
+    const authenticatedAt = event?.authenticatedAt;
+    const verifiedAt = event?.verifiedAt;
+    if (
+      event === undefined ||
+      !nonBlank(id) ||
+      !eventIds.includes(id) ||
+      eventRows.has(id) ||
+      event.paymentId !== paymentId ||
+      event.refundTransactionId !== refundId ||
+      event.provider !== provider ||
+      event.providerTransactionId !== providerTransactionId ||
+      (event.kind !== "refund_succeeded" && event.kind !== "refund_failed") ||
+      event.amountMinor !== amountMinor ||
+      event.currency !== currency ||
+      event.authenticated !== true ||
+      event.verified !== true ||
+      !nonBlank(event.resultId) ||
+      event.immutable !== true ||
+      !(occurredAt instanceof Instant) ||
+      !(authenticatedAt instanceof Instant) ||
+      !(verifiedAt instanceof Instant) ||
+      authenticatedAt.epochMilliseconds <
+        occurredAt.epochMilliseconds - 5_000 ||
+      verifiedAt.compare(authenticatedAt) < 0
+    ) {
+      return undefined;
+    }
+    eventRows.set(id, event);
+  }
+  if (eventIds.some((id) => !eventRows.has(id))) return undefined;
+  const failure = eventRows.get(failureEventId);
+  const failureOccurredAt = failure?.occurredAt;
+  const priorEvents = [...eventRows.values()].filter(
+    (event) => event.id !== failureEventId,
+  );
+  if (
+    failure?.kind !== "refund_failed" ||
+    failure?.resultId !== resultId ||
+    !(failureOccurredAt instanceof Instant) ||
+    priorEvents.some(
+      (event) => (event.occurredAt as Instant).compare(failureOccurredAt) >= 0,
+    )
+  ) {
+    return undefined;
+  }
+  const latestOccurredAt = Math.max(
+    ...priorEvents.map(
+      (event) => (event.occurredAt as Instant).epochMilliseconds,
+    ),
+  );
+  const latestPriorCandidates = priorEvents.filter(
+    (event) =>
+      (event.occurredAt as Instant).epochMilliseconds === latestOccurredAt,
+  );
+  const latestPrior = latestPriorCandidates
+    .slice()
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+    .at(-1);
+  const success = eventRows.get(successEventId);
+  if (
+    latestPrior?.id !== latestPriorEventId ||
+    latestPrior.kind !== "refund_succeeded" ||
+    success?.kind !== "refund_succeeded" ||
+    context.lateRefundFailureSuccessProviderEventResultId !==
+      success.resultId ||
+    context.lateRefundFailureLatestPriorProviderEventResultId !==
+      latestPrior.resultId ||
+    context.lateRefundFailureProviderEventResultId !== failure.resultId ||
+    eventSetResultId !== resultId
+  ) {
+    return undefined;
+  }
+  const exactEventProjection = (
+    projection: Readonly<Record<string, unknown>> | undefined,
+    authoritative: Readonly<Record<string, unknown>>,
+  ): boolean =>
+    projection !== undefined &&
+    projection.id === authoritative.id &&
+    projection.paymentId === authoritative.paymentId &&
+    projection.refundTransactionId === authoritative.refundTransactionId &&
+    projection.provider === authoritative.provider &&
+    projection.providerTransactionId === authoritative.providerTransactionId &&
+    projection.kind === authoritative.kind &&
+    projection.amountMinor === authoritative.amountMinor &&
+    projection.currency === authoritative.currency &&
+    projection.occurredAt instanceof Instant &&
+    authoritative.occurredAt instanceof Instant &&
+    projection.occurredAt.equals(authoritative.occurredAt) &&
+    projection.authenticatedAt instanceof Instant &&
+    authoritative.authenticatedAt instanceof Instant &&
+    projection.authenticatedAt.equals(authoritative.authenticatedAt) &&
+    projection.verifiedAt instanceof Instant &&
+    authoritative.verifiedAt instanceof Instant &&
+    projection.verifiedAt.equals(authoritative.verifiedAt) &&
+    projection.authenticated === true &&
+    projection.verified === true &&
+    projection.resultId === authoritative.resultId &&
+    projection.immutable === true;
+  if (
+    !exactEventProjection(
+      record(context.lateRefundFailureSuccessProviderEvent),
+      success,
+    ) ||
+    !exactEventProjection(
+      record(context.lateRefundFailureProviderEvent),
+      failure,
+    ) ||
+    !exactEventProjection(
+      record(context.lateRefundFailureLatestPriorProviderEvent),
+      latestPrior,
+    )
+  ) {
+    return undefined;
+  }
+
+  const sourceRefund = record(context.lateRefundFailureSourceRefundTransaction);
+  const reconciledRefund = record(context.lateRefundFailureRefundTransaction);
+  const requestedAt = sourceRefund?.requestedAt;
+  const sourceCompletedAt = sourceRefund?.completedAt;
+  if (
+    sourceRefund?.id !== refundId ||
+    sourceRefund.paymentId !== paymentId ||
+    sourceRefund.orderId !== orderId ||
+    sourceRefund.phaseId !== phaseId ||
+    sourceRefund.status !== "succeeded" ||
+    sourceRefund.provider !== provider ||
+    sourceRefund.providerTransactionId !== providerTransactionId ||
+    sourceRefund.amountMinor !== amountMinor ||
+    sourceRefund.currency !== currency ||
+    sourceRefund.idempotencyKey !== attemptKey ||
+    sourceRefund.providerEventId !== successEventId ||
+    !(requestedAt instanceof Instant) ||
+    !(sourceCompletedAt instanceof Instant) ||
+    !(success.verifiedAt instanceof Instant) ||
+    sourceCompletedAt.epochMilliseconds <
+      requestedAt.epochMilliseconds - 5_000 ||
+    [...eventRows.values()].some(
+      (event) =>
+        (event.occurredAt as Instant).epochMilliseconds <
+        requestedAt.epochMilliseconds - 5_000,
+    ) ||
+    !sourceCompletedAt.equals(success.verifiedAt) ||
+    sourceRefund.resultId !==
+      context.lateRefundFailureSourceRefundTransactionResultId ||
+    sourceRefund.resultId !== success.resultId ||
+    sourceRefund.immutable !== true ||
+    reconciledRefund?.id !== refundId ||
+    reconciledRefund.paymentId !== paymentId ||
+    reconciledRefund.orderId !== orderId ||
+    reconciledRefund.phaseId !== phaseId ||
+    reconciledRefund.previousStatus !== "succeeded" ||
+    reconciledRefund.targetStatus !== "failed" ||
+    reconciledRefund.status !== "failed" ||
+    reconciledRefund.provider !== provider ||
+    reconciledRefund.providerTransactionId !== providerTransactionId ||
+    reconciledRefund.amountMinor !== amountMinor ||
+    reconciledRefund.currency !== currency ||
+    reconciledRefund.idempotencyKey !== attemptKey ||
+    reconciledRefund.previousProviderEventId !== successEventId ||
+    reconciledRefund.providerEventId !== failureEventId ||
+    !(reconciledRefund.requestedAt instanceof Instant) ||
+    !reconciledRefund.requestedAt.equals(requestedAt) ||
+    reconciledRefund.completedAt !== null ||
+    reconciledRefund.resultId !== resultId ||
+    reconciledRefund.immutable !== true
+  ) {
+    return undefined;
+  }
+
+  const sourcePayment = record(context.lateRefundFailureSourcePayment);
+  const reconciledPayment = record(context.lateRefundFailureReconciledPayment);
+  if (
+    sourcePayment?.id !== paymentId ||
+    sourcePayment.orderId !== orderId ||
+    sourcePayment.phaseId !== phaseId ||
+    sourcePayment.role !== role ||
+    sourcePayment.provider !== provider ||
+    sourcePayment.currency !== currency ||
+    sourcePayment.status !== expectedSource ||
+    sourcePayment.capturedAmountMinor !== capturedAmountMinor ||
+    sourcePayment.succeededRefundAmountMinor !== succeededBefore ||
+    sourcePayment.authoritativeRefundSetId !== beforeSetId ||
+    sourcePayment.authoritativeRefundSetResultId !== beforeSetResultId ||
+    sourcePayment.resultId !== previousPaymentResultId ||
+    sourcePayment.currentStateCommandKey !== paymentStateKey ||
+    sourcePayment.immutable !== true ||
+    reconciledPayment?.id !== paymentId ||
+    reconciledPayment.orderId !== orderId ||
+    reconciledPayment.phaseId !== phaseId ||
+    reconciledPayment.role !== role ||
+    reconciledPayment.provider !== provider ||
+    reconciledPayment.currency !== currency ||
+    reconciledPayment.previousStatus !== expectedSource ||
+    reconciledPayment.targetStatus !== expectedTarget ||
+    reconciledPayment.capturedAmountMinor !== capturedAmountMinor ||
+    reconciledPayment.succeededRefundAmountMinor !== succeededAfter ||
+    reconciledPayment.refundTransactionId !== refundId ||
+    reconciledPayment.authoritativeRefundSetId !== afterSetId ||
+    reconciledPayment.authoritativeRefundSetResultId !== afterSetResultId ||
+    reconciledPayment.resultId !== resultId ||
+    reconciledPayment.immutable !== true ||
+    context.lateRefundFailurePaymentResultId !== resultId ||
+    context.lateRefundFailureRefundTransactionResultId !== resultId
+  ) {
+    return undefined;
+  }
+
+  if (expectedSource === "refunded") {
+    const sourceOrder = record(context.lateRefundFailureSourceOrder);
+    const reopenedOrder = record(context.lateRefundFailureReopenedOrder);
+    const sourcePhase = record(context.lateRefundFailureSourcePhase);
+    const reopenedPhase = record(context.lateRefundFailureReopenedPhase);
+    const beforePaymentSetId = context.lateRefundFailureOrderPaymentSetBeforeId;
+    const beforePaymentSetResultId =
+      context.lateRefundFailureOrderPaymentSetBeforeResultId;
+    const afterPaymentSetId = context.lateRefundFailureOrderPaymentSetAfterId;
+    const afterPaymentSetResultId =
+      context.lateRefundFailureOrderPaymentSetAfterResultId;
+    const parseOrderPaymentSet = (
+      value: unknown,
+      expectedId: unknown,
+      expectedResultId: unknown,
+      phase: "before" | "after",
+    ) => {
+      const snapshot = record(value);
+      const paymentIds = snapshot?.paymentIds;
+      const payments = snapshot?.paymentSnapshots;
+      if (
+        !nonBlank(expectedId) ||
+        !nonBlank(expectedResultId) ||
+        snapshot?.id !== expectedId ||
+        snapshot.orderId !== orderId ||
+        snapshot.phaseId !== phaseId ||
+        snapshot.resultId !== expectedResultId ||
+        snapshot.authoritative !== true ||
+        snapshot.complete !== true ||
+        snapshot.immutable !== true ||
+        !Array.isArray(paymentIds) ||
+        !Array.isArray(payments) ||
+        paymentIds.length === 0 ||
+        paymentIds.length !== payments.length ||
+        paymentIds.some((id) => !nonBlank(id)) ||
+        new Set(paymentIds).size !== paymentIds.length
+      ) {
+        return undefined;
+      }
+      const rows = new Map<string, Readonly<Record<string, unknown>>>();
+      for (const value of payments) {
+        const row = record(value);
+        const id = row?.id;
+        if (
+          row === undefined ||
+          !nonBlank(id) ||
+          !paymentIds.includes(id) ||
+          rows.has(id) ||
+          row.orderId !== orderId ||
+          row.phaseId !== phaseId ||
+          (row.role !== "full" &&
+            row.role !== "deposit" &&
+            row.role !== "balance") ||
+          !nonBlank(row.provider) ||
+          !nonBlank(row.currency) ||
+          typeof row.capturedAmountMinor !== "bigint" ||
+          row.capturedAmountMinor <= 0n ||
+          typeof row.succeededRefundAmountMinor !== "bigint" ||
+          row.succeededRefundAmountMinor < 0n ||
+          !nonBlank(row.authoritativeRefundSetId) ||
+          !nonBlank(row.authoritativeRefundSetResultId) ||
+          (phase === "before"
+            ? !nonBlank(row.status) || !nonBlank(row.resultId)
+            : !nonBlank(row.previousStatus) ||
+              !nonBlank(row.targetStatus) ||
+              !nonBlank(row.previousResultId) ||
+              !nonBlank(row.resultId)) ||
+          row.immutable !== true
+        ) {
+          return undefined;
+        }
+        rows.set(id, row);
+      }
+      return paymentIds.some((id) => !rows.has(id)) ? undefined : rows;
+    };
+    const beforePayments = parseOrderPaymentSet(
+      context.lateRefundFailureOrderPaymentSetBefore,
+      beforePaymentSetId,
+      beforePaymentSetResultId,
+      "before",
+    );
+    const afterPayments = parseOrderPaymentSet(
+      context.lateRefundFailureOrderPaymentSetAfter,
+      afterPaymentSetId,
+      afterPaymentSetResultId,
+      "after",
+    );
+    const beforeSlotSetId = context.lateRefundFailureSlotSetBeforeId;
+    const beforeSlotSetResultId =
+      context.lateRefundFailureSlotSetBeforeResultId;
+    const afterSlotSetId = context.lateRefundFailureSlotSetAfterId;
+    const afterSlotSetResultId = context.lateRefundFailureSlotSetAfterResultId;
+    const parseSlotSet = (
+      value: unknown,
+      expectedId: unknown,
+      expectedResultId: unknown,
+      expectedOutcome: string,
+    ) => {
+      const snapshot = record(value);
+      const slotIds = snapshot?.slotIds;
+      const slots = snapshot?.slotSnapshots;
+      if (
+        !nonBlank(expectedId) ||
+        !nonBlank(expectedResultId) ||
+        snapshot?.id !== expectedId ||
+        snapshot.orderId !== orderId ||
+        snapshot.phaseId !== phaseId ||
+        snapshot.resultId !== expectedResultId ||
+        snapshot.authoritative !== true ||
+        snapshot.complete !== true ||
+        snapshot.immutable !== true ||
+        !Array.isArray(slotIds) ||
+        !Array.isArray(slots) ||
+        slotIds.length === 0 ||
+        slotIds.length !== slots.length ||
+        slotIds.some((id) => !nonBlank(id)) ||
+        new Set(slotIds).size !== slotIds.length
+      ) {
+        return undefined;
+      }
+      const rows = new Map<string, Readonly<Record<string, unknown>>>();
+      for (const value of slots) {
+        const row = record(value);
+        const id = row?.id;
+        if (
+          row === undefined ||
+          !nonBlank(id) ||
+          !slotIds.includes(id) ||
+          rows.has(id) ||
+          row.orderId !== orderId ||
+          row.phaseId !== phaseId ||
+          row.outcome !== expectedOutcome ||
+          !nonBlank(row.resultId) ||
+          row.immutable !== true
+        ) {
+          return undefined;
+        }
+        rows.set(id, row);
+      }
+      return slotIds.some((id) => !rows.has(id)) ? undefined : rows;
+    };
+    const beforeSlots = parseSlotSet(
+      context.lateRefundFailureSlotSetBefore,
+      beforeSlotSetId,
+      beforeSlotSetResultId,
+      "cancelled_refunded",
+    );
+    const afterSlots = parseSlotSet(
+      context.lateRefundFailureSlotSetAfter,
+      afterSlotSetId,
+      afterSlotSetResultId,
+      "cancelled",
+    );
+    if (
+      beforePayments === undefined ||
+      afterPayments === undefined ||
+      beforePayments.size !== afterPayments.size ||
+      beforePaymentSetId === afterPaymentSetId ||
+      beforePaymentSetResultId === afterPaymentSetResultId ||
+      afterPaymentSetResultId !== resultId ||
+      [...beforePayments].some(([id, source]) => {
+        const target = afterPayments.get(id);
+        if (target === undefined) return true;
+        const selected = id === paymentId;
+        return (
+          target.orderId !== source.orderId ||
+          target.phaseId !== source.phaseId ||
+          target.role !== source.role ||
+          target.provider !== source.provider ||
+          target.currency !== source.currency ||
+          target.capturedAmountMinor !== source.capturedAmountMinor ||
+          target.previousStatus !== source.status ||
+          target.previousResultId !== source.resultId ||
+          (selected
+            ? source.status !== expectedSource ||
+              source.provider !== provider ||
+              source.currency !== currency ||
+              source.capturedAmountMinor !== capturedAmountMinor ||
+              source.succeededRefundAmountMinor !== succeededBefore ||
+              source.authoritativeRefundSetId !== beforeSetId ||
+              source.authoritativeRefundSetResultId !== beforeSetResultId ||
+              source.resultId !== previousPaymentResultId ||
+              target.targetStatus !== expectedTarget ||
+              target.succeededRefundAmountMinor !== succeededAfter ||
+              target.authoritativeRefundSetId !== afterSetId ||
+              target.authoritativeRefundSetResultId !== afterSetResultId ||
+              target.resultId !== resultId
+            : target.targetStatus !== source.status ||
+              target.succeededRefundAmountMinor !==
+                source.succeededRefundAmountMinor ||
+              target.authoritativeRefundSetId !==
+                source.authoritativeRefundSetId ||
+              target.authoritativeRefundSetResultId !==
+                source.authoritativeRefundSetResultId ||
+              target.resultId !== source.resultId)
+        );
+      }) ||
+      beforeSlots === undefined ||
+      afterSlots === undefined ||
+      beforeSlots.size !== afterSlots.size ||
+      beforeSlotSetId === afterSlotSetId ||
+      beforeSlotSetResultId === afterSlotSetResultId ||
+      afterSlotSetResultId !== resultId ||
+      [...beforeSlots].some(([id, source]) => {
+        const target = afterSlots.get(id);
+        return (
+          target === undefined ||
+          target.previousOutcome !== "cancelled_refunded" ||
+          target.previousResultId !== source.resultId ||
+          target.resultId !== resultId
+        );
+      }) ||
+      sourceOrder?.id !== orderId ||
+      sourceOrder.phaseId !== phaseId ||
+      sourceOrder.paymentId !== paymentId ||
+      sourceOrder.status !== "refunded" ||
+      sourceOrder.authoritativePaymentSetId !== beforePaymentSetId ||
+      sourceOrder.authoritativePaymentSetResultId !==
+        beforePaymentSetResultId ||
+      sourceOrder.authoritativeSlotSetId !== beforeSlotSetId ||
+      sourceOrder.authoritativeSlotSetResultId !== beforeSlotSetResultId ||
+      sourceOrder.phaseResultId !== sourcePhaseResultId ||
+      sourceOrder.resultId !== sourceOrderResultId ||
+      sourceOrder.currentStateCommandKey !== sourceOrderStateKey ||
+      sourceOrder.immutable !== true ||
+      reopenedOrder?.id !== orderId ||
+      reopenedOrder.phaseId !== phaseId ||
+      reopenedOrder.paymentId !== paymentId ||
+      reopenedOrder.previousStatus !== "refunded" ||
+      reopenedOrder.targetStatus !== "cancelled" ||
+      reopenedOrder.authoritativePaymentSetId !== afterPaymentSetId ||
+      reopenedOrder.authoritativePaymentSetResultId !==
+        afterPaymentSetResultId ||
+      reopenedOrder.authoritativeSlotSetId !== afterSlotSetId ||
+      reopenedOrder.authoritativeSlotSetResultId !== afterSlotSetResultId ||
+      reopenedOrder.phaseResultId !== resultId ||
+      reopenedOrder.resultId !== resultId ||
+      reopenedOrder.immutable !== true ||
+      sourcePhase?.id !== phaseId ||
+      sourcePhase.orderId !== orderId ||
+      sourcePhase.status !== "cancelled_refunded" ||
+      sourcePhase.authoritativePaymentSetId !== beforePaymentSetId ||
+      sourcePhase.authoritativePaymentSetResultId !==
+        beforePaymentSetResultId ||
+      sourcePhase.authoritativeSlotSetId !== beforeSlotSetId ||
+      sourcePhase.authoritativeSlotSetResultId !== beforeSlotSetResultId ||
+      sourcePhase.orderResultId !== sourceOrderResultId ||
+      sourcePhase.resultId !== sourcePhaseResultId ||
+      sourcePhase.currentStateCommandKey !== sourcePhaseStateKey ||
+      sourcePhase.immutable !== true ||
+      reopenedPhase?.id !== phaseId ||
+      reopenedPhase.orderId !== orderId ||
+      reopenedPhase.previousStatus !== "cancelled_refunded" ||
+      reopenedPhase.targetStatus !== "cancelled" ||
+      reopenedPhase.authoritativePaymentSetId !== afterPaymentSetId ||
+      reopenedPhase.authoritativePaymentSetResultId !==
+        afterPaymentSetResultId ||
+      reopenedPhase.authoritativeSlotSetId !== afterSlotSetId ||
+      reopenedPhase.authoritativeSlotSetResultId !== afterSlotSetResultId ||
+      reopenedPhase.orderResultId !== resultId ||
+      reopenedPhase.resultId !== resultId ||
+      reopenedPhase.immutable !== true
+    ) {
+      return undefined;
+    }
+  }
+
+  return {
+    expectedSource,
+    expectedTarget,
+    orderId,
+    paymentId,
+    paymentStateKey,
+    phaseId,
+    previousPaymentResultId,
+    resultId,
+    sourceOrderResultId,
+    sourceOrderStateKey,
+    sourcePhaseResultId,
+    sourcePhaseStateKey,
+  };
+}
+
+function requireExactLateRefundFailureReconciliation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  scope: "payment" | "order" | "phase",
+): void {
+  const context = command.context;
+  const exactProof = readExactLateRefundFailureProof(context);
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const refundId = context?.refundTransactionId;
+  const successEventId = context?.lateRefundFailureSuccessProviderEventId;
+  const failureEventId = context?.lateRefundFailureProviderEventId;
+  const provider = context?.lateRefundFailureProvider;
+  const providerTransactionId = context?.lateRefundFailureProviderTransactionId;
+  const amountMinor = context?.lateRefundFailureAmountMinor;
+  const currency = context?.lateRefundFailureCurrency;
+  const attemptKey = context?.lateRefundFailureAttemptKey;
+  const capturedAmountMinor = context?.lateRefundFailureCapturedAmountMinor;
+  const beforeSetId = context?.lateRefundFailureRefundSetBeforeId;
+  const beforeSetResultId = context?.lateRefundFailureRefundSetBeforeResultId;
+  const afterSetId = context?.lateRefundFailureRefundSetAfterId;
+  const afterSetResultId = context?.lateRefundFailureRefundSetAfterResultId;
+  const previousPaymentResultId =
+    context?.lateRefundFailurePreviousPaymentResultId;
+  const paymentStateKey =
+    context?.lateRefundFailureCurrentPaymentStateCommandKey;
+  const resultId = context?.lateRefundFailureResultId;
+  const sourcePayment = record(context?.lateRefundFailureSourcePayment);
+  const reconciledPayment = record(context?.lateRefundFailureReconciledPayment);
+  const refund = record(context?.lateRefundFailureRefundTransaction);
+  const success = record(context?.lateRefundFailureSuccessProviderEvent);
+  const failure = record(context?.lateRefundFailureProviderEvent);
+  const latestPriorEventId =
+    context?.lateRefundFailureLatestPriorProviderEventId;
+  const latestPrior = record(
+    context?.lateRefundFailureLatestPriorProviderEvent,
+  );
+  const sourceOrder = record(context?.lateRefundFailureSourceOrder);
+  const reopenedOrder = record(context?.lateRefundFailureReopenedOrder);
+  const sourcePhase = record(context?.lateRefundFailureSourcePhase);
+  const reopenedPhase = record(context?.lateRefundFailureReopenedPhase);
+  const parseRefundSet = (
+    value: unknown,
+    expectedId: unknown,
+    expectedResultId: unknown,
+  ) => {
+    const snapshot = record(value);
+    const refundIds = snapshot?.refundIds;
+    const refunds = snapshot?.refundSnapshots;
+    if (
+      !nonBlank(expectedId) ||
+      !nonBlank(expectedResultId) ||
+      snapshot?.id !== expectedId ||
+      snapshot.paymentId !== paymentId ||
+      snapshot.resultId !== expectedResultId ||
+      snapshot.immutable !== true ||
+      !Array.isArray(refundIds) ||
+      !Array.isArray(refunds) ||
+      refundIds.length !== refunds.length ||
+      refundIds.some((id) => !nonBlank(id)) ||
+      new Set(refundIds).size !== refundIds.length
+    ) {
+      return undefined;
+    }
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    let succeededAmountMinor = 0n;
+    let pendingCount = 0;
+    for (const value of refunds) {
+      const row = record(value);
+      const id = row?.id;
+      const status = row?.status;
+      const rowAmountMinor = row?.amountMinor;
+      if (
+        row === undefined ||
+        !nonBlank(id) ||
+        !refundIds.includes(id) ||
+        rows.has(id) ||
+        row.paymentId !== paymentId ||
+        (status !== "pending" &&
+          status !== "succeeded" &&
+          status !== "failed") ||
+        typeof rowAmountMinor !== "bigint" ||
+        rowAmountMinor <= 0n ||
+        !nonBlank(row.resultId) ||
+        row.immutable !== true
+      ) {
+        return undefined;
+      }
+      rows.set(id, row);
+      if (status === "succeeded") succeededAmountMinor += rowAmountMinor;
+      if (status === "pending") pendingCount += 1;
+    }
+    if (refundIds.some((id) => !rows.has(id))) return undefined;
+    return { pendingCount, rows, succeededAmountMinor };
+  };
+  const before = parseRefundSet(
+    context?.lateRefundFailureRefundSetBefore,
+    beforeSetId,
+    beforeSetResultId,
+  );
+  const after = parseRefundSet(
+    context?.lateRefundFailureRefundSetAfter,
+    afterSetId,
+    afterSetResultId,
+  );
+  let exactRefundSetTransition = false;
+  if (
+    before !== undefined &&
+    after !== undefined &&
+    before.rows.size === after.rows.size &&
+    before.rows.has(refundId as string) &&
+    after.rows.has(refundId as string)
+  ) {
+    exactRefundSetTransition = true;
+    for (const [id, beforeRow] of before.rows) {
+      const afterRow = after.rows.get(id);
+      if (
+        afterRow === undefined ||
+        afterRow.paymentId !== beforeRow.paymentId ||
+        afterRow.amountMinor !== beforeRow.amountMinor ||
+        afterRow.immutable !== true ||
+        (id === refundId
+          ? beforeRow.status !== "succeeded" ||
+            beforeRow.amountMinor !== amountMinor ||
+            beforeRow.resultId !==
+              context?.lateRefundFailureSuccessProviderEventResultId ||
+            afterRow.status !== "failed" ||
+            afterRow.resultId !== resultId
+          : afterRow.status !== beforeRow.status ||
+            afterRow.resultId !== beforeRow.resultId)
+      ) {
+        exactRefundSetTransition = false;
+        break;
+      }
+    }
+  }
+  const succeededBefore = before?.succeededAmountMinor;
+  const succeededAfter = after?.succeededAmountMinor;
+  const expectedSource =
+    before?.pendingCount !== 0
+      ? "refund_pending"
+      : succeededBefore === capturedAmountMinor
+        ? "refunded"
+        : "partially_refunded";
+  const expectedTarget =
+    after?.pendingCount !== 0
+      ? "refund_pending"
+      : succeededAfter === 0n
+        ? "captured"
+        : "partially_refunded";
+  const successOccurredAt = success?.occurredAt;
+  const successVerifiedAt = success?.verifiedAt;
+  const failureOccurredAt = failure?.occurredAt;
+  const failureVerifiedAt = failure?.verifiedAt;
+  const latestPriorOccurredAt = latestPrior?.occurredAt;
+  const sourceOrderResultId = context?.lateRefundFailureSourceOrderResultId;
+  const sourceOrderStateKey =
+    context?.lateRefundFailureCurrentOrderStateCommandKey;
+  const sourcePhaseResultId = context?.lateRefundFailureSourcePhaseResultId;
+  const sourcePhaseStateKey =
+    context?.lateRefundFailureCurrentPhaseStateCommandKey;
+  const paymentBindingValid =
+    scope !== "payment" ||
+    (command.aggregateId === paymentId &&
+      command.current === expectedSource &&
+      command.target === expectedTarget &&
+      command.currentStateResultId === previousPaymentResultId &&
+      command.currentStateCommandKey === paymentStateKey &&
+      expectedSource !== expectedTarget);
+  const orderBindingValid =
+    scope !== "order" ||
+    (command.aggregateId === orderId &&
+      command.current === "refunded" &&
+      command.target === "cancelled" &&
+      command.currentStateResultId === sourceOrderResultId &&
+      command.currentStateCommandKey === sourceOrderStateKey &&
+      expectedSource === "refunded" &&
+      sourceOrder !== undefined &&
+      sourceOrder?.id === orderId &&
+      sourceOrder.phaseId === phaseId &&
+      sourceOrder.paymentId === paymentId &&
+      sourceOrder.status === "refunded" &&
+      sourceOrder.resultId === sourceOrderResultId &&
+      sourceOrder.currentStateCommandKey === sourceOrderStateKey &&
+      sourceOrder.immutable === true &&
+      reopenedOrder !== undefined &&
+      reopenedOrder?.id === orderId &&
+      reopenedOrder.phaseId === phaseId &&
+      reopenedOrder.paymentId === paymentId &&
+      reopenedOrder.previousStatus === "refunded" &&
+      reopenedOrder.targetStatus === "cancelled" &&
+      reopenedOrder.resultId === resultId &&
+      reopenedOrder.immutable === true);
+  const phaseBindingValid =
+    scope !== "phase" ||
+    (command.aggregateId === phaseId &&
+      command.current === "cancelled_refunded" &&
+      command.target === "cancelled" &&
+      command.currentStateResultId === sourcePhaseResultId &&
+      command.currentStateCommandKey === sourcePhaseStateKey &&
+      expectedSource === "refunded" &&
+      sourcePhase !== undefined &&
+      sourcePhase?.id === phaseId &&
+      sourcePhase.orderId === orderId &&
+      sourcePhase.status === "cancelled_refunded" &&
+      sourcePhase.resultId === sourcePhaseResultId &&
+      sourcePhase.currentStateCommandKey === sourcePhaseStateKey &&
+      sourcePhase.immutable === true &&
+      reopenedPhase !== undefined &&
+      reopenedPhase?.id === phaseId &&
+      reopenedPhase.orderId === orderId &&
+      reopenedPhase.previousStatus === "cancelled_refunded" &&
+      reopenedPhase.targetStatus === "cancelled" &&
+      reopenedPhase.resultId === resultId &&
+      reopenedPhase.immutable === true);
+
+  if (
+    exactProof === undefined ||
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(refundId) ||
+    !nonBlank(successEventId) ||
+    !nonBlank(failureEventId) ||
+    !nonBlank(latestPriorEventId) ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(currency) ||
+    !nonBlank(attemptKey) ||
+    !nonBlank(beforeSetId) ||
+    !nonBlank(beforeSetResultId) ||
+    !nonBlank(afterSetId) ||
+    !nonBlank(afterSetResultId) ||
+    !nonBlank(previousPaymentResultId) ||
+    !nonBlank(paymentStateKey) ||
+    !nonBlank(resultId) ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n ||
+    !exactRefundSetTransition ||
+    succeededBefore === undefined ||
+    succeededAfter === undefined ||
+    succeededAfter !== succeededBefore - amountMinor ||
+    succeededAfter < 0n ||
+    succeededBefore > capturedAmountMinor ||
+    before?.pendingCount !== after?.pendingCount ||
+    beforeSetId === afterSetId ||
+    beforeSetResultId === afterSetResultId ||
+    !paymentBindingValid ||
+    !orderBindingValid ||
+    !phaseBindingValid ||
+    sourcePayment?.id !== paymentId ||
+    sourcePayment.orderId !== orderId ||
+    sourcePayment.phaseId !== phaseId ||
+    sourcePayment.role !== role ||
+    sourcePayment.status !== expectedSource ||
+    sourcePayment.capturedAmountMinor !== capturedAmountMinor ||
+    sourcePayment.succeededRefundAmountMinor !== succeededBefore ||
+    sourcePayment.authoritativeRefundSetId !== beforeSetId ||
+    sourcePayment.authoritativeRefundSetResultId !== beforeSetResultId ||
+    sourcePayment.resultId !== previousPaymentResultId ||
+    sourcePayment.currentStateCommandKey !== paymentStateKey ||
+    sourcePayment.immutable !== true ||
+    reconciledPayment?.id !== paymentId ||
+    reconciledPayment.orderId !== orderId ||
+    reconciledPayment.phaseId !== phaseId ||
+    reconciledPayment.role !== role ||
+    reconciledPayment.previousStatus !== expectedSource ||
+    reconciledPayment.targetStatus !== expectedTarget ||
+    reconciledPayment.capturedAmountMinor !== capturedAmountMinor ||
+    reconciledPayment.succeededRefundAmountMinor !== succeededAfter ||
+    reconciledPayment.refundTransactionId !== refundId ||
+    reconciledPayment.authoritativeRefundSetId !== afterSetId ||
+    reconciledPayment.authoritativeRefundSetResultId !== afterSetResultId ||
+    reconciledPayment.resultId !== resultId ||
+    reconciledPayment.immutable !== true ||
+    refund?.id !== refundId ||
+    refund.paymentId !== paymentId ||
+    refund.orderId !== orderId ||
+    refund.phaseId !== phaseId ||
+    refund.previousStatus !== "succeeded" ||
+    refund.targetStatus !== "failed" ||
+    refund.status !== "failed" ||
+    refund.provider !== provider ||
+    refund.providerTransactionId !== providerTransactionId ||
+    refund.amountMinor !== amountMinor ||
+    refund.currency !== currency ||
+    refund.idempotencyKey !== attemptKey ||
+    refund.previousProviderEventId !== successEventId ||
+    refund.providerEventId !== failureEventId ||
+    refund.completedAt !== null ||
+    refund.resultId !== resultId ||
+    refund.immutable !== true ||
+    success?.paymentId !== paymentId ||
+    success.refundTransactionId !== refundId ||
+    success.provider !== provider ||
+    success.providerTransactionId !== providerTransactionId ||
+    success.amountMinor !== amountMinor ||
+    success.currency !== currency ||
+    !(successOccurredAt instanceof Instant) ||
+    !(successVerifiedAt instanceof Instant) ||
+    failure?.paymentId !== paymentId ||
+    failure.refundTransactionId !== refundId ||
+    failure.provider !== provider ||
+    failure.providerTransactionId !== providerTransactionId ||
+    failure.amountMinor !== amountMinor ||
+    failure.currency !== currency ||
+    !(failureOccurredAt instanceof Instant) ||
+    !(failureVerifiedAt instanceof Instant) ||
+    latestPrior?.id !== latestPriorEventId ||
+    latestPrior.paymentId !== paymentId ||
+    latestPrior.refundTransactionId !== refundId ||
+    latestPrior.provider !== provider ||
+    latestPrior.providerTransactionId !== providerTransactionId ||
+    latestPrior.kind !== "refund_succeeded" ||
+    latestPrior.amountMinor !== amountMinor ||
+    latestPrior.currency !== currency ||
+    latestPrior.authenticated !== true ||
+    latestPrior.verified !== true ||
+    latestPrior.immutable !== true ||
+    !(latestPriorOccurredAt instanceof Instant) ||
+    successOccurredAt.compare(latestPriorOccurredAt) > 0 ||
+    latestPriorOccurredAt.compare(failureOccurredAt) >= 0 ||
+    context?.lateRefundFailurePaymentResultId !== resultId ||
+    context?.lateRefundFailureRefundTransactionResultId !== resultId ||
+    context?.lateRefundFailureProviderEventResultId !== resultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late refund failure requires the exact selected success, strictly newer failure, complete refund-set change, and atomic aggregate projection",
+    );
+  }
+}
+
 function requireExactLateRefundSuccessReconciliation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2231,6 +3318,8 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
   }
   const failureVerifiedAt = failureEvent?.verifiedAt;
   const successVerifiedAt = successEvent?.verifiedAt;
+  const failureOccurredAt = failureEvent?.occurredAt;
+  const successOccurredAt = successEvent?.occurredAt;
   const refundCompletedAt = refund?.completedAt;
   const derivedSucceededBefore = refundSetBefore?.succeededAmountMinor;
   const derivedSucceededAfter = refundSetAfter?.succeededAmountMinor;
@@ -2346,6 +3435,7 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     failureEvent.currency !== currency ||
     failureEvent.authenticated !== true ||
     failureEvent.verified !== true ||
+    !(failureOccurredAt instanceof Instant) ||
     !(failureVerifiedAt instanceof Instant) ||
     failureEvent.immutable !== true ||
     successEvent?.id !== successEventId ||
@@ -2360,9 +3450,11 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     successEvent.projectedTarget !== expectedTarget ||
     successEvent.authenticated !== true ||
     successEvent.verified !== true ||
+    !(successOccurredAt instanceof Instant) ||
     !(successVerifiedAt instanceof Instant) ||
     successEvent.resultId !== finalResultId ||
     successEvent.immutable !== true ||
+    failureOccurredAt.compare(successOccurredAt) >= 0 ||
     failureVerifiedAt.compare(successVerifiedAt) >= 0 ||
     !refundCompletedAt.equals(successVerifiedAt) ||
     reconciledPayment?.id !== paymentId ||
@@ -7744,17 +8836,19 @@ export type PaymentRole = "full" | "deposit" | "balance";
 export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   name: "Payment",
   initial: ["created"],
-  terminal: ["refunded"],
+  terminal: [],
   contextualTerminal: (state, context) =>
+    (state === "refunded" && !hasExactLateRefundFailureMarker(context)) ||
     hasExactNoIntentPaymentTerminalSnapshot(state, context),
   transitions: {
     created: ["pending", "failed", "voided"],
     pending: ["captured", "failed", "voided", "refund_pending"],
     failed: ["refund_pending"],
     captured: ["refund_pending"],
-    partially_refunded: ["refund_pending"],
+    partially_refunded: ["captured", "refund_pending"],
     voided: ["refund_pending"],
     refund_pending: ["captured", "partially_refunded", "refunded"],
+    refunded: ["captured", "partially_refunded", "refund_pending"],
   },
   guard: (command) => {
     if (command.current === "created" && command.target === "pending") {
@@ -7856,6 +8950,12 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
           command,
           "start",
         );
+      } else if (captureKind === "late_refund_failure") {
+        requireExactLateRefundFailureReconciliation(
+          "Payment",
+          command,
+          "payment",
+        );
       } else if (captureKind === "settlement") {
         requireExactOrdinaryRefundSetup("Payment", command);
       } else {
@@ -7881,6 +8981,22 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
     }
     if (command.current === "refund_pending" && command.target === "captured") {
       requireExactRefundFailureRollback("Payment", command);
+    }
+    const lateRefundFailureEdge =
+      (command.current === "refunded" &&
+        (command.target === "captured" ||
+          command.target === "partially_refunded" ||
+          command.target === "refund_pending")) ||
+      (command.current === "partially_refunded" &&
+        (command.target === "captured" ||
+          (command.target === "refund_pending" &&
+            command.context?.paymentCaptureKind === "late_refund_failure")));
+    if (lateRefundFailureEdge) {
+      requireExactLateRefundFailureReconciliation(
+        "Payment",
+        command,
+        "payment",
+      );
     }
   },
 };
@@ -7914,7 +9030,8 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
   ],
   contextualTerminal: (state, context) =>
     (state === "refunded" &&
-      !hasExactRefundedCancellationRecoveryMarker(context)) ||
+      !hasExactRefundedCancellationRecoveryMarker(context) &&
+      !hasExactLateRefundFailureMarker(context)) ||
     (state === "cancelled" && context?.paymentStatus === "unpaid"),
   transitions: {
     draft: ["quoted"],
@@ -7939,7 +9056,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     delivered: ["completed"],
     recovery_pending: ["qc_passed", "cancelled", "partially_fulfilled"],
     cancelled: ["shipped", "refunded", "cancelled_settled"],
-    refunded: ["shipped"],
+    refunded: ["shipped", "cancelled"],
   },
   guard: (command) => {
     if (command.current === "draft" && command.target === "quoted") {
@@ -8007,6 +9124,9 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     if (command.current === "refunded" && command.target === "shipped") {
       requireVerifiedMatchingCancellationRaceScan("Order", command);
       requireExactCancellationRaceHandoffResult("Order", command);
+    }
+    if (command.current === "refunded" && command.target === "cancelled") {
+      requireExactLateRefundFailureReconciliation("Order", command, "order");
     }
     if (
       command.current === "awaiting_balance" &&
@@ -8129,7 +9249,8 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
     terminal: ["completed", "cancelled_settled", "partially_fulfilled"],
     contextualTerminal: (state, context) =>
       (state === "cancelled_refunded" &&
-        !hasExactRefundedCancellationRecoveryMarker(context)) ||
+        !hasExactRefundedCancellationRecoveryMarker(context) &&
+        !hasExactLateRefundFailureMarker(context)) ||
       (state === "cancelled" && context?.paymentStatus === "unpaid"),
     transitions: {
       quoted: ["active", "cancelled"],
@@ -8144,7 +9265,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         "cancelled_refunded",
       ],
       cancelled: ["shipped", "cancelled_refunded", "cancelled_settled"],
-      cancelled_refunded: ["shipped"],
+      cancelled_refunded: ["shipped", "cancelled"],
     },
     guard: (command) => {
       if (command.current === "quoted" && command.target === "active") {
@@ -8191,6 +9312,16 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         requireExactCancellationRaceHandoffResult(
           "OrderPhase(single)",
           command,
+        );
+      }
+      if (
+        command.current === "cancelled_refunded" &&
+        command.target === "cancelled"
+      ) {
+        requireExactLateRefundFailureReconciliation(
+          "OrderPhase(single)",
+          command,
+          "phase",
         );
       }
       if (command.current === "shipped" && command.target === "delivered") {

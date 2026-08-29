@@ -1721,21 +1721,23 @@ model PaymentIntentCreationFailure {
 }
 
 model RefundTransaction {
-  id               String       @id @default(uuid()) @db.Uuid
-  paymentId        String       @map("payment_id") @db.Uuid
-  idempotencyKey   String       @map("idempotency_key") @db.VarChar(255)
-  provider         String       @map("provider") @db.VarChar(100)
-  providerRefundId String?      @map("provider_refund_id") @db.VarChar(255)
-  amountMinor      BigInt       @map("amount_minor")
-  reason           RefundReason
-  status           RefundStatus @default(PENDING)
-  requestedAt      DateTime     @default(dbgenerated("clock_timestamp()")) @map("requested_at") @db.Timestamptz(3)
-  completedAt      DateTime?    @map("completed_at") @db.Timestamptz(3)
-  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                    String       @id @default(uuid()) @db.Uuid
+  paymentId             String       @map("payment_id") @db.Uuid
+  idempotencyKey        String       @map("idempotency_key") @db.VarChar(255)
+  provider              String       @map("provider") @db.VarChar(100)
+  providerRefundId      String?      @map("provider_refund_id") @db.VarChar(255)
+  providerResultEventId String?      @map("provider_result_event_id") @db.Uuid
+  amountMinor           BigInt       @map("amount_minor")
+  reason                RefundReason
+  status                RefundStatus @default(PENDING)
+  requestedAt           DateTime     @default(dbgenerated("clock_timestamp()")) @map("requested_at") @db.Timestamptz(3)
+  completedAt           DateTime?    @map("completed_at") @db.Timestamptz(3)
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   payment                Payment                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  providerEvents         PaymentProviderEvent[]
+  providerEvents         PaymentProviderEvent[]  @relation("RefundProviderEvents")
+  providerResultEvent    PaymentProviderEvent?   @relation("RefundSelectedResultEvent", fields: [providerResultEventId, id], references: [id, refundTransactionId], onDelete: Restrict, map: "refund_transactions_provider_result_event_scope_fkey")
   auditEvents            AuditEvent[]
   handoffReconciliations HandoffReconciliation[]
   orderSettlement        OrderSettlement?
@@ -1743,6 +1745,7 @@ model RefundTransaction {
   @@unique([id, paymentId])
   @@unique([paymentId, idempotencyKey])
   @@unique([provider, providerRefundId], map: "refund_transactions_provider_provider_refund_id_key")
+  @@unique([providerResultEventId, id], map: "refund_transactions_provider_result_event_scope_key")
   @@index([paymentId, status])
   @@map("refund_transactions")
 }
@@ -1765,7 +1768,8 @@ model PaymentProviderEvent {
   createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
 
   payment                      Payment                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  refundTransaction            RefundTransaction?      @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
+  refundTransaction            RefundTransaction?      @relation("RefundProviderEvents", fields: [refundTransactionId], references: [id], onDelete: Restrict)
+  selectedByRefundTransaction  RefundTransaction?      @relation("RefundSelectedResultEvent")
   handoffRefundReconciliations HandoffReconciliation[] @relation("HandoffRefundProviderEvent")
 
   @@unique([id, refundTransactionId])
