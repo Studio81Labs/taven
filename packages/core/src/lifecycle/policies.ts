@@ -57,28 +57,42 @@ function hasLateRefundSuccessRetryReconciliation(
   return typeof retryId === "string" && retryId.trim().length > 0;
 }
 
-function hasLateRefundSuccessSuspensionMarker(
+function hasExactLateRefundSuccessSuspensionMarker(
   context: Readonly<Record<string, unknown>> | undefined,
 ): boolean {
-  const retryId = context?.lateRefundSuccessReconciledRetryRefundTransactionId;
-  const retryValue = context?.lateRefundSuccessReconciledRetryRefundTransaction;
-  const retry =
-    typeof retryValue === "object" &&
-    retryValue !== null &&
-    !Array.isArray(retryValue)
-      ? (retryValue as Readonly<Record<string, unknown>>)
-      : undefined;
-  return (
-    context?.paymentCaptureKind === "late_refund_success" &&
-    (context.lateRefundSuccessRetryReconciliationKind === "suspend_claimed" ||
-      context.lateRefundSuccessRetryReconciliationKind ===
-        "suspend_succeeded") &&
-    typeof retryId === "string" &&
-    retryId.trim().length > 0 &&
-    retry?.id === retryId &&
-    retry.status === "suspended" &&
-    retry.immutable === true
-  );
+  const paymentId = context?.paymentId;
+  const sourceResultId = context?.lateRefundSuccessSourcePaymentResultId;
+  const sourceStateKey = context?.lateRefundSuccessSourceCurrentStateCommandKey;
+  if (
+    context?.lateRefundSuccessRetryReconciliationKind !== "suspend_succeeded" ||
+    typeof paymentId !== "string" ||
+    paymentId.trim().length === 0 ||
+    typeof sourceResultId !== "string" ||
+    sourceResultId.trim().length === 0 ||
+    typeof sourceStateKey !== "string" ||
+    sourceStateKey.trim().length === 0
+  ) {
+    return false;
+  }
+  try {
+    requireExactLateRefundSuccessReconciliation(
+      "Payment",
+      {
+        aggregateId: paymentId,
+        current: "refunded",
+        target: "refund_pending",
+        idempotencyKey: sourceStateKey,
+        currentStateResultId: sourceResultId,
+        currentStateCommandKey: sourceStateKey,
+        context,
+      },
+      "reconcile_pending_retry",
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof TransitionGuardError) return false;
+    throw error;
+  }
 }
 
 function hasExactNoIntentPaymentTerminalSnapshot(
@@ -9478,7 +9492,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   contextualTerminal: (state, context) =>
     (state === "refunded" &&
       !hasExactLateRefundFailureMarker(context) &&
-      !hasLateRefundSuccessSuspensionMarker(context)) ||
+      !hasExactLateRefundSuccessSuspensionMarker(context)) ||
     hasExactNoIntentPaymentTerminalSnapshot(state, context),
   sameStateReconciliationGuard: (command) => {
     if (
@@ -9663,9 +9677,16 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
     if (
       command.current === "refunded" &&
       command.target === "refund_pending" &&
-      command.context?.paymentCaptureKind === "late_refund_success" &&
-      hasLateRefundSuccessRetryReconciliation(command.context)
+      command.context?.paymentCaptureKind === "late_refund_success"
     ) {
+      if (!hasLateRefundSuccessRetryReconciliation(command.context)) {
+        throw new TransitionGuardError(
+          "Payment",
+          command.current,
+          command.target,
+          "late refund success after a refunded projection requires its exact suspended retry",
+        );
+      }
       requireExactLateRefundSuccessReconciliation(
         "Payment",
         command,

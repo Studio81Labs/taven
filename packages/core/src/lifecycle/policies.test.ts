@@ -8710,6 +8710,38 @@ describe("v0 lifecycle policy tables", () => {
               current: "refund_pending",
             },
       );
+      if (paymentSource === "refunded") {
+        expect(isTerminal(paymentPolicy, "refunded", context)).toBe(false);
+        expect(
+          isTerminal(paymentPolicy, "refunded", {
+            ...context,
+            lateRefundSuccessRefundSetAfter: {
+              ...context.lateRefundSuccessRefundSetAfter,
+              complete: false,
+            },
+          }),
+        ).toBe(true);
+        expect(
+          isTerminal(paymentPolicy, "refunded", {
+            ...context,
+            lateRefundSuccessRetryProviderEvent: {
+              ...context.lateRefundSuccessRetryProviderEvent,
+              paymentId: "payment-2",
+            },
+          }),
+        ).toBe(true);
+        const {
+          lateRefundSuccessReconciledRetryRefundTransactionId: _missingRetryId,
+          ...missingRetryIdContext
+        } = context;
+        expect(() =>
+          transition(paymentPolicy, {
+            ...command,
+            idempotencyKey: "late-refunded-missing-retry-id",
+            context: missingRetryIdContext,
+          }),
+        ).toThrow(TransitionGuardError);
+      }
       expect(() =>
         transition(paymentPolicy, {
           ...command,
