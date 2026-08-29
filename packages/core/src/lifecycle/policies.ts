@@ -2140,9 +2140,12 @@ function readExactLateRefundFailureProof(
   const providerTransactionId = context.lateRefundFailureProviderTransactionId;
   const amountMinor = context.lateRefundFailureAmountMinor;
   const currency = context.lateRefundFailureCurrency;
+  const reason = context.lateRefundFailureReason;
   const attemptKey = context.lateRefundFailureAttemptKey;
   const capturedAmountMinor = context.lateRefundFailureCapturedAmountMinor;
   const resultId = context.lateRefundFailureResultId;
+  const successEventId = context.lateRefundFailureSuccessProviderEventId;
+  const failureEventId = context.lateRefundFailureProviderEventId;
   const previousPaymentResultId =
     context.lateRefundFailurePreviousPaymentResultId;
   const paymentStateKey =
@@ -2162,6 +2165,7 @@ function readExactLateRefundFailureProof(
     !nonBlank(provider) ||
     !nonBlank(providerTransactionId) ||
     !nonBlank(currency) ||
+    !nonBlank(reason) ||
     !nonBlank(attemptKey) ||
     !nonBlank(resultId) ||
     !nonBlank(previousPaymentResultId) ||
@@ -2204,6 +2208,7 @@ function readExactLateRefundFailureProof(
       return undefined;
     }
     const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    const attemptKeys = new Set<string>();
     let succeededAmountMinor = 0n;
     let pendingCount = 0;
     for (const value of refunds) {
@@ -2211,6 +2216,7 @@ function readExactLateRefundFailureProof(
       const id = row?.id;
       const status = row?.status;
       const rowAmountMinor = row?.amountMinor;
+      const rowAttemptKey = row?.idempotencyKey;
       if (
         row === undefined ||
         !nonBlank(id) ||
@@ -2222,12 +2228,15 @@ function readExactLateRefundFailureProof(
           status !== "failed") ||
         typeof rowAmountMinor !== "bigint" ||
         rowAmountMinor <= 0n ||
+        !nonBlank(rowAttemptKey) ||
+        attemptKeys.has(rowAttemptKey) ||
         !nonBlank(row.resultId) ||
         row.immutable !== true
       ) {
         return undefined;
       }
       rows.set(id, row);
+      attemptKeys.add(rowAttemptKey);
       if (status === "succeeded") succeededAmountMinor += rowAmountMinor;
       if (status === "pending") pendingCount += 1;
     }
@@ -2252,7 +2261,8 @@ function readExactLateRefundFailureProof(
   if (
     before === undefined ||
     after === undefined ||
-    before.rows.size !== after.rows.size ||
+    (after.rows.size !== before.rows.size &&
+      after.rows.size !== before.rows.size + 1) ||
     beforeSetId === afterSetId ||
     beforeSetResultId === afterSetResultId
   ) {
@@ -2264,6 +2274,11 @@ function readExactLateRefundFailureProof(
       target === undefined ||
       target.paymentId !== source.paymentId ||
       target.amountMinor !== source.amountMinor ||
+      target.idempotencyKey !== source.idempotencyKey ||
+      target.replacesRefundTransactionId !==
+        source.replacesRefundTransactionId ||
+      target.replacesFailureProviderEventId !==
+        source.replacesFailureProviderEventId ||
       target.immutable !== true ||
       (id === refundId
         ? source.status !== "succeeded" ||
@@ -2280,6 +2295,7 @@ function readExactLateRefundFailureProof(
   }
   const succeededBefore = before.succeededAmountMinor;
   const succeededAfter = after.succeededAmountMinor;
+  const addedRefunds = [...after.rows].filter(([id]) => !before.rows.has(id));
   const expectedSource =
     before.pendingCount !== 0
       ? "refund_pending"
@@ -2292,18 +2308,73 @@ function readExactLateRefundFailureProof(
       : succeededAfter === 0n
         ? "captured"
         : "partially_refunded";
+  const stableRefundPendingReconciliation =
+    expectedSource === "refund_pending" &&
+    expectedTarget === "refund_pending" &&
+    before.pendingCount > 0;
+  const stableRefundPendingRetry =
+    stableRefundPendingReconciliation &&
+    after.pendingCount === before.pendingCount + 1;
+  const stableRefundPendingWithoutRetry =
+    stableRefundPendingReconciliation &&
+    after.pendingCount === before.pendingCount &&
+    addedRefunds.length === 0;
+  const retryRefundId = context.lateRefundFailureRetryRefundTransactionId;
+  const retryAttemptKey = context.lateRefundFailureRetryAttemptKey;
+  const retryRefund = record(context.lateRefundFailureRetryRefundTransaction);
+  const retryRequestedAt = retryRefund?.requestedAt;
+  const retryCreatedAt = retryRefund?.createdAt;
+  const addedRetry = addedRefunds[0]?.[1];
+  const exactRetryCreated =
+    stableRefundPendingRetry &&
+    addedRefunds.length === 1 &&
+    nonBlank(retryRefundId) &&
+    nonBlank(retryAttemptKey) &&
+    addedRefunds[0]?.[0] === retryRefundId &&
+    addedRetry?.paymentId === paymentId &&
+    addedRetry.status === "pending" &&
+    addedRetry.amountMinor === amountMinor &&
+    addedRetry.provider === provider &&
+    addedRetry.reason === reason &&
+    addedRetry.idempotencyKey === retryAttemptKey &&
+    addedRetry.replacesRefundTransactionId === refundId &&
+    addedRetry.replacesFailureProviderEventId === failureEventId &&
+    addedRetry.resultId === resultId &&
+    addedRetry.immutable === true &&
+    retryRefund?.id === retryRefundId &&
+    retryRefund.paymentId === paymentId &&
+    retryRefund.orderId === orderId &&
+    retryRefund.phaseId === phaseId &&
+    retryRefund.status === "pending" &&
+    retryRefund.amountMinor === amountMinor &&
+    retryRefund.currency === currency &&
+    retryRefund.provider === provider &&
+    retryRefund.reason === reason &&
+    retryRefund.idempotencyKey === retryAttemptKey &&
+    retryRefund.replacesRefundTransactionId === refundId &&
+    retryRefund.replacesFailureProviderEventId === failureEventId &&
+    retryRequestedAt instanceof Instant &&
+    retryCreatedAt instanceof Instant &&
+    retryCreatedAt.epochMilliseconds >=
+      retryRequestedAt.epochMilliseconds - 5_000 &&
+    retryRefund.providerEventId === null &&
+    retryRefund.completedAt === null &&
+    retryRefund.resultId === resultId &&
+    retryRefund.immutable === true &&
+    context.lateRefundFailureRetryCreated === true;
   if (
     succeededAfter !== succeededBefore - amountMinor ||
     succeededAfter < 0n ||
     succeededBefore > capturedAmountMinor ||
-    before.pendingCount !== after.pendingCount ||
-    expectedSource === expectedTarget
+    (stableRefundPendingReconciliation
+      ? !stableRefundPendingWithoutRetry && !exactRetryCreated
+      : addedRefunds.length !== 0 ||
+        before.pendingCount !== after.pendingCount) ||
+    (expectedSource === expectedTarget && !stableRefundPendingReconciliation)
   ) {
     return undefined;
   }
 
-  const successEventId = context.lateRefundFailureSuccessProviderEventId;
-  const failureEventId = context.lateRefundFailureProviderEventId;
   const latestPriorEventId =
     context.lateRefundFailureLatestPriorProviderEventId;
   const eventSetId = context.lateRefundFailureProviderEventSetId;
@@ -2377,6 +2448,11 @@ function readExactLateRefundFailureProof(
     failure?.kind !== "refund_failed" ||
     failure?.resultId !== resultId ||
     !(failureOccurredAt instanceof Instant) ||
+    (stableRefundPendingRetry &&
+      (!(failure.verifiedAt instanceof Instant) ||
+        !(retryRequestedAt instanceof Instant) ||
+        retryRequestedAt.epochMilliseconds <
+          failure.verifiedAt.epochMilliseconds - 5_000)) ||
     priorEvents.some(
       (event) => (event.occurredAt as Instant).compare(failureOccurredAt) >= 0,
     )
@@ -2467,6 +2543,7 @@ function readExactLateRefundFailureProof(
     sourceRefund.providerTransactionId !== providerTransactionId ||
     sourceRefund.amountMinor !== amountMinor ||
     sourceRefund.currency !== currency ||
+    sourceRefund.reason !== reason ||
     sourceRefund.idempotencyKey !== attemptKey ||
     sourceRefund.providerEventId !== successEventId ||
     !(requestedAt instanceof Instant) ||
@@ -2495,6 +2572,7 @@ function readExactLateRefundFailureProof(
     reconciledRefund.providerTransactionId !== providerTransactionId ||
     reconciledRefund.amountMinor !== amountMinor ||
     reconciledRefund.currency !== currency ||
+    reconciledRefund.reason !== reason ||
     reconciledRefund.idempotencyKey !== attemptKey ||
     reconciledRefund.previousProviderEventId !== successEventId ||
     reconciledRefund.providerEventId !== failureEventId ||
@@ -2539,6 +2617,10 @@ function readExactLateRefundFailureProof(
     reconciledPayment.authoritativeRefundSetResultId !== afterSetResultId ||
     reconciledPayment.resultId !== resultId ||
     reconciledPayment.immutable !== true ||
+    (stableRefundPendingRetry &&
+      (reconciledPayment.retryRefundTransactionId !== retryRefundId ||
+        reconciledPayment.previousStateCommandKey !== paymentStateKey ||
+        !nonBlank(reconciledPayment.currentStateCommandKey))) ||
     context.lateRefundFailurePaymentResultId !== resultId ||
     context.lateRefundFailureRefundTransactionResultId !== resultId
   ) {
@@ -2879,6 +2961,43 @@ function requireExactLateRefundFailureReconciliation<S extends string>(
   const reopenedOrder = record(context?.lateRefundFailureReopenedOrder);
   const sourcePhase = record(context?.lateRefundFailureSourcePhase);
   const reopenedPhase = record(context?.lateRefundFailureReopenedPhase);
+  if (exactProof !== undefined) {
+    const paymentBindingValid =
+      scope !== "payment" ||
+      (command.aggregateId === exactProof.paymentId &&
+        command.current === exactProof.expectedSource &&
+        command.target === exactProof.expectedTarget &&
+        command.currentStateResultId === exactProof.previousPaymentResultId &&
+        command.currentStateCommandKey === exactProof.paymentStateKey &&
+        (exactProof.expectedSource !== exactProof.expectedTarget ||
+          (reconciledPayment?.previousStateCommandKey ===
+            exactProof.paymentStateKey &&
+            reconciledPayment?.currentStateCommandKey ===
+              command.idempotencyKey)));
+    const orderBindingValid =
+      scope !== "order" ||
+      (exactProof.expectedSource === "refunded" &&
+        command.aggregateId === exactProof.orderId &&
+        command.current === "refunded" &&
+        command.target === "cancelled" &&
+        command.currentStateResultId === exactProof.sourceOrderResultId &&
+        command.currentStateCommandKey === exactProof.sourceOrderStateKey);
+    const phaseBindingValid =
+      scope !== "phase" ||
+      (exactProof.expectedSource === "refunded" &&
+        command.aggregateId === exactProof.phaseId &&
+        command.current === "cancelled_refunded" &&
+        command.target === "cancelled" &&
+        command.currentStateResultId === exactProof.sourcePhaseResultId &&
+        command.currentStateCommandKey === exactProof.sourcePhaseStateKey);
+    if (paymentBindingValid && orderBindingValid && phaseBindingValid) return;
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late refund failure proof is not bound to the selected aggregate command",
+    );
+  }
   const parseRefundSet = (
     value: unknown,
     expectedId: unknown,
@@ -3006,7 +3125,11 @@ function requireExactLateRefundFailureReconciliation<S extends string>(
       command.target === expectedTarget &&
       command.currentStateResultId === previousPaymentResultId &&
       command.currentStateCommandKey === paymentStateKey &&
-      expectedSource !== expectedTarget);
+      (expectedSource !== expectedTarget ||
+        (expectedSource === "refund_pending" &&
+          reconciledPayment?.previousStateCommandKey === paymentStateKey &&
+          reconciledPayment?.currentStateCommandKey ===
+            command.idempotencyKey)));
   const orderBindingValid =
     scope !== "order" ||
     (command.aggregateId === orderId &&
@@ -3222,6 +3345,122 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
   const failureEvent = record(context?.lateRefundSuccessFailureProviderEvent);
   const successEvent = record(context?.refundCompletionProviderEvent);
   const reconciledPayment = record(context?.lateRefundSuccessReconciledPayment);
+  const providerEventSetId = context?.lateRefundSuccessProviderEventSetId;
+  const providerEventSetResultId =
+    context?.lateRefundSuccessProviderEventSetResultId;
+  const providerEventSet = record(context?.lateRefundSuccessProviderEventSet);
+  const providerEventIds = providerEventSet?.providerEventIds;
+  const providerEvents = providerEventSet?.providerEvents;
+  let exactProviderEventSet = false;
+  if (
+    nonBlank(providerEventSetId) &&
+    nonBlank(providerEventSetResultId) &&
+    providerEventSet?.id === providerEventSetId &&
+    providerEventSet.paymentId === paymentId &&
+    providerEventSet.refundTransactionId === refundId &&
+    providerEventSet.resultId === providerEventSetResultId &&
+    providerEventSet.authoritative === true &&
+    providerEventSet.complete === true &&
+    providerEventSet.immutable === true &&
+    Array.isArray(providerEventIds) &&
+    Array.isArray(providerEvents) &&
+    providerEventIds.length >= 2 &&
+    providerEventIds.length === providerEvents.length &&
+    providerEventIds.every((id) => nonBlank(id)) &&
+    new Set(providerEventIds).size === providerEventIds.length
+  ) {
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    for (const value of providerEvents) {
+      const event = record(value);
+      const id = event?.id;
+      const occurredAt = event?.occurredAt;
+      const authenticatedAt = event?.authenticatedAt;
+      const verifiedAt = event?.verifiedAt;
+      if (
+        event === undefined ||
+        !nonBlank(id) ||
+        !providerEventIds.includes(id) ||
+        rows.has(id) ||
+        event.paymentId !== paymentId ||
+        event.refundTransactionId !== refundId ||
+        event.provider !== provider ||
+        event.providerTransactionId !== providerTransactionId ||
+        (event.kind !== "refund_succeeded" && event.kind !== "refund_failed") ||
+        event.amountMinor !== amountMinor ||
+        event.currency !== currency ||
+        event.authenticated !== true ||
+        event.verified !== true ||
+        !nonBlank(event.resultId) ||
+        event.immutable !== true ||
+        !(occurredAt instanceof Instant) ||
+        !(authenticatedAt instanceof Instant) ||
+        !(verifiedAt instanceof Instant) ||
+        authenticatedAt.epochMilliseconds <
+          occurredAt.epochMilliseconds - 5_000 ||
+        verifiedAt.compare(authenticatedAt) < 0
+      ) {
+        rows.clear();
+        break;
+      }
+      rows.set(id, event);
+    }
+    const authoritativeFailure = rows.get(failureEventId as string);
+    const authoritativeSuccess = rows.get(successEventId as string);
+    const priorRows = [...rows.values()].filter(
+      (event) => event.id !== successEventId,
+    );
+    const latestOccurredAt =
+      rows.size === 0
+        ? undefined
+        : Math.max(
+            ...[...rows.values()].map(
+              (event) => (event.occurredAt as Instant).epochMilliseconds,
+            ),
+          );
+    const latestRows = [...rows.values()].filter(
+      (event) =>
+        (event.occurredAt as Instant).epochMilliseconds === latestOccurredAt,
+    );
+    const exactProjection = (
+      projection: Readonly<Record<string, unknown>> | undefined,
+      authoritative: Readonly<Record<string, unknown>> | undefined,
+    ): boolean =>
+      projection !== undefined &&
+      authoritative !== undefined &&
+      projection.id === authoritative.id &&
+      projection.paymentId === authoritative.paymentId &&
+      projection.refundTransactionId === authoritative.refundTransactionId &&
+      projection.provider === authoritative.provider &&
+      projection.providerTransactionId ===
+        authoritative.providerTransactionId &&
+      projection.kind === authoritative.kind &&
+      projection.amountMinor === authoritative.amountMinor &&
+      projection.currency === authoritative.currency &&
+      projection.occurredAt instanceof Instant &&
+      authoritative.occurredAt instanceof Instant &&
+      projection.occurredAt.equals(authoritative.occurredAt) &&
+      projection.authenticatedAt instanceof Instant &&
+      authoritative.authenticatedAt instanceof Instant &&
+      projection.authenticatedAt.equals(authoritative.authenticatedAt) &&
+      projection.verifiedAt instanceof Instant &&
+      authoritative.verifiedAt instanceof Instant &&
+      projection.verifiedAt.equals(authoritative.verifiedAt) &&
+      projection.authenticated === true &&
+      projection.verified === true &&
+      projection.resultId === authoritative.resultId &&
+      projection.immutable === true;
+    exactProviderEventSet =
+      rows.size === providerEventIds.length &&
+      providerEventIds.every((id) => rows.has(id as string)) &&
+      providerEventSetResultId === finalResultId &&
+      priorRows.length >= 1 &&
+      authoritativeFailure?.kind === "refund_failed" &&
+      authoritativeSuccess?.kind === "refund_succeeded" &&
+      latestRows.length === 1 &&
+      latestRows[0]?.id === successEventId &&
+      exactProjection(failureEvent, authoritativeFailure) &&
+      exactProjection(successEvent, authoritativeSuccess);
+  }
   const parseRefundSet = (
     value: unknown,
     expectedId: unknown,
@@ -3236,6 +3475,8 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
       snapshot?.id !== expectedId ||
       snapshot.paymentId !== paymentId ||
       snapshot.resultId !== expectedResultId ||
+      snapshot.authoritative !== true ||
+      snapshot.complete !== true ||
       snapshot.immutable !== true ||
       !Array.isArray(refundIds) ||
       !Array.isArray(refunds) ||
@@ -3360,6 +3601,7 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     succeededBefore !== derivedSucceededBefore ||
     typeof succeededAfter !== "bigint" ||
     succeededAfter !== derivedSucceededAfter ||
+    !exactProviderEventSet ||
     !nonBlank(refundSetBeforeId) ||
     !nonBlank(refundSetBeforeResultId) ||
     !nonBlank(refundSetAfterId) ||
@@ -3455,7 +3697,6 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     successEvent.resultId !== finalResultId ||
     successEvent.immutable !== true ||
     failureOccurredAt.compare(successOccurredAt) >= 0 ||
-    failureVerifiedAt.compare(successVerifiedAt) >= 0 ||
     !refundCompletedAt.equals(successVerifiedAt) ||
     reconciledPayment?.id !== paymentId ||
     reconciledPayment.orderId !== orderId ||
@@ -8840,6 +9081,17 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   contextualTerminal: (state, context) =>
     (state === "refunded" && !hasExactLateRefundFailureMarker(context)) ||
     hasExactNoIntentPaymentTerminalSnapshot(state, context),
+  sameStateReconciliationGuard: (command) => {
+    if (
+      command.current !== "refund_pending" ||
+      command.target !== "refund_pending" ||
+      command.context?.paymentCaptureKind !== "late_refund_failure"
+    ) {
+      return false;
+    }
+    requireExactLateRefundFailureReconciliation("Payment", command, "payment");
+    return true;
+  },
   transitions: {
     created: ["pending", "failed", "voided"],
     pending: ["captured", "failed", "voided", "refund_pending"],

@@ -471,6 +471,8 @@ CREATE TABLE "payment_intent_creation_failures" (
 CREATE TABLE "refund_transactions" (
     "id" UUID NOT NULL,
     "payment_id" UUID NOT NULL,
+    "replaces_refund_transaction_id" UUID,
+    "replaces_failure_provider_event_id" UUID,
     "provider" VARCHAR(100) NOT NULL,
     "idempotency_key" VARCHAR(255) NOT NULL,
     "provider_refund_id" VARCHAR(255),
@@ -656,6 +658,8 @@ CREATE UNIQUE INDEX "payment_intent_creation_failures_id_payment_id_provider_key
 CREATE UNIQUE INDEX "refund_transactions_provider_provider_refund_id_key" ON "refund_transactions"("provider", "provider_refund_id");
 CREATE UNIQUE INDEX "refund_transactions_payment_id_idempotency_key_key" ON "refund_transactions"("payment_id", "idempotency_key");
 CREATE UNIQUE INDEX "refund_transactions_id_payment_id_key" ON "refund_transactions"("id", "payment_id");
+CREATE INDEX "refund_transactions_replaces_payment_id_idx" ON "refund_transactions"("replaces_refund_transaction_id", "payment_id");
+CREATE UNIQUE INDEX "refund_transactions_replaces_failure_event_key" ON "refund_transactions"("replaces_failure_provider_event_id", "replaces_refund_transaction_id");
 CREATE UNIQUE INDEX "refund_transactions_provider_result_event_scope_key" ON "refund_transactions"("provider_result_event_id", "id");
 CREATE INDEX "refund_transactions_payment_id_status_idx" ON "refund_transactions"("payment_id", "status");
 CREATE UNIQUE INDEX "order_settlements_refund_transaction_id_key" ON "order_settlements"("refund_transaction_id");
@@ -755,6 +759,8 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_schedule_contract_fkey" FOREIGN 
 ALTER TABLE "payments" ADD CONSTRAINT "payments_intent_creation_failure_result_fkey" FOREIGN KEY ("intent_creation_failure_result_id", "id", "provider") REFERENCES "payment_intent_creation_failures"("id", "payment_id", "provider") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "payment_intent_creation_failures" ADD CONSTRAINT "payment_intent_creation_failures_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_replaces_scope_fkey" FOREIGN KEY ("replaces_refund_transaction_id", "payment_id") REFERENCES "refund_transactions"("id", "payment_id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_replaces_failure_event_scope_fkey" FOREIGN KEY ("replaces_failure_provider_event_id", "replaces_refund_transaction_id") REFERENCES "payment_provider_events"("id", "refund_transaction_id") ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_order_phase_scope_fkey" FOREIGN KEY ("order_phase_id", "order_id") REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "order_settlements" ADD CONSTRAINT "order_settlements_order_snapshot_fkey" FOREIGN KEY ("order_price_binding_id", "order_id", "price_snapshot_id") REFERENCES "order_price_bindings"("id", "order_id", "price_snapshot_id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -926,6 +932,14 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_facts_check" CHECK (
     )
 );
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_values_check" CHECK ("amount_minor" > 0 AND ("completed_at" IS NULL OR "completed_at" >= "requested_at" - interval '5 seconds'));
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_replacement_not_self_check" CHECK (
+    "replaces_refund_transaction_id" IS NULL
+    OR "replaces_refund_transaction_id" <> "id"
+);
+ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_replacement_failure_event_pair_check" CHECK (
+    ("replaces_refund_transaction_id" IS NULL) =
+    ("replaces_failure_provider_event_id" IS NULL)
+);
 ALTER TABLE "refund_transactions" ADD CONSTRAINT "refund_transactions_idempotency_key_identity_check" CHECK (
     "idempotency_key" ~ '[^[:space:]]'
 );
@@ -8855,6 +8869,9 @@ BEGIN
                              refund."id", refund."provider_result_event_id",
                              'FAILED'::"refund_status"
                          )
+                         -- Equal physical timestamps are ambiguous after provider
+                         -- precision normalization: retain the receipt without
+                         -- replacing the already selected outcome.
                          AND EXISTS (
                              SELECT 1
                              FROM "payment_provider_events" later_failure
@@ -8867,7 +8884,7 @@ BEGIN
                                    NEW."provider_transaction_id"
                                AND later_failure."amount_minor" = NEW."amount_minor"
                                AND later_failure."currency" = NEW."currency"
-                               AND later_failure."occurred_at" > NEW."occurred_at"
+                               AND later_failure."occurred_at" >= NEW."occurred_at"
                          )
                      )
                  )
@@ -8898,6 +8915,8 @@ BEGIN
                              refund."id", refund."provider_result_event_id",
                              'SUCCEEDED'::"refund_status"
                          )
+                         -- The symmetric tie is also audit-only; only a strictly
+                         -- newer opposite outcome may drive a state reversal.
                          AND EXISTS (
                              SELECT 1
                              FROM "payment_provider_events" later_success
@@ -8910,7 +8929,7 @@ BEGIN
                                    NEW."provider_transaction_id"
                                AND later_success."amount_minor" = NEW."amount_minor"
                                AND later_success."currency" = NEW."currency"
-                               AND later_success."occurred_at" > NEW."occurred_at"
+                               AND later_success."occurred_at" >= NEW."occurred_at"
                          )
                      )
                  )
@@ -9939,6 +9958,8 @@ BEGIN
 
     IF NEW."id" IS DISTINCT FROM OLD."id"
        OR NEW."payment_id" IS DISTINCT FROM OLD."payment_id"
+       OR NEW."replaces_refund_transaction_id" IS DISTINCT FROM OLD."replaces_refund_transaction_id"
+       OR NEW."replaces_failure_provider_event_id" IS DISTINCT FROM OLD."replaces_failure_provider_event_id"
        OR NEW."provider" IS DISTINCT FROM OLD."provider"
        OR NEW."idempotency_key" IS DISTINCT FROM OLD."idempotency_key"
        OR NEW."amount_minor" IS DISTINCT FROM OLD."amount_minor"
@@ -9979,6 +10000,117 @@ $$;
 CREATE TRIGGER "refund_transactions_identity_protected"
 BEFORE INSERT OR UPDATE OR DELETE ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_refund_transaction_identity();
+
+CREATE FUNCTION taven_validate_refund_retry_lineage()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    replaced_refund "refund_transactions"%ROWTYPE;
+    selected_failure_verified_at timestamptz;
+BEGIN
+    IF NEW."replaces_refund_transaction_id" IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT source_refund.*
+    INTO replaced_refund
+    FROM "refund_transactions" source_refund
+    WHERE source_refund."id" = NEW."replaces_refund_transaction_id"
+      AND source_refund."payment_id" = NEW."payment_id";
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'refund retry must exactly replace one failed refund attempt'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_retry_lineage_check';
+    END IF;
+
+    SELECT failure_event."verified_at"
+    INTO selected_failure_verified_at
+    FROM "payment_provider_events" failure_event
+    WHERE failure_event."id" = replaced_refund."provider_result_event_id"
+      AND failure_event."id" = NEW."replaces_failure_provider_event_id"
+      AND failure_event."refund_transaction_id" = replaced_refund."id"
+      AND failure_event."payment_id" = replaced_refund."payment_id"
+      AND failure_event."provider" = replaced_refund."provider"
+      AND failure_event."kind" = 'REFUND_FAILED'
+      AND failure_event."provider_transaction_id" =
+          replaced_refund."provider_refund_id"
+      AND failure_event."amount_minor" = replaced_refund."amount_minor";
+
+    -- This validates the immutable reason a retry was created. The source may
+    -- later receive another provider receipt; lineage remains historical.
+    IF NOT FOUND
+       OR replaced_refund."status" IS DISTINCT FROM 'FAILED'::"refund_status"
+       OR NEW."status" IS DISTINCT FROM 'PENDING'::"refund_status"
+       OR NEW."provider" IS DISTINCT FROM replaced_refund."provider"
+       OR NEW."amount_minor" IS DISTINCT FROM replaced_refund."amount_minor"
+       OR NEW."reason" IS DISTINCT FROM replaced_refund."reason"
+       OR NEW."requested_at" < selected_failure_verified_at - interval '5 seconds'
+       OR NEW."created_at" < NEW."requested_at" - interval '5 seconds' THEN
+        RAISE EXCEPTION 'refund retry must exactly replace one failed refund attempt'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_retry_lineage_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "refund_transactions_retry_lineage_reconciled"
+AFTER INSERT ON "refund_transactions"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_refund_retry_lineage();
+
+CREATE FUNCTION taven_validate_refund_failure_retry_obligation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_payment_status "payment_status";
+    captured_amount bigint;
+    active_refund_amount bigint;
+BEGIN
+    IF OLD."status" IS DISTINCT FROM 'SUCCEEDED'::"refund_status"
+       OR NEW."status" IS DISTINCT FROM 'FAILED'::"refund_status" THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT payment."status", payment."captured_amount_minor"
+    INTO target_payment_status, captured_amount
+    FROM "payments" payment
+    WHERE payment."id" = NEW."payment_id";
+
+    SELECT coalesce(sum(refund."amount_minor"), 0)
+    INTO active_refund_amount
+    FROM "refund_transactions" refund
+    WHERE refund."payment_id" = NEW."payment_id"
+      AND refund."status" IN ('PENDING', 'SUCCEEDED');
+
+    IF target_payment_status = 'REFUND_PENDING'
+       AND active_refund_amount = captured_amount
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "refund_transactions" retry
+           WHERE retry."replaces_refund_transaction_id" = NEW."id"
+             AND retry."replaces_failure_provider_event_id" =
+                 NEW."provider_result_event_id"
+             AND retry."payment_id" = NEW."payment_id"
+             AND retry."provider" = NEW."provider"
+             AND retry."amount_minor" = NEW."amount_minor"
+             AND retry."reason" = NEW."reason"
+             AND retry."status" = 'PENDING'
+       ) THEN
+        RAISE EXCEPTION 'a stable refund-pending reversal requires its exact pending retry'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_failure_retry_obligation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "refund_transactions_failure_retry_obligation_reconciled"
+AFTER UPDATE OF "status" ON "refund_transactions"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_refund_failure_retry_obligation();
 
 CREATE FUNCTION taven_validate_refund_against_capture()
 RETURNS trigger

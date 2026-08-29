@@ -6443,6 +6443,8 @@ describe("v0 lifecycle policy tables", () => {
           },
         ],
         resultId: refundSetBeforeResultId,
+        authoritative: true,
+        complete: true,
         immutable: true,
       };
       const refundSetAfter = {
@@ -6461,6 +6463,44 @@ describe("v0 lifecycle policy tables", () => {
           },
         ],
         resultId: refundSetAfterResultId,
+        authoritative: true,
+        complete: true,
+        immutable: true,
+      };
+      const failureProviderEvent = {
+        id: "refund-failure-event-1",
+        paymentId: "payment-1",
+        refundTransactionId: "refund-1",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        kind: "refund_failed",
+        amountMinor,
+        currency: "EUR",
+        occurredAt: failureVerifiedAt,
+        authenticatedAt: failureVerifiedAt,
+        verifiedAt: failureVerifiedAt,
+        authenticated: true,
+        verified: true,
+        resultId: "refund-failure-event-1",
+        immutable: true,
+      };
+      const successProviderEvent = {
+        id: "refund-provider-event-1",
+        paymentId: "payment-1",
+        refundTransactionId: "refund-1",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        kind: "refund_succeeded",
+        amountMinor,
+        currency: "EUR",
+        occurredAt: successVerifiedAt,
+        authenticatedAt: successVerifiedAt,
+        verifiedAt: successVerifiedAt,
+        status: "succeeded",
+        projectedTarget: target,
+        authenticated: true,
+        verified: true,
+        resultId: finalResultId,
         immutable: true,
       };
       const base = contextForTransition(target, "refund_pending");
@@ -6539,37 +6579,20 @@ describe("v0 lifecycle policy tables", () => {
           resultId: finalResultId,
           immutable: true,
         },
-        lateRefundSuccessFailureProviderEvent: {
-          id: "refund-failure-event-1",
+        lateRefundSuccessFailureProviderEvent: failureProviderEvent,
+        refundCompletionProviderEvent: successProviderEvent,
+        lateRefundSuccessProviderEventSetId:
+          "late-refund-success-provider-event-set-1",
+        lateRefundSuccessProviderEventSetResultId: finalResultId,
+        lateRefundSuccessProviderEventSet: {
+          id: "late-refund-success-provider-event-set-1",
           paymentId: "payment-1",
           refundTransactionId: "refund-1",
-          provider: "sandbox",
-          providerTransactionId: "provider-refund-1",
-          kind: "refund_failed",
-          amountMinor,
-          currency: "EUR",
-          occurredAt: failureVerifiedAt,
-          authenticated: true,
-          verified: true,
-          verifiedAt: failureVerifiedAt,
-          immutable: true,
-        },
-        refundCompletionProviderEvent: {
-          id: "refund-provider-event-1",
-          paymentId: "payment-1",
-          refundTransactionId: "refund-1",
-          provider: "sandbox",
-          providerTransactionId: "provider-refund-1",
-          kind: "refund_succeeded",
-          amountMinor,
-          currency: "EUR",
-          occurredAt: successVerifiedAt,
-          status: "succeeded",
-          projectedTarget: target,
-          authenticated: true,
-          verified: true,
-          verifiedAt: successVerifiedAt,
+          providerEventIds: [failureProviderEvent.id, successProviderEvent.id],
+          providerEvents: [failureProviderEvent, successProviderEvent],
           resultId: finalResultId,
+          authoritative: true,
+          complete: true,
           immutable: true,
         },
         lateRefundSuccessReconciledPayment: {
@@ -6625,6 +6648,36 @@ describe("v0 lifecycle policy tables", () => {
         previous: "refund_pending",
         current: target,
       });
+      const delayedFailureVerification = Instant.parse(
+        "2026-01-01T00:12:00.000Z",
+      );
+      const nonMonotoneFailure = {
+        ...failureProviderEvent,
+        authenticatedAt: delayedFailureVerification,
+        verifiedAt: delayedFailureVerification,
+      };
+      expect(
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: source,
+          target: "refund_pending",
+          idempotencyKey: `late-refund-success-non-monotone-${source}`,
+          currentStateResultId: sourceResultId,
+          currentStateCommandKey: sourceStateKey,
+          context: {
+            ...context,
+            lateRefundSuccessFailureProviderEvent: nonMonotoneFailure,
+            lateRefundSuccessProviderEventSet: {
+              ...context.lateRefundSuccessProviderEventSet,
+              providerEvents: [nonMonotoneFailure, successProviderEvent],
+            },
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: source,
+        current: "refund_pending",
+      });
     },
   );
 
@@ -6643,6 +6696,7 @@ describe("v0 lifecycle policy tables", () => {
           paymentId: "payment-1",
           status: "succeeded",
           amountMinor: 10_000n,
+          idempotencyKey: "refund-attempt-1",
           resultId: "refund-success-event-1",
           immutable: true,
         },
@@ -6662,6 +6716,7 @@ describe("v0 lifecycle policy tables", () => {
           paymentId: "payment-1",
           status: "failed",
           amountMinor: 10_000n,
+          idempotencyKey: "refund-attempt-1",
           resultId: "late-refund-failure-result-1",
           immutable: true,
         },
@@ -6819,6 +6874,7 @@ describe("v0 lifecycle policy tables", () => {
       lateRefundFailureProviderTransactionId: "provider-refund-1",
       lateRefundFailureAmountMinor: 10_000n,
       lateRefundFailureCurrency: "EUR",
+      lateRefundFailureReason: "customer_cancellation",
       lateRefundFailureAttemptKey: "refund-attempt-1",
       lateRefundFailureCapturedAmountMinor: 10_000n,
       lateRefundFailureRefundSetBeforeId: beforeSet.id,
@@ -6844,6 +6900,7 @@ describe("v0 lifecycle policy tables", () => {
         providerTransactionId: "provider-refund-1",
         amountMinor: 10_000n,
         currency: "EUR",
+        reason: "customer_cancellation",
         idempotencyKey: "refund-attempt-1",
         providerEventId: "refund-success-event-1",
         requestedAt,
@@ -6896,6 +6953,7 @@ describe("v0 lifecycle policy tables", () => {
         providerTransactionId: "provider-refund-1",
         amountMinor: 10_000n,
         currency: "EUR",
+        reason: "customer_cancellation",
         idempotencyKey: "refund-attempt-1",
         previousProviderEventId: "refund-success-event-1",
         providerEventId: "refund-failure-event-1",
@@ -7143,6 +7201,389 @@ describe("v0 lifecycle policy tables", () => {
       current: "captured",
     });
 
+    const stableBeforeSet = {
+      ...beforeSet,
+      id: "stable-refund-pending-set-before-1",
+      refundIds: ["refund-1", "refund-2"],
+      refundSnapshots: [
+        {
+          ...beforeSet.refundSnapshots[0],
+          amountMinor: 6_000n,
+        },
+        {
+          id: "refund-2",
+          paymentId: "payment-1",
+          status: "pending",
+          amountMinor: 4_000n,
+          idempotencyKey: "refund-attempt-2",
+          resultId: "pending-refund-source-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "stable-refund-pending-set-before-result-1",
+    };
+    const stableAfterSet = {
+      ...afterSet,
+      id: "stable-refund-pending-set-after-1",
+      refundIds: ["refund-1", "refund-2", "refund-3"],
+      refundSnapshots: [
+        {
+          ...afterSet.refundSnapshots[0],
+          amountMinor: 6_000n,
+        },
+        {
+          id: "refund-2",
+          paymentId: "payment-1",
+          status: "pending",
+          amountMinor: 4_000n,
+          idempotencyKey: "refund-attempt-2",
+          resultId: "pending-refund-source-result-1",
+          immutable: true,
+        },
+        {
+          id: "refund-3",
+          paymentId: "payment-1",
+          status: "pending",
+          amountMinor: 6_000n,
+          provider: "sandbox",
+          reason: "customer_cancellation",
+          idempotencyKey: "refund-attempt-3",
+          replacesRefundTransactionId: "refund-1",
+          replacesFailureProviderEventId: "refund-failure-event-1",
+          resultId: "late-refund-failure-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "stable-refund-pending-set-after-result-1",
+    };
+    const stableSuccessProviderEvent = {
+      ...successProviderEvent,
+      amountMinor: 6_000n,
+    };
+    const stableFailureProviderEvent = {
+      ...failureProviderEvent,
+      amountMinor: 6_000n,
+    };
+    const stableReconciliationCommandKey =
+      "stable-refund-pending-reconciliation-command-1";
+    const stableRefundPendingContext = {
+      ...context,
+      lateRefundFailureAmountMinor: 6_000n,
+      lateRefundFailureRefundSetBeforeId: stableBeforeSet.id,
+      lateRefundFailureRefundSetBeforeResultId: stableBeforeSet.resultId,
+      lateRefundFailureRefundSetBefore: stableBeforeSet,
+      lateRefundFailureRefundSetAfterId: stableAfterSet.id,
+      lateRefundFailureRefundSetAfterResultId: stableAfterSet.resultId,
+      lateRefundFailureRefundSetAfter: stableAfterSet,
+      lateRefundFailureSourcePayment: {
+        ...context.lateRefundFailureSourcePayment,
+        status: "refund_pending",
+        succeededRefundAmountMinor: 6_000n,
+        authoritativeRefundSetId: stableBeforeSet.id,
+        authoritativeRefundSetResultId: stableBeforeSet.resultId,
+      },
+      lateRefundFailureReconciledPayment: {
+        ...context.lateRefundFailureReconciledPayment,
+        previousStatus: "refund_pending",
+        targetStatus: "refund_pending",
+        succeededRefundAmountMinor: 0n,
+        authoritativeRefundSetId: stableAfterSet.id,
+        authoritativeRefundSetResultId: stableAfterSet.resultId,
+        retryRefundTransactionId: "refund-3",
+        previousStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        currentStateCommandKey: stableReconciliationCommandKey,
+      },
+      lateRefundFailureSourceRefundTransaction: {
+        ...context.lateRefundFailureSourceRefundTransaction,
+        amountMinor: 6_000n,
+      },
+      lateRefundFailureRefundTransaction: {
+        ...context.lateRefundFailureRefundTransaction,
+        amountMinor: 6_000n,
+      },
+      lateRefundFailureSuccessProviderEvent: stableSuccessProviderEvent,
+      lateRefundFailureProviderEvent: stableFailureProviderEvent,
+      lateRefundFailureLatestPriorProviderEvent: stableSuccessProviderEvent,
+      lateRefundFailureProviderEventSet: {
+        ...context.lateRefundFailureProviderEventSet,
+        providerEvents: [
+          stableSuccessProviderEvent,
+          stableFailureProviderEvent,
+        ],
+      },
+      lateRefundFailureRetryRefundTransactionId: "refund-3",
+      lateRefundFailureRetryAttemptKey: "refund-attempt-3",
+      lateRefundFailureRetryRefundTransaction: {
+        id: "refund-3",
+        paymentId: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "pending",
+        amountMinor: 6_000n,
+        currency: "EUR",
+        provider: "sandbox",
+        reason: "customer_cancellation",
+        idempotencyKey: "refund-attempt-3",
+        replacesRefundTransactionId: "refund-1",
+        replacesFailureProviderEventId: "refund-failure-event-1",
+        requestedAt: failureVerifiedAt,
+        createdAt: failureVerifiedAt,
+        providerEventId: null,
+        completedAt: null,
+        resultId: "late-refund-failure-result-1",
+        immutable: true,
+      },
+      lateRefundFailureRetryCreated: true,
+    };
+    const partialBeforeSet = {
+      ...stableBeforeSet,
+      id: "partial-refund-pending-set-before-1",
+      refundSnapshots: [
+        { ...stableBeforeSet.refundSnapshots[0], amountMinor: 2_000n },
+        { ...stableBeforeSet.refundSnapshots[1], amountMinor: 1_000n },
+      ],
+      resultId: "partial-refund-pending-set-before-result-1",
+    };
+    const partialAfterSet = {
+      ...stableAfterSet,
+      id: "partial-refund-pending-set-after-1",
+      refundIds: ["refund-1", "refund-2"],
+      refundSnapshots: [
+        { ...stableAfterSet.refundSnapshots[0], amountMinor: 2_000n },
+        { ...stableAfterSet.refundSnapshots[1], amountMinor: 1_000n },
+      ],
+      resultId: "partial-refund-pending-set-after-result-1",
+    };
+    const partialSuccessProviderEvent = {
+      ...stableSuccessProviderEvent,
+      amountMinor: 2_000n,
+    };
+    const partialFailureProviderEvent = {
+      ...stableFailureProviderEvent,
+      amountMinor: 2_000n,
+    };
+    const partialRefundPendingContext = {
+      ...stableRefundPendingContext,
+      lateRefundFailureAmountMinor: 2_000n,
+      lateRefundFailureRefundSetBeforeId: partialBeforeSet.id,
+      lateRefundFailureRefundSetBeforeResultId: partialBeforeSet.resultId,
+      lateRefundFailureRefundSetBefore: partialBeforeSet,
+      lateRefundFailureRefundSetAfterId: partialAfterSet.id,
+      lateRefundFailureRefundSetAfterResultId: partialAfterSet.resultId,
+      lateRefundFailureRefundSetAfter: partialAfterSet,
+      lateRefundFailureSourcePayment: {
+        ...stableRefundPendingContext.lateRefundFailureSourcePayment,
+        succeededRefundAmountMinor: 2_000n,
+        authoritativeRefundSetId: partialBeforeSet.id,
+        authoritativeRefundSetResultId: partialBeforeSet.resultId,
+      },
+      lateRefundFailureReconciledPayment: {
+        ...stableRefundPendingContext.lateRefundFailureReconciledPayment,
+        succeededRefundAmountMinor: 0n,
+        authoritativeRefundSetId: partialAfterSet.id,
+        authoritativeRefundSetResultId: partialAfterSet.resultId,
+        retryRefundTransactionId: undefined,
+        currentStateCommandKey:
+          "partial-refund-pending-reconciliation-command-1",
+      },
+      lateRefundFailureSourceRefundTransaction: {
+        ...stableRefundPendingContext.lateRefundFailureSourceRefundTransaction,
+        amountMinor: 2_000n,
+      },
+      lateRefundFailureRefundTransaction: {
+        ...stableRefundPendingContext.lateRefundFailureRefundTransaction,
+        amountMinor: 2_000n,
+      },
+      lateRefundFailureSuccessProviderEvent: partialSuccessProviderEvent,
+      lateRefundFailureProviderEvent: partialFailureProviderEvent,
+      lateRefundFailureLatestPriorProviderEvent: partialSuccessProviderEvent,
+      lateRefundFailureProviderEventSet: {
+        ...stableRefundPendingContext.lateRefundFailureProviderEventSet,
+        providerEvents: [
+          partialSuccessProviderEvent,
+          partialFailureProviderEvent,
+        ],
+      },
+      lateRefundFailureRetryRefundTransactionId: undefined,
+      lateRefundFailureRetryAttemptKey: undefined,
+      lateRefundFailureRetryRefundTransaction: undefined,
+      lateRefundFailureRetryCreated: false,
+    };
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: "partial-refund-pending-reconciliation-command-1",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: partialRefundPendingContext,
+      }),
+    ).toEqual({ kind: "reconciled", current: "refund_pending" });
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: stableRefundPendingContext,
+      }),
+    ).toEqual({ kind: "reconciled", current: "refund_pending" });
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailureResultId,
+        currentStateCommandKey: stableReconciliationCommandKey,
+        context: stableRefundPendingContext,
+      }),
+    ).toEqual({ kind: "already_applied", current: "refund_pending" });
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: "unproven-second-stable-refund-reconciliation",
+        currentStateResultId: context.lateRefundFailureResultId,
+        currentStateCommandKey: stableReconciliationCommandKey,
+        context: stableRefundPendingContext,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...stableRefundPendingContext,
+          lateRefundFailureRefundSetAfter: {
+            ...stableAfterSet,
+            refundIds: ["refund-1"],
+            refundSnapshots: [stableAfterSet.refundSnapshots[0]],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    for (const [field, value] of [
+      ["idempotencyKey", "mutated-refund-attempt-2"],
+      ["replacesRefundTransactionId", "foreign-refund"],
+      ["replacesFailureProviderEventId", "foreign-failure-event"],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: "refund_pending",
+          target: "refund_pending",
+          idempotencyKey: stableReconciliationCommandKey,
+          currentStateResultId:
+            context.lateRefundFailurePreviousPaymentResultId,
+          currentStateCommandKey:
+            context.lateRefundFailureCurrentPaymentStateCommandKey,
+          context: {
+            ...stableRefundPendingContext,
+            lateRefundFailureRefundSetAfter: {
+              ...stableAfterSet,
+              refundSnapshots: stableAfterSet.refundSnapshots.map((refund) =>
+                refund.id === "refund-2"
+                  ? { ...refund, [field]: value }
+                  : refund,
+              ),
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+    for (const [field, value] of [
+      ["provider", "other-provider"],
+      ["reason", "production_failure"],
+      ["replacesRefundTransactionId", "refund-2"],
+      ["replacesFailureProviderEventId", "foreign-failure-event"],
+      ["requestedAt", Instant.parse("2026-01-01T00:10:54.000Z")],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: "refund_pending",
+          target: "refund_pending",
+          idempotencyKey: stableReconciliationCommandKey,
+          currentStateResultId:
+            context.lateRefundFailurePreviousPaymentResultId,
+          currentStateCommandKey:
+            context.lateRefundFailureCurrentPaymentStateCommandKey,
+          context: {
+            ...stableRefundPendingContext,
+            lateRefundFailureRetryRefundTransaction: {
+              ...stableRefundPendingContext.lateRefundFailureRetryRefundTransaction,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...stableRefundPendingContext,
+          lateRefundFailureRefundSetAfter: {
+            ...stableAfterSet,
+            refundSnapshots: stableAfterSet.refundSnapshots.map((refund) =>
+              refund.id === "refund-3"
+                ? {
+                    ...refund,
+                    replacesFailureProviderEventId: "foreign-failure-event",
+                  }
+                : refund,
+            ),
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...stableRefundPendingContext,
+          lateRefundFailureRetryAttemptKey: "refund-attempt-1",
+          lateRefundFailureRetryRefundTransaction: {
+            ...stableRefundPendingContext.lateRefundFailureRetryRefundTransaction,
+            idempotencyKey: "refund-attempt-1",
+          },
+          lateRefundFailureRefundSetAfter: {
+            ...stableAfterSet,
+            refundSnapshots: stableAfterSet.refundSnapshots.map((refund) =>
+              refund.id === "refund-3"
+                ? { ...refund, idempotencyKey: "refund-attempt-1" }
+                : refund,
+            ),
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+
     expect(
       isTerminal(paymentPolicy, "refunded", {
         paymentCaptureKind: "late_refund_failure",
@@ -7365,6 +7806,35 @@ describe("v0 lifecycle policy tables", () => {
     const base = contextForTransition("refunded", "refund_pending");
     const failureVerifiedAt = Instant.parse("2026-01-01T00:10:00.000Z");
     const successVerifiedAt = Instant.parse("2026-01-01T00:11:00.000Z");
+    const failureProviderEvent = {
+      id: "refund-failure-event-1",
+      paymentId: "payment-1",
+      refundTransactionId: "refund-1",
+      provider: "sandbox",
+      providerTransactionId: "provider-refund-1",
+      kind: "refund_failed",
+      amountMinor: 10_000n,
+      currency: "EUR",
+      occurredAt: failureVerifiedAt,
+      authenticatedAt: failureVerifiedAt,
+      verifiedAt: failureVerifiedAt,
+      authenticated: true,
+      verified: true,
+      resultId: "refund-failure-event-1",
+      immutable: true,
+    };
+    const successProviderEvent = {
+      ...base.refundCompletionProviderEvent,
+      provider: "sandbox",
+      providerTransactionId: "provider-refund-1",
+      kind: "refund_succeeded",
+      amountMinor: 10_000n,
+      currency: "EUR",
+      occurredAt: successVerifiedAt,
+      authenticatedAt: successVerifiedAt,
+      verifiedAt: successVerifiedAt,
+      resultId: "late-final-result",
+    };
     const refundSetBefore = {
       id: "late-refund-set-before-1",
       paymentId: "payment-1",
@@ -7380,6 +7850,8 @@ describe("v0 lifecycle policy tables", () => {
         },
       ],
       resultId: "late-refund-set-before-result-1",
+      authoritative: true,
+      complete: true,
       immutable: true,
     };
     const refundSetAfter = {
@@ -7397,6 +7869,8 @@ describe("v0 lifecycle policy tables", () => {
         },
       ],
       resultId: "late-refund-set-after-result-1",
+      authoritative: true,
+      complete: true,
       immutable: true,
     };
     const context = {
@@ -7458,31 +7932,21 @@ describe("v0 lifecycle policy tables", () => {
         completedAt: successVerifiedAt,
         resultId: "late-final-result",
       },
-      lateRefundSuccessFailureProviderEvent: {
-        id: "refund-failure-event-1",
+      lateRefundSuccessFailureProviderEvent: failureProviderEvent,
+      refundCompletionProviderEvent: successProviderEvent,
+      lateRefundSuccessProviderEventSetId:
+        "late-refund-success-provider-event-set-invalid",
+      lateRefundSuccessProviderEventSetResultId: "late-final-result",
+      lateRefundSuccessProviderEventSet: {
+        id: "late-refund-success-provider-event-set-invalid",
         paymentId: "payment-1",
         refundTransactionId: "refund-1",
-        provider: "sandbox",
-        providerTransactionId: "provider-refund-1",
-        kind: "refund_failed",
-        amountMinor: 10_000n,
-        currency: "EUR",
-        occurredAt: failureVerifiedAt,
-        authenticated: true,
-        verified: true,
-        verifiedAt: failureVerifiedAt,
-        immutable: true,
-      },
-      refundCompletionProviderEvent: {
-        ...base.refundCompletionProviderEvent,
-        provider: "sandbox",
-        providerTransactionId: "provider-refund-1",
-        kind: "refund_succeeded",
-        amountMinor: 10_000n,
-        currency: "EUR",
-        occurredAt: successVerifiedAt,
-        verifiedAt: successVerifiedAt,
+        providerEventIds: [failureProviderEvent.id, successProviderEvent.id],
+        providerEvents: [failureProviderEvent, successProviderEvent],
         resultId: "late-final-result",
+        authoritative: true,
+        complete: true,
+        immutable: true,
       },
       lateRefundSuccessReconciledPayment: {
         id: "payment-1",
@@ -7515,6 +7979,37 @@ describe("v0 lifecycle policy tables", () => {
       currentStateCommandKey: "late-source-command",
       context,
     };
+
+    const tiedOlderFailure = {
+      ...failureProviderEvent,
+      id: "tied-older-refund-failure-event-2",
+      resultId: "tied-older-refund-failure-result-2",
+    };
+    expect(
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessProviderEventSet: {
+            ...context.lateRefundSuccessProviderEventSet,
+            providerEventIds: [
+              failureProviderEvent.id,
+              tiedOlderFailure.id,
+              successProviderEvent.id,
+            ],
+            providerEvents: [
+              failureProviderEvent,
+              tiedOlderFailure,
+              successProviderEvent,
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "captured",
+      current: "refund_pending",
+    });
 
     expect(() =>
       transition(paymentPolicy, {
@@ -7559,6 +8054,18 @@ describe("v0 lifecycle policy tables", () => {
         ...command,
         context: {
           ...context,
+          lateRefundSuccessRefundSetBefore: {
+            ...refundSetBefore,
+            authoritative: false,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
           lateRefundSuccessRefundSetAfterId: refundSetBefore.id,
           lateRefundSuccessRefundSetAfterResultId: refundSetBefore.resultId,
           lateRefundSuccessRefundSetAfter: {
@@ -7577,6 +8084,35 @@ describe("v0 lifecycle policy tables", () => {
           lateRefundSuccessFailureProviderEvent: {
             ...context.lateRefundSuccessFailureProviderEvent,
             providerTransactionId: "foreign-provider-refund",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    const tiedLatestFailure = {
+      ...failureProviderEvent,
+      id: "unselected-tied-refund-failure-event-2",
+      occurredAt: successVerifiedAt,
+      authenticatedAt: successVerifiedAt,
+      verifiedAt: successVerifiedAt,
+      resultId: "unselected-tied-refund-failure-result-2",
+    };
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessProviderEventSet: {
+            ...context.lateRefundSuccessProviderEventSet,
+            providerEventIds: [
+              failureProviderEvent.id,
+              successProviderEvent.id,
+              tiedLatestFailure.id,
+            ],
+            providerEvents: [
+              failureProviderEvent,
+              successProviderEvent,
+              tiedLatestFailure,
+            ],
           },
         },
       }),
