@@ -81,6 +81,32 @@ duplicate event is acknowledged without applying the effect twice. Provider
 transaction IDs are separate identities where a provider can emit multiple
 event IDs for one transaction.
 
+### Refund retry dispatch and late receipts
+
+A refund dispatcher durably claims an attempt by inserting an append-only
+claim row. Every claim insert acquires the canonical order, phase, refund, and
+payment lock set before recording the database claim time on the attempt and
+making its first provider call; direct attempt updates require that exact
+immutable claim. If a failed source attempt later succeeds, an unclaimed
+linked retry is atomically `SUPERSEDED` and is no longer included in committed
+refund totals. A claimed retry is instead `SUSPENDED`: the source receipt is
+retained, Payment remains `REFUND_PENDING`, and no further automatic dispatch
+is allowed.
+
+Receipt ordering does not change this result. If the claimed retry succeeds
+first, the later source success converts that retry from `SUCCEEDED` to the
+same `SUSPENDED` incident while retaining its exact retry-success receipt. Any
+previously completed refund aggregate is reopened atomically so order closure
+cannot hide the double-success incident.
+
+An exact retry failure resolves that suspension atomically by selecting the
+retry failure, applying the retained source success, and recalculating Payment
+from the complete refund set. An exact retry success remains selected on the
+suspended retry as durable financial-incident evidence; normal refund
+completion stays blocked for manual financial reconciliation. Provider truth
+is never rewritten as a locally invented failure or discarded because retry
+work exists.
+
 ## Consequences
 
 Concurrency behavior is reviewable as data rather than hidden in adapter

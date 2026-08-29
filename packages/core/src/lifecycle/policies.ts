@@ -3302,7 +3302,7 @@ function requireExactLateRefundFailureReconciliation<S extends string>(
 function requireExactLateRefundSuccessReconciliation<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
-  phase: "start" | "complete",
+  phase: "start" | "complete" | "reconcile_pending_retry",
 ): void {
   const context = command.context;
   const nonBlank = (value: unknown): value is string =>
@@ -3325,6 +3325,8 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
   const amountMinor = context?.lateRefundSuccessAmountMinor;
   const currency = context?.lateRefundSuccessCurrency;
   const attemptKey = context?.lateRefundSuccessAttemptKey;
+  const supersededRetryId =
+    context?.lateRefundSuccessSupersededRetryRefundTransactionId;
   const capturedAmountMinor = context?.lateRefundSuccessCapturedAmountMinor;
   const succeededBefore = context?.lateRefundSuccessSucceededBeforeMinor;
   const succeededAfter = context?.lateRefundSuccessSucceededAfterMinor;
@@ -3342,6 +3344,9 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
   const sourcePayment = record(context?.lateRefundSuccessSourcePayment);
   const interimPayment = record(context?.refundCompletionExpectedPayment);
   const refund = record(context?.refundCompletionRefundTransaction);
+  const supersededRetry = record(
+    context?.lateRefundSuccessSupersededRetryRefundTransaction,
+  );
   const failureEvent = record(context?.lateRefundSuccessFailureProviderEvent);
   const successEvent = record(context?.refundCompletionProviderEvent);
   const reconciledPayment = record(context?.lateRefundSuccessReconciledPayment);
@@ -3488,6 +3493,7 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     }
     const rows = new Map<string, Readonly<Record<string, unknown>>>();
     let succeededAmountMinor = 0n;
+    let pendingAmountMinor = 0n;
     let pendingCount = 0;
     for (const value of refunds) {
       const row = record(value);
@@ -3502,7 +3508,9 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
         row.paymentId !== paymentId ||
         (status !== "pending" &&
           status !== "succeeded" &&
-          status !== "failed") ||
+          status !== "failed" &&
+          status !== "superseded" &&
+          status !== "suspended") ||
         typeof rowAmountMinor !== "bigint" ||
         rowAmountMinor <= 0n ||
         !nonBlank(row.resultId) ||
@@ -3512,10 +3520,18 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
       }
       rows.set(id, row);
       if (status === "succeeded") succeededAmountMinor += rowAmountMinor;
-      if (status === "pending") pendingCount += 1;
+      if (status === "pending" || status === "suspended") {
+        pendingAmountMinor += rowAmountMinor;
+        pendingCount += 1;
+      }
     }
     if (refundIds.some((id) => !rows.has(id))) return undefined;
-    return { pendingCount, rows, succeededAmountMinor };
+    return {
+      pendingAmountMinor,
+      pendingCount,
+      rows,
+      succeededAmountMinor,
+    };
   };
   const refundSetBefore = parseRefundSet(
     context?.lateRefundSuccessRefundSetBefore,
@@ -3527,6 +3543,28 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     refundSetAfterId,
     refundSetAfterResultId,
   );
+  const failureVerifiedAt = failureEvent?.verifiedAt;
+  const successVerifiedAt = successEvent?.verifiedAt;
+  const failureOccurredAt = failureEvent?.occurredAt;
+  const successOccurredAt = successEvent?.occurredAt;
+  const refundCompletedAt = refund?.completedAt;
+  const retryReconciliationRequested =
+    supersededRetry !== undefined || nonBlank(supersededRetryId);
+  const sameImmutableProjection = (
+    before: Readonly<Record<string, unknown>>,
+    after: Readonly<Record<string, unknown>>,
+  ): boolean => {
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    return [...keys].every((key) => {
+      const beforeValue = before[key];
+      const afterValue = after[key];
+      if (beforeValue instanceof Instant && afterValue instanceof Instant) {
+        return beforeValue.equals(afterValue);
+      }
+      return Object.is(beforeValue, afterValue);
+    });
+  };
+  let exactSupersededRetryTransition = !retryReconciliationRequested;
   let exactRefundSetTransition = false;
   if (
     refundSetBefore !== undefined &&
@@ -3538,6 +3576,7 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     exactRefundSetTransition = true;
     for (const [id, before] of refundSetBefore.rows) {
       const after = refundSetAfter.rows.get(id);
+      const isSupersededRetry = id === supersededRetryId;
       if (
         after === undefined ||
         after.paymentId !== before.paymentId ||
@@ -3549,27 +3588,60 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
             before.resultId !== failureEventId ||
             after.status !== "succeeded" ||
             after.resultId !== finalResultId
-          : after.status !== before.status ||
-            after.resultId !== before.resultId)
+          : isSupersededRetry
+            ? before.status !== "pending" ||
+              before.provider !== provider ||
+              before.providerTransactionId !== null ||
+              before.providerEventId !== null ||
+              before.amountMinor !== amountMinor ||
+              before.currency !== currency ||
+              before.reason !== refund?.reason ||
+              !nonBlank(before.idempotencyKey) ||
+              before.replacesRefundTransactionId !== refundId ||
+              before.replacesFailureProviderEventId !== failureEventId ||
+              before.dispatchClaimedAt !== null ||
+              before.sourceSuccessProviderEventId !== null ||
+              before.reconciliationStartedAt !== null ||
+              before.completedAt !== null ||
+              after.status !== "superseded" ||
+              after.provider !== before.provider ||
+              after.providerTransactionId !== null ||
+              after.providerEventId !== null ||
+              after.amountMinor !== before.amountMinor ||
+              after.currency !== before.currency ||
+              after.reason !== before.reason ||
+              after.idempotencyKey !== before.idempotencyKey ||
+              after.replacesRefundTransactionId !== refundId ||
+              after.replacesFailureProviderEventId !== failureEventId ||
+              after.dispatchClaimedAt !== null ||
+              after.sourceSuccessProviderEventId !== successEventId ||
+              !(after.reconciliationStartedAt instanceof Instant) ||
+              !(successVerifiedAt instanceof Instant) ||
+              !after.reconciliationStartedAt.equals(successVerifiedAt) ||
+              after.completedAt !== null ||
+              after.resultId !== finalResultId
+            : !sameImmutableProjection(before, after))
       ) {
         exactRefundSetTransition = false;
         break;
       }
+      if (isSupersededRetry) exactSupersededRetryTransition = true;
     }
   }
-  const failureVerifiedAt = failureEvent?.verifiedAt;
-  const successVerifiedAt = successEvent?.verifiedAt;
-  const failureOccurredAt = failureEvent?.occurredAt;
-  const successOccurredAt = successEvent?.occurredAt;
-  const refundCompletedAt = refund?.completedAt;
   const derivedSucceededBefore = refundSetBefore?.succeededAmountMinor;
   const derivedSucceededAfter = refundSetAfter?.succeededAmountMinor;
   const expectedSource =
-    derivedSucceededBefore === 0n ? "captured" : "partially_refunded";
+    (refundSetBefore?.pendingCount ?? 0) > 0
+      ? "refund_pending"
+      : derivedSucceededBefore === 0n
+        ? "captured"
+        : "partially_refunded";
   const expectedTarget =
-    derivedSucceededAfter === capturedAmountMinor
-      ? "refunded"
-      : "partially_refunded";
+    (refundSetAfter?.pendingCount ?? 0) > 0
+      ? "refund_pending"
+      : derivedSucceededAfter === capturedAmountMinor
+        ? "refunded"
+        : "partially_refunded";
 
   if (
     context?.paymentCaptureKind !== "late_refund_success" ||
@@ -3590,13 +3662,26 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     typeof capturedAmountMinor !== "bigint" ||
     capturedAmountMinor <= 0n ||
     !exactRefundSetTransition ||
-    refundSetBefore?.pendingCount !== 0 ||
-    refundSetAfter?.pendingCount !== 0 ||
+    !exactSupersededRetryTransition ||
+    retryReconciliationRequested !== (phase === "reconcile_pending_retry") ||
+    (retryReconciliationRequested
+      ? refundSetBefore === undefined ||
+        refundSetAfter === undefined ||
+        refundSetBefore.pendingCount < 1 ||
+        refundSetAfter.pendingCount !== refundSetBefore.pendingCount - 1
+      : refundSetBefore?.pendingCount !== 0 ||
+        refundSetAfter?.pendingCount !== 0) ||
     derivedSucceededBefore === undefined ||
     derivedSucceededBefore < 0n ||
     derivedSucceededAfter === undefined ||
     derivedSucceededAfter !== derivedSucceededBefore + amountMinor ||
     derivedSucceededAfter > capturedAmountMinor ||
+    refundSetBefore === undefined ||
+    refundSetBefore.succeededAmountMinor + refundSetBefore.pendingAmountMinor >
+      capturedAmountMinor ||
+    refundSetAfter === undefined ||
+    refundSetAfter.succeededAmountMinor + refundSetAfter.pendingAmountMinor >
+      capturedAmountMinor ||
     typeof succeededBefore !== "bigint" ||
     succeededBefore !== derivedSucceededBefore ||
     typeof succeededAfter !== "bigint" ||
@@ -3610,8 +3695,8 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     refundSetBeforeResultId === refundSetAfterResultId ||
     !nonBlank(sourceResultId) ||
     !nonBlank(sourceStateKey) ||
-    !nonBlank(interimResultId) ||
-    !nonBlank(interimStateKey) ||
+    (phase !== "reconcile_pending_retry" &&
+      (!nonBlank(interimResultId) || !nonBlank(interimStateKey))) ||
     !nonBlank(finalResultId) ||
     command.aggregateId !== paymentId ||
     (phase === "start" &&
@@ -3624,6 +3709,12 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
         command.target !== expectedTarget ||
         command.currentStateResultId !== interimResultId ||
         command.currentStateCommandKey !== interimStateKey)) ||
+    (phase === "reconcile_pending_retry" &&
+      (command.current !== expectedSource ||
+        command.current !== "refund_pending" ||
+        command.target !== expectedTarget ||
+        command.currentStateResultId !== sourceResultId ||
+        command.currentStateCommandKey !== sourceStateKey)) ||
     sourcePayment?.id !== paymentId ||
     sourcePayment.orderId !== orderId ||
     sourcePayment.phaseId !== phaseId ||
@@ -3632,24 +3723,28 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     sourcePayment.capturedAmountMinor !== capturedAmountMinor ||
     sourcePayment.succeededRefundAmountMinor !== succeededBefore ||
     sourcePayment.failedRefundTransactionId !== refundId ||
+    (retryReconciliationRequested &&
+      sourcePayment.activeRefundTransactionId !== supersededRetryId) ||
     sourcePayment.authoritativeRefundSetId !== refundSetBeforeId ||
     sourcePayment.authoritativeRefundSetResultId !== refundSetBeforeResultId ||
     sourcePayment.resultId !== sourceResultId ||
     sourcePayment.currentStateCommandKey !== sourceStateKey ||
     sourcePayment.immutable !== true ||
-    interimPayment?.id !== paymentId ||
-    interimPayment.orderId !== orderId ||
-    interimPayment.phaseId !== phaseId ||
-    interimPayment.role !== role ||
-    interimPayment.status !== "refund_pending" ||
-    interimPayment.activeRefundTransactionId !== refundId ||
-    interimPayment.capturedAmountMinor !== capturedAmountMinor ||
-    interimPayment.succeededRefundAmountMinor !== succeededAfter ||
-    interimPayment.authoritativeRefundSetId !== refundSetAfterId ||
-    interimPayment.authoritativeRefundSetResultId !== refundSetAfterResultId ||
-    interimPayment.resultId !== interimResultId ||
-    interimPayment.currentStateCommandKey !== interimStateKey ||
-    interimPayment.immutable !== true ||
+    (phase !== "reconcile_pending_retry" &&
+      (interimPayment?.id !== paymentId ||
+        interimPayment.orderId !== orderId ||
+        interimPayment.phaseId !== phaseId ||
+        interimPayment.role !== role ||
+        interimPayment.status !== "refund_pending" ||
+        interimPayment.activeRefundTransactionId !== refundId ||
+        interimPayment.capturedAmountMinor !== capturedAmountMinor ||
+        interimPayment.succeededRefundAmountMinor !== succeededAfter ||
+        interimPayment.authoritativeRefundSetId !== refundSetAfterId ||
+        interimPayment.authoritativeRefundSetResultId !==
+          refundSetAfterResultId ||
+        interimPayment.resultId !== interimResultId ||
+        interimPayment.currentStateCommandKey !== interimStateKey ||
+        interimPayment.immutable !== true)) ||
     refund?.id !== refundId ||
     refund.paymentId !== paymentId ||
     refund.orderId !== orderId ||
@@ -3667,6 +3762,32 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
     !(refundCompletedAt instanceof Instant) ||
     refund.resultId !== finalResultId ||
     refund.immutable !== true ||
+    (retryReconciliationRequested &&
+      (supersededRetry === undefined ||
+        supersededRetry.id !== supersededRetryId ||
+        supersededRetry.paymentId !== paymentId ||
+        supersededRetry.orderId !== orderId ||
+        supersededRetry.phaseId !== phaseId ||
+        supersededRetry.previousStatus !== "pending" ||
+        supersededRetry.targetStatus !== "superseded" ||
+        supersededRetry.status !== "superseded" ||
+        supersededRetry.provider !== provider ||
+        supersededRetry.providerTransactionId !== null ||
+        supersededRetry.providerEventId !== null ||
+        supersededRetry.amountMinor !== amountMinor ||
+        supersededRetry.currency !== currency ||
+        supersededRetry.reason !== refund.reason ||
+        !nonBlank(supersededRetry.idempotencyKey) ||
+        supersededRetry.replacesRefundTransactionId !== refundId ||
+        supersededRetry.replacesFailureProviderEventId !== failureEventId ||
+        supersededRetry.dispatchClaimedAt !== null ||
+        supersededRetry.sourceSuccessProviderEventId !== successEventId ||
+        !(supersededRetry.reconciliationStartedAt instanceof Instant) ||
+        !(successVerifiedAt instanceof Instant) ||
+        !supersededRetry.reconciliationStartedAt.equals(successVerifiedAt) ||
+        supersededRetry.completedAt !== null ||
+        supersededRetry.resultId !== finalResultId ||
+        supersededRetry.immutable !== true)) ||
     failureEvent?.id !== failureEventId ||
     failureEvent.paymentId !== paymentId ||
     failureEvent.refundTransactionId !== refundId ||
@@ -9084,13 +9205,27 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   sameStateReconciliationGuard: (command) => {
     if (
       command.current !== "refund_pending" ||
-      command.target !== "refund_pending" ||
-      command.context?.paymentCaptureKind !== "late_refund_failure"
+      command.target !== "refund_pending"
     ) {
       return false;
     }
-    requireExactLateRefundFailureReconciliation("Payment", command, "payment");
-    return true;
+    if (command.context?.paymentCaptureKind === "late_refund_failure") {
+      requireExactLateRefundFailureReconciliation(
+        "Payment",
+        command,
+        "payment",
+      );
+      return true;
+    }
+    if (command.context?.paymentCaptureKind === "late_refund_success") {
+      requireExactLateRefundSuccessReconciliation(
+        "Payment",
+        command,
+        "reconcile_pending_retry",
+      );
+      return true;
+    }
+    return false;
   },
   transitions: {
     created: ["pending", "failed", "voided"],
@@ -9229,7 +9364,19 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       command.current === "refund_pending" &&
       (command.target === "partially_refunded" || command.target === "refunded")
     ) {
-      requireExactPaymentRefundCompletion("Payment", command);
+      if (
+        command.context?.paymentCaptureKind === "late_refund_success" &&
+        command.context.lateRefundSuccessSupersededRetryRefundTransactionId !==
+          undefined
+      ) {
+        requireExactLateRefundSuccessReconciliation(
+          "Payment",
+          command,
+          "reconcile_pending_retry",
+        );
+      } else {
+        requireExactPaymentRefundCompletion("Payment", command);
+      }
     }
     if (command.current === "refund_pending" && command.target === "captured") {
       requireExactRefundFailureRollback("Payment", command);
