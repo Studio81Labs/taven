@@ -8771,6 +8771,29 @@ describe("v0 lifecycle policy tables", () => {
           },
         }),
       ).toThrow(TransitionGuardError);
+      const foreignSourceSetRow = {
+        ...sourceRefund,
+        status: "superseded",
+        provider: "foreign-provider",
+        resultId: "foreign-source-result",
+      };
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          idempotencyKey: `late-${reconciliationKind}-foreign-source-set-row`,
+          context: {
+            ...context,
+            lateRefundSuccessRefundSetBefore: {
+              ...refundSetBefore,
+              refundSnapshots: [foreignSourceSetRow, retryBefore],
+            },
+            lateRefundSuccessRefundSetAfter: {
+              ...refundSetAfter,
+              refundSnapshots: [foreignSourceSetRow, retryAfter],
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
       expect(() =>
         transition(paymentPolicy, {
           ...command,

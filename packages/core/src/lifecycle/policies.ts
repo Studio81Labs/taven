@@ -3776,7 +3776,10 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
               before.resultId !== failureEventId ||
               after.status !== "succeeded" ||
               after.resultId !== finalResultId
-            : !suspendRetry || !sameImmutableProjection(before, after)
+            : !suspendRetry ||
+              sourceRefund === undefined ||
+              !sameImmutableProjection(before, sourceRefund) ||
+              !sameImmutableProjection(after, sourceRefund)
           : isReconciledRetry
             ? before.provider !== provider ||
               before.amountMinor !== amountMinor ||
