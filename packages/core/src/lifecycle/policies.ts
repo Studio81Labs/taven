@@ -2057,6 +2057,12 @@ function requireExactRefundFailureRollback<S extends string>(
   const stateKey = context?.refundFailureRollbackCurrentStateCommandKey;
   const resultId = context?.refundFailureRollbackResultId;
   const attemptKey = context?.refundFailureAttemptKey;
+  const capturedAmountMinor = context?.refundFailureCapturedAmountMinor;
+  const succeededAmountMinor = context?.refundFailureSucceededAmountMinor;
+  const expectedTarget =
+    typeof succeededAmountMinor === "bigint" && succeededAmountMinor === 0n
+      ? "captured"
+      : "partially_refunded";
   const expectedPayment = record(context?.refundFailureRollbackExpectedPayment);
   const restoredPayment = record(context?.refundFailureRollbackRestoredPayment);
   const refundTransaction = record(
@@ -2075,6 +2081,15 @@ function requireExactRefundFailureRollback<S extends string>(
     !nonBlank(stateKey) ||
     !nonBlank(resultId) ||
     !nonBlank(attemptKey) ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n ||
+    typeof succeededAmountMinor !== "bigint" ||
+    succeededAmountMinor < 0n ||
+    succeededAmountMinor >= capturedAmountMinor ||
+    (command.target !== "captured" &&
+      command.target !== "partially_refunded") ||
+    command.target !== expectedTarget ||
+    context?.refundFailureRollbackTargetStatus !== expectedTarget ||
     command.aggregateId !== paymentId ||
     command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
@@ -2083,6 +2098,9 @@ function requireExactRefundFailureRollback<S extends string>(
     expectedPayment.phaseId !== phaseId ||
     expectedPayment.role !== role ||
     expectedPayment.status !== "refund_pending" ||
+    expectedPayment.activeRefundTransactionId !== refundTransactionId ||
+    expectedPayment.capturedAmountMinor !== capturedAmountMinor ||
+    expectedPayment.succeededRefundAmountMinor !== succeededAmountMinor ||
     expectedPayment.resultId !== previousResultId ||
     expectedPayment.currentStateCommandKey !== stateKey ||
     expectedPayment.immutable !== true ||
@@ -2091,7 +2109,9 @@ function requireExactRefundFailureRollback<S extends string>(
     restoredPayment.phaseId !== phaseId ||
     restoredPayment.role !== role ||
     restoredPayment.previousStatus !== "refund_pending" ||
-    restoredPayment.targetStatus !== "captured" ||
+    restoredPayment.targetStatus !== expectedTarget ||
+    restoredPayment.capturedAmountMinor !== capturedAmountMinor ||
+    restoredPayment.succeededRefundAmountMinor !== succeededAmountMinor ||
     restoredPayment.resultId !== resultId ||
     restoredPayment.immutable !== true ||
     refundTransaction?.id !== refundTransactionId ||
@@ -2108,8 +2128,11 @@ function requireExactRefundFailureRollback<S extends string>(
     context?.refundFailureRollbackPaymentResultId !== resultId ||
     context?.refundFailureRollbackTransactionResultId !== resultId ||
     context?.refundFailureRollbackEvidenceResultId !== resultId ||
+    context?.refundFailureLatestTransactionId !== refundTransactionId ||
+    context?.refundFailureSucceededRefundSetComplete !== true ||
     context?.refundFailureNoPendingRefunds !== true ||
-    context?.refundFailureNoSuccessfulRefunds !== true ||
+    context?.refundFailureNoSuccessfulRefunds !==
+      (succeededAmountMinor === 0n) ||
     context?.refundFailureRollbackCompleted !== true ||
     context?.refundFailureRollbackAtomic !== true
   ) {
@@ -2117,7 +2140,7 @@ function requireExactRefundFailureRollback<S extends string>(
       lifecycle,
       command.current,
       command.target,
-      "refund failure rollback requires the exact captured Payment restoration, failed RefundTransaction, provider failure, and atomic result",
+      "refund failure rollback requires the exact Payment restoration, failed latest RefundTransaction, provider failure, financial totals, and atomic result",
     );
   }
 }
@@ -6345,6 +6368,166 @@ function requireExactPaymentIntentSetup<S extends string>(
   }
 }
 
+function requireCreatedPaymentVoidClosure<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const previousPaymentResultId =
+    context?.createdPaymentVoidPreviousPaymentResultId;
+  const paymentStateKey = context?.createdPaymentVoidCurrentStateCommandKey;
+  const previousOrderResultId =
+    context?.initialCaptureClosePreviousOrderResultId;
+  const orderStateKey = context?.initialCaptureCloseOrderCurrentStateCommandKey;
+  const previousPhaseResultId =
+    context?.createdPaymentVoidPreviousPhaseResultId;
+  const phaseStateKey = context?.createdPaymentVoidPhaseCurrentStateCommandKey;
+  const resultId = context?.createdPaymentVoidResultId;
+  const reservationSetId = context?.phaseReservationSetId;
+  const orderTarget = context?.initialCaptureCloseOrderTargetStatus;
+  const expectedReason =
+    orderTarget === "expired" ? "checkout_expired" : "checkout_cancelled";
+  const expectedPayment = record(context?.createdPaymentVoidExpectedPayment);
+  const voidedPayment = record(context?.createdPaymentVoidVoidedPayment);
+  const expectedOrder = record(context?.initialCaptureCloseExpectedOrder);
+  const expectedPhase = record(context?.createdPaymentVoidExpectedPhase);
+
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit") ||
+    !nonBlank(previousPaymentResultId) ||
+    !nonBlank(paymentStateKey) ||
+    !nonBlank(previousOrderResultId) ||
+    !nonBlank(orderStateKey) ||
+    !nonBlank(previousPhaseResultId) ||
+    !nonBlank(phaseStateKey) ||
+    !nonBlank(resultId) ||
+    !nonBlank(reservationSetId) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateResultId !== previousPaymentResultId ||
+    command.currentStateCommandKey !== paymentStateKey ||
+    expectedPayment?.id !== paymentId ||
+    expectedPayment.orderId !== orderId ||
+    expectedPayment.phaseId !== phaseId ||
+    expectedPayment.role !== role ||
+    expectedPayment.status !== "created" ||
+    expectedPayment.providerIntentId !== null ||
+    expectedPayment.resultId !== previousPaymentResultId ||
+    expectedPayment.currentStateCommandKey !== paymentStateKey ||
+    expectedPayment.immutable !== true ||
+    voidedPayment?.id !== paymentId ||
+    voidedPayment.orderId !== orderId ||
+    voidedPayment.phaseId !== phaseId ||
+    voidedPayment.role !== role ||
+    voidedPayment.previousStatus !== "created" ||
+    voidedPayment.targetStatus !== "voided" ||
+    voidedPayment.providerIntentId !== null ||
+    voidedPayment.captureAuthorized !== false ||
+    voidedPayment.resultId !== resultId ||
+    voidedPayment.immutable !== true ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.status !== "quoted" ||
+    expectedOrder.resultId !== previousOrderResultId ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    expectedOrder.immutable !== true ||
+    expectedPhase?.id !== phaseId ||
+    expectedPhase.orderId !== orderId ||
+    expectedPhase.kind !== "single" ||
+    expectedPhase.status !== "quoted" ||
+    expectedPhase.resultId !== previousPhaseResultId ||
+    expectedPhase.currentStateCommandKey !== phaseStateKey ||
+    expectedPhase.immutable !== true ||
+    context?.createdPaymentVoidProviderIntentAbsent !== true ||
+    context?.createdPaymentVoidProviderTransactionAbsent !== true ||
+    context?.createdPaymentVoidProviderVoidOutboxAbsent !== true ||
+    context?.initialPaymentRole !== role ||
+    context?.initialPaymentId !== paymentId ||
+    context?.initialPaymentOrderId !== orderId ||
+    context?.initialPaymentStatus !== "voided" ||
+    context?.initialCaptureClosePaymentId !== paymentId ||
+    context?.initialCaptureCloseOrderId !== orderId ||
+    context?.initialCaptureClosePhaseId !== phaseId ||
+    context?.initialCaptureClosePhaseOrderId !== orderId ||
+    context?.phaseKind !== "single" ||
+    context?.initialCaptureCloseReservationSetId !== reservationSetId ||
+    context?.initialCaptureCloseReservationSetOrderId !== orderId ||
+    context?.initialCaptureCloseReservationSetPhaseId !== phaseId ||
+    context?.initialCaptureCloseOrderPreviousStatus !== "quoted" ||
+    (orderTarget !== "expired" && orderTarget !== "cancelled") ||
+    context?.initialCaptureClosePhasePreviousStatus !== "quoted" ||
+    context?.initialCaptureClosePhaseTargetStatus !== "cancelled" ||
+    context?.initialCaptureCloseReason !== expectedReason ||
+    context?.createdPaymentVoidPaymentResultId !== resultId ||
+    context?.createdPaymentVoidOrderResultId !== resultId ||
+    context?.createdPaymentVoidPhaseResultId !== resultId ||
+    context?.createdPaymentVoidReservationResultId !== resultId ||
+    context?.createdPaymentVoidCompleted !== true ||
+    context?.createdPaymentVoidAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "created Payment voiding requires its exact no-intent Payment, quoted checkout, cancellation result, and atomic evidence",
+    );
+  }
+
+  for (const [flag, reason] of [
+    [
+      "captureAuthorizationDisabled",
+      "created Payment voiding requires capture authorization to be disabled",
+    ],
+    [
+      "captureWindowClosed",
+      "created Payment voiding requires its capture window to be closed",
+    ],
+    [
+      "captureCutoffSet",
+      "created Payment voiding requires its capture cutoff to be recorded",
+    ],
+    [
+      "initialCaptureWindowClosed",
+      "created Payment voiding requires its initial capture window closure",
+    ],
+    [
+      "initialCaptureCutoffSet",
+      "created Payment voiding requires its immutable initial cutoff",
+    ],
+    [
+      "preCapturePhaseCancelled",
+      "created Payment voiding requires phase cancellation",
+    ],
+    [
+      "preCaptureFulfilmentSlotsCancelled",
+      "created Payment voiding requires slot cancellation",
+    ],
+    [
+      "preCaptureReservationsReleased",
+      "created Payment voiding requires reservation release",
+    ],
+    [
+      "initialCaptureCloseAtomic",
+      "created Payment voiding requires atomic checkout closure",
+    ],
+  ] as const) {
+    requireFlag(lifecycle, command, flag, reason);
+  }
+}
+
 function requireRoleSpecificPaymentVoidClosure<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -6703,7 +6886,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   initial: ["created"],
   terminal: ["failed", "refunded"],
   transitions: {
-    created: ["pending", "failed"],
+    created: ["pending", "failed", "voided"],
     pending: ["captured", "failed", "voided", "refund_pending"],
     captured: ["refund_pending"],
     partially_refunded: ["refund_pending"],
@@ -6716,6 +6899,9 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
     }
     if (command.current === "created" && command.target === "failed") {
       requireExactPaymentIntentCreationFailure("Payment", command);
+    }
+    if (command.current === "created" && command.target === "voided") {
+      requireCreatedPaymentVoidClosure("Payment", command);
     }
     if (command.current === "pending" && command.target === "captured") {
       if (command.context?.paymentCaptureKind !== "settlement") {
@@ -6803,6 +6989,12 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       }
     }
     if (
+      command.current === "refund_pending" &&
+      command.target === "partially_refunded" &&
+      command.context?.paymentCaptureKind === "refund_failure_rollback"
+    ) {
+      requireExactRefundFailureRollback("Payment", command);
+    } else if (
       command.current === "refund_pending" &&
       (command.target === "partially_refunded" || command.target === "refunded")
     ) {

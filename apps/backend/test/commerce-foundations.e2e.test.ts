@@ -367,6 +367,7 @@ async function persistVerifiedShipmentOutcome(
   kind: "TRANSIT_SCAN" | "DELIVERY_SCAN",
   verifiedAt = new Date(),
   providerTransactionId?: string,
+  advanceLifecycle = true,
 ): Promise<void> {
   const evidence = (
     await client.query<{ carrier: string; carrier_label_id: string }>(
@@ -398,14 +399,14 @@ async function persistVerifiedShipmentOutcome(
       verifiedAt,
     ],
   );
-  if (kind === "TRANSIT_SCAN") {
+  if (advanceLifecycle && kind === "TRANSIT_SCAN") {
     await client.query(
       `UPDATE shipments
        SET status = 'IN_TRANSIT', updated_at = $2
        WHERE id = $1`,
       [shipmentId, verifiedAt],
     );
-  } else {
+  } else if (advanceLifecycle) {
     await client.query(
       `UPDATE shipments
        SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
@@ -8218,6 +8219,11 @@ describe("commerce persistence foundations", () => {
         },
       );
       const sharedProviderTransactionId = `shipment-delivery:${randomUUID()}`;
+      const repeatedTransitAt = new Date(deliveredAt.getTime() + 1);
+      const mismatchedDeliveryScanAt = new Date(deliveredAt.getTime() + 2);
+      const mismatchedDeliveredAt = new Date(deliveredAt.getTime() + 3);
+      const firstDeliveryAt = new Date(deliveredAt.getTime() + 4);
+      const repeatedDeliveryAt = new Date(deliveredAt.getTime() + 5);
       await persistVerifiedShipmentOutcome(
         client,
         firstShipmentId,
@@ -8228,20 +8234,84 @@ describe("commerce persistence foundations", () => {
       await persistVerifiedShipmentOutcome(
         client,
         firstShipmentId,
-        "DELIVERY_SCAN",
-        deliveredAt,
+        "TRANSIT_SCAN",
+        repeatedTransitAt,
         sharedProviderTransactionId,
+        false,
+      );
+      await expectQueryError(
+        client,
+        "delivery_timestamp_mismatch",
+        async () => {
+          await client.query(
+            `INSERT INTO shipment_provider_events
+               (id, shipment_id, carrier, carrier_label_id,
+                provider_event_id, provider_transaction_id, kind,
+                occurred_at, authenticated_at, verified_at, created_at)
+             SELECT $1, shipment.id, shipment.carrier,
+                    shipment.carrier_label_id, $3, $4, 'DELIVERY_SCAN',
+                    $5, $5, $5, $5
+             FROM shipments shipment WHERE shipment.id = $2`,
+            [
+              randomUUID(),
+              firstShipmentId,
+              `mismatched-delivery:${randomUUID()}`,
+              sharedProviderTransactionId,
+              mismatchedDeliveryScanAt,
+            ],
+          );
+          await client.query(
+            `UPDATE shipments
+             SET status = 'DELIVERED', delivered_at = $2, updated_at = $2
+             WHERE id = $1`,
+            [firstShipmentId, mismatchedDeliveredAt],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_delivery_scan_confirmation_check",
+        },
+      );
+      await persistVerifiedShipmentOutcome(
+        client,
+        firstShipmentId,
+        "DELIVERY_SCAN",
+        firstDeliveryAt,
+        sharedProviderTransactionId,
+      );
+      await persistVerifiedShipmentOutcome(
+        client,
+        firstShipmentId,
+        "DELIVERY_SCAN",
+        repeatedDeliveryAt,
+        sharedProviderTransactionId,
+        false,
       );
       expect(
         (
-          await client.query<{ event_count: string }>(
-            `SELECT count(*)::text AS event_count
-             FROM shipment_provider_events
-             WHERE shipment_id = $1 AND provider_transaction_id = $2`,
-            [firstShipmentId, sharedProviderTransactionId],
+          await client.query<{
+            event_count: string;
+            status: string;
+            delivery_timestamp_preserved: boolean;
+          }>(
+            `SELECT count(event.id)::text AS event_count,
+                    shipment.status::text AS status,
+                    shipment.delivered_at = $3 AS delivery_timestamp_preserved
+             FROM shipments shipment
+             JOIN shipment_provider_events event
+               ON event.shipment_id = shipment.id
+             WHERE shipment.id = $1 AND event.provider_transaction_id = $2
+             GROUP BY shipment.status, shipment.delivered_at`,
+            [firstShipmentId, sharedProviderTransactionId, firstDeliveryAt],
           )
         ).rows,
-      ).toEqual([{ event_count: "2" }]);
+      ).toEqual([
+        {
+          event_count: "4",
+          status: "DELIVERED",
+          delivery_timestamp_preserved: true,
+        },
+      ]);
       await client.query(
         `UPDATE fulfilment_slots slot
          SET outcome = 'DELIVERED', updated_at = $2

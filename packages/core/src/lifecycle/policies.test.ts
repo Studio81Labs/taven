@@ -238,6 +238,52 @@ const permittedContext = {
   paymentIntentFailureEvidenceResultId: "payment-intent-failure-result-1",
   paymentIntentFailureCompleted: true,
   paymentIntentFailureAtomic: true,
+  createdPaymentVoidResultId: "created-payment-void-result-1",
+  createdPaymentVoidPreviousPaymentResultId: "payment-created-result-1",
+  createdPaymentVoidCurrentStateCommandKey: "payment-created-command-1",
+  createdPaymentVoidPreviousPhaseResultId: "phase-quoted-result-1",
+  createdPaymentVoidPhaseCurrentStateCommandKey: "phase-quoted-command-1",
+  createdPaymentVoidExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "created",
+    providerIntentId: null,
+    resultId: "payment-created-result-1",
+    currentStateCommandKey: "payment-created-command-1",
+    immutable: true,
+  },
+  createdPaymentVoidVoidedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    previousStatus: "created",
+    targetStatus: "voided",
+    providerIntentId: null,
+    captureAuthorized: false,
+    resultId: "created-payment-void-result-1",
+    immutable: true,
+  },
+  createdPaymentVoidExpectedPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    kind: "single",
+    status: "quoted",
+    resultId: "phase-quoted-result-1",
+    currentStateCommandKey: "phase-quoted-command-1",
+    immutable: true,
+  },
+  createdPaymentVoidProviderIntentAbsent: true,
+  createdPaymentVoidProviderTransactionAbsent: true,
+  createdPaymentVoidProviderVoidOutboxAbsent: true,
+  createdPaymentVoidPaymentResultId: "created-payment-void-result-1",
+  createdPaymentVoidOrderResultId: "created-payment-void-result-1",
+  createdPaymentVoidPhaseResultId: "created-payment-void-result-1",
+  createdPaymentVoidReservationResultId: "created-payment-void-result-1",
+  createdPaymentVoidCompleted: true,
+  createdPaymentVoidAtomic: true,
   checkoutCaptureExpiresAt: Instant.parse("2026-01-01T01:00:00.000Z"),
   paymentCaptureWindowId: "capture-window-1",
   paymentCaptureWindowResultId: "capture-window-result-1",
@@ -434,12 +480,18 @@ const permittedContext = {
     "payment-refund-pending-command-1",
   refundFailureTransactionId: "refund-1",
   refundFailureAttemptKey: "refund-attempt-1",
+  refundFailureCapturedAmountMinor: 10_000n,
+  refundFailureSucceededAmountMinor: 0n,
+  refundFailureRollbackTargetStatus: "captured",
   refundFailureRollbackExpectedPayment: {
     id: "payment-1",
     orderId: "order-1",
     phaseId: "phase-1",
     role: "full",
     status: "refund_pending",
+    activeRefundTransactionId: "refund-1",
+    capturedAmountMinor: 10_000n,
+    succeededRefundAmountMinor: 0n,
     resultId: "refund-pending-result-1",
     currentStateCommandKey: "payment-refund-pending-command-1",
     immutable: true,
@@ -451,6 +503,8 @@ const permittedContext = {
     role: "full",
     previousStatus: "refund_pending",
     targetStatus: "captured",
+    capturedAmountMinor: 10_000n,
+    succeededRefundAmountMinor: 0n,
     resultId: "refund-failure-result-1",
     immutable: true,
   },
@@ -472,6 +526,8 @@ const permittedContext = {
   refundFailureRollbackPaymentResultId: "refund-failure-result-1",
   refundFailureRollbackTransactionResultId: "refund-failure-result-1",
   refundFailureRollbackEvidenceResultId: "refund-failure-result-1",
+  refundFailureLatestTransactionId: "refund-1",
+  refundFailureSucceededRefundSetComplete: true,
   refundFailureNoPendingRefunds: true,
   refundFailureNoSuccessfulRefunds: true,
   refundFailureRollbackCompleted: true,
@@ -5066,7 +5122,7 @@ function commandAnchors(
   if (
     policy.name === "Payment" &&
     current === "created" &&
-    (target === "pending" || target === "failed")
+    (target === "pending" || target === "failed" || target === "voided")
   ) {
     return {
       aggregateId: "payment-1",
@@ -6366,6 +6422,7 @@ describe("v0 lifecycle policy tables", () => {
   it.each([
     [quoteRequestPolicy, "quoted", "accepted"],
     [quoteRequestPolicy, "quoted", "expired"],
+    [paymentPolicy, "created", "voided"],
     [paymentPolicy, "pending", "captured"],
     [paymentPolicy, "pending", "refund_pending"],
     [paymentPolicy, "voided", "refund_pending"],
@@ -8726,6 +8783,159 @@ describe("v0 lifecycle policy tables", () => {
       previous: "pending",
       current: "refund_pending",
     });
+  });
+
+  it.each(["full", "deposit"] as const)(
+    "atomically voids a created %s Payment without provider artifacts",
+    (paymentRole) => {
+      const base = contextForTransition("voided", "created");
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "created", "voided"),
+          current: "created",
+          target: "voided",
+          idempotencyKey: `created-payment-void-${paymentRole}`,
+          context: {
+            ...base,
+            paymentRole,
+            initialPaymentRole: paymentRole,
+            createdPaymentVoidExpectedPayment: {
+              ...base.createdPaymentVoidExpectedPayment,
+              role: paymentRole,
+            },
+            createdPaymentVoidVoidedPayment: {
+              ...base.createdPaymentVoidVoidedPayment,
+              role: paymentRole,
+            },
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "created", current: "voided" });
+    },
+  );
+
+  it("rejects created balance Payment voiding through the checkout path", () => {
+    const base = contextForTransition("voided", "created");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "created", "voided"),
+        current: "created",
+        target: "voided",
+        idempotencyKey: "created-balance-payment-void",
+        context: {
+          ...base,
+          paymentRole: "balance",
+          initialPaymentRole: "balance",
+          createdPaymentVoidExpectedPayment: {
+            ...base.createdPaymentVoidExpectedPayment,
+            role: "balance",
+          },
+          createdPaymentVoidVoidedPayment: {
+            ...base.createdPaymentVoidVoidedPayment,
+            role: "balance",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects incomplete or mismatched created Payment void evidence", () => {
+    const base = contextForTransition("voided", "created");
+    const command = {
+      ...commandAnchors(paymentPolicy, "created", "voided"),
+      current: "created" as const,
+      target: "voided" as const,
+      idempotencyKey: "created-payment-void-invalid",
+      context: base,
+    };
+
+    for (const [field, value] of [
+      ["paymentId", "payment-2"],
+      ["orderId", "order-2"],
+      ["phaseId", "phase-2"],
+      ["paymentRole", "balance"],
+      ["createdPaymentVoidPreviousPaymentResultId", "foreign-result"],
+      ["createdPaymentVoidCurrentStateCommandKey", "foreign-command"],
+      ["createdPaymentVoidPreviousPhaseResultId", "foreign-result"],
+      ["createdPaymentVoidPhaseCurrentStateCommandKey", "foreign-command"],
+      ["createdPaymentVoidResultId", " "],
+      ["createdPaymentVoidProviderIntentAbsent", false],
+      ["createdPaymentVoidProviderTransactionAbsent", false],
+      ["createdPaymentVoidProviderVoidOutboxAbsent", false],
+      ["captureAuthorizationDisabled", false],
+      ["captureWindowClosed", false],
+      ["captureCutoffSet", false],
+      ["initialPaymentRole", "balance"],
+      ["initialPaymentId", "payment-2"],
+      ["initialPaymentOrderId", "order-2"],
+      ["initialPaymentStatus", "pending"],
+      ["initialCaptureClosePaymentId", "payment-2"],
+      ["initialCaptureCloseOrderId", "order-2"],
+      ["initialCaptureClosePhaseId", "phase-2"],
+      ["initialCaptureClosePhaseOrderId", "order-2"],
+      ["phaseKind", "sample"],
+      ["phaseReservationSetId", " "],
+      ["initialCaptureCloseReservationSetId", "reservation-set-2"],
+      ["initialCaptureCloseReservationSetOrderId", "order-2"],
+      ["initialCaptureCloseReservationSetPhaseId", "phase-2"],
+      ["initialCaptureCloseOrderPreviousStatus", "draft"],
+      ["initialCaptureCloseOrderTargetStatus", "confirmed"],
+      ["initialCaptureClosePhasePreviousStatus", "active"],
+      ["initialCaptureClosePhaseTargetStatus", "active"],
+      ["initialCaptureCloseReason", "checkout_expired"],
+      ["initialCaptureWindowClosed", false],
+      ["initialCaptureCutoffSet", false],
+      ["preCapturePhaseCancelled", false],
+      ["preCaptureFulfilmentSlotsCancelled", false],
+      ["preCaptureReservationsReleased", false],
+      ["initialCaptureCloseAtomic", false],
+      ["createdPaymentVoidPaymentResultId", "foreign-result"],
+      ["createdPaymentVoidOrderResultId", "foreign-result"],
+      ["createdPaymentVoidPhaseResultId", "foreign-result"],
+      ["createdPaymentVoidReservationResultId", "foreign-result"],
+      ["createdPaymentVoidCompleted", false],
+      ["createdPaymentVoidAtomic", false],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: { ...base, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    for (const [recordName, field, value] of [
+      ["createdPaymentVoidExpectedPayment", "id", "payment-2"],
+      ["createdPaymentVoidExpectedPayment", "orderId", "order-2"],
+      ["createdPaymentVoidExpectedPayment", "phaseId", "phase-2"],
+      ["createdPaymentVoidExpectedPayment", "status", "pending"],
+      ["createdPaymentVoidExpectedPayment", "providerIntentId", "intent-1"],
+      ["createdPaymentVoidExpectedPayment", "immutable", false],
+      ["createdPaymentVoidVoidedPayment", "id", "payment-2"],
+      ["createdPaymentVoidVoidedPayment", "previousStatus", "pending"],
+      ["createdPaymentVoidVoidedPayment", "targetStatus", "failed"],
+      ["createdPaymentVoidVoidedPayment", "providerIntentId", "intent-1"],
+      ["createdPaymentVoidVoidedPayment", "captureAuthorized", true],
+      ["createdPaymentVoidVoidedPayment", "immutable", false],
+      ["initialCaptureCloseExpectedOrder", "id", "order-2"],
+      ["initialCaptureCloseExpectedOrder", "status", "draft"],
+      ["initialCaptureCloseExpectedOrder", "immutable", false],
+      ["createdPaymentVoidExpectedPhase", "id", "phase-2"],
+      ["createdPaymentVoidExpectedPhase", "orderId", "order-2"],
+      ["createdPaymentVoidExpectedPhase", "kind", "sample"],
+      ["createdPaymentVoidExpectedPhase", "status", "active"],
+      ["createdPaymentVoidExpectedPhase", "immutable", false],
+    ] as const) {
+      const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: {
+            ...base,
+            [recordName]: { ...snapshot, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
   });
 
   it.each(["full", "deposit"] as const)(
@@ -21048,6 +21258,7 @@ describe("v0 lifecycle policy tables", () => {
     [jobPolicy, "printed", "photo_submitted"],
     [jobPolicy, "photo_submitted", "qc_approved"],
     [jobPolicy, "photo_submitted", "qc_rejected"],
+    [paymentPolicy, "created", "voided"],
     [paymentPolicy, "pending", "captured"],
     [paymentPolicy, "pending", "refund_pending"],
     [paymentPolicy, "pending", "failed"],
@@ -24716,6 +24927,7 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     ["created", "pending"],
+    ["created", "voided"],
     ["pending", "voided"],
     ["pending", "failed"],
   ] as const)(
@@ -25505,35 +25717,48 @@ describe("v0 lifecycle policy tables", () => {
     ).toThrow(TransitionGuardError);
   });
 
-  it.each(["full", "deposit", "balance"] as const)(
-    "restores a %s Payment after its exact refund attempt fails",
-    (paymentRole) => {
-      const base = contextForTransition("captured", "refund_pending");
+  it.each([
+    ["full", "captured", 0n],
+    ["deposit", "captured", 0n],
+    ["balance", "captured", 0n],
+    ["full", "partially_refunded", 4_000n],
+    ["deposit", "partially_refunded", 4_000n],
+    ["balance", "partially_refunded", 4_000n],
+  ] as const)(
+    "restores a %s Payment to %s after its exact refund attempt fails",
+    (paymentRole, target, succeededAmountMinor) => {
+      const base = contextForTransition(target, "refund_pending");
       const context = {
         ...base,
         paymentCaptureKind: "refund_failure_rollback",
         paymentRole,
+        refundFailureSucceededAmountMinor: succeededAmountMinor,
+        refundFailureRollbackTargetStatus: target,
+        refundFailureNoSuccessfulRefunds: succeededAmountMinor === 0n,
         refundFailureRollbackExpectedPayment: {
           ...base.refundFailureRollbackExpectedPayment,
           role: paymentRole,
+          succeededRefundAmountMinor: succeededAmountMinor,
         },
         refundFailureRollbackRestoredPayment: {
           ...base.refundFailureRollbackRestoredPayment,
           role: paymentRole,
+          targetStatus: target,
+          succeededRefundAmountMinor: succeededAmountMinor,
         },
       };
       expect(
         transition(paymentPolicy, {
-          ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+          ...commandAnchors(paymentPolicy, "refund_pending", target),
           current: "refund_pending",
-          target: "captured",
-          idempotencyKey: `refund-failure-rollback-${paymentRole}`,
+          target,
+          idempotencyKey: `refund-failure-rollback-${paymentRole}-${target}`,
           context,
         }),
       ).toEqual({
         kind: "changed",
         previous: "refund_pending",
-        current: "captured",
+        current: target,
       });
     },
   );
@@ -25562,9 +25787,16 @@ describe("v0 lifecycle policy tables", () => {
       ["refundFailureRollbackCurrentStateCommandKey", "foreign-command"],
       ["refundFailureRollbackResultId", " "],
       ["refundFailureAttemptKey", "foreign-attempt"],
+      ["refundFailureCapturedAmountMinor", 0n],
+      ["refundFailureSucceededAmountMinor", -1n],
+      ["refundFailureSucceededAmountMinor", 10_000n],
+      ["refundFailureSucceededAmountMinor", 1],
+      ["refundFailureRollbackTargetStatus", "partially_refunded"],
       ["refundFailureRollbackPaymentResultId", "foreign-result"],
       ["refundFailureRollbackTransactionResultId", "foreign-result"],
       ["refundFailureRollbackEvidenceResultId", "foreign-result"],
+      ["refundFailureLatestTransactionId", "refund-2"],
+      ["refundFailureSucceededRefundSetComplete", false],
       ["refundFailureNoPendingRefunds", false],
       ["refundFailureNoPendingRefunds", undefined],
       ["refundFailureNoSuccessfulRefunds", false],
@@ -25582,10 +25814,27 @@ describe("v0 lifecycle policy tables", () => {
     for (const [recordName, field, value] of [
       ["refundFailureRollbackExpectedPayment", "id", "payment-2"],
       ["refundFailureRollbackExpectedPayment", "status", "captured"],
+      [
+        "refundFailureRollbackExpectedPayment",
+        "activeRefundTransactionId",
+        "refund-2",
+      ],
+      ["refundFailureRollbackExpectedPayment", "capturedAmountMinor", 9_000n],
+      [
+        "refundFailureRollbackExpectedPayment",
+        "succeededRefundAmountMinor",
+        1n,
+      ],
       ["refundFailureRollbackExpectedPayment", "immutable", false],
       ["refundFailureRollbackRestoredPayment", "id", "payment-2"],
       ["refundFailureRollbackRestoredPayment", "previousStatus", "captured"],
       ["refundFailureRollbackRestoredPayment", "targetStatus", "refunded"],
+      ["refundFailureRollbackRestoredPayment", "capturedAmountMinor", 9_000n],
+      [
+        "refundFailureRollbackRestoredPayment",
+        "succeededRefundAmountMinor",
+        1n,
+      ],
       ["refundFailureRollbackRestoredPayment", "immutable", false],
       ["refundFailureRollbackRefundTransaction", "id", "refund-2"],
       ["refundFailureRollbackRefundTransaction", "status", "succeeded"],

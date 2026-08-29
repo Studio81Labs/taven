@@ -6413,9 +6413,9 @@ BEGIN
     IF ((NEW."kind" IN ('LABEL_VOIDED', 'ACCEPTANCE_SCAN')
          AND target_status IS DISTINCT FROM 'CANCELLATION_PENDING'::"shipment_status")
         OR (NEW."kind" = 'TRANSIT_SCAN'
-            AND target_status IS DISTINCT FROM 'HANDED_OVER'::"shipment_status")
+            AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT'))
         OR (NEW."kind" = 'DELIVERY_SCAN'
-            AND target_status IS DISTINCT FROM 'IN_TRANSIT'::"shipment_status"))
+            AND target_status NOT IN ('IN_TRANSIT', 'DELIVERED')))
        OR NEW."carrier" IS DISTINCT FROM target_carrier
        OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id
        OR NEW."carrier" !~ '[^[:space:]]'
@@ -6515,7 +6515,6 @@ BEGIN
                FROM "shipments" shipment
                WHERE shipment."id" = NEW."shipment_id"
                  AND shipment."status" = 'DELIVERED'
-                 AND shipment."delivered_at" = NEW."verified_at"
            )) THEN
         RAISE EXCEPTION 'Shipment provider event and its complete lifecycle outcome must commit atomically'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_consumption_check';
