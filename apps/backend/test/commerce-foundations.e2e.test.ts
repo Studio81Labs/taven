@@ -15032,6 +15032,75 @@ describe("commerce persistence foundations", () => {
 
   it("bounds Order and OrderPhase lifecycle evidence by the database clock", async () => {
     await rollback("future-order-evidence", async (client, fixtures) => {
+      const quotedWithinCreatedAtSkewId = fixtures.id(
+        "quoted-within-created-at-skew",
+      );
+      const quotedBeyondCreatedAtSkewId = fixtures.id(
+        "quoted-beyond-created-at-skew",
+      );
+      const defaultedCreatedAtOrders = (
+        await client.query<{ created_at: Date; id: string }>(
+          `INSERT INTO orders (id, public_reference, updated_at)
+           VALUES ($1, $2, clock_timestamp()),
+                  ($3, $4, clock_timestamp())
+           RETURNING id, created_at`,
+          [
+            quotedWithinCreatedAtSkewId,
+            `T-${fixtures.id("quoted-within-created-at-skew-reference")}`,
+            quotedBeyondCreatedAtSkewId,
+            `T-${fixtures.id("quoted-beyond-created-at-skew-reference")}`,
+          ],
+        )
+      ).rows;
+      const createdAtByOrderId = new Map(
+        defaultedCreatedAtOrders.map((defaultedOrder) => [
+          defaultedOrder.id,
+          defaultedOrder.created_at,
+        ]),
+      );
+      const withinSkewCreatedAt = createdAtByOrderId.get(
+        quotedWithinCreatedAtSkewId,
+      );
+      const beyondSkewCreatedAt = createdAtByOrderId.get(
+        quotedBeyondCreatedAtSkewId,
+      );
+      if (!withinSkewCreatedAt || !beyondSkewCreatedAt) {
+        throw new Error("defaulted Order creation evidence is missing");
+      }
+      const quotedAtSkewBoundary = new Date(
+        withinSkewCreatedAt.getTime() - 5_000,
+      );
+      await client.query(
+        `UPDATE orders
+         SET status = 'QUOTED', quoted_at = $2, updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [quotedWithinCreatedAtSkewId, quotedAtSkewBoundary],
+      );
+      await expectQueryError(
+        client,
+        "quoted_before_created_beyond_skew",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET status = 'QUOTED', quoted_at = $2,
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [
+              quotedBeyondCreatedAtSkewId,
+              new Date(beyondSkewCreatedAt.getTime() - 5_001),
+            ],
+          ),
+        { code: "23514", constraint: "orders_timestamps_check" },
+      );
+      expect(
+        (
+          await client.query<{ quoted_at: Date }>(
+            `SELECT quoted_at FROM orders WHERE id = $1`,
+            [quotedWithinCreatedAtSkewId],
+          )
+        ).rows,
+      ).toEqual([{ quoted_at: quotedAtSkewBoundary }]);
+
       const order = await fixtures.createFoundation(
         "future-order-evidence",
         {},

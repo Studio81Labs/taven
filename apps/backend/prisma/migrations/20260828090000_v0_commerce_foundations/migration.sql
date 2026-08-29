@@ -826,7 +826,7 @@ ALTER TABLE "orders" ADD CONSTRAINT "orders_checkout_acceptance_shape_check" CHE
     )
 );
 ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
-    ("quoted_at" IS NULL OR "quoted_at" >= "created_at")
+    ("quoted_at" IS NULL OR "quoted_at" >= "created_at" - interval '5 seconds')
     AND ("confirmed_at" IS NULL OR ("quoted_at" IS NOT NULL AND "confirmed_at" >= "quoted_at"))
     AND (
         "withdrawal_exception_acknowledged_at" IS NULL
