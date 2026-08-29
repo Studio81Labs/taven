@@ -6081,7 +6081,7 @@ describe("commerce persistence foundations", () => {
           ]),
         { code: "23514", constraint: "payment_capture_window_check" },
       );
-      const intentFailureAt = new Date();
+      const intentFailureAt = new Date(Date.now() + 2_000);
       await expectQueryError(
         client,
         "fail_created_payment_without_attempt_evidence",

@@ -1293,8 +1293,8 @@ export class PersistenceFactory {
     await this.sql.query(
       `INSERT INTO payment_intent_creation_failures (
            id, payment_id, provider, attempt_key, outcome,
-           provider_intent_id, failed_at, created_at
-       ) VALUES ($1, $2, $3, $4, 'FAILED', NULL, $5, $5)`,
+           provider_intent_id, failed_at
+       ) VALUES ($1, $2, $3, $4, 'FAILED', NULL, $5)`,
       [resultId, paymentId, target.provider, attemptKey, failedAt],
     );
 

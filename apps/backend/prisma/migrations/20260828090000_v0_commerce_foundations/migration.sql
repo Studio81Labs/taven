@@ -867,7 +867,7 @@ ALTER TABLE "payment_intent_creation_failures" ADD CONSTRAINT "payment_intent_cr
     AND "attempt_key" ~ '[^[:space:]]'
     AND "outcome" = 'FAILED'
     AND "provider_intent_id" IS NULL
-    AND "created_at" >= "failed_at"
+    AND "failed_at" <= "created_at" + interval '5 seconds'
 );
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_scope_check" CHECK ("quote_id" IS NOT NULL OR "order_id" IS NOT NULL OR "payment_id" IS NOT NULL OR "refund_transaction_id" IS NOT NULL);
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_identity_check" CHECK (
