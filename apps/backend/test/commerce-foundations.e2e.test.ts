@@ -1259,6 +1259,40 @@ describe("commerce persistence foundations", () => {
     });
   });
 
+  it("rejects quoting an incomplete fulfilment topology", async () => {
+    await rollback("incomplete-quote-topology", async (client, fixtures) => {
+      await expectQueryError(
+        client,
+        "quote_with_missing_quantity_slot",
+        async () => {
+          await fixtures.createFoundation(
+            "incomplete-quote-topology",
+            {},
+            undefined,
+            undefined,
+            undefined,
+            1,
+            [{ quantity: 1 }],
+            "QUOTED",
+            async (draft) => {
+              await client.query(
+                `UPDATE order_items SET quantity = 2 WHERE id = $1`,
+                [draft.orderItemId],
+              );
+            },
+          );
+          await client.query(
+            `SET CONSTRAINTS "orders_require_initial_quoted_single_phase" IMMEDIATE`,
+          );
+        },
+        {
+          code: "23514",
+          constraint: "quoted_order_fulfilment_topology_check",
+        },
+      );
+    });
+  });
+
   it("freezes order ownership after initial anonymous draft attachment", async () => {
     await rollback("order-ownership", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation("ownership-source");
@@ -15678,7 +15712,6 @@ describe("commerce persistence foundations", () => {
         },
       );
       await insertQuotePriceComponent(priceComponents.at(-1)!);
-      await forceQuoteIssuanceConstraints(client);
       await expectQueryError(
         client,
         "price_bound_quote_item_insert",
@@ -15967,6 +16000,8 @@ describe("commerce persistence foundations", () => {
       );
       const bindingId = fixtures.id("custom-order-price-binding");
       const phaseId = fixtures.id("custom-order-phase");
+      const shipmentPlanId = fixtures.id("custom-shipment-plan");
+      const shipmentComponentId = fixtures.id("custom-shipment-component");
       const createQuotedTopology = async (
         includeFulfilmentMoney = false,
       ): Promise<void> => {
@@ -15990,6 +16025,25 @@ describe("commerce persistence foundations", () => {
         );
         if (includeFulfilmentMoney) {
           await client.query(
+            `INSERT INTO shipment_plans
+               (id, order_id, order_phase_id, price_snapshot_id,
+                order_price_binding_id, delivery_destination_id, ordinal,
+                category, planned_volume_cubic_mm, planned_weight_milligrams,
+                shipping_amount_minor, packaging_amount_minor,
+                handling_amount_minor, allocation_snapshot, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,0,'standard',1,1,0,0,0,
+                     '{}'::jsonb,$7)`,
+            [
+              shipmentPlanId,
+              orderId,
+              phaseId,
+              snapshotId,
+              bindingId,
+              destinationId,
+              now,
+            ],
+          );
+          await client.query(
             `INSERT INTO fulfilment_slots
                (id, order_id, order_phase_id, order_item_id,
                 quantity_ordinal, settlement_amount_minor, created_at, updated_at)
@@ -16006,6 +16060,25 @@ describe("commerce persistence foundations", () => {
               secondOrderItemId,
               now,
             ],
+          );
+          await client.query(
+            `INSERT INTO shipment_plan_fulfilment_slots
+               (shipment_plan_id, order_price_binding_id, fulfilment_slot_id)
+             VALUES ($1,$2,$3),($1,$2,$4),($1,$2,$5)`,
+            [
+              shipmentPlanId,
+              bindingId,
+              fulfilmentSlotIds[0],
+              fulfilmentSlotIds[1],
+              fulfilmentSlotIds[2],
+            ],
+          );
+          await client.query(
+            `INSERT INTO price_snapshot_components
+               (id, price_snapshot_id, kind, scope, shipment_plan_id,
+                amount_minor, allocation, created_at)
+             VALUES ($1,$2,'SHIPMENT','SHIPMENT_PLAN',$3,0,'{}'::jsonb,$4)`,
+            [shipmentComponentId, snapshotId, shipmentPlanId, now],
           );
           for (const component of priceComponents) {
             await client.query(
@@ -16065,6 +16138,15 @@ describe("commerce persistence foundations", () => {
         [secondOrderItemId, secondQuoteItemId],
       );
       await createQuotedTopology(true);
+      await client.query(
+        `SET CONSTRAINTS
+           "price_snapshots_total_reconciled",
+           "price_snapshot_components_total_reconciled",
+           "payment_schedules_total_reconciled",
+           "quote_price_bindings_snapshot_sealed",
+           "order_price_bindings_snapshot_sealed",
+           "shipment_plans_price_reconciled" IMMEDIATE`,
+      );
       await client.query(
         `SET CONSTRAINTS
            "order_price_bindings_individual_quote_snapshot_reconciled",

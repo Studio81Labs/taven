@@ -1,3 +1,26 @@
+-- Refuse an unsafe upgrade before this migration changes the schema: issue #15
+-- persisted these identifiers as UUID seams without a recoverable ownership
+-- mapping. A data migration must be designed separately if any seam has rows.
+DO $$
+DECLARE
+    seam_table text;
+    has_rows boolean;
+BEGIN
+    FOREACH seam_table IN ARRAY ARRAY[
+        'candidate_resource_estimates',
+        'eligibility_snapshots',
+        'phase_resource_plan_slots',
+        'production_reservations'
+    ] LOOP
+        EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I)', seam_table) INTO has_rows;
+        IF has_rows THEN
+            RAISE EXCEPTION 'cannot apply v0 commerce foundations: issue-15 seam table % is non-empty; provide an explicit backfill migration', seam_table
+                USING ERRCODE = '55000';
+        END IF;
+    END LOOP;
+END;
+$$;
+
 -- CreateEnum
 CREATE TYPE "quote_session_status" AS ENUM ('OPEN', 'EXPIRED', 'CONVERTED', 'CANCELLED');
 
@@ -663,29 +686,6 @@ ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_quote_id_fkey" FOREIGN K
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_payment_id_fkey" FOREIGN KEY ("payment_id") REFERENCES "payments"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_refund_transaction_id_fkey" FOREIGN KEY ("refund_transaction_id") REFERENCES "refund_transactions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- Refuse an unsafe upgrade: issue #15 persisted these identifiers as UUID seams
--- without a recoverable ownership mapping. A data migration must be designed
--- separately if any of the seam tables already contain rows.
-DO $$
-DECLARE
-    seam_table text;
-    has_rows boolean;
-BEGIN
-    FOREACH seam_table IN ARRAY ARRAY[
-        'candidate_resource_estimates',
-        'eligibility_snapshots',
-        'phase_resource_plan_slots',
-        'production_reservations'
-    ] LOOP
-        EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I)', seam_table) INTO has_rows;
-        IF has_rows THEN
-            RAISE EXCEPTION 'cannot apply v0 commerce foundations: issue-15 seam table % is non-empty; provide an explicit backfill migration', seam_table
-                USING ERRCODE = '55000';
-        END IF;
-    END LOOP;
-END;
-$$;
 
 -- Replace issue-15 UUID seams with relational foreign keys.
 ALTER TABLE "candidate_resource_estimates" ADD CONSTRAINT "candidate_resource_estimates_shipment_plan_id_fkey" FOREIGN KEY ("shipment_plan_id") REFERENCES "shipment_plans"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -1415,6 +1415,92 @@ CREATE TRIGGER "quote_price_bindings_require_quotable_request"
 BEFORE INSERT ON "quote_price_bindings"
 FOR EACH ROW EXECUTE FUNCTION taven_require_quotable_request_for_price_binding();
 
+CREATE FUNCTION taven_assert_order_quote_fulfilment_topology(target_order_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_binding_id uuid;
+BEGIN
+    SELECT active."order_price_binding_id"
+    INTO target_binding_id
+    FROM "order_active_price_bindings" active
+    JOIN "order_price_bindings" binding
+      ON binding."id" = active."order_price_binding_id"
+     AND binding."order_id" = active."order_id"
+    WHERE active."order_id" = target_order_id
+      AND binding."invalidated_at" IS NULL;
+
+    IF target_binding_id IS NULL
+       OR NOT EXISTS (
+           SELECT 1
+           FROM "order_items" item
+           WHERE item."order_id" = target_order_id
+       )
+       OR NOT EXISTS (
+           SELECT 1
+           FROM "fulfilment_slots" slot
+           WHERE slot."order_id" = target_order_id
+       )
+       OR NOT EXISTS (
+           SELECT 1
+           FROM "shipment_plans" plan
+           WHERE plan."order_id" = target_order_id
+             AND plan."order_price_binding_id" = target_binding_id
+       ) THEN
+        RAISE EXCEPTION 'quoted order requires items, fulfilment slots, and binding-scoped shipment plans'
+            USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_fulfilment_topology_check';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "order_items" item
+        LEFT JOIN "fulfilment_slots" slot
+          ON slot."order_item_id" = item."id"
+         AND slot."order_id" = item."order_id"
+        WHERE item."order_id" = target_order_id
+        GROUP BY item."id", item."quantity"
+        HAVING count(slot."id") <> item."quantity"
+            OR coalesce(min(slot."quantity_ordinal"), 0) <> 1
+            OR coalesce(max(slot."quantity_ordinal"), 0) <> item."quantity"
+            OR bool_or(
+                slot."quantity_ordinal" < 1
+                OR slot."quantity_ordinal" > item."quantity"
+            )
+    ) THEN
+        RAISE EXCEPTION 'quoted order requires one in-range fulfilment slot per item unit'
+            USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_fulfilment_topology_check';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "fulfilment_slots" slot
+        WHERE slot."order_id" = target_order_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              WHERE allocation."fulfilment_slot_id" = slot."id"
+                AND allocation."order_price_binding_id" = target_binding_id
+          )
+    )
+       OR EXISTS (
+           SELECT 1
+           FROM "shipment_plans" plan
+           WHERE plan."order_id" = target_order_id
+             AND plan."order_price_binding_id" = target_binding_id
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM "shipment_plan_fulfilment_slots" allocation
+                 WHERE allocation."shipment_plan_id" = plan."id"
+                   AND allocation."order_price_binding_id" = target_binding_id
+             )
+       ) THEN
+        RAISE EXCEPTION 'quoted order requires complete slot and shipment-plan allocation coverage'
+            USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_fulfilment_topology_check';
+    END IF;
+END;
+$$;
+
 -- A draft may be assembled incrementally. Once quoted, exactly one stable
 -- single phase is required; the immediate foreign key still requires Order
 -- insertion before its phase in the same transaction.
@@ -1516,6 +1602,7 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quoted_order_positive_payment_check';
     END IF;
 
+    PERFORM taven_assert_order_quote_fulfilment_topology(NEW."id");
     PERFORM taven_assert_order_fulfilment_money(NEW."id");
 
     RETURN NULL;
