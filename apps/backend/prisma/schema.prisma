@@ -351,6 +351,8 @@ enum RefundStatus {
   PENDING
   SUCCEEDED
   FAILED
+  SUPERSEDED
+  SUSPENDED
 
   @@map("refund_status")
 }
@@ -1729,6 +1731,9 @@ model RefundTransaction {
   provider                       String       @map("provider") @db.VarChar(100)
   providerRefundId               String?      @map("provider_refund_id") @db.VarChar(255)
   providerResultEventId          String?      @map("provider_result_event_id") @db.Uuid
+  dispatchClaimedAt              DateTime?    @map("dispatch_claimed_at") @db.Timestamptz(3)
+  sourceSuccessProviderEventId   String?      @map("source_success_provider_event_id") @db.Uuid
+  reconciliationStartedAt        DateTime?    @map("reconciliation_started_at") @db.Timestamptz(3)
   amountMinor                    BigInt       @map("amount_minor")
   reason                         RefundReason
   status                         RefundStatus @default(PENDING)
@@ -1741,6 +1746,7 @@ model RefundTransaction {
   replacesRefundTransaction     RefundTransaction?      @relation("RefundRetryLineage", fields: [replacesRefundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "refund_transactions_replaces_scope_fkey")
   replacementRefundTransactions RefundTransaction[]     @relation("RefundRetryLineage")
   replacesFailureProviderEvent  PaymentProviderEvent?   @relation("RefundRetryFailureEvent", fields: [replacesFailureProviderEventId, replacesRefundTransactionId], references: [id, refundTransactionId], onDelete: Restrict, map: "refund_transactions_replaces_failure_event_scope_fkey")
+  sourceSuccessProviderEvent    PaymentProviderEvent?   @relation("RefundRetrySourceSuccessEvent", fields: [sourceSuccessProviderEventId, replacesRefundTransactionId], references: [id, refundTransactionId], onDelete: Restrict, map: "refund_transactions_source_success_event_scope_fkey")
   providerEvents                PaymentProviderEvent[]  @relation("RefundProviderEvents")
   providerResultEvent           PaymentProviderEvent?   @relation("RefundSelectedResultEvent", fields: [providerResultEventId, id], references: [id, refundTransactionId], onDelete: Restrict, map: "refund_transactions_provider_result_event_scope_fkey")
   auditEvents                   AuditEvent[]
@@ -1752,6 +1758,7 @@ model RefundTransaction {
   @@unique([paymentId, idempotencyKey])
   @@unique([provider, providerRefundId], map: "refund_transactions_provider_provider_refund_id_key")
   @@unique([providerResultEventId, id], map: "refund_transactions_provider_result_event_scope_key")
+  @@unique([sourceSuccessProviderEventId, replacesRefundTransactionId], map: "refund_transactions_source_success_event_scope_key")
   @@index([replacesRefundTransactionId, paymentId], map: "refund_transactions_replaces_payment_id_idx")
   @@index([paymentId, status])
   @@map("refund_transactions")
@@ -1778,6 +1785,7 @@ model PaymentProviderEvent {
   refundTransaction            RefundTransaction?      @relation("RefundProviderEvents", fields: [refundTransactionId], references: [id], onDelete: Restrict)
   selectedByRefundTransaction  RefundTransaction?      @relation("RefundSelectedResultEvent")
   retryingRefundTransaction    RefundTransaction?      @relation("RefundRetryFailureEvent")
+  suspendingRefundTransaction  RefundTransaction?      @relation("RefundRetrySourceSuccessEvent")
   handoffRefundReconciliations HandoffReconciliation[] @relation("HandoffRefundProviderEvent")
 
   @@unique([id, refundTransactionId])
