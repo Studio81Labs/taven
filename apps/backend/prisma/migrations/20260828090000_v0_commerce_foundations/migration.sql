@@ -856,7 +856,7 @@ ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_va
     AND "currency" ~ '^[A-Z]{3}$'
     AND jsonb_typeof("payload") = 'object'
     AND "payload_hash" ~ '^[0-9a-f]{64}$'
-    AND "authenticated_at" >= "occurred_at"
+    AND "authenticated_at" >= "occurred_at" - interval '5 seconds'
     AND "verified_at" >= "authenticated_at"
 );
 ALTER TABLE "payment_provider_events" ADD CONSTRAINT "payment_provider_events_scope_check" CHECK (
@@ -6585,7 +6585,7 @@ BEGIN
     IF NEW."occurred_at" > evidence_now + interval '5 seconds'
        OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
        OR NEW."verified_at" > evidence_now + interval '5 seconds'
-       OR NEW."authenticated_at" < NEW."occurred_at"
+       OR NEW."authenticated_at" < NEW."occurred_at" - interval '5 seconds'
        OR NEW."verified_at" < NEW."authenticated_at" THEN
         RAISE EXCEPTION 'Shipment provider event timestamps must be current and chronological'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_evidence_check';

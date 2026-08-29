@@ -2612,6 +2612,7 @@ function requireExactPendingCaptureWindow<S extends string>(
       : undefined;
   const opensAt = window?.opensAt;
   const cutoffAt = window?.cutoffAt;
+  const verifiedAt = event?.verifiedAt;
   const providerEventId = context?.captureProviderEventId;
   const providerTransactionId = context?.providerPaymentTransactionId;
   const windowKind = role === "balance" ? "balance_deadline" : "checkout";
@@ -2656,6 +2657,12 @@ function requireExactPendingCaptureWindow<S extends string>(
     expectedPayment.phaseId !== phaseId ||
     expectedPayment.role !== role ||
     expectedPayment.status !== "pending" ||
+    typeof expectedPayment.provider !== "string" ||
+    expectedPayment.provider.trim().length === 0 ||
+    typeof expectedPayment.requestedAmountMinor !== "bigint" ||
+    expectedPayment.requestedAmountMinor <= 0n ||
+    typeof expectedPayment.currency !== "string" ||
+    expectedPayment.currency.trim().length === 0 ||
     expectedPayment.resultId !== previousPaymentResultId ||
     expectedPayment.currentStateCommandKey !== stateKey ||
     expectedPayment.immutable !== true ||
@@ -2675,10 +2682,15 @@ function requireExactPendingCaptureWindow<S extends string>(
     context?.captureEvaluationOutcome !== expectedOutcome ||
     event?.id !== providerEventId ||
     event.paymentId !== paymentId ||
+    event.provider !== expectedPayment.provider ||
     event.transactionId !== providerTransactionId ||
+    event.kind !== "PAYMENT_CAPTURED" ||
+    event.amountMinor !== expectedPayment.requestedAmountMinor ||
+    event.currency !== expectedPayment.currency ||
     event.status !== "captured" ||
     !(event.occurredAt instanceof Instant) ||
-    !event.occurredAt.equals(evaluatedAt) ||
+    !(verifiedAt instanceof Instant) ||
+    !verifiedAt.equals(evaluatedAt) ||
     event.authenticated !== true ||
     event.verified !== true ||
     event.immutable !== true ||
@@ -2695,7 +2707,7 @@ function requireExactPendingCaptureWindow<S extends string>(
       command.current,
       command.target,
       expectedOutcome === "within_window"
-        ? "capture must bind the exact immutable Payment window and occur before its cutoff"
+        ? "capture must bind the exact immutable Payment window and be verified before its cutoff"
         : "late capture compensation must bind the exact expired Payment window",
     );
   }
@@ -2737,7 +2749,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
     !Array.isArray(failureEventValue)
       ? (failureEventValue as Readonly<Record<string, unknown>>)
       : undefined;
-  const failedCaptureCutoffAt = expected?.captureCutoffAt;
+  const captureCutoffAt = expected?.captureCutoffAt;
   const failureVerifiedAt = failureEvent?.verifiedAt;
   const captureEventValue = command.context?.captureProviderEvent;
   const captureEvent =
@@ -2749,6 +2761,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
   const captureEventId = command.context?.lateCaptureProviderEventId;
   const captureResultId = command.context?.lateCaptureCompensationResultId;
   const capturedAt = command.context?.lateCaptureCapturedAt;
+  const captureOccurredAt = captureEvent?.occurredAt;
   const captureVerifiedAt = captureEvent?.verifiedAt;
   if (
     (command.current === "voided" || command.current === "failed") &&
@@ -2782,35 +2795,16 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
     );
   }
   if (
-    command.current === "failed" &&
-    (typeof expected?.providerIntentId !== "string" ||
-      expected.providerIntentId.trim().length === 0 ||
-      typeof expected.providerFailureEventId !== "string" ||
-      expected.providerFailureEventId.trim().length === 0 ||
-      typeof expected.provider !== "string" ||
+    (command.current === "voided" || command.current === "failed") &&
+    command.target === "refund_pending" &&
+    (typeof expected?.provider !== "string" ||
       expected.provider.trim().length === 0 ||
       typeof expected.requestedAmountMinor !== "bigint" ||
       expected.requestedAmountMinor <= 0n ||
       typeof expected.currency !== "string" ||
       expected.currency.trim().length === 0 ||
       expected.captureAuthorized !== false ||
-      !(failedCaptureCutoffAt instanceof Instant) ||
-      command.context?.paymentFailureProviderEventId !==
-        expected.providerFailureEventId ||
-      command.context?.paymentFailureResultId !== previousResultId ||
-      failureEvent?.id !== expected.providerFailureEventId ||
-      failureEvent.paymentId !== paymentId ||
-      failureEvent.transactionId !== expected.providerIntentId ||
-      failureEvent.provider !== expected.provider ||
-      failureEvent.amountMinor !== expected.requestedAmountMinor ||
-      failureEvent.currency !== expected.currency ||
-      failureEvent.status !== "failed" ||
-      failureEvent.authenticated !== true ||
-      failureEvent.verified !== true ||
-      !(failureVerifiedAt instanceof Instant) ||
-      !failureVerifiedAt.equals(failedCaptureCutoffAt) ||
-      failureEvent.resultId !== previousResultId ||
-      failureEvent.immutable !== true ||
+      !(captureCutoffAt instanceof Instant) ||
       typeof captureEventId !== "string" ||
       captureEventId.trim().length === 0 ||
       typeof captureResultId !== "string" ||
@@ -2826,13 +2820,45 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
       captureEvent.status !== "captured" ||
       captureEvent.authenticated !== true ||
       captureEvent.verified !== true ||
+      !(captureOccurredAt instanceof Instant) ||
       !(captureVerifiedAt instanceof Instant) ||
       !(capturedAt instanceof Instant) ||
       !captureVerifiedAt.equals(capturedAt) ||
-      captureVerifiedAt.compare(failedCaptureCutoffAt) < 0 ||
+      captureVerifiedAt.compare(captureCutoffAt) < 0 ||
       captureEvent.resultId !== captureResultId ||
       command.context?.lateCaptureProviderEventResultId !== captureResultId ||
       captureEvent.immutable !== true)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late capture compensation requires the exact provider capture evidence",
+    );
+  }
+  if (
+    command.current === "failed" &&
+    (typeof expected?.providerIntentId !== "string" ||
+      expected.providerIntentId.trim().length === 0 ||
+      typeof expected.providerFailureEventId !== "string" ||
+      expected.providerFailureEventId.trim().length === 0 ||
+      command.context?.paymentFailureProviderEventId !==
+        expected.providerFailureEventId ||
+      command.context?.paymentFailureResultId !== previousResultId ||
+      failureEvent?.id !== expected.providerFailureEventId ||
+      failureEvent.paymentId !== paymentId ||
+      failureEvent.transactionId !== expected.providerIntentId ||
+      failureEvent.provider !== expected.provider ||
+      failureEvent.amountMinor !== expected.requestedAmountMinor ||
+      failureEvent.currency !== expected.currency ||
+      failureEvent.status !== "failed" ||
+      failureEvent.authenticated !== true ||
+      failureEvent.verified !== true ||
+      !(failureVerifiedAt instanceof Instant) ||
+      !(captureCutoffAt instanceof Instant) ||
+      !failureVerifiedAt.equals(captureCutoffAt) ||
+      failureEvent.resultId !== previousResultId ||
+      failureEvent.immutable !== true)
   ) {
     throw new TransitionGuardError(
       lifecycle,
@@ -2843,7 +2869,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
   }
   if (
     typeof providerTransactionId !== "string" ||
-    providerTransactionId.length === 0 ||
+    providerTransactionId.trim().length === 0 ||
     command.context?.lateCaptureCompensationProviderTransactionId !==
       providerTransactionId ||
     command.context?.lateCaptureRefundTransactionProviderTransactionId !==
@@ -2858,7 +2884,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
   }
   if (
     typeof refundTransactionId !== "string" ||
-    refundTransactionId.length === 0 ||
+    refundTransactionId.trim().length === 0 ||
     command.context?.lateCaptureCompensationRefundTransactionId !==
       refundTransactionId
   ) {

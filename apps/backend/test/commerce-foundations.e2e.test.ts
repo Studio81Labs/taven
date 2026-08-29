@@ -7177,6 +7177,77 @@ describe("commerce persistence foundations", () => {
         ).rows,
       ).toEqual([{ captured_at: capturedAt, event_count: "2" }]);
 
+      const paymentClockSkewAnchor = (
+        await client.query<{ authenticated_at: Date }>(
+          `SELECT clock_timestamp() - interval '1 second' AS authenticated_at`,
+        )
+      ).rows[0]?.authenticated_at;
+      if (!paymentClockSkewAnchor) {
+        throw new Error("payment provider clock-skew anchor is unavailable");
+      }
+      await expectQueryError(
+        client,
+        "payment_provider_occurrence_beyond_authentication_skew",
+        () =>
+          fixtures.persistPaymentProviderEvent(
+            captured.paymentId,
+            "PAYMENT_CAPTURED",
+            providerCaptureId,
+            paymentClockSkewAnchor,
+            null,
+            "payment-provider-occurrence-beyond-authentication-skew",
+            new Date(paymentClockSkewAnchor.getTime() + 5_001),
+          ),
+        {
+          code: "23514",
+          constraint: "payment_provider_events_values_check",
+        },
+      );
+      const paymentOccurrenceAtSkewBoundary = new Date(
+        paymentClockSkewAnchor.getTime() + 5_000,
+      );
+      await fixtures.persistPaymentProviderEvent(
+        captured.paymentId,
+        "PAYMENT_CAPTURED",
+        providerCaptureId,
+        paymentClockSkewAnchor,
+        null,
+        "payment-provider-occurrence-at-authentication-skew-boundary",
+        paymentOccurrenceAtSkewBoundary,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "payment_provider_events_consumed" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{
+            authenticated_at: Date;
+            captured_at: Date;
+            occurred_at: Date;
+            verified_at: Date;
+          }>(
+            `SELECT event.occurred_at, event.authenticated_at,
+                    event.verified_at, payment.captured_at
+             FROM payment_provider_events event
+             JOIN payments payment ON payment.id = event.payment_id
+             WHERE event.payment_id = $1
+               AND event.provider_event_id =
+                   'payment-provider-occurrence-at-authentication-skew-boundary'`,
+            [captured.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          occurred_at: paymentOccurrenceAtSkewBoundary,
+          authenticated_at: paymentClockSkewAnchor,
+          verified_at: paymentClockSkewAnchor,
+          captured_at: capturedAt,
+        },
+      ]);
+
       const delayedFailureAt = new Date();
       await expectQueryError(
         client,
@@ -9923,14 +9994,20 @@ describe("commerce persistence foundations", () => {
           constraint: "shipment_replacement_predecessor_terminal_check",
         },
       );
-      const cancelledAt = new Date();
-      await client.query(
-        `UPDATE shipments
+      const cancelledAt = (
+        await client.query<{ cancellation_requested_at: Date }>(
+          `UPDATE shipments
          SET status = 'CANCELLATION_PENDING',
-             cancellation_requested_at = $2, updated_at = $2
-         WHERE id = $1`,
-        [replacedShipmentId, cancelledAt],
-      );
+             cancellation_requested_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+         WHERE id = $1
+         RETURNING cancellation_requested_at`,
+          [replacedShipmentId],
+        )
+      ).rows[0]?.cancellation_requested_at;
+      if (!cancelledAt) {
+        throw new Error("replacement cancellation timestamp is unavailable");
+      }
       await confirmCarrierLabelVoid(
         client,
         replacedShipmentId,
@@ -11780,6 +11857,71 @@ describe("commerce persistence foundations", () => {
           provider_acceptance_scan_id: delivered.provider_acceptance_scan_id,
           status: "DELIVERED",
           transit_event_count: "2",
+        },
+      ]);
+
+      const shipmentClockSkewAnchor = (
+        await client.query<{ authenticated_at: Date }>(
+          `SELECT clock_timestamp() - interval '1 second' AS authenticated_at`,
+        )
+      ).rows[0]?.authenticated_at;
+      if (!shipmentClockSkewAnchor) {
+        throw new Error("shipment provider clock-skew anchor is unavailable");
+      }
+      await expectQueryError(
+        client,
+        "shipment_provider_occurrence_beyond_authentication_skew",
+        () =>
+          persistVerifiedShipmentOutcome(
+            client,
+            foundation.shipmentId,
+            "TRANSIT_SCAN",
+            shipmentClockSkewAnchor,
+            "transit-beyond-authentication-skew",
+            false,
+            new Date(shipmentClockSkewAnchor.getTime() + 5_001),
+          ),
+        {
+          code: "23514",
+          constraint: "shipment_provider_event_evidence_check",
+        },
+      );
+      const shipmentOccurrenceAtSkewBoundary = new Date(
+        shipmentClockSkewAnchor.getTime() + 5_000,
+      );
+      await persistVerifiedShipmentOutcome(
+        client,
+        foundation.shipmentId,
+        "TRANSIT_SCAN",
+        shipmentClockSkewAnchor,
+        "transit-at-authentication-skew-boundary",
+        false,
+        shipmentOccurrenceAtSkewBoundary,
+      );
+      expect(
+        (
+          await client.query<{
+            authenticated_at: Date;
+            delivered_at: Date;
+            occurred_at: Date;
+            verified_at: Date;
+          }>(
+            `SELECT event.occurred_at, event.authenticated_at,
+                    event.verified_at, shipment.delivered_at
+             FROM shipment_provider_events event
+             JOIN shipments shipment ON shipment.id = event.shipment_id
+             WHERE event.shipment_id = $1
+               AND event.provider_transaction_id =
+                   'transit-at-authentication-skew-boundary'`,
+            [foundation.shipmentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          occurred_at: shipmentOccurrenceAtSkewBoundary,
+          authenticated_at: shipmentClockSkewAnchor,
+          verified_at: shipmentClockSkewAnchor,
+          delivered_at: delivered.delivered_at,
         },
       ]);
     });

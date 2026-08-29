@@ -318,6 +318,9 @@ const permittedContext = {
     phaseId: "phase-1",
     role: "full",
     status: "pending",
+    provider: "sandbox",
+    requestedAmountMinor: 10_000n,
+    currency: "EUR",
     resultId: "payment-pending-result-1",
     currentStateCommandKey: "payment-pending-command-1",
     immutable: true,
@@ -4603,17 +4606,21 @@ function contextForTransition(target: string, current?: string) {
             phaseId: "phase-1",
             role: permittedContext.paymentRole,
             status: current,
+            ...(current === "voided" || current === "failed"
+              ? {
+                  provider: "sandbox",
+                  requestedAmountMinor: 10_000n,
+                  currency: "EUR",
+                  captureAuthorized: false,
+                  captureCutoffAt: Instant.parse("2026-01-01T00:30:00.000Z"),
+                }
+              : {}),
             ...(current === "failed"
               ? {
                   providerIntentId:
                     permittedContext.providerPaymentTransactionId,
                   providerFailureEventId:
                     permittedContext.paymentFailureProviderEventId,
-                  provider: "sandbox",
-                  requestedAmountMinor: 10_000n,
-                  currency: "EUR",
-                  captureAuthorized: false,
-                  captureCutoffAt: Instant.parse("2026-01-01T00:30:00.000Z"),
                 }
               : {}),
             resultId: lateCapturePreviousPaymentResultId,
@@ -5753,102 +5760,111 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
-  it.each([
-    ["paymentId", "payment-2"],
-    ["provider", "another-provider"],
-    ["transactionId", "another-capture"],
-    ["kind", "PAYMENT_FAILED"],
-    ["amountMinor", 9_999n],
-    ["currency", "USD"],
-    ["verifiedAt", undefined],
-    ["resultId", "another-result"],
-  ] as const)(
-    "rejects failed-source late capture with mismatched capture receipt %s",
-    (field, value) => {
-      const context = contextForTransition("refund_pending", "failed");
+  for (const current of ["voided", "failed"] as const) {
+    it.each([
+      ["id", "another-event"],
+      ["paymentId", "payment-2"],
+      ["provider", "another-provider"],
+      ["transactionId", "another-capture"],
+      ["kind", "PAYMENT_FAILED"],
+      ["amountMinor", 9_999n],
+      ["currency", "USD"],
+      ["occurredAt", undefined],
+      ["occurredAt", "not-an-instant"],
+      ["verifiedAt", undefined],
+      ["authenticated", false],
+      ["verified", false],
+      ["immutable", false],
+      ["resultId", "another-result"],
+    ] as const)(
+      `rejects ${current}-source late capture with mismatched capture receipt %s`,
+      (field, value) => {
+        const context = contextForTransition("refund_pending", current);
+        expect(() =>
+          transition(paymentPolicy, {
+            ...commandAnchors(paymentPolicy, current, "refund_pending"),
+            current,
+            target: "refund_pending",
+            idempotencyKey: `${current}-late-capture-receipt-${field}`,
+            context: {
+              ...context,
+              captureProviderEvent: {
+                ...context.captureProviderEvent,
+                [field]: value,
+              },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      },
+    );
+
+    it(`rejects a ${current}-source capture verified one millisecond before its cutoff`, () => {
+      const context = contextForTransition("refund_pending", current);
+      const capturedAt = Instant.parse("2026-01-01T00:29:59.999Z");
       expect(() =>
         transition(paymentPolicy, {
-          ...commandAnchors(paymentPolicy, "failed", "refund_pending"),
-          current: "failed",
+          ...commandAnchors(paymentPolicy, current, "refund_pending"),
+          current,
           target: "refund_pending",
-          idempotencyKey: `failed-late-capture-receipt-${field}`,
+          idempotencyKey: `${current}-late-capture-before-cutoff`,
           context: {
             ...context,
+            lateCaptureCapturedAt: capturedAt,
             captureProviderEvent: {
               ...context.captureProviderEvent,
-              [field]: value,
+              verifiedAt: capturedAt,
             },
           },
         }),
       ).toThrow(TransitionGuardError);
-    },
-  );
-
-  it("rejects a failed-source capture verified before its failure cutoff", () => {
-    const context = contextForTransition("refund_pending", "failed");
-    const capturedAt = Instant.parse("2026-01-01T00:29:59.999Z");
-    expect(() =>
-      transition(paymentPolicy, {
-        ...commandAnchors(paymentPolicy, "failed", "refund_pending"),
-        current: "failed",
-        target: "refund_pending",
-        idempotencyKey: "failed-late-capture-before-cutoff",
-        context: {
-          ...context,
-          lateCaptureCapturedAt: capturedAt,
-          captureProviderEvent: {
-            ...context.captureProviderEvent,
-            verifiedAt: capturedAt,
-          },
-        },
-      }),
-    ).toThrow(TransitionGuardError);
-  });
-
-  it("accepts provider occurrence skew when trusted capture verification meets the cutoff", () => {
-    const context = contextForTransition("refund_pending", "failed");
-    expect(
-      transition(paymentPolicy, {
-        ...commandAnchors(paymentPolicy, "failed", "refund_pending"),
-        current: "failed",
-        target: "refund_pending",
-        idempotencyKey: "failed-late-capture-provider-occurrence-skew",
-        context: {
-          ...context,
-          captureProviderEvent: {
-            ...context.captureProviderEvent,
-            occurredAt: Instant.parse("2026-01-01T00:29:55.000Z"),
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "changed",
-      previous: "failed",
-      current: "refund_pending",
     });
-  });
 
-  it.each([
-    ["lateCaptureProviderEventId", "another-event"],
-    ["captureProviderEventId", "another-event"],
-    ["lateCaptureCompensationResultId", "another-result"],
-    ["lateCaptureProviderEventResultId", "another-result"],
-    ["lateCaptureCapturedAt", Instant.parse("2026-01-01T00:30:00.001Z")],
-  ] as const)(
-    "rejects failed-source late capture with mismatched %s root",
-    (field, value) => {
-      const context = contextForTransition("refund_pending", "failed");
-      expect(() =>
+    it(`accepts ${current}-source provider occurrence skew when trusted capture verification meets the cutoff`, () => {
+      const context = contextForTransition("refund_pending", current);
+      expect(
         transition(paymentPolicy, {
-          ...commandAnchors(paymentPolicy, "failed", "refund_pending"),
-          current: "failed",
+          ...commandAnchors(paymentPolicy, current, "refund_pending"),
+          current,
           target: "refund_pending",
-          idempotencyKey: `failed-late-capture-root-${field}`,
-          context: { ...context, [field]: value },
+          idempotencyKey: `${current}-late-capture-provider-occurrence-skew`,
+          context: {
+            ...context,
+            captureProviderEvent: {
+              ...context.captureProviderEvent,
+              occurredAt: Instant.parse("2026-01-01T00:29:55.000Z"),
+            },
+          },
         }),
-      ).toThrow(TransitionGuardError);
-    },
-  );
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "refund_pending",
+      });
+    });
+
+    it.each([
+      ["captureProviderEvent", undefined],
+      ["lateCaptureProviderEventId", "another-event"],
+      ["captureProviderEventId", "another-event"],
+      ["lateCaptureCompensationResultId", "another-result"],
+      ["lateCaptureProviderEventResultId", "another-result"],
+      ["lateCaptureCapturedAt", Instant.parse("2026-01-01T00:30:00.001Z")],
+    ] as const)(
+      `rejects ${current}-source late capture with mismatched %s root`,
+      (field, value) => {
+        const context = contextForTransition("refund_pending", current);
+        expect(() =>
+          transition(paymentPolicy, {
+            ...commandAnchors(paymentPolicy, current, "refund_pending"),
+            current,
+            target: "refund_pending",
+            idempotencyKey: `${current}-late-capture-root-${field}`,
+            context: { ...context, [field]: value },
+          }),
+        ).toThrow(TransitionGuardError);
+      },
+    );
+  }
 
   it.each([
     ["missing aggregate", { aggregateId: undefined }],
@@ -8809,6 +8825,29 @@ describe("v0 lifecycle policy tables", () => {
           captureProviderEvent: {
             ...base.captureProviderEvent,
             occurredAt: evaluatedAt,
+            verifiedAt: evaluatedAt,
+          },
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "pending", current: "captured" });
+  });
+
+  it("uses trusted verification rather than provider occurrence for an in-window capture", () => {
+    const base = contextForTransition("captured", "pending");
+    const verifiedAt = Instant.parse("2026-01-01T00:59:59.999Z");
+    expect(
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "captured"),
+        current: "pending",
+        target: "captured",
+        idempotencyKey: "capture-window-provider-clock-ahead",
+        context: {
+          ...base,
+          captureEvaluatedAt: verifiedAt,
+          captureProviderEvent: {
+            ...base.captureProviderEvent,
+            occurredAt: Instant.parse("2026-01-01T01:00:00.000Z"),
+            verifiedAt,
           },
         },
       }),
@@ -8835,6 +8874,7 @@ describe("v0 lifecycle policy tables", () => {
             captureProviderEvent: {
               ...base.captureProviderEvent,
               occurredAt: evaluatedAt,
+              verifiedAt: evaluatedAt,
             },
           },
         }),
@@ -8890,11 +8930,16 @@ describe("v0 lifecycle policy tables", () => {
     ["paymentCaptureWindow", "resultId", "another-result"],
     ["captureProviderEvent", "id", "another-event"],
     ["captureProviderEvent", "paymentId", "another-payment"],
+    ["captureProviderEvent", "provider", "another-provider"],
     ["captureProviderEvent", "transactionId", "another-transaction"],
+    ["captureProviderEvent", "kind", "PAYMENT_FAILED"],
+    ["captureProviderEvent", "amountMinor", 9_999n],
+    ["captureProviderEvent", "currency", "USD"],
     ["captureProviderEvent", "status", "failed"],
+    ["captureProviderEvent", "occurredAt", "not-an-instant"],
     [
       "captureProviderEvent",
-      "occurredAt",
+      "verifiedAt",
       Instant.parse("2026-01-01T00:29:59.999Z"),
     ],
     ["captureProviderEvent", "authenticated", false],
@@ -8937,6 +8982,34 @@ describe("v0 lifecycle policy tables", () => {
           captureProviderEvent: {
             ...base.captureProviderEvent,
             occurredAt: evaluatedAt,
+            verifiedAt: evaluatedAt,
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "pending",
+      current: "refund_pending",
+    });
+  });
+
+  it("uses trusted verification rather than provider occurrence for an expired capture", () => {
+    const base = contextForTransition("refund_pending", "voided");
+    const verifiedAt = permittedContext.checkoutCaptureExpiresAt;
+    expect(
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "refund_pending"),
+        current: "pending",
+        target: "refund_pending",
+        idempotencyKey: "late-capture-provider-clock-behind",
+        context: {
+          ...base,
+          captureEvaluatedAt: verifiedAt,
+          captureEvaluationOutcome: "expired",
+          captureProviderEvent: {
+            ...base.captureProviderEvent,
+            occurredAt: Instant.parse("2026-01-01T00:59:59.999Z"),
+            verifiedAt,
           },
         },
       }),
@@ -14851,6 +14924,9 @@ describe("v0 lifecycle policy tables", () => {
     ["phaseId", "phase-2"],
     ["role", "deposit"],
     ["status", "captured"],
+    ["provider", "another-provider"],
+    ["requestedAmountMinor", 9_999n],
+    ["currency", "USD"],
     ["resultId", "foreign-result"],
     ["currentStateCommandKey", "foreign-command"],
     ["immutable", false],
@@ -14893,6 +14969,7 @@ describe("v0 lifecycle policy tables", () => {
               captureProviderEvent: {
                 ...base.captureProviderEvent,
                 occurredAt: permittedContext.checkoutCaptureExpiresAt,
+                verifiedAt: permittedContext.checkoutCaptureExpiresAt,
               },
             };
       for (const [label, value] of [
@@ -14931,6 +15008,7 @@ describe("v0 lifecycle policy tables", () => {
               captureProviderEvent: {
                 ...base.captureProviderEvent,
                 occurredAt: permittedContext.checkoutCaptureExpiresAt,
+                verifiedAt: permittedContext.checkoutCaptureExpiresAt,
               },
             };
       expect(() =>
@@ -15066,6 +15144,7 @@ describe("v0 lifecycle policy tables", () => {
         captureProviderEvent: {
           ...base.captureProviderEvent,
           occurredAt: evaluatedAt,
+          verifiedAt: evaluatedAt,
         },
       },
     };
@@ -24726,6 +24805,11 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     ["status", "pending"],
+    ["provider", "another-provider"],
+    ["requestedAmountMinor", 9_999n],
+    ["currency", "USD"],
+    ["captureAuthorized", true],
+    ["captureCutoffAt", "not-an-instant"],
     ["resultId", "payment-voided-result-2"],
     ["currentStateCommandKey", "payment-voided-command-2"],
     ["immutable", false],
