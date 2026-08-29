@@ -2883,6 +2883,10 @@ AS $$
                     AND job."order_id" = shipment."order_id"
                     AND job."order_phase_id" = shipment."order_phase_id"
                     AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                    AND job."status" = 'CANCELLED'
+                    AND job."cancellation_reason" = 'ORDER_CANCELLED'
+                    AND job."cancelled_at" IS NOT NULL
+                    AND job."cancelled_at" >= shipment."cancelled_at"
               )
           )
           AND NOT EXISTS (

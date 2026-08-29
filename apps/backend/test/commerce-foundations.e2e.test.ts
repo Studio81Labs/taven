@@ -12203,6 +12203,65 @@ describe("commerce persistence foundations", () => {
          WHERE order_id = $1`,
         [foundation.orderId, handedOverAt],
       );
+      const shipmentCancelledAt = (
+        await recoveryClient.query<{ cancelled_at: Date }>(
+          `SELECT cancelled_at
+           FROM shipments
+           WHERE id = $1`,
+          [foundation.shipmentId],
+        )
+      ).rows[0]?.cancelled_at;
+      if (!shipmentCancelledAt) {
+        throw new Error("committed recovery Shipment has no cancellation time");
+      }
+      // Suppress the ordinary mutation guards only while seeding invalid
+      // retained evidence so each assertion isolates the recovery predicate.
+      for (const [name, corruption] of [
+        [
+          "wrong_reason",
+          `UPDATE jobs
+           SET cancellation_reason = 'CLAIM_WITHDRAWN'
+           WHERE order_id = $1`,
+        ],
+        [
+          "predating_cancellation",
+          `UPDATE jobs
+           SET cancelled_at = $2
+           WHERE order_id = $1`,
+        ],
+      ] as const) {
+        await expectQueryError(
+          recoveryClient,
+          `committed_cancelled_job_${name}`,
+          async () => {
+            await recoveryClient.query(
+              `SET LOCAL session_replication_role = 'replica'`,
+            );
+            await recoveryClient.query(
+              corruption,
+              name === "wrong_reason"
+                ? [foundation.orderId]
+                : [
+                    foundation.orderId,
+                    new Date(shipmentCancelledAt.getTime() - 1),
+                  ],
+            );
+            await recoveryClient.query(
+              `SET LOCAL session_replication_role = 'origin'`,
+            );
+            await recoveryClient.query(
+              `UPDATE jobs
+               SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+               WHERE order_id = $1`,
+              [foundation.orderId, handedOverAt],
+            );
+          },
+          {
+            code: "23514",
+            constraint: "job_status_transition_check",
+          },
+        );
+      }
       await recoveryClient.query(
         `UPDATE jobs
          SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
