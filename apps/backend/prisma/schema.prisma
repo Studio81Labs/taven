@@ -983,7 +983,7 @@ model OutboxMessage {
   createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  shipmentProviderEvent ShipmentProviderEvent?
+  shipmentProviderEvents ShipmentProviderEvent[]
 
   @@index([status, availableAt])
   @@index([aggregateType, aggregateId])
@@ -1484,7 +1484,7 @@ model Shipment {
 model ShipmentProviderEvent {
   id                    String                    @id @default(uuid()) @db.Uuid
   shipmentId            String                    @map("shipment_id") @db.Uuid
-  outboxMessageId       String?                   @unique @map("outbox_message_id") @db.Uuid
+  outboxMessageId       String?                   @map("outbox_message_id") @db.Uuid
   carrier               String                    @db.VarChar(100)
   carrierLabelId        String                    @map("carrier_label_id") @db.VarChar(190)
   providerEventId       String                    @map("provider_event_id") @db.VarChar(255)
@@ -1500,6 +1500,7 @@ model ShipmentProviderEvent {
 
   @@unique([carrier, providerEventId], map: "shipment_provider_events_carrier_provider_event_id_key")
   @@index([carrier, providerTransactionId], map: "shipment_provider_events_carrier_provider_transaction_id_idx")
+  @@index([outboxMessageId], map: "shipment_provider_events_outbox_message_id_idx")
   @@index([shipmentId, kind])
   @@map("shipment_provider_events")
 }

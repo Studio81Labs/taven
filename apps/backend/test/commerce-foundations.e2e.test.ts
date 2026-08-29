@@ -5988,24 +5988,37 @@ describe("commerce persistence foundations", () => {
       const checkoutCaptureExpiresAt = new Date(
         createdAt.getTime() + 60 * 60 * 1_000,
       );
-      await client.query(
-        `INSERT INTO payments
-           (id, order_id, price_snapshot_id, order_price_binding_id,
-            payment_schedule_id, role, provider, requested_amount_minor,
-            currency, status, checkout_capture_expires_at, created_at, updated_at)
-         SELECT $1,$2,$3,$4,$5,'FULL','test',gross_amount_minor,
-                'EUR','CREATED',$6,$7,$7
-         FROM payment_schedules WHERE id = $5`,
-        [
-          createdFoundation.paymentId,
-          createdFoundation.orderId,
-          createdFoundation.priceSnapshotId,
-          createdFoundation.orderPriceBindingId,
-          createdFoundation.paymentScheduleId,
-          checkoutCaptureExpiresAt,
-          createdAt,
-        ],
+      const insertCreatedPayment = (providerIntentId: string | null) =>
+        client.query(
+          `INSERT INTO payments
+             (id, order_id, price_snapshot_id, order_price_binding_id,
+              payment_schedule_id, role, provider, provider_intent_id,
+              requested_amount_minor, currency, status,
+              checkout_capture_expires_at, created_at, updated_at)
+           SELECT $1,$2,$3,$4,$5,'FULL','test',$6,gross_amount_minor,
+                  'EUR','CREATED',$7,$8,$8
+           FROM payment_schedules WHERE id = $5`,
+          [
+            createdFoundation.paymentId,
+            createdFoundation.orderId,
+            createdFoundation.priceSnapshotId,
+            createdFoundation.orderPriceBindingId,
+            createdFoundation.paymentScheduleId,
+            providerIntentId,
+            checkoutCaptureExpiresAt,
+            createdAt,
+          ],
+        );
+      await expectQueryError(
+        client,
+        "create_created_payment_with_provider_intent",
+        () => insertCreatedPayment("stranded-created-provider-intent"),
+        {
+          code: "23514",
+          constraint: "payments_provider_intent_identity_check",
+        },
       );
+      await insertCreatedPayment(null);
       await expectQueryError(
         client,
         "pending_without_provider_intent",
@@ -6013,6 +6026,27 @@ describe("commerce persistence foundations", () => {
           client.query(`UPDATE payments SET status = 'PENDING' WHERE id = $1`, [
             createdFoundation.paymentId,
           ]),
+        {
+          code: "23514",
+          constraint: "payments_provider_intent_identity_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "void_created_payment_with_provider_intent",
+        () =>
+          client.query(
+            `UPDATE payments
+             SET status = 'VOIDED', provider_intent_id = $2,
+                 capture_authorized = false, capture_cutoff_at = $3,
+                 updated_at = $3
+             WHERE id = $1`,
+            [
+              createdFoundation.paymentId,
+              "stranded-created-void-intent",
+              new Date(),
+            ],
+          ),
         {
           code: "23514",
           constraint: "payments_provider_intent_identity_check",
@@ -6077,6 +6111,19 @@ describe("commerce persistence foundations", () => {
           capture_cutoff_at: intentFailureAt,
         },
       ]);
+      await expectQueryError(
+        client,
+        "assign_provider_intent_after_created_failure",
+        () =>
+          client.query(
+            `UPDATE payments SET provider_intent_id = $2 WHERE id = $1`,
+            [createdFoundation.paymentId, "late-provider-intent"],
+          ),
+        {
+          code: "23514",
+          constraint: "payments_provider_intent_identity_check",
+        },
+      );
 
       const noIntentVoid = await fixtures.createFoundation(
         "created-payment-no-intent-void",
@@ -9700,6 +9747,85 @@ describe("commerce persistence foundations", () => {
         foundation.shipmentId,
         "provider-void-confirmed",
       );
+      const originalVoid = (
+        await client.query<{
+          cancelled_at: Date;
+          provider_void_id: string;
+          provider_voided_at: Date;
+        }>(
+          `SELECT provider_void_id, provider_voided_at, cancelled_at
+           FROM shipments
+           WHERE id = $1`,
+          [foundation.shipmentId],
+        )
+      ).rows[0];
+      if (!originalVoid?.provider_voided_at || !originalVoid.cancelled_at) {
+        throw new Error("confirmed carrier-void evidence is unavailable");
+      }
+      await client.query(
+        `INSERT INTO shipment_provider_events
+           (id, shipment_id, outbox_message_id, carrier, carrier_label_id,
+            provider_event_id, provider_transaction_id, kind, occurred_at,
+            authenticated_at, verified_at, created_at)
+         SELECT $1, event.shipment_id, event.outbox_message_id, event.carrier,
+                event.carrier_label_id, $2, event.provider_transaction_id,
+                'LABEL_VOIDED', event.verified_at + interval '1 millisecond',
+                event.verified_at + interval '1 millisecond',
+                event.verified_at + interval '1 millisecond',
+                statement_timestamp()
+         FROM shipment_provider_events event
+         WHERE event.shipment_id = $3
+           AND event.kind = 'LABEL_VOIDED'
+           AND event.provider_event_id = $4`,
+        [
+          randomUUID(),
+          "provider-void-confirmed-repeat",
+          foundation.shipmentId,
+          "provider-void-confirmed",
+        ],
+      );
+      await client.query(
+        `SET CONSTRAINTS "shipment_provider_events_consumed" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS "shipment_provider_events_consumed" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{
+            cancelled_at: Date;
+            event_count: string;
+            outbox_count: string;
+            provider_void_id: string;
+            provider_voided_at: Date;
+            status: string;
+          }>(
+            `SELECT shipment.status::text AS status,
+                    shipment.provider_void_id,
+                    shipment.provider_voided_at,
+                    shipment.cancelled_at,
+                    count(event.id)::text AS event_count,
+                    count(DISTINCT event.outbox_message_id)::text AS outbox_count
+             FROM shipments shipment
+             JOIN shipment_provider_events event
+               ON event.shipment_id = shipment.id
+              AND event.kind = 'LABEL_VOIDED'
+             WHERE shipment.id = $1
+             GROUP BY shipment.status, shipment.provider_void_id,
+                      shipment.provider_voided_at, shipment.cancelled_at`,
+            [foundation.shipmentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          cancelled_at: originalVoid.cancelled_at,
+          event_count: "2",
+          outbox_count: "1",
+          provider_void_id: originalVoid.provider_void_id,
+          provider_voided_at: originalVoid.provider_voided_at,
+          status: "CANCELLED",
+        },
+      ]);
       await cancelOrderBeforeHandoff(client, foundation.orderId);
 
       expect(
@@ -11963,9 +12089,9 @@ describe("commerce persistence foundations", () => {
           return client.query(
             `INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id,
                                   payment_schedule_id, role, provider, provider_intent_id,
-                                  requested_amount_minor, currency,
+                                  requested_amount_minor, currency, status,
                                   checkout_capture_expires_at, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR',$8,$9,$9)`,
+             VALUES ($1,$2,$3,$4,$5,'FULL','test',$6,$7,'EUR','PENDING',$8,$9,$9)`,
             [
               fixtures.id("duplicate-payment"),
               foundation.orderId,

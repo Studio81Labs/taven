@@ -535,7 +535,7 @@ CREATE UNIQUE INDEX "shipments_lineage_scope_key" ON "shipments"("id", "shipment
 CREATE UNIQUE INDEX "shipments_plan_root_key" ON "shipments"("shipment_plan_id") WHERE "replaces_shipment_id" IS NULL;
 CREATE INDEX "shipments_order_id_status_idx" ON "shipments"("order_id", "status");
 CREATE INDEX "shipments_shipment_plan_id_status_idx" ON "shipments"("shipment_plan_id", "status");
-CREATE UNIQUE INDEX "shipment_provider_events_outbox_message_id_key" ON "shipment_provider_events"("outbox_message_id");
+CREATE INDEX "shipment_provider_events_outbox_message_id_idx" ON "shipment_provider_events"("outbox_message_id");
 CREATE UNIQUE INDEX "shipment_provider_events_carrier_provider_event_id_key" ON "shipment_provider_events"("carrier", "provider_event_id");
 CREATE INDEX "shipment_provider_events_carrier_provider_transaction_id_idx" ON "shipment_provider_events"("carrier", "provider_transaction_id");
 CREATE INDEX "shipment_provider_events_shipment_id_kind_idx" ON "shipment_provider_events"("shipment_id", "kind");
@@ -784,7 +784,9 @@ ALTER TABLE "payments" ADD CONSTRAINT "payments_capture_authorization_pair_check
     "capture_authorized" = ("capture_cutoff_at" IS NULL)
 );
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_intent_identity_check" CHECK (
-    ("provider_intent_id" IS NOT NULL AND "provider_intent_id" ~ '[^[:space:]]')
+    ("provider_intent_id" IS NOT NULL
+     AND "provider_intent_id" ~ '[^[:space:]]'
+     AND "status" <> 'CREATED')
     OR ("provider_intent_id" IS NULL AND "status" IN ('CREATED', 'FAILED', 'VOIDED'))
 );
 ALTER TABLE "payments" ADD CONSTRAINT "payments_provider_capture_identity_check" CHECK (
@@ -6543,7 +6545,7 @@ BEGIN
     WHERE shipment."id" = NEW."shipment_id";
 
     IF (NEW."kind" = 'LABEL_VOIDED'
-        AND target_status IS DISTINCT FROM 'CANCELLATION_PENDING'::"shipment_status")
+        AND target_status NOT IN ('CANCELLATION_PENDING', 'CANCELLED'))
        OR (NEW."kind" = 'ACCEPTANCE_SCAN'
            AND target_status NOT IN (
                'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'
@@ -6612,8 +6614,30 @@ BEGIN
             FROM "shipments" shipment
             WHERE shipment."id" = NEW."shipment_id"
               AND shipment."status" = 'CANCELLED'
-              AND shipment."provider_void_id" = NEW."provider_event_id"
-              AND shipment."provider_voided_at" = NEW."verified_at"
+              AND (
+                  (
+                      shipment."provider_void_id" = NEW."provider_event_id"
+                      AND shipment."provider_voided_at" = NEW."verified_at"
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "shipment_provider_events" exact_event
+                      WHERE exact_event."id" <> NEW."id"
+                        AND exact_event."shipment_id" = NEW."shipment_id"
+                        AND exact_event."outbox_message_id" =
+                            NEW."outbox_message_id"
+                        AND exact_event."carrier" = NEW."carrier"
+                        AND exact_event."carrier_label_id" =
+                            NEW."carrier_label_id"
+                        AND exact_event."kind" = 'LABEL_VOIDED'
+                        AND exact_event."provider_event_id" =
+                            shipment."provider_void_id"
+                        AND exact_event."provider_transaction_id" =
+                            NEW."provider_transaction_id"
+                        AND exact_event."verified_at" =
+                            shipment."provider_voided_at"
+                  )
+              )
         ))
        OR (NEW."kind" = 'ACCEPTANCE_SCAN'
            AND NOT EXISTS (
@@ -7638,6 +7662,13 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'payment status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_status_transition_check';
+    END IF;
+
+    IF OLD."provider_intent_id" IS NULL
+       AND NEW."provider_intent_id" IS NOT NULL
+       AND NOT (OLD."status" = 'CREATED' AND NEW."status" = 'PENDING') THEN
+        RAISE EXCEPTION 'provider intent may be assigned only as a payment becomes pending'
+            USING ERRCODE = '23514', CONSTRAINT = 'payments_provider_intent_identity_check';
     END IF;
 
     IF OLD."status" IN ('PENDING', 'REFUND_PENDING')
