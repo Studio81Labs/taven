@@ -7235,8 +7235,8 @@ AS $$
 DECLARE
     quoted_phase_count integer;
 BEGIN
-    IF NEW."status" NOT IN ('CREATED', 'PENDING') THEN
-        RAISE EXCEPTION 'new payments must begin in a pre-capture state'
+    IF NEW."status" <> 'CREATED' THEN
+        RAISE EXCEPTION 'new payments must begin created'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_initial_status_check';
     END IF;
 
@@ -7670,7 +7670,8 @@ BEGIN
 
     IF NOT FOUND
        OR NEW."provider" IS DISTINCT FROM target_provider
-       OR NEW."occurred_at" < target_payment_created_at THEN
+       OR NEW."occurred_at" <
+          target_payment_created_at - interval '5 seconds' THEN
         RAISE EXCEPTION 'Payment provider event does not match its exact Payment parent'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
     END IF;
@@ -7697,7 +7698,8 @@ BEGIN
         IF target_refund_payment_id IS DISTINCT FROM NEW."payment_id"
            OR NEW."amount_minor" IS DISTINCT FROM target_refund_amount
            OR NEW."currency" IS DISTINCT FROM target_currency
-           OR NEW."occurred_at" < target_refund_requested_at
+           OR NEW."occurred_at" <
+              target_refund_requested_at - interval '5 seconds'
            OR (target_provider_refund_id IS NOT NULL
                AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_refund_id)
            OR (NEW."kind" = 'REFUND_SUCCEEDED'

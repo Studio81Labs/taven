@@ -1085,7 +1085,7 @@ export class PersistenceFactory {
       throw new Error("commerce topology payment schedule is missing");
     }
     await this.sql.query(
-      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, provider_intent_id, requested_amount_minor, currency, status, checkout_capture_expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL',$6,$7,$8,'EUR','PENDING',$9,$10,$10)",
+      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, requested_amount_minor, currency, status, checkout_capture_expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL',$6,$7,'EUR','CREATED',$8,$9,$9)",
       [
         foundation.paymentId,
         foundation.orderId,
@@ -1093,11 +1093,16 @@ export class PersistenceFactory {
         foundation.orderPriceBindingId,
         foundation.paymentScheduleId,
         provider,
-        providerIntentId,
         requestedAmountMinor,
         checkoutCaptureExpiresAt,
         paymentCreatedAt,
       ],
+    );
+    await this.sql.query(
+      `UPDATE payments
+       SET status = 'PENDING', provider_intent_id = $2, updated_at = $3
+       WHERE id = $1`,
+      [foundation.paymentId, providerIntentId, paymentCreatedAt],
     );
   }
 
@@ -1176,6 +1181,7 @@ export class PersistenceFactory {
     providerEventId = `event-${this.hash(
       `${paymentId}:${kind}:${providerTransactionId}:${verifiedAt.toISOString()}`,
     ).slice(0, 48)}`,
+    occurredAt = verifiedAt,
   ): Promise<string> {
     const evidence = await this.sql.query<{
       provider: string;
@@ -1221,7 +1227,7 @@ export class PersistenceFactory {
            $1, $2, $3, $4, $5, $6, $7,
            $8, $9, $10::jsonb,
            encode(sha256(convert_to($10::jsonb::text, 'UTF8')), 'hex'),
-           $11, $11, $11, $11
+           $11, $12, $12, $12
        )`,
       [
         this.id(`provider-event:${providerEventId}`),
@@ -1234,6 +1240,7 @@ export class PersistenceFactory {
         target.amount_minor,
         target.currency,
         JSON.stringify(payload),
+        occurredAt,
         verifiedAt,
       ],
     );
@@ -1307,6 +1314,7 @@ export class PersistenceFactory {
     providerRefundId: string,
     verifiedAt = new Date(),
     providerEventId?: string,
+    occurredAt = verifiedAt,
   ): Promise<string> {
     const refund = await this.sql.query<{ payment_id: string }>(
       `SELECT payment_id FROM refund_transactions WHERE id = $1`,
@@ -1323,6 +1331,7 @@ export class PersistenceFactory {
       verifiedAt,
       refundTransactionId,
       providerEventId,
+      occurredAt,
     );
   }
 
