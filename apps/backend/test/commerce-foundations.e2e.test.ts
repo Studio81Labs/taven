@@ -5175,18 +5175,34 @@ describe("commerce persistence foundations", () => {
           client,
           "orphan_production_failure_refund",
           async () => {
+            const orphanRefundId = fixtures.id(
+              "orphan-production-failure-refund",
+            );
+            const orphanProviderRefundId = "orphan-production-failure-refund";
             await client.query(
               `INSERT INTO refund_transactions
              (id, payment_id, idempotency_key, amount_minor, reason, status,
               requested_at, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,'PRODUCTION_FAILURE','FAILED',$5,$5,$5)`,
+             VALUES ($1,$2,$3,$4,'PRODUCTION_FAILURE','PENDING',$5,$5,$5)`,
               [
-                fixtures.id("orphan-production-failure-refund"),
+                orphanRefundId,
                 foundation.paymentId,
                 "orphan-production-failure-refund",
                 capturedAmount,
                 failedAt,
               ],
+            );
+            await fixtures.persistRefundProviderEvent(
+              orphanRefundId,
+              "REFUND_FAILED",
+              orphanProviderRefundId,
+              failedAt,
+            );
+            await client.query(
+              `UPDATE refund_transactions
+               SET status = 'FAILED', provider_refund_id = $2, updated_at = $3
+               WHERE id = $1`,
+              [orphanRefundId, orphanProviderRefundId, failedAt],
             );
             await client.query(
               `SET CONSTRAINTS "refunds_production_failure_reconciled" IMMEDIATE`,
@@ -5392,18 +5408,35 @@ describe("commerce persistence foundations", () => {
           "retain_only_latest_failed_refund_attempt",
           async () => {
             const wrongRetryAt = new Date(refundFailedAt.getTime() + 1);
+            const wrongRetryId = fixtures.id(
+              "wrong-production-failure-refund-retry",
+            );
+            const wrongRetryProviderId =
+              "wrong-production-failure-refund-retry";
             await client.query(
               `INSERT INTO refund_transactions
                (id, payment_id, idempotency_key, amount_minor, reason, status,
                 requested_at, created_at, updated_at)
-               VALUES ($1,$2,$3,$4,'PRODUCTION_FAILURE','FAILED',$5,$5,$5)`,
+               VALUES ($1,$2,$3,$4,'PRODUCTION_FAILURE','PENDING',$5,$5,$5)`,
               [
-                fixtures.id("wrong-production-failure-refund-retry"),
+                wrongRetryId,
                 foundation.paymentId,
                 "wrong-production-failure-refund-retry",
                 wrongRetryAmount,
                 wrongRetryAt,
               ],
+            );
+            await fixtures.persistRefundProviderEvent(
+              wrongRetryId,
+              "REFUND_FAILED",
+              wrongRetryProviderId,
+              wrongRetryAt,
+            );
+            await client.query(
+              `UPDATE refund_transactions
+               SET status = 'FAILED', provider_refund_id = $2, updated_at = $3
+               WHERE id = $1`,
+              [wrongRetryId, wrongRetryProviderId, wrongRetryAt],
             );
             await client.query(
               `SET CONSTRAINTS "refunds_production_failure_reconciled" IMMEDIATE`,
@@ -5611,18 +5644,36 @@ describe("commerce persistence foundations", () => {
         client,
         "latest_failed_customer_refund_must_cover_balance",
         async () => {
+          const wrongRetryId = fixtures.id(
+            "wrong-customer-cancellation-refund-retry",
+          );
+          const wrongRetryProviderId =
+            "wrong-customer-cancellation-refund-retry";
+          const wrongRetryAt = new Date();
           await client.query(
             `INSERT INTO refund_transactions
                  (id, payment_id, idempotency_key, amount_minor, reason, status,
                   requested_at, created_at, updated_at)
-               VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','FAILED',
-                       clock_timestamp(),clock_timestamp(),clock_timestamp())`,
+               VALUES ($1,$2,$3,$4,'CUSTOMER_CANCELLATION','PENDING',$5,$5,$5)`,
             [
-              fixtures.id("wrong-customer-cancellation-refund-retry"),
+              wrongRetryId,
               captured.paymentId,
               "wrong-customer-cancellation-refund-retry",
               wrongRetryAmount,
+              wrongRetryAt,
             ],
+          );
+          await fixtures.persistRefundProviderEvent(
+            wrongRetryId,
+            "REFUND_FAILED",
+            wrongRetryProviderId,
+            wrongRetryAt,
+          );
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'FAILED', provider_refund_id = $2, updated_at = $3
+             WHERE id = $1`,
+            [wrongRetryId, wrongRetryProviderId, wrongRetryAt],
           );
           await forceOrderLifecycleConstraints(client);
         },
@@ -10197,13 +10248,33 @@ describe("commerce persistence foundations", () => {
         },
       );
 
-      for (const [name, status] of [
-        ["historical-pending-refund", "PENDING"],
-        ["historical-succeeded-refund", "SUCCEEDED"],
-      ] as const) {
+      await expectQueryError(
+        client,
+        "historical_pending_refund",
+        () =>
+          client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                requested_at, created_at, updated_at)
+             SELECT $1,$2,$3,1,'PRODUCTION_FAILURE','PENDING',
+                    captured_at - interval '1 millisecond',
+                    clock_timestamp(),clock_timestamp()
+             FROM payments WHERE id = $2`,
+            [
+              fixtures.id("historical-pending-refund"),
+              financial.paymentId,
+              "historical-pending-refund",
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_capture_timestamp_order_check",
+        },
+      );
+      for (const status of ["SUCCEEDED", "FAILED"] as const) {
         await expectQueryError(
           client,
-          name.replaceAll("-", "_"),
+          `insert_terminal_${status.toLowerCase()}_refund`,
           () =>
             client.query(
               `INSERT INTO refund_transactions
@@ -10213,63 +10284,24 @@ describe("commerce persistence foundations", () => {
                SELECT $1,$2,$3::text,
                       CASE WHEN $4::refund_status = 'SUCCEEDED'::refund_status
                            THEN $3::text ELSE NULL END,
-                      1,'PRODUCTION_FAILURE',$4::refund_status,
-                      captured_at - interval '1 millisecond',
+                      1,'CUSTOMER_CANCELLATION',$4::refund_status,captured_at,
                       CASE WHEN $4::refund_status = 'SUCCEEDED'::refund_status
-                           THEN captured_at - interval '1 millisecond'
-                           ELSE NULL END,
+                           THEN captured_at ELSE NULL END,
                       clock_timestamp(),clock_timestamp()
                FROM payments WHERE id = $2`,
-              [fixtures.id(name), financial.paymentId, name, status],
+              [
+                fixtures.id(`terminal-${status.toLowerCase()}-refund`),
+                financial.paymentId,
+                `terminal-${status.toLowerCase()}-refund`,
+                status,
+              ],
             ),
           {
             code: "23514",
-            constraint: "refund_capture_timestamp_order_check",
+            constraint: "refund_transaction_initial_status_check",
           },
         );
       }
-
-      await expectQueryError(
-        client,
-        "future_refund_insert",
-        () =>
-          client.query(
-            `INSERT INTO refund_transactions
-               (id, payment_id, idempotency_key, provider_refund_id,
-                amount_minor, reason, status, requested_at, completed_at,
-                created_at, updated_at)
-             VALUES ($1,$2,$3,$4,1,'PRODUCTION_FAILURE','SUCCEEDED',
-                     (SELECT captured_at FROM payments WHERE id = $2),
-                     clock_timestamp() + interval '60 seconds',
-                     clock_timestamp(), clock_timestamp())`,
-            [
-              fixtures.id("future-refund-insert"),
-              financial.paymentId,
-              "future-refund-insert",
-              "future-refund-insert",
-            ],
-          ),
-        {
-          code: "23514",
-          constraint: "refund_completion_evidence_check",
-        },
-      );
-      await client.query(
-        `INSERT INTO refund_transactions
-           (id, payment_id, idempotency_key, provider_refund_id,
-            amount_minor, reason, status, requested_at, completed_at,
-            created_at, updated_at)
-         VALUES ($1,$2,$3,$4,1,'PRODUCTION_FAILURE','SUCCEEDED',
-                 (SELECT captured_at FROM payments WHERE id = $2),
-                 clock_timestamp() + interval '2 seconds',
-                 clock_timestamp(), clock_timestamp())`,
-        [
-          fixtures.id("tolerated-refund-insert"),
-          financial.paymentId,
-          "tolerated-refund-insert",
-          "tolerated-refund-insert",
-        ],
-      );
       await client.query(
         `INSERT INTO refund_transactions
            (id, payment_id, idempotency_key, amount_minor, reason, status,
@@ -10301,32 +10333,29 @@ describe("commerce persistence foundations", () => {
           constraint: "refund_transactions_completion_status_check",
         },
       );
-      for (const status of ["PENDING", "FAILED"] as const) {
-        await expectQueryError(
-          client,
-          `insert_completed_${status.toLowerCase()}_refund`,
-          () =>
-            client.query(
-              `INSERT INTO refund_transactions
-                 (id, payment_id, idempotency_key, amount_minor, reason, status,
-                  requested_at, completed_at, created_at, updated_at)
-               SELECT $1,$2,$3,1,'PRODUCTION_FAILURE',$4,
-                      captured_at,captured_at,
-                      clock_timestamp(),clock_timestamp()
-               FROM payments WHERE id = $2`,
-              [
-                fixtures.id(`completed-${status.toLowerCase()}-refund`),
-                financial.paymentId,
-                `completed-${status.toLowerCase()}-refund`,
-                status,
-              ],
-            ),
-          {
-            code: "23514",
-            constraint: "refund_transactions_completion_status_check",
-          },
-        );
-      }
+      await expectQueryError(
+        client,
+        "insert_completed_pending_refund",
+        () =>
+          client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                requested_at, completed_at, created_at, updated_at)
+             SELECT $1,$2,$3,1,'PRODUCTION_FAILURE','PENDING',
+                    captured_at,captured_at,
+                    clock_timestamp(),clock_timestamp()
+             FROM payments WHERE id = $2`,
+            [
+              fixtures.id("completed-pending-refund"),
+              financial.paymentId,
+              "completed-pending-refund",
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_transactions_completion_status_check",
+        },
+      );
       await expectQueryError(
         client,
         "future_refund_update",
@@ -11791,6 +11820,8 @@ describe("commerce persistence foundations", () => {
         "active_order_partial_customer_cancellation_refund",
         async () => {
           const completedAt = new Date();
+          const refundId = fixtures.id("active-order-partial-refund");
+          const providerRefundId = "provider-active-order-partial-refund";
           await client.query(
             `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
             [foundation.paymentId],
@@ -11798,15 +11829,27 @@ describe("commerce persistence foundations", () => {
           await client.query(
             `INSERT INTO refund_transactions
                (id, payment_id, idempotency_key, amount_minor, reason, status,
-                provider_refund_id, requested_at, completed_at, created_at, updated_at)
-             VALUES ($1,$2,$3,1,'CUSTOMER_CANCELLATION','SUCCEEDED',$4,$5,$5,$5,$5)`,
+                requested_at, created_at, updated_at)
+             VALUES ($1,$2,$3,1,'CUSTOMER_CANCELLATION','PENDING',$4,$4,$4)`,
             [
-              fixtures.id("active-order-partial-refund"),
+              refundId,
               foundation.paymentId,
               "active-order-partial-refund",
-              "provider-active-order-partial-refund",
               completedAt,
             ],
+          );
+          await fixtures.persistRefundProviderEvent(
+            refundId,
+            "REFUND_SUCCEEDED",
+            providerRefundId,
+            completedAt,
+          );
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED', provider_refund_id = $2,
+                 completed_at = $3, updated_at = $3
+             WHERE id = $1`,
+            [refundId, providerRefundId, completedAt],
           );
           await client.query(
             `UPDATE payments SET status = 'PARTIALLY_REFUNDED' WHERE id = $1`,
@@ -11830,6 +11873,8 @@ describe("commerce persistence foundations", () => {
         "active_order_full_customer_cancellation_refund",
         async () => {
           const completedAt = new Date();
+          const refundId = fixtures.id("active-order-full-refund");
+          const providerRefundId = "provider-active-order-full-refund";
           await client.query(
             `UPDATE payments SET status = 'REFUND_PENDING' WHERE id = $1`,
             [foundation.paymentId],
@@ -11837,17 +11882,29 @@ describe("commerce persistence foundations", () => {
           await client.query(
             `INSERT INTO refund_transactions
                (id, payment_id, idempotency_key, amount_minor, reason, status,
-                provider_refund_id, requested_at, completed_at, created_at, updated_at)
+                requested_at, created_at, updated_at)
              SELECT $1,id,$2,captured_amount_minor,'CUSTOMER_CANCELLATION',
-                    'SUCCEEDED',$3,$4,$4,$4,$4
-             FROM payments WHERE id = $5`,
+                    'PENDING',$3,$3,$3
+             FROM payments WHERE id = $4`,
             [
-              fixtures.id("active-order-full-refund"),
+              refundId,
               "active-order-full-refund",
-              "provider-active-order-full-refund",
               completedAt,
               foundation.paymentId,
             ],
+          );
+          await fixtures.persistRefundProviderEvent(
+            refundId,
+            "REFUND_SUCCEEDED",
+            providerRefundId,
+            completedAt,
+          );
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED', provider_refund_id = $2,
+                 completed_at = $3, updated_at = $3
+             WHERE id = $1`,
+            [refundId, providerRefundId, completedAt],
           );
           await client.query(
             `UPDATE payments SET status = 'REFUNDED' WHERE id = $1`,

@@ -8123,6 +8123,15 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."status" IS DISTINCT FROM 'PENDING'::"refund_status" THEN
+            RAISE EXCEPTION 'new refund transactions must begin pending'
+                USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_initial_status_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'refund transactions are append-only financial history'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_append_only_check';
@@ -8205,7 +8214,7 @@ END;
 $$;
 
 CREATE TRIGGER "refund_transactions_identity_protected"
-BEFORE UPDATE OR DELETE ON "refund_transactions"
+BEFORE INSERT OR UPDATE OR DELETE ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_refund_transaction_identity();
 
 CREATE FUNCTION taven_validate_refund_against_capture()
