@@ -2739,6 +2739,17 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
       : undefined;
   const failedCaptureCutoffAt = expected?.captureCutoffAt;
   const failureVerifiedAt = failureEvent?.verifiedAt;
+  const captureEventValue = command.context?.captureProviderEvent;
+  const captureEvent =
+    typeof captureEventValue === "object" &&
+    captureEventValue !== null &&
+    !Array.isArray(captureEventValue)
+      ? (captureEventValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const captureEventId = command.context?.lateCaptureProviderEventId;
+  const captureResultId = command.context?.lateCaptureCompensationResultId;
+  const capturedAt = command.context?.lateCaptureCapturedAt;
+  const captureVerifiedAt = captureEvent?.verifiedAt;
   if (
     (command.current === "voided" || command.current === "failed") &&
     command.target === "refund_pending" &&
@@ -2799,7 +2810,29 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
       !(failureVerifiedAt instanceof Instant) ||
       !failureVerifiedAt.equals(failedCaptureCutoffAt) ||
       failureEvent.resultId !== previousResultId ||
-      failureEvent.immutable !== true)
+      failureEvent.immutable !== true ||
+      typeof captureEventId !== "string" ||
+      captureEventId.trim().length === 0 ||
+      typeof captureResultId !== "string" ||
+      captureResultId.trim().length === 0 ||
+      command.context?.captureProviderEventId !== captureEventId ||
+      captureEvent?.id !== captureEventId ||
+      captureEvent.paymentId !== paymentId ||
+      captureEvent.provider !== expected.provider ||
+      captureEvent.transactionId !== providerTransactionId ||
+      captureEvent.kind !== "PAYMENT_CAPTURED" ||
+      captureEvent.amountMinor !== expected.requestedAmountMinor ||
+      captureEvent.currency !== expected.currency ||
+      captureEvent.status !== "captured" ||
+      captureEvent.authenticated !== true ||
+      captureEvent.verified !== true ||
+      !(captureVerifiedAt instanceof Instant) ||
+      !(capturedAt instanceof Instant) ||
+      !captureVerifiedAt.equals(capturedAt) ||
+      captureVerifiedAt.compare(failedCaptureCutoffAt) < 0 ||
+      captureEvent.resultId !== captureResultId ||
+      command.context?.lateCaptureProviderEventResultId !== captureResultId ||
+      captureEvent.immutable !== true)
   ) {
     throw new TransitionGuardError(
       lifecycle,
