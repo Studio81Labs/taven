@@ -1194,6 +1194,7 @@ model Order {
   status                            OrderStatus @default(DRAFT)
   quotedAt                          DateTime?   @map("quoted_at") @db.Timestamptz(3)
   confirmedAt                       DateTime?   @map("confirmed_at") @db.Timestamptz(3)
+  acceptedOrderPriceBindingId       String?     @unique(map: "orders_accepted_order_price_binding_id_key") @map("accepted_order_price_binding_id") @db.Uuid
   acceptedTermsRevision             String?     @map("accepted_terms_revision") @db.VarChar(100)
   acceptedClaimPolicyRevision       String?     @map("accepted_claim_policy_revision") @db.VarChar(100)
   withdrawalExceptionAcknowledgedAt DateTime?   @map("withdrawal_exception_acknowledged_at") @db.Timestamptz(3)
@@ -1203,7 +1204,8 @@ model Order {
   customer             Customer?                @relation(fields: [customerId], references: [id], onDelete: Restrict)
   automaticOrigin      AutomaticOrderOrigin?
   individualOrigin     IndividualOrderOrigin?
-  priceBindings        OrderPriceBinding[]
+  priceBindings        OrderPriceBinding[]      @relation("OrderPriceBindings")
+  acceptedPriceBinding OrderPriceBinding?       @relation("CheckoutAcceptanceBinding", fields: [acceptedOrderPriceBindingId], references: [id], onDelete: Restrict)
   activePriceBinding   OrderActivePriceBinding?
   deliveryDestinations DeliveryDestination[]
   items                OrderItem[]
@@ -1247,7 +1249,8 @@ model OrderPriceBinding {
   invalidatedAt         DateTime? @map("invalidated_at") @db.Timestamptz(3)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  order                     Order                        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  order                     Order                        @relation("OrderPriceBindings", fields: [orderId], references: [id], onDelete: Restrict)
+  checkoutAcceptanceOrder   Order?                       @relation("CheckoutAcceptanceBinding")
   priceSnapshot             PriceSnapshot                @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
   deliveryDestination       DeliveryDestination          @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
   activeForOrder            OrderActivePriceBinding?

@@ -1039,12 +1039,13 @@ export class PersistenceFactory {
       );
       await this.sql.query(
         `UPDATE orders
-         SET accepted_terms_revision = 'terms-v1',
+         SET accepted_order_price_binding_id = $3,
+             accepted_terms_revision = 'terms-v1',
              accepted_claim_policy_revision = 'claim-policy-v1',
              withdrawal_exception_acknowledged_at = $2,
              updated_at = $2
          WHERE id = $1`,
-        [input.orderId, t],
+        [input.orderId, t, input.orderPriceBindingId],
       );
       await this.sql.query(
         "INSERT INTO audit_events (id, quote_id, order_id, event_type, payload, created_at) VALUES ($1,$2,$3,'order.quoted',$4::jsonb,$5)",
@@ -1106,16 +1107,18 @@ export class PersistenceFactory {
   ): Promise<void> {
     await this.sql.query(
       `UPDATE orders
-       SET accepted_terms_revision = 'terms-v1',
+       SET accepted_order_price_binding_id = $3,
+           accepted_terms_revision = 'terms-v1',
            accepted_claim_policy_revision = 'claim-policy-v1',
            withdrawal_exception_acknowledged_at = $2,
            updated_at = $2
        WHERE id = $1
          AND status = 'QUOTED'
+         AND accepted_order_price_binding_id IS NULL
          AND accepted_terms_revision IS NULL
          AND accepted_claim_policy_revision IS NULL
          AND withdrawal_exception_acknowledged_at IS NULL`,
-      [foundation.orderId, acknowledgedAt],
+      [foundation.orderId, acknowledgedAt, foundation.orderPriceBindingId],
     );
   }
 

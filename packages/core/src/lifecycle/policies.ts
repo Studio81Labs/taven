@@ -2034,6 +2034,94 @@ function requireExactPaymentRefundCompletion<S extends string>(
   }
 }
 
+function requireExactRefundFailureRollback<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const refundTransactionId = context?.refundFailureTransactionId;
+  const previousResultId =
+    context?.refundFailureRollbackPreviousPaymentResultId;
+  const stateKey = context?.refundFailureRollbackCurrentStateCommandKey;
+  const resultId = context?.refundFailureRollbackResultId;
+  const attemptKey = context?.refundFailureAttemptKey;
+  const expectedPayment = record(context?.refundFailureRollbackExpectedPayment);
+  const restoredPayment = record(context?.refundFailureRollbackRestoredPayment);
+  const refundTransaction = record(
+    context?.refundFailureRollbackRefundTransaction,
+  );
+  const failure = record(context?.refundFailureProviderEvidence);
+
+  if (
+    context?.paymentCaptureKind !== "refund_failure_rollback" ||
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(refundTransactionId) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(resultId) ||
+    !nonBlank(attemptKey) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedPayment?.id !== paymentId ||
+    expectedPayment.orderId !== orderId ||
+    expectedPayment.phaseId !== phaseId ||
+    expectedPayment.role !== role ||
+    expectedPayment.status !== "refund_pending" ||
+    expectedPayment.resultId !== previousResultId ||
+    expectedPayment.currentStateCommandKey !== stateKey ||
+    expectedPayment.immutable !== true ||
+    restoredPayment?.id !== paymentId ||
+    restoredPayment.orderId !== orderId ||
+    restoredPayment.phaseId !== phaseId ||
+    restoredPayment.role !== role ||
+    restoredPayment.previousStatus !== "refund_pending" ||
+    restoredPayment.targetStatus !== "captured" ||
+    restoredPayment.resultId !== resultId ||
+    restoredPayment.immutable !== true ||
+    refundTransaction?.id !== refundTransactionId ||
+    refundTransaction.paymentId !== paymentId ||
+    refundTransaction.status !== "failed" ||
+    refundTransaction.idempotencyKey !== attemptKey ||
+    refundTransaction.resultId !== resultId ||
+    refundTransaction.immutable !== true ||
+    failure?.refundTransactionId !== refundTransactionId ||
+    failure.attemptKey !== attemptKey ||
+    failure.outcome !== "failed" ||
+    failure.resultId !== resultId ||
+    failure.immutable !== true ||
+    context?.refundFailureRollbackPaymentResultId !== resultId ||
+    context?.refundFailureRollbackTransactionResultId !== resultId ||
+    context?.refundFailureRollbackEvidenceResultId !== resultId ||
+    context?.refundFailureNoPendingRefunds !== true ||
+    context?.refundFailureNoSuccessfulRefunds !== true ||
+    context?.refundFailureRollbackCompleted !== true ||
+    context?.refundFailureRollbackAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "refund failure rollback requires the exact captured Payment restoration, failed RefundTransaction, provider failure, and atomic result",
+    );
+  }
+}
+
 function requireBalancePaymentDeadlineSetup<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -6620,7 +6708,7 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
     captured: ["refund_pending"],
     partially_refunded: ["refund_pending"],
     voided: ["refund_pending"],
-    refund_pending: ["partially_refunded", "refunded"],
+    refund_pending: ["captured", "partially_refunded", "refunded"],
   },
   guard: (command) => {
     if (command.current === "created" && command.target === "pending") {
@@ -6719,6 +6807,9 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       (command.target === "partially_refunded" || command.target === "refunded")
     ) {
       requireExactPaymentRefundCompletion("Payment", command);
+    }
+    if (command.current === "refund_pending" && command.target === "captured") {
+      requireExactRefundFailureRollback("Payment", command);
     }
   },
 };

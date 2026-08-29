@@ -9828,6 +9828,55 @@ describe("commerce persistence foundations", () => {
          WHERE id = $1`,
         [checkout.orderId, quotedAt],
       );
+      const replacementSnapshotId = fixtures.id(
+        "checkout-acceptance:replacement-snapshot",
+      );
+      const replacementBindingId = fixtures.id(
+        "checkout-acceptance:replacement-binding",
+      );
+      await client.query(
+        `INSERT INTO price_snapshots
+           (id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         SELECT $1, currency, contract_total_minor, 'acceptance-replacement',
+                input_snapshot, $2, clock_timestamp()
+         FROM price_snapshots WHERE id = $3`,
+        [
+          replacementSnapshotId,
+          randomUUID().replaceAll("-", "").repeat(2),
+          checkout.priceSnapshotId,
+        ],
+      );
+      await client.query(
+        `INSERT INTO order_price_bindings
+           (id, order_id, price_snapshot_id, delivery_destination_id, created_at)
+         VALUES ($1,$2,$3,$4,clock_timestamp())`,
+        [
+          replacementBindingId,
+          checkout.orderId,
+          replacementSnapshotId,
+          checkout.deliveryDestinationId,
+        ],
+      );
+
+      await expectQueryError(
+        client,
+        "accept_inactive_price_binding",
+        () =>
+          client.query(
+            `UPDATE orders
+             SET accepted_order_price_binding_id = $2,
+                 accepted_terms_revision = 'terms-v1',
+                 accepted_claim_policy_revision = 'claim-policy-v1',
+                 withdrawal_exception_acknowledged_at = clock_timestamp()
+             WHERE id = $1`,
+            [checkout.orderId, replacementBindingId],
+          ),
+        {
+          code: "23514",
+          constraint: "order_checkout_acceptance_binding_check",
+        },
+      );
 
       await expectQueryError(
         client,
@@ -9867,12 +9916,13 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `UPDATE orders
-             SET accepted_terms_revision = 'terms-v1',
+             SET accepted_order_price_binding_id = $2,
+                 accepted_terms_revision = 'terms-v1',
                  accepted_claim_policy_revision = 'claim-policy-v1',
                  withdrawal_exception_acknowledged_at =
                    clock_timestamp() + interval '60 seconds'
              WHERE id = $1`,
-            [checkout.orderId],
+            [checkout.orderId, checkout.orderPriceBindingId],
           ),
         {
           code: "23514",
@@ -9885,10 +9935,12 @@ describe("commerce persistence foundations", () => {
         (
           await client.query<{
             accepted_claim_policy_revision: string;
+            accepted_order_price_binding_id: string;
             accepted_terms_revision: string;
             withdrawal_exception_acknowledged_at: Date;
           }>(
-            `SELECT accepted_terms_revision,
+            `SELECT accepted_order_price_binding_id,
+                    accepted_terms_revision,
                     accepted_claim_policy_revision,
                     withdrawal_exception_acknowledged_at
              FROM orders WHERE id = $1`,
@@ -9898,11 +9950,63 @@ describe("commerce persistence foundations", () => {
       ).toEqual([
         {
           accepted_claim_policy_revision: "claim-policy-v1",
+          accepted_order_price_binding_id: checkout.orderPriceBindingId,
           accepted_terms_revision: "terms-v1",
           withdrawal_exception_acknowledged_at: expect.any(Date),
         },
       ]);
+      await client.query(
+        `UPDATE order_active_price_bindings
+         SET order_price_binding_id = order_price_binding_id
+         WHERE order_id = $1`,
+        [checkout.orderId],
+      );
+      await expectQueryError(
+        client,
+        "move_active_binding_after_checkout_acceptance",
+        () =>
+          client.query(
+            `UPDATE order_active_price_bindings
+             SET order_price_binding_id = $2 WHERE order_id = $1`,
+            [checkout.orderId, replacementBindingId],
+          ),
+        {
+          code: "23514",
+          constraint: "active_order_price_binding_acceptance_guard",
+        },
+      );
+
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await client.query(
+        `UPDATE orders SET accepted_order_price_binding_id = $2 WHERE id = $1`,
+        [checkout.orderId, replacementBindingId],
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
+      await expectQueryError(
+        client,
+        "payment_for_unaccepted_active_binding",
+        () =>
+          fixtures.finalizePayment(
+            checkout,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            false,
+          ),
+        { code: "23514", constraint: "payment_terms_acceptance_check" },
+      );
+      await client.query(`SET LOCAL session_replication_role = 'replica'`);
+      await client.query(
+        `UPDATE orders SET accepted_order_price_binding_id = $2 WHERE id = $1`,
+        [checkout.orderId, checkout.orderPriceBindingId],
+      );
+      await client.query(`SET LOCAL session_replication_role = 'origin'`);
       for (const [name, assignment] of [
+        [
+          "rewrite_accepted_price_binding",
+          `accepted_order_price_binding_id = '${fixtures.id("foreign-binding")}'`,
+        ],
         ["rewrite_terms_revision", "accepted_terms_revision = 'terms-v2'"],
         [
           "rewrite_claim_policy_revision",
@@ -9934,7 +10038,8 @@ describe("commerce persistence foundations", () => {
       await client.query(`SET LOCAL session_replication_role = 'replica'`);
       await client.query(
         `UPDATE orders
-         SET accepted_terms_revision = NULL,
+         SET accepted_order_price_binding_id = NULL,
+             accepted_terms_revision = NULL,
              accepted_claim_policy_revision = NULL,
              withdrawal_exception_acknowledged_at = NULL
          WHERE id = $1`,
@@ -9962,7 +10067,8 @@ describe("commerce persistence foundations", () => {
       await client.query(`SET LOCAL session_replication_role = 'replica'`);
       await client.query(
         `UPDATE orders
-         SET accepted_terms_revision = NULL,
+         SET accepted_order_price_binding_id = NULL,
+             accepted_terms_revision = NULL,
              accepted_claim_policy_revision = NULL,
              withdrawal_exception_acknowledged_at = NULL
          WHERE id = $1`,
@@ -10002,6 +10108,7 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `UPDATE orders
          SET status = 'CONFIRMED', confirmed_at = $2,
+             accepted_order_price_binding_id = NULL,
              accepted_terms_revision = NULL,
              accepted_claim_policy_revision = NULL,
              withdrawal_exception_acknowledged_at = NULL,

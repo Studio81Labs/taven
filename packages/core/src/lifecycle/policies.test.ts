@@ -428,6 +428,54 @@ const permittedContext = {
   refundCompletionProviderEventResultId: "refund-completion-result-1",
   refundCompletionCompleted: true,
   refundCompletionAtomic: true,
+  refundFailureRollbackResultId: "refund-failure-result-1",
+  refundFailureRollbackPreviousPaymentResultId: "refund-pending-result-1",
+  refundFailureRollbackCurrentStateCommandKey:
+    "payment-refund-pending-command-1",
+  refundFailureTransactionId: "refund-1",
+  refundFailureAttemptKey: "refund-attempt-1",
+  refundFailureRollbackExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "refund_pending",
+    resultId: "refund-pending-result-1",
+    currentStateCommandKey: "payment-refund-pending-command-1",
+    immutable: true,
+  },
+  refundFailureRollbackRestoredPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    previousStatus: "refund_pending",
+    targetStatus: "captured",
+    resultId: "refund-failure-result-1",
+    immutable: true,
+  },
+  refundFailureRollbackRefundTransaction: {
+    id: "refund-1",
+    paymentId: "payment-1",
+    status: "failed",
+    idempotencyKey: "refund-attempt-1",
+    resultId: "refund-failure-result-1",
+    immutable: true,
+  },
+  refundFailureProviderEvidence: {
+    refundTransactionId: "refund-1",
+    attemptKey: "refund-attempt-1",
+    outcome: "failed",
+    resultId: "refund-failure-result-1",
+    immutable: true,
+  },
+  refundFailureRollbackPaymentResultId: "refund-failure-result-1",
+  refundFailureRollbackTransactionResultId: "refund-failure-result-1",
+  refundFailureRollbackEvidenceResultId: "refund-failure-result-1",
+  refundFailureNoPendingRefunds: true,
+  refundFailureNoSuccessfulRefunds: true,
+  refundFailureRollbackCompleted: true,
+  refundFailureRollbackAtomic: true,
   refundWebhookAmountMinor: 1_000n,
   captureWindowClosed: true,
   captureCutoffSet: true,
@@ -3738,6 +3786,8 @@ function contextForTransition(target: string, current?: string) {
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
     current === "voided" && target === "refund_pending";
+  const refundFailureRollback =
+    current === "refund_pending" && target === "captured";
   const compensationRetryKind = capacityCaptureCompensation
     ? "initial_checkout_capacity"
     : lateCaptureCompensation
@@ -4420,7 +4470,9 @@ function contextForTransition(target: string, current?: string) {
       ? "initial_checkout_capacity"
       : lateCaptureCompensation
         ? "late_capture"
-        : permittedContext.paymentCaptureKind,
+        : refundFailureRollback
+          ? "refund_failure_rollback"
+          : permittedContext.paymentCaptureKind,
     ...(compensationRetryKind
       ? {
           compensationRefundRetryKind: compensationRetryKind,
@@ -5101,7 +5153,9 @@ function commandAnchors(
   if (
     policy.name === "Payment" &&
     current === "refund_pending" &&
-    (target === "partially_refunded" || target === "refunded")
+    (target === "captured" ||
+      target === "partially_refunded" ||
+      target === "refunded")
   ) {
     return {
       aggregateId: "payment-1",
@@ -6315,6 +6369,7 @@ describe("v0 lifecycle policy tables", () => {
     [paymentPolicy, "pending", "captured"],
     [paymentPolicy, "pending", "refund_pending"],
     [paymentPolicy, "voided", "refund_pending"],
+    [paymentPolicy, "refund_pending", "captured"],
     [paymentPolicy, "refund_pending", "partially_refunded"],
     [paymentPolicy, "refund_pending", "refunded"],
     [orderPolicy, "draft", "quoted"],
@@ -25448,6 +25503,113 @@ describe("v0 lifecycle policy tables", () => {
         context,
       }),
     ).toThrow(TransitionGuardError);
+  });
+
+  it.each(["full", "deposit", "balance"] as const)(
+    "restores a %s Payment after its exact refund attempt fails",
+    (paymentRole) => {
+      const base = contextForTransition("captured", "refund_pending");
+      const context = {
+        ...base,
+        paymentCaptureKind: "refund_failure_rollback",
+        paymentRole,
+        refundFailureRollbackExpectedPayment: {
+          ...base.refundFailureRollbackExpectedPayment,
+          role: paymentRole,
+        },
+        refundFailureRollbackRestoredPayment: {
+          ...base.refundFailureRollbackRestoredPayment,
+          role: paymentRole,
+        },
+      };
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+          current: "refund_pending",
+          target: "captured",
+          idempotencyKey: `refund-failure-rollback-${paymentRole}`,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "refund_pending",
+        current: "captured",
+      });
+    },
+  );
+
+  it("rejects incomplete or mismatched refund-failure rollback evidence", () => {
+    const base = {
+      ...contextForTransition("captured", "refund_pending"),
+      paymentCaptureKind: "refund_failure_rollback",
+    };
+    const command = {
+      ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+      current: "refund_pending" as const,
+      target: "captured" as const,
+      idempotencyKey: "refund-failure-rollback-invalid",
+      context: base,
+    };
+
+    for (const [field, value] of [
+      ["paymentCaptureKind", "settlement"],
+      ["paymentId", "payment-2"],
+      ["orderId", "order-2"],
+      ["phaseId", "phase-2"],
+      ["paymentRole", "unknown"],
+      ["refundFailureTransactionId", "refund-2"],
+      ["refundFailureRollbackPreviousPaymentResultId", "foreign-result"],
+      ["refundFailureRollbackCurrentStateCommandKey", "foreign-command"],
+      ["refundFailureRollbackResultId", " "],
+      ["refundFailureAttemptKey", "foreign-attempt"],
+      ["refundFailureRollbackPaymentResultId", "foreign-result"],
+      ["refundFailureRollbackTransactionResultId", "foreign-result"],
+      ["refundFailureRollbackEvidenceResultId", "foreign-result"],
+      ["refundFailureNoPendingRefunds", false],
+      ["refundFailureNoPendingRefunds", undefined],
+      ["refundFailureNoSuccessfulRefunds", false],
+      ["refundFailureRollbackCompleted", false],
+      ["refundFailureRollbackAtomic", false],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: { ...base, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    for (const [recordName, field, value] of [
+      ["refundFailureRollbackExpectedPayment", "id", "payment-2"],
+      ["refundFailureRollbackExpectedPayment", "status", "captured"],
+      ["refundFailureRollbackExpectedPayment", "immutable", false],
+      ["refundFailureRollbackRestoredPayment", "id", "payment-2"],
+      ["refundFailureRollbackRestoredPayment", "previousStatus", "captured"],
+      ["refundFailureRollbackRestoredPayment", "targetStatus", "refunded"],
+      ["refundFailureRollbackRestoredPayment", "immutable", false],
+      ["refundFailureRollbackRefundTransaction", "id", "refund-2"],
+      ["refundFailureRollbackRefundTransaction", "status", "succeeded"],
+      [
+        "refundFailureRollbackRefundTransaction",
+        "idempotencyKey",
+        "foreign-attempt",
+      ],
+      ["refundFailureRollbackRefundTransaction", "immutable", false],
+      ["refundFailureProviderEvidence", "refundTransactionId", "refund-2"],
+      ["refundFailureProviderEvidence", "outcome", "succeeded"],
+      ["refundFailureProviderEvidence", "immutable", false],
+    ] as const) {
+      const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: {
+            ...base,
+            [recordName]: { ...snapshot, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
   });
 
   it.each([

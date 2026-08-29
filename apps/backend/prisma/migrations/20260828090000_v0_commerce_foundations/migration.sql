@@ -174,6 +174,7 @@ CREATE TABLE "orders" (
     "status" "order_status" NOT NULL DEFAULT 'DRAFT',
     "quoted_at" TIMESTAMPTZ(3),
     "confirmed_at" TIMESTAMPTZ(3),
+    "accepted_order_price_binding_id" UUID,
     "accepted_terms_revision" VARCHAR(100),
     "accepted_claim_policy_revision" VARCHAR(100),
     "withdrawal_exception_acknowledged_at" TIMESTAMPTZ(3),
@@ -473,6 +474,7 @@ CREATE UNIQUE INDEX "payment_schedules_price_snapshot_id_sequence_key" ON "payme
 CREATE UNIQUE INDEX "payment_schedules_price_snapshot_id_role_key" ON "payment_schedules"("price_snapshot_id", "role");
 CREATE UNIQUE INDEX "payment_schedules_contract_key" ON "payment_schedules"("id", "price_snapshot_id", "role", "gross_amount_minor");
 CREATE UNIQUE INDEX "orders_public_reference_key" ON "orders"("public_reference");
+CREATE UNIQUE INDEX "orders_accepted_order_price_binding_id_key" ON "orders"("accepted_order_price_binding_id");
 CREATE INDEX "orders_customer_id_created_at_idx" ON "orders"("customer_id", "created_at");
 CREATE INDEX "orders_status_created_at_idx" ON "orders"("status", "created_at");
 CREATE UNIQUE INDEX "order_items_order_id_ordinal_key" ON "order_items"("order_id", "ordinal");
@@ -567,6 +569,7 @@ ALTER TABLE "quote_price_bindings" ADD CONSTRAINT "quote_price_bindings_price_sn
 ALTER TABLE "order_price_bindings" ADD CONSTRAINT "order_price_bindings_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "order_price_bindings" ADD CONSTRAINT "order_price_bindings_price_snapshot_id_fkey" FOREIGN KEY ("price_snapshot_id") REFERENCES "price_snapshots"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "order_price_bindings" ADD CONSTRAINT "order_price_bindings_delivery_destination_id_order_id_fkey" FOREIGN KEY ("delivery_destination_id", "order_id") REFERENCES "delivery_destinations"("id", "order_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "orders" ADD CONSTRAINT "orders_accepted_order_price_binding_id_fkey" FOREIGN KEY ("accepted_order_price_binding_id") REFERENCES "order_price_bindings"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "delivery_destinations" ADD CONSTRAINT "delivery_destinations_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "order_active_price_bindings" ADD CONSTRAINT "order_active_price_bindings_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "order_active_price_bindings" ADD CONSTRAINT "order_active_price_bindings_order_price_binding_id_fkey" FOREIGN KEY ("order_price_binding_id") REFERENCES "order_price_bindings"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -666,12 +669,14 @@ ALTER TABLE "payment_schedules" ADD CONSTRAINT "payment_schedules_values_check" 
 ALTER TABLE "orders" ADD CONSTRAINT "orders_public_reference_identity_check" CHECK ("public_reference" ~ '[^[:space:]]');
 ALTER TABLE "orders" ADD CONSTRAINT "orders_checkout_acceptance_shape_check" CHECK (
     (
-        "accepted_terms_revision" IS NULL
+        "accepted_order_price_binding_id" IS NULL
+        AND "accepted_terms_revision" IS NULL
         AND "accepted_claim_policy_revision" IS NULL
         AND "withdrawal_exception_acknowledged_at" IS NULL
     )
     OR (
-        "accepted_terms_revision" IS NOT NULL
+        "accepted_order_price_binding_id" IS NOT NULL
+        AND "accepted_terms_revision" IS NOT NULL
         AND "accepted_claim_policy_revision" IS NOT NULL
         AND "withdrawal_exception_acknowledged_at" IS NOT NULL
         AND "accepted_terms_revision" ~ '[^[:space:]]'
@@ -2661,6 +2666,7 @@ BEGIN
         IF NEW."status" <> 'DRAFT'
            OR NEW."quoted_at" IS NOT NULL
            OR NEW."confirmed_at" IS NOT NULL
+           OR NEW."accepted_order_price_binding_id" IS NOT NULL
            OR NEW."accepted_terms_revision" IS NOT NULL
            OR NEW."accepted_claim_policy_revision" IS NOT NULL
            OR NEW."withdrawal_exception_acknowledged_at" IS NOT NULL THEN
@@ -2730,10 +2736,17 @@ BEGIN
 
     IF OLD."status" = 'QUOTED' AND NEW."status" = 'CONFIRMED'
        AND (
-           NEW."accepted_terms_revision" IS NULL
+           NEW."accepted_order_price_binding_id" IS NULL
+           OR NEW."accepted_terms_revision" IS NULL
            OR NEW."accepted_claim_policy_revision" IS NULL
            OR NEW."withdrawal_exception_acknowledged_at" IS NULL
            OR NEW."withdrawal_exception_acknowledged_at" > NEW."confirmed_at"
+           OR NOT EXISTS (
+               SELECT 1
+               FROM "order_active_price_bindings" active
+               WHERE active."order_id" = NEW."id"
+                 AND active."order_price_binding_id" = NEW."accepted_order_price_binding_id"
+           )
        ) THEN
         RAISE EXCEPTION 'quoted-to-confirmed transition requires prior checkout acceptance evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_check';
@@ -2764,7 +2777,7 @@ END;
 $$;
 
 CREATE TRIGGER "orders_status_transitions_valid"
-BEFORE INSERT OR UPDATE OF "id", "public_reference", "status", "quoted_at", "confirmed_at", "accepted_terms_revision", "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at", "created_at" ON "orders"
+BEFORE INSERT OR UPDATE OF "id", "public_reference", "status", "quoted_at", "confirmed_at", "accepted_order_price_binding_id", "accepted_terms_revision", "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at", "created_at" ON "orders"
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_status_transition();
 
 CREATE FUNCTION taven_protect_order_checkout_acceptance()
@@ -2775,7 +2788,8 @@ DECLARE
     evidence_now timestamptz := clock_timestamp();
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        IF NEW."accepted_terms_revision" IS NOT NULL
+        IF NEW."accepted_order_price_binding_id" IS NOT NULL
+           OR NEW."accepted_terms_revision" IS NOT NULL
            OR NEW."accepted_claim_policy_revision" IS NOT NULL
            OR NEW."withdrawal_exception_acknowledged_at" IS NOT NULL THEN
             RAISE EXCEPTION 'checkout acceptance cannot predate the quoted order'
@@ -2785,15 +2799,18 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    IF NEW."accepted_terms_revision" IS NOT DISTINCT FROM OLD."accepted_terms_revision"
+    IF NEW."accepted_order_price_binding_id" IS NOT DISTINCT FROM OLD."accepted_order_price_binding_id"
+       AND NEW."accepted_terms_revision" IS NOT DISTINCT FROM OLD."accepted_terms_revision"
        AND NEW."accepted_claim_policy_revision" IS NOT DISTINCT FROM OLD."accepted_claim_policy_revision"
        AND NEW."withdrawal_exception_acknowledged_at" IS NOT DISTINCT FROM OLD."withdrawal_exception_acknowledged_at" THEN
         RETURN NEW;
     END IF;
 
-    IF OLD."accepted_terms_revision" IS NOT NULL
+    IF OLD."accepted_order_price_binding_id" IS NOT NULL
+       OR OLD."accepted_terms_revision" IS NOT NULL
        OR OLD."accepted_claim_policy_revision" IS NOT NULL
        OR OLD."withdrawal_exception_acknowledged_at" IS NOT NULL
+       OR NEW."accepted_order_price_binding_id" IS NULL
        OR NEW."accepted_terms_revision" IS NULL
        OR btrim(NEW."accepted_terms_revision") = ''
        OR NEW."accepted_claim_policy_revision" IS NULL
@@ -2809,6 +2826,16 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_immutable_check';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "order_active_price_bindings" active
+        WHERE active."order_id" = OLD."id"
+          AND active."order_price_binding_id" = NEW."accepted_order_price_binding_id"
+    ) THEN
+        RAISE EXCEPTION 'checkout acceptance must identify the active destination-bound price binding'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_binding_check';
+    END IF;
+
     IF NEW."withdrawal_exception_acknowledged_at" < OLD."quoted_at"
        OR NEW."withdrawal_exception_acknowledged_at" > evidence_now + interval '5 seconds' THEN
         RAISE EXCEPTION 'checkout acceptance evidence must follow the quote and cannot be in the future'
@@ -2820,7 +2847,7 @@ END;
 $$;
 
 CREATE TRIGGER "orders_checkout_acceptance_protected"
-BEFORE INSERT OR UPDATE OF "accepted_terms_revision", "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at" ON "orders"
+BEFORE INSERT OR UPDATE OF "accepted_order_price_binding_id", "accepted_terms_revision", "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at" ON "orders"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_order_checkout_acceptance();
 
 CREATE FUNCTION taven_reconcile_refunded_order()
@@ -4474,6 +4501,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     target_order_status "order_status";
+    target_accepted_order_price_binding_id uuid;
 BEGIN
     IF TG_OP = 'UPDATE' AND NEW."order_id" IS DISTINCT FROM OLD."order_id" THEN
         RAISE EXCEPTION 'active order price binding cannot be reparented'
@@ -4501,8 +4529,8 @@ BEGIN
     SET "invalidated_at" = "invalidated_at"
     WHERE "id" = NEW."order_price_binding_id";
 
-    SELECT "status"
-    INTO target_order_status
+    SELECT "status", "accepted_order_price_binding_id"
+    INTO target_order_status, target_accepted_order_price_binding_id
     FROM "orders"
     WHERE "id" = NEW."order_id"
     FOR UPDATE NOWAIT;
@@ -4510,6 +4538,13 @@ BEGIN
     IF EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = NEW."order_id") THEN
         RAISE EXCEPTION 'active destination and price binding cannot change after payment intent creation'
             USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_payment_guard';
+    END IF;
+
+    IF TG_OP = 'UPDATE'
+       AND NEW."order_price_binding_id" IS DISTINCT FROM OLD."order_price_binding_id"
+       AND target_accepted_order_price_binding_id IS NOT NULL THEN
+        RAISE EXCEPTION 'active destination and price binding cannot change after checkout acceptance'
+            USING ERRCODE = '23514', CONSTRAINT = 'active_order_price_binding_acceptance_guard';
     END IF;
 
     IF TG_OP = 'UPDATE'
@@ -5334,6 +5369,7 @@ BEGIN
         WHERE target_order."id" = target_order_id
           AND target_order."status" = 'CONFIRMED'
           AND target_order."confirmed_at" IS NOT NULL
+          AND target_order."accepted_order_price_binding_id" = payment."order_price_binding_id"
           AND target_order."accepted_terms_revision" IS NOT NULL
           AND target_order."accepted_claim_policy_revision" IS NOT NULL
           AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
@@ -7049,6 +7085,7 @@ BEGIN
         SELECT 1
         FROM "orders" target_order
         WHERE target_order."id" = NEW."order_id"
+          AND target_order."accepted_order_price_binding_id" = NEW."order_price_binding_id"
           AND target_order."accepted_terms_revision" IS NOT NULL
           AND target_order."accepted_claim_policy_revision" IS NOT NULL
           AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
