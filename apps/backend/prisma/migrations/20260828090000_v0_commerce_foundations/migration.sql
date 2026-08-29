@@ -590,7 +590,7 @@ CREATE UNIQUE INDEX "payments_provider_provider_intent_id_key" ON "payments"("pr
 CREATE UNIQUE INDEX "payments_provider_provider_capture_id_key" ON "payments"("provider", "provider_capture_id");
 CREATE UNIQUE INDEX "payments_intent_creation_failure_result_id_key" ON "payments"("intent_creation_failure_result_id");
 CREATE UNIQUE INDEX "payments_intent_creation_failure_scope_key" ON "payments"("intent_creation_failure_result_id", "id", "provider");
-CREATE UNIQUE INDEX "payments_one_nonfailed_attempt_per_schedule_key" ON "payments"("payment_schedule_id") WHERE "status" <> 'FAILED';
+CREATE UNIQUE INDEX "payments_one_active_attempt_per_schedule_key" ON "payments"("payment_schedule_id") WHERE "status" IN ('CREATED', 'PENDING', 'CAPTURED');
 CREATE INDEX "payments_order_id_status_idx" ON "payments"("order_id", "status");
 CREATE INDEX "payments_capture_cutoff_at_status_idx" ON "payments"("capture_cutoff_at", "status");
 CREATE INDEX "payments_checkout_capture_expires_at_status_idx" ON "payments"("checkout_capture_expires_at", "status");
@@ -6696,13 +6696,10 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
     END IF;
 
-    IF (NEW."kind" = 'LABEL_VOIDED'
-        AND NEW."occurred_at" < target_label_created_at - interval '5 seconds')
-       OR (NEW."kind" <> 'LABEL_VOIDED'
-           AND NEW."occurred_at" < target_label_created_at)
+    IF NEW."occurred_at" < target_label_created_at - interval '5 seconds'
        OR (NEW."kind" IN ('TRANSIT_SCAN', 'DELIVERY_SCAN')
            AND (target_handed_over_at IS NULL
-                OR NEW."occurred_at" < target_handed_over_at)) THEN
+                OR NEW."occurred_at" < target_handed_over_at - interval '5 seconds')) THEN
         RAISE EXCEPTION 'Shipment provider event timestamps must match its lifecycle chronology'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_evidence_check';
     END IF;
@@ -7153,7 +7150,7 @@ BEGIN
              AND event."kind" = 'TRANSIT_SCAN'
              AND event."carrier" = NEW."carrier"
              AND event."carrier_label_id" = NEW."carrier_label_id"
-             AND event."occurred_at" >= NEW."handed_over_at"
+             AND event."occurred_at" >= NEW."handed_over_at" - interval '5 seconds'
        ) THEN
         RAISE EXCEPTION 'Shipment transit requires its exact authenticated carrier scan'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_transit_scan_confirmation_check';
@@ -7169,7 +7166,7 @@ BEGIN
              AND event."kind" = 'DELIVERY_SCAN'
              AND event."carrier" = NEW."carrier"
              AND event."carrier_label_id" = NEW."carrier_label_id"
-             AND event."occurred_at" >= NEW."handed_over_at"
+             AND event."occurred_at" >= NEW."handed_over_at" - interval '5 seconds'
              AND event."verified_at" = NEW."delivered_at"
        ) THEN
         RAISE EXCEPTION 'Shipment delivery requires its exact authenticated carrier scan'
@@ -7771,9 +7768,13 @@ BEGIN
            OR NEW."currency" IS DISTINCT FROM target_currency
            OR (NEW."kind" = 'PAYMENT_CAPTURED' AND (
                target_payment_status NOT IN (
-                   'PENDING', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
+                   'PENDING', 'FAILED', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
                    'PARTIALLY_REFUNDED', 'REFUNDED'
                )
+               OR (target_payment_status = 'FAILED' AND (
+                   target_provider_intent_id IS NULL
+                   OR target_provider_intent_id !~ '[^[:space:]]'
+               ))
                OR (target_provider_capture_id IS NOT NULL
                    AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_capture_id)
            ))
@@ -7932,6 +7933,7 @@ BEGIN
        AND NOT (
            (OLD."status" = 'CREATED' AND NEW."status" IN ('PENDING', 'FAILED', 'VOIDED'))
            OR (OLD."status" = 'PENDING' AND NEW."status" IN ('CAPTURED', 'FAILED', 'VOIDED', 'REFUND_PENDING'))
+           OR (OLD."status" = 'FAILED' AND NEW."status" = 'REFUND_PENDING')
            OR (OLD."status" = 'CAPTURED' AND NEW."status" = 'REFUND_PENDING')
            OR (OLD."status" = 'VOIDED' AND NEW."status" = 'REFUND_PENDING')
            OR (OLD."status" = 'REFUND_PENDING' AND NEW."status" IN ('CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED'))
@@ -7997,6 +7999,74 @@ BEGIN
        AND (NEW."capture_authorized" OR NEW."capture_cutoff_at" IS NULL) THEN
         RAISE EXCEPTION 'failed or voided payment requires a closed authorization window'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+    END IF;
+
+    IF OLD."status" = 'FAILED'
+       AND NEW."status" = 'REFUND_PENDING'
+       AND (
+           NEW."provider_intent_id" IS NULL
+           OR NEW."provider_intent_id" !~ '[^[:space:]]'
+           OR NEW."capture_authorized"
+           OR NEW."capture_cutoff_at" IS NULL
+           OR NEW."captured_at" IS NULL
+           OR NEW."captured_at" < NEW."capture_cutoff_at"
+           OR NOT EXISTS (
+               SELECT 1
+               FROM "payment_provider_events" event
+               WHERE event."payment_id" = NEW."id"
+                 AND event."refund_transaction_id" IS NULL
+                 AND event."provider" = NEW."provider"
+                 AND event."kind" = 'PAYMENT_FAILED'
+                 AND event."provider_transaction_id" = NEW."provider_intent_id"
+                 AND event."amount_minor" = NEW."requested_amount_minor"
+                 AND event."currency" = NEW."currency"
+                 AND event."verified_at" = NEW."capture_cutoff_at"
+           )
+       ) THEN
+        RAISE EXCEPTION 'failed Payment may reopen only for a verified capture after its closed authorization cutoff'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_failed_late_capture_check';
+    END IF;
+
+    IF OLD."status" = 'PENDING'
+       AND NEW."status" = 'REFUND_PENDING'
+       AND EXISTS (
+           SELECT 1
+           FROM "payment_provider_events" event
+           WHERE event."payment_id" = NEW."id"
+             AND event."refund_transaction_id" IS NULL
+             AND event."provider" = NEW."provider"
+             AND event."kind" = 'PAYMENT_FAILED'
+             AND event."provider_transaction_id" = NEW."provider_intent_id"
+             AND event."amount_minor" = NEW."requested_amount_minor"
+             AND event."currency" = NEW."currency"
+             AND event."verified_at" = NEW."capture_cutoff_at"
+       ) THEN
+        RAISE EXCEPTION 'a provider-failed Payment must record failure before late-capture compensation'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_failed_late_capture_source_check';
+    END IF;
+
+    IF OLD."status" = 'REFUND_PENDING'
+       AND NEW."status" = 'CAPTURED'
+       AND EXISTS (
+           SELECT 1
+           FROM "refund_transactions" refund
+           WHERE refund."payment_id" = NEW."id"
+             AND refund."reason" = 'LATE_CAPTURE_COMPENSATION'
+       )
+       AND EXISTS (
+           SELECT 1
+           FROM "payment_provider_events" event
+           WHERE event."payment_id" = NEW."id"
+             AND event."refund_transaction_id" IS NULL
+             AND event."provider" = NEW."provider"
+             AND event."kind" = 'PAYMENT_FAILED'
+             AND event."provider_transaction_id" = NEW."provider_intent_id"
+             AND event."amount_minor" = NEW."requested_amount_minor"
+             AND event."currency" = NEW."currency"
+             AND event."verified_at" = NEW."capture_cutoff_at"
+       ) THEN
+        RAISE EXCEPTION 'failed-source late capture must retain pending compensation until fully refunded'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_failed_late_capture_refund_retry_check';
     END IF;
 
     IF NEW."id" IS DISTINCT FROM OLD."id"
@@ -8714,6 +8784,7 @@ DECLARE
     payment_capture_authorized boolean;
     payment_capture_cutoff_at timestamptz;
     payment_captured_at timestamptz;
+    payment_failed_before_capture boolean;
     target_order_status "order_status";
     evidence_now timestamptz := clock_timestamp();
 BEGIN
@@ -8747,9 +8818,21 @@ BEGIN
 
     SELECT payment."captured_amount_minor", payment."capture_authorized",
            payment."capture_cutoff_at", payment."captured_at",
-           target_order."status"
+           EXISTS (
+               SELECT 1
+               FROM "payment_provider_events" event
+               WHERE event."payment_id" = payment."id"
+                 AND event."refund_transaction_id" IS NULL
+                 AND event."provider" = payment."provider"
+                 AND event."kind" = 'PAYMENT_FAILED'
+                 AND event."provider_transaction_id" = payment."provider_intent_id"
+                 AND event."amount_minor" = payment."requested_amount_minor"
+                 AND event."currency" = payment."currency"
+                 AND event."verified_at" = payment."capture_cutoff_at"
+           ), target_order."status"
     INTO captured_amount, payment_capture_authorized,
-         payment_capture_cutoff_at, payment_captured_at, target_order_status
+         payment_capture_cutoff_at, payment_captured_at,
+         payment_failed_before_capture, target_order_status
     FROM "payments" payment
     JOIN "orders" target_order ON target_order."id" = payment."order_id"
     WHERE payment."id" = NEW."payment_id"
@@ -8771,8 +8854,9 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'refund_completion_evidence_check';
     END IF;
 
-    IF NEW."requested_at" < payment_captured_at
-       OR (NEW."completed_at" IS NOT NULL AND NEW."completed_at" < payment_captured_at) THEN
+    IF NEW."requested_at" < payment_captured_at - interval '5 seconds'
+       OR (NEW."completed_at" IS NOT NULL
+           AND NEW."completed_at" < payment_captured_at - interval '5 seconds') THEN
         RAISE EXCEPTION 'refund evidence cannot predate payment capture'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_capture_timestamp_order_check';
     END IF;
@@ -8797,7 +8881,8 @@ BEGIN
         OR payment_capture_cutoff_at IS NULL
         OR payment_captured_at IS NULL
         OR payment_captured_at < payment_capture_cutoff_at
-        OR target_order_status NOT IN ('EXPIRED', 'CANCELLED')
+        OR (target_order_status NOT IN ('EXPIRED', 'CANCELLED')
+            AND NOT payment_failed_before_capture)
         OR NEW."amount_minor" <> captured_amount - committed_refunds
     ) THEN
         RAISE EXCEPTION 'late-capture compensation requires the full remaining capture after a terminal checkout cutoff'
@@ -8807,7 +8892,8 @@ BEGIN
     IF NOT payment_capture_authorized
        AND payment_capture_cutoff_at IS NOT NULL
        AND payment_captured_at >= payment_capture_cutoff_at
-       AND target_order_status IN ('EXPIRED', 'CANCELLED')
+       AND (target_order_status IN ('EXPIRED', 'CANCELLED')
+            OR payment_failed_before_capture)
        AND NEW."reason" <> 'LATE_CAPTURE_COMPENSATION' THEN
         RAISE EXCEPTION 'a capture after a terminal checkout cutoff requires late-capture compensation'
             USING ERRCODE = '23514', CONSTRAINT = 'late_capture_compensation_reason_check';

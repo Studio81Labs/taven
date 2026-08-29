@@ -2076,6 +2076,19 @@ function requireExactRefundFailureRollback<S extends string>(
   const failure = record(context?.refundFailureProviderEvidence);
 
   if (
+    command.target === "captured" &&
+    typeof expectedPayment?.providerFailureEventId === "string" &&
+    expectedPayment.providerFailureEventId.trim().length > 0
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "failed-source late capture must retain compensation provenance and retry its refund",
+    );
+  }
+
+  if (
     context?.paymentCaptureKind !== "refund_failure_rollback" ||
     !nonBlank(paymentId) ||
     !nonBlank(orderId) ||
@@ -2105,6 +2118,12 @@ function requireExactRefundFailureRollback<S extends string>(
     command.currentStateResultId !== previousResultId ||
     command.currentStateCommandKey !== stateKey ||
     expectedPayment?.id !== paymentId ||
+    !Object.prototype.hasOwnProperty.call(
+      expectedPayment,
+      "providerFailureEventId",
+    ) ||
+    (expectedPayment.providerFailureEventId !== null &&
+      !nonBlank(expectedPayment.providerFailureEventId)) ||
     expectedPayment.orderId !== orderId ||
     expectedPayment.phaseId !== phaseId ||
     expectedPayment.role !== role ||
@@ -2118,6 +2137,12 @@ function requireExactRefundFailureRollback<S extends string>(
     expectedPayment.currentStateCommandKey !== stateKey ||
     expectedPayment.immutable !== true ||
     restoredPayment?.id !== paymentId ||
+    !Object.prototype.hasOwnProperty.call(
+      restoredPayment,
+      "providerFailureEventId",
+    ) ||
+    restoredPayment.providerFailureEventId !==
+      expectedPayment.providerFailureEventId ||
     restoredPayment.orderId !== orderId ||
     restoredPayment.phaseId !== phaseId ||
     restoredPayment.role !== role ||
@@ -2705,8 +2730,17 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
       : undefined;
   const providerTransactionId = command.context?.providerPaymentTransactionId;
   const refundTransactionId = command.context?.refundTransactionId;
+  const failureEventValue = command.context?.paymentFailureProviderEvent;
+  const failureEvent =
+    typeof failureEventValue === "object" &&
+    failureEventValue !== null &&
+    !Array.isArray(failureEventValue)
+      ? (failureEventValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const failedCaptureCutoffAt = expected?.captureCutoffAt;
+  const failureVerifiedAt = failureEvent?.verifiedAt;
   if (
-    command.current === "voided" &&
+    (command.current === "voided" || command.current === "failed") &&
     command.target === "refund_pending" &&
     (typeof paymentId !== "string" ||
       paymentId.trim().length === 0 ||
@@ -2721,7 +2755,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
       expected.orderId !== command.context?.orderId ||
       expected.phaseId !== command.context?.phaseId ||
       expected.role !== command.context?.paymentRole ||
-      expected.status !== "voided" ||
+      expected.status !== command.current ||
       expected.resultId !== previousResultId ||
       expected.currentStateCommandKey !== stateKey ||
       expected.immutable !== true ||
@@ -2734,6 +2768,44 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
       command.current,
       command.target,
       "late capture compensation must belong to this exact Payment",
+    );
+  }
+  if (
+    command.current === "failed" &&
+    (typeof expected?.providerIntentId !== "string" ||
+      expected.providerIntentId.trim().length === 0 ||
+      typeof expected.providerFailureEventId !== "string" ||
+      expected.providerFailureEventId.trim().length === 0 ||
+      typeof expected.provider !== "string" ||
+      expected.provider.trim().length === 0 ||
+      typeof expected.requestedAmountMinor !== "bigint" ||
+      expected.requestedAmountMinor <= 0n ||
+      typeof expected.currency !== "string" ||
+      expected.currency.trim().length === 0 ||
+      expected.captureAuthorized !== false ||
+      !(failedCaptureCutoffAt instanceof Instant) ||
+      command.context?.paymentFailureProviderEventId !==
+        expected.providerFailureEventId ||
+      command.context?.paymentFailureResultId !== previousResultId ||
+      failureEvent?.id !== expected.providerFailureEventId ||
+      failureEvent.paymentId !== paymentId ||
+      failureEvent.transactionId !== expected.providerIntentId ||
+      failureEvent.provider !== expected.provider ||
+      failureEvent.amountMinor !== expected.requestedAmountMinor ||
+      failureEvent.currency !== expected.currency ||
+      failureEvent.status !== "failed" ||
+      failureEvent.authenticated !== true ||
+      failureEvent.verified !== true ||
+      !(failureVerifiedAt instanceof Instant) ||
+      !failureVerifiedAt.equals(failedCaptureCutoffAt) ||
+      failureEvent.resultId !== previousResultId ||
+      failureEvent.immutable !== true)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "failed-source late capture requires the exact prior provider failure evidence",
     );
   }
   if (
@@ -2768,7 +2840,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
     lifecycle,
     command,
     "verifiedLateCapture",
-    "a voided payment may be refunded only after verified late capture",
+    "a closed payment may be refunded only after verified late capture",
   );
   requireFlag(
     lifecycle,
@@ -6925,10 +6997,11 @@ export type PaymentRole = "full" | "deposit" | "balance";
 export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   name: "Payment",
   initial: ["created"],
-  terminal: ["failed", "refunded"],
+  terminal: ["refunded"],
   transitions: {
     created: ["pending", "failed", "voided"],
     pending: ["captured", "failed", "voided", "refund_pending"],
+    failed: ["refund_pending"],
     captured: ["refund_pending"],
     partially_refunded: ["refund_pending"],
     voided: ["refund_pending"],
@@ -6980,6 +7053,9 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       }
     }
     if (command.current === "voided" && command.target === "refund_pending") {
+      requireVerifiedLateCaptureCompensation("Payment", command);
+    }
+    if (command.current === "failed" && command.target === "refund_pending") {
       requireVerifiedLateCaptureCompensation("Payment", command);
     }
     if (command.current === "pending" && command.target === "failed") {

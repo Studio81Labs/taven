@@ -372,6 +372,7 @@ async function persistVerifiedShipmentOutcome(
   verifiedAt = new Date(),
   providerTransactionId?: string,
   advanceLifecycle = true,
+  occurredAt = verifiedAt,
 ): Promise<void> {
   const evidence = (
     await client.query<{ carrier: string; carrier_label_id: string }>(
@@ -391,7 +392,7 @@ async function persistVerifiedShipmentOutcome(
         provider_transaction_id, kind, occurred_at, authenticated_at,
         verified_at, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7::shipment_provider_event_kind,
-             $8,$8,$8,$8)`,
+             $8,$9,$9,$9)`,
     [
       randomUUID(),
       shipmentId,
@@ -400,6 +401,7 @@ async function persistVerifiedShipmentOutcome(
       providerEventId,
       providerTransactionId ?? `${providerEventId}:transaction`,
       kind,
+      occurredAt,
       verifiedAt,
     ],
   );
@@ -791,6 +793,7 @@ async function persistVerifiedAcceptanceScan(
   client: PoolClient,
   shipmentId: string,
   providerEventId: string,
+  occurredAt?: Date,
 ): Promise<Date> {
   const verifiedAt = (
     await client.query<{ verified_at: Date }>(
@@ -799,7 +802,8 @@ async function persistVerifiedAcceptanceScan(
         provider_transaction_id, kind, occurred_at, authenticated_at,
         verified_at, created_at)
      SELECT $1, shipment.id, shipment.carrier, shipment.carrier_label_id,
-            $3, $4, 'ACCEPTANCE_SCAN', statement_timestamp(), statement_timestamp(),
+            $3, $4, 'ACCEPTANCE_SCAN',
+            coalesce($5::timestamptz, statement_timestamp()), statement_timestamp(),
             statement_timestamp() + interval '2 seconds', statement_timestamp()
      FROM shipments shipment
      WHERE shipment.id = $2
@@ -809,6 +813,7 @@ async function persistVerifiedAcceptanceScan(
         shipmentId,
         providerEventId,
         `${providerEventId}:transaction`,
+        occurredAt ?? null,
       ],
     )
   ).rows[0]?.verified_at;
@@ -5016,6 +5021,201 @@ describe("commerce persistence foundations", () => {
         },
       ]);
 
+      const failedCaptureBeforeCutoff = new Date(failedAt.getTime() - 1);
+      await expectQueryError(
+        client,
+        "capture_before_failed_payment_cutoff",
+        async () => {
+          await fixtures.persistPaymentProviderEvent(
+            failedPayment.paymentId,
+            "PAYMENT_CAPTURED",
+            "failed-payment-capture-before-cutoff",
+            failedCaptureBeforeCutoff,
+          );
+          await client.query(
+            `UPDATE payments
+             SET status = 'REFUND_PENDING',
+                 captured_amount_minor = requested_amount_minor,
+                 provider_capture_id = $2, captured_at = $3, updated_at = $3
+             WHERE id = $1`,
+            [
+              failedPayment.paymentId,
+              "failed-payment-capture-before-cutoff",
+              failedCaptureBeforeCutoff,
+            ],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_failed_late_capture_check",
+        },
+      );
+
+      const failedLateCapturedAt = (
+        await client.query<{ captured_at: Date }>(
+          `SELECT clock_timestamp() + interval '5 seconds' AS captured_at`,
+        )
+      ).rows[0]?.captured_at;
+      if (!failedLateCapturedAt) {
+        throw new Error("failed late-capture database anchor is unavailable");
+      }
+      const failedProviderCaptureId = "failed-payment-late-capture";
+      await fixtures.persistPaymentProviderEvent(
+        failedPayment.paymentId,
+        "PAYMENT_CAPTURED",
+        failedProviderCaptureId,
+        failedLateCapturedAt,
+      );
+      await client.query(
+        `UPDATE payments
+         SET status = 'REFUND_PENDING',
+             captured_amount_minor = requested_amount_minor,
+             provider_capture_id = $2, captured_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [
+          failedPayment.paymentId,
+          failedProviderCaptureId,
+          failedLateCapturedAt,
+        ],
+      );
+      await expectQueryError(
+        client,
+        "failed_late_capture_without_compensation",
+        () =>
+          client.query(
+            `SET CONSTRAINTS "payments_refund_status_reconciled" IMMEDIATE`,
+          ),
+        {
+          code: "23514",
+          constraint: "payment_refund_status_reconciliation_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "failed_late_refund_beyond_negative_skew",
+        () =>
+          client.query(
+            `INSERT INTO refund_transactions
+               (id, payment_id, idempotency_key, amount_minor, reason, status,
+                requested_at, created_at, updated_at)
+             SELECT $1, id, $2, requested_amount_minor,
+                    'LATE_CAPTURE_COMPENSATION', 'PENDING', $3, $3, $3
+             FROM payments WHERE id = $4`,
+            [
+              fixtures.id("failed-late-refund-beyond-negative-skew"),
+              "late_initial_capture:failed-late-refund-beyond-negative-skew",
+              new Date(failedLateCapturedAt.getTime() - 5_001),
+              failedPayment.paymentId,
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "refund_capture_timestamp_order_check",
+        },
+      );
+      const failedLateRefundId = fixtures.id("failed-late-capture-refund");
+      const failedLateRefundRequestedAt = (
+        await client.query<{ requested_at: Date }>(
+          `INSERT INTO refund_transactions
+             (id, payment_id, idempotency_key, amount_minor, reason, status,
+              updated_at)
+           SELECT $1, id, $2, requested_amount_minor,
+                  'LATE_CAPTURE_COMPENSATION', 'PENDING', clock_timestamp()
+           FROM payments WHERE id = $3
+           RETURNING requested_at`,
+          [
+            failedLateRefundId,
+            `late_initial_capture:${failedProviderCaptureId}`,
+            failedPayment.paymentId,
+          ],
+        )
+      ).rows[0]?.requested_at;
+      if (!failedLateRefundRequestedAt) {
+        throw new Error("failed late-capture refund evidence is unavailable");
+      }
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{
+            capture_event_count: string;
+            capture_matches_refund: boolean;
+            captured_at: Date;
+            job_count: string;
+            order_status: string;
+            payment_status: string;
+            phase_status: string;
+            provider_capture_id: string;
+            refund_requested_before_capture: boolean;
+            refund_requested_within_skew: boolean;
+            refund_status: string;
+            reservation_status: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    phase.status::text AS phase_status,
+                    reservation_set.status::text AS reservation_status,
+                    payment.status::text AS payment_status,
+                    payment.provider_capture_id, payment.captured_at,
+                    refund.status::text AS refund_status,
+                    payment.captured_amount_minor = refund.amount_minor
+                      AS capture_matches_refund,
+                    refund.requested_at < payment.captured_at
+                      AS refund_requested_before_capture,
+                    refund.requested_at >=
+                      payment.captured_at - interval '5 seconds'
+                      AS refund_requested_within_skew,
+                    (SELECT count(*)::text
+                     FROM payment_provider_events event
+                     WHERE event.payment_id = payment.id
+                       AND event.kind = 'PAYMENT_CAPTURED'
+                       AND event.provider_transaction_id = $3)
+                      AS capture_event_count,
+                    (SELECT count(*)::text FROM jobs
+                     WHERE order_id = target_order.id) AS job_count
+             FROM orders target_order
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             JOIN phase_resource_plans resource_plan
+               ON resource_plan.order_phase_id = phase.id
+             JOIN phase_reservation_sets reservation_set
+               ON reservation_set.phase_resource_plan_id = resource_plan.id
+              AND reservation_set.node_id = resource_plan.node_id
+             JOIN payments payment ON payment.order_id = target_order.id
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             WHERE target_order.id = $1 AND refund.id = $2`,
+            [
+              failedPayment.orderId,
+              failedLateRefundId,
+              failedProviderCaptureId,
+            ],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "EXPIRED",
+          phase_status: "CANCELLED",
+          reservation_status: "RELEASED",
+          payment_status: "REFUND_PENDING",
+          provider_capture_id: failedProviderCaptureId,
+          captured_at: failedLateCapturedAt,
+          refund_status: "PENDING",
+          capture_matches_refund: true,
+          refund_requested_before_capture: true,
+          refund_requested_within_skew: true,
+          capture_event_count: "1",
+          job_count: "0",
+        },
+      ]);
+
       await expectQueryError(
         client,
         "reopen_expired_order",
@@ -5991,7 +6191,11 @@ describe("commerce persistence foundations", () => {
       const foundation = await fixtures.createFoundation(
         "payment-schedule-retry",
       );
-      await createCurrentPlanAndPayment(client, fixtures, foundation);
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
 
       const insertRetry = async (id: string, providerIntentId: string) => {
         const retryCreatedAt = new Date();
@@ -6028,7 +6232,7 @@ describe("commerce persistence foundations", () => {
           ),
         {
           code: "23505",
-          constraint: "payments_one_nonfailed_attempt_per_schedule_key",
+          constraint: "payments_one_active_attempt_per_schedule_key",
         },
       );
 
@@ -6073,6 +6277,274 @@ describe("commerce persistence foundations", () => {
       await expect(
         insertRetry(retryPaymentId, "failed-provider-intent-retry"),
       ).resolves.toBeDefined();
+
+      const lateCapturedAt = (
+        await client.query<{ captured_at: Date }>(
+          `SELECT clock_timestamp() + interval '2 seconds' AS captured_at`,
+        )
+      ).rows[0]?.captured_at;
+      if (!lateCapturedAt) {
+        throw new Error("failed retry late-capture anchor is unavailable");
+      }
+      const lateProviderCaptureId = "failed-attempt-late-capture-with-retry";
+      await fixtures.persistPaymentProviderEvent(
+        foundation.paymentId,
+        "PAYMENT_CAPTURED",
+        lateProviderCaptureId,
+        lateCapturedAt,
+      );
+      await client.query(
+        `UPDATE payments
+         SET status = 'REFUND_PENDING',
+             captured_amount_minor = requested_amount_minor,
+             provider_capture_id = $2, captured_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [foundation.paymentId, lateProviderCaptureId, lateCapturedAt],
+      );
+      const lateRefundId = fixtures.id("failed-attempt-late-refund-with-retry");
+      await client.query(
+        `INSERT INTO refund_transactions
+           (id, payment_id, idempotency_key, amount_minor, reason, status,
+            requested_at, created_at, updated_at)
+         SELECT $1, id, $2, requested_amount_minor,
+                'LATE_CAPTURE_COMPENSATION', 'PENDING', $3, $3, $3
+         FROM payments WHERE id = $4`,
+        [
+          lateRefundId,
+          `late_initial_capture:${lateProviderCaptureId}`,
+          lateCapturedAt,
+          foundation.paymentId,
+        ],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+
+      expect(
+        (
+          await client.query<{
+            active_attempt_count: string;
+            job_count: string;
+            original_status: string;
+            order_status: string;
+            phase_status: string;
+            refund_status: string;
+            reservation_status: string;
+            retry_status: string;
+          }>(
+            `SELECT original.status::text AS original_status,
+                    retry.status::text AS retry_status,
+                    target_order.status::text AS order_status,
+                    phase.status::text AS phase_status,
+                    reservation_set.status::text AS reservation_status,
+                    refund.status::text AS refund_status,
+                    (SELECT count(*)::text FROM payments active
+                     WHERE active.payment_schedule_id = original.payment_schedule_id
+                       AND active.status IN ('CREATED', 'PENDING', 'CAPTURED'))
+                      AS active_attempt_count,
+                    (SELECT count(*)::text FROM jobs
+                     WHERE order_id = target_order.id) AS job_count
+             FROM payments original
+             JOIN payments retry ON retry.id = $2
+             JOIN orders target_order ON target_order.id = original.order_id
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             JOIN phase_resource_plans resource_plan
+               ON resource_plan.order_phase_id = phase.id
+             JOIN phase_reservation_sets reservation_set
+               ON reservation_set.phase_resource_plan_id = resource_plan.id
+              AND reservation_set.node_id = resource_plan.node_id
+             JOIN refund_transactions refund ON refund.id = $3
+             WHERE original.id = $1`,
+            [foundation.paymentId, retryPaymentId, lateRefundId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          original_status: "REFUND_PENDING",
+          retry_status: "PENDING",
+          order_status: "QUOTED",
+          phase_status: "QUOTED",
+          reservation_status: "RESERVED",
+          refund_status: "PENDING",
+          active_attempt_count: "1",
+          job_count: "0",
+        },
+      ]);
+
+      await expectQueryError(
+        client,
+        "second_active_payment_after_failed_late_capture",
+        () =>
+          insertRetry(
+            fixtures.id("second-active-payment-after-late-capture"),
+            "second-active-provider-intent-after-late-capture",
+          ),
+        {
+          code: "23505",
+          constraint: "payments_one_active_attempt_per_schedule_key",
+        },
+      );
+
+      const failedRefundAt = new Date();
+      await expectQueryError(
+        client,
+        "failed_late_capture_refund_cannot_restore_capture",
+        async () => {
+          await fixtures.persistRefundProviderEvent(
+            lateRefundId,
+            "REFUND_FAILED",
+            "failed-late-capture-provider-refund",
+            failedRefundAt,
+          );
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'FAILED',
+                 provider_refund_id = 'failed-late-capture-provider-refund',
+                 updated_at = $2
+             WHERE id = $1`,
+            [lateRefundId, failedRefundAt],
+          );
+          await client.query(
+            `UPDATE payments SET status = 'CAPTURED', updated_at = $2
+             WHERE id = $1`,
+            [foundation.paymentId, failedRefundAt],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "payment_failed_late_capture_refund_retry_check",
+        },
+      );
+
+      await fixtures.persistRefundProviderEvent(
+        lateRefundId,
+        "REFUND_FAILED",
+        "failed-late-capture-provider-refund",
+        failedRefundAt,
+      );
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'FAILED',
+             provider_refund_id = 'failed-late-capture-provider-refund',
+             updated_at = $2
+         WHERE id = $1`,
+        [lateRefundId, failedRefundAt],
+      );
+      const replacementLateRefundId = fixtures.id(
+        "failed-attempt-late-refund-replacement",
+      );
+      await client.query(
+        `INSERT INTO refund_transactions
+           (id, payment_id, idempotency_key, amount_minor, reason, status,
+            requested_at, created_at, updated_at)
+         SELECT $1, id, $2, requested_amount_minor,
+                'LATE_CAPTURE_COMPENSATION', 'PENDING', $3, $3, $3
+         FROM payments WHERE id = $4`,
+        [
+          replacementLateRefundId,
+          `late_initial_capture:${lateProviderCaptureId}:retry:1`,
+          failedRefundAt,
+          foundation.paymentId,
+        ],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" IMMEDIATE`,
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_refund_status_reconciled",
+           "refund_transactions_payment_status_reconciled" DEFERRED`,
+      );
+      expect(
+        (
+          await client.query<{
+            failed_refund_count: string;
+            original_status: string;
+            pending_refund_count: string;
+            retry_status: string;
+          }>(
+            `SELECT original.status::text AS original_status,
+                    retry.status::text AS retry_status,
+                    count(refund.id) FILTER (
+                      WHERE refund.status = 'FAILED'
+                    )::text AS failed_refund_count,
+                    count(refund.id) FILTER (
+                      WHERE refund.status = 'PENDING'
+                    )::text AS pending_refund_count
+             FROM payments original
+             JOIN payments retry ON retry.id = $2
+             JOIN refund_transactions refund ON refund.payment_id = original.id
+             WHERE original.id = $1
+             GROUP BY original.status, retry.status`,
+            [foundation.paymentId, retryPaymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          original_status: "REFUND_PENDING",
+          retry_status: "PENDING",
+          failed_refund_count: "1",
+          pending_refund_count: "1",
+        },
+      ]);
+
+      await activateCurrentPlan(
+        client,
+        fixtures,
+        { ...foundation, paymentId: retryPaymentId },
+        productions,
+        "retry-provider-capture-after-old-compensation",
+      );
+      expect(
+        (
+          await client.query<{
+            job_count: string;
+            original_status: string;
+            order_status: string;
+            pending_refund_count: string;
+            phase_status: string;
+            retry_status: string;
+          }>(
+            `SELECT original.status::text AS original_status,
+                    retry.status::text AS retry_status,
+                    target_order.status::text AS order_status,
+                    phase.status::text AS phase_status,
+                    (SELECT count(*)::text FROM refund_transactions refund
+                     WHERE refund.payment_id = original.id
+                       AND refund.status = 'PENDING') AS pending_refund_count,
+                    (SELECT count(*)::text FROM jobs
+                     WHERE order_id = target_order.id) AS job_count
+             FROM payments original
+             JOIN payments retry ON retry.id = $2
+             JOIN orders target_order ON target_order.id = original.order_id
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             WHERE original.id = $1`,
+            [foundation.paymentId, retryPaymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          original_status: "REFUND_PENDING",
+          retry_status: "CAPTURED",
+          order_status: "CONFIRMED",
+          phase_status: "ACTIVE",
+          pending_refund_count: "1",
+          job_count: String(productions.length),
+        },
+      ]);
     });
   });
 
@@ -6373,6 +6845,21 @@ describe("commerce persistence foundations", () => {
         {
           code: "23514",
           constraint: "payments_provider_intent_identity_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "capture_after_intent_creation_failure",
+        () =>
+          fixtures.persistPaymentProviderEvent(
+            createdFoundation.paymentId,
+            "PAYMENT_CAPTURED",
+            "capture-without-issued-intent",
+            new Date(),
+          ),
+        {
+          code: "23514",
+          constraint: "payment_provider_event_scope_check",
         },
       );
 
@@ -10990,6 +11477,17 @@ describe("commerce persistence foundations", () => {
       ] as const) {
         await advanceOrderLifecycleStep(client, foundation.orderId, status);
       }
+      const labelCreatedAt = (
+        await client.query<{ label_created_at: Date }>(
+          `SELECT label_created_at
+           FROM shipments
+           WHERE id = $1`,
+          [foundation.shipmentId],
+        )
+      ).rows[0]?.label_created_at;
+      if (!labelCreatedAt) {
+        throw new Error("carrier skew fixture has no label timestamp");
+      }
       await expectQueryError(
         client,
         "pre_handoff_scan_cannot_become_noop",
@@ -11010,10 +11508,27 @@ describe("commerce persistence foundations", () => {
           constraint: "shipment_provider_event_consumption_check",
         },
       );
+      await expectQueryError(
+        client,
+        "acceptance_scan_beyond_negative_skew",
+        () =>
+          persistVerifiedAcceptanceScan(
+            client,
+            foundation.shipmentId,
+            "acceptance-scan-beyond-negative-skew",
+            new Date(labelCreatedAt.getTime() - 5_001),
+          ),
+        {
+          code: "23514",
+          constraint: "shipment_provider_event_evidence_check",
+        },
+      );
+      const acceptanceOccurredAt = new Date(labelCreatedAt.getTime() - 5_000);
       const acceptedAt = await persistVerifiedAcceptanceScan(
         client,
         foundation.shipmentId,
         "pre-handoff-acceptance-scan",
+        acceptanceOccurredAt,
       );
       await client.query(
         `UPDATE jobs
@@ -11062,6 +11577,12 @@ describe("commerce persistence foundations", () => {
       );
       const transitAt = new Date(original.handed_over_at.getTime() + 100);
       const deliveredAt = new Date(original.handed_over_at.getTime() + 200);
+      const scanOccurredAt = new Date(
+        original.handed_over_at.getTime() - 5_000,
+      );
+      const scanBeyondSkew = new Date(
+        original.handed_over_at.getTime() - 5_001,
+      );
 
       for (const status of [
         "HANDED_OVER",
@@ -11117,21 +11638,90 @@ describe("commerce persistence foundations", () => {
         ]);
 
         if (status === "HANDED_OVER") {
+          await expectQueryError(
+            client,
+            "transit_scan_beyond_negative_skew",
+            () =>
+              persistVerifiedShipmentOutcome(
+                client,
+                foundation.shipmentId,
+                "TRANSIT_SCAN",
+                transitAt,
+                "transit-beyond-negative-skew",
+                true,
+                scanBeyondSkew,
+              ),
+            {
+              code: "23514",
+              constraint: "shipment_provider_event_evidence_check",
+            },
+          );
           await persistVerifiedShipmentOutcome(
             client,
             foundation.shipmentId,
             "TRANSIT_SCAN",
             transitAt,
+            "transit-at-negative-skew-boundary",
+            true,
+            scanOccurredAt,
           );
         } else if (status === "IN_TRANSIT") {
+          await expectQueryError(
+            client,
+            "delivery_scan_beyond_negative_skew",
+            () =>
+              persistVerifiedShipmentOutcome(
+                client,
+                foundation.shipmentId,
+                "DELIVERY_SCAN",
+                deliveredAt,
+                "delivery-beyond-negative-skew",
+                true,
+                scanBeyondSkew,
+              ),
+            {
+              code: "23514",
+              constraint: "shipment_provider_event_evidence_check",
+            },
+          );
           await persistVerifiedShipmentOutcome(
             client,
             foundation.shipmentId,
             "DELIVERY_SCAN",
             deliveredAt,
+            "delivery-at-negative-skew-boundary",
+            true,
+            scanOccurredAt,
           );
         }
       }
+
+      expect(
+        (
+          await client.query<{ kind: string; occurred_at: Date }>(
+            `SELECT kind::text, occurred_at
+             FROM shipment_provider_events
+             WHERE shipment_id = $1
+               AND (
+                 provider_event_id = 'pre-handoff-acceptance-scan'
+                 OR provider_transaction_id IN (
+                   'transit-at-negative-skew-boundary',
+                   'delivery-at-negative-skew-boundary'
+                 )
+               )
+             ORDER BY CASE kind
+               WHEN 'ACCEPTANCE_SCAN' THEN 1
+               WHEN 'TRANSIT_SCAN' THEN 2
+               ELSE 3
+             END`,
+            [foundation.shipmentId],
+          )
+        ).rows,
+      ).toEqual([
+        { kind: "ACCEPTANCE_SCAN", occurred_at: acceptanceOccurredAt },
+        { kind: "TRANSIT_SCAN", occurred_at: scanOccurredAt },
+        { kind: "DELIVERY_SCAN", occurred_at: scanOccurredAt },
+      ]);
 
       const delivered = (
         await client.query<{
@@ -11561,20 +12151,20 @@ describe("commerce persistence foundations", () => {
 
       await expectQueryError(
         client,
-        "historical_pending_refund",
+        "refund_request_beyond_negative_skew",
         () =>
           client.query(
             `INSERT INTO refund_transactions
                (id, payment_id, idempotency_key, amount_minor, reason, status,
                 requested_at, created_at, updated_at)
              SELECT $1,$2,$3,1,'PRODUCTION_FAILURE','PENDING',
-                    captured_at - interval '1 millisecond',
+                    captured_at - interval '5 seconds 1 millisecond',
                     clock_timestamp(),clock_timestamp()
              FROM payments WHERE id = $2`,
             [
-              fixtures.id("historical-pending-refund"),
+              fixtures.id("refund-request-beyond-negative-skew"),
               financial.paymentId,
-              "historical-pending-refund",
+              "refund-request-beyond-negative-skew",
             ],
           ),
         {
@@ -11618,7 +12208,8 @@ describe("commerce persistence foundations", () => {
            (id, payment_id, idempotency_key, amount_minor, reason, status,
             requested_at, created_at, updated_at)
          VALUES ($1,$2,$3,1,'PRODUCTION_FAILURE','PENDING',
-                 (SELECT captured_at FROM payments WHERE id = $2),
+                 (SELECT captured_at - interval '5 seconds'
+                  FROM payments WHERE id = $2),
                  clock_timestamp(), clock_timestamp())`,
         [
           fixtures.id("pending-refund-completion"),
@@ -11685,24 +12276,75 @@ describe("commerce persistence foundations", () => {
           constraint: "refund_completion_evidence_check",
         },
       );
-      const toleratedRefundCompletedAt = new Date(
-        toleratedPaymentCapturedAt.getTime() + 1,
+      const refundCompletionBeyondNegativeSkew = new Date(
+        toleratedPaymentCapturedAt.getTime() - 5_001,
+      );
+      await expectQueryError(
+        client,
+        "refund_completion_beyond_negative_skew",
+        async () => {
+          await fixtures.persistRefundProviderEvent(
+            fixtures.id("pending-refund-completion"),
+            "REFUND_SUCCEEDED",
+            "refund-completion-beyond-negative-skew",
+            refundCompletionBeyondNegativeSkew,
+          );
+          await client.query(
+            `UPDATE refund_transactions
+             SET status = 'SUCCEEDED',
+                 provider_refund_id = 'refund-completion-beyond-negative-skew',
+                 completed_at = $2,
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [
+              fixtures.id("pending-refund-completion"),
+              refundCompletionBeyondNegativeSkew,
+            ],
+          );
+        },
+        {
+          code: "23514",
+          constraint: "refund_capture_timestamp_order_check",
+        },
+      );
+      const refundCompletionAtNegativeSkewBoundary = new Date(
+        toleratedPaymentCapturedAt.getTime() - 5_000,
       );
       await fixtures.persistRefundProviderEvent(
         fixtures.id("pending-refund-completion"),
         "REFUND_SUCCEEDED",
-        "tolerated-refund-update",
-        toleratedRefundCompletedAt,
+        "refund-completion-at-negative-skew-boundary",
+        refundCompletionAtNegativeSkewBoundary,
       );
       await client.query(
         `UPDATE refund_transactions
          SET status = 'SUCCEEDED',
-             provider_refund_id = 'tolerated-refund-update',
+             provider_refund_id = 'refund-completion-at-negative-skew-boundary',
              completed_at = $2,
              updated_at = clock_timestamp()
          WHERE id = $1`,
-        [fixtures.id("pending-refund-completion"), toleratedRefundCompletedAt],
+        [
+          fixtures.id("pending-refund-completion"),
+          refundCompletionAtNegativeSkewBoundary,
+        ],
       );
+      expect(
+        (
+          await client.query<{
+            completed_at: Date;
+            requested_at: Date;
+          }>(
+            `SELECT requested_at, completed_at
+             FROM refund_transactions WHERE id = $1`,
+            [fixtures.id("pending-refund-completion")],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          requested_at: refundCompletionAtNegativeSkewBoundary,
+          completed_at: refundCompletionAtNegativeSkewBoundary,
+        },
+      ]);
     });
   });
 

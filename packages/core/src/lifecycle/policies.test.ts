@@ -367,9 +367,13 @@ const permittedContext = {
     id: "payment-failure-event-1",
     paymentId: "payment-1",
     transactionId: "provider-transaction-1",
+    provider: "sandbox",
+    amountMinor: 10_000n,
+    currency: "EUR",
     status: "failed",
     authenticated: true,
     verified: true,
+    verifiedAt: Instant.parse("2026-01-01T00:30:00.000Z"),
     resultId: "payment-failure-result-1",
     immutable: true,
   },
@@ -508,6 +512,7 @@ const permittedContext = {
     activeRefundTransactionId: "refund-1",
     capturedAmountMinor: 10_000n,
     succeededRefundAmountMinor: 0n,
+    providerFailureEventId: null,
     resultId: "refund-pending-result-1",
     currentStateCommandKey: "payment-refund-pending-command-1",
     immutable: true,
@@ -523,6 +528,7 @@ const permittedContext = {
     targetStatus: "captured",
     capturedAmountMinor: 10_000n,
     succeededRefundAmountMinor: 0n,
+    providerFailureEventId: null,
     resultId: "refund-failure-result-1",
     immutable: true,
   },
@@ -3871,7 +3877,8 @@ function contextForTransition(target: string, current?: string) {
   const capacityCaptureCompensation =
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
-    current === "voided" && target === "refund_pending";
+    (current === "voided" || current === "failed") &&
+    target === "refund_pending";
   const refundFailureRollback =
     current === "refund_pending" && target === "captured";
   const compensationRetryKind = capacityCaptureCompensation
@@ -3879,8 +3886,11 @@ function contextForTransition(target: string, current?: string) {
     : lateCaptureCompensation
       ? "late_capture"
       : undefined;
-  const lateCapturePreviousPaymentResultId = "payment-voided-result-1";
-  const lateCaptureCurrentStateCommandKey = "payment-voided-command-1";
+  const lateCapturePreviousPaymentResultId =
+    current === "failed"
+      ? permittedContext.paymentFailureResultId
+      : `payment-${current ?? "voided"}-result-1`;
+  const lateCaptureCurrentStateCommandKey = `payment-${current ?? "voided"}-command-1`;
   const unauthorizedHandoffReconciliation =
     current === "awaiting_balance" && target === "shipped";
   const completionTopologyStatus =
@@ -4583,7 +4593,20 @@ function contextForTransition(target: string, current?: string) {
             orderId: "order-1",
             phaseId: "phase-1",
             role: permittedContext.paymentRole,
-            status: "voided",
+            status: current,
+            ...(current === "failed"
+              ? {
+                  providerIntentId:
+                    permittedContext.providerPaymentTransactionId,
+                  providerFailureEventId:
+                    permittedContext.paymentFailureProviderEventId,
+                  provider: "sandbox",
+                  requestedAmountMinor: 10_000n,
+                  currency: "EUR",
+                  captureAuthorized: false,
+                  captureCutoffAt: Instant.parse("2026-01-01T00:30:00.000Z"),
+                }
+              : {}),
             resultId: lateCapturePreviousPaymentResultId,
             currentStateCommandKey: lateCaptureCurrentStateCommandKey,
             immutable: true,
@@ -4592,7 +4615,7 @@ function contextForTransition(target: string, current?: string) {
       : {}),
     refundWebhookProjectedTarget: target,
     providerPaymentEventStatus:
-      (current === "voided" || current === "pending") &&
+      (current === "voided" || current === "failed" || current === "pending") &&
       target === "refund_pending"
         ? "captured"
         : target,
@@ -5217,13 +5240,16 @@ function commandAnchors(
   }
   if (
     policy.name === "Payment" &&
-    current === "voided" &&
+    (current === "voided" || current === "failed") &&
     target === "refund_pending"
   ) {
     return {
       aggregateId: "payment-1",
-      currentStateCommandKey: "payment-voided-command-1",
-      currentStateResultId: "payment-voided-result-1",
+      currentStateCommandKey: `payment-${current}-command-1`,
+      currentStateResultId:
+        current === "failed"
+          ? permittedContext.paymentFailureResultId
+          : `payment-${current}-result-1`,
     };
   }
   if (
@@ -24497,21 +24523,80 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
-  it("binds late capture compensation to the selected voided Payment", () => {
-    expect(
-      transition(paymentPolicy, {
-        ...commandAnchors(paymentPolicy, "voided", "refund_pending"),
-        current: "voided",
-        target: "refund_pending",
-        idempotencyKey: "late-capture-voided-selected-payment",
-        context: contextForTransition("refund_pending", "voided"),
-      }),
-    ).toEqual({
-      kind: "changed",
-      previous: "voided",
-      current: "refund_pending",
-    });
-  });
+  it.each(["voided", "failed"] as const)(
+    "binds late capture compensation to the selected %s Payment",
+    (current) => {
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, current, "refund_pending"),
+          current,
+          target: "refund_pending",
+          idempotencyKey: `late-capture-${current}-selected-payment`,
+          context: contextForTransition("refund_pending", current),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "refund_pending",
+      });
+    },
+  );
+
+  it.each([
+    ["providerFailureEventId", "another-failure-event"],
+    ["providerIntentId", "another-provider-intent"],
+    ["captureAuthorized", true],
+    ["captureCutoffAt", "not-an-instant"],
+  ] as const)(
+    "rejects failed-source late capture with foreign Payment %s",
+    (field, value) => {
+      const context = contextForTransition("refund_pending", "failed");
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "failed", "refund_pending"),
+          current: "failed",
+          target: "refund_pending",
+          idempotencyKey: `failed-late-capture-${field}`,
+          context: {
+            ...context,
+            lateCaptureCompensationExpectedPayment: {
+              ...context.lateCaptureCompensationExpectedPayment,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["paymentId", "payment-2"],
+    ["provider", "another-provider"],
+    ["amountMinor", 9_999n],
+    ["currency", "USD"],
+    ["verifiedAt", undefined],
+    ["verifiedAt", Instant.parse("2026-01-01T00:30:00.001Z")],
+  ] as const)(
+    "rejects failed-source late capture with foreign prior failure receipt %s",
+    (field, value) => {
+      const context = contextForTransition("refund_pending", "failed");
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "failed", "refund_pending"),
+          current: "failed",
+          target: "refund_pending",
+          idempotencyKey: `failed-late-capture-foreign-failure-${field}`,
+          context: {
+            ...context,
+            paymentFailureProviderEvent: {
+              ...context.paymentFailureProviderEvent,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each([
     ["missing", undefined],
@@ -25837,6 +25922,48 @@ describe("v0 lifecycle policy tables", () => {
       });
     },
   );
+
+  it("keeps a failed-source late capture in compensation after a refund attempt fails", () => {
+    const base = contextForTransition("captured", "refund_pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+        current: "refund_pending",
+        target: "captured",
+        idempotencyKey: "failed-source-compensation-refund-retry",
+        context: {
+          ...base,
+          paymentCaptureKind: "refund_failure_rollback",
+          refundFailureRollbackExpectedPayment: {
+            ...base.refundFailureRollbackExpectedPayment,
+            providerFailureEventId: "payment-failure-event-1",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("requires immutable capture-origin provenance for refund-failure rollback", () => {
+    const base = contextForTransition("captured", "refund_pending");
+    const {
+      providerFailureEventId: _omittedFailureEventId,
+      ...expectedWithoutOrigin
+    } = base.refundFailureRollbackExpectedPayment;
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+        current: "refund_pending",
+        target: "captured",
+        idempotencyKey: "refund-failure-rollback-missing-origin",
+        context: {
+          ...base,
+          paymentCaptureKind: "refund_failure_rollback",
+          refundFailureRollbackExpectedPayment: expectedWithoutOrigin,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(_omittedFailureEventId).toBeNull();
+  });
 
   it("rejects incomplete or mismatched refund-failure rollback evidence", () => {
     const base = {
