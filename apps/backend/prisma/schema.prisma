@@ -1752,6 +1752,7 @@ model RefundTransaction {
   auditEvents                   AuditEvent[]
   handoffReconciliations        HandoffReconciliation[]
   orderSettlement               OrderSettlement?
+  dispatchClaim                 RefundDispatchClaim?
 
   @@unique([id, paymentId])
   @@unique([replacesFailureProviderEventId, replacesRefundTransactionId], map: "refund_transactions_replaces_failure_event_key")
@@ -1762,6 +1763,16 @@ model RefundTransaction {
   @@index([replacesRefundTransactionId, paymentId], map: "refund_transactions_replaces_payment_id_idx")
   @@index([paymentId, status])
   @@map("refund_transactions")
+}
+
+model RefundDispatchClaim {
+  refundTransactionId String   @id @map("refund_transaction_id") @db.Uuid
+  claimedAt            DateTime @default(dbgenerated("clock_timestamp()")) @map("claimed_at") @db.Timestamptz(3)
+  createdAt            DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+
+  refundTransaction RefundTransaction @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
+
+  @@map("refund_dispatch_claims")
 }
 
 model PaymentProviderEvent {

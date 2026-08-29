@@ -8343,6 +8343,26 @@ describe("v0 lifecycle policy tables", () => {
       kind: "reconciled",
       current: "refund_pending",
     });
+    const suspendedSibling = { ...sibling, status: "suspended" };
+    expect(
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessRefundSetBefore: {
+            ...refundSetBefore,
+            refundSnapshots: [sourceBefore, retryBefore, suspendedSibling],
+          },
+          lateRefundSuccessRefundSetAfter: {
+            ...refundSetAfter,
+            refundSnapshots: [sourceAfter, retryAfter, suspendedSibling],
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "reconciled",
+      current: "refund_pending",
+    });
     expect(() =>
       transition(paymentPolicy, {
         ...command,

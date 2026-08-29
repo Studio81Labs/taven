@@ -3509,7 +3509,8 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
         (status !== "pending" &&
           status !== "succeeded" &&
           status !== "failed" &&
-          status !== "superseded") ||
+          status !== "superseded" &&
+          status !== "suspended") ||
         typeof rowAmountMinor !== "bigint" ||
         rowAmountMinor <= 0n ||
         !nonBlank(row.resultId) ||
@@ -3519,7 +3520,7 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
       }
       rows.set(id, row);
       if (status === "succeeded") succeededAmountMinor += rowAmountMinor;
-      if (status === "pending") {
+      if (status === "pending" || status === "suspended") {
         pendingAmountMinor += rowAmountMinor;
         pendingCount += 1;
       }

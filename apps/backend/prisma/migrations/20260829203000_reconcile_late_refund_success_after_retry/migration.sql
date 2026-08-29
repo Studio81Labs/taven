@@ -57,6 +57,19 @@ ALTER TABLE "refund_transactions"
         )
     );
 
+CREATE TABLE "refund_dispatch_claims" (
+    "refund_transaction_id" UUID NOT NULL,
+    "claimed_at" TIMESTAMPTZ(3) NOT NULL DEFAULT clock_timestamp(),
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT clock_timestamp(),
+
+    CONSTRAINT "refund_dispatch_claims_pkey"
+        PRIMARY KEY ("refund_transaction_id"),
+    CONSTRAINT "refund_dispatch_claims_refund_transaction_id_fkey"
+        FOREIGN KEY ("refund_transaction_id")
+        REFERENCES "refund_transactions"("id")
+        ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
 ALTER TABLE "refund_transactions"
     DROP CONSTRAINT "refund_transactions_terminal_result_event_check";
 ALTER TABLE "refund_transactions"
@@ -123,28 +136,35 @@ CREATE TRIGGER "payment_provider_events_refund_retries_locked"
 BEFORE INSERT ON "payment_provider_events"
 FOR EACH ROW EXECUTE FUNCTION taven_lock_refund_provider_event_retries();
 
-CREATE FUNCTION taven_claim_refund_dispatch(target_refund_id uuid)
-RETURNS timestamptz
+CREATE FUNCTION taven_prepare_refund_dispatch_claim()
+RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
     target_payment_id uuid;
     target_order_id uuid;
-    prior_claim_authorization text;
-    claim_time timestamptz;
-    claimed_at timestamptz;
+    target_status "refund_status";
+    target_dispatch_claimed_at timestamptz;
+    target_provider_result_event_id uuid;
+    target_source_success_provider_event_id uuid;
 BEGIN
+    IF TG_OP IN ('UPDATE', 'DELETE') THEN
+        RAISE EXCEPTION 'refund dispatch claims are immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_dispatch_claim_identity_immutable_check';
+    END IF;
+
     -- Read only immutable identities before taking the canonical lock set.
-    -- UPDATE cannot be used here: PostgreSQL would lock the target refund row
-    -- before any BEFORE UPDATE trigger could serialize on its order.
+    -- INSERT has not acquired an existing refund row, so the claim can lock
+    -- the complete order envelope before touching its target attempt.
     SELECT refund."payment_id", payment."order_id"
     INTO target_payment_id, target_order_id
     FROM "refund_transactions" refund
     JOIN "payments" payment ON payment."id" = refund."payment_id"
-    WHERE refund."id" = target_refund_id;
+    WHERE refund."id" = NEW."refund_transaction_id";
 
     IF NOT FOUND THEN
-        RETURN NULL;
+        RAISE EXCEPTION 'refund dispatch claim target does not exist'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_dispatch_claim_scope_check';
     END IF;
 
     PERFORM taven_lock_automatic_order_session(target_order_id);
@@ -171,33 +191,76 @@ BEGIN
     WHERE payment."id" = target_payment_id
     FOR UPDATE;
 
-    prior_claim_authorization :=
-        current_setting('taven.refund_dispatch_claim_id', true);
-    PERFORM set_config(
-        'taven.refund_dispatch_claim_id',
-        target_refund_id::text,
-        true
-    );
-    claim_time := clock_timestamp();
+    -- Re-read through a locking query after the canonical lock wait so a
+    -- receipt that won first deterministically makes this claim a no-op.
+    SELECT refund."status", refund."dispatch_claimed_at",
+           refund."provider_result_event_id",
+           refund."source_success_provider_event_id"
+    INTO target_status, target_dispatch_claimed_at,
+         target_provider_result_event_id,
+         target_source_success_provider_event_id
+    FROM "refund_transactions" refund
+    WHERE refund."id" = NEW."refund_transaction_id"
+      AND refund."payment_id" = target_payment_id
+    FOR UPDATE;
 
+    IF target_status IS DISTINCT FROM 'PENDING'::"refund_status"
+       OR target_dispatch_claimed_at IS NOT NULL
+       OR target_provider_result_event_id IS NOT NULL
+       OR target_source_success_provider_event_id IS NOT NULL THEN
+        RETURN NULL;
+    END IF;
+
+    NEW."claimed_at" := clock_timestamp();
+    NEW."created_at" := NEW."claimed_at";
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "refund_dispatch_claims_prepared"
+BEFORE INSERT OR UPDATE OR DELETE ON "refund_dispatch_claims"
+FOR EACH ROW EXECUTE FUNCTION taven_prepare_refund_dispatch_claim();
+
+CREATE FUNCTION taven_apply_refund_dispatch_claim()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
     UPDATE "refund_transactions"
-    SET "dispatch_claimed_at" = claim_time,
-        "updated_at" = claim_time
-    WHERE "id" = target_refund_id
-      AND "payment_id" = target_payment_id
+    SET "dispatch_claimed_at" = NEW."claimed_at",
+        "updated_at" = NEW."claimed_at"
+    WHERE "id" = NEW."refund_transaction_id"
       AND "status" = 'PENDING'
       AND "dispatch_claimed_at" IS NULL
       AND "provider_result_event_id" IS NULL
-      AND "source_success_provider_event_id" IS NULL
-    RETURNING "dispatch_claimed_at" INTO claimed_at;
+      AND "source_success_provider_event_id" IS NULL;
 
-    PERFORM set_config(
-        'taven.refund_dispatch_claim_id',
-        coalesce(prior_claim_authorization, ''),
-        true
-    );
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'refund dispatch claim lost its canonically locked target'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_dispatch_claim_apply_check';
+    END IF;
 
-    RETURN claimed_at;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "refund_dispatch_claims_applied"
+AFTER INSERT ON "refund_dispatch_claims"
+FOR EACH ROW EXECUTE FUNCTION taven_apply_refund_dispatch_claim();
+
+CREATE FUNCTION taven_claim_refund_dispatch(target_refund_id uuid)
+RETURNS timestamptz
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    result_claimed_at timestamptz;
+BEGIN
+    INSERT INTO "refund_dispatch_claims" ("refund_transaction_id")
+    VALUES (target_refund_id)
+    ON CONFLICT ("refund_transaction_id") DO NOTHING
+    RETURNING "claimed_at" INTO result_claimed_at;
+
+    RETURN result_claimed_at;
 END;
 $$;
 
@@ -230,9 +293,17 @@ BEGIN
     END IF;
 
     IF NEW."dispatch_claimed_at" IS DISTINCT FROM OLD."dispatch_claimed_at"
-       AND current_setting('taven.refund_dispatch_claim_id', true)
-           IS DISTINCT FROM OLD."id"::text THEN
-        RAISE EXCEPTION 'refund dispatch must be claimed through the canonical claim function'
+       AND NOT (
+           OLD."dispatch_claimed_at" IS NULL
+           AND NEW."dispatch_claimed_at" IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+               FROM "refund_dispatch_claims" claim
+               WHERE claim."refund_transaction_id" = OLD."id"
+                 AND claim."claimed_at" = NEW."dispatch_claimed_at"
+           )
+       ) THEN
+        RAISE EXCEPTION 'refund dispatch requires its exact immutable canonical claim'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_dispatch_claim_protocol_check';
     END IF;
 
@@ -315,14 +386,15 @@ BEGIN
                'SUCCEEDED', 'FAILED', 'SUPERSEDED', 'SUSPENDED'
            ))
            OR (OLD."status" = 'FAILED' AND NEW."status" = 'SUCCEEDED')
-           OR (OLD."status" = 'SUCCEEDED' AND NEW."status" = 'FAILED')
+           OR (OLD."status" = 'SUCCEEDED'
+               AND NEW."status" IN ('FAILED', 'SUSPENDED'))
            OR (OLD."status" = 'SUSPENDED' AND NEW."status" = 'FAILED')
        ) THEN
         IF OLD."status" = 'FAILED' THEN
             RAISE EXCEPTION 'failed refund transactions may only reconcile a late provider success'
                 USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_failed_immutable_check';
         ELSIF OLD."status" = 'SUCCEEDED' THEN
-            RAISE EXCEPTION 'successful refund transactions may only reconcile a newer provider failure'
+            RAISE EXCEPTION 'successful refund transactions may only reconcile a newer failure or an exact double-success incident'
                 USING ERRCODE = '23514', CONSTRAINT = 'refund_transaction_succeeded_immutable_check';
         ELSE
             RAISE EXCEPTION 'refund status transition is not allowed'
@@ -338,8 +410,9 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'refund_result_event_transition_check';
     END IF;
 
-    IF OLD."status" = 'PENDING'
-       AND NEW."status" IN ('SUPERSEDED', 'SUSPENDED') THEN
+    IF (OLD."status" = 'PENDING'
+        AND NEW."status" IN ('SUPERSEDED', 'SUSPENDED'))
+       OR (OLD."status" = 'SUCCEEDED' AND NEW."status" = 'SUSPENDED') THEN
         SELECT success_event."verified_at"
         INTO source_success_verified_at
         FROM "refund_transactions" source_refund
@@ -355,6 +428,9 @@ BEGIN
           AND source_refund."provider" = NEW."provider"
           AND source_refund."amount_minor" = NEW."amount_minor"
           AND source_refund."reason" = NEW."reason"
+          AND source_refund."status" = 'FAILED'
+          AND source_refund."provider_result_event_id" = failure_event."id"
+          AND source_refund."completed_at" IS NULL
           AND failure_event."payment_id" = source_refund."payment_id"
           AND failure_event."provider" = source_refund."provider"
           AND failure_event."kind" = 'REFUND_FAILED'
@@ -374,8 +450,20 @@ BEGIN
         IF NOT FOUND
            OR NEW."reconciliation_started_at" IS DISTINCT FROM
               source_success_verified_at
-           OR NEW."provider_result_event_id" IS NOT NULL
            OR NEW."completed_at" IS NOT NULL
+           OR (OLD."status" = 'PENDING'
+               AND NEW."provider_result_event_id" IS NOT NULL)
+           OR (OLD."status" = 'SUCCEEDED' AND (
+               NEW."provider_result_event_id" IS DISTINCT FROM
+                   OLD."provider_result_event_id"
+               OR NEW."provider_refund_id" IS DISTINCT FROM
+                   OLD."provider_refund_id"
+               OR OLD."completed_at" IS NULL
+               OR NOT taven_refund_result_event_matches(
+                   OLD."id", OLD."provider_result_event_id",
+                   'SUCCEEDED'::"refund_status"
+               )
+           ))
            OR (NEW."status" = 'SUPERSEDED' AND (
                NEW."dispatch_claimed_at" IS NOT NULL
                OR NEW."provider_refund_id" IS NOT NULL
@@ -532,7 +620,7 @@ BEGIN
            AND NEW."completed_at" IS DISTINCT FROM OLD."completed_at"
            AND NOT (
                OLD."status" = 'SUCCEEDED'
-               AND NEW."status" = 'FAILED'
+               AND NEW."status" IN ('FAILED', 'SUSPENDED')
                AND NEW."completed_at" IS NULL
            )
        )
@@ -644,7 +732,7 @@ BEGIN
            FROM "refund_transactions" retry
            WHERE retry."replaces_refund_transaction_id" = NEW."id"
              AND retry."replaces_failure_provider_event_id" = OLD."provider_result_event_id"
-             AND retry."status" IN ('PENDING', 'SUSPENDED')
+             AND retry."status" IN ('PENDING', 'SUSPENDED', 'SUCCEEDED')
        ) THEN
         RAISE EXCEPTION 'late source success must atomically supersede its undispatched retry'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_retry_source_reconciliation_check';
@@ -661,6 +749,174 @@ AFTER UPDATE OF "status", "provider_result_event_id", "completed_at",
 ON "refund_transactions"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_refund_retry_source_reconciliation();
+
+CREATE FUNCTION taven_payment_has_suspended_refund_incident(
+    target_payment_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "refund_transactions" retry
+        JOIN "payments" payment ON payment."id" = retry."payment_id"
+        JOIN "refund_transactions" source_refund
+          ON source_refund."id" = retry."replaces_refund_transaction_id"
+         AND source_refund."payment_id" = retry."payment_id"
+        JOIN "payment_provider_events" source_failure
+          ON source_failure."id" = retry."replaces_failure_provider_event_id"
+         AND source_failure."refund_transaction_id" = source_refund."id"
+        JOIN "payment_provider_events" source_success
+          ON source_success."id" = retry."source_success_provider_event_id"
+         AND source_success."refund_transaction_id" = source_refund."id"
+        JOIN "payment_provider_events" retry_success
+          ON retry_success."id" = retry."provider_result_event_id"
+         AND retry_success."refund_transaction_id" = retry."id"
+        WHERE retry."payment_id" = target_payment_id
+          AND retry."status" = 'SUSPENDED'
+          AND retry."dispatch_claimed_at" IS NOT NULL
+          AND retry."completed_at" IS NULL
+          AND retry."reconciliation_started_at" = source_success."verified_at"
+          AND retry."provider" = source_refund."provider"
+          AND retry."amount_minor" = source_refund."amount_minor"
+          AND retry."reason" = source_refund."reason"
+          AND source_refund."status" = 'FAILED'
+          AND source_refund."provider_result_event_id" = source_failure."id"
+          AND source_refund."completed_at" IS NULL
+          AND source_failure."payment_id" = payment."id"
+          AND source_failure."provider" = source_refund."provider"
+          AND source_failure."provider" = payment."provider"
+          AND source_failure."kind" = 'REFUND_FAILED'
+          AND source_failure."provider_transaction_id" =
+              source_refund."provider_refund_id"
+          AND source_failure."amount_minor" = source_refund."amount_minor"
+          AND source_failure."currency" = payment."currency"
+          AND source_success."payment_id" = payment."id"
+          AND source_success."provider" = source_refund."provider"
+          AND source_success."kind" = 'REFUND_SUCCEEDED'
+          AND source_success."provider_transaction_id" =
+              source_refund."provider_refund_id"
+          AND source_success."amount_minor" = source_refund."amount_minor"
+          AND source_success."currency" = payment."currency"
+          AND source_success."occurred_at" > source_failure."occurred_at"
+          AND retry_success."payment_id" = payment."id"
+          AND retry_success."provider" = retry."provider"
+          AND retry_success."provider" = payment."provider"
+          AND retry_success."kind" = 'REFUND_SUCCEEDED'
+          AND retry_success."provider_transaction_id" = retry."provider_refund_id"
+          AND retry_success."amount_minor" = retry."amount_minor"
+          AND retry_success."currency" = payment."currency"
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "payment_provider_events" later_retry_event
+              WHERE later_retry_event."id" <> retry_success."id"
+                AND later_retry_event."payment_id" = retry."payment_id"
+                AND later_retry_event."refund_transaction_id" = retry."id"
+                AND later_retry_event."provider" = retry."provider"
+                AND later_retry_event."provider_transaction_id" =
+                    retry."provider_refund_id"
+                AND later_retry_event."amount_minor" = retry."amount_minor"
+                AND later_retry_event."currency" = payment."currency"
+                AND later_retry_event."occurred_at" >= retry_success."occurred_at"
+          )
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION taven_payment_has_newer_refund_failure(
+    target_payment_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT taven_payment_has_suspended_refund_incident(target_payment_id)
+        OR EXISTS (
+            SELECT 1
+            FROM "refund_transactions" refund
+            JOIN "payments" payment ON payment."id" = refund."payment_id"
+            JOIN "payment_provider_events" failure
+              ON failure."id" = refund."provider_result_event_id"
+             AND failure."refund_transaction_id" = refund."id"
+            WHERE refund."payment_id" = target_payment_id
+              AND refund."status" = 'FAILED'
+              AND taven_refund_result_event_matches(
+                  refund."id", refund."provider_result_event_id",
+                  'FAILED'::"refund_status"
+              )
+              AND EXISTS (
+                  SELECT 1
+                  FROM "payment_provider_events" success
+                  WHERE success."payment_id" = refund."payment_id"
+                    AND success."refund_transaction_id" = refund."id"
+                    AND success."provider" = refund."provider"
+                    AND success."kind" = 'REFUND_SUCCEEDED'
+                    AND success."provider_transaction_id" =
+                        refund."provider_refund_id"
+                    AND success."amount_minor" = refund."amount_minor"
+                    AND success."currency" = payment."currency"
+                    AND success."occurred_at" < failure."occurred_at"
+              )
+        );
+$$;
+
+CREATE OR REPLACE FUNCTION taven_order_has_newer_refund_failure(
+    target_order_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "payments" payment
+        WHERE payment."order_id" = target_order_id
+          AND taven_payment_has_suspended_refund_incident(payment."id")
+    ) OR EXISTS (
+        SELECT 1
+        FROM "payments" payment
+        JOIN "refund_transactions" refund
+          ON refund."payment_id" = payment."id"
+        JOIN "payment_provider_events" failure
+          ON failure."id" = refund."provider_result_event_id"
+         AND failure."payment_id" = payment."id"
+         AND failure."refund_transaction_id" = refund."id"
+        WHERE payment."order_id" = target_order_id
+          AND refund."status" = 'FAILED'
+          AND failure."provider" = refund."provider"
+          AND failure."provider" = payment."provider"
+          AND failure."kind" = 'REFUND_FAILED'
+          AND failure."provider_transaction_id" = refund."provider_refund_id"
+          AND failure."amount_minor" = refund."amount_minor"
+          AND failure."currency" = payment."currency"
+          AND EXISTS (
+              SELECT 1
+              FROM "payment_provider_events" success
+              WHERE success."payment_id" = payment."id"
+                AND success."refund_transaction_id" = refund."id"
+                AND success."provider" = refund."provider"
+                AND success."kind" = 'REFUND_SUCCEEDED'
+                AND success."provider_transaction_id" =
+                    refund."provider_refund_id"
+                AND success."amount_minor" = refund."amount_minor"
+                AND success."currency" = payment."currency"
+                AND success."occurred_at" < failure."occurred_at"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "payment_provider_events" later_event
+              WHERE later_event."id" <> failure."id"
+                AND later_event."payment_id" = payment."id"
+                AND later_event."refund_transaction_id" = refund."id"
+                AND later_event."provider" = refund."provider"
+                AND later_event."provider_transaction_id" =
+                    refund."provider_refund_id"
+                AND later_event."amount_minor" = refund."amount_minor"
+                AND later_event."currency" = payment."currency"
+                AND later_event."occurred_at" >= failure."occurred_at"
+          )
+    );
+$$;
 
 CREATE OR REPLACE FUNCTION taven_validate_payment_provider_event_scope()
 RETURNS trigger
