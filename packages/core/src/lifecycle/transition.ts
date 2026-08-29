@@ -7,6 +7,7 @@ export type TransitionTable<S extends string> = Readonly<{
 
 export type TransitionResult<S extends string> =
   | Readonly<{ kind: "changed"; previous: S; current: S }>
+  | Readonly<{ kind: "reconciled"; current: S }>
   | Readonly<{ kind: "already_applied"; current: S }>;
 
 export class InvalidTransitionError<
@@ -77,6 +78,10 @@ export interface TransitionPolicy<S extends string> {
     context: TransitionContext | undefined,
   ) => boolean;
   readonly transitions: TransitionTable<S>;
+  /** Opt-in guard for an exact projection revision whose status is unchanged. */
+  readonly sameStateReconciliationGuard?: (
+    command: TransitionCommand<S>,
+  ) => boolean;
   readonly guard?: (command: TransitionCommand<S>) => void;
 }
 
@@ -106,6 +111,9 @@ export function transition<S extends string>(
   if (command.current === command.target) {
     if (command.currentStateCommandKey === command.idempotencyKey) {
       return { kind: "already_applied", current: command.current };
+    }
+    if (policy.sameStateReconciliationGuard?.(command) === true) {
+      return { kind: "reconciled", current: command.current };
     }
     throw new InvalidTransitionError(
       policy.name,

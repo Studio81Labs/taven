@@ -200,6 +200,101 @@ const permittedContext = {
   paymentIntentSetupPhaseResultId: "payment-intent-setup-result-1",
   paymentIntentSetupCompleted: true,
   paymentIntentSetupAtomic: true,
+  paymentIntentFailureResultId: "payment-intent-failure-result-1",
+  paymentIntentFailurePreviousPaymentResultId: "payment-created-result-1",
+  paymentIntentFailureCurrentStateCommandKey: "payment-created-command-1",
+  paymentIntentFailureAttemptKey: "payment-intent-attempt-1",
+  paymentIntentFailureEvidenceId: "payment-intent-failure-1",
+  paymentIntentFailureProvider: "sandbox",
+  paymentIntentFailureExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    provider: "sandbox",
+    status: "created",
+    providerIntentId: null,
+    resultId: "payment-created-result-1",
+    currentStateCommandKey: "payment-created-command-1",
+    immutable: true,
+  },
+  paymentIntentFailureFailedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    provider: "sandbox",
+    previousStatus: "created",
+    targetStatus: "failed",
+    providerIntentId: null,
+    intentCreationFailureResultId: "payment-intent-failure-1",
+    captureAuthorized: false,
+    captureCutoffAt: Instant.parse("2026-01-01T00:05:00.000Z"),
+    resultId: "payment-intent-failure-result-1",
+    immutable: true,
+  },
+  paymentIntentFailureEvidence: {
+    id: "payment-intent-failure-1",
+    paymentId: "payment-1",
+    attemptKey: "payment-intent-attempt-1",
+    provider: "sandbox",
+    outcome: "failed",
+    providerIntentId: null,
+    failedAt: Instant.parse("2026-01-01T00:05:00.000Z"),
+    resultId: "payment-intent-failure-result-1",
+    immutable: true,
+  },
+  paymentIntentFailurePaymentResultId: "payment-intent-failure-result-1",
+  paymentIntentFailureEvidenceResultId: "payment-intent-failure-result-1",
+  paymentIntentFailureCompleted: true,
+  paymentIntentFailureAtomic: true,
+  createdPaymentVoidResultId: "created-payment-void-result-1",
+  createdPaymentVoidPreviousPaymentResultId: "payment-created-result-1",
+  createdPaymentVoidCurrentStateCommandKey: "payment-created-command-1",
+  createdPaymentVoidPreviousPhaseResultId: "phase-quoted-result-1",
+  createdPaymentVoidPhaseCurrentStateCommandKey: "phase-quoted-command-1",
+  createdPaymentVoidExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    status: "created",
+    providerIntentId: null,
+    resultId: "payment-created-result-1",
+    currentStateCommandKey: "payment-created-command-1",
+    immutable: true,
+  },
+  createdPaymentVoidVoidedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    previousStatus: "created",
+    targetStatus: "voided",
+    providerIntentId: null,
+    captureAuthorized: false,
+    captureCutoffAt: Instant.parse("2026-01-01T00:06:00.000Z"),
+    resultId: "created-payment-void-result-1",
+    immutable: true,
+  },
+  createdPaymentVoidExpectedPhase: {
+    id: "phase-1",
+    orderId: "order-1",
+    kind: "single",
+    status: "quoted",
+    resultId: "phase-quoted-result-1",
+    currentStateCommandKey: "phase-quoted-command-1",
+    immutable: true,
+  },
+  createdPaymentVoidProviderIntentAbsent: true,
+  createdPaymentVoidProviderTransactionAbsent: true,
+  createdPaymentVoidProviderVoidOutboxAbsent: true,
+  createdPaymentVoidPaymentResultId: "created-payment-void-result-1",
+  createdPaymentVoidOrderResultId: "created-payment-void-result-1",
+  createdPaymentVoidPhaseResultId: "created-payment-void-result-1",
+  createdPaymentVoidReservationResultId: "created-payment-void-result-1",
+  createdPaymentVoidCompleted: true,
+  createdPaymentVoidAtomic: true,
   checkoutCaptureExpiresAt: Instant.parse("2026-01-01T01:00:00.000Z"),
   paymentCaptureWindowId: "capture-window-1",
   paymentCaptureWindowResultId: "capture-window-result-1",
@@ -225,6 +320,9 @@ const permittedContext = {
     phaseId: "phase-1",
     role: "full",
     status: "pending",
+    provider: "sandbox",
+    requestedAmountMinor: 10_000n,
+    currency: "EUR",
     resultId: "payment-pending-result-1",
     currentStateCommandKey: "payment-pending-command-1",
     immutable: true,
@@ -240,8 +338,13 @@ const permittedContext = {
     id: "capture-event-1",
     paymentId: "payment-1",
     transactionId: "provider-transaction-1",
+    provider: "sandbox",
+    kind: "PAYMENT_CAPTURED",
+    amountMinor: 10_000n,
+    currency: "EUR",
     status: "captured",
     occurredAt: Instant.parse("2026-01-01T00:30:00.000Z"),
+    verifiedAt: Instant.parse("2026-01-01T00:30:00.000Z"),
     authenticated: true,
     verified: true,
     immutable: true,
@@ -266,17 +369,45 @@ const permittedContext = {
     phaseId: "phase-1",
     role: "full",
     status: "pending",
+    provider: "sandbox",
+    providerIntentId: "provider-transaction-1",
+    requestedAmountMinor: 10_000n,
+    currency: "EUR",
+    captureAuthorized: true,
+    captureCutoffAt: null,
     resultId: "payment-pending-result-1",
     currentStateCommandKey: "payment-pending-command-1",
+    immutable: true,
+  },
+  paymentFailureFailedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    previousStatus: "pending",
+    targetStatus: "failed",
+    provider: "sandbox",
+    providerIntentId: "provider-transaction-1",
+    requestedAmountMinor: 10_000n,
+    currency: "EUR",
+    captureAuthorized: false,
+    captureCutoffAt: Instant.parse("2026-01-01T00:30:00.000Z"),
+    resultId: "payment-failure-result-1",
     immutable: true,
   },
   paymentFailureProviderEvent: {
     id: "payment-failure-event-1",
     paymentId: "payment-1",
     transactionId: "provider-transaction-1",
+    provider: "sandbox",
+    amountMinor: 10_000n,
+    currency: "EUR",
+    kind: "PAYMENT_FAILED",
     status: "failed",
+    occurredAt: Instant.parse("2026-01-01T00:30:00.000Z"),
     authenticated: true,
     verified: true,
+    verifiedAt: Instant.parse("2026-01-01T00:30:00.000Z"),
     resultId: "payment-failure-result-1",
     immutable: true,
   },
@@ -356,10 +487,54 @@ const permittedContext = {
     orderId: "order-1",
     phaseId: "phase-1",
     role: "full",
+    provider: "sandbox",
+    currency: "EUR",
     status: "refund_pending",
     activeRefundTransactionId: "refund-1",
+    capturedAmountMinor: 10_000n,
+    succeededRefundAmountMinor: 0n,
+    authoritativeRefundSetId: "refund-set-before-1",
+    authoritativeRefundSetResultId: "refund-set-before-result-1",
     resultId: "refund-pending-result-1",
     currentStateCommandKey: "payment-refund-pending-command-1",
+    immutable: true,
+  },
+  refundCompletionRefundSetBeforeId: "refund-set-before-1",
+  refundCompletionRefundSetBeforeResultId: "refund-set-before-result-1",
+  refundCompletionRefundSetBefore: {
+    id: "refund-set-before-1",
+    paymentId: "payment-1",
+    refundIds: ["refund-1"],
+    refundSnapshots: [
+      {
+        id: "refund-1",
+        paymentId: "payment-1",
+        status: "pending",
+        amountMinor: 10_000n,
+        resultId: "refund-transaction-pending-result-1",
+        immutable: true,
+      },
+    ],
+    resultId: "refund-set-before-result-1",
+    immutable: true,
+  },
+  refundCompletionRefundSetAfterId: "refund-set-after-1",
+  refundCompletionRefundSetAfterResultId: "refund-set-after-result-1",
+  refundCompletionRefundSetAfter: {
+    id: "refund-set-after-1",
+    paymentId: "payment-1",
+    refundIds: ["refund-1"],
+    refundSnapshots: [
+      {
+        id: "refund-1",
+        paymentId: "payment-1",
+        status: "succeeded",
+        amountMinor: 10_000n,
+        resultId: "refund-completion-result-1",
+        immutable: true,
+      },
+    ],
+    resultId: "refund-set-after-result-1",
     immutable: true,
   },
   refundCompletionRefundTransaction: {
@@ -368,8 +543,15 @@ const permittedContext = {
     orderId: "order-1",
     phaseId: "phase-1",
     previousStatus: "pending",
+    previousResultId: "refund-transaction-pending-result-1",
     targetStatus: "succeeded",
     status: "succeeded",
+    provider: "sandbox",
+    providerTransactionId: "provider-refund-1",
+    amountMinor: 10_000n,
+    currency: "EUR",
+    requestedAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    completedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
     providerEventId: "refund-provider-event-1",
     resultId: "refund-completion-result-1",
     immutable: true,
@@ -378,10 +560,36 @@ const permittedContext = {
     id: "refund-provider-event-1",
     paymentId: "payment-1",
     refundTransactionId: "refund-1",
+    provider: "sandbox",
+    providerTransactionId: "provider-refund-1",
+    kind: "refund_succeeded",
+    amountMinor: 10_000n,
+    currency: "EUR",
     status: "succeeded",
     projectedTarget: "refunded",
     authenticated: true,
     verified: true,
+    occurredAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    authenticatedAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    verifiedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+    resultId: "refund-completion-result-1",
+    immutable: true,
+  },
+  refundCompletionReconciledPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    provider: "sandbox",
+    currency: "EUR",
+    previousStatus: "refund_pending",
+    targetStatus: "refunded",
+    activeRefundTransactionId: null,
+    capturedAmountMinor: 10_000n,
+    succeededRefundAmountMinor: 10_000n,
+    refundTransactionId: "refund-1",
+    authoritativeRefundSetId: "refund-set-after-1",
+    authoritativeRefundSetResultId: "refund-set-after-result-1",
     resultId: "refund-completion-result-1",
     immutable: true,
   },
@@ -390,6 +598,87 @@ const permittedContext = {
   refundCompletionProviderEventResultId: "refund-completion-result-1",
   refundCompletionCompleted: true,
   refundCompletionAtomic: true,
+  refundFailureRollbackResultId: "refund-failure-result-1",
+  refundFailureRollbackPreviousPaymentResultId: "refund-pending-result-1",
+  refundFailureRollbackCurrentStateCommandKey:
+    "payment-refund-pending-command-1",
+  refundFailureTransactionId: "refund-1",
+  refundFailureProviderEventId: "refund-failure-event-1",
+  refundFailureProvider: "sandbox",
+  refundFailureProviderTransactionId: "provider-refund-1",
+  refundFailureAmountMinor: 1_000n,
+  refundFailureCurrency: "EUR",
+  refundFailureAttemptKey: "refund-attempt-1",
+  refundFailureCapturedAmountMinor: 10_000n,
+  refundFailureSucceededAmountMinor: 0n,
+  refundFailureRollbackTargetStatus: "captured",
+  refundFailureRollbackExpectedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    provider: "sandbox",
+    currency: "EUR",
+    status: "refund_pending",
+    activeRefundTransactionId: "refund-1",
+    capturedAmountMinor: 10_000n,
+    succeededRefundAmountMinor: 0n,
+    providerFailureEventId: null,
+    resultId: "refund-pending-result-1",
+    currentStateCommandKey: "payment-refund-pending-command-1",
+    immutable: true,
+  },
+  refundFailureRollbackRestoredPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    provider: "sandbox",
+    currency: "EUR",
+    previousStatus: "refund_pending",
+    targetStatus: "captured",
+    capturedAmountMinor: 10_000n,
+    succeededRefundAmountMinor: 0n,
+    providerFailureEventId: null,
+    resultId: "refund-failure-result-1",
+    immutable: true,
+  },
+  refundFailureRollbackRefundTransaction: {
+    id: "refund-1",
+    paymentId: "payment-1",
+    provider: "sandbox",
+    providerRefundId: "provider-refund-1",
+    amountMinor: 1_000n,
+    status: "failed",
+    idempotencyKey: "refund-attempt-1",
+    resultId: "refund-failure-result-1",
+    immutable: true,
+  },
+  refundFailureProviderEvidence: {
+    id: "refund-failure-event-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    provider: "sandbox",
+    providerTransactionId: "provider-refund-1",
+    kind: "REFUND_FAILED",
+    amountMinor: 1_000n,
+    currency: "EUR",
+    attemptKey: "refund-attempt-1",
+    outcome: "failed",
+    authenticated: true,
+    verified: true,
+    resultId: "refund-failure-result-1",
+    immutable: true,
+  },
+  refundFailureRollbackPaymentResultId: "refund-failure-result-1",
+  refundFailureRollbackTransactionResultId: "refund-failure-result-1",
+  refundFailureRollbackEvidenceResultId: "refund-failure-result-1",
+  refundFailureLatestTransactionId: "refund-1",
+  refundFailureSucceededRefundSetComplete: true,
+  refundFailureNoPendingRefunds: true,
+  refundFailureNoSuccessfulRefunds: true,
+  refundFailureRollbackCompleted: true,
+  refundFailureRollbackAtomic: true,
   refundWebhookAmountMinor: 1_000n,
   captureWindowClosed: true,
   captureCutoffSet: true,
@@ -506,6 +795,10 @@ const permittedContext = {
   lateCaptureRefundTransactionPaymentId: "payment-1",
   lateCaptureRefundTransactionProviderTransactionId: "provider-transaction-1",
   lateCaptureCompensationRefundTransactionId: "refund-1",
+  lateCaptureCompensationResultId: "capture-evaluation-result-1",
+  lateCaptureProviderEventId: "capture-event-1",
+  lateCaptureProviderEventResultId: "capture-evaluation-result-1",
+  lateCaptureCapturedAt: Instant.parse("2026-01-01T00:30:00.000Z"),
   lateCaptureCompensationCreated: true,
   lateCaptureRefundIsFull: true,
   lateCaptureRefundIdempotencyKeyValid: true,
@@ -816,6 +1109,113 @@ const permittedContext = {
   handoffSettlementKind: "handoff_reconciliation",
   handoffSettlementImmutable: true,
   handoffSettlementResultId: "cancellation-race-result-1",
+  handoffRefundedReconciliation: {
+    id: "handoff-reconciliation-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    shipmentId: "shipment-1",
+    providerEventId: "shipment-provider-event-1",
+    providerTransactionId: "shipment-provider-transaction-1",
+    orderSettlementId: "handoff-settlement-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    refundProviderEventId: "refund-provider-event-1",
+    status: "completed",
+    resultId: "cancellation-race-result-1",
+    immutable: true,
+  },
+  handoffRefundedSettlement: {
+    id: "handoff-settlement-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    orderPriceBindingId: "order-price-binding-1",
+    priceSnapshotId: "price-snapshot-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    kind: "unauthorized_handoff",
+    currency: "CZK",
+    contractTotalMinor: 1_000n,
+    capturedTotalMinor: 1_000n,
+    earnedAmountMinor: 0n,
+    retainedAmountMinor: 0n,
+    refundAmountMinor: 1_000n,
+    writtenOffAmountMinor: 0n,
+    unearnedCancelledAmountMinor: 1_000n,
+    amountDueMinor: 0n,
+    refundableBalanceMinor: 0n,
+    cutoffAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    settledAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    resultId: "cancellation-race-result-1",
+    immutable: true,
+  },
+  handoffRefundedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    orderPriceBindingId: "order-price-binding-1",
+    priceSnapshotId: "price-snapshot-1",
+    status: "refunded",
+    currency: "CZK",
+    capturedAmountMinor: 1_000n,
+    captureAuthorized: false,
+    capturedAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    captureCutoffAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    immutable: true,
+  },
+  handoffRefundedRefund: {
+    id: "refund-1",
+    paymentId: "payment-1",
+    reason: "customer_cancellation",
+    status: "succeeded",
+    amountMinor: 1_000n,
+    provider: "mock-payments",
+    providerRefundId: "provider-refund-1",
+    completedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+    immutable: true,
+  },
+  handoffRefundedProviderEvent: {
+    id: "refund-provider-event-1",
+    paymentId: "payment-1",
+    refundTransactionId: "refund-1",
+    kind: "refund_succeeded",
+    provider: "mock-payments",
+    providerTransactionId: "provider-refund-1",
+    amountMinor: 1_000n,
+    currency: "CZK",
+    verifiedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+    immutable: true,
+  },
+  handoffSettlementOrderPayments: [
+    {
+      id: "payment-1",
+      orderId: "order-1",
+      capturedAmountMinor: 1_000n,
+      capturedAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+      immutable: true,
+    },
+  ],
+  handoffSettlementOrderRefunds: [
+    {
+      id: "refund-1",
+      paymentId: "payment-1",
+      status: "succeeded",
+      amountMinor: 1_000n,
+      immutable: true,
+    },
+  ],
+  handoffSettlementPaymentIds: ["payment-1"],
+  handoffSettlementRefundIds: ["refund-1"],
+  handoffSettlementPaymentSetComplete: true,
+  handoffSettlementRefundSetComplete: true,
+  handoffRefundedPriorReconciliation: {
+    id: "handoff-reconciliation-prior",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    shipmentId: "shipment-prior",
+    orderSettlementId: "handoff-settlement-1",
+    status: "completed",
+    resultId: "cancellation-race-result-1",
+    immutable: true,
+  },
   amountDueMinor: 0n,
   refundableBalanceMinor: 0n,
   reconciliationRefundAllocated: true,
@@ -3168,6 +3568,42 @@ const permittedContext = {
     currentStateCommandKey: "shipment-cancellation-pending-command-1",
     immutable: true,
   },
+  cancellationRaceAcceptanceEvent: {
+    id: "shipment-provider-event-1",
+    shipmentId: "shipment-1",
+    carrier: "carrier-1",
+    carrierLabelId: "label-1",
+    transactionId: "shipment-provider-transaction-1",
+    kind: "acceptance_scan",
+    occurredAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    verifiedAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    authenticated: true,
+    verified: true,
+    immutable: true,
+  },
+  cancellationRaceSelectedVoidEvent: {
+    id: "void-event-1",
+    shipmentId: "shipment-1",
+    carrier: "carrier-1",
+    carrierLabelId: "label-1",
+    kind: "label_voided",
+    occurredAt: Instant.parse("2026-01-01T00:10:00.001Z"),
+    verifiedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+    authenticated: true,
+    verified: true,
+    immutable: true,
+  },
+  cancellationRaceResultShipment: {
+    id: "shipment-1",
+    previousStatus: "cancelled",
+    targetStatus: "handed_over",
+    carrier: "carrier-1",
+    carrierLabelId: "label-1",
+    providerAcceptanceScanId: "shipment-provider-event-1",
+    handedOverAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    resultId: "cancellation-race-result-1",
+    immutable: true,
+  },
   cancellationRaceCancellationRequestId: "shipment-cancellation-request-1",
   cancellationRaceCancellationRequestShipmentId: "shipment-1",
   cancellationRaceCancellationRequestResultId: "shipment-cancellation-1",
@@ -3699,16 +4135,28 @@ function contextForTransition(target: string, current?: string) {
   const capacityCaptureCompensation =
     current === "pending" && target === "refund_pending";
   const lateCaptureCompensation =
-    current === "voided" && target === "refund_pending";
+    (current === "voided" || current === "failed") &&
+    target === "refund_pending";
+  const refundFailureRollback =
+    current === "refund_pending" && target === "captured";
   const compensationRetryKind = capacityCaptureCompensation
     ? "initial_checkout_capacity"
     : lateCaptureCompensation
       ? "late_capture"
       : undefined;
-  const lateCapturePreviousPaymentResultId = "payment-voided-result-1";
-  const lateCaptureCurrentStateCommandKey = "payment-voided-command-1";
+  const lateCapturePreviousPaymentResultId =
+    current === "failed"
+      ? permittedContext.paymentFailureResultId
+      : `payment-${current ?? "voided"}-result-1`;
+  const lateCaptureCurrentStateCommandKey = `payment-${current ?? "voided"}-command-1`;
   const unauthorizedHandoffReconciliation =
     current === "awaiting_balance" && target === "shipped";
+  const committedCancellationRecovery =
+    current === "cancelled" &&
+    (target === "handed_over" || target === "shipped");
+  const refundedCancellationRecovery =
+    (current === "refunded" || current === "cancelled_refunded") &&
+    target === "shipped";
   const completionTopologyStatus =
     current === "awaiting_balance" && target === "cancelled_settled"
       ? "qc_passed"
@@ -3962,6 +4410,10 @@ function contextForTransition(target: string, current?: string) {
   const reshipmentSetupPreviousResultId = `claim-resolution-${current}-result-1`;
   const ordinaryRefundState =
     current === "partially_refunded" ? "partially_refunded" : "captured";
+  const refundCompletionTarget =
+    target === "partially_refunded" ? "partially_refunded" : "refunded";
+  const refundCompletionAmountMinor =
+    refundCompletionTarget === "partially_refunded" ? 1_000n : 10_000n;
   const claimRefundSetupPreviousResultId = `claim-resolution-${current ?? "pending"}-result-1`;
   const claimRefundSetupCurrentStateCommandKey = `claim-resolution-${current ?? "pending"}-command-1`;
   const shipmentReadinessPreviousOrderResultId = `order-${current ?? "qc_passed"}-result-1`;
@@ -4095,13 +4547,46 @@ function contextForTransition(target: string, current?: string) {
       ...permittedContext.paymentFailureExpectedPayment,
       role: permittedContext.paymentRole,
     },
+    paymentFailureFailedPayment: {
+      ...permittedContext.paymentFailureFailedPayment,
+      role: permittedContext.paymentRole,
+    },
     refundCompletionExpectedPayment: {
       ...permittedContext.refundCompletionExpectedPayment,
       role: permittedContext.paymentRole,
     },
+    refundCompletionRefundSetBefore: {
+      ...permittedContext.refundCompletionRefundSetBefore,
+      refundSnapshots: [
+        {
+          ...permittedContext.refundCompletionRefundSetBefore
+            .refundSnapshots[0],
+          amountMinor: refundCompletionAmountMinor,
+        },
+      ],
+    },
+    refundCompletionRefundSetAfter: {
+      ...permittedContext.refundCompletionRefundSetAfter,
+      refundSnapshots: [
+        {
+          ...permittedContext.refundCompletionRefundSetAfter.refundSnapshots[0],
+          amountMinor: refundCompletionAmountMinor,
+        },
+      ],
+    },
+    refundCompletionRefundTransaction: {
+      ...permittedContext.refundCompletionRefundTransaction,
+      amountMinor: refundCompletionAmountMinor,
+    },
     refundCompletionProviderEvent: {
       ...permittedContext.refundCompletionProviderEvent,
-      projectedTarget: target,
+      amountMinor: refundCompletionAmountMinor,
+      projectedTarget: refundCompletionTarget,
+    },
+    refundCompletionReconciledPayment: {
+      ...permittedContext.refundCompletionReconciledPayment,
+      targetStatus: refundCompletionTarget,
+      succeededRefundAmountMinor: refundCompletionAmountMinor,
     },
     shipmentProviderOutcomePreviousResultId: `shipment-${shipmentProviderOutcomeSource}-result-1`,
     shipmentProviderOutcomeResultId,
@@ -4382,7 +4867,9 @@ function contextForTransition(target: string, current?: string) {
       ? "initial_checkout_capacity"
       : lateCaptureCompensation
         ? "late_capture"
-        : permittedContext.paymentCaptureKind,
+        : refundFailureRollback
+          ? "refund_failure_rollback"
+          : permittedContext.paymentCaptureKind,
     ...(compensationRetryKind
       ? {
           compensationRefundRetryKind: compensationRetryKind,
@@ -4407,7 +4894,24 @@ function contextForTransition(target: string, current?: string) {
             orderId: "order-1",
             phaseId: "phase-1",
             role: permittedContext.paymentRole,
-            status: "voided",
+            status: current,
+            ...(current === "voided" || current === "failed"
+              ? {
+                  provider: "sandbox",
+                  requestedAmountMinor: 10_000n,
+                  currency: "EUR",
+                  captureAuthorized: false,
+                  captureCutoffAt: Instant.parse("2026-01-01T00:30:00.000Z"),
+                }
+              : {}),
+            ...(current === "failed"
+              ? {
+                  providerIntentId:
+                    permittedContext.providerPaymentTransactionId,
+                  providerFailureEventId:
+                    permittedContext.paymentFailureProviderEventId,
+                }
+              : {}),
             resultId: lateCapturePreviousPaymentResultId,
             currentStateCommandKey: lateCaptureCurrentStateCommandKey,
             immutable: true,
@@ -4416,7 +4920,7 @@ function contextForTransition(target: string, current?: string) {
       : {}),
     refundWebhookProjectedTarget: target,
     providerPaymentEventStatus:
-      (current === "voided" || current === "pending") &&
+      (current === "voided" || current === "failed" || current === "pending") &&
       target === "refund_pending"
         ? "captured"
         : target,
@@ -4425,13 +4929,16 @@ function contextForTransition(target: string, current?: string) {
     currentRemedyShipmentLineageLeafStatus: remedyIncident
       ? "lost"
       : permittedContext.currentRemedyShipmentLineageLeafStatus,
-    providerEventStatus: unauthorizedHandoffReconciliation
-      ? "handed_over"
-      : remedyIncident
-        ? "lost"
-        : target === "delivered_reship" || target === "delivered_reprint"
-          ? "delivered"
-          : target,
+    providerEventStatus:
+      unauthorizedHandoffReconciliation ||
+      committedCancellationRecovery ||
+      refundedCancellationRecovery
+        ? "handed_over"
+        : remedyIncident
+          ? "lost"
+          : target === "delivered_reship" || target === "delivered_reprint"
+            ? "delivered"
+            : target,
     remedyDeliveryKind:
       current === "replacement_shipped" && target === "delivered_reprint"
         ? "reprint"
@@ -4479,47 +4986,197 @@ function contextForTransition(target: string, current?: string) {
     remedyIncidentShipmentTargetStatus: remedyIncident
       ? "lost"
       : permittedContext.remedyIncidentShipmentTargetStatus,
-    handoffShipmentPreviousStatus:
-      unauthorizedHandoffReconciliation ||
-      (current === "cancellation_pending" && target === "handed_over")
-        ? "cancellation_pending"
-        : permittedContext.handoffShipmentPreviousStatus,
-    handoffOrderPreviousStatus: unauthorizedHandoffReconciliation
-      ? "awaiting_balance"
-      : permittedContext.handoffOrderPreviousStatus,
-    cancellationRacePreviousOrderResultId: unauthorizedHandoffReconciliation
-      ? "order-awaiting_balance-result-1"
-      : permittedContext.cancellationRacePreviousOrderResultId,
-    cancellationRaceCurrentOrderStateCommandKey:
-      unauthorizedHandoffReconciliation
+    handoffShipmentPreviousStatus: unauthorizedHandoffReconciliation
+      ? "cancellation_pending"
+      : refundedCancellationRecovery
+        ? "cancelled"
+        : committedCancellationRecovery
+          ? "cancelled"
+          : (current === "cancellation_pending" || current === "cancelled") &&
+              target === "handed_over"
+            ? current
+            : permittedContext.handoffShipmentPreviousStatus,
+    handoffOrderPreviousStatus: refundedCancellationRecovery
+      ? "refunded"
+      : unauthorizedHandoffReconciliation
+        ? "awaiting_balance"
+        : committedCancellationRecovery
+          ? "cancelled"
+          : permittedContext.handoffOrderPreviousStatus,
+    handoffPhasePreviousStatus: refundedCancellationRecovery
+      ? "cancelled_refunded"
+      : committedCancellationRecovery
+        ? "cancelled"
+        : "qc_passed",
+    handoffPhasePreviousResultId: refundedCancellationRecovery
+      ? "phase-cancelled_refunded-result-1"
+      : committedCancellationRecovery
+        ? "phase-cancelled-result-1"
+        : permittedContext.handoffPhasePreviousResultId,
+    handoffPhaseCurrentStateCommandKey: refundedCancellationRecovery
+      ? "phase-cancelled_refunded-command-1"
+      : committedCancellationRecovery
+        ? "phase-cancelled-command-1"
+        : permittedContext.handoffPhaseCurrentStateCommandKey,
+    handoffExpectedPhase: refundedCancellationRecovery
+      ? {
+          ...permittedContext.handoffExpectedPhase,
+          status: "cancelled_refunded",
+          resultId: "phase-cancelled_refunded-result-1",
+          currentStateCommandKey: "phase-cancelled_refunded-command-1",
+        }
+      : committedCancellationRecovery
+        ? {
+            ...permittedContext.handoffExpectedPhase,
+            status: "cancelled",
+            resultId: "phase-cancelled-result-1",
+            currentStateCommandKey: "phase-cancelled-command-1",
+          }
+        : permittedContext.handoffExpectedPhase,
+    handoffJobPreviousStatus:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "cancelled"
+        : permittedContext.handoffJobPreviousStatus,
+    handoffSlots: refundedCancellationRecovery
+      ? permittedContext.handoffSlots.map((slot) => ({
+          ...slot,
+          previousOutcome: "cancelled_refunded",
+          targetOutcome: "pending",
+        }))
+      : committedCancellationRecovery
+        ? permittedContext.handoffSlots.map((slot) => ({
+            ...slot,
+            previousOutcome: "cancelled",
+            targetOutcome: "pending",
+          }))
+        : permittedContext.handoffSlots,
+    handoffJobs: refundedCancellationRecovery
+      ? permittedContext.handoffJobs.map((job) => ({
+          ...job,
+          previousStatus: "cancelled",
+        }))
+      : committedCancellationRecovery
+        ? permittedContext.handoffJobs.map((job) => ({
+            ...job,
+            previousStatus: "cancelled",
+          }))
+        : permittedContext.handoffJobs,
+    jobHandoffExpectedJob:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? {
+            ...permittedContext.jobHandoffExpectedJob,
+            status: "cancelled",
+            cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+            cancellationReason: "order_cancelled",
+            currentStateCommandKey: "job-cancelled-command-1",
+            resultId: "job-cancelled-result-1",
+          }
+        : permittedContext.jobHandoffExpectedJob,
+    jobHandoffPreviousStatus:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "cancelled"
+        : permittedContext.jobHandoffPreviousStatus,
+    jobHandoffCurrentStateCommandKey:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "job-cancelled-command-1"
+        : permittedContext.jobHandoffCurrentStateCommandKey,
+    jobHandoffPreviousResultId:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "job-cancelled-result-1"
+        : permittedContext.jobHandoffPreviousResultId,
+    jobHandoffResultId:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? permittedContext.cancellationRaceHandoffResultId
+        : permittedContext.jobHandoffResultId,
+    jobHandoffJobResultId:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? permittedContext.cancellationRaceHandoffResultId
+        : permittedContext.jobHandoffJobResultId,
+    cancellationRacePreviousOrderResultId: refundedCancellationRecovery
+      ? "order-refunded-result-1"
+      : unauthorizedHandoffReconciliation
+        ? "order-awaiting_balance-result-1"
+        : committedCancellationRecovery
+          ? "order-cancelled-result-1"
+          : permittedContext.cancellationRacePreviousOrderResultId,
+    cancellationRaceCurrentOrderStateCommandKey: refundedCancellationRecovery
+      ? "order-refunded-command-1"
+      : unauthorizedHandoffReconciliation
         ? "order-awaiting_balance-command-1"
-        : permittedContext.cancellationRaceCurrentOrderStateCommandKey,
+        : committedCancellationRecovery
+          ? "order-cancelled-command-1"
+          : permittedContext.cancellationRaceCurrentOrderStateCommandKey,
     cancellationRaceExpectedOrder: {
       ...permittedContext.cancellationRaceExpectedOrder,
-      status: unauthorizedHandoffReconciliation
-        ? "awaiting_balance"
-        : permittedContext.cancellationRaceExpectedOrder.status,
-      resultId: unauthorizedHandoffReconciliation
-        ? "order-awaiting_balance-result-1"
-        : permittedContext.cancellationRaceExpectedOrder.resultId,
-      currentStateCommandKey: unauthorizedHandoffReconciliation
-        ? "order-awaiting_balance-command-1"
-        : permittedContext.cancellationRaceExpectedOrder.currentStateCommandKey,
+      status: refundedCancellationRecovery
+        ? "refunded"
+        : unauthorizedHandoffReconciliation
+          ? "awaiting_balance"
+          : committedCancellationRecovery
+            ? "cancelled"
+            : permittedContext.cancellationRaceExpectedOrder.status,
+      resultId: refundedCancellationRecovery
+        ? "order-refunded-result-1"
+        : unauthorizedHandoffReconciliation
+          ? "order-awaiting_balance-result-1"
+          : committedCancellationRecovery
+            ? "order-cancelled-result-1"
+            : permittedContext.cancellationRaceExpectedOrder.resultId,
+      currentStateCommandKey: refundedCancellationRecovery
+        ? "order-refunded-command-1"
+        : unauthorizedHandoffReconciliation
+          ? "order-awaiting_balance-command-1"
+          : committedCancellationRecovery
+            ? "order-cancelled-command-1"
+            : permittedContext.cancellationRaceExpectedOrder
+                .currentStateCommandKey,
     },
-    cancellationRaceHandoffKind: unauthorizedHandoffReconciliation
-      ? "unauthorized_reconciliation"
-      : current === "packed" && target === "handed_over"
-        ? undefined
-        : permittedContext.cancellationRaceHandoffKind,
-    cancellationRaceResultKind: unauthorizedHandoffReconciliation
-      ? "unauthorized_reconciliation"
-      : permittedContext.cancellationRaceResultKind,
-    cancellationRaceFinancialResultStatus: unauthorizedHandoffReconciliation
-      ? "unauthorized_handoff_settled"
-      : permittedContext.cancellationRaceFinancialResultStatus,
-    cancellationRaceAuthorizationResultStatus: unauthorizedHandoffReconciliation
-      ? "unauthorized_reconciliation"
-      : permittedContext.cancellationRaceAuthorizationResultStatus,
+    cancellationRacePreviousShipmentResultId:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "shipment-cancelled-result-1"
+        : permittedContext.cancellationRacePreviousShipmentResultId,
+    cancellationRaceCurrentStateCommandKey:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "shipment-cancelled-command-1"
+        : permittedContext.cancellationRaceCurrentStateCommandKey,
+    cancellationRaceExpectedShipment:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? {
+            ...permittedContext.cancellationRaceExpectedShipment,
+            status: "cancelled",
+            providerVoidId:
+              permittedContext.cancellationRaceSelectedVoidEvent.id,
+            providerVoidedAt:
+              permittedContext.cancellationRaceSelectedVoidEvent.verifiedAt,
+            cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+            resultId: "shipment-cancelled-result-1",
+            currentStateCommandKey: "shipment-cancelled-command-1",
+          }
+        : permittedContext.cancellationRaceExpectedShipment,
+    cancellationRaceResultShipmentPreviousStatus:
+      refundedCancellationRecovery || committedCancellationRecovery
+        ? "cancelled"
+        : permittedContext.cancellationRaceResultShipmentPreviousStatus,
+    cancellationRaceRefundedAggregate: refundedCancellationRecovery,
+    cancellationRaceCommittedCancellation: committedCancellationRecovery,
+    cancellationRaceHandoffKind:
+      refundedCancellationRecovery || unauthorizedHandoffReconciliation
+        ? "unauthorized_reconciliation"
+        : current === "packed" && target === "handed_over"
+          ? undefined
+          : permittedContext.cancellationRaceHandoffKind,
+    cancellationRaceResultKind:
+      refundedCancellationRecovery || unauthorizedHandoffReconciliation
+        ? "unauthorized_reconciliation"
+        : permittedContext.cancellationRaceResultKind,
+    cancellationRaceFinancialResultStatus:
+      refundedCancellationRecovery || unauthorizedHandoffReconciliation
+        ? "unauthorized_handoff_settled"
+        : permittedContext.cancellationRaceFinancialResultStatus,
+    cancellationRaceAuthorizationResultStatus:
+      refundedCancellationRecovery || unauthorizedHandoffReconciliation
+        ? "unauthorized_reconciliation"
+        : permittedContext.cancellationRaceAuthorizationResultStatus,
     reshipmentSetupResolutionPreviousStatus:
       target === "reship_pending"
         ? current
@@ -4627,6 +5284,70 @@ function unauthorizedHandoffReconciliationContext() {
   } as const;
 }
 
+function laterRefundedParcelContext() {
+  const base = contextForTransition("shipped", "refunded");
+  const resultId = "cancellation-race-result-later";
+  const providerEventId = "shipment-provider-event-later";
+  const providerTransactionId = "shipment-provider-transaction-later";
+  return {
+    ...base,
+    cancellationRaceLaterRefundedParcel: true,
+    cancellationRaceHandoffResultId: resultId,
+    cancellationRaceAggregateResultId: resultId,
+    cancellationRaceShipmentResultId: resultId,
+    cancellationRaceSlotSetResultId: resultId,
+    cancellationRaceFinancialResultId: resultId,
+    cancellationRaceAuthorizationResultId: resultId,
+    cancellationRaceJobResultId: resultId,
+    cancellationRaceBarrierResultId: resultId,
+    jobHandoffResultId: resultId,
+    jobHandoffJobResultId: resultId,
+    providerEventId,
+    providerEventTransactionId: providerTransactionId,
+    shipmentProviderTransactionId: providerTransactionId,
+    shipmentProviderScanEventId: providerEventId,
+    cancellationRaceResultProviderEventId: providerEventId,
+    cancellationRaceResultProviderTransactionId: providerTransactionId,
+    cancellationRaceAcceptanceEvent: {
+      ...base.cancellationRaceAcceptanceEvent,
+      id: providerEventId,
+      transactionId: providerTransactionId,
+    },
+    cancellationRaceResultShipment: {
+      ...base.cancellationRaceResultShipment,
+      providerAcceptanceScanId: providerEventId,
+      resultId,
+    },
+    handoffReconciliationResultId: resultId,
+    handoffReconciliationProviderEventId: providerEventId,
+    handoffReconciliationProviderTransactionId: providerTransactionId,
+    handoffRefundedReconciliation: {
+      ...base.handoffRefundedReconciliation,
+      providerEventId,
+      providerTransactionId,
+      resultId,
+    },
+    handoffOrderPreviousStatus: "shipped",
+    handoffPhasePreviousStatus: "shipped",
+    cancellationRacePreviousOrderResultId: "order-shipped-result-1",
+    cancellationRaceCurrentOrderStateCommandKey: "order-shipped-command-1",
+    cancellationRaceExpectedOrder: {
+      ...base.cancellationRaceExpectedOrder,
+      status: "shipped",
+      resultId: "order-shipped-result-1",
+      currentStateCommandKey: "order-shipped-command-1",
+    },
+    handoffPhasePreviousResultId: "phase-shipped-result-1",
+    handoffPhaseCurrentStateCommandKey: "phase-shipped-command-1",
+    handoffExpectedPhase: {
+      ...base.handoffExpectedPhase,
+      status: "shipped",
+      resultId: "phase-shipped-result-1",
+      currentStateCommandKey: "phase-shipped-command-1",
+    },
+  } as const;
+}
+
 function cancellationRaceShipmentCommand(shipmentId: string) {
   const suffix = shipmentId === "shipment-1" ? "1" : shipmentId;
   return {
@@ -4675,6 +5396,58 @@ function cancellationRaceShipmentSource(
     cancellationRaceCancellationRequestShipmentId: shipmentId,
     cancellationRaceCancellationRequestResultId: cancellationRequestResultId,
     shipmentProviderScanCancellationRequestId: cancellationRequestId,
+  } as const;
+}
+
+function postVoidCancellationRaceShipmentSource(
+  shipmentId: string,
+  originKind: "ordinary" | "replacement" | "reship" = "ordinary",
+) {
+  const source = cancellationRaceShipmentSource(
+    shipmentId,
+    "order-1",
+    "phase-1",
+    "label-1",
+    originKind,
+  );
+  const suffix = shipmentId === "shipment-1" ? "1" : shipmentId;
+  const previousShipmentResultId = `shipment-cancelled-result-${suffix}`;
+  const currentStateCommandKey = `shipment-cancelled-command-${suffix}`;
+  return {
+    ...source,
+    cancellationRaceCommittedCancellation: false,
+    cancellationRacePreviousShipmentResultId: previousShipmentResultId,
+    cancellationRaceCurrentStateCommandKey: currentStateCommandKey,
+    cancellationRaceExpectedShipment: {
+      ...source.cancellationRaceExpectedShipment,
+      status: "cancelled",
+      providerVoidId: "void-event-1",
+      providerVoidedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+      cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+      resultId: previousShipmentResultId,
+      currentStateCommandKey,
+    },
+    cancellationRaceAcceptanceEvent: {
+      ...permittedContext.cancellationRaceAcceptanceEvent,
+      shipmentId,
+    },
+    cancellationRaceSelectedVoidEvent: {
+      ...permittedContext.cancellationRaceSelectedVoidEvent,
+      shipmentId,
+    },
+    cancellationRaceResultShipment: {
+      ...permittedContext.cancellationRaceResultShipment,
+      id: shipmentId,
+    },
+  } as const;
+}
+
+function postVoidCancellationRaceShipmentCommand(shipmentId: string) {
+  const suffix = shipmentId === "shipment-1" ? "1" : shipmentId;
+  return {
+    aggregateId: shipmentId,
+    currentStateCommandKey: `shipment-cancelled-command-${suffix}`,
+    currentStateResultId: `shipment-cancelled-result-${suffix}`,
   } as const;
 }
 
@@ -4879,6 +5652,50 @@ function commandAnchors(
   }
   if (
     policy.name === "Order" &&
+    current === "cancelled" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "order-1",
+      currentStateCommandKey: "order-cancelled-command-1",
+      currentStateResultId: "order-cancelled-result-1",
+    };
+  }
+  if (
+    policy.name === "Order" &&
+    current === "refunded" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "order-1",
+      currentStateCommandKey: "order-refunded-command-1",
+      currentStateResultId: "order-refunded-result-1",
+    };
+  }
+  if (
+    policy.name === "OrderPhase(single)" &&
+    current === "cancelled" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "phase-1",
+      currentStateCommandKey: "phase-cancelled-command-1",
+      currentStateResultId: "phase-cancelled-result-1",
+    };
+  }
+  if (
+    policy.name === "OrderPhase(single)" &&
+    current === "cancelled_refunded" &&
+    target === "shipped"
+  ) {
+    return {
+      aggregateId: "phase-1",
+      currentStateCommandKey: "phase-cancelled_refunded-command-1",
+      currentStateResultId: "phase-cancelled_refunded-result-1",
+    };
+  }
+  if (
+    policy.name === "Order" &&
     current === "ready_to_ship" &&
     target === "shipped"
   ) {
@@ -4944,6 +5761,17 @@ function commandAnchors(
     };
   }
   if (
+    policy.name === "Shipment" &&
+    current === "cancelled" &&
+    target === "handed_over"
+  ) {
+    return {
+      aggregateId: "shipment-1",
+      currentStateCommandKey: "shipment-cancelled-command-1",
+      currentStateResultId: "shipment-cancelled-result-1",
+    };
+  }
+  if (
     policy.name === "Order" &&
     (target === "completed" ||
       target === "partially_fulfilled" ||
@@ -4976,7 +5804,7 @@ function commandAnchors(
   if (
     policy.name === "Payment" &&
     current === "created" &&
-    target === "pending"
+    (target === "pending" || target === "failed" || target === "voided")
   ) {
     return {
       aggregateId: "payment-1",
@@ -5041,13 +5869,16 @@ function commandAnchors(
   }
   if (
     policy.name === "Payment" &&
-    current === "voided" &&
+    (current === "voided" || current === "failed") &&
     target === "refund_pending"
   ) {
     return {
       aggregateId: "payment-1",
-      currentStateCommandKey: "payment-voided-command-1",
-      currentStateResultId: "payment-voided-result-1",
+      currentStateCommandKey: `payment-${current}-command-1`,
+      currentStateResultId:
+        current === "failed"
+          ? permittedContext.paymentFailureResultId
+          : `payment-${current}-result-1`,
     };
   }
   if (
@@ -5063,7 +5894,9 @@ function commandAnchors(
   if (
     policy.name === "Payment" &&
     current === "refund_pending" &&
-    (target === "partially_refunded" || target === "refunded")
+    (target === "captured" ||
+      target === "partially_refunded" ||
+      target === "refunded")
   ) {
     return {
       aggregateId: "payment-1",
@@ -5073,7 +5906,8 @@ function commandAnchors(
   }
   if (
     (policy.name === "Shipment" &&
-      ((current === "handed_over" && target === "in_transit") ||
+      ((current === "handed_over" &&
+        (target === "in_transit" || target === "delivered")) ||
         (current === "in_transit" &&
           (target === "delivered" ||
             target === "lost" ||
@@ -5164,6 +5998,17 @@ function commandAnchors(
       aggregateId: "job-1",
       currentStateCommandKey: "job-packed-command-1",
       currentStateResultId: "job-packed-result-1",
+    };
+  }
+  if (
+    policy.name === "Job" &&
+    current === "cancelled" &&
+    target === "handed_over"
+  ) {
+    return {
+      aggregateId: "job-1",
+      currentStateCommandKey: "job-cancelled-command-1",
+      currentStateResultId: "job-cancelled-result-1",
     };
   }
   if (
@@ -5425,6 +6270,19 @@ function verifyEveryStatePair<S extends string>(
     for (const target of states) {
       const allowed = (policy.transitions[current] ?? []).includes(target);
       const name = `${policy.name}: ${current} -> ${target}`;
+      const requiresLateRefundFailureEvidence =
+        (policy.name === "Payment" &&
+          ((current === "refunded" &&
+            (target === "captured" ||
+              target === "partially_refunded" ||
+              target === "refund_pending")) ||
+            (current === "partially_refunded" && target === "captured"))) ||
+        (policy.name === "Order" &&
+          current === "refunded" &&
+          target === "cancelled") ||
+        (policy.name === "OrderPhase(single)" &&
+          current === "cancelled_refunded" &&
+          target === "cancelled");
       if (current === target || !allowed) {
         expect(
           () =>
@@ -5437,6 +6295,18 @@ function verifyEveryStatePair<S extends string>(
             }),
           name,
         ).toThrow(InvalidTransitionError);
+      } else if (requiresLateRefundFailureEvidence) {
+        expect(
+          () =>
+            transition(policy, {
+              ...commandAnchors(policy, current, target),
+              current,
+              target,
+              idempotencyKey: "new",
+              context: contextForTransition(target, current),
+            }),
+          name,
+        ).toThrow(TransitionGuardError);
       } else {
         expect(
           transition(policy, {
@@ -5523,6 +6393,1733 @@ describe("v0 lifecycle policy tables", () => {
   });
 
   it.each([
+    ["captured", "refunded", 0n, 10_000n],
+    ["partially_refunded", "partially_refunded", 4_000n, 1_000n],
+  ] as const)(
+    "reconciles an exact late refund success from %s through %s",
+    (source, target, succeededBefore, amountMinor) => {
+      const capturedAmountMinor = 10_000n;
+      const succeededAfter = succeededBefore + amountMinor;
+      const sourceResultId = `payment-${source}-late-refund-source-result-1`;
+      const sourceStateKey = `payment-${source}-late-refund-command-1`;
+      const interimResultId = "late-refund-success-interim-result-1";
+      const interimStateKey = "late-refund-success-interim-command-1";
+      const finalResultId = "late-refund-success-result-1";
+      const refundSetBeforeId = `late-refund-set-before-${source}`;
+      const refundSetBeforeResultId = `${refundSetBeforeId}-result`;
+      const refundSetAfterId = `late-refund-set-after-${source}`;
+      const refundSetAfterResultId = `${refundSetAfterId}-result`;
+      const failureVerifiedAt = Instant.parse("2026-01-01T00:10:00.000Z");
+      const successVerifiedAt = Instant.parse("2026-01-01T00:11:00.000Z");
+      const existingSucceededRefunds =
+        succeededBefore === 0n
+          ? []
+          : [
+              {
+                id: "existing-refund-1",
+                paymentId: "payment-1",
+                status: "succeeded",
+                amountMinor: succeededBefore,
+                resultId: "existing-refund-result-1",
+                immutable: true,
+              },
+            ];
+      const refundSetBefore = {
+        id: refundSetBeforeId,
+        paymentId: "payment-1",
+        refundIds: [
+          ...existingSucceededRefunds.map(({ id }) => id),
+          "refund-1",
+        ],
+        refundSnapshots: [
+          ...existingSucceededRefunds,
+          {
+            id: "refund-1",
+            paymentId: "payment-1",
+            status: "failed",
+            amountMinor,
+            resultId: "refund-failure-event-1",
+            immutable: true,
+          },
+        ],
+        resultId: refundSetBeforeResultId,
+        authoritative: true,
+        complete: true,
+        immutable: true,
+      };
+      const refundSetAfter = {
+        id: refundSetAfterId,
+        paymentId: "payment-1",
+        refundIds: refundSetBefore.refundIds,
+        refundSnapshots: [
+          ...existingSucceededRefunds,
+          {
+            id: "refund-1",
+            paymentId: "payment-1",
+            status: "succeeded",
+            amountMinor,
+            resultId: finalResultId,
+            immutable: true,
+          },
+        ],
+        resultId: refundSetAfterResultId,
+        authoritative: true,
+        complete: true,
+        immutable: true,
+      };
+      const failureProviderEvent = {
+        id: "refund-failure-event-1",
+        paymentId: "payment-1",
+        refundTransactionId: "refund-1",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        kind: "refund_failed",
+        amountMinor,
+        currency: "EUR",
+        occurredAt: failureVerifiedAt,
+        authenticatedAt: failureVerifiedAt,
+        verifiedAt: failureVerifiedAt,
+        authenticated: true,
+        verified: true,
+        resultId: "refund-failure-event-1",
+        immutable: true,
+      };
+      const successProviderEvent = {
+        id: "refund-provider-event-1",
+        paymentId: "payment-1",
+        refundTransactionId: "refund-1",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        kind: "refund_succeeded",
+        amountMinor,
+        currency: "EUR",
+        occurredAt: successVerifiedAt,
+        authenticatedAt: successVerifiedAt,
+        verifiedAt: successVerifiedAt,
+        status: "succeeded",
+        projectedTarget: target,
+        authenticated: true,
+        verified: true,
+        resultId: finalResultId,
+        immutable: true,
+      };
+      const base = contextForTransition(target, "refund_pending");
+      const context = {
+        ...base,
+        paymentCaptureKind: "late_refund_success",
+        refundCompletionPreviousPaymentResultId: interimResultId,
+        refundCompletionCurrentStateCommandKey: interimStateKey,
+        refundCompletionResultId: finalResultId,
+        refundCompletionPaymentResultId: finalResultId,
+        refundCompletionRefundTransactionResultId: finalResultId,
+        refundCompletionProviderEventResultId: finalResultId,
+        lateRefundSuccessFailureProviderEventId: "refund-failure-event-1",
+        lateRefundSuccessProvider: "sandbox",
+        lateRefundSuccessProviderTransactionId: "provider-refund-1",
+        lateRefundSuccessAmountMinor: amountMinor,
+        lateRefundSuccessCurrency: "EUR",
+        lateRefundSuccessAttemptKey: "refund-attempt-1",
+        lateRefundSuccessCapturedAmountMinor: capturedAmountMinor,
+        lateRefundSuccessSucceededBeforeMinor: succeededBefore,
+        lateRefundSuccessSucceededAfterMinor: succeededAfter,
+        lateRefundSuccessRefundSetBeforeId: refundSetBeforeId,
+        lateRefundSuccessRefundSetBeforeResultId: refundSetBeforeResultId,
+        lateRefundSuccessRefundSetBefore: refundSetBefore,
+        lateRefundSuccessRefundSetAfterId: refundSetAfterId,
+        lateRefundSuccessRefundSetAfterResultId: refundSetAfterResultId,
+        lateRefundSuccessRefundSetAfter: refundSetAfter,
+        lateRefundSuccessSourcePaymentResultId: sourceResultId,
+        lateRefundSuccessSourceCurrentStateCommandKey: sourceStateKey,
+        lateRefundSuccessSourcePayment: {
+          id: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          role: "full",
+          status: source,
+          capturedAmountMinor,
+          succeededRefundAmountMinor: succeededBefore,
+          failedRefundTransactionId: "refund-1",
+          authoritativeRefundSetId: refundSetBeforeId,
+          authoritativeRefundSetResultId: refundSetBeforeResultId,
+          resultId: sourceResultId,
+          currentStateCommandKey: sourceStateKey,
+          immutable: true,
+        },
+        refundCompletionExpectedPayment: {
+          id: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          role: "full",
+          status: "refund_pending",
+          activeRefundTransactionId: "refund-1",
+          capturedAmountMinor,
+          succeededRefundAmountMinor: succeededAfter,
+          authoritativeRefundSetId: refundSetAfterId,
+          authoritativeRefundSetResultId: refundSetAfterResultId,
+          resultId: interimResultId,
+          currentStateCommandKey: interimStateKey,
+          immutable: true,
+        },
+        refundCompletionRefundTransaction: {
+          id: "refund-1",
+          paymentId: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          previousStatus: "failed",
+          targetStatus: "succeeded",
+          status: "succeeded",
+          provider: "sandbox",
+          providerTransactionId: "provider-refund-1",
+          amountMinor,
+          currency: "EUR",
+          idempotencyKey: "refund-attempt-1",
+          failureProviderEventId: "refund-failure-event-1",
+          providerEventId: "refund-provider-event-1",
+          completedAt: successVerifiedAt,
+          resultId: finalResultId,
+          immutable: true,
+        },
+        lateRefundSuccessFailureProviderEvent: failureProviderEvent,
+        refundCompletionProviderEvent: successProviderEvent,
+        lateRefundSuccessProviderEventSetId:
+          "late-refund-success-provider-event-set-1",
+        lateRefundSuccessProviderEventSetResultId: finalResultId,
+        lateRefundSuccessProviderEventSet: {
+          id: "late-refund-success-provider-event-set-1",
+          paymentId: "payment-1",
+          refundTransactionId: "refund-1",
+          providerEventIds: [failureProviderEvent.id, successProviderEvent.id],
+          providerEvents: [failureProviderEvent, successProviderEvent],
+          resultId: finalResultId,
+          authoritative: true,
+          complete: true,
+          immutable: true,
+        },
+        lateRefundSuccessReconciledPayment: {
+          id: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          role: "full",
+          previousStatus: source,
+          intermediateStatus: "refund_pending",
+          targetStatus: target,
+          capturedAmountMinor,
+          succeededRefundAmountMinor: succeededAfter,
+          refundTransactionId: "refund-1",
+          authoritativeRefundSetId: refundSetAfterId,
+          authoritativeRefundSetResultId: refundSetAfterResultId,
+          resultId: finalResultId,
+          immutable: true,
+        },
+        lateRefundSuccessPaymentResultId: finalResultId,
+        lateRefundSuccessRefundTransactionResultId: finalResultId,
+        lateRefundSuccessProviderEventResultId: finalResultId,
+        lateRefundSuccessCompleted: true,
+        lateRefundSuccessAtomic: true,
+      };
+
+      expect(
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: source,
+          target: "refund_pending",
+          idempotencyKey: `late-refund-success-start-${source}`,
+          currentStateResultId: sourceResultId,
+          currentStateCommandKey: sourceStateKey,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: source,
+        current: "refund_pending",
+      });
+      expect(
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: "refund_pending",
+          target,
+          idempotencyKey: `late-refund-success-complete-${source}`,
+          currentStateResultId: interimResultId,
+          currentStateCommandKey: interimStateKey,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "refund_pending",
+        current: target,
+      });
+      const delayedFailureVerification = Instant.parse(
+        "2026-01-01T00:12:00.000Z",
+      );
+      const nonMonotoneFailure = {
+        ...failureProviderEvent,
+        authenticatedAt: delayedFailureVerification,
+        verifiedAt: delayedFailureVerification,
+      };
+      expect(
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: source,
+          target: "refund_pending",
+          idempotencyKey: `late-refund-success-non-monotone-${source}`,
+          currentStateResultId: sourceResultId,
+          currentStateCommandKey: sourceStateKey,
+          context: {
+            ...context,
+            lateRefundSuccessFailureProviderEvent: nonMonotoneFailure,
+            lateRefundSuccessProviderEventSet: {
+              ...context.lateRefundSuccessProviderEventSet,
+              providerEvents: [nonMonotoneFailure, successProviderEvent],
+            },
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: source,
+        current: "refund_pending",
+      });
+    },
+  );
+
+  it("reconciles an exact newer refund failure through Payment and cancelled aggregates", () => {
+    const successOccurredAt = Instant.parse("2026-01-01T00:10:00.000Z");
+    const successVerifiedAt = Instant.parse("2026-01-01T00:10:01.000Z");
+    const failureOccurredAt = Instant.parse("2026-01-01T00:11:00.000Z");
+    const failureVerifiedAt = Instant.parse("2026-01-01T00:11:01.000Z");
+    const beforeSet = {
+      id: "late-failure-refund-set-before-1",
+      paymentId: "payment-1",
+      refundIds: ["refund-1"],
+      refundSnapshots: [
+        {
+          id: "refund-1",
+          paymentId: "payment-1",
+          status: "succeeded",
+          amountMinor: 10_000n,
+          idempotencyKey: "refund-attempt-1",
+          resultId: "refund-success-event-1",
+          immutable: true,
+        },
+      ],
+      resultId: "late-failure-refund-set-before-result-1",
+      authoritative: true,
+      complete: true,
+      immutable: true,
+    };
+    const afterSet = {
+      id: "late-failure-refund-set-after-1",
+      paymentId: "payment-1",
+      refundIds: ["refund-1"],
+      refundSnapshots: [
+        {
+          id: "refund-1",
+          paymentId: "payment-1",
+          status: "failed",
+          amountMinor: 10_000n,
+          idempotencyKey: "refund-attempt-1",
+          resultId: "late-refund-failure-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "late-failure-refund-set-after-result-1",
+      authoritative: true,
+      complete: true,
+      immutable: true,
+    };
+    const requestedAt = Instant.parse("2026-01-01T00:09:00.000Z");
+    const successProviderEvent = {
+      id: "refund-success-event-1",
+      paymentId: "payment-1",
+      refundTransactionId: "refund-1",
+      provider: "sandbox",
+      providerTransactionId: "provider-refund-1",
+      kind: "refund_succeeded",
+      amountMinor: 10_000n,
+      currency: "EUR",
+      occurredAt: successOccurredAt,
+      authenticatedAt: successVerifiedAt,
+      verifiedAt: successVerifiedAt,
+      authenticated: true,
+      verified: true,
+      resultId: "refund-success-event-1",
+      immutable: true,
+    };
+    const failureProviderEvent = {
+      id: "refund-failure-event-1",
+      paymentId: "payment-1",
+      refundTransactionId: "refund-1",
+      provider: "sandbox",
+      providerTransactionId: "provider-refund-1",
+      kind: "refund_failed",
+      amountMinor: 10_000n,
+      currency: "EUR",
+      occurredAt: failureOccurredAt,
+      authenticatedAt: failureVerifiedAt,
+      verifiedAt: failureVerifiedAt,
+      authenticated: true,
+      verified: true,
+      resultId: "late-refund-failure-result-1",
+      immutable: true,
+    };
+    const slotSetBefore = {
+      id: "late-refund-failure-slot-set-before-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      slotIds: ["slot-1"],
+      slotSnapshots: [
+        {
+          id: "slot-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          outcome: "cancelled_refunded",
+          resultId: "slot-source-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "late-refund-failure-slot-set-before-result-1",
+      authoritative: true,
+      complete: true,
+      immutable: true,
+    };
+    const slotSetAfter = {
+      id: "late-refund-failure-slot-set-after-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      slotIds: ["slot-1"],
+      slotSnapshots: [
+        {
+          id: "slot-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          outcome: "cancelled",
+          previousOutcome: "cancelled_refunded",
+          previousResultId: "slot-source-result-1",
+          resultId: "late-refund-failure-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "late-refund-failure-result-1",
+      authoritative: true,
+      complete: true,
+      immutable: true,
+    };
+    const orderPaymentSetBefore = {
+      id: "late-refund-failure-order-payment-set-before-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      paymentIds: ["payment-1"],
+      paymentSnapshots: [
+        {
+          id: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          role: "full",
+          provider: "sandbox",
+          currency: "EUR",
+          status: "refunded",
+          capturedAmountMinor: 10_000n,
+          succeededRefundAmountMinor: 10_000n,
+          authoritativeRefundSetId: beforeSet.id,
+          authoritativeRefundSetResultId: beforeSet.resultId,
+          resultId: "late-refund-failure-payment-source-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "late-refund-failure-order-payment-set-before-result-1",
+      authoritative: true,
+      complete: true,
+      immutable: true,
+    };
+    const orderPaymentSetAfter = {
+      id: "late-refund-failure-order-payment-set-after-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      paymentIds: ["payment-1"],
+      paymentSnapshots: [
+        {
+          id: "payment-1",
+          orderId: "order-1",
+          phaseId: "phase-1",
+          role: "full",
+          provider: "sandbox",
+          currency: "EUR",
+          previousStatus: "refunded",
+          targetStatus: "captured",
+          capturedAmountMinor: 10_000n,
+          succeededRefundAmountMinor: 0n,
+          authoritativeRefundSetId: afterSet.id,
+          authoritativeRefundSetResultId: afterSet.resultId,
+          previousResultId: "late-refund-failure-payment-source-result-1",
+          resultId: "late-refund-failure-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "late-refund-failure-result-1",
+      authoritative: true,
+      complete: true,
+      immutable: true,
+    };
+    const context = {
+      ...contextForTransition("captured", "refunded"),
+      paymentId: "payment-1",
+      orderId: "order-1",
+      phaseId: "phase-1",
+      paymentRole: "full",
+      refundTransactionId: "refund-1",
+      paymentCaptureKind: "late_refund_failure",
+      lateRefundFailureSuccessProviderEventId: "refund-success-event-1",
+      lateRefundFailureSuccessProviderEventResultId: "refund-success-event-1",
+      lateRefundFailureProviderEventId: "refund-failure-event-1",
+      lateRefundFailureProvider: "sandbox",
+      lateRefundFailureProviderTransactionId: "provider-refund-1",
+      lateRefundFailureAmountMinor: 10_000n,
+      lateRefundFailureCurrency: "EUR",
+      lateRefundFailureReason: "customer_cancellation",
+      lateRefundFailureAttemptKey: "refund-attempt-1",
+      lateRefundFailureCapturedAmountMinor: 10_000n,
+      lateRefundFailureRefundSetBeforeId: beforeSet.id,
+      lateRefundFailureRefundSetBeforeResultId: beforeSet.resultId,
+      lateRefundFailureRefundSetBefore: beforeSet,
+      lateRefundFailureRefundSetAfterId: afterSet.id,
+      lateRefundFailureRefundSetAfterResultId: afterSet.resultId,
+      lateRefundFailureRefundSetAfter: afterSet,
+      lateRefundFailurePreviousPaymentResultId:
+        "late-refund-failure-payment-source-result-1",
+      lateRefundFailureCurrentPaymentStateCommandKey:
+        "late-refund-failure-payment-source-command-1",
+      lateRefundFailureResultId: "late-refund-failure-result-1",
+      lateRefundFailureSourceRefundTransactionResultId:
+        "refund-success-event-1",
+      lateRefundFailureSourceRefundTransaction: {
+        id: "refund-1",
+        paymentId: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "succeeded",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        amountMinor: 10_000n,
+        currency: "EUR",
+        reason: "customer_cancellation",
+        idempotencyKey: "refund-attempt-1",
+        providerEventId: "refund-success-event-1",
+        requestedAt,
+        completedAt: successVerifiedAt,
+        resultId: "refund-success-event-1",
+        immutable: true,
+      },
+      lateRefundFailureSourcePayment: {
+        id: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        role: "full",
+        provider: "sandbox",
+        currency: "EUR",
+        status: "refunded",
+        capturedAmountMinor: 10_000n,
+        succeededRefundAmountMinor: 10_000n,
+        authoritativeRefundSetId: beforeSet.id,
+        authoritativeRefundSetResultId: beforeSet.resultId,
+        resultId: "late-refund-failure-payment-source-result-1",
+        currentStateCommandKey: "late-refund-failure-payment-source-command-1",
+        immutable: true,
+      },
+      lateRefundFailureReconciledPayment: {
+        id: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        role: "full",
+        provider: "sandbox",
+        currency: "EUR",
+        previousStatus: "refunded",
+        targetStatus: "captured",
+        capturedAmountMinor: 10_000n,
+        succeededRefundAmountMinor: 0n,
+        refundTransactionId: "refund-1",
+        authoritativeRefundSetId: afterSet.id,
+        authoritativeRefundSetResultId: afterSet.resultId,
+        resultId: "late-refund-failure-result-1",
+        immutable: true,
+      },
+      lateRefundFailureRefundTransaction: {
+        id: "refund-1",
+        paymentId: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        previousStatus: "succeeded",
+        targetStatus: "failed",
+        status: "failed",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        amountMinor: 10_000n,
+        currency: "EUR",
+        reason: "customer_cancellation",
+        idempotencyKey: "refund-attempt-1",
+        previousProviderEventId: "refund-success-event-1",
+        providerEventId: "refund-failure-event-1",
+        requestedAt,
+        completedAt: null,
+        resultId: "late-refund-failure-result-1",
+        immutable: true,
+      },
+      lateRefundFailureSuccessProviderEvent: successProviderEvent,
+      lateRefundFailureProviderEvent: failureProviderEvent,
+      lateRefundFailureLatestPriorProviderEventId: "refund-success-event-1",
+      lateRefundFailureLatestPriorProviderEventResultId:
+        "refund-success-event-1",
+      lateRefundFailureLatestPriorProviderEvent: successProviderEvent,
+      lateRefundFailureProviderEventSetId:
+        "late-refund-failure-provider-event-set-1",
+      lateRefundFailureProviderEventSetResultId: "late-refund-failure-result-1",
+      lateRefundFailureProviderEventSet: {
+        id: "late-refund-failure-provider-event-set-1",
+        paymentId: "payment-1",
+        refundTransactionId: "refund-1",
+        providerEventIds: ["refund-success-event-1", "refund-failure-event-1"],
+        providerEvents: [successProviderEvent, failureProviderEvent],
+        resultId: "late-refund-failure-result-1",
+        authoritative: true,
+        complete: true,
+        immutable: true,
+      },
+      lateRefundFailureSourceOrderResultId:
+        "late-refund-failure-order-source-result-1",
+      lateRefundFailureCurrentOrderStateCommandKey:
+        "late-refund-failure-order-source-command-1",
+      lateRefundFailureSourceOrder: {
+        id: "order-1",
+        phaseId: "phase-1",
+        paymentId: "payment-1",
+        status: "refunded",
+        authoritativePaymentSetId: orderPaymentSetBefore.id,
+        authoritativePaymentSetResultId: orderPaymentSetBefore.resultId,
+        authoritativeSlotSetId: slotSetBefore.id,
+        authoritativeSlotSetResultId: slotSetBefore.resultId,
+        phaseResultId: "late-refund-failure-phase-source-result-1",
+        resultId: "late-refund-failure-order-source-result-1",
+        currentStateCommandKey: "late-refund-failure-order-source-command-1",
+        immutable: true,
+      },
+      lateRefundFailureReopenedOrder: {
+        id: "order-1",
+        phaseId: "phase-1",
+        paymentId: "payment-1",
+        previousStatus: "refunded",
+        targetStatus: "cancelled",
+        authoritativePaymentSetId: orderPaymentSetAfter.id,
+        authoritativePaymentSetResultId: orderPaymentSetAfter.resultId,
+        authoritativeSlotSetId: slotSetAfter.id,
+        authoritativeSlotSetResultId: slotSetAfter.resultId,
+        phaseResultId: "late-refund-failure-result-1",
+        resultId: "late-refund-failure-result-1",
+        immutable: true,
+      },
+      lateRefundFailureSourcePhaseResultId:
+        "late-refund-failure-phase-source-result-1",
+      lateRefundFailureCurrentPhaseStateCommandKey:
+        "late-refund-failure-phase-source-command-1",
+      lateRefundFailureSourcePhase: {
+        id: "phase-1",
+        orderId: "order-1",
+        status: "cancelled_refunded",
+        authoritativePaymentSetId: orderPaymentSetBefore.id,
+        authoritativePaymentSetResultId: orderPaymentSetBefore.resultId,
+        authoritativeSlotSetId: slotSetBefore.id,
+        authoritativeSlotSetResultId: slotSetBefore.resultId,
+        orderResultId: "late-refund-failure-order-source-result-1",
+        resultId: "late-refund-failure-phase-source-result-1",
+        currentStateCommandKey: "late-refund-failure-phase-source-command-1",
+        immutable: true,
+      },
+      lateRefundFailureReopenedPhase: {
+        id: "phase-1",
+        orderId: "order-1",
+        previousStatus: "cancelled_refunded",
+        targetStatus: "cancelled",
+        authoritativePaymentSetId: orderPaymentSetAfter.id,
+        authoritativePaymentSetResultId: orderPaymentSetAfter.resultId,
+        authoritativeSlotSetId: slotSetAfter.id,
+        authoritativeSlotSetResultId: slotSetAfter.resultId,
+        orderResultId: "late-refund-failure-result-1",
+        resultId: "late-refund-failure-result-1",
+        immutable: true,
+      },
+      lateRefundFailureSlotSetBeforeId: slotSetBefore.id,
+      lateRefundFailureSlotSetBeforeResultId: slotSetBefore.resultId,
+      lateRefundFailureSlotSetBefore: slotSetBefore,
+      lateRefundFailureSlotSetAfterId: slotSetAfter.id,
+      lateRefundFailureSlotSetAfterResultId: slotSetAfter.resultId,
+      lateRefundFailureSlotSetAfter: slotSetAfter,
+      lateRefundFailureOrderPaymentSetBeforeId: orderPaymentSetBefore.id,
+      lateRefundFailureOrderPaymentSetBeforeResultId:
+        orderPaymentSetBefore.resultId,
+      lateRefundFailureOrderPaymentSetBefore: orderPaymentSetBefore,
+      lateRefundFailureOrderPaymentSetAfterId: orderPaymentSetAfter.id,
+      lateRefundFailureOrderPaymentSetAfterResultId:
+        orderPaymentSetAfter.resultId,
+      lateRefundFailureOrderPaymentSetAfter: orderPaymentSetAfter,
+      lateRefundFailurePaymentResultId: "late-refund-failure-result-1",
+      lateRefundFailureRefundTransactionResultId:
+        "late-refund-failure-result-1",
+      lateRefundFailureProviderEventResultId: "late-refund-failure-result-1",
+      lateRefundFailureCompleted: true,
+      lateRefundFailureAtomic: true,
+    };
+
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refunded",
+        target: "captured",
+        idempotencyKey: "late-refund-failure-payment",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "refunded",
+      current: "captured",
+    });
+
+    const tiedPriorSuccess = {
+      ...successProviderEvent,
+      id: "zz-tied-prior-refund-success-event-1",
+      resultId: "zz-tied-prior-refund-success-result-1",
+    };
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refunded",
+        target: "captured",
+        idempotencyKey: "tied-prior-refund-success-payment",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureLatestPriorProviderEventId: tiedPriorSuccess.id,
+          lateRefundFailureLatestPriorProviderEventResultId:
+            tiedPriorSuccess.resultId,
+          lateRefundFailureLatestPriorProviderEvent: tiedPriorSuccess,
+          lateRefundFailureProviderEventSet: {
+            ...context.lateRefundFailureProviderEventSet,
+            providerEventIds: [
+              "refund-success-event-1",
+              tiedPriorSuccess.id,
+              "refund-failure-event-1",
+            ],
+            providerEvents: [
+              successProviderEvent,
+              tiedPriorSuccess,
+              failureProviderEvent,
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "refunded",
+      current: "captured",
+    });
+    expect(
+      transition(orderPolicy, {
+        aggregateId: "order-1",
+        current: "refunded",
+        target: "cancelled",
+        idempotencyKey: "late-refund-failure-order",
+        currentStateResultId: context.lateRefundFailureSourceOrderResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentOrderStateCommandKey,
+        context,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "refunded",
+      current: "cancelled",
+    });
+    expect(
+      transition(singleOrderPhasePolicy, {
+        aggregateId: "phase-1",
+        current: "cancelled_refunded",
+        target: "cancelled",
+        idempotencyKey: "late-refund-failure-phase",
+        currentStateResultId: context.lateRefundFailureSourcePhaseResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPhaseStateCommandKey,
+        context,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancelled_refunded",
+      current: "cancelled",
+    });
+    expect(isTerminal(paymentPolicy, "refunded", context)).toBe(false);
+    expect(isTerminal(orderPolicy, "refunded", context)).toBe(false);
+    expect(
+      isTerminal(singleOrderPhasePolicy, "cancelled_refunded", context),
+    ).toBe(false);
+
+    const physicallyNewerFailureOccurredAt = Instant.parse(
+      "2026-01-01T00:10:02.000Z",
+    );
+    const nonMonotoneFailureAuthenticatedAt = Instant.parse(
+      "2026-01-01T00:09:57.000Z",
+    );
+    const nonMonotoneFailureVerifiedAt = Instant.parse(
+      "2026-01-01T00:09:58.000Z",
+    );
+    const nonMonotoneFailure = {
+      ...failureProviderEvent,
+      occurredAt: physicallyNewerFailureOccurredAt,
+      authenticatedAt: nonMonotoneFailureAuthenticatedAt,
+      verifiedAt: nonMonotoneFailureVerifiedAt,
+    };
+    const nonMonotoneContext = {
+      ...context,
+      lateRefundFailureProviderEvent: nonMonotoneFailure,
+      lateRefundFailureProviderEventSet: {
+        ...context.lateRefundFailureProviderEventSet,
+        providerEvents: [successProviderEvent, nonMonotoneFailure],
+      },
+    };
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refunded",
+        target: "captured",
+        idempotencyKey: "physical-refund-order-only-payment",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: nonMonotoneContext,
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "refunded",
+      current: "captured",
+    });
+
+    const stableBeforeSet = {
+      ...beforeSet,
+      id: "stable-refund-pending-set-before-1",
+      refundIds: ["refund-1", "refund-2"],
+      refundSnapshots: [
+        {
+          ...beforeSet.refundSnapshots[0],
+          amountMinor: 6_000n,
+        },
+        {
+          id: "refund-2",
+          paymentId: "payment-1",
+          status: "pending",
+          amountMinor: 4_000n,
+          idempotencyKey: "refund-attempt-2",
+          resultId: "pending-refund-source-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "stable-refund-pending-set-before-result-1",
+    };
+    const stableAfterSet = {
+      ...afterSet,
+      id: "stable-refund-pending-set-after-1",
+      refundIds: ["refund-1", "refund-2", "refund-3"],
+      refundSnapshots: [
+        {
+          ...afterSet.refundSnapshots[0],
+          amountMinor: 6_000n,
+        },
+        {
+          id: "refund-2",
+          paymentId: "payment-1",
+          status: "pending",
+          amountMinor: 4_000n,
+          idempotencyKey: "refund-attempt-2",
+          resultId: "pending-refund-source-result-1",
+          immutable: true,
+        },
+        {
+          id: "refund-3",
+          paymentId: "payment-1",
+          status: "pending",
+          amountMinor: 6_000n,
+          provider: "sandbox",
+          reason: "customer_cancellation",
+          idempotencyKey: "refund-attempt-3",
+          replacesRefundTransactionId: "refund-1",
+          replacesFailureProviderEventId: "refund-failure-event-1",
+          resultId: "late-refund-failure-result-1",
+          immutable: true,
+        },
+      ],
+      resultId: "stable-refund-pending-set-after-result-1",
+    };
+    const stableSuccessProviderEvent = {
+      ...successProviderEvent,
+      amountMinor: 6_000n,
+    };
+    const stableFailureProviderEvent = {
+      ...failureProviderEvent,
+      amountMinor: 6_000n,
+    };
+    const stableReconciliationCommandKey =
+      "stable-refund-pending-reconciliation-command-1";
+    const stableRefundPendingContext = {
+      ...context,
+      lateRefundFailureAmountMinor: 6_000n,
+      lateRefundFailureRefundSetBeforeId: stableBeforeSet.id,
+      lateRefundFailureRefundSetBeforeResultId: stableBeforeSet.resultId,
+      lateRefundFailureRefundSetBefore: stableBeforeSet,
+      lateRefundFailureRefundSetAfterId: stableAfterSet.id,
+      lateRefundFailureRefundSetAfterResultId: stableAfterSet.resultId,
+      lateRefundFailureRefundSetAfter: stableAfterSet,
+      lateRefundFailureSourcePayment: {
+        ...context.lateRefundFailureSourcePayment,
+        status: "refund_pending",
+        succeededRefundAmountMinor: 6_000n,
+        authoritativeRefundSetId: stableBeforeSet.id,
+        authoritativeRefundSetResultId: stableBeforeSet.resultId,
+      },
+      lateRefundFailureReconciledPayment: {
+        ...context.lateRefundFailureReconciledPayment,
+        previousStatus: "refund_pending",
+        targetStatus: "refund_pending",
+        succeededRefundAmountMinor: 0n,
+        authoritativeRefundSetId: stableAfterSet.id,
+        authoritativeRefundSetResultId: stableAfterSet.resultId,
+        retryRefundTransactionId: "refund-3",
+        previousStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        currentStateCommandKey: stableReconciliationCommandKey,
+      },
+      lateRefundFailureSourceRefundTransaction: {
+        ...context.lateRefundFailureSourceRefundTransaction,
+        amountMinor: 6_000n,
+      },
+      lateRefundFailureRefundTransaction: {
+        ...context.lateRefundFailureRefundTransaction,
+        amountMinor: 6_000n,
+      },
+      lateRefundFailureSuccessProviderEvent: stableSuccessProviderEvent,
+      lateRefundFailureProviderEvent: stableFailureProviderEvent,
+      lateRefundFailureLatestPriorProviderEvent: stableSuccessProviderEvent,
+      lateRefundFailureProviderEventSet: {
+        ...context.lateRefundFailureProviderEventSet,
+        providerEvents: [
+          stableSuccessProviderEvent,
+          stableFailureProviderEvent,
+        ],
+      },
+      lateRefundFailureRetryRefundTransactionId: "refund-3",
+      lateRefundFailureRetryAttemptKey: "refund-attempt-3",
+      lateRefundFailureRetryRefundTransaction: {
+        id: "refund-3",
+        paymentId: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        status: "pending",
+        amountMinor: 6_000n,
+        currency: "EUR",
+        provider: "sandbox",
+        reason: "customer_cancellation",
+        idempotencyKey: "refund-attempt-3",
+        replacesRefundTransactionId: "refund-1",
+        replacesFailureProviderEventId: "refund-failure-event-1",
+        requestedAt: failureVerifiedAt,
+        createdAt: failureVerifiedAt,
+        providerEventId: null,
+        completedAt: null,
+        resultId: "late-refund-failure-result-1",
+        immutable: true,
+      },
+      lateRefundFailureRetryCreated: true,
+    };
+    const partialBeforeSet = {
+      ...stableBeforeSet,
+      id: "partial-refund-pending-set-before-1",
+      refundSnapshots: [
+        { ...stableBeforeSet.refundSnapshots[0], amountMinor: 2_000n },
+        { ...stableBeforeSet.refundSnapshots[1], amountMinor: 1_000n },
+      ],
+      resultId: "partial-refund-pending-set-before-result-1",
+    };
+    const partialAfterSet = {
+      ...stableAfterSet,
+      id: "partial-refund-pending-set-after-1",
+      refundIds: ["refund-1", "refund-2"],
+      refundSnapshots: [
+        { ...stableAfterSet.refundSnapshots[0], amountMinor: 2_000n },
+        { ...stableAfterSet.refundSnapshots[1], amountMinor: 1_000n },
+      ],
+      resultId: "partial-refund-pending-set-after-result-1",
+    };
+    const partialSuccessProviderEvent = {
+      ...stableSuccessProviderEvent,
+      amountMinor: 2_000n,
+    };
+    const partialFailureProviderEvent = {
+      ...stableFailureProviderEvent,
+      amountMinor: 2_000n,
+    };
+    const partialRefundPendingContext = {
+      ...stableRefundPendingContext,
+      lateRefundFailureAmountMinor: 2_000n,
+      lateRefundFailureRefundSetBeforeId: partialBeforeSet.id,
+      lateRefundFailureRefundSetBeforeResultId: partialBeforeSet.resultId,
+      lateRefundFailureRefundSetBefore: partialBeforeSet,
+      lateRefundFailureRefundSetAfterId: partialAfterSet.id,
+      lateRefundFailureRefundSetAfterResultId: partialAfterSet.resultId,
+      lateRefundFailureRefundSetAfter: partialAfterSet,
+      lateRefundFailureSourcePayment: {
+        ...stableRefundPendingContext.lateRefundFailureSourcePayment,
+        succeededRefundAmountMinor: 2_000n,
+        authoritativeRefundSetId: partialBeforeSet.id,
+        authoritativeRefundSetResultId: partialBeforeSet.resultId,
+      },
+      lateRefundFailureReconciledPayment: {
+        ...stableRefundPendingContext.lateRefundFailureReconciledPayment,
+        succeededRefundAmountMinor: 0n,
+        authoritativeRefundSetId: partialAfterSet.id,
+        authoritativeRefundSetResultId: partialAfterSet.resultId,
+        retryRefundTransactionId: undefined,
+        currentStateCommandKey:
+          "partial-refund-pending-reconciliation-command-1",
+      },
+      lateRefundFailureSourceRefundTransaction: {
+        ...stableRefundPendingContext.lateRefundFailureSourceRefundTransaction,
+        amountMinor: 2_000n,
+      },
+      lateRefundFailureRefundTransaction: {
+        ...stableRefundPendingContext.lateRefundFailureRefundTransaction,
+        amountMinor: 2_000n,
+      },
+      lateRefundFailureSuccessProviderEvent: partialSuccessProviderEvent,
+      lateRefundFailureProviderEvent: partialFailureProviderEvent,
+      lateRefundFailureLatestPriorProviderEvent: partialSuccessProviderEvent,
+      lateRefundFailureProviderEventSet: {
+        ...stableRefundPendingContext.lateRefundFailureProviderEventSet,
+        providerEvents: [
+          partialSuccessProviderEvent,
+          partialFailureProviderEvent,
+        ],
+      },
+      lateRefundFailureRetryRefundTransactionId: undefined,
+      lateRefundFailureRetryAttemptKey: undefined,
+      lateRefundFailureRetryRefundTransaction: undefined,
+      lateRefundFailureRetryCreated: false,
+    };
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: "partial-refund-pending-reconciliation-command-1",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: partialRefundPendingContext,
+      }),
+    ).toEqual({ kind: "reconciled", current: "refund_pending" });
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: stableRefundPendingContext,
+      }),
+    ).toEqual({ kind: "reconciled", current: "refund_pending" });
+    expect(
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailureResultId,
+        currentStateCommandKey: stableReconciliationCommandKey,
+        context: stableRefundPendingContext,
+      }),
+    ).toEqual({ kind: "already_applied", current: "refund_pending" });
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: "unproven-second-stable-refund-reconciliation",
+        currentStateResultId: context.lateRefundFailureResultId,
+        currentStateCommandKey: stableReconciliationCommandKey,
+        context: stableRefundPendingContext,
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...stableRefundPendingContext,
+          lateRefundFailureRefundSetAfter: {
+            ...stableAfterSet,
+            refundIds: ["refund-1"],
+            refundSnapshots: [stableAfterSet.refundSnapshots[0]],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    for (const [field, value] of [
+      ["idempotencyKey", "mutated-refund-attempt-2"],
+      ["replacesRefundTransactionId", "foreign-refund"],
+      ["replacesFailureProviderEventId", "foreign-failure-event"],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: "refund_pending",
+          target: "refund_pending",
+          idempotencyKey: stableReconciliationCommandKey,
+          currentStateResultId:
+            context.lateRefundFailurePreviousPaymentResultId,
+          currentStateCommandKey:
+            context.lateRefundFailureCurrentPaymentStateCommandKey,
+          context: {
+            ...stableRefundPendingContext,
+            lateRefundFailureRefundSetAfter: {
+              ...stableAfterSet,
+              refundSnapshots: stableAfterSet.refundSnapshots.map((refund) =>
+                refund.id === "refund-2"
+                  ? { ...refund, [field]: value }
+                  : refund,
+              ),
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+    for (const [field, value] of [
+      ["provider", "other-provider"],
+      ["reason", "production_failure"],
+      ["replacesRefundTransactionId", "refund-2"],
+      ["replacesFailureProviderEventId", "foreign-failure-event"],
+      ["requestedAt", Instant.parse("2026-01-01T00:10:54.000Z")],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          aggregateId: "payment-1",
+          current: "refund_pending",
+          target: "refund_pending",
+          idempotencyKey: stableReconciliationCommandKey,
+          currentStateResultId:
+            context.lateRefundFailurePreviousPaymentResultId,
+          currentStateCommandKey:
+            context.lateRefundFailureCurrentPaymentStateCommandKey,
+          context: {
+            ...stableRefundPendingContext,
+            lateRefundFailureRetryRefundTransaction: {
+              ...stableRefundPendingContext.lateRefundFailureRetryRefundTransaction,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...stableRefundPendingContext,
+          lateRefundFailureRefundSetAfter: {
+            ...stableAfterSet,
+            refundSnapshots: stableAfterSet.refundSnapshots.map((refund) =>
+              refund.id === "refund-3"
+                ? {
+                    ...refund,
+                    replacesFailureProviderEventId: "foreign-failure-event",
+                  }
+                : refund,
+            ),
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refund_pending",
+        target: "refund_pending",
+        idempotencyKey: stableReconciliationCommandKey,
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...stableRefundPendingContext,
+          lateRefundFailureRetryAttemptKey: "refund-attempt-1",
+          lateRefundFailureRetryRefundTransaction: {
+            ...stableRefundPendingContext.lateRefundFailureRetryRefundTransaction,
+            idempotencyKey: "refund-attempt-1",
+          },
+          lateRefundFailureRefundSetAfter: {
+            ...stableAfterSet,
+            refundSnapshots: stableAfterSet.refundSnapshots.map((refund) =>
+              refund.id === "refund-3"
+                ? { ...refund, idempotencyKey: "refund-attempt-1" }
+                : refund,
+            ),
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+
+    expect(
+      isTerminal(paymentPolicy, "refunded", {
+        paymentCaptureKind: "late_refund_failure",
+        lateRefundFailureCompleted: true,
+        lateRefundFailureAtomic: true,
+        lateRefundFailureSuccessProviderEventId: "refund-success-event-1",
+        lateRefundFailureProviderEventId: "refund-failure-event-1",
+        lateRefundFailureLatestPriorProviderEventId: "refund-success-event-1",
+        lateRefundFailureSuccessProviderEvent: successProviderEvent,
+        lateRefundFailureProviderEvent: failureProviderEvent,
+        lateRefundFailureLatestPriorProviderEvent: successProviderEvent,
+      }),
+    ).toBe(true);
+
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refunded",
+        target: "captured",
+        idempotencyKey: "equal-refund-failure-payment",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureProviderEvent: {
+            ...context.lateRefundFailureProviderEvent,
+            occurredAt: successOccurredAt,
+          },
+          lateRefundFailureProviderEventSet: {
+            ...context.lateRefundFailureProviderEventSet,
+            providerEvents: [
+              successProviderEvent,
+              {
+                ...failureProviderEvent,
+                occurredAt: successOccurredAt,
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(orderPolicy, {
+        aggregateId: "order-1",
+        current: "refunded",
+        target: "cancelled",
+        idempotencyKey: "incomplete-refund-failure-order",
+        currentStateResultId: context.lateRefundFailureSourceOrderResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentOrderStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureRefundSetAfter: {
+            ...afterSet,
+            refundSnapshots: [],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refunded",
+        target: "captured",
+        idempotencyKey: "stale-selected-refund-failure-payment",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureProviderEventSet: {
+            ...context.lateRefundFailureProviderEventSet,
+            providerEventIds: [
+              "refund-success-event-1",
+              "refund-failure-event-1",
+              "later-refund-success-event-1",
+            ],
+            providerEvents: [
+              successProviderEvent,
+              failureProviderEvent,
+              {
+                ...successProviderEvent,
+                id: "later-refund-success-event-1",
+                occurredAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+                authenticatedAt: Instant.parse("2026-01-01T00:12:01.000Z"),
+                verifiedAt: Instant.parse("2026-01-01T00:12:01.000Z"),
+                resultId: "later-refund-success-event-result-1",
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(orderPolicy, {
+        aggregateId: "order-1",
+        current: "refunded",
+        target: "cancelled",
+        idempotencyKey: "mismatched-refund-source-completion-order",
+        currentStateResultId: context.lateRefundFailureSourceOrderResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentOrderStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureSourceRefundTransaction: {
+            ...context.lateRefundFailureSourceRefundTransaction,
+            completedAt: failureVerifiedAt,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(singleOrderPhasePolicy, {
+        aggregateId: "phase-1",
+        current: "cancelled_refunded",
+        target: "cancelled",
+        idempotencyKey: "incomplete-refund-failure-slot-set-phase",
+        currentStateResultId: context.lateRefundFailureSourcePhaseResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPhaseStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureSlotSetAfter: {
+            ...slotSetAfter,
+            slotSnapshots: [],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    const mismatchedFailureResult = {
+      ...failureProviderEvent,
+      resultId: "foreign-refund-failure-result-1",
+    };
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refunded",
+        target: "captured",
+        idempotencyKey: "foreign-refund-failure-result-payment",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureProviderEvent: mismatchedFailureResult,
+          lateRefundFailureProviderEventSet: {
+            ...context.lateRefundFailureProviderEventSet,
+            providerEvents: [successProviderEvent, mismatchedFailureResult],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refunded",
+        target: "captured",
+        idempotencyKey: "foreign-payment-provider-refund-failure",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureSourcePayment: {
+            ...context.lateRefundFailureSourcePayment,
+            provider: "foreign-provider",
+          },
+          lateRefundFailureReconciledPayment: {
+            ...context.lateRefundFailureReconciledPayment,
+            provider: "foreign-provider",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    const afterRequest = Instant.parse("2026-01-01T00:20:00.000Z");
+    expect(() =>
+      transition(paymentPolicy, {
+        aggregateId: "payment-1",
+        current: "refunded",
+        target: "captured",
+        idempotencyKey: "provider-event-before-refund-request",
+        currentStateResultId: context.lateRefundFailurePreviousPaymentResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentPaymentStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureSourceRefundTransaction: {
+            ...context.lateRefundFailureSourceRefundTransaction,
+            requestedAt: afterRequest,
+          },
+          lateRefundFailureRefundTransaction: {
+            ...context.lateRefundFailureRefundTransaction,
+            requestedAt: afterRequest,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(orderPolicy, {
+        aggregateId: "order-1",
+        current: "refunded",
+        target: "cancelled",
+        idempotencyKey: "incomplete-order-payment-set-refund-failure",
+        currentStateResultId: context.lateRefundFailureSourceOrderResultId,
+        currentStateCommandKey:
+          context.lateRefundFailureCurrentOrderStateCommandKey,
+        context: {
+          ...context,
+          lateRefundFailureOrderPaymentSetAfter: {
+            ...orderPaymentSetAfter,
+            paymentSnapshots: [],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects late refund success with pending refund work or a foreign failure receipt", () => {
+    const base = contextForTransition("refunded", "refund_pending");
+    const failureVerifiedAt = Instant.parse("2026-01-01T00:10:00.000Z");
+    const successVerifiedAt = Instant.parse("2026-01-01T00:11:00.000Z");
+    const failureProviderEvent = {
+      id: "refund-failure-event-1",
+      paymentId: "payment-1",
+      refundTransactionId: "refund-1",
+      provider: "sandbox",
+      providerTransactionId: "provider-refund-1",
+      kind: "refund_failed",
+      amountMinor: 10_000n,
+      currency: "EUR",
+      occurredAt: failureVerifiedAt,
+      authenticatedAt: failureVerifiedAt,
+      verifiedAt: failureVerifiedAt,
+      authenticated: true,
+      verified: true,
+      resultId: "refund-failure-event-1",
+      immutable: true,
+    };
+    const successProviderEvent = {
+      ...base.refundCompletionProviderEvent,
+      provider: "sandbox",
+      providerTransactionId: "provider-refund-1",
+      kind: "refund_succeeded",
+      amountMinor: 10_000n,
+      currency: "EUR",
+      occurredAt: successVerifiedAt,
+      authenticatedAt: successVerifiedAt,
+      verifiedAt: successVerifiedAt,
+      resultId: "late-final-result",
+    };
+    const refundSetBefore = {
+      id: "late-refund-set-before-1",
+      paymentId: "payment-1",
+      refundIds: ["refund-1"],
+      refundSnapshots: [
+        {
+          id: "refund-1",
+          paymentId: "payment-1",
+          status: "failed",
+          amountMinor: 10_000n,
+          resultId: "refund-failure-event-1",
+          immutable: true,
+        },
+      ],
+      resultId: "late-refund-set-before-result-1",
+      authoritative: true,
+      complete: true,
+      immutable: true,
+    };
+    const refundSetAfter = {
+      id: "late-refund-set-after-1",
+      paymentId: "payment-1",
+      refundIds: ["refund-1"],
+      refundSnapshots: [
+        {
+          id: "refund-1",
+          paymentId: "payment-1",
+          status: "succeeded",
+          amountMinor: 10_000n,
+          resultId: "late-final-result",
+          immutable: true,
+        },
+      ],
+      resultId: "late-refund-set-after-result-1",
+      authoritative: true,
+      complete: true,
+      immutable: true,
+    };
+    const context = {
+      ...base,
+      paymentCaptureKind: "late_refund_success",
+      refundCompletionPreviousPaymentResultId: "late-interim-result",
+      refundCompletionCurrentStateCommandKey: "late-interim-command",
+      refundCompletionResultId: "late-final-result",
+      lateRefundSuccessFailureProviderEventId: "refund-failure-event-1",
+      lateRefundSuccessProvider: "sandbox",
+      lateRefundSuccessProviderTransactionId: "provider-refund-1",
+      lateRefundSuccessAmountMinor: 10_000n,
+      lateRefundSuccessCurrency: "EUR",
+      lateRefundSuccessAttemptKey: "refund-attempt-1",
+      lateRefundSuccessCapturedAmountMinor: 10_000n,
+      lateRefundSuccessSucceededBeforeMinor: 0n,
+      lateRefundSuccessSucceededAfterMinor: 10_000n,
+      lateRefundSuccessRefundSetBeforeId: refundSetBefore.id,
+      lateRefundSuccessRefundSetBeforeResultId: refundSetBefore.resultId,
+      lateRefundSuccessRefundSetBefore: refundSetBefore,
+      lateRefundSuccessRefundSetAfterId: refundSetAfter.id,
+      lateRefundSuccessRefundSetAfterResultId: refundSetAfter.resultId,
+      lateRefundSuccessRefundSetAfter: refundSetAfter,
+      lateRefundSuccessSourcePaymentResultId: "late-source-result",
+      lateRefundSuccessSourceCurrentStateCommandKey: "late-source-command",
+      lateRefundSuccessSourcePayment: {
+        id: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        role: "full",
+        status: "captured",
+        capturedAmountMinor: 10_000n,
+        succeededRefundAmountMinor: 0n,
+        failedRefundTransactionId: "refund-1",
+        authoritativeRefundSetId: refundSetBefore.id,
+        authoritativeRefundSetResultId: refundSetBefore.resultId,
+        resultId: "late-source-result",
+        currentStateCommandKey: "late-source-command",
+        immutable: true,
+      },
+      refundCompletionExpectedPayment: {
+        ...base.refundCompletionExpectedPayment,
+        capturedAmountMinor: 10_000n,
+        succeededRefundAmountMinor: 10_000n,
+        authoritativeRefundSetId: refundSetAfter.id,
+        authoritativeRefundSetResultId: refundSetAfter.resultId,
+        resultId: "late-interim-result",
+        currentStateCommandKey: "late-interim-command",
+      },
+      refundCompletionRefundTransaction: {
+        ...base.refundCompletionRefundTransaction,
+        previousStatus: "failed",
+        provider: "sandbox",
+        providerTransactionId: "provider-refund-1",
+        amountMinor: 10_000n,
+        currency: "EUR",
+        idempotencyKey: "refund-attempt-1",
+        failureProviderEventId: "refund-failure-event-1",
+        completedAt: successVerifiedAt,
+        resultId: "late-final-result",
+      },
+      lateRefundSuccessFailureProviderEvent: failureProviderEvent,
+      refundCompletionProviderEvent: successProviderEvent,
+      lateRefundSuccessProviderEventSetId:
+        "late-refund-success-provider-event-set-invalid",
+      lateRefundSuccessProviderEventSetResultId: "late-final-result",
+      lateRefundSuccessProviderEventSet: {
+        id: "late-refund-success-provider-event-set-invalid",
+        paymentId: "payment-1",
+        refundTransactionId: "refund-1",
+        providerEventIds: [failureProviderEvent.id, successProviderEvent.id],
+        providerEvents: [failureProviderEvent, successProviderEvent],
+        resultId: "late-final-result",
+        authoritative: true,
+        complete: true,
+        immutable: true,
+      },
+      lateRefundSuccessReconciledPayment: {
+        id: "payment-1",
+        orderId: "order-1",
+        phaseId: "phase-1",
+        role: "full",
+        previousStatus: "captured",
+        intermediateStatus: "refund_pending",
+        targetStatus: "refunded",
+        capturedAmountMinor: 10_000n,
+        succeededRefundAmountMinor: 10_000n,
+        refundTransactionId: "refund-1",
+        authoritativeRefundSetId: refundSetAfter.id,
+        authoritativeRefundSetResultId: refundSetAfter.resultId,
+        resultId: "late-final-result",
+        immutable: true,
+      },
+      lateRefundSuccessPaymentResultId: "late-final-result",
+      lateRefundSuccessRefundTransactionResultId: "late-final-result",
+      lateRefundSuccessProviderEventResultId: "late-final-result",
+      lateRefundSuccessCompleted: true,
+      lateRefundSuccessAtomic: true,
+    };
+    const command = {
+      aggregateId: "payment-1",
+      current: "captured" as const,
+      target: "refund_pending" as const,
+      idempotencyKey: "late-refund-success-invalid",
+      currentStateResultId: "late-source-result",
+      currentStateCommandKey: "late-source-command",
+      context,
+    };
+
+    const tiedOlderFailure = {
+      ...failureProviderEvent,
+      id: "tied-older-refund-failure-event-2",
+      resultId: "tied-older-refund-failure-result-2",
+    };
+    expect(
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessProviderEventSet: {
+            ...context.lateRefundSuccessProviderEventSet,
+            providerEventIds: [
+              failureProviderEvent.id,
+              tiedOlderFailure.id,
+              successProviderEvent.id,
+            ],
+            providerEvents: [
+              failureProviderEvent,
+              tiedOlderFailure,
+              successProviderEvent,
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "captured",
+      current: "refund_pending",
+    });
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessRefundSetBefore: {
+            ...refundSetBefore,
+            refundIds: [...refundSetBefore.refundIds, "pending-refund-2"],
+            refundSnapshots: [
+              ...refundSetBefore.refundSnapshots,
+              {
+                id: "pending-refund-2",
+                paymentId: "payment-1",
+                status: "pending",
+                amountMinor: 1_000n,
+                resultId: "pending-refund-result-2",
+                immutable: true,
+              },
+            ],
+          },
+          lateRefundSuccessRefundSetAfter: {
+            ...refundSetAfter,
+            refundIds: [...refundSetAfter.refundIds, "pending-refund-2"],
+            refundSnapshots: [
+              ...refundSetAfter.refundSnapshots,
+              {
+                id: "pending-refund-2",
+                paymentId: "payment-1",
+                status: "pending",
+                amountMinor: 1_000n,
+                resultId: "pending-refund-result-2",
+                immutable: true,
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessRefundSetBefore: {
+            ...refundSetBefore,
+            authoritative: false,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessRefundSetAfterId: refundSetBefore.id,
+          lateRefundSuccessRefundSetAfterResultId: refundSetBefore.resultId,
+          lateRefundSuccessRefundSetAfter: {
+            ...refundSetAfter,
+            id: refundSetBefore.id,
+            resultId: refundSetBefore.resultId,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessFailureProviderEvent: {
+            ...context.lateRefundSuccessFailureProviderEvent,
+            providerTransactionId: "foreign-provider-refund",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    const tiedLatestFailure = {
+      ...failureProviderEvent,
+      id: "unselected-tied-refund-failure-event-2",
+      occurredAt: successVerifiedAt,
+      authenticatedAt: successVerifiedAt,
+      verifiedAt: successVerifiedAt,
+      resultId: "unselected-tied-refund-failure-result-2",
+    };
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          ...context,
+          lateRefundSuccessProviderEventSet: {
+            ...context.lateRefundSuccessProviderEventSet,
+            providerEventIds: [
+              failureProviderEvent.id,
+              successProviderEvent.id,
+              tiedLatestFailure.id,
+            ],
+            providerEvents: [
+              failureProviderEvent,
+              successProviderEvent,
+              tiedLatestFailure,
+            ],
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
     ["reprint_pending", "replacement_in_production"],
     ["replacement_in_production", "recovery_pending"],
   ] as const)(
@@ -5539,6 +8136,112 @@ describe("v0 lifecycle policy tables", () => {
       ).toEqual({ kind: "changed", previous: current, current: target });
     },
   );
+
+  for (const current of ["voided", "failed"] as const) {
+    it.each([
+      ["id", "another-event"],
+      ["paymentId", "payment-2"],
+      ["provider", "another-provider"],
+      ["transactionId", "another-capture"],
+      ["kind", "PAYMENT_FAILED"],
+      ["amountMinor", 9_999n],
+      ["currency", "USD"],
+      ["occurredAt", undefined],
+      ["occurredAt", "not-an-instant"],
+      ["verifiedAt", undefined],
+      ["authenticated", false],
+      ["verified", false],
+      ["immutable", false],
+      ["resultId", "another-result"],
+    ] as const)(
+      `rejects ${current}-source late capture with mismatched capture receipt %s`,
+      (field, value) => {
+        const context = contextForTransition("refund_pending", current);
+        expect(() =>
+          transition(paymentPolicy, {
+            ...commandAnchors(paymentPolicy, current, "refund_pending"),
+            current,
+            target: "refund_pending",
+            idempotencyKey: `${current}-late-capture-receipt-${field}`,
+            context: {
+              ...context,
+              captureProviderEvent: {
+                ...context.captureProviderEvent,
+                [field]: value,
+              },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      },
+    );
+
+    it(`rejects a ${current}-source capture verified one millisecond before its cutoff`, () => {
+      const context = contextForTransition("refund_pending", current);
+      const capturedAt = Instant.parse("2026-01-01T00:29:59.999Z");
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, current, "refund_pending"),
+          current,
+          target: "refund_pending",
+          idempotencyKey: `${current}-late-capture-before-cutoff`,
+          context: {
+            ...context,
+            lateCaptureCapturedAt: capturedAt,
+            captureProviderEvent: {
+              ...context.captureProviderEvent,
+              verifiedAt: capturedAt,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    });
+
+    it(`accepts ${current}-source provider occurrence skew when trusted capture verification meets the cutoff`, () => {
+      const context = contextForTransition("refund_pending", current);
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, current, "refund_pending"),
+          current,
+          target: "refund_pending",
+          idempotencyKey: `${current}-late-capture-provider-occurrence-skew`,
+          context: {
+            ...context,
+            captureProviderEvent: {
+              ...context.captureProviderEvent,
+              occurredAt: Instant.parse("2026-01-01T00:29:55.000Z"),
+            },
+          },
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "refund_pending",
+      });
+    });
+
+    it.each([
+      ["captureProviderEvent", undefined],
+      ["lateCaptureProviderEventId", "another-event"],
+      ["captureProviderEventId", "another-event"],
+      ["lateCaptureCompensationResultId", "another-result"],
+      ["lateCaptureProviderEventResultId", "another-result"],
+      ["lateCaptureCapturedAt", Instant.parse("2026-01-01T00:30:00.001Z")],
+    ] as const)(
+      `rejects ${current}-source late capture with mismatched %s root`,
+      (field, value) => {
+        const context = contextForTransition("refund_pending", current);
+        expect(() =>
+          transition(paymentPolicy, {
+            ...commandAnchors(paymentPolicy, current, "refund_pending"),
+            current,
+            target: "refund_pending",
+            idempotencyKey: `${current}-late-capture-root-${field}`,
+            context: { ...context, [field]: value },
+          }),
+        ).toThrow(TransitionGuardError);
+      },
+    );
+  }
 
   it.each([
     ["missing aggregate", { aggregateId: undefined }],
@@ -6274,9 +8977,11 @@ describe("v0 lifecycle policy tables", () => {
   it.each([
     [quoteRequestPolicy, "quoted", "accepted"],
     [quoteRequestPolicy, "quoted", "expired"],
+    [paymentPolicy, "created", "voided"],
     [paymentPolicy, "pending", "captured"],
     [paymentPolicy, "pending", "refund_pending"],
     [paymentPolicy, "voided", "refund_pending"],
+    [paymentPolicy, "refund_pending", "captured"],
     [paymentPolicy, "refund_pending", "partially_refunded"],
     [paymentPolicy, "refund_pending", "refunded"],
     [orderPolicy, "draft", "quoted"],
@@ -6301,7 +9006,9 @@ describe("v0 lifecycle policy tables", () => {
     [jobPolicy, "handed_over", "settled"],
     [shipmentPolicy, "label_created", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "handed_over"],
+    [shipmentPolicy, "cancelled", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "cancelled"],
+    [shipmentPolicy, "handed_over", "delivered"],
     [shipmentPolicy, "in_transit", "delivered"],
     [shipmentPolicy, "in_transit", "lost"],
     [shipmentPolicy, "in_transit", "returned"],
@@ -8497,6 +11204,29 @@ describe("v0 lifecycle policy tables", () => {
           captureProviderEvent: {
             ...base.captureProviderEvent,
             occurredAt: evaluatedAt,
+            verifiedAt: evaluatedAt,
+          },
+        },
+      }),
+    ).toEqual({ kind: "changed", previous: "pending", current: "captured" });
+  });
+
+  it("uses trusted verification rather than provider occurrence for an in-window capture", () => {
+    const base = contextForTransition("captured", "pending");
+    const verifiedAt = Instant.parse("2026-01-01T00:59:59.999Z");
+    expect(
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "captured"),
+        current: "pending",
+        target: "captured",
+        idempotencyKey: "capture-window-provider-clock-ahead",
+        context: {
+          ...base,
+          captureEvaluatedAt: verifiedAt,
+          captureProviderEvent: {
+            ...base.captureProviderEvent,
+            occurredAt: Instant.parse("2026-01-01T01:00:00.000Z"),
+            verifiedAt,
           },
         },
       }),
@@ -8523,6 +11253,7 @@ describe("v0 lifecycle policy tables", () => {
             captureProviderEvent: {
               ...base.captureProviderEvent,
               occurredAt: evaluatedAt,
+              verifiedAt: evaluatedAt,
             },
           },
         }),
@@ -8578,11 +11309,16 @@ describe("v0 lifecycle policy tables", () => {
     ["paymentCaptureWindow", "resultId", "another-result"],
     ["captureProviderEvent", "id", "another-event"],
     ["captureProviderEvent", "paymentId", "another-payment"],
+    ["captureProviderEvent", "provider", "another-provider"],
     ["captureProviderEvent", "transactionId", "another-transaction"],
+    ["captureProviderEvent", "kind", "PAYMENT_FAILED"],
+    ["captureProviderEvent", "amountMinor", 9_999n],
+    ["captureProviderEvent", "currency", "USD"],
     ["captureProviderEvent", "status", "failed"],
+    ["captureProviderEvent", "occurredAt", "not-an-instant"],
     [
       "captureProviderEvent",
-      "occurredAt",
+      "verifiedAt",
       Instant.parse("2026-01-01T00:29:59.999Z"),
     ],
     ["captureProviderEvent", "authenticated", false],
@@ -8625,6 +11361,7 @@ describe("v0 lifecycle policy tables", () => {
           captureProviderEvent: {
             ...base.captureProviderEvent,
             occurredAt: evaluatedAt,
+            verifiedAt: evaluatedAt,
           },
         },
       }),
@@ -8633,6 +11370,187 @@ describe("v0 lifecycle policy tables", () => {
       previous: "pending",
       current: "refund_pending",
     });
+  });
+
+  it("uses trusted verification rather than provider occurrence for an expired capture", () => {
+    const base = contextForTransition("refund_pending", "voided");
+    const verifiedAt = permittedContext.checkoutCaptureExpiresAt;
+    expect(
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "refund_pending"),
+        current: "pending",
+        target: "refund_pending",
+        idempotencyKey: "late-capture-provider-clock-behind",
+        context: {
+          ...base,
+          captureEvaluatedAt: verifiedAt,
+          captureEvaluationOutcome: "expired",
+          captureProviderEvent: {
+            ...base.captureProviderEvent,
+            occurredAt: Instant.parse("2026-01-01T00:59:59.999Z"),
+            verifiedAt,
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "pending",
+      current: "refund_pending",
+    });
+  });
+
+  it.each(["full", "deposit"] as const)(
+    "atomically voids a created %s Payment without provider artifacts",
+    (paymentRole) => {
+      const base = contextForTransition("voided", "created");
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "created", "voided"),
+          current: "created",
+          target: "voided",
+          idempotencyKey: `created-payment-void-${paymentRole}`,
+          context: {
+            ...base,
+            paymentRole,
+            initialPaymentRole: paymentRole,
+            createdPaymentVoidExpectedPayment: {
+              ...base.createdPaymentVoidExpectedPayment,
+              role: paymentRole,
+            },
+            createdPaymentVoidVoidedPayment: {
+              ...base.createdPaymentVoidVoidedPayment,
+              role: paymentRole,
+            },
+          },
+        }),
+      ).toEqual({ kind: "changed", previous: "created", current: "voided" });
+    },
+  );
+
+  it("rejects created balance Payment voiding through the checkout path", () => {
+    const base = contextForTransition("voided", "created");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "created", "voided"),
+        current: "created",
+        target: "voided",
+        idempotencyKey: "created-balance-payment-void",
+        context: {
+          ...base,
+          paymentRole: "balance",
+          initialPaymentRole: "balance",
+          createdPaymentVoidExpectedPayment: {
+            ...base.createdPaymentVoidExpectedPayment,
+            role: "balance",
+          },
+          createdPaymentVoidVoidedPayment: {
+            ...base.createdPaymentVoidVoidedPayment,
+            role: "balance",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects incomplete or mismatched created Payment void evidence", () => {
+    const base = contextForTransition("voided", "created");
+    const command = {
+      ...commandAnchors(paymentPolicy, "created", "voided"),
+      current: "created" as const,
+      target: "voided" as const,
+      idempotencyKey: "created-payment-void-invalid",
+      context: base,
+    };
+
+    for (const [field, value] of [
+      ["paymentId", "payment-2"],
+      ["orderId", "order-2"],
+      ["phaseId", "phase-2"],
+      ["paymentRole", "balance"],
+      ["createdPaymentVoidPreviousPaymentResultId", "foreign-result"],
+      ["createdPaymentVoidCurrentStateCommandKey", "foreign-command"],
+      ["createdPaymentVoidPreviousPhaseResultId", "foreign-result"],
+      ["createdPaymentVoidPhaseCurrentStateCommandKey", "foreign-command"],
+      ["createdPaymentVoidResultId", " "],
+      ["createdPaymentVoidProviderIntentAbsent", false],
+      ["createdPaymentVoidProviderTransactionAbsent", false],
+      ["createdPaymentVoidProviderVoidOutboxAbsent", false],
+      ["captureAuthorizationDisabled", false],
+      ["captureWindowClosed", false],
+      ["captureCutoffSet", false],
+      ["initialPaymentRole", "balance"],
+      ["initialPaymentId", "payment-2"],
+      ["initialPaymentOrderId", "order-2"],
+      ["initialPaymentStatus", "pending"],
+      ["initialCaptureClosePaymentId", "payment-2"],
+      ["initialCaptureCloseOrderId", "order-2"],
+      ["initialCaptureClosePhaseId", "phase-2"],
+      ["initialCaptureClosePhaseOrderId", "order-2"],
+      ["phaseKind", "sample"],
+      ["phaseReservationSetId", " "],
+      ["initialCaptureCloseReservationSetId", "reservation-set-2"],
+      ["initialCaptureCloseReservationSetOrderId", "order-2"],
+      ["initialCaptureCloseReservationSetPhaseId", "phase-2"],
+      ["initialCaptureCloseOrderPreviousStatus", "draft"],
+      ["initialCaptureCloseOrderTargetStatus", "confirmed"],
+      ["initialCaptureClosePhasePreviousStatus", "active"],
+      ["initialCaptureClosePhaseTargetStatus", "active"],
+      ["initialCaptureCloseReason", "checkout_expired"],
+      ["initialCaptureWindowClosed", false],
+      ["initialCaptureCutoffSet", false],
+      ["preCapturePhaseCancelled", false],
+      ["preCaptureFulfilmentSlotsCancelled", false],
+      ["preCaptureReservationsReleased", false],
+      ["initialCaptureCloseAtomic", false],
+      ["createdPaymentVoidPaymentResultId", "foreign-result"],
+      ["createdPaymentVoidOrderResultId", "foreign-result"],
+      ["createdPaymentVoidPhaseResultId", "foreign-result"],
+      ["createdPaymentVoidReservationResultId", "foreign-result"],
+      ["createdPaymentVoidCompleted", false],
+      ["createdPaymentVoidAtomic", false],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: { ...base, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    for (const [recordName, field, value] of [
+      ["createdPaymentVoidExpectedPayment", "id", "payment-2"],
+      ["createdPaymentVoidExpectedPayment", "orderId", "order-2"],
+      ["createdPaymentVoidExpectedPayment", "phaseId", "phase-2"],
+      ["createdPaymentVoidExpectedPayment", "status", "pending"],
+      ["createdPaymentVoidExpectedPayment", "providerIntentId", "intent-1"],
+      ["createdPaymentVoidExpectedPayment", "immutable", false],
+      ["createdPaymentVoidVoidedPayment", "id", "payment-2"],
+      ["createdPaymentVoidVoidedPayment", "previousStatus", "pending"],
+      ["createdPaymentVoidVoidedPayment", "targetStatus", "failed"],
+      ["createdPaymentVoidVoidedPayment", "providerIntentId", "intent-1"],
+      ["createdPaymentVoidVoidedPayment", "captureAuthorized", true],
+      ["createdPaymentVoidVoidedPayment", "captureCutoffAt", null],
+      ["createdPaymentVoidVoidedPayment", "immutable", false],
+      ["initialCaptureCloseExpectedOrder", "id", "order-2"],
+      ["initialCaptureCloseExpectedOrder", "status", "draft"],
+      ["initialCaptureCloseExpectedOrder", "immutable", false],
+      ["createdPaymentVoidExpectedPhase", "id", "phase-2"],
+      ["createdPaymentVoidExpectedPhase", "orderId", "order-2"],
+      ["createdPaymentVoidExpectedPhase", "kind", "sample"],
+      ["createdPaymentVoidExpectedPhase", "status", "active"],
+      ["createdPaymentVoidExpectedPhase", "immutable", false],
+    ] as const) {
+      const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: {
+            ...base,
+            [recordName]: { ...snapshot, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
   });
 
   it.each(["full", "deposit"] as const)(
@@ -9218,6 +12136,461 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("reconciles a post-void Shipment source through the Order command", () => {
+    expect(
+      transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "awaiting_balance", "shipped"),
+        current: "awaiting_balance",
+        target: "shipped",
+        idempotencyKey: "post-void-order-reconciliation",
+        context: {
+          ...unauthorizedHandoffReconciliationContext(),
+          ...postVoidCancellationRaceShipmentSource("shipment-1"),
+          handoffShipmentPreviousStatus: "cancelled",
+          cancellationRaceResultShipmentPreviousStatus: "cancelled",
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "awaiting_balance",
+      current: "shipped",
+    });
+  });
+
+  it.each([
+    ["refunded aggregate proof", { cancellationRaceRefundedAggregate: false }],
+    ["unauthorized route", { cancellationRaceHandoffKind: "ordinary" }],
+    ["completed settlement", { handoffSettlementCompleted: false }],
+    ["exact settlement result", { handoffSettlementResultId: "other-result" }],
+  ] as const)(
+    "rejects refunded cancellation recovery without its %s",
+    (_name, override) => {
+      const context = contextForTransition("shipped", "refunded");
+      expect(() =>
+        transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, "refunded", "shipped"),
+          current: "refunded",
+          target: "shipped",
+          idempotencyKey: "refunded-cancellation-race-proof",
+          context: { ...context, ...override },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "reconciliation settlement link",
+      "handoffRefundedReconciliation",
+      "orderSettlementId",
+      "other-settlement",
+    ],
+    [
+      "reconciliation refund receipt",
+      "handoffRefundedReconciliation",
+      "refundProviderEventId",
+      "other-event",
+    ],
+    [
+      "settlement payment",
+      "handoffRefundedSettlement",
+      "paymentId",
+      "other-payment",
+    ],
+    ["settlement kind", "handoffRefundedSettlement", "kind", "balance_timeout"],
+    [
+      "settlement retained amount",
+      "handoffRefundedSettlement",
+      "retainedAmountMinor",
+      1n,
+    ],
+    ["settlement currency", "handoffRefundedSettlement", "currency", "EUR"],
+    ["payment state", "handoffRefundedPayment", "status", "captured"],
+    [
+      "capture authorization",
+      "handoffRefundedPayment",
+      "captureAuthorized",
+      true,
+    ],
+    ["refund state", "handoffRefundedRefund", "status", "pending"],
+    ["refund reason", "handoffRefundedRefund", "reason", "claim_refund"],
+    [
+      "refund receipt identity",
+      "handoffRefundedProviderEvent",
+      "refundTransactionId",
+      "other-refund",
+    ],
+    [
+      "refund receipt amount",
+      "handoffRefundedProviderEvent",
+      "amountMinor",
+      999n,
+    ],
+  ] as const)(
+    "rejects refunded recovery with a mismatched %s",
+    (_name, recordName, field, value) => {
+      const context = contextForTransition("shipped", "refunded");
+      const source = context[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(orderPolicy, {
+          ...commandAnchors(orderPolicy, "refunded", "shipped"),
+          current: "refunded",
+          target: "shipped",
+          idempotencyKey: `refunded-financial-${_name}`,
+          context: {
+            ...context,
+            [recordName]: { ...source, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    [
+      "another pre-cutoff capture",
+      {
+        handoffSettlementOrderPayments: [
+          ...permittedContext.handoffSettlementOrderPayments,
+          {
+            id: "payment-2",
+            orderId: "order-1",
+            capturedAmountMinor: 1n,
+            capturedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+            immutable: true,
+          },
+        ],
+      },
+    ],
+    [
+      "a pending order refund",
+      {
+        handoffSettlementOrderRefunds: [
+          ...permittedContext.handoffSettlementOrderRefunds,
+          {
+            id: "refund-2",
+            paymentId: "payment-2",
+            status: "pending",
+            amountMinor: 1n,
+            immutable: true,
+          },
+        ],
+      },
+    ],
+    [
+      "an incomplete authoritative payment row",
+      {
+        handoffSettlementOrderPayments: [
+          ...permittedContext.handoffSettlementOrderPayments,
+          {
+            id: "payment-2",
+            orderId: "order-1",
+            immutable: true,
+          },
+        ],
+        handoffSettlementPaymentIds: ["payment-1", "payment-2"],
+      },
+    ],
+    [
+      "an incomplete authoritative refund row",
+      {
+        handoffSettlementOrderRefunds: [
+          ...permittedContext.handoffSettlementOrderRefunds,
+          {
+            id: "refund-2",
+            paymentId: "payment-1",
+            amountMinor: 1n,
+            immutable: true,
+          },
+        ],
+        handoffSettlementRefundIds: ["refund-1", "refund-2"],
+      },
+    ],
+    [
+      "an incomplete payment set",
+      { handoffSettlementPaymentSetComplete: false },
+    ],
+    ["an incomplete refund set", { handoffSettlementRefundSetComplete: false }],
+    [
+      "an omitted authoritative payment",
+      { handoffSettlementPaymentIds: ["payment-1", "payment-2"] },
+    ],
+    [
+      "an omitted authoritative refund",
+      { handoffSettlementRefundIds: ["refund-1", "refund-2"] },
+    ],
+  ] as const)("rejects refunded recovery with %s", (_name, invalid) => {
+    expect(() =>
+      transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "refunded", "shipped"),
+        current: "refunded",
+        target: "shipped",
+        idempotencyKey: `refunded-financial-set-${_name}`,
+        context: {
+          ...contextForTransition("shipped", "refunded"),
+          ...invalid,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("keeps refunded aggregates terminal outside exact cancellation-race recovery", () => {
+    expect(isTerminal(orderPolicy, "refunded")).toBe(true);
+    expect(
+      isTerminal(
+        orderPolicy,
+        "refunded",
+        contextForTransition("shipped", "refunded"),
+      ),
+    ).toBe(false);
+    expect(
+      isTerminal(orderPolicy, "refunded", {
+        cancellationRaceRefundedAggregate: true,
+      }),
+    ).toBe(true);
+    expect(
+      isTerminal(singleOrderPhasePolicy, "cancelled_refunded", {
+        cancellationRaceRefundedAggregate: true,
+      }),
+    ).toBe(true);
+    expect(
+      isTerminal(jobPolicy, "cancelled", {
+        cancellationRaceRefundedAggregate: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("classifies only exact provider-void cancellation races as recoverable Shipments", () => {
+    expect(isTerminal(shipmentPolicy, "cancelled")).toBe(true);
+    expect(
+      isTerminal(
+        shipmentPolicy,
+        "cancelled",
+        contextForTransition("cancelled", "planned"),
+      ),
+    ).toBe(true);
+    expect(
+      isTerminal(shipmentPolicy, "cancelled", {
+        cancellationRaceCommittedCancellation: true,
+      }),
+    ).toBe(true);
+
+    const recoverable = contextForTransition("handed_over", "cancelled");
+    expect(isTerminal(shipmentPolicy, "cancelled", recoverable)).toBe(false);
+    expect(
+      isTerminal(
+        shipmentPolicy,
+        "cancelled",
+        contextForTransition("shipped", "refunded"),
+      ),
+    ).toBe(false);
+    expect(
+      isTerminal(shipmentPolicy, "cancelled", {
+        ...recoverable,
+        providerEventAuthenticated: false,
+      }),
+    ).toBe(true);
+    expect(
+      isTerminal(shipmentPolicy, "cancelled", {
+        ...recoverable,
+        providerEventKind: "delivery_scan",
+      }),
+    ).toBe(true);
+    expect(
+      isTerminal(shipmentPolicy, "cancelled", {
+        ...recoverable,
+        cancellationRaceAcceptanceEvent: {
+          ...recoverable.cancellationRaceAcceptanceEvent,
+          occurredAt: recoverable.cancellationRaceSelectedVoidEvent.occurredAt,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("classifies only exact no-intent failed and voided Payments as terminal", () => {
+    const snapshot = (status: "failed" | "voided") => ({
+      paymentId: "payment-1",
+      paymentTerminalSnapshotResultId: `payment-${status}-result-1`,
+      paymentTerminalSnapshotCurrentStateCommandKey: `payment-${status}-command-1`,
+      paymentTerminalSnapshot: {
+        id: "payment-1",
+        status,
+        providerIntentId: null,
+        captureAuthorized: false,
+        captureCutoffAt: Instant.parse("2026-01-01T00:05:00.000Z"),
+        resultId: `payment-${status}-result-1`,
+        currentStateCommandKey: `payment-${status}-command-1`,
+        immutable: true,
+      },
+    });
+
+    expect(isTerminal(paymentPolicy, "failed")).toBe(false);
+    expect(isTerminal(paymentPolicy, "voided")).toBe(false);
+    expect(isTerminal(paymentPolicy, "failed", snapshot("failed"))).toBe(true);
+    expect(isTerminal(paymentPolicy, "voided", snapshot("voided"))).toBe(true);
+    expect(
+      isTerminal(paymentPolicy, "failed", {
+        ...snapshot("failed"),
+        paymentTerminalSnapshot: {
+          ...snapshot("failed").paymentTerminalSnapshot,
+          providerIntentId: "provider-intent-1",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isTerminal(paymentPolicy, "voided", {
+        ...snapshot("voided"),
+        paymentTerminalSnapshot: {
+          ...snapshot("voided").paymentTerminalSnapshot,
+          id: "payment-2",
+        },
+      }),
+    ).toBe(false);
+    expect(isTerminal(paymentPolicy, "refunded")).toBe(true);
+  });
+
+  it("reconciles a cancelled Job from the exact refunded aggregate", () => {
+    expect(
+      transition(jobPolicy, {
+        ...commandAnchors(jobPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "refunded-cancellation-race-job",
+        context: contextForTransition("shipped", "refunded"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancelled",
+      current: "handed_over",
+    });
+  });
+
+  it.each([
+    ["Shipment", shipmentPolicy],
+    ["Job", jobPolicy],
+  ] as const)(
+    "reconciles a later cancelled %s through the shared refunded settlement",
+    (_name, policy) => {
+      expect(
+        transition(policy, {
+          ...commandAnchors(policy, "cancelled", "handed_over"),
+          current: "cancelled",
+          target: "handed_over",
+          idempotencyKey: `later-refunded-parcel-${_name}`,
+          context: laterRefundedParcelContext(),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "cancelled",
+        current: "handed_over",
+      });
+    },
+  );
+
+  it("rejects a later refunded parcel without its prior reconciliation", () => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "later-refunded-parcel-without-prior",
+        context: {
+          ...laterRefundedParcelContext(),
+          handoffRefundedPriorReconciliation: undefined,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a later refunded parcel that reuses the current reconciliation identity", () => {
+    const context = laterRefundedParcelContext();
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "later-refunded-parcel-reused-reconciliation-id",
+        context: {
+          ...context,
+          handoffRefundedPriorReconciliation: {
+            ...context.handoffRefundedPriorReconciliation,
+            id: context.handoffReconciliationId,
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
+    ["Shipment", shipmentPolicy],
+    ["Job", jobPolicy],
+  ] as const)(
+    "rejects SHIPPED source snapshots for a refunded %s without the later-parcel route",
+    (_name, policy) => {
+      expect(() =>
+        transition(policy, {
+          ...commandAnchors(policy, "cancelled", "handed_over"),
+          current: "cancelled",
+          target: "handed_over",
+          idempotencyKey: `refunded-shipped-source-without-later-route-${_name}`,
+          context: {
+            ...laterRefundedParcelContext(),
+            cancellationRaceLaterRefundedParcel: false,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it("rejects a cancelled Order recovery presented as an active-state race", () => {
+    const context = contextForTransition("shipped", "cancelled");
+    expect(() =>
+      transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "cancelled", "shipped"),
+        current: "cancelled",
+        target: "shipped",
+        idempotencyKey: "cancelled-order-active-race-bypass",
+        context: {
+          ...context,
+          cancellationRaceCommittedCancellation: false,
+          cancellationRacePreviousOrderResultId: "order-ready_to_ship-result-1",
+          cancellationRaceCurrentOrderStateCommandKey:
+            "order-ready_to_ship-command-1",
+          cancellationRaceExpectedOrder: {
+            ...context.cancellationRaceExpectedOrder,
+            status: "ready_to_ship",
+            resultId: "order-ready_to_ship-result-1",
+            currentStateCommandKey: "order-ready_to_ship-command-1",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("rejects a cancelled phase recovery presented as an active-state race", () => {
+    const context = contextForTransition("shipped", "cancelled");
+    expect(() =>
+      transition(singleOrderPhasePolicy, {
+        ...commandAnchors(singleOrderPhasePolicy, "cancelled", "shipped"),
+        current: "cancelled",
+        target: "shipped",
+        idempotencyKey: "cancelled-phase-active-race-bypass",
+        context: {
+          ...context,
+          cancellationRaceCommittedCancellation: false,
+          handoffPhasePreviousResultId: "phase-qc_passed-result-1",
+          handoffPhaseCurrentStateCommandKey: "phase-qc_passed-command-1",
+          handoffExpectedPhase: {
+            ...context.handoffExpectedPhase,
+            status: "qc_passed",
+            resultId: "phase-qc_passed-result-1",
+            currentStateCommandKey: "phase-qc_passed-command-1",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it("requires zero amount due before reconciling an unauthorized handoff", () => {
     expect(() =>
@@ -11027,6 +14400,249 @@ describe("v0 lifecycle policy tables", () => {
       });
     },
   );
+
+  it("reconciles an acceptance receipt that physically predates the selected void", () => {
+    expect(
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "post-void-cancellation-race",
+        context: contextForTransition("handed_over", "cancelled"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancelled",
+      current: "handed_over",
+    });
+  });
+
+  it("accepts cancellation evidence at the provider clock-skew boundary", () => {
+    const context = contextForTransition("handed_over", "cancelled");
+    expect(
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "post-void-cancellation-race-at-skew-boundary",
+        context: {
+          ...context,
+          cancellationRaceExpectedShipment: {
+            ...context.cancellationRaceExpectedShipment,
+            cancelledAt: Instant.parse("2026-01-01T00:10:55.000Z"),
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancelled",
+      current: "handed_over",
+    });
+  });
+
+  it.each(["unauthorized_reconciliation", "replacement", "reship"] as const)(
+    "dispatches a post-void acceptance receipt through the %s handler",
+    (kind) => {
+      const base = contextForTransition("handed_over", "cancelled");
+      const shipmentId =
+        kind === "replacement"
+          ? "replacement-shipment-1"
+          : kind === "reship"
+            ? "reship-shipment-1"
+            : "shipment-1";
+      const context =
+        kind === "unauthorized_reconciliation"
+          ? {
+              ...base,
+              ...postVoidCancellationRaceShipmentSource("shipment-1"),
+              cancellationRaceHandoffKind: kind,
+              cancellationRaceResultKind: kind,
+              cancellationRaceFinancialResultStatus:
+                "unauthorized_handoff_settled",
+              cancellationRaceAuthorizationResultStatus:
+                "unauthorized_reconciliation",
+              handoffOrderPreviousStatus: "awaiting_balance",
+              handoffPhasePreviousStatus: "qc_passed",
+              handoffJobPreviousStatus: "packed",
+              handoffSlots: base.handoffSlots.map(
+                ({ id, shipmentId, orderId, phaseId, jobId }) => ({
+                  id,
+                  shipmentId,
+                  orderId,
+                  phaseId,
+                  jobId,
+                }),
+              ),
+              handoffJobs: base.handoffJobs.map(
+                ({ id, shipmentId, orderId, phaseId }) => ({
+                  id,
+                  shipmentId,
+                  orderId,
+                  phaseId,
+                  previousStatus: "packed",
+                  targetStatus: "handed_over",
+                }),
+              ),
+            }
+          : kind === "replacement"
+            ? {
+                ...base,
+                ...postVoidCancellationRaceShipmentSource(
+                  shipmentId,
+                  "replacement",
+                ),
+                shipmentId,
+                providerEventShipmentId: shipmentId,
+                cancellationRaceResultShipmentId: shipmentId,
+                cancellationRaceHandoffKind: kind,
+                cancellationRaceResultKind: kind,
+                labelledHandoffShipmentKind: kind,
+                labelledHandoffShipmentOriginClaimId: base.claimId,
+                labelledHandoffShipmentOriginResolutionId:
+                  base.claimSlotResolutionId,
+                cancellationRaceAggregateResultStatus:
+                  "replacement_child_shipped",
+                cancellationRaceFinancialResultStatus: "claim_remedy_no_charge",
+                cancellationRaceAuthorizationResultStatus:
+                  "replacement_authorization_consumed",
+                cancellationRaceJobResultStatus:
+                  "complete_replacement_job_set_handed_over",
+                replacementHandoffSlotBindings:
+                  base.replacementHandoffSlotBindings.map((binding) => ({
+                    ...binding,
+                    replacementShipmentPreviousStatus: "cancelled",
+                  })),
+                replacementHandoffResourceGroups:
+                  base.replacementHandoffResourceGroups.map((group) => ({
+                    ...group,
+                    replacementShipmentPreviousStatus: "cancelled",
+                  })),
+              }
+            : {
+                ...base,
+                ...postVoidCancellationRaceShipmentSource(shipmentId, "reship"),
+                shipmentId,
+                providerEventShipmentId: shipmentId,
+                cancellationRaceResultShipmentId: shipmentId,
+                cancellationRaceHandoffKind: kind,
+                cancellationRaceResultKind: kind,
+                labelledHandoffShipmentKind: kind,
+                labelledHandoffShipmentOriginClaimId: base.claimId,
+                labelledHandoffShipmentOriginResolutionId:
+                  base.claimSlotResolutionId,
+                cancellationRaceAggregateResultStatus: "reship_child_shipped",
+                cancellationRaceFinancialResultStatus: "claim_remedy_no_charge",
+                cancellationRaceAuthorizationResultStatus:
+                  "reship_authorization_consumed",
+                cancellationRaceJobResultStatus: "original_job_unchanged",
+                reshipmentHandoffShipmentPreviousStatus: "cancelled",
+              };
+      expect(
+        transition(shipmentPolicy, {
+          ...postVoidCancellationRaceShipmentCommand(shipmentId),
+          current: "cancelled",
+          target: "handed_over",
+          idempotencyKey: `post-void-cancellation-race-${kind}`,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "cancelled",
+        current: "handed_over",
+      });
+    },
+  );
+
+  it.each([
+    [
+      "equal provider occurrence times",
+      {
+        cancellationRaceAcceptanceEvent: {
+          ...permittedContext.cancellationRaceAcceptanceEvent,
+          occurredAt:
+            permittedContext.cancellationRaceSelectedVoidEvent.occurredAt,
+        },
+      },
+    ],
+    [
+      "a foreign selected void",
+      {
+        cancellationRaceSelectedVoidEvent: {
+          ...permittedContext.cancellationRaceSelectedVoidEvent,
+          shipmentId: "shipment-2",
+        },
+      },
+    ],
+    [
+      "a mismatched void snapshot",
+      {
+        cancellationRaceExpectedShipment: {
+          ...contextForTransition("handed_over", "cancelled")
+            .cancellationRaceExpectedShipment,
+          providerVoidId: "another-void",
+        },
+      },
+    ],
+    [
+      "cancellation beyond the provider clock-skew boundary",
+      {
+        cancellationRaceExpectedShipment: {
+          ...contextForTransition("handed_over", "cancelled")
+            .cancellationRaceExpectedShipment,
+          cancelledAt: Instant.parse("2026-01-01T00:10:54.999Z"),
+        },
+      },
+    ],
+    [
+      "a mismatched resulting handoff timestamp",
+      {
+        cancellationRaceResultShipment: {
+          ...permittedContext.cancellationRaceResultShipment,
+          handedOverAt: Instant.parse("2026-01-01T00:12:00.001Z"),
+        },
+      },
+    ],
+    [
+      "a foreign resulting Shipment",
+      {
+        cancellationRaceResultShipment: {
+          ...permittedContext.cancellationRaceResultShipment,
+          id: "shipment-2",
+        },
+      },
+    ],
+    [
+      "a foreign acceptance carrier",
+      {
+        cancellationRaceAcceptanceEvent: {
+          ...permittedContext.cancellationRaceAcceptanceEvent,
+          carrier: "carrier-2",
+        },
+      },
+    ],
+    [
+      "a foreign void carrier",
+      {
+        cancellationRaceSelectedVoidEvent: {
+          ...permittedContext.cancellationRaceSelectedVoidEvent,
+          carrier: "carrier-2",
+        },
+      },
+    ],
+  ] as const)("rejects post-void handoff with %s", (_case, mutation) => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: `post-void-cancellation-race-${_case}`,
+        context: {
+          ...contextForTransition("handed_over", "cancelled"),
+          ...mutation,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each(["ordinary", "unauthorized_reconciliation"] as const)(
     "rejects a Claim-origin Shipment presented to the %s cancellation-race handler",
@@ -14386,6 +18002,9 @@ describe("v0 lifecycle policy tables", () => {
     ["phaseId", "phase-2"],
     ["role", "deposit"],
     ["status", "captured"],
+    ["provider", "another-provider"],
+    ["requestedAmountMinor", 9_999n],
+    ["currency", "USD"],
     ["resultId", "foreign-result"],
     ["currentStateCommandKey", "foreign-command"],
     ["immutable", false],
@@ -14428,6 +18047,7 @@ describe("v0 lifecycle policy tables", () => {
               captureProviderEvent: {
                 ...base.captureProviderEvent,
                 occurredAt: permittedContext.checkoutCaptureExpiresAt,
+                verifiedAt: permittedContext.checkoutCaptureExpiresAt,
               },
             };
       for (const [label, value] of [
@@ -14466,6 +18086,7 @@ describe("v0 lifecycle policy tables", () => {
               captureProviderEvent: {
                 ...base.captureProviderEvent,
                 occurredAt: permittedContext.checkoutCaptureExpiresAt,
+                verifiedAt: permittedContext.checkoutCaptureExpiresAt,
               },
             };
       expect(() =>
@@ -14601,6 +18222,7 @@ describe("v0 lifecycle policy tables", () => {
         captureProviderEvent: {
           ...base.captureProviderEvent,
           occurredAt: evaluatedAt,
+          verifiedAt: evaluatedAt,
         },
       },
     };
@@ -15062,6 +18684,167 @@ describe("v0 lifecycle policy tables", () => {
           captureAuthorized: true,
           providerPaymentTransactionId: base.providerPaymentTransactionId,
           paymentCaptureWindow: base.paymentCaptureWindow,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each(["full", "deposit", "balance"] as const)(
+    "fails a created %s Payment from its exact durable intent-creation failure",
+    (paymentRole) => {
+      const base = contextForTransition("failed", "created");
+      const context = {
+        ...base,
+        paymentRole,
+        paymentIntentFailureExpectedPayment: {
+          ...base.paymentIntentFailureExpectedPayment,
+          role: paymentRole,
+        },
+        paymentIntentFailureFailedPayment: {
+          ...base.paymentIntentFailureFailedPayment,
+          role: paymentRole,
+        },
+      };
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "created", "failed"),
+          current: "created",
+          target: "failed",
+          idempotencyKey: `payment-intent-failure-${paymentRole}`,
+          context,
+        }),
+      ).toEqual({ kind: "changed", previous: "created", current: "failed" });
+    },
+  );
+
+  it("rejects incomplete or mismatched created Payment intent failures", () => {
+    const base = contextForTransition("failed", "created");
+    const command = {
+      ...commandAnchors(paymentPolicy, "created", "failed"),
+      current: "created" as const,
+      target: "failed" as const,
+      idempotencyKey: "payment-intent-failure-invalid",
+      context: base,
+    };
+
+    for (const [field, value] of [
+      ["paymentId", "payment-2"],
+      ["orderId", "order-2"],
+      ["phaseId", "phase-2"],
+      ["paymentRole", "unknown"],
+      ["paymentIntentFailurePreviousPaymentResultId", "foreign-result"],
+      ["paymentIntentFailureCurrentStateCommandKey", "foreign-command"],
+      ["paymentIntentFailureResultId", " "],
+      ["paymentIntentFailureAttemptKey", " "],
+      ["paymentIntentFailureEvidenceId", "foreign-failure"],
+      ["paymentIntentFailureProvider", "foreign-provider"],
+      ["paymentIntentFailurePaymentResultId", "foreign-result"],
+      ["paymentIntentFailureEvidenceResultId", "foreign-result"],
+      ["paymentIntentFailureCompleted", false],
+      ["paymentIntentFailureAtomic", false],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: { ...base, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    for (const [recordName, field, value] of [
+      ["paymentIntentFailureExpectedPayment", "id", "payment-2"],
+      ["paymentIntentFailureExpectedPayment", "status", "pending"],
+      ["paymentIntentFailureExpectedPayment", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureExpectedPayment", "provider", "other"],
+      ["paymentIntentFailureExpectedPayment", "immutable", false],
+      ["paymentIntentFailureFailedPayment", "id", "payment-2"],
+      ["paymentIntentFailureFailedPayment", "previousStatus", "pending"],
+      ["paymentIntentFailureFailedPayment", "targetStatus", "voided"],
+      ["paymentIntentFailureFailedPayment", "providerIntentId", "intent-1"],
+      [
+        "paymentIntentFailureFailedPayment",
+        "intentCreationFailureResultId",
+        null,
+      ],
+      [
+        "paymentIntentFailureFailedPayment",
+        "intentCreationFailureResultId",
+        "foreign-failure",
+      ],
+      ["paymentIntentFailureFailedPayment", "provider", "other"],
+      ["paymentIntentFailureFailedPayment", "captureAuthorized", true],
+      ["paymentIntentFailureFailedPayment", "captureCutoffAt", null],
+      ["paymentIntentFailureFailedPayment", "captureCutoffAt", "2026-01-01"],
+      [
+        "paymentIntentFailureFailedPayment",
+        "captureCutoffAt",
+        Instant.parse("2026-01-01T00:06:00.000Z"),
+      ],
+      ["paymentIntentFailureFailedPayment", "immutable", false],
+      ["paymentIntentFailureEvidence", "id", "foreign-failure"],
+      ["paymentIntentFailureEvidence", "paymentId", "payment-2"],
+      ["paymentIntentFailureEvidence", "attemptKey", "foreign-attempt"],
+      ["paymentIntentFailureEvidence", "provider", " "],
+      ["paymentIntentFailureEvidence", "provider", "other"],
+      ["paymentIntentFailureEvidence", "outcome", "pending"],
+      ["paymentIntentFailureEvidence", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureEvidence", "failedAt", null],
+      ["paymentIntentFailureEvidence", "failedAt", "2026-01-01"],
+      [
+        "paymentIntentFailureEvidence",
+        "failedAt",
+        Instant.parse("2026-01-01T00:06:00.000Z"),
+      ],
+      ["paymentIntentFailureEvidence", "immutable", false],
+    ] as const) {
+      const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: {
+            ...base,
+            [recordName]: { ...snapshot, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        idempotencyKey: "payment-intent-failure-foreign-payment",
+        context: {
+          ...base,
+          paymentId: "payment-2",
+          paymentIntentFailureExpectedPayment: {
+            ...base.paymentIntentFailureExpectedPayment,
+            id: "payment-2",
+          },
+          paymentIntentFailureFailedPayment: {
+            ...base.paymentIntentFailureFailedPayment,
+            id: "payment-2",
+          },
+          paymentIntentFailureEvidence: {
+            ...base.paymentIntentFailureEvidence,
+            paymentId: "payment-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        context: {
+          paymentId: base.paymentId,
+          orderId: base.orderId,
+          phaseId: base.phaseId,
+          paymentRole: base.paymentRole,
+          ...Object.fromEntries(
+            Object.entries(base).filter(([key]) =>
+              key.startsWith("paymentFailure"),
+            ),
+          ),
         },
       }),
     ).toThrow(TransitionGuardError);
@@ -20793,6 +24576,12 @@ describe("v0 lifecycle policy tables", () => {
     ],
     [
       shipmentPolicy,
+      "handed_over",
+      "delivered",
+      ["providerEventAuthenticated", "providerEventVerified"],
+    ],
+    [
+      shipmentPolicy,
       "lost",
       "recovered",
       [
@@ -20849,6 +24638,7 @@ describe("v0 lifecycle policy tables", () => {
     [jobPolicy, "printed", "photo_submitted"],
     [jobPolicy, "photo_submitted", "qc_approved"],
     [jobPolicy, "photo_submitted", "qc_rejected"],
+    [paymentPolicy, "created", "voided"],
     [paymentPolicy, "pending", "captured"],
     [paymentPolicy, "pending", "refund_pending"],
     [paymentPolicy, "pending", "failed"],
@@ -20872,7 +24662,9 @@ describe("v0 lifecycle policy tables", () => {
     [shipmentPolicy, "planned", "cancelled"],
     [shipmentPolicy, "label_created", "cancellation_pending"],
     [shipmentPolicy, "cancellation_pending", "cancelled"],
+    [shipmentPolicy, "cancelled", "handed_over"],
     [shipmentPolicy, "handed_over", "in_transit"],
+    [shipmentPolicy, "handed_over", "delivered"],
     [shipmentPolicy, "lost", "recovered"],
     [claimSlotResolutionPolicy, "pending", "reship_pending"],
     [claimSlotResolutionPolicy, "recovery_pending", "reship_pending"],
@@ -24012,21 +27804,80 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
-  it("binds late capture compensation to the selected voided Payment", () => {
-    expect(
-      transition(paymentPolicy, {
-        ...commandAnchors(paymentPolicy, "voided", "refund_pending"),
-        current: "voided",
-        target: "refund_pending",
-        idempotencyKey: "late-capture-voided-selected-payment",
-        context: contextForTransition("refund_pending", "voided"),
-      }),
-    ).toEqual({
-      kind: "changed",
-      previous: "voided",
-      current: "refund_pending",
-    });
-  });
+  it.each(["voided", "failed"] as const)(
+    "binds late capture compensation to the selected %s Payment",
+    (current) => {
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, current, "refund_pending"),
+          current,
+          target: "refund_pending",
+          idempotencyKey: `late-capture-${current}-selected-payment`,
+          context: contextForTransition("refund_pending", current),
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "refund_pending",
+      });
+    },
+  );
+
+  it.each([
+    ["providerFailureEventId", "another-failure-event"],
+    ["providerIntentId", "another-provider-intent"],
+    ["captureAuthorized", true],
+    ["captureCutoffAt", "not-an-instant"],
+  ] as const)(
+    "rejects failed-source late capture with foreign Payment %s",
+    (field, value) => {
+      const context = contextForTransition("refund_pending", "failed");
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "failed", "refund_pending"),
+          current: "failed",
+          target: "refund_pending",
+          idempotencyKey: `failed-late-capture-${field}`,
+          context: {
+            ...context,
+            lateCaptureCompensationExpectedPayment: {
+              ...context.lateCaptureCompensationExpectedPayment,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["paymentId", "payment-2"],
+    ["provider", "another-provider"],
+    ["amountMinor", 9_999n],
+    ["currency", "USD"],
+    ["verifiedAt", undefined],
+    ["verifiedAt", Instant.parse("2026-01-01T00:30:00.001Z")],
+  ] as const)(
+    "rejects failed-source late capture with foreign prior failure receipt %s",
+    (field, value) => {
+      const context = contextForTransition("refund_pending", "failed");
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "failed", "refund_pending"),
+          current: "failed",
+          target: "refund_pending",
+          idempotencyKey: `failed-late-capture-foreign-failure-${field}`,
+          context: {
+            ...context,
+            paymentFailureProviderEvent: {
+              ...context.paymentFailureProviderEvent,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
 
   it.each([
     ["missing", undefined],
@@ -24050,6 +27901,11 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     ["status", "pending"],
+    ["provider", "another-provider"],
+    ["requestedAmountMinor", 9_999n],
+    ["currency", "USD"],
+    ["captureAuthorized", true],
+    ["captureCutoffAt", "not-an-instant"],
     ["resultId", "payment-voided-result-2"],
     ["currentStateCommandKey", "payment-voided-command-2"],
     ["immutable", false],
@@ -24509,6 +28365,10 @@ describe("v0 lifecycle policy tables", () => {
               ...context.paymentFailureExpectedPayment,
               role: paymentRole,
             },
+            paymentFailureFailedPayment: {
+              ...context.paymentFailureFailedPayment,
+              role: paymentRole,
+            },
           },
         }),
       ).toEqual({ kind: "changed", previous: "pending", current: "failed" });
@@ -24517,6 +28377,7 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     ["created", "pending"],
+    ["created", "voided"],
     ["pending", "voided"],
     ["pending", "failed"],
   ] as const)(
@@ -24571,11 +28432,47 @@ describe("v0 lifecycle policy tables", () => {
   it.each([
     ["paymentFailureExpectedPayment", "id", "payment-2"],
     ["paymentFailureExpectedPayment", "status", "captured"],
+    ["paymentFailureExpectedPayment", "provider", "other-provider"],
+    ["paymentFailureExpectedPayment", "providerIntentId", "other-intent"],
+    ["paymentFailureExpectedPayment", "requestedAmountMinor", 9_999n],
+    ["paymentFailureExpectedPayment", "currency", "USD"],
+    ["paymentFailureExpectedPayment", "captureAuthorized", false],
+    ["paymentFailureExpectedPayment", "captureCutoffAt", "not-null"],
     ["paymentFailureExpectedPayment", "immutable", false],
+    ["paymentFailureFailedPayment", "id", "payment-2"],
+    ["paymentFailureFailedPayment", "previousStatus", "created"],
+    ["paymentFailureFailedPayment", "targetStatus", "voided"],
+    ["paymentFailureFailedPayment", "provider", "other-provider"],
+    ["paymentFailureFailedPayment", "providerIntentId", "other-intent"],
+    ["paymentFailureFailedPayment", "requestedAmountMinor", 9_999n],
+    ["paymentFailureFailedPayment", "currency", "USD"],
+    ["paymentFailureFailedPayment", "captureAuthorized", true],
+    ["paymentFailureFailedPayment", "captureCutoffAt", null],
+    ["paymentFailureFailedPayment", "captureCutoffAt", "not-an-instant"],
+    [
+      "paymentFailureFailedPayment",
+      "captureCutoffAt",
+      Instant.parse("2026-01-01T00:30:00.001Z"),
+    ],
+    ["paymentFailureFailedPayment", "resultId", "another-result"],
+    ["paymentFailureFailedPayment", "immutable", false],
     ["paymentFailureProviderEvent", "paymentId", "payment-2"],
+    ["paymentFailureProviderEvent", "provider", "other-provider"],
     ["paymentFailureProviderEvent", "transactionId", "transaction-2"],
+    ["paymentFailureProviderEvent", "kind", "PAYMENT_CAPTURED"],
+    ["paymentFailureProviderEvent", "amountMinor", 9_999n],
+    ["paymentFailureProviderEvent", "currency", "USD"],
+    ["paymentFailureProviderEvent", "occurredAt", undefined],
+    ["paymentFailureProviderEvent", "verifiedAt", undefined],
+    [
+      "paymentFailureProviderEvent",
+      "verifiedAt",
+      Instant.parse("2026-01-01T00:30:00.001Z"),
+    ],
     ["paymentFailureProviderEvent", "authenticated", false],
+    ["paymentFailureProviderEvent", "verified", false],
     ["paymentFailureProviderEvent", "resultId", "another-result"],
+    ["paymentFailureProviderEvent", "immutable", false],
     ["paymentFailureProviderTransaction", "paymentId", "payment-2"],
     ["paymentFailureProviderTransaction", "eventId", "another-event"],
     ["paymentFailureProviderTransaction", "resultId", "another-result"],
@@ -24598,6 +28495,33 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("rejects a coordinated blank provider across pending failure evidence", () => {
+    const context = contextForTransition("failed", "pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "failed"),
+        current: "pending",
+        target: "failed",
+        idempotencyKey: "payment-failure-blank-provider",
+        context: {
+          ...context,
+          paymentFailureExpectedPayment: {
+            ...context.paymentFailureExpectedPayment,
+            provider: " ",
+          },
+          paymentFailureFailedPayment: {
+            ...context.paymentFailureFailedPayment,
+            provider: " ",
+          },
+          paymentFailureProviderEvent: {
+            ...context.paymentFailureProviderEvent,
+            provider: " ",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it("rejects a coordinated foreign Payment failure substitution", () => {
     const context = contextForTransition("failed", "pending");
@@ -24630,6 +28554,7 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     ["handed_over", "in_transit"],
+    ["handed_over", "delivered"],
     ["in_transit", "delivered"],
     ["in_transit", "lost"],
     ["in_transit", "returned"],
@@ -25307,10 +29232,258 @@ describe("v0 lifecycle policy tables", () => {
   });
 
   it.each([
+    ["full", "captured", 0n],
+    ["deposit", "captured", 0n],
+    ["balance", "captured", 0n],
+    ["full", "partially_refunded", 4_000n],
+    ["deposit", "partially_refunded", 4_000n],
+    ["balance", "partially_refunded", 4_000n],
+  ] as const)(
+    "restores a %s Payment to %s after its exact refund attempt fails",
+    (paymentRole, target, succeededAmountMinor) => {
+      const base = contextForTransition(target, "refund_pending");
+      const context = {
+        ...base,
+        paymentCaptureKind: "refund_failure_rollback",
+        paymentRole,
+        refundFailureSucceededAmountMinor: succeededAmountMinor,
+        refundFailureRollbackTargetStatus: target,
+        refundFailureNoSuccessfulRefunds: succeededAmountMinor === 0n,
+        refundFailureRollbackExpectedPayment: {
+          ...base.refundFailureRollbackExpectedPayment,
+          role: paymentRole,
+          succeededRefundAmountMinor: succeededAmountMinor,
+        },
+        refundFailureRollbackRestoredPayment: {
+          ...base.refundFailureRollbackRestoredPayment,
+          role: paymentRole,
+          targetStatus: target,
+          succeededRefundAmountMinor: succeededAmountMinor,
+        },
+      };
+      expect(
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "refund_pending", target),
+          current: "refund_pending",
+          target,
+          idempotencyKey: `refund-failure-rollback-${paymentRole}-${target}`,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "refund_pending",
+        current: target,
+      });
+    },
+  );
+
+  it("keeps a failed-source late capture in compensation after a refund attempt fails", () => {
+    const base = contextForTransition("captured", "refund_pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+        current: "refund_pending",
+        target: "captured",
+        idempotencyKey: "failed-source-compensation-refund-retry",
+        context: {
+          ...base,
+          paymentCaptureKind: "refund_failure_rollback",
+          refundFailureRollbackExpectedPayment: {
+            ...base.refundFailureRollbackExpectedPayment,
+            providerFailureEventId: "payment-failure-event-1",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it("requires immutable capture-origin provenance for refund-failure rollback", () => {
+    const base = contextForTransition("captured", "refund_pending");
+    const {
+      providerFailureEventId: _omittedFailureEventId,
+      ...expectedWithoutOrigin
+    } = base.refundFailureRollbackExpectedPayment;
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+        current: "refund_pending",
+        target: "captured",
+        idempotencyKey: "refund-failure-rollback-missing-origin",
+        context: {
+          ...base,
+          paymentCaptureKind: "refund_failure_rollback",
+          refundFailureRollbackExpectedPayment: expectedWithoutOrigin,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+    expect(_omittedFailureEventId).toBeNull();
+  });
+
+  it("rejects incomplete or mismatched refund-failure rollback evidence", () => {
+    const base = {
+      ...contextForTransition("captured", "refund_pending"),
+      paymentCaptureKind: "refund_failure_rollback",
+    };
+    const command = {
+      ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+      current: "refund_pending" as const,
+      target: "captured" as const,
+      idempotencyKey: "refund-failure-rollback-invalid",
+      context: base,
+    };
+
+    for (const [field, value] of [
+      ["paymentCaptureKind", "settlement"],
+      ["paymentId", "payment-2"],
+      ["orderId", "order-2"],
+      ["phaseId", "phase-2"],
+      ["paymentRole", "unknown"],
+      ["refundFailureTransactionId", "refund-2"],
+      ["refundFailureProviderEventId", "event-2"],
+      ["refundFailureProvider", "foreign-provider"],
+      ["refundFailureProviderTransactionId", "foreign-refund"],
+      ["refundFailureAmountMinor", 999n],
+      ["refundFailureCurrency", "USD"],
+      ["refundFailureRollbackPreviousPaymentResultId", "foreign-result"],
+      ["refundFailureRollbackCurrentStateCommandKey", "foreign-command"],
+      ["refundFailureRollbackResultId", " "],
+      ["refundFailureAttemptKey", "foreign-attempt"],
+      ["refundFailureCapturedAmountMinor", 0n],
+      ["refundFailureSucceededAmountMinor", -1n],
+      ["refundFailureSucceededAmountMinor", 10_000n],
+      ["refundFailureSucceededAmountMinor", 1],
+      ["refundFailureRollbackTargetStatus", "partially_refunded"],
+      ["refundFailureRollbackPaymentResultId", "foreign-result"],
+      ["refundFailureRollbackTransactionResultId", "foreign-result"],
+      ["refundFailureRollbackEvidenceResultId", "foreign-result"],
+      ["refundFailureLatestTransactionId", "refund-2"],
+      ["refundFailureSucceededRefundSetComplete", false],
+      ["refundFailureNoPendingRefunds", false],
+      ["refundFailureNoPendingRefunds", undefined],
+      ["refundFailureNoSuccessfulRefunds", false],
+      ["refundFailureRollbackCompleted", false],
+      ["refundFailureRollbackAtomic", false],
+    ] as const) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: { ...base, [field]: value },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    for (const [recordName, field, value] of [
+      ["refundFailureRollbackExpectedPayment", "id", "payment-2"],
+      ["refundFailureRollbackExpectedPayment", "status", "captured"],
+      ["refundFailureRollbackExpectedPayment", "provider", "other"],
+      ["refundFailureRollbackExpectedPayment", "currency", "USD"],
+      [
+        "refundFailureRollbackExpectedPayment",
+        "activeRefundTransactionId",
+        "refund-2",
+      ],
+      ["refundFailureRollbackExpectedPayment", "capturedAmountMinor", 9_000n],
+      [
+        "refundFailureRollbackExpectedPayment",
+        "succeededRefundAmountMinor",
+        1n,
+      ],
+      ["refundFailureRollbackExpectedPayment", "immutable", false],
+      ["refundFailureRollbackRestoredPayment", "id", "payment-2"],
+      ["refundFailureRollbackRestoredPayment", "previousStatus", "captured"],
+      ["refundFailureRollbackRestoredPayment", "targetStatus", "refunded"],
+      ["refundFailureRollbackRestoredPayment", "provider", "other"],
+      ["refundFailureRollbackRestoredPayment", "currency", "USD"],
+      ["refundFailureRollbackRestoredPayment", "capturedAmountMinor", 9_000n],
+      [
+        "refundFailureRollbackRestoredPayment",
+        "succeededRefundAmountMinor",
+        1n,
+      ],
+      ["refundFailureRollbackRestoredPayment", "immutable", false],
+      ["refundFailureRollbackRefundTransaction", "id", "refund-2"],
+      ["refundFailureRollbackRefundTransaction", "paymentId", "payment-2"],
+      ["refundFailureRollbackRefundTransaction", "provider", "other"],
+      [
+        "refundFailureRollbackRefundTransaction",
+        "providerRefundId",
+        "foreign-refund",
+      ],
+      ["refundFailureRollbackRefundTransaction", "amountMinor", 999n],
+      ["refundFailureRollbackRefundTransaction", "status", "succeeded"],
+      [
+        "refundFailureRollbackRefundTransaction",
+        "idempotencyKey",
+        "foreign-attempt",
+      ],
+      ["refundFailureRollbackRefundTransaction", "immutable", false],
+      ["refundFailureProviderEvidence", "id", "event-2"],
+      ["refundFailureProviderEvidence", "paymentId", "payment-2"],
+      ["refundFailureProviderEvidence", "refundTransactionId", "refund-2"],
+      ["refundFailureProviderEvidence", "provider", "other"],
+      [
+        "refundFailureProviderEvidence",
+        "providerTransactionId",
+        "foreign-refund",
+      ],
+      ["refundFailureProviderEvidence", "kind", "refund_succeeded"],
+      ["refundFailureProviderEvidence", "amountMinor", 999n],
+      ["refundFailureProviderEvidence", "currency", "USD"],
+      ["refundFailureProviderEvidence", "outcome", "succeeded"],
+      ["refundFailureProviderEvidence", "authenticated", false],
+      ["refundFailureProviderEvidence", "verified", false],
+      ["refundFailureProviderEvidence", "resultId", "foreign-result"],
+      ["refundFailureProviderEvidence", "immutable", false],
+    ] as const) {
+      const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: {
+            ...base,
+            [recordName]: { ...snapshot, [field]: value },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        idempotencyKey: "refund-failure-coordinated-payment-substitution",
+        context: {
+          ...base,
+          paymentId: "payment-2",
+          refundFailureRollbackExpectedPayment: {
+            ...base.refundFailureRollbackExpectedPayment,
+            id: "payment-2",
+          },
+          refundFailureRollbackRestoredPayment: {
+            ...base.refundFailureRollbackRestoredPayment,
+            id: "payment-2",
+          },
+          refundFailureRollbackRefundTransaction: {
+            ...base.refundFailureRollbackRefundTransaction,
+            paymentId: "payment-2",
+          },
+          refundFailureProviderEvidence: {
+            ...base.refundFailureProviderEvidence,
+            paymentId: "payment-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
+
+  it.each([
     ["refundCompletionProviderEventId", "another-event"],
     ["refundCompletionPreviousPaymentResultId", "another-result"],
     ["refundCompletionResultId", " "],
     ["refundCompletionCurrentStateCommandKey", "another-command"],
+    ["refundCompletionRefundSetBeforeId", "another-set"],
+    ["refundCompletionRefundSetBeforeResultId", "another-result"],
+    ["refundCompletionRefundSetAfterId", "another-set"],
+    ["refundCompletionRefundSetAfterResultId", "another-result"],
     ["refundCompletionPaymentResultId", "another-result"],
     ["refundCompletionRefundTransactionResultId", "another-result"],
     ["refundCompletionProviderEventResultId", "another-result"],
@@ -25342,16 +29515,72 @@ describe("v0 lifecycle policy tables", () => {
       "refund-2",
     ],
     ["refundCompletionExpectedPayment", "status", "captured"],
+    ["refundCompletionExpectedPayment", "provider", "other"],
+    ["refundCompletionExpectedPayment", "currency", "USD"],
+    ["refundCompletionExpectedPayment", "currency", "eur"],
+    ["refundCompletionExpectedPayment", "capturedAmountMinor", 9_000n],
+    ["refundCompletionExpectedPayment", "succeededRefundAmountMinor", 1n],
+    [
+      "refundCompletionExpectedPayment",
+      "authoritativeRefundSetId",
+      "another-set",
+    ],
     ["refundCompletionExpectedPayment", "immutable", false],
     ["refundCompletionRefundTransaction", "paymentId", "payment-2"],
     ["refundCompletionRefundTransaction", "providerEventId", "event-2"],
     ["refundCompletionRefundTransaction", "status", "failed"],
+    ["refundCompletionRefundTransaction", "previousResultId", "another-result"],
+    ["refundCompletionRefundTransaction", "provider", "other"],
+    [
+      "refundCompletionRefundTransaction",
+      "providerTransactionId",
+      "another-transaction",
+    ],
+    ["refundCompletionRefundTransaction", "amountMinor", 999n],
+    ["refundCompletionRefundTransaction", "amountMinor", 0n],
+    ["refundCompletionRefundTransaction", "currency", "USD"],
+    ["refundCompletionRefundTransaction", "requestedAt", undefined],
+    ["refundCompletionRefundTransaction", "completedAt", undefined],
+    [
+      "refundCompletionRefundTransaction",
+      "completedAt",
+      Instant.parse("2026-01-01T00:11:00.001Z"),
+    ],
     ["refundCompletionRefundTransaction", "resultId", "another-result"],
     ["refundCompletionProviderEvent", "paymentId", "payment-2"],
     ["refundCompletionProviderEvent", "refundTransactionId", "refund-2"],
+    ["refundCompletionProviderEvent", "provider", "other"],
+    [
+      "refundCompletionProviderEvent",
+      "providerTransactionId",
+      "another-transaction",
+    ],
+    ["refundCompletionProviderEvent", "kind", "refund_failed"],
+    ["refundCompletionProviderEvent", "amountMinor", 999n],
+    ["refundCompletionProviderEvent", "currency", "USD"],
+    ["refundCompletionProviderEvent", "occurredAt", undefined],
+    ["refundCompletionProviderEvent", "authenticatedAt", undefined],
+    ["refundCompletionProviderEvent", "verifiedAt", undefined],
     ["refundCompletionProviderEvent", "projectedTarget", "partially_refunded"],
     ["refundCompletionProviderEvent", "verified", false],
     ["refundCompletionProviderEvent", "resultId", "another-result"],
+    ["refundCompletionReconciledPayment", "id", "payment-2"],
+    ["refundCompletionReconciledPayment", "provider", "other"],
+    ["refundCompletionReconciledPayment", "currency", "USD"],
+    ["refundCompletionReconciledPayment", "targetStatus", "partially_refunded"],
+    [
+      "refundCompletionReconciledPayment",
+      "activeRefundTransactionId",
+      "refund-1",
+    ],
+    ["refundCompletionReconciledPayment", "capturedAmountMinor", 9_000n],
+    ["refundCompletionReconciledPayment", "succeededRefundAmountMinor", 9_000n],
+    [
+      "refundCompletionReconciledPayment",
+      "authoritativeRefundSetId",
+      "another-set",
+    ],
+    ["refundCompletionReconciledPayment", "immutable", false],
   ] as const)(
     "rejects refund completion with mismatched %s.%s",
     (recordField, field, value) => {
@@ -25371,6 +29600,210 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("derives closing refund status from the complete immutable refund set", () => {
+    const expectRejected = (
+      idempotencyKey: string,
+      context: ReturnType<typeof contextForTransition>,
+      target: "partially_refunded" | "refunded" = "refunded",
+    ) => {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...commandAnchors(paymentPolicy, "refund_pending", target),
+          current: "refund_pending",
+          target,
+          idempotencyKey,
+          context,
+        }),
+      ).toThrow(TransitionGuardError);
+    };
+
+    const receiptSkewBoundary = contextForTransition(
+      "refunded",
+      "refund_pending",
+    );
+    const boundaryOccurredAt = Instant.parse("2026-01-01T00:09:55.000Z");
+    const boundaryAuthenticatedAt = Instant.parse("2026-01-01T00:09:50.000Z");
+    expect(
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "refund_pending", "refunded"),
+        current: "refund_pending",
+        target: "refunded",
+        idempotencyKey: "refund-completion-receipt-skew-boundary",
+        context: {
+          ...receiptSkewBoundary,
+          refundCompletionProviderEvent: {
+            ...receiptSkewBoundary.refundCompletionProviderEvent,
+            occurredAt: boundaryOccurredAt,
+            authenticatedAt: boundaryAuthenticatedAt,
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "refund_pending",
+      current: "refunded",
+    });
+    expectRejected("refund-completion-occurrence-beyond-skew", {
+      ...receiptSkewBoundary,
+      refundCompletionProviderEvent: {
+        ...receiptSkewBoundary.refundCompletionProviderEvent,
+        occurredAt: Instant.parse("2026-01-01T00:09:54.999Z"),
+      },
+    });
+    expectRejected("refund-completion-authentication-beyond-skew", {
+      ...receiptSkewBoundary,
+      refundCompletionProviderEvent: {
+        ...receiptSkewBoundary.refundCompletionProviderEvent,
+        occurredAt: boundaryOccurredAt,
+        authenticatedAt: Instant.parse("2026-01-01T00:09:49.999Z"),
+      },
+    });
+
+    const remainingPending = contextForTransition(
+      "partially_refunded",
+      "refund_pending",
+    );
+    const pendingSibling = {
+      id: "refund-2",
+      paymentId: "payment-1",
+      status: "pending",
+      amountMinor: 500n,
+      resultId: "refund-2-pending-result-1",
+      immutable: true,
+    };
+    expectRejected(
+      "refund-completion-remaining-pending",
+      {
+        ...remainingPending,
+        refundCompletionRefundSetBefore: {
+          ...remainingPending.refundCompletionRefundSetBefore,
+          refundIds: ["refund-1", "refund-2"],
+          refundSnapshots: [
+            ...remainingPending.refundCompletionRefundSetBefore.refundSnapshots,
+            pendingSibling,
+          ],
+        },
+        refundCompletionRefundSetAfter: {
+          ...remainingPending.refundCompletionRefundSetAfter,
+          refundIds: ["refund-1", "refund-2"],
+          refundSnapshots: [
+            ...remainingPending.refundCompletionRefundSetAfter.refundSnapshots,
+            pendingSibling,
+          ],
+        },
+      },
+      "partially_refunded",
+    );
+
+    const omittedSibling = contextForTransition(
+      "partially_refunded",
+      "refund_pending",
+    );
+    expectRejected(
+      "refund-completion-omitted-sibling",
+      {
+        ...omittedSibling,
+        refundCompletionRefundSetBefore: {
+          ...omittedSibling.refundCompletionRefundSetBefore,
+          refundIds: ["refund-1", "refund-2"],
+          refundSnapshots: [
+            ...omittedSibling.refundCompletionRefundSetBefore.refundSnapshots,
+            {
+              ...pendingSibling,
+              status: "failed",
+              resultId: "refund-2-failed-result-1",
+            },
+          ],
+        },
+      },
+      "partially_refunded",
+    );
+
+    const wrongCapturedTotal = contextForTransition(
+      "refunded",
+      "refund_pending",
+    );
+    expectRejected("refund-completion-spoofed-full-target", {
+      ...wrongCapturedTotal,
+      refundCompletionExpectedPayment: {
+        ...wrongCapturedTotal.refundCompletionExpectedPayment,
+        capturedAmountMinor: 20_000n,
+      },
+      refundCompletionReconciledPayment: {
+        ...wrongCapturedTotal.refundCompletionReconciledPayment,
+        capturedAmountMinor: 20_000n,
+      },
+    });
+
+    const staleSelectedRefund = contextForTransition(
+      "refunded",
+      "refund_pending",
+    );
+    expectRejected("refund-completion-stale-selected-refund", {
+      ...staleSelectedRefund,
+      refundCompletionRefundSetBefore: {
+        ...staleSelectedRefund.refundCompletionRefundSetBefore,
+        refundSnapshots: [
+          {
+            ...staleSelectedRefund.refundCompletionRefundSetBefore
+              .refundSnapshots[0],
+            resultId: "stale-refund-result",
+          },
+        ],
+      },
+    });
+
+    const overCapture = contextForTransition("refunded", "refund_pending");
+    const overCaptureAmount = 10_001n;
+    expectRejected("refund-completion-over-capture", {
+      ...overCapture,
+      refundCompletionRefundSetBefore: {
+        ...overCapture.refundCompletionRefundSetBefore,
+        refundSnapshots: [
+          {
+            ...overCapture.refundCompletionRefundSetBefore.refundSnapshots[0],
+            amountMinor: overCaptureAmount,
+          },
+        ],
+      },
+      refundCompletionRefundSetAfter: {
+        ...overCapture.refundCompletionRefundSetAfter,
+        refundSnapshots: [
+          {
+            ...overCapture.refundCompletionRefundSetAfter.refundSnapshots[0],
+            amountMinor: overCaptureAmount,
+          },
+        ],
+      },
+      refundCompletionRefundTransaction: {
+        ...overCapture.refundCompletionRefundTransaction,
+        amountMinor: overCaptureAmount,
+      },
+      refundCompletionProviderEvent: {
+        ...overCapture.refundCompletionProviderEvent,
+        amountMinor: overCaptureAmount,
+      },
+      refundCompletionReconciledPayment: {
+        ...overCapture.refundCompletionReconciledPayment,
+        succeededRefundAmountMinor: overCaptureAmount,
+      },
+    });
+
+    const staleCompletion = contextForTransition("refunded", "refund_pending");
+    const staleCompletedAt = Instant.parse("2026-01-01T00:09:54.999Z");
+    expectRejected("refund-completion-before-request-skew", {
+      ...staleCompletion,
+      refundCompletionRefundTransaction: {
+        ...staleCompletion.refundCompletionRefundTransaction,
+        completedAt: staleCompletedAt,
+      },
+      refundCompletionProviderEvent: {
+        ...staleCompletion.refundCompletionProviderEvent,
+        verifiedAt: staleCompletedAt,
+      },
+    });
+  });
 
   it("rejects a coordinated foreign Payment refund substitution", () => {
     const context = contextForTransition("refunded", "refund_pending");
@@ -25915,6 +30348,109 @@ describe("v0 lifecycle policy tables", () => {
         previous: "packed",
         current: "handed_over",
       });
+    },
+  );
+
+  it("dispatches a post-void Shipment source through the Job command", () => {
+    const context = contextForTransition("handed_over", "packed");
+    const raceResultId = context.cancellationRaceHandoffResultId;
+    expect(
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-packed-command-1",
+        currentStateResultId: context.jobHandoffPreviousResultId,
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "job-post-void-cancellation-race",
+        context: {
+          ...context,
+          ...postVoidCancellationRaceShipmentSource("shipment-1"),
+          cancellationRaceHandoffKind: "ordinary",
+          handoffShipmentPreviousStatus: "cancelled",
+          cancellationRaceResultShipmentPreviousStatus: "cancelled",
+          jobHandoffResultId: raceResultId,
+          jobHandoffJobResultId: raceResultId,
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "packed",
+      current: "handed_over",
+    });
+  });
+
+  it("treats cancelled Jobs as terminal except during committed scan recovery", () => {
+    expect(isTerminal(jobPolicy, "cancelled")).toBe(true);
+    expect(
+      isTerminal(
+        jobPolicy,
+        "cancelled",
+        contextForTransition("handed_over", "cancelled"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["cancelledAt", undefined],
+    ["cancellationReason", undefined],
+    ["cancellationReason", "claim_withdrawn"],
+    ["cancelledAt", Instant.parse("2026-01-01T00:10:59.999Z")],
+  ] as const)(
+    "rejects committed cancellation Job recovery without %s evidence",
+    (field, value) => {
+      const context = contextForTransition("handed_over", "cancelled");
+      expect(() =>
+        transition(jobPolicy, {
+          ...commandAnchors(jobPolicy, "cancelled", "handed_over"),
+          current: "cancelled",
+          target: "handed_over",
+          idempotencyKey: `job-committed-cancellation-missing-${field}`,
+          context: {
+            ...context,
+            jobHandoffExpectedJob: {
+              ...context.jobHandoffExpectedJob,
+              [field]: value,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    },
+  );
+
+  it.each([
+    ["id", "shipment-2"],
+    ["resultId", "another-result"],
+    ["currentStateCommandKey", "another-command"],
+    ["immutable", false],
+  ] as const)(
+    "rejects a post-void Job handoff with an invalid Shipment snapshot %s",
+    (field, value) => {
+      const context = contextForTransition("handed_over", "packed");
+      const source = postVoidCancellationRaceShipmentSource("shipment-1");
+      const raceResultId = context.cancellationRaceHandoffResultId;
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-packed-command-1",
+          currentStateResultId: context.jobHandoffPreviousResultId,
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `job-post-void-invalid-shipment-${field}`,
+          context: {
+            ...context,
+            ...source,
+            cancellationRaceExpectedShipment: {
+              ...source.cancellationRaceExpectedShipment,
+              [field]: value,
+            },
+            cancellationRaceHandoffKind: "ordinary",
+            handoffShipmentPreviousStatus: "cancelled",
+            cancellationRaceResultShipmentPreviousStatus: "cancelled",
+            jobHandoffResultId: raceResultId,
+            jobHandoffJobResultId: raceResultId,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
     },
   );
 

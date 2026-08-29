@@ -163,6 +163,226 @@ enum IdempotencyStatus {
   @@map("idempotency_status")
 }
 
+enum QuoteSessionStatus {
+  OPEN
+  EXPIRED
+  CONVERTED
+  CANCELLED
+
+  @@map("quote_session_status")
+}
+
+enum QuoteRequestStatus {
+  NEW
+  IN_REVIEW
+  QUOTED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+
+  @@map("quote_request_status")
+}
+
+enum PriceComponentKind {
+  ITEM_PRODUCTION
+  ITEM_QUANTITY
+  ITEM_POSTPROCESSING
+  ORDER_MIN_PRINT
+  ORDER_SMALL_SURCHARGE
+  SHIPMENT
+  EXPRESS
+  PAYMENT_FEE
+
+  @@map("price_component_kind")
+}
+
+enum PriceComponentScope {
+  ORDER
+  QUOTE_ITEM
+  ORDER_ITEM
+  SHIPMENT_PLAN
+
+  @@map("price_component_scope")
+}
+
+enum PaymentRole {
+  FULL
+
+  @@map("payment_role")
+}
+
+enum OrderStatus {
+  DRAFT
+  QUOTED
+  EXPIRED
+  CONFIRMED
+  IN_PRODUCTION
+  QC_PASSED
+  READY_TO_SHIP
+  SHIPPED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_FULFILLED
+  CANCELLED_SETTLED
+
+  @@map("order_status")
+}
+
+enum OrderPhaseKind {
+  SINGLE
+
+  @@map("order_phase_kind")
+}
+
+enum OrderPhaseStatus {
+  QUOTED
+  ACTIVE
+  IN_PRODUCTION
+  QC_PASSED
+  SHIPPED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  CANCELLED_REFUNDED
+
+  @@map("order_phase_status")
+}
+
+enum FulfilmentSlotOutcome {
+  PENDING
+  DELIVERED
+  CANCELLED
+  CANCELLED_REFUNDED
+
+  @@map("fulfilment_slot_outcome")
+}
+
+enum ShipmentStatus {
+  PLANNED
+  LABEL_CREATED
+  CANCELLATION_PENDING
+  HANDED_OVER
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+
+  @@map("shipment_status")
+}
+
+enum ShipmentProviderEventKind {
+  LABEL_VOIDED
+  ACCEPTANCE_SCAN
+  TRANSIT_SCAN
+  DELIVERY_SCAN
+
+  @@map("shipment_provider_event_kind")
+}
+
+enum PaymentProviderEventKind {
+  PAYMENT_CAPTURED
+  PAYMENT_FAILED
+  REFUND_SUCCEEDED
+  REFUND_FAILED
+
+  @@map("payment_provider_event_kind")
+}
+
+enum PaymentIntentCreationOutcome {
+  FAILED
+
+  @@map("payment_intent_creation_outcome")
+}
+
+enum JobStatus {
+  CREATED
+  ACCEPTED
+  GCODE_READY
+  PRINTING
+  PRINTED
+  PHOTO_SUBMITTED
+  QC_APPROVED
+  PACKED
+  HANDED_OVER
+  SETTLED
+  CANCELLED
+  FAILED
+  QC_REJECTED
+
+  @@map("job_status")
+}
+
+enum JobFailureStage {
+  PREPARATION
+  GCODE
+  MACHINE
+  PRINTING
+  POST_PRINT
+  POST_QC
+  PACKING
+
+  @@map("job_failure_stage")
+}
+
+enum JobCancellationReason {
+  ROUTING_EXHAUSTED
+  ORDER_CANCELLED
+  PHASE_CANCELLED
+  CLAIM_WITHDRAWN
+
+  @@map("job_cancellation_reason")
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  CAPTURED
+  FAILED
+  VOIDED
+  REFUND_PENDING
+  PARTIALLY_REFUNDED
+  REFUNDED
+
+  @@map("payment_status")
+}
+
+enum RefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+
+  @@map("refund_status")
+}
+
+enum RefundReason {
+  CUSTOMER_CANCELLATION
+  PRODUCTION_FAILURE
+  LATE_CAPTURE_COMPENSATION
+
+  @@map("refund_reason")
+}
+
+enum OrderSettlementKind {
+  UNAUTHORIZED_HANDOFF
+
+  @@map("order_settlement_kind")
+}
+
+enum HandoffReconciliationStatus {
+  COMPLETED
+
+  @@map("handoff_reconciliation_status")
+}
+
+enum AuditActorKind {
+  SYSTEM
+  CUSTOMER
+  OPERATOR
+
+  @@map("audit_actor_kind")
+}
+
 model RevisionIdentity {
   id        String       @id @db.Uuid
   kind      RevisionKind
@@ -178,20 +398,23 @@ model RevisionIdentity {
 }
 
 model ModelFile {
-  id                String          @id @default(uuid()) @db.Uuid
-  format            ModelFileFormat
-  originalFilename  String          @map("original_filename") @db.VarChar(255)
-  storageObjectKey  String          @unique @map("storage_object_key") @db.Text
-  contentHash       String          @map("content_hash") @db.VarChar(64)
-  sizeBytes         BigInt          @map("size_bytes")
-  uploadedAt        DateTime        @map("uploaded_at") @db.Timestamptz(3)
-  sourceDeleteAfter DateTime        @map("source_delete_after") @db.Timestamptz(3)
-  retentionHold     RetentionHold   @default(NONE) @map("retention_hold")
-  deletedAt         DateTime?       @map("deleted_at") @db.Timestamptz(3)
-  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                  String          @id @default(uuid()) @db.Uuid
+  format              ModelFileFormat
+  originalFilename    String          @map("original_filename") @db.VarChar(255)
+  storageObjectKey    String          @unique @map("storage_object_key") @db.Text
+  contentHash         String          @map("content_hash") @db.VarChar(64)
+  sizeBytes           BigInt          @map("size_bytes")
+  uploadedAt          DateTime        @map("uploaded_at") @db.Timestamptz(3)
+  sourceDeleteAfter   DateTime        @map("source_delete_after") @db.Timestamptz(3)
+  sourceRetentionDays Int             @default(90) @map("source_retention_days")
+  retentionHold       RetentionHold   @default(NONE) @map("retention_hold")
+  deletedAt           DateTime?       @map("deleted_at") @db.Timestamptz(3)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
   geometries        ModelGeometry[]
   preflightFindings PreflightFinding[]
+  quoteItems        QuoteItem[]        @relation("QuoteItemSourceModelFile")
+  orderItems        OrderItem[]        @relation("OrderItemSourceModelFile")
 
   @@index([contentHash])
   @@index([sourceDeleteAfter, retentionHold, deletedAt])
@@ -217,6 +440,8 @@ model ModelGeometry {
   preflightFindings  PreflightFinding[]
   sliceResults       SliceResult[]
   candidateEstimates CandidateResourceEstimate[]
+  quoteItems         QuoteItem[]
+  orderItems         OrderItem[]
 
   @@unique([id, sourceModelFileId])
   @@index([sourceModelFileId])
@@ -255,10 +480,13 @@ model PhotoAsset {
   mediaType        String         @map("media_type") @db.VarChar(100)
   sizeBytes        BigInt         @map("size_bytes")
   uploadedAt       DateTime       @map("uploaded_at") @db.Timestamptz(3)
+  retentionDays    Int            @default(90) @map("retention_days")
   photoDeleteAfter DateTime       @map("photo_delete_after") @db.Timestamptz(3)
   retentionHold    RetentionHold  @default(NONE) @map("retention_hold")
   deletedAt        DateTime?      @map("deleted_at") @db.Timestamptz(3)
   createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  qcJobs Job[] @relation("JobQcPhotoAsset")
 
   @@index([contentHash])
   @@index([scopeKind, scopeId])
@@ -280,6 +508,8 @@ model PrintConfigRevision {
   sliceResults           SliceResult[]
   candidateEstimates     CandidateResourceEstimate[]
   productionReservations ProductionReservation[]
+  orderItems             OrderItem[]
+  quoteItems             QuoteItem[]
 
   @@index([quality, infillPercent])
   @@map("print_config_revisions")
@@ -372,6 +602,7 @@ model Node {
   productionReservations     ProductionReservation[]
   inventoryReservations      InventoryReservation[]
   capacityReservations       CapacityReservation[]
+  jobs                       Job[]
 
   @@map("nodes")
 }
@@ -484,6 +715,9 @@ model SliceResult {
   machineCalibration     MachineCalibration?         @relation(fields: [machineCalibrationId], references: [id], onDelete: Restrict)
   candidateEstimates     CandidateResourceEstimate[]
   productionReservations ProductionReservation[]
+  quoteItems             QuoteItem[]
+  orderItems             OrderItem[]
+  productionJobs         Job[]                       @relation("JobProductionSliceResult")
 
   @@unique([id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId])
   @@index([modelGeometryId])
@@ -520,6 +754,7 @@ model CandidateResourceEstimate {
   machineCalibration    MachineCalibration          @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
   machine               Machine                     @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
   inventory             Inventory                   @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  shipmentPlan          ShipmentPlan                @relation(fields: [shipmentPlanId], references: [id], onDelete: Restrict)
   capacityIntervals     CandidateCapacityInterval[]
   phaseResourcePlanJobs PhaseResourcePlanJob[]
 
@@ -563,6 +798,7 @@ model EligibilitySnapshot {
 
   node               Node                @relation(fields: [nodeId], references: [id], onDelete: Restrict)
   phaseResourcePlans PhaseResourcePlan[]
+  orderPhase         OrderPhase          @relation(fields: [orderPhaseId], references: [id], onDelete: Restrict)
 
   @@unique([id, nodeId])
   @@unique([id, nodeId, orderPhaseId])
@@ -604,6 +840,7 @@ model PhaseResourcePlanJob {
   candidateResourceEstimate CandidateResourceEstimate @relation(fields: [candidateResourceEstimateId, nodeId], references: [id, nodeId], onDelete: Restrict)
   slots                     PhaseResourcePlanSlot[]
   productionReservations    ProductionReservation[]
+  jobs                      Job[]
 
   @@unique([phaseResourcePlanId, plannedJobKey])
   @@unique([id, nodeId])
@@ -623,6 +860,7 @@ model PhaseResourcePlanSlot {
   node                 Node                 @relation(fields: [nodeId], references: [id], onDelete: Restrict)
   phaseResourcePlan    PhaseResourcePlan    @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
   phaseResourcePlanJob PhaseResourcePlanJob @relation(fields: [phaseResourcePlanJobId, nodeId, phaseResourcePlanId], references: [id, nodeId, phaseResourcePlanId], onDelete: Restrict)
+  fulfilmentSlot       FulfilmentSlot       @relation(fields: [fulfilmentSlotId], references: [id], onDelete: Restrict)
 
   @@unique([phaseResourcePlanId, fulfilmentSlotId])
   @@index([nodeId, phaseResourcePlanJobId])
@@ -682,6 +920,7 @@ model ProductionReservation {
   printConfigRevision  PrintConfigRevision   @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
   machineProfile       MachineProfile        @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
   machineCalibration   MachineCalibration    @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  job                  Job?                  @relation("ProductionReservationJob", fields: [jobId, nodeId, phaseResourcePlanJobId], references: [id, nodeId, phaseResourcePlanJobId], onDelete: Restrict, map: "production_reservations_job_scope_fkey")
   inventoryReservation InventoryReservation?
   capacityReservations CapacityReservation[]
 
@@ -762,6 +1001,8 @@ model OutboxMessage {
   createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  shipmentProviderEvents ShipmentProviderEvent[]
+
   @@index([status, availableAt])
   @@index([aggregateType, aggregateId])
   @@map("outbox_messages")
@@ -782,4 +1023,793 @@ model IdempotencyRecord {
   @@unique([namespace, idempotencyKey])
   @@index([expiresAt])
   @@map("idempotency_records")
+}
+
+model Customer {
+  id               String   @id @default(uuid()) @db.Uuid
+  email            String   @unique @db.VarChar(320)
+  displayName      String?  @map("display_name") @db.VarChar(200)
+  phone            String?  @db.VarChar(50)
+  firstAttribution Json?    @map("first_attribution") @db.JsonB
+  firstSeenAt      DateTime @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  quoteSessions QuoteSession[]
+  quotes        Quote[]
+  orders        Order[]
+  quoteRequests QuoteRequest[]
+
+  @@map("customers")
+}
+
+model QuoteSession {
+  id              String             @id @default(uuid()) @db.Uuid
+  customerId      String?            @map("customer_id") @db.Uuid
+  publicTokenHash String             @unique @map("public_token_hash") @db.VarChar(64)
+  status          QuoteSessionStatus @default(OPEN)
+  attribution     Json?              @db.JsonB
+  expiresAt       DateTime           @map("expires_at") @db.Timestamptz(3)
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customer             Customer?             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  quoteRequest         QuoteRequest?
+  automaticOrderOrigin AutomaticOrderOrigin?
+
+  @@index([customerId, createdAt])
+  @@index([status, expiresAt])
+  @@map("quote_sessions")
+}
+
+model QuoteRequest {
+  id             String             @id @default(uuid()) @db.Uuid
+  quoteSessionId String?            @unique @map("quote_session_id") @db.Uuid
+  customerId     String?            @map("customer_id") @db.Uuid
+  status         QuoteRequestStatus @default(NEW)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  quoteSession QuoteSession? @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
+  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  quote        Quote?
+
+  @@index([customerId, status])
+  @@map("quote_requests")
+}
+
+model Quote {
+  id             String   @id @default(uuid()) @db.Uuid
+  quoteRequestId String   @unique @map("quote_request_id") @db.Uuid
+  customerId     String   @map("customer_id") @db.Uuid
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+  issuedAt       DateTime @default(now()) @map("issued_at") @db.Timestamptz(3)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quoteRequest          QuoteRequest           @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
+  customer              Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items                 QuoteItem[]
+  priceBinding          QuotePriceBinding?
+  individualOrderOrigin IndividualOrderOrigin?
+  auditEvents           AuditEvent[]
+
+  @@unique([id, customerId], map: "quotes_id_customer_key")
+  @@index([customerId, issuedAt])
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id                     String   @id @default(uuid()) @db.Uuid
+  quoteId                String   @map("quote_id") @db.Uuid
+  ordinal                Int
+  sourceModelFileId      String   @map("source_model_file_id") @db.Uuid
+  modelGeometryId        String   @map("model_geometry_id") @db.Uuid
+  printConfigRevisionId  String   @map("print_config_revision_id") @db.Uuid
+  referenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
+  material               Material
+  color                  String?  @db.VarChar(100)
+  quantity               Int
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quote                     Quote                      @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  sourceModelFile           ModelFile                  @relation("QuoteItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
+  modelGeometry             ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  printConfigRevision       PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  referenceSliceResult      SliceResult?               @relation(fields: [referenceSliceResultId], references: [id], onDelete: Restrict)
+  individualOrderItemSource IndividualOrderItemSource?
+  priceComponents           PriceSnapshotComponent[]
+
+  @@unique([quoteId, ordinal])
+  @@unique([id, quoteId])
+  @@index([modelGeometryId])
+  @@map("quote_items")
+}
+
+model PriceSnapshot {
+  id                 String    @id @default(uuid()) @db.Uuid
+  currency           String    @db.Char(3)
+  contractTotalMinor BigInt    @map("contract_total_minor")
+  pricingRevision    String    @map("pricing_revision") @db.VarChar(100)
+  inputSnapshot      Json      @map("input_snapshot") @db.JsonB
+  snapshotHash       String    @unique @map("snapshot_hash") @db.VarChar(64)
+  sealedAt           DateTime? @map("sealed_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quoteBinding     QuotePriceBinding?
+  orderBinding     OrderPriceBinding?
+  components       PriceSnapshotComponent[]
+  paymentSchedules PaymentSchedule[]
+  shipmentPlans    ShipmentPlan[]
+  payments         Payment[]
+  orderSettlements OrderSettlement[]
+
+  @@unique([id, currency], map: "price_snapshots_id_currency_key")
+  @@map("price_snapshots")
+}
+
+model PriceSnapshotComponent {
+  id              String              @id @default(uuid()) @db.Uuid
+  priceSnapshotId String              @map("price_snapshot_id") @db.Uuid
+  kind            PriceComponentKind
+  scope           PriceComponentScope
+  quoteItemId     String?             @map("quote_item_id") @db.Uuid
+  orderItemId     String?             @map("order_item_id") @db.Uuid
+  shipmentPlanId  String?             @map("shipment_plan_id") @db.Uuid
+  amountMinor     BigInt              @map("amount_minor")
+  allocation      Json?               @db.JsonB
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  priceSnapshot         PriceSnapshot                        @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+  quoteItem             QuoteItem?                           @relation(fields: [quoteItemId], references: [id], onDelete: Restrict)
+  orderItem             OrderItem?                           @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  shipmentPlan          ShipmentPlan?                        @relation(fields: [shipmentPlanId, priceSnapshotId], references: [id, priceSnapshotId], onDelete: Restrict, map: "price_snapshot_components_shipment_plan_snapshot_fkey")
+  fulfilmentAllocations PriceComponentFulfilmentAllocation[]
+
+  @@index([priceSnapshotId, kind])
+  @@index([quoteItemId])
+  @@index([orderItemId])
+  @@index([shipmentPlanId])
+  @@map("price_snapshot_components")
+}
+
+model PriceComponentFulfilmentAllocation {
+  priceSnapshotComponentId String @map("price_snapshot_component_id") @db.Uuid
+  fulfilmentSlotId         String @map("fulfilment_slot_id") @db.Uuid
+  amountMinor              BigInt @map("amount_minor")
+
+  priceSnapshotComponent PriceSnapshotComponent @relation(fields: [priceSnapshotComponentId], references: [id], onDelete: Restrict)
+  fulfilmentSlot         FulfilmentSlot         @relation(fields: [fulfilmentSlotId], references: [id], onDelete: Restrict)
+
+  @@id([priceSnapshotComponentId, fulfilmentSlotId])
+  @@index([fulfilmentSlotId])
+  @@map("price_component_fulfilment_allocations")
+}
+
+model PaymentSchedule {
+  id                 String      @id @default(uuid()) @db.Uuid
+  priceSnapshotId    String      @map("price_snapshot_id") @db.Uuid
+  sequence           Int
+  role               PaymentRole
+  grossAmountMinor   BigInt      @map("gross_amount_minor")
+  feeRateBasisPoints Int         @map("fee_rate_basis_points")
+  feeFixedMinor      BigInt      @map("fee_fixed_minor")
+  providerConfig     Json        @map("provider_config") @db.JsonB
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  priceSnapshot PriceSnapshot @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+  payments      Payment[]
+
+  @@unique([priceSnapshotId, sequence])
+  @@unique([priceSnapshotId, role])
+  @@unique([id, priceSnapshotId, role, grossAmountMinor], map: "payment_schedules_contract_key")
+  @@map("payment_schedules")
+}
+
+model QuotePriceBinding {
+  quoteId         String @id @map("quote_id") @db.Uuid
+  priceSnapshotId String @unique @map("price_snapshot_id") @db.Uuid
+
+  quote         Quote         @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  priceSnapshot PriceSnapshot @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+
+  @@map("quote_price_bindings")
+}
+
+model Order {
+  id                                String      @id @default(uuid()) @db.Uuid
+  customerId                        String?     @map("customer_id") @db.Uuid
+  publicReference                   String      @unique @map("public_reference") @db.VarChar(50)
+  status                            OrderStatus @default(DRAFT)
+  quotedAt                          DateTime?   @map("quoted_at") @db.Timestamptz(3)
+  confirmedAt                       DateTime?   @map("confirmed_at") @db.Timestamptz(3)
+  acceptedOrderPriceBindingId       String?     @unique(map: "orders_accepted_order_price_binding_id_key") @map("accepted_order_price_binding_id") @db.Uuid
+  acceptedTermsRevision             String?     @map("accepted_terms_revision") @db.VarChar(100)
+  acceptedClaimPolicyRevision       String?     @map("accepted_claim_policy_revision") @db.VarChar(100)
+  withdrawalExceptionAcknowledgedAt DateTime?   @map("withdrawal_exception_acknowledged_at") @db.Timestamptz(3)
+  createdAt                         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customer               Customer?                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  automaticOrigin        AutomaticOrderOrigin?
+  individualOrigin       IndividualOrderOrigin?
+  priceBindings          OrderPriceBinding[]      @relation("OrderPriceBindings")
+  acceptedPriceBinding   OrderPriceBinding?       @relation("CheckoutAcceptanceBinding", fields: [acceptedOrderPriceBindingId], references: [id], onDelete: Restrict)
+  activePriceBinding     OrderActivePriceBinding?
+  deliveryDestinations   DeliveryDestination[]
+  items                  OrderItem[]
+  phases                 OrderPhase[]
+  shipmentPlans          ShipmentPlan[]
+  shipments              Shipment[]
+  jobs                   Job[]
+  auditEvents            AuditEvent[]
+  fulfilmentSlots        FulfilmentSlot[]
+  settlements            OrderSettlement[]
+  handoffReconciliations HandoffReconciliation[]
+
+  @@index([customerId, createdAt])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+model AutomaticOrderOrigin {
+  orderId        String @id @map("order_id") @db.Uuid
+  quoteSessionId String @unique @map("quote_session_id") @db.Uuid
+
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  quoteSession QuoteSession @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
+
+  @@map("automatic_order_origins")
+}
+
+model IndividualOrderOrigin {
+  orderId String @id @map("order_id") @db.Uuid
+  quoteId String @unique @map("quote_id") @db.Uuid
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+
+  @@map("individual_order_origins")
+}
+
+model OrderPriceBinding {
+  id                    String    @id @default(uuid()) @db.Uuid
+  orderId               String    @map("order_id") @db.Uuid
+  priceSnapshotId       String    @unique @map("price_snapshot_id") @db.Uuid
+  deliveryDestinationId String    @map("delivery_destination_id") @db.Uuid
+  invalidatedAt         DateTime? @map("invalidated_at") @db.Timestamptz(3)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order                     Order                        @relation("OrderPriceBindings", fields: [orderId], references: [id], onDelete: Restrict)
+  checkoutAcceptanceOrder   Order?                       @relation("CheckoutAcceptanceBinding")
+  priceSnapshot             PriceSnapshot                @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+  deliveryDestination       DeliveryDestination          @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  activeForOrder            OrderActivePriceBinding?
+  shipmentPlans             ShipmentPlan[]
+  fulfilmentSlotAllocations ShipmentPlanFulfilmentSlot[]
+  payments                  Payment[]
+  orderSettlements          OrderSettlement[]
+
+  @@unique([orderId, priceSnapshotId], map: "order_price_bindings_order_snapshot_key")
+  @@unique([id, orderId, priceSnapshotId], map: "order_price_bindings_payment_contract_key")
+  @@unique([id, orderId, priceSnapshotId, deliveryDestinationId], map: "order_price_bindings_contract_destination_key")
+  @@map("order_price_bindings")
+}
+
+model DeliveryDestination {
+  id                 String   @id @default(uuid()) @db.Uuid
+  orderId            String   @map("order_id") @db.Uuid
+  providerEndpointId String   @map("provider_endpoint_id") @db.VarChar(255)
+  endpointType       String   @map("endpoint_type") @db.VarChar(100)
+  addressSnapshot    Json     @map("address_snapshot") @db.JsonB
+  capabilitySnapshot Json     @map("capability_snapshot") @db.JsonB
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order         Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  priceBindings OrderPriceBinding[]
+  shipmentPlans ShipmentPlan[]
+  shipments     Shipment[]
+
+  @@unique([id, orderId])
+  @@index([orderId, createdAt])
+  @@map("delivery_destinations")
+}
+
+model OrderActivePriceBinding {
+  orderId             String @id @map("order_id") @db.Uuid
+  orderPriceBindingId String @unique @map("order_price_binding_id") @db.Uuid
+
+  order             Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPriceBinding OrderPriceBinding @relation(fields: [orderPriceBindingId], references: [id], onDelete: Restrict)
+
+  @@map("order_active_price_bindings")
+}
+
+model OrderItem {
+  id                     String   @id @default(uuid()) @db.Uuid
+  orderId                String   @map("order_id") @db.Uuid
+  ordinal                Int
+  sourceModelFileId      String   @map("source_model_file_id") @db.Uuid
+  modelGeometryId        String   @map("model_geometry_id") @db.Uuid
+  printConfigRevisionId  String   @map("print_config_revision_id") @db.Uuid
+  referenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
+  material               Material
+  color                  String?  @db.VarChar(100)
+  quantity               Int
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order                Order                      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  sourceModelFile      ModelFile                  @relation("OrderItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
+  modelGeometry        ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  printConfigRevision  PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  referenceSliceResult SliceResult?               @relation(fields: [referenceSliceResultId], references: [id], onDelete: Restrict)
+  individualSource     IndividualOrderItemSource?
+  priceComponents      PriceSnapshotComponent[]
+  fulfilmentSlots      FulfilmentSlot[]
+
+  @@unique([orderId, ordinal])
+  @@unique([id, orderId])
+  @@index([modelGeometryId])
+  @@map("order_items")
+}
+
+model IndividualOrderItemSource {
+  orderItemId String @id @map("order_item_id") @db.Uuid
+  quoteItemId String @unique @map("quote_item_id") @db.Uuid
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  quoteItem QuoteItem @relation(fields: [quoteItemId], references: [id], onDelete: Restrict)
+
+  @@map("individual_order_item_sources")
+}
+
+model OrderPhase {
+  id          String           @id @default(uuid()) @db.Uuid
+  orderId     String           @unique @map("order_id") @db.Uuid
+  kind        OrderPhaseKind   @default(SINGLE)
+  status      OrderPhaseStatus @default(QUOTED)
+  activatedAt DateTime?        @map("activated_at") @db.Timestamptz(3)
+  qcPassedAt  DateTime?        @map("qc_passed_at") @db.Timestamptz(3)
+  shippedAt   DateTime?        @map("shipped_at") @db.Timestamptz(3)
+  deliveredAt DateTime?        @map("delivered_at") @db.Timestamptz(3)
+  completedAt DateTime?        @map("completed_at") @db.Timestamptz(3)
+  cancelledAt DateTime?        @map("cancelled_at") @db.Timestamptz(3)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  eligibilitySnapshots   EligibilitySnapshot[]
+  fulfilmentSlots        FulfilmentSlot[]
+  shipmentPlans          ShipmentPlan[]
+  shipments              Shipment[]
+  jobs                   Job[]
+  settlements            OrderSettlement[]
+  handoffReconciliations HandoffReconciliation[]
+
+  @@unique([id, orderId])
+  @@map("order_phases")
+}
+
+model ShipmentPlan {
+  id                      String   @id @default(uuid()) @db.Uuid
+  orderId                 String   @map("order_id") @db.Uuid
+  orderPhaseId            String   @map("order_phase_id") @db.Uuid
+  priceSnapshotId         String   @map("price_snapshot_id") @db.Uuid
+  orderPriceBindingId     String   @map("order_price_binding_id") @db.Uuid
+  deliveryDestinationId   String   @map("delivery_destination_id") @db.Uuid
+  ordinal                 Int
+  category                String   @db.VarChar(100)
+  plannedVolumeCubicMm    BigInt   @map("planned_volume_cubic_mm")
+  plannedWeightMilligrams BigInt   @map("planned_weight_milligrams")
+  shippingAmountMinor     BigInt   @map("shipping_amount_minor")
+  packagingAmountMinor    BigInt   @map("packaging_amount_minor")
+  handlingAmountMinor     BigInt   @map("handling_amount_minor")
+  allocationSnapshot      Json     @map("allocation_snapshot") @db.JsonB
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order                     Order                        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPriceBinding         OrderPriceBinding            @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId, deliveryDestinationId], references: [id, orderId, priceSnapshotId, deliveryDestinationId], onDelete: Restrict, map: "shipment_plans_order_snapshot_fkey")
+  orderPhase                OrderPhase                   @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  priceSnapshot             PriceSnapshot                @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+  deliveryDestination       DeliveryDestination          @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  priceComponents           PriceSnapshotComponent[]
+  fulfilmentSlotAllocations ShipmentPlanFulfilmentSlot[]
+  shipments                 Shipment[]
+  candidateEstimates        CandidateResourceEstimate[]
+  jobs                      Job[]
+
+  @@unique([orderPhaseId, orderPriceBindingId, ordinal])
+  @@unique([id, orderPriceBindingId])
+  @@unique([id, orderId, orderPhaseId])
+  @@unique([id, orderId, orderPhaseId, deliveryDestinationId])
+  @@unique([id, priceSnapshotId])
+  @@index([orderId])
+  @@map("shipment_plans")
+}
+
+model FulfilmentSlot {
+  id                    String                @id @default(uuid()) @db.Uuid
+  orderId               String                @map("order_id") @db.Uuid
+  orderPhaseId          String                @map("order_phase_id") @db.Uuid
+  orderItemId           String                @map("order_item_id") @db.Uuid
+  quantityOrdinal       Int                   @map("quantity_ordinal")
+  settlementAmountMinor BigInt                @map("settlement_amount_minor")
+  outcome               FulfilmentSlotOutcome @default(PENDING)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order                     Order                                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase                OrderPhase                           @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  orderItem                 OrderItem                            @relation(fields: [orderItemId, orderId], references: [id, orderId], onDelete: Restrict)
+  planSlots                 PhaseResourcePlanSlot[]
+  shipmentPlanAllocations   ShipmentPlanFulfilmentSlot[]
+  priceComponentAllocations PriceComponentFulfilmentAllocation[]
+
+  @@unique([orderItemId, orderPhaseId, quantityOrdinal])
+  @@index([orderPhaseId])
+  @@map("fulfilment_slots")
+}
+
+model ShipmentPlanFulfilmentSlot {
+  shipmentPlanId      String @map("shipment_plan_id") @db.Uuid
+  orderPriceBindingId String @map("order_price_binding_id") @db.Uuid
+  fulfilmentSlotId    String @map("fulfilment_slot_id") @db.Uuid
+
+  shipmentPlan      ShipmentPlan      @relation(fields: [shipmentPlanId, orderPriceBindingId], references: [id, orderPriceBindingId], onDelete: Restrict)
+  orderPriceBinding OrderPriceBinding @relation(fields: [orderPriceBindingId], references: [id], onDelete: Restrict)
+  fulfilmentSlot    FulfilmentSlot    @relation(fields: [fulfilmentSlotId], references: [id], onDelete: Restrict)
+
+  @@id([shipmentPlanId, fulfilmentSlotId])
+  @@unique([orderPriceBindingId, fulfilmentSlotId])
+  @@index([fulfilmentSlotId])
+  @@map("shipment_plan_fulfilment_slots")
+}
+
+model Shipment {
+  id                       String         @id @default(uuid()) @db.Uuid
+  orderId                  String         @map("order_id") @db.Uuid
+  orderPhaseId             String         @map("order_phase_id") @db.Uuid
+  shipmentPlanId           String         @map("shipment_plan_id") @db.Uuid
+  deliveryDestinationId    String         @map("delivery_destination_id") @db.Uuid
+  replacesShipmentId       String?        @map("replaces_shipment_id") @db.Uuid
+  status                   ShipmentStatus @default(PLANNED)
+  carrier                  String?        @db.VarChar(100)
+  providerShipmentId       String?        @map("provider_shipment_id") @db.VarChar(255)
+  carrierLabelId           String?        @map("carrier_label_id") @db.VarChar(190)
+  trackingCode             String?        @map("tracking_code") @db.VarChar(255)
+  labelCreatedAt           DateTime?      @map("label_created_at") @db.Timestamptz(3)
+  cancellationRequestedAt  DateTime?      @map("cancellation_requested_at") @db.Timestamptz(3)
+  providerVoidId           String?        @map("provider_void_id") @db.VarChar(255)
+  providerVoidedAt         DateTime?      @map("provider_voided_at") @db.Timestamptz(3)
+  providerAcceptanceScanId String?        @map("provider_acceptance_scan_id") @db.VarChar(255)
+  handedOverAt             DateTime?      @map("handed_over_at") @db.Timestamptz(3)
+  deliveredAt              DateTime?      @map("delivered_at") @db.Timestamptz(3)
+  cancelledAt              DateTime?      @map("cancelled_at") @db.Timestamptz(3)
+  createdAt                DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order                 Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase            OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan          ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
+  deliveryDestination   DeliveryDestination     @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  replacesShipment      Shipment?               @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
+  replacementShipment   Shipment?               @relation("ShipmentReplacementLineage")
+  providerEvents        ShipmentProviderEvent[]
+  handoffReconciliation HandoffReconciliation?
+
+  @@unique([id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_lineage_scope_key")
+  @@unique([carrier, providerShipmentId], map: "shipments_carrier_provider_shipment_id_key")
+  @@unique([carrier, carrierLabelId], map: "shipments_carrier_carrier_label_id_key")
+  @@unique([carrier, providerVoidId], map: "shipments_carrier_provider_void_id_key")
+  @@unique([replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_replaces_shipment_id_key")
+  @@index([orderId, status])
+  @@index([shipmentPlanId, status])
+  @@map("shipments")
+}
+
+model OrderSettlement {
+  id                           String              @id @default(uuid()) @db.Uuid
+  orderId                      String              @map("order_id") @db.Uuid
+  orderPhaseId                 String              @map("order_phase_id") @db.Uuid
+  orderPriceBindingId          String              @map("order_price_binding_id") @db.Uuid
+  priceSnapshotId              String              @map("price_snapshot_id") @db.Uuid
+  paymentId                    String              @map("payment_id") @db.Uuid
+  refundTransactionId          String              @unique @map("refund_transaction_id") @db.Uuid
+  kind                         OrderSettlementKind @default(UNAUTHORIZED_HANDOFF)
+  currency                     String              @db.Char(3)
+  contractTotalMinor           BigInt              @map("contract_total_minor")
+  capturedTotalMinor           BigInt              @map("captured_total_minor")
+  earnedAmountMinor            BigInt              @map("earned_amount_minor")
+  retainedAmountMinor          BigInt              @map("retained_amount_minor")
+  refundAmountMinor            BigInt              @map("refund_amount_minor")
+  writtenOffAmountMinor        BigInt              @map("written_off_amount_minor")
+  unearnedCancelledAmountMinor BigInt              @map("unearned_cancelled_amount_minor")
+  amountDueMinor               BigInt              @map("amount_due_minor")
+  refundableBalanceMinor       BigInt              @map("refundable_balance_minor")
+  cutoffAt                     DateTime            @map("cutoff_at") @db.Timestamptz(3)
+  settledAt                    DateTime            @map("settled_at") @db.Timestamptz(3)
+  createdAt                    DateTime            @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+
+  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase             OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_settlements_order_phase_scope_fkey")
+  orderPriceBinding      OrderPriceBinding       @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "order_settlements_order_snapshot_fkey")
+  priceSnapshot          PriceSnapshot           @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "order_settlements_snapshot_currency_fkey")
+  payment                Payment                 @relation(fields: [paymentId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_settlements_payment_scope_fkey")
+  refundTransaction      RefundTransaction       @relation(fields: [refundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "order_settlements_refund_scope_fkey")
+  handoffReconciliations HandoffReconciliation[]
+
+  @@unique([orderId, kind])
+  @@unique([refundTransactionId, paymentId], map: "order_settlements_refund_transaction_id_payment_id_key")
+  @@unique([id, orderId, orderPhaseId], map: "order_settlements_reconciliation_scope_key")
+  @@index([orderId, settledAt])
+  @@map("order_settlements")
+}
+
+model HandoffReconciliation {
+  id                      String                      @id @default(uuid()) @db.Uuid
+  orderId                 String                      @map("order_id") @db.Uuid
+  orderPhaseId            String                      @map("order_phase_id") @db.Uuid
+  shipmentId              String                      @unique @map("shipment_id") @db.Uuid
+  shipmentPlanId          String                      @map("shipment_plan_id") @db.Uuid
+  deliveryDestinationId   String                      @map("delivery_destination_id") @db.Uuid
+  acceptanceEventId       String                      @unique @map("acceptance_event_id") @db.Uuid
+  voidEventId             String                      @unique @map("void_event_id") @db.Uuid
+  paymentId               String                      @map("payment_id") @db.Uuid
+  refundTransactionId     String                      @map("refund_transaction_id") @db.Uuid
+  refundProviderEventId   String                      @map("refund_provider_event_id") @db.Uuid
+  orderSettlementId       String                      @map("order_settlement_id") @db.Uuid
+  status                  HandoffReconciliationStatus @default(COMPLETED)
+  cancellationRequestedAt DateTime                    @map("cancellation_requested_at") @db.Timestamptz(3)
+  reconciledAt            DateTime                    @map("reconciled_at") @db.Timestamptz(3)
+  createdAt               DateTime                    @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+
+  order               Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase          OrderPhase            @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict, map: "handoff_reconciliations_order_phase_scope_fkey")
+  shipment            Shipment              @relation(fields: [shipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "handoff_reconciliations_shipment_scope_fkey")
+  acceptanceEvent     ShipmentProviderEvent @relation("HandoffAcceptanceEvent", fields: [acceptanceEventId, shipmentId], references: [id, shipmentId], onDelete: Restrict, map: "handoff_reconciliations_acceptance_event_scope_fkey")
+  voidEvent           ShipmentProviderEvent @relation("HandoffVoidEvent", fields: [voidEventId, shipmentId], references: [id, shipmentId], onDelete: Restrict, map: "handoff_reconciliations_void_event_scope_fkey")
+  payment             Payment               @relation(fields: [paymentId, orderId], references: [id, orderId], onDelete: Restrict, map: "handoff_reconciliations_payment_scope_fkey")
+  refundTransaction   RefundTransaction     @relation(fields: [refundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "handoff_reconciliations_refund_scope_fkey")
+  refundProviderEvent PaymentProviderEvent  @relation("HandoffRefundProviderEvent", fields: [refundProviderEventId, refundTransactionId], references: [id, refundTransactionId], onDelete: Restrict, map: "handoff_reconciliations_refund_provider_event_scope_fkey")
+  orderSettlement     OrderSettlement       @relation(fields: [orderSettlementId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict, map: "handoff_reconciliations_settlement_scope_fkey")
+
+  @@unique([orderId, shipmentId])
+  @@unique([shipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "handoff_reconciliations_shipment_scope_key")
+  @@unique([acceptanceEventId, shipmentId], map: "handoff_reconciliations_acceptance_event_scope_key")
+  @@unique([voidEventId, shipmentId], map: "handoff_reconciliations_void_event_scope_key")
+  @@index([refundTransactionId, paymentId], map: "handoff_reconciliations_refund_scope_idx")
+  @@index([refundProviderEventId, refundTransactionId], map: "handoff_reconciliations_refund_provider_event_scope_idx")
+  @@index([orderSettlementId, orderId, orderPhaseId], map: "handoff_reconciliations_settlement_scope_idx")
+  @@index([orderId, reconciledAt])
+  @@map("handoff_reconciliations")
+}
+
+model ShipmentProviderEvent {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  shipmentId            String                    @map("shipment_id") @db.Uuid
+  outboxMessageId       String?                   @map("outbox_message_id") @db.Uuid
+  carrier               String                    @db.VarChar(100)
+  carrierLabelId        String                    @map("carrier_label_id") @db.VarChar(190)
+  providerEventId       String                    @map("provider_event_id") @db.VarChar(255)
+  providerTransactionId String                    @map("provider_transaction_id") @db.VarChar(255)
+  kind                  ShipmentProviderEventKind
+  sourceShipmentStatus  ShipmentStatus            @default(PLANNED) @map("source_shipment_status")
+  occurredAt            DateTime                  @map("occurred_at") @db.Timestamptz(3)
+  authenticatedAt       DateTime                  @map("authenticated_at") @db.Timestamptz(3)
+  verifiedAt            DateTime                  @map("verified_at") @db.Timestamptz(3)
+  createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  shipment                        Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  outboxMessage                   OutboxMessage?         @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
+  acceptanceHandoffReconciliation HandoffReconciliation? @relation("HandoffAcceptanceEvent")
+  voidHandoffReconciliation       HandoffReconciliation? @relation("HandoffVoidEvent")
+
+  @@unique([id, shipmentId])
+  @@unique([carrier, providerEventId], map: "shipment_provider_events_carrier_provider_event_id_key")
+  @@index([carrier, providerTransactionId], map: "shipment_provider_events_carrier_provider_transaction_id_idx")
+  @@index([outboxMessageId], map: "shipment_provider_events_outbox_message_id_idx")
+  @@index([shipmentId, kind])
+  @@map("shipment_provider_events")
+}
+
+model Job {
+  id                      String                 @id @default(uuid()) @db.Uuid
+  nodeId                  String                 @map("node_id") @db.Uuid
+  orderId                 String                 @map("order_id") @db.Uuid
+  orderPhaseId            String                 @map("order_phase_id") @db.Uuid
+  shipmentPlanId          String                 @map("shipment_plan_id") @db.Uuid
+  phaseResourcePlanJobId  String                 @map("phase_resource_plan_job_id") @db.Uuid
+  status                  JobStatus              @default(CREATED)
+  acceptedAt              DateTime?              @map("accepted_at") @db.Timestamptz(3)
+  payoutAmount            BigInt?                @map("payout_amount")
+  payoutCurrency          String?                @map("payout_currency") @db.Char(3)
+  gcodeReadyAt            DateTime?              @map("gcode_ready_at") @db.Timestamptz(3)
+  productionSliceResultId String?                @map("production_slice_result_id") @db.Uuid
+  productionArtifactHash  String?                @map("production_artifact_hash") @db.VarChar(64)
+  printingAt              DateTime?              @map("printing_at") @db.Timestamptz(3)
+  printedAt               DateTime?              @map("printed_at") @db.Timestamptz(3)
+  photoSubmittedAt        DateTime?              @map("photo_submitted_at") @db.Timestamptz(3)
+  qcPhotoAssetId          String?                @unique @map("qc_photo_asset_id") @db.Uuid
+  qcApprovedAt            DateTime?              @map("qc_approved_at") @db.Timestamptz(3)
+  qcRejectedAt            DateTime?              @map("qc_rejected_at") @db.Timestamptz(3)
+  packedAt                DateTime?              @map("packed_at") @db.Timestamptz(3)
+  handedOverAt            DateTime?              @map("handed_over_at") @db.Timestamptz(3)
+  settledAt               DateTime?              @map("settled_at") @db.Timestamptz(3)
+  failedAt                DateTime?              @map("failed_at") @db.Timestamptz(3)
+  failureStage            JobFailureStage?       @map("failure_stage")
+  failureReason           String?                @map("failure_reason") @db.Text
+  cancelledAt             DateTime?              @map("cancelled_at") @db.Timestamptz(3)
+  cancellationReason      JobCancellationReason? @map("cancellation_reason")
+  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  node                   Node                    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase             OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan           ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict)
+  phaseResourcePlanJob   PhaseResourcePlanJob    @relation(fields: [phaseResourcePlanJobId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  productionSliceResult  SliceResult?            @relation("JobProductionSliceResult", fields: [productionSliceResultId], references: [id], onDelete: Restrict)
+  qcPhotoAsset           PhotoAsset?             @relation("JobQcPhotoAsset", fields: [qcPhotoAssetId], references: [id], onDelete: Restrict)
+  productionReservations ProductionReservation[] @relation("ProductionReservationJob")
+
+  @@unique([id, nodeId, phaseResourcePlanJobId])
+  @@unique([phaseResourcePlanJobId])
+  @@index([shipmentPlanId, status])
+  @@index([nodeId, status])
+  @@index([productionSliceResultId])
+  @@map("jobs")
+}
+
+model Payment {
+  id                            String        @id @default(uuid()) @db.Uuid
+  orderId                       String        @map("order_id") @db.Uuid
+  priceSnapshotId               String        @map("price_snapshot_id") @db.Uuid
+  orderPriceBindingId           String        @map("order_price_binding_id") @db.Uuid
+  paymentScheduleId             String        @map("payment_schedule_id") @db.Uuid
+  role                          PaymentRole
+  provider                      String        @db.VarChar(100)
+  providerIntentId              String?       @map("provider_intent_id") @db.VarChar(255)
+  providerCaptureId             String?       @map("provider_capture_id") @db.VarChar(255)
+  intentCreationFailureResultId String?       @unique @map("intent_creation_failure_result_id") @db.Uuid
+  requestedAmountMinor          BigInt        @map("requested_amount_minor")
+  capturedAmountMinor           BigInt?       @map("captured_amount_minor")
+  currency                      String        @db.Char(3)
+  status                        PaymentStatus @default(CREATED)
+  captureAuthorized             Boolean       @default(true) @map("capture_authorized")
+  captureCutoffAt               DateTime?     @map("capture_cutoff_at") @db.Timestamptz(3)
+  checkoutCaptureExpiresAt      DateTime?     @map("checkout_capture_expires_at") @db.Timestamptz(3)
+  capturedAt                    DateTime?     @map("captured_at") @db.Timestamptz(3)
+  createdAt                     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  orderPriceBinding             OrderPriceBinding             @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
+  priceSnapshot                 PriceSnapshot                 @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
+  paymentSchedule               PaymentSchedule               @relation(fields: [paymentScheduleId, priceSnapshotId, role, requestedAmountMinor], references: [id, priceSnapshotId, role, grossAmountMinor], onDelete: Restrict, map: "payments_schedule_contract_fkey")
+  intentCreationFailureEvidence PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailurePayment")
+  intentCreationFailureResult   PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailureResult", fields: [intentCreationFailureResultId, id, provider], references: [id, paymentId, provider], onDelete: Restrict, map: "payments_intent_creation_failure_result_fkey")
+  refunds                       RefundTransaction[]
+  providerEvents                PaymentProviderEvent[]
+  auditEvents                   AuditEvent[]
+  handoffReconciliations        HandoffReconciliation[]
+  orderSettlements              OrderSettlement[]
+
+  @@unique([id, orderId])
+  @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
+  @@unique([provider, providerCaptureId], map: "payments_provider_provider_capture_id_key")
+  @@unique([intentCreationFailureResultId, id, provider], map: "payments_intent_creation_failure_scope_key")
+  @@index([orderId, status])
+  @@index([captureCutoffAt, status])
+  @@index([checkoutCaptureExpiresAt, status])
+  @@map("payments")
+}
+
+model PaymentIntentCreationFailure {
+  id               String                       @id @default(uuid()) @db.Uuid
+  paymentId        String                       @unique @map("payment_id") @db.Uuid
+  provider         String                       @db.VarChar(100)
+  attemptKey       String                       @map("attempt_key") @db.VarChar(255)
+  outcome          PaymentIntentCreationOutcome @default(FAILED)
+  providerIntentId String?                      @map("provider_intent_id") @db.VarChar(255)
+  failedAt         DateTime                     @map("failed_at") @db.Timestamptz(3)
+  createdAt        DateTime                     @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+
+  payment       Payment  @relation("PaymentIntentCreationFailurePayment", fields: [paymentId], references: [id], onDelete: Restrict)
+  failedPayment Payment? @relation("PaymentIntentCreationFailureResult")
+
+  @@unique([provider, attemptKey])
+  @@unique([id, paymentId, provider])
+  @@map("payment_intent_creation_failures")
+}
+
+model RefundTransaction {
+  id                             String       @id @default(uuid()) @db.Uuid
+  paymentId                      String       @map("payment_id") @db.Uuid
+  replacesRefundTransactionId    String?      @map("replaces_refund_transaction_id") @db.Uuid
+  replacesFailureProviderEventId String?      @map("replaces_failure_provider_event_id") @db.Uuid
+  idempotencyKey                 String       @map("idempotency_key") @db.VarChar(255)
+  provider                       String       @map("provider") @db.VarChar(100)
+  providerRefundId               String?      @map("provider_refund_id") @db.VarChar(255)
+  providerResultEventId          String?      @map("provider_result_event_id") @db.Uuid
+  amountMinor                    BigInt       @map("amount_minor")
+  reason                         RefundReason
+  status                         RefundStatus @default(PENDING)
+  requestedAt                    DateTime     @default(dbgenerated("clock_timestamp()")) @map("requested_at") @db.Timestamptz(3)
+  completedAt                    DateTime?    @map("completed_at") @db.Timestamptz(3)
+  createdAt                      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  payment                       Payment                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  replacesRefundTransaction     RefundTransaction?      @relation("RefundRetryLineage", fields: [replacesRefundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "refund_transactions_replaces_scope_fkey")
+  replacementRefundTransactions RefundTransaction[]     @relation("RefundRetryLineage")
+  replacesFailureProviderEvent  PaymentProviderEvent?   @relation("RefundRetryFailureEvent", fields: [replacesFailureProviderEventId, replacesRefundTransactionId], references: [id, refundTransactionId], onDelete: Restrict, map: "refund_transactions_replaces_failure_event_scope_fkey")
+  providerEvents                PaymentProviderEvent[]  @relation("RefundProviderEvents")
+  providerResultEvent           PaymentProviderEvent?   @relation("RefundSelectedResultEvent", fields: [providerResultEventId, id], references: [id, refundTransactionId], onDelete: Restrict, map: "refund_transactions_provider_result_event_scope_fkey")
+  auditEvents                   AuditEvent[]
+  handoffReconciliations        HandoffReconciliation[]
+  orderSettlement               OrderSettlement?
+
+  @@unique([id, paymentId])
+  @@unique([replacesFailureProviderEventId, replacesRefundTransactionId], map: "refund_transactions_replaces_failure_event_key")
+  @@unique([paymentId, idempotencyKey])
+  @@unique([provider, providerRefundId], map: "refund_transactions_provider_provider_refund_id_key")
+  @@unique([providerResultEventId, id], map: "refund_transactions_provider_result_event_scope_key")
+  @@index([replacesRefundTransactionId, paymentId], map: "refund_transactions_replaces_payment_id_idx")
+  @@index([paymentId, status])
+  @@map("refund_transactions")
+}
+
+model PaymentProviderEvent {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  paymentId             String                   @map("payment_id") @db.Uuid
+  refundTransactionId   String?                  @map("refund_transaction_id") @db.Uuid
+  provider              String                   @db.VarChar(100)
+  providerEventId       String                   @map("provider_event_id") @db.VarChar(255)
+  providerTransactionId String                   @map("provider_transaction_id") @db.VarChar(255)
+  kind                  PaymentProviderEventKind
+  amountMinor           BigInt                   @map("amount_minor")
+  currency              String                   @db.Char(3)
+  payload               Json                     @db.JsonB
+  payloadHash           String                   @map("payload_hash") @db.Char(64)
+  occurredAt            DateTime                 @map("occurred_at") @db.Timestamptz(3)
+  authenticatedAt       DateTime                 @map("authenticated_at") @db.Timestamptz(3)
+  verifiedAt            DateTime                 @map("verified_at") @db.Timestamptz(3)
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  payment                      Payment                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  refundTransaction            RefundTransaction?      @relation("RefundProviderEvents", fields: [refundTransactionId], references: [id], onDelete: Restrict)
+  selectedByRefundTransaction  RefundTransaction?      @relation("RefundSelectedResultEvent")
+  retryingRefundTransaction    RefundTransaction?      @relation("RefundRetryFailureEvent")
+  handoffRefundReconciliations HandoffReconciliation[] @relation("HandoffRefundProviderEvent")
+
+  @@unique([id, refundTransactionId])
+  @@unique([provider, providerEventId], map: "payment_provider_events_provider_provider_event_id_key")
+  @@index([provider, providerTransactionId], map: "payment_provider_events_provider_provider_transaction_id_idx")
+  @@index([paymentId, kind])
+  @@index([refundTransactionId, kind])
+  @@map("payment_provider_events")
+}
+
+model AuditEvent {
+  id                  String         @id @default(uuid()) @db.Uuid
+  quoteId             String?        @map("quote_id") @db.Uuid
+  orderId             String?        @map("order_id") @db.Uuid
+  paymentId           String?        @map("payment_id") @db.Uuid
+  refundTransactionId String?        @map("refund_transaction_id") @db.Uuid
+  eventType           String         @map("event_type") @db.VarChar(150)
+  actorKind           AuditActorKind @default(SYSTEM) @map("actor_kind")
+  actorId             String?        @map("actor_id") @db.Uuid
+  correlationId       String?        @map("correlation_id") @db.Uuid
+  idempotencyKey      String?        @map("idempotency_key") @db.VarChar(255)
+  payload             Json           @db.JsonB
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quote             Quote?             @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  order             Order?             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payment           Payment?           @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  refundTransaction RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
+
+  @@index([quoteId, createdAt])
+  @@index([orderId, createdAt])
+  @@index([paymentId, createdAt])
+  @@index([refundTransactionId, createdAt])
+  @@map("audit_events")
 }

@@ -5,6 +5,169 @@ import {
   type TransitionPolicy,
 } from "./transition.js";
 
+function hasExactRefundedCancellationRecoveryMarker(
+  context: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const reconciliation = record(context?.handoffRefundedReconciliation);
+  const settlement = record(context?.handoffRefundedSettlement);
+  const reconciliationId = context?.handoffReconciliationId;
+  const settlementId = context?.handoffSettlementId;
+  return (
+    context?.cancellationRaceRefundedAggregate === true &&
+    context.cancellationRaceHandoffKind === "unauthorized_reconciliation" &&
+    context.cancellationRaceResultKind === "unauthorized_reconciliation" &&
+    context.handoffReconciliation === true &&
+    context.handoffSettlementCompleted === true &&
+    context.handoffReconciliationAtomic === true &&
+    context.handoffSettlementImmutable === true &&
+    nonBlank(reconciliationId) &&
+    nonBlank(settlementId) &&
+    reconciliation?.id === reconciliationId &&
+    reconciliation.orderSettlementId === settlementId &&
+    reconciliation.status === "completed" &&
+    reconciliation.immutable === true &&
+    settlement?.id === settlementId &&
+    settlement.kind === "unauthorized_handoff" &&
+    settlement.immutable === true
+  );
+}
+
+function hasExactLateRefundFailureMarker(
+  context: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  return (
+    readExactLateRefundFailureProof(context)?.expectedSource === "refunded"
+  );
+}
+
+function hasExactNoIntentPaymentTerminalSnapshot(
+  state: string,
+  context: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  if (state !== "failed" && state !== "voided") return false;
+  const snapshotValue = context?.paymentTerminalSnapshot;
+  const snapshot =
+    typeof snapshotValue === "object" &&
+    snapshotValue !== null &&
+    !Array.isArray(snapshotValue)
+      ? (snapshotValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const resultId = context?.paymentTerminalSnapshotResultId;
+  const stateKey = context?.paymentTerminalSnapshotCurrentStateCommandKey;
+  return (
+    typeof paymentId === "string" &&
+    paymentId.trim().length > 0 &&
+    typeof resultId === "string" &&
+    resultId.trim().length > 0 &&
+    typeof stateKey === "string" &&
+    stateKey.trim().length > 0 &&
+    snapshot?.id === paymentId &&
+    snapshot.status === state &&
+    snapshot.providerIntentId === null &&
+    snapshot.captureAuthorized === false &&
+    snapshot.captureCutoffAt instanceof Instant &&
+    snapshot.resultId === resultId &&
+    snapshot.currentStateCommandKey === stateKey &&
+    snapshot.immutable === true
+  );
+}
+
+function hasExactRecoverableProviderVoidCancellationRace(
+  context: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const shipmentId = context?.shipmentId;
+  const carrierLabelId = context?.carrierLabelId;
+  const providerEventId = context?.providerEventId;
+  const providerTransactionId = context?.shipmentProviderTransactionId;
+  const resultId = context?.cancellationRaceHandoffResultId;
+  const expectedShipment = record(context?.cancellationRaceExpectedShipment);
+  const acceptanceEvent = record(context?.cancellationRaceAcceptanceEvent);
+  const voidEvent = record(context?.cancellationRaceSelectedVoidEvent);
+  const resultShipment = record(context?.cancellationRaceResultShipment);
+  const acceptanceOccurredAt = acceptanceEvent?.occurredAt;
+  const acceptanceVerifiedAt = acceptanceEvent?.verifiedAt;
+  const voidOccurredAt = voidEvent?.occurredAt;
+  const voidVerifiedAt = voidEvent?.verifiedAt;
+  const handedOverAt = resultShipment?.handedOverAt;
+  const providerVoidedAt = expectedShipment?.providerVoidedAt;
+  const cancelledAt = expectedShipment?.cancelledAt;
+  const voidEventId = voidEvent?.id;
+  const carrier = resultShipment?.carrier;
+
+  return (
+    nonBlank(shipmentId) &&
+    nonBlank(carrierLabelId) &&
+    nonBlank(providerEventId) &&
+    nonBlank(providerTransactionId) &&
+    nonBlank(resultId) &&
+    nonBlank(voidEventId) &&
+    nonBlank(carrier) &&
+    context?.providerEventShipmentId === shipmentId &&
+    context.providerEventTransactionId === providerTransactionId &&
+    context.shipmentProviderScanEventId === providerEventId &&
+    context.providerEventKind === "acceptance_scan" &&
+    context.providerEventStatus === "handed_over" &&
+    context.providerEventAuthenticated === true &&
+    context.providerEventVerified === true &&
+    context.verifiedProviderScan === true &&
+    expectedShipment?.id === shipmentId &&
+    expectedShipment.status === "cancelled" &&
+    expectedShipment.providerVoidId === voidEventId &&
+    providerVoidedAt instanceof Instant &&
+    cancelledAt instanceof Instant &&
+    expectedShipment.immutable === true &&
+    resultShipment?.id === shipmentId &&
+    resultShipment.previousStatus === "cancelled" &&
+    resultShipment.targetStatus === "handed_over" &&
+    resultShipment.carrierLabelId === carrierLabelId &&
+    resultShipment.providerAcceptanceScanId === providerEventId &&
+    handedOverAt instanceof Instant &&
+    resultShipment.resultId === resultId &&
+    resultShipment.immutable === true &&
+    acceptanceEvent?.id === providerEventId &&
+    acceptanceEvent.shipmentId === shipmentId &&
+    acceptanceEvent.carrier === carrier &&
+    acceptanceEvent.carrierLabelId === carrierLabelId &&
+    acceptanceEvent.transactionId === providerTransactionId &&
+    acceptanceEvent.kind === "acceptance_scan" &&
+    acceptanceEvent.authenticated === true &&
+    acceptanceEvent.verified === true &&
+    acceptanceEvent.immutable === true &&
+    acceptanceOccurredAt instanceof Instant &&
+    acceptanceVerifiedAt instanceof Instant &&
+    voidEvent?.shipmentId === shipmentId &&
+    voidEvent.carrier === carrier &&
+    voidEvent.carrierLabelId === carrierLabelId &&
+    voidEvent.kind === "label_voided" &&
+    voidEvent.authenticated === true &&
+    voidEvent.verified === true &&
+    voidEvent.immutable === true &&
+    voidOccurredAt instanceof Instant &&
+    voidVerifiedAt instanceof Instant &&
+    handedOverAt.equals(acceptanceVerifiedAt) &&
+    acceptanceOccurredAt.compare(voidOccurredAt) < 0 &&
+    providerVoidedAt.equals(voidVerifiedAt) &&
+    cancelledAt.epochMilliseconds >= voidVerifiedAt.epochMilliseconds - 5_000
+  );
+}
+
 function requireFlag<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -1934,6 +2097,1637 @@ function requireAllShipmentLineageLeavesDelivered<S extends string>(
   );
 }
 
+function readExactLateRefundFailureProof(
+  context: Readonly<Record<string, unknown>> | undefined,
+):
+  | Readonly<{
+      expectedSource: string;
+      expectedTarget: string;
+      orderId: string;
+      paymentId: string;
+      paymentStateKey: string;
+      phaseId: string;
+      previousPaymentResultId: string;
+      resultId: string;
+      sourceOrderResultId: string;
+      sourceOrderStateKey: string;
+      sourcePhaseResultId: string;
+      sourcePhaseStateKey: string;
+    }>
+  | undefined {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (
+    context?.paymentCaptureKind !== "late_refund_failure" ||
+    context.lateRefundFailureCompleted !== true ||
+    context.lateRefundFailureAtomic !== true
+  ) {
+    return undefined;
+  }
+
+  const paymentId = context.paymentId;
+  const orderId = context.orderId;
+  const phaseId = context.phaseId;
+  const role = context.paymentRole;
+  const refundId = context.refundTransactionId;
+  const provider = context.lateRefundFailureProvider;
+  const providerTransactionId = context.lateRefundFailureProviderTransactionId;
+  const amountMinor = context.lateRefundFailureAmountMinor;
+  const currency = context.lateRefundFailureCurrency;
+  const reason = context.lateRefundFailureReason;
+  const attemptKey = context.lateRefundFailureAttemptKey;
+  const capturedAmountMinor = context.lateRefundFailureCapturedAmountMinor;
+  const resultId = context.lateRefundFailureResultId;
+  const successEventId = context.lateRefundFailureSuccessProviderEventId;
+  const failureEventId = context.lateRefundFailureProviderEventId;
+  const previousPaymentResultId =
+    context.lateRefundFailurePreviousPaymentResultId;
+  const paymentStateKey =
+    context.lateRefundFailureCurrentPaymentStateCommandKey;
+  const sourceOrderResultId = context.lateRefundFailureSourceOrderResultId;
+  const sourceOrderStateKey =
+    context.lateRefundFailureCurrentOrderStateCommandKey;
+  const sourcePhaseResultId = context.lateRefundFailureSourcePhaseResultId;
+  const sourcePhaseStateKey =
+    context.lateRefundFailureCurrentPhaseStateCommandKey;
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(refundId) ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(currency) ||
+    !nonBlank(reason) ||
+    !nonBlank(attemptKey) ||
+    !nonBlank(resultId) ||
+    !nonBlank(previousPaymentResultId) ||
+    !nonBlank(paymentStateKey) ||
+    !nonBlank(sourceOrderResultId) ||
+    !nonBlank(sourceOrderStateKey) ||
+    !nonBlank(sourcePhaseResultId) ||
+    !nonBlank(sourcePhaseStateKey) ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n
+  ) {
+    return undefined;
+  }
+
+  const parseRefundSet = (
+    value: unknown,
+    expectedId: unknown,
+    expectedResultId: unknown,
+  ) => {
+    const snapshot = record(value);
+    const refundIds = snapshot?.refundIds;
+    const refunds = snapshot?.refundSnapshots;
+    if (
+      !nonBlank(expectedId) ||
+      !nonBlank(expectedResultId) ||
+      snapshot?.id !== expectedId ||
+      snapshot.paymentId !== paymentId ||
+      snapshot.resultId !== expectedResultId ||
+      snapshot.authoritative !== true ||
+      snapshot.complete !== true ||
+      snapshot.immutable !== true ||
+      !Array.isArray(refundIds) ||
+      !Array.isArray(refunds) ||
+      refundIds.length !== refunds.length ||
+      refundIds.some((id) => !nonBlank(id)) ||
+      new Set(refundIds).size !== refundIds.length
+    ) {
+      return undefined;
+    }
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    const attemptKeys = new Set<string>();
+    let succeededAmountMinor = 0n;
+    let pendingCount = 0;
+    for (const value of refunds) {
+      const row = record(value);
+      const id = row?.id;
+      const status = row?.status;
+      const rowAmountMinor = row?.amountMinor;
+      const rowAttemptKey = row?.idempotencyKey;
+      if (
+        row === undefined ||
+        !nonBlank(id) ||
+        !refundIds.includes(id) ||
+        rows.has(id) ||
+        row.paymentId !== paymentId ||
+        (status !== "pending" &&
+          status !== "succeeded" &&
+          status !== "failed") ||
+        typeof rowAmountMinor !== "bigint" ||
+        rowAmountMinor <= 0n ||
+        !nonBlank(rowAttemptKey) ||
+        attemptKeys.has(rowAttemptKey) ||
+        !nonBlank(row.resultId) ||
+        row.immutable !== true
+      ) {
+        return undefined;
+      }
+      rows.set(id, row);
+      attemptKeys.add(rowAttemptKey);
+      if (status === "succeeded") succeededAmountMinor += rowAmountMinor;
+      if (status === "pending") pendingCount += 1;
+    }
+    return refundIds.some((id) => !rows.has(id))
+      ? undefined
+      : { pendingCount, rows, succeededAmountMinor };
+  };
+  const beforeSetId = context.lateRefundFailureRefundSetBeforeId;
+  const beforeSetResultId = context.lateRefundFailureRefundSetBeforeResultId;
+  const afterSetId = context.lateRefundFailureRefundSetAfterId;
+  const afterSetResultId = context.lateRefundFailureRefundSetAfterResultId;
+  const before = parseRefundSet(
+    context.lateRefundFailureRefundSetBefore,
+    beforeSetId,
+    beforeSetResultId,
+  );
+  const after = parseRefundSet(
+    context.lateRefundFailureRefundSetAfter,
+    afterSetId,
+    afterSetResultId,
+  );
+  if (
+    before === undefined ||
+    after === undefined ||
+    (after.rows.size !== before.rows.size &&
+      after.rows.size !== before.rows.size + 1) ||
+    beforeSetId === afterSetId ||
+    beforeSetResultId === afterSetResultId
+  ) {
+    return undefined;
+  }
+  for (const [id, source] of before.rows) {
+    const target = after.rows.get(id);
+    if (
+      target === undefined ||
+      target.paymentId !== source.paymentId ||
+      target.amountMinor !== source.amountMinor ||
+      target.idempotencyKey !== source.idempotencyKey ||
+      target.replacesRefundTransactionId !==
+        source.replacesRefundTransactionId ||
+      target.replacesFailureProviderEventId !==
+        source.replacesFailureProviderEventId ||
+      target.immutable !== true ||
+      (id === refundId
+        ? source.status !== "succeeded" ||
+          source.amountMinor !== amountMinor ||
+          source.resultId !==
+            context.lateRefundFailureSuccessProviderEventResultId ||
+          target.status !== "failed" ||
+          target.resultId !== resultId
+        : target.status !== source.status ||
+          target.resultId !== source.resultId)
+    ) {
+      return undefined;
+    }
+  }
+  const succeededBefore = before.succeededAmountMinor;
+  const succeededAfter = after.succeededAmountMinor;
+  const addedRefunds = [...after.rows].filter(([id]) => !before.rows.has(id));
+  const expectedSource =
+    before.pendingCount !== 0
+      ? "refund_pending"
+      : succeededBefore === capturedAmountMinor
+        ? "refunded"
+        : "partially_refunded";
+  const expectedTarget =
+    after.pendingCount !== 0
+      ? "refund_pending"
+      : succeededAfter === 0n
+        ? "captured"
+        : "partially_refunded";
+  const stableRefundPendingReconciliation =
+    expectedSource === "refund_pending" &&
+    expectedTarget === "refund_pending" &&
+    before.pendingCount > 0;
+  const stableRefundPendingRetry =
+    stableRefundPendingReconciliation &&
+    after.pendingCount === before.pendingCount + 1;
+  const stableRefundPendingWithoutRetry =
+    stableRefundPendingReconciliation &&
+    after.pendingCount === before.pendingCount &&
+    addedRefunds.length === 0;
+  const retryRefundId = context.lateRefundFailureRetryRefundTransactionId;
+  const retryAttemptKey = context.lateRefundFailureRetryAttemptKey;
+  const retryRefund = record(context.lateRefundFailureRetryRefundTransaction);
+  const retryRequestedAt = retryRefund?.requestedAt;
+  const retryCreatedAt = retryRefund?.createdAt;
+  const addedRetry = addedRefunds[0]?.[1];
+  const exactRetryCreated =
+    stableRefundPendingRetry &&
+    addedRefunds.length === 1 &&
+    nonBlank(retryRefundId) &&
+    nonBlank(retryAttemptKey) &&
+    addedRefunds[0]?.[0] === retryRefundId &&
+    addedRetry?.paymentId === paymentId &&
+    addedRetry.status === "pending" &&
+    addedRetry.amountMinor === amountMinor &&
+    addedRetry.provider === provider &&
+    addedRetry.reason === reason &&
+    addedRetry.idempotencyKey === retryAttemptKey &&
+    addedRetry.replacesRefundTransactionId === refundId &&
+    addedRetry.replacesFailureProviderEventId === failureEventId &&
+    addedRetry.resultId === resultId &&
+    addedRetry.immutable === true &&
+    retryRefund?.id === retryRefundId &&
+    retryRefund.paymentId === paymentId &&
+    retryRefund.orderId === orderId &&
+    retryRefund.phaseId === phaseId &&
+    retryRefund.status === "pending" &&
+    retryRefund.amountMinor === amountMinor &&
+    retryRefund.currency === currency &&
+    retryRefund.provider === provider &&
+    retryRefund.reason === reason &&
+    retryRefund.idempotencyKey === retryAttemptKey &&
+    retryRefund.replacesRefundTransactionId === refundId &&
+    retryRefund.replacesFailureProviderEventId === failureEventId &&
+    retryRequestedAt instanceof Instant &&
+    retryCreatedAt instanceof Instant &&
+    retryCreatedAt.epochMilliseconds >=
+      retryRequestedAt.epochMilliseconds - 5_000 &&
+    retryRefund.providerEventId === null &&
+    retryRefund.completedAt === null &&
+    retryRefund.resultId === resultId &&
+    retryRefund.immutable === true &&
+    context.lateRefundFailureRetryCreated === true;
+  if (
+    succeededAfter !== succeededBefore - amountMinor ||
+    succeededAfter < 0n ||
+    succeededBefore > capturedAmountMinor ||
+    (stableRefundPendingReconciliation
+      ? !stableRefundPendingWithoutRetry && !exactRetryCreated
+      : addedRefunds.length !== 0 ||
+        before.pendingCount !== after.pendingCount) ||
+    (expectedSource === expectedTarget && !stableRefundPendingReconciliation)
+  ) {
+    return undefined;
+  }
+
+  const latestPriorEventId =
+    context.lateRefundFailureLatestPriorProviderEventId;
+  const eventSetId = context.lateRefundFailureProviderEventSetId;
+  const eventSetResultId = context.lateRefundFailureProviderEventSetResultId;
+  const eventSet = record(context.lateRefundFailureProviderEventSet);
+  const eventIds = eventSet?.providerEventIds;
+  const events = eventSet?.providerEvents;
+  if (
+    !nonBlank(successEventId) ||
+    !nonBlank(failureEventId) ||
+    !nonBlank(latestPriorEventId) ||
+    !nonBlank(eventSetId) ||
+    !nonBlank(eventSetResultId) ||
+    eventSet?.id !== eventSetId ||
+    eventSet.paymentId !== paymentId ||
+    eventSet.refundTransactionId !== refundId ||
+    eventSet.resultId !== eventSetResultId ||
+    eventSet.authoritative !== true ||
+    eventSet.complete !== true ||
+    eventSet.immutable !== true ||
+    !Array.isArray(eventIds) ||
+    !Array.isArray(events) ||
+    eventIds.length < 2 ||
+    eventIds.length !== events.length ||
+    eventIds.some((id) => !nonBlank(id)) ||
+    new Set(eventIds).size !== eventIds.length
+  ) {
+    return undefined;
+  }
+  const eventRows = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const value of events) {
+    const event = record(value);
+    const id = event?.id;
+    const occurredAt = event?.occurredAt;
+    const authenticatedAt = event?.authenticatedAt;
+    const verifiedAt = event?.verifiedAt;
+    if (
+      event === undefined ||
+      !nonBlank(id) ||
+      !eventIds.includes(id) ||
+      eventRows.has(id) ||
+      event.paymentId !== paymentId ||
+      event.refundTransactionId !== refundId ||
+      event.provider !== provider ||
+      event.providerTransactionId !== providerTransactionId ||
+      (event.kind !== "refund_succeeded" && event.kind !== "refund_failed") ||
+      event.amountMinor !== amountMinor ||
+      event.currency !== currency ||
+      event.authenticated !== true ||
+      event.verified !== true ||
+      !nonBlank(event.resultId) ||
+      event.immutable !== true ||
+      !(occurredAt instanceof Instant) ||
+      !(authenticatedAt instanceof Instant) ||
+      !(verifiedAt instanceof Instant) ||
+      authenticatedAt.epochMilliseconds <
+        occurredAt.epochMilliseconds - 5_000 ||
+      verifiedAt.compare(authenticatedAt) < 0
+    ) {
+      return undefined;
+    }
+    eventRows.set(id, event);
+  }
+  if (eventIds.some((id) => !eventRows.has(id))) return undefined;
+  const failure = eventRows.get(failureEventId);
+  const failureOccurredAt = failure?.occurredAt;
+  const priorEvents = [...eventRows.values()].filter(
+    (event) => event.id !== failureEventId,
+  );
+  if (
+    failure?.kind !== "refund_failed" ||
+    failure?.resultId !== resultId ||
+    !(failureOccurredAt instanceof Instant) ||
+    (stableRefundPendingRetry &&
+      (!(failure.verifiedAt instanceof Instant) ||
+        !(retryRequestedAt instanceof Instant) ||
+        retryRequestedAt.epochMilliseconds <
+          failure.verifiedAt.epochMilliseconds - 5_000)) ||
+    priorEvents.some(
+      (event) => (event.occurredAt as Instant).compare(failureOccurredAt) >= 0,
+    )
+  ) {
+    return undefined;
+  }
+  const latestOccurredAt = Math.max(
+    ...priorEvents.map(
+      (event) => (event.occurredAt as Instant).epochMilliseconds,
+    ),
+  );
+  const latestPriorCandidates = priorEvents.filter(
+    (event) =>
+      (event.occurredAt as Instant).epochMilliseconds === latestOccurredAt,
+  );
+  const latestPrior = latestPriorCandidates
+    .slice()
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+    .at(-1);
+  const success = eventRows.get(successEventId);
+  if (
+    latestPrior?.id !== latestPriorEventId ||
+    latestPrior.kind !== "refund_succeeded" ||
+    success?.kind !== "refund_succeeded" ||
+    context.lateRefundFailureSuccessProviderEventResultId !==
+      success.resultId ||
+    context.lateRefundFailureLatestPriorProviderEventResultId !==
+      latestPrior.resultId ||
+    context.lateRefundFailureProviderEventResultId !== failure.resultId ||
+    eventSetResultId !== resultId
+  ) {
+    return undefined;
+  }
+  const exactEventProjection = (
+    projection: Readonly<Record<string, unknown>> | undefined,
+    authoritative: Readonly<Record<string, unknown>>,
+  ): boolean =>
+    projection !== undefined &&
+    projection.id === authoritative.id &&
+    projection.paymentId === authoritative.paymentId &&
+    projection.refundTransactionId === authoritative.refundTransactionId &&
+    projection.provider === authoritative.provider &&
+    projection.providerTransactionId === authoritative.providerTransactionId &&
+    projection.kind === authoritative.kind &&
+    projection.amountMinor === authoritative.amountMinor &&
+    projection.currency === authoritative.currency &&
+    projection.occurredAt instanceof Instant &&
+    authoritative.occurredAt instanceof Instant &&
+    projection.occurredAt.equals(authoritative.occurredAt) &&
+    projection.authenticatedAt instanceof Instant &&
+    authoritative.authenticatedAt instanceof Instant &&
+    projection.authenticatedAt.equals(authoritative.authenticatedAt) &&
+    projection.verifiedAt instanceof Instant &&
+    authoritative.verifiedAt instanceof Instant &&
+    projection.verifiedAt.equals(authoritative.verifiedAt) &&
+    projection.authenticated === true &&
+    projection.verified === true &&
+    projection.resultId === authoritative.resultId &&
+    projection.immutable === true;
+  if (
+    !exactEventProjection(
+      record(context.lateRefundFailureSuccessProviderEvent),
+      success,
+    ) ||
+    !exactEventProjection(
+      record(context.lateRefundFailureProviderEvent),
+      failure,
+    ) ||
+    !exactEventProjection(
+      record(context.lateRefundFailureLatestPriorProviderEvent),
+      latestPrior,
+    )
+  ) {
+    return undefined;
+  }
+
+  const sourceRefund = record(context.lateRefundFailureSourceRefundTransaction);
+  const reconciledRefund = record(context.lateRefundFailureRefundTransaction);
+  const requestedAt = sourceRefund?.requestedAt;
+  const sourceCompletedAt = sourceRefund?.completedAt;
+  if (
+    sourceRefund?.id !== refundId ||
+    sourceRefund.paymentId !== paymentId ||
+    sourceRefund.orderId !== orderId ||
+    sourceRefund.phaseId !== phaseId ||
+    sourceRefund.status !== "succeeded" ||
+    sourceRefund.provider !== provider ||
+    sourceRefund.providerTransactionId !== providerTransactionId ||
+    sourceRefund.amountMinor !== amountMinor ||
+    sourceRefund.currency !== currency ||
+    sourceRefund.reason !== reason ||
+    sourceRefund.idempotencyKey !== attemptKey ||
+    sourceRefund.providerEventId !== successEventId ||
+    !(requestedAt instanceof Instant) ||
+    !(sourceCompletedAt instanceof Instant) ||
+    !(success.verifiedAt instanceof Instant) ||
+    sourceCompletedAt.epochMilliseconds <
+      requestedAt.epochMilliseconds - 5_000 ||
+    [...eventRows.values()].some(
+      (event) =>
+        (event.occurredAt as Instant).epochMilliseconds <
+        requestedAt.epochMilliseconds - 5_000,
+    ) ||
+    !sourceCompletedAt.equals(success.verifiedAt) ||
+    sourceRefund.resultId !==
+      context.lateRefundFailureSourceRefundTransactionResultId ||
+    sourceRefund.resultId !== success.resultId ||
+    sourceRefund.immutable !== true ||
+    reconciledRefund?.id !== refundId ||
+    reconciledRefund.paymentId !== paymentId ||
+    reconciledRefund.orderId !== orderId ||
+    reconciledRefund.phaseId !== phaseId ||
+    reconciledRefund.previousStatus !== "succeeded" ||
+    reconciledRefund.targetStatus !== "failed" ||
+    reconciledRefund.status !== "failed" ||
+    reconciledRefund.provider !== provider ||
+    reconciledRefund.providerTransactionId !== providerTransactionId ||
+    reconciledRefund.amountMinor !== amountMinor ||
+    reconciledRefund.currency !== currency ||
+    reconciledRefund.reason !== reason ||
+    reconciledRefund.idempotencyKey !== attemptKey ||
+    reconciledRefund.previousProviderEventId !== successEventId ||
+    reconciledRefund.providerEventId !== failureEventId ||
+    !(reconciledRefund.requestedAt instanceof Instant) ||
+    !reconciledRefund.requestedAt.equals(requestedAt) ||
+    reconciledRefund.completedAt !== null ||
+    reconciledRefund.resultId !== resultId ||
+    reconciledRefund.immutable !== true
+  ) {
+    return undefined;
+  }
+
+  const sourcePayment = record(context.lateRefundFailureSourcePayment);
+  const reconciledPayment = record(context.lateRefundFailureReconciledPayment);
+  if (
+    sourcePayment?.id !== paymentId ||
+    sourcePayment.orderId !== orderId ||
+    sourcePayment.phaseId !== phaseId ||
+    sourcePayment.role !== role ||
+    sourcePayment.provider !== provider ||
+    sourcePayment.currency !== currency ||
+    sourcePayment.status !== expectedSource ||
+    sourcePayment.capturedAmountMinor !== capturedAmountMinor ||
+    sourcePayment.succeededRefundAmountMinor !== succeededBefore ||
+    sourcePayment.authoritativeRefundSetId !== beforeSetId ||
+    sourcePayment.authoritativeRefundSetResultId !== beforeSetResultId ||
+    sourcePayment.resultId !== previousPaymentResultId ||
+    sourcePayment.currentStateCommandKey !== paymentStateKey ||
+    sourcePayment.immutable !== true ||
+    reconciledPayment?.id !== paymentId ||
+    reconciledPayment.orderId !== orderId ||
+    reconciledPayment.phaseId !== phaseId ||
+    reconciledPayment.role !== role ||
+    reconciledPayment.provider !== provider ||
+    reconciledPayment.currency !== currency ||
+    reconciledPayment.previousStatus !== expectedSource ||
+    reconciledPayment.targetStatus !== expectedTarget ||
+    reconciledPayment.capturedAmountMinor !== capturedAmountMinor ||
+    reconciledPayment.succeededRefundAmountMinor !== succeededAfter ||
+    reconciledPayment.refundTransactionId !== refundId ||
+    reconciledPayment.authoritativeRefundSetId !== afterSetId ||
+    reconciledPayment.authoritativeRefundSetResultId !== afterSetResultId ||
+    reconciledPayment.resultId !== resultId ||
+    reconciledPayment.immutable !== true ||
+    (stableRefundPendingRetry &&
+      (reconciledPayment.retryRefundTransactionId !== retryRefundId ||
+        reconciledPayment.previousStateCommandKey !== paymentStateKey ||
+        !nonBlank(reconciledPayment.currentStateCommandKey))) ||
+    context.lateRefundFailurePaymentResultId !== resultId ||
+    context.lateRefundFailureRefundTransactionResultId !== resultId
+  ) {
+    return undefined;
+  }
+
+  if (expectedSource === "refunded") {
+    const sourceOrder = record(context.lateRefundFailureSourceOrder);
+    const reopenedOrder = record(context.lateRefundFailureReopenedOrder);
+    const sourcePhase = record(context.lateRefundFailureSourcePhase);
+    const reopenedPhase = record(context.lateRefundFailureReopenedPhase);
+    const beforePaymentSetId = context.lateRefundFailureOrderPaymentSetBeforeId;
+    const beforePaymentSetResultId =
+      context.lateRefundFailureOrderPaymentSetBeforeResultId;
+    const afterPaymentSetId = context.lateRefundFailureOrderPaymentSetAfterId;
+    const afterPaymentSetResultId =
+      context.lateRefundFailureOrderPaymentSetAfterResultId;
+    const parseOrderPaymentSet = (
+      value: unknown,
+      expectedId: unknown,
+      expectedResultId: unknown,
+      phase: "before" | "after",
+    ) => {
+      const snapshot = record(value);
+      const paymentIds = snapshot?.paymentIds;
+      const payments = snapshot?.paymentSnapshots;
+      if (
+        !nonBlank(expectedId) ||
+        !nonBlank(expectedResultId) ||
+        snapshot?.id !== expectedId ||
+        snapshot.orderId !== orderId ||
+        snapshot.phaseId !== phaseId ||
+        snapshot.resultId !== expectedResultId ||
+        snapshot.authoritative !== true ||
+        snapshot.complete !== true ||
+        snapshot.immutable !== true ||
+        !Array.isArray(paymentIds) ||
+        !Array.isArray(payments) ||
+        paymentIds.length === 0 ||
+        paymentIds.length !== payments.length ||
+        paymentIds.some((id) => !nonBlank(id)) ||
+        new Set(paymentIds).size !== paymentIds.length
+      ) {
+        return undefined;
+      }
+      const rows = new Map<string, Readonly<Record<string, unknown>>>();
+      for (const value of payments) {
+        const row = record(value);
+        const id = row?.id;
+        if (
+          row === undefined ||
+          !nonBlank(id) ||
+          !paymentIds.includes(id) ||
+          rows.has(id) ||
+          row.orderId !== orderId ||
+          row.phaseId !== phaseId ||
+          (row.role !== "full" &&
+            row.role !== "deposit" &&
+            row.role !== "balance") ||
+          !nonBlank(row.provider) ||
+          !nonBlank(row.currency) ||
+          typeof row.capturedAmountMinor !== "bigint" ||
+          row.capturedAmountMinor <= 0n ||
+          typeof row.succeededRefundAmountMinor !== "bigint" ||
+          row.succeededRefundAmountMinor < 0n ||
+          !nonBlank(row.authoritativeRefundSetId) ||
+          !nonBlank(row.authoritativeRefundSetResultId) ||
+          (phase === "before"
+            ? !nonBlank(row.status) || !nonBlank(row.resultId)
+            : !nonBlank(row.previousStatus) ||
+              !nonBlank(row.targetStatus) ||
+              !nonBlank(row.previousResultId) ||
+              !nonBlank(row.resultId)) ||
+          row.immutable !== true
+        ) {
+          return undefined;
+        }
+        rows.set(id, row);
+      }
+      return paymentIds.some((id) => !rows.has(id)) ? undefined : rows;
+    };
+    const beforePayments = parseOrderPaymentSet(
+      context.lateRefundFailureOrderPaymentSetBefore,
+      beforePaymentSetId,
+      beforePaymentSetResultId,
+      "before",
+    );
+    const afterPayments = parseOrderPaymentSet(
+      context.lateRefundFailureOrderPaymentSetAfter,
+      afterPaymentSetId,
+      afterPaymentSetResultId,
+      "after",
+    );
+    const beforeSlotSetId = context.lateRefundFailureSlotSetBeforeId;
+    const beforeSlotSetResultId =
+      context.lateRefundFailureSlotSetBeforeResultId;
+    const afterSlotSetId = context.lateRefundFailureSlotSetAfterId;
+    const afterSlotSetResultId = context.lateRefundFailureSlotSetAfterResultId;
+    const parseSlotSet = (
+      value: unknown,
+      expectedId: unknown,
+      expectedResultId: unknown,
+      expectedOutcome: string,
+    ) => {
+      const snapshot = record(value);
+      const slotIds = snapshot?.slotIds;
+      const slots = snapshot?.slotSnapshots;
+      if (
+        !nonBlank(expectedId) ||
+        !nonBlank(expectedResultId) ||
+        snapshot?.id !== expectedId ||
+        snapshot.orderId !== orderId ||
+        snapshot.phaseId !== phaseId ||
+        snapshot.resultId !== expectedResultId ||
+        snapshot.authoritative !== true ||
+        snapshot.complete !== true ||
+        snapshot.immutable !== true ||
+        !Array.isArray(slotIds) ||
+        !Array.isArray(slots) ||
+        slotIds.length === 0 ||
+        slotIds.length !== slots.length ||
+        slotIds.some((id) => !nonBlank(id)) ||
+        new Set(slotIds).size !== slotIds.length
+      ) {
+        return undefined;
+      }
+      const rows = new Map<string, Readonly<Record<string, unknown>>>();
+      for (const value of slots) {
+        const row = record(value);
+        const id = row?.id;
+        if (
+          row === undefined ||
+          !nonBlank(id) ||
+          !slotIds.includes(id) ||
+          rows.has(id) ||
+          row.orderId !== orderId ||
+          row.phaseId !== phaseId ||
+          row.outcome !== expectedOutcome ||
+          !nonBlank(row.resultId) ||
+          row.immutable !== true
+        ) {
+          return undefined;
+        }
+        rows.set(id, row);
+      }
+      return slotIds.some((id) => !rows.has(id)) ? undefined : rows;
+    };
+    const beforeSlots = parseSlotSet(
+      context.lateRefundFailureSlotSetBefore,
+      beforeSlotSetId,
+      beforeSlotSetResultId,
+      "cancelled_refunded",
+    );
+    const afterSlots = parseSlotSet(
+      context.lateRefundFailureSlotSetAfter,
+      afterSlotSetId,
+      afterSlotSetResultId,
+      "cancelled",
+    );
+    if (
+      beforePayments === undefined ||
+      afterPayments === undefined ||
+      beforePayments.size !== afterPayments.size ||
+      beforePaymentSetId === afterPaymentSetId ||
+      beforePaymentSetResultId === afterPaymentSetResultId ||
+      afterPaymentSetResultId !== resultId ||
+      [...beforePayments].some(([id, source]) => {
+        const target = afterPayments.get(id);
+        if (target === undefined) return true;
+        const selected = id === paymentId;
+        return (
+          target.orderId !== source.orderId ||
+          target.phaseId !== source.phaseId ||
+          target.role !== source.role ||
+          target.provider !== source.provider ||
+          target.currency !== source.currency ||
+          target.capturedAmountMinor !== source.capturedAmountMinor ||
+          target.previousStatus !== source.status ||
+          target.previousResultId !== source.resultId ||
+          (selected
+            ? source.status !== expectedSource ||
+              source.provider !== provider ||
+              source.currency !== currency ||
+              source.capturedAmountMinor !== capturedAmountMinor ||
+              source.succeededRefundAmountMinor !== succeededBefore ||
+              source.authoritativeRefundSetId !== beforeSetId ||
+              source.authoritativeRefundSetResultId !== beforeSetResultId ||
+              source.resultId !== previousPaymentResultId ||
+              target.targetStatus !== expectedTarget ||
+              target.succeededRefundAmountMinor !== succeededAfter ||
+              target.authoritativeRefundSetId !== afterSetId ||
+              target.authoritativeRefundSetResultId !== afterSetResultId ||
+              target.resultId !== resultId
+            : target.targetStatus !== source.status ||
+              target.succeededRefundAmountMinor !==
+                source.succeededRefundAmountMinor ||
+              target.authoritativeRefundSetId !==
+                source.authoritativeRefundSetId ||
+              target.authoritativeRefundSetResultId !==
+                source.authoritativeRefundSetResultId ||
+              target.resultId !== source.resultId)
+        );
+      }) ||
+      beforeSlots === undefined ||
+      afterSlots === undefined ||
+      beforeSlots.size !== afterSlots.size ||
+      beforeSlotSetId === afterSlotSetId ||
+      beforeSlotSetResultId === afterSlotSetResultId ||
+      afterSlotSetResultId !== resultId ||
+      [...beforeSlots].some(([id, source]) => {
+        const target = afterSlots.get(id);
+        return (
+          target === undefined ||
+          target.previousOutcome !== "cancelled_refunded" ||
+          target.previousResultId !== source.resultId ||
+          target.resultId !== resultId
+        );
+      }) ||
+      sourceOrder?.id !== orderId ||
+      sourceOrder.phaseId !== phaseId ||
+      sourceOrder.paymentId !== paymentId ||
+      sourceOrder.status !== "refunded" ||
+      sourceOrder.authoritativePaymentSetId !== beforePaymentSetId ||
+      sourceOrder.authoritativePaymentSetResultId !==
+        beforePaymentSetResultId ||
+      sourceOrder.authoritativeSlotSetId !== beforeSlotSetId ||
+      sourceOrder.authoritativeSlotSetResultId !== beforeSlotSetResultId ||
+      sourceOrder.phaseResultId !== sourcePhaseResultId ||
+      sourceOrder.resultId !== sourceOrderResultId ||
+      sourceOrder.currentStateCommandKey !== sourceOrderStateKey ||
+      sourceOrder.immutable !== true ||
+      reopenedOrder?.id !== orderId ||
+      reopenedOrder.phaseId !== phaseId ||
+      reopenedOrder.paymentId !== paymentId ||
+      reopenedOrder.previousStatus !== "refunded" ||
+      reopenedOrder.targetStatus !== "cancelled" ||
+      reopenedOrder.authoritativePaymentSetId !== afterPaymentSetId ||
+      reopenedOrder.authoritativePaymentSetResultId !==
+        afterPaymentSetResultId ||
+      reopenedOrder.authoritativeSlotSetId !== afterSlotSetId ||
+      reopenedOrder.authoritativeSlotSetResultId !== afterSlotSetResultId ||
+      reopenedOrder.phaseResultId !== resultId ||
+      reopenedOrder.resultId !== resultId ||
+      reopenedOrder.immutable !== true ||
+      sourcePhase?.id !== phaseId ||
+      sourcePhase.orderId !== orderId ||
+      sourcePhase.status !== "cancelled_refunded" ||
+      sourcePhase.authoritativePaymentSetId !== beforePaymentSetId ||
+      sourcePhase.authoritativePaymentSetResultId !==
+        beforePaymentSetResultId ||
+      sourcePhase.authoritativeSlotSetId !== beforeSlotSetId ||
+      sourcePhase.authoritativeSlotSetResultId !== beforeSlotSetResultId ||
+      sourcePhase.orderResultId !== sourceOrderResultId ||
+      sourcePhase.resultId !== sourcePhaseResultId ||
+      sourcePhase.currentStateCommandKey !== sourcePhaseStateKey ||
+      sourcePhase.immutable !== true ||
+      reopenedPhase?.id !== phaseId ||
+      reopenedPhase.orderId !== orderId ||
+      reopenedPhase.previousStatus !== "cancelled_refunded" ||
+      reopenedPhase.targetStatus !== "cancelled" ||
+      reopenedPhase.authoritativePaymentSetId !== afterPaymentSetId ||
+      reopenedPhase.authoritativePaymentSetResultId !==
+        afterPaymentSetResultId ||
+      reopenedPhase.authoritativeSlotSetId !== afterSlotSetId ||
+      reopenedPhase.authoritativeSlotSetResultId !== afterSlotSetResultId ||
+      reopenedPhase.orderResultId !== resultId ||
+      reopenedPhase.resultId !== resultId ||
+      reopenedPhase.immutable !== true
+    ) {
+      return undefined;
+    }
+  }
+
+  return {
+    expectedSource,
+    expectedTarget,
+    orderId,
+    paymentId,
+    paymentStateKey,
+    phaseId,
+    previousPaymentResultId,
+    resultId,
+    sourceOrderResultId,
+    sourceOrderStateKey,
+    sourcePhaseResultId,
+    sourcePhaseStateKey,
+  };
+}
+
+function requireExactLateRefundFailureReconciliation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  scope: "payment" | "order" | "phase",
+): void {
+  const context = command.context;
+  const exactProof = readExactLateRefundFailureProof(context);
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const refundId = context?.refundTransactionId;
+  const successEventId = context?.lateRefundFailureSuccessProviderEventId;
+  const failureEventId = context?.lateRefundFailureProviderEventId;
+  const provider = context?.lateRefundFailureProvider;
+  const providerTransactionId = context?.lateRefundFailureProviderTransactionId;
+  const amountMinor = context?.lateRefundFailureAmountMinor;
+  const currency = context?.lateRefundFailureCurrency;
+  const attemptKey = context?.lateRefundFailureAttemptKey;
+  const capturedAmountMinor = context?.lateRefundFailureCapturedAmountMinor;
+  const beforeSetId = context?.lateRefundFailureRefundSetBeforeId;
+  const beforeSetResultId = context?.lateRefundFailureRefundSetBeforeResultId;
+  const afterSetId = context?.lateRefundFailureRefundSetAfterId;
+  const afterSetResultId = context?.lateRefundFailureRefundSetAfterResultId;
+  const previousPaymentResultId =
+    context?.lateRefundFailurePreviousPaymentResultId;
+  const paymentStateKey =
+    context?.lateRefundFailureCurrentPaymentStateCommandKey;
+  const resultId = context?.lateRefundFailureResultId;
+  const sourcePayment = record(context?.lateRefundFailureSourcePayment);
+  const reconciledPayment = record(context?.lateRefundFailureReconciledPayment);
+  const refund = record(context?.lateRefundFailureRefundTransaction);
+  const success = record(context?.lateRefundFailureSuccessProviderEvent);
+  const failure = record(context?.lateRefundFailureProviderEvent);
+  const latestPriorEventId =
+    context?.lateRefundFailureLatestPriorProviderEventId;
+  const latestPrior = record(
+    context?.lateRefundFailureLatestPriorProviderEvent,
+  );
+  const sourceOrder = record(context?.lateRefundFailureSourceOrder);
+  const reopenedOrder = record(context?.lateRefundFailureReopenedOrder);
+  const sourcePhase = record(context?.lateRefundFailureSourcePhase);
+  const reopenedPhase = record(context?.lateRefundFailureReopenedPhase);
+  if (exactProof !== undefined) {
+    const paymentBindingValid =
+      scope !== "payment" ||
+      (command.aggregateId === exactProof.paymentId &&
+        command.current === exactProof.expectedSource &&
+        command.target === exactProof.expectedTarget &&
+        command.currentStateResultId === exactProof.previousPaymentResultId &&
+        command.currentStateCommandKey === exactProof.paymentStateKey &&
+        (exactProof.expectedSource !== exactProof.expectedTarget ||
+          (reconciledPayment?.previousStateCommandKey ===
+            exactProof.paymentStateKey &&
+            reconciledPayment?.currentStateCommandKey ===
+              command.idempotencyKey)));
+    const orderBindingValid =
+      scope !== "order" ||
+      (exactProof.expectedSource === "refunded" &&
+        command.aggregateId === exactProof.orderId &&
+        command.current === "refunded" &&
+        command.target === "cancelled" &&
+        command.currentStateResultId === exactProof.sourceOrderResultId &&
+        command.currentStateCommandKey === exactProof.sourceOrderStateKey);
+    const phaseBindingValid =
+      scope !== "phase" ||
+      (exactProof.expectedSource === "refunded" &&
+        command.aggregateId === exactProof.phaseId &&
+        command.current === "cancelled_refunded" &&
+        command.target === "cancelled" &&
+        command.currentStateResultId === exactProof.sourcePhaseResultId &&
+        command.currentStateCommandKey === exactProof.sourcePhaseStateKey);
+    if (paymentBindingValid && orderBindingValid && phaseBindingValid) return;
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late refund failure proof is not bound to the selected aggregate command",
+    );
+  }
+  const parseRefundSet = (
+    value: unknown,
+    expectedId: unknown,
+    expectedResultId: unknown,
+  ) => {
+    const snapshot = record(value);
+    const refundIds = snapshot?.refundIds;
+    const refunds = snapshot?.refundSnapshots;
+    if (
+      !nonBlank(expectedId) ||
+      !nonBlank(expectedResultId) ||
+      snapshot?.id !== expectedId ||
+      snapshot.paymentId !== paymentId ||
+      snapshot.resultId !== expectedResultId ||
+      snapshot.immutable !== true ||
+      !Array.isArray(refundIds) ||
+      !Array.isArray(refunds) ||
+      refundIds.length !== refunds.length ||
+      refundIds.some((id) => !nonBlank(id)) ||
+      new Set(refundIds).size !== refundIds.length
+    ) {
+      return undefined;
+    }
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    let succeededAmountMinor = 0n;
+    let pendingCount = 0;
+    for (const value of refunds) {
+      const row = record(value);
+      const id = row?.id;
+      const status = row?.status;
+      const rowAmountMinor = row?.amountMinor;
+      if (
+        row === undefined ||
+        !nonBlank(id) ||
+        !refundIds.includes(id) ||
+        rows.has(id) ||
+        row.paymentId !== paymentId ||
+        (status !== "pending" &&
+          status !== "succeeded" &&
+          status !== "failed") ||
+        typeof rowAmountMinor !== "bigint" ||
+        rowAmountMinor <= 0n ||
+        !nonBlank(row.resultId) ||
+        row.immutable !== true
+      ) {
+        return undefined;
+      }
+      rows.set(id, row);
+      if (status === "succeeded") succeededAmountMinor += rowAmountMinor;
+      if (status === "pending") pendingCount += 1;
+    }
+    if (refundIds.some((id) => !rows.has(id))) return undefined;
+    return { pendingCount, rows, succeededAmountMinor };
+  };
+  const before = parseRefundSet(
+    context?.lateRefundFailureRefundSetBefore,
+    beforeSetId,
+    beforeSetResultId,
+  );
+  const after = parseRefundSet(
+    context?.lateRefundFailureRefundSetAfter,
+    afterSetId,
+    afterSetResultId,
+  );
+  let exactRefundSetTransition = false;
+  if (
+    before !== undefined &&
+    after !== undefined &&
+    before.rows.size === after.rows.size &&
+    before.rows.has(refundId as string) &&
+    after.rows.has(refundId as string)
+  ) {
+    exactRefundSetTransition = true;
+    for (const [id, beforeRow] of before.rows) {
+      const afterRow = after.rows.get(id);
+      if (
+        afterRow === undefined ||
+        afterRow.paymentId !== beforeRow.paymentId ||
+        afterRow.amountMinor !== beforeRow.amountMinor ||
+        afterRow.immutable !== true ||
+        (id === refundId
+          ? beforeRow.status !== "succeeded" ||
+            beforeRow.amountMinor !== amountMinor ||
+            beforeRow.resultId !==
+              context?.lateRefundFailureSuccessProviderEventResultId ||
+            afterRow.status !== "failed" ||
+            afterRow.resultId !== resultId
+          : afterRow.status !== beforeRow.status ||
+            afterRow.resultId !== beforeRow.resultId)
+      ) {
+        exactRefundSetTransition = false;
+        break;
+      }
+    }
+  }
+  const succeededBefore = before?.succeededAmountMinor;
+  const succeededAfter = after?.succeededAmountMinor;
+  const expectedSource =
+    before?.pendingCount !== 0
+      ? "refund_pending"
+      : succeededBefore === capturedAmountMinor
+        ? "refunded"
+        : "partially_refunded";
+  const expectedTarget =
+    after?.pendingCount !== 0
+      ? "refund_pending"
+      : succeededAfter === 0n
+        ? "captured"
+        : "partially_refunded";
+  const successOccurredAt = success?.occurredAt;
+  const successVerifiedAt = success?.verifiedAt;
+  const failureOccurredAt = failure?.occurredAt;
+  const failureVerifiedAt = failure?.verifiedAt;
+  const latestPriorOccurredAt = latestPrior?.occurredAt;
+  const sourceOrderResultId = context?.lateRefundFailureSourceOrderResultId;
+  const sourceOrderStateKey =
+    context?.lateRefundFailureCurrentOrderStateCommandKey;
+  const sourcePhaseResultId = context?.lateRefundFailureSourcePhaseResultId;
+  const sourcePhaseStateKey =
+    context?.lateRefundFailureCurrentPhaseStateCommandKey;
+  const paymentBindingValid =
+    scope !== "payment" ||
+    (command.aggregateId === paymentId &&
+      command.current === expectedSource &&
+      command.target === expectedTarget &&
+      command.currentStateResultId === previousPaymentResultId &&
+      command.currentStateCommandKey === paymentStateKey &&
+      (expectedSource !== expectedTarget ||
+        (expectedSource === "refund_pending" &&
+          reconciledPayment?.previousStateCommandKey === paymentStateKey &&
+          reconciledPayment?.currentStateCommandKey ===
+            command.idempotencyKey)));
+  const orderBindingValid =
+    scope !== "order" ||
+    (command.aggregateId === orderId &&
+      command.current === "refunded" &&
+      command.target === "cancelled" &&
+      command.currentStateResultId === sourceOrderResultId &&
+      command.currentStateCommandKey === sourceOrderStateKey &&
+      expectedSource === "refunded" &&
+      sourceOrder !== undefined &&
+      sourceOrder?.id === orderId &&
+      sourceOrder.phaseId === phaseId &&
+      sourceOrder.paymentId === paymentId &&
+      sourceOrder.status === "refunded" &&
+      sourceOrder.resultId === sourceOrderResultId &&
+      sourceOrder.currentStateCommandKey === sourceOrderStateKey &&
+      sourceOrder.immutable === true &&
+      reopenedOrder !== undefined &&
+      reopenedOrder?.id === orderId &&
+      reopenedOrder.phaseId === phaseId &&
+      reopenedOrder.paymentId === paymentId &&
+      reopenedOrder.previousStatus === "refunded" &&
+      reopenedOrder.targetStatus === "cancelled" &&
+      reopenedOrder.resultId === resultId &&
+      reopenedOrder.immutable === true);
+  const phaseBindingValid =
+    scope !== "phase" ||
+    (command.aggregateId === phaseId &&
+      command.current === "cancelled_refunded" &&
+      command.target === "cancelled" &&
+      command.currentStateResultId === sourcePhaseResultId &&
+      command.currentStateCommandKey === sourcePhaseStateKey &&
+      expectedSource === "refunded" &&
+      sourcePhase !== undefined &&
+      sourcePhase?.id === phaseId &&
+      sourcePhase.orderId === orderId &&
+      sourcePhase.status === "cancelled_refunded" &&
+      sourcePhase.resultId === sourcePhaseResultId &&
+      sourcePhase.currentStateCommandKey === sourcePhaseStateKey &&
+      sourcePhase.immutable === true &&
+      reopenedPhase !== undefined &&
+      reopenedPhase?.id === phaseId &&
+      reopenedPhase.orderId === orderId &&
+      reopenedPhase.previousStatus === "cancelled_refunded" &&
+      reopenedPhase.targetStatus === "cancelled" &&
+      reopenedPhase.resultId === resultId &&
+      reopenedPhase.immutable === true);
+
+  if (
+    exactProof === undefined ||
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(refundId) ||
+    !nonBlank(successEventId) ||
+    !nonBlank(failureEventId) ||
+    !nonBlank(latestPriorEventId) ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    !nonBlank(currency) ||
+    !nonBlank(attemptKey) ||
+    !nonBlank(beforeSetId) ||
+    !nonBlank(beforeSetResultId) ||
+    !nonBlank(afterSetId) ||
+    !nonBlank(afterSetResultId) ||
+    !nonBlank(previousPaymentResultId) ||
+    !nonBlank(paymentStateKey) ||
+    !nonBlank(resultId) ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n ||
+    !exactRefundSetTransition ||
+    succeededBefore === undefined ||
+    succeededAfter === undefined ||
+    succeededAfter !== succeededBefore - amountMinor ||
+    succeededAfter < 0n ||
+    succeededBefore > capturedAmountMinor ||
+    before?.pendingCount !== after?.pendingCount ||
+    beforeSetId === afterSetId ||
+    beforeSetResultId === afterSetResultId ||
+    !paymentBindingValid ||
+    !orderBindingValid ||
+    !phaseBindingValid ||
+    sourcePayment?.id !== paymentId ||
+    sourcePayment.orderId !== orderId ||
+    sourcePayment.phaseId !== phaseId ||
+    sourcePayment.role !== role ||
+    sourcePayment.status !== expectedSource ||
+    sourcePayment.capturedAmountMinor !== capturedAmountMinor ||
+    sourcePayment.succeededRefundAmountMinor !== succeededBefore ||
+    sourcePayment.authoritativeRefundSetId !== beforeSetId ||
+    sourcePayment.authoritativeRefundSetResultId !== beforeSetResultId ||
+    sourcePayment.resultId !== previousPaymentResultId ||
+    sourcePayment.currentStateCommandKey !== paymentStateKey ||
+    sourcePayment.immutable !== true ||
+    reconciledPayment?.id !== paymentId ||
+    reconciledPayment.orderId !== orderId ||
+    reconciledPayment.phaseId !== phaseId ||
+    reconciledPayment.role !== role ||
+    reconciledPayment.previousStatus !== expectedSource ||
+    reconciledPayment.targetStatus !== expectedTarget ||
+    reconciledPayment.capturedAmountMinor !== capturedAmountMinor ||
+    reconciledPayment.succeededRefundAmountMinor !== succeededAfter ||
+    reconciledPayment.refundTransactionId !== refundId ||
+    reconciledPayment.authoritativeRefundSetId !== afterSetId ||
+    reconciledPayment.authoritativeRefundSetResultId !== afterSetResultId ||
+    reconciledPayment.resultId !== resultId ||
+    reconciledPayment.immutable !== true ||
+    refund?.id !== refundId ||
+    refund.paymentId !== paymentId ||
+    refund.orderId !== orderId ||
+    refund.phaseId !== phaseId ||
+    refund.previousStatus !== "succeeded" ||
+    refund.targetStatus !== "failed" ||
+    refund.status !== "failed" ||
+    refund.provider !== provider ||
+    refund.providerTransactionId !== providerTransactionId ||
+    refund.amountMinor !== amountMinor ||
+    refund.currency !== currency ||
+    refund.idempotencyKey !== attemptKey ||
+    refund.previousProviderEventId !== successEventId ||
+    refund.providerEventId !== failureEventId ||
+    refund.completedAt !== null ||
+    refund.resultId !== resultId ||
+    refund.immutable !== true ||
+    success?.paymentId !== paymentId ||
+    success.refundTransactionId !== refundId ||
+    success.provider !== provider ||
+    success.providerTransactionId !== providerTransactionId ||
+    success.amountMinor !== amountMinor ||
+    success.currency !== currency ||
+    !(successOccurredAt instanceof Instant) ||
+    !(successVerifiedAt instanceof Instant) ||
+    failure?.paymentId !== paymentId ||
+    failure.refundTransactionId !== refundId ||
+    failure.provider !== provider ||
+    failure.providerTransactionId !== providerTransactionId ||
+    failure.amountMinor !== amountMinor ||
+    failure.currency !== currency ||
+    !(failureOccurredAt instanceof Instant) ||
+    !(failureVerifiedAt instanceof Instant) ||
+    latestPrior?.id !== latestPriorEventId ||
+    latestPrior.paymentId !== paymentId ||
+    latestPrior.refundTransactionId !== refundId ||
+    latestPrior.provider !== provider ||
+    latestPrior.providerTransactionId !== providerTransactionId ||
+    latestPrior.kind !== "refund_succeeded" ||
+    latestPrior.amountMinor !== amountMinor ||
+    latestPrior.currency !== currency ||
+    latestPrior.authenticated !== true ||
+    latestPrior.verified !== true ||
+    latestPrior.immutable !== true ||
+    !(latestPriorOccurredAt instanceof Instant) ||
+    successOccurredAt.compare(latestPriorOccurredAt) > 0 ||
+    latestPriorOccurredAt.compare(failureOccurredAt) >= 0 ||
+    context?.lateRefundFailurePaymentResultId !== resultId ||
+    context?.lateRefundFailureRefundTransactionResultId !== resultId ||
+    context?.lateRefundFailureProviderEventResultId !== resultId
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late refund failure requires the exact selected success, strictly newer failure, complete refund-set change, and atomic aggregate projection",
+    );
+  }
+}
+
+function requireExactLateRefundSuccessReconciliation<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+  phase: "start" | "complete",
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const refundId = context?.refundTransactionId;
+  const failureEventId = context?.lateRefundSuccessFailureProviderEventId;
+  const successEventId = context?.refundCompletionProviderEventId;
+  const provider = context?.lateRefundSuccessProvider;
+  const providerTransactionId = context?.lateRefundSuccessProviderTransactionId;
+  const amountMinor = context?.lateRefundSuccessAmountMinor;
+  const currency = context?.lateRefundSuccessCurrency;
+  const attemptKey = context?.lateRefundSuccessAttemptKey;
+  const capturedAmountMinor = context?.lateRefundSuccessCapturedAmountMinor;
+  const succeededBefore = context?.lateRefundSuccessSucceededBeforeMinor;
+  const succeededAfter = context?.lateRefundSuccessSucceededAfterMinor;
+  const refundSetBeforeId = context?.lateRefundSuccessRefundSetBeforeId;
+  const refundSetBeforeResultId =
+    context?.lateRefundSuccessRefundSetBeforeResultId;
+  const refundSetAfterId = context?.lateRefundSuccessRefundSetAfterId;
+  const refundSetAfterResultId =
+    context?.lateRefundSuccessRefundSetAfterResultId;
+  const sourceResultId = context?.lateRefundSuccessSourcePaymentResultId;
+  const sourceStateKey = context?.lateRefundSuccessSourceCurrentStateCommandKey;
+  const interimResultId = context?.refundCompletionPreviousPaymentResultId;
+  const interimStateKey = context?.refundCompletionCurrentStateCommandKey;
+  const finalResultId = context?.refundCompletionResultId;
+  const sourcePayment = record(context?.lateRefundSuccessSourcePayment);
+  const interimPayment = record(context?.refundCompletionExpectedPayment);
+  const refund = record(context?.refundCompletionRefundTransaction);
+  const failureEvent = record(context?.lateRefundSuccessFailureProviderEvent);
+  const successEvent = record(context?.refundCompletionProviderEvent);
+  const reconciledPayment = record(context?.lateRefundSuccessReconciledPayment);
+  const providerEventSetId = context?.lateRefundSuccessProviderEventSetId;
+  const providerEventSetResultId =
+    context?.lateRefundSuccessProviderEventSetResultId;
+  const providerEventSet = record(context?.lateRefundSuccessProviderEventSet);
+  const providerEventIds = providerEventSet?.providerEventIds;
+  const providerEvents = providerEventSet?.providerEvents;
+  let exactProviderEventSet = false;
+  if (
+    nonBlank(providerEventSetId) &&
+    nonBlank(providerEventSetResultId) &&
+    providerEventSet?.id === providerEventSetId &&
+    providerEventSet.paymentId === paymentId &&
+    providerEventSet.refundTransactionId === refundId &&
+    providerEventSet.resultId === providerEventSetResultId &&
+    providerEventSet.authoritative === true &&
+    providerEventSet.complete === true &&
+    providerEventSet.immutable === true &&
+    Array.isArray(providerEventIds) &&
+    Array.isArray(providerEvents) &&
+    providerEventIds.length >= 2 &&
+    providerEventIds.length === providerEvents.length &&
+    providerEventIds.every((id) => nonBlank(id)) &&
+    new Set(providerEventIds).size === providerEventIds.length
+  ) {
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    for (const value of providerEvents) {
+      const event = record(value);
+      const id = event?.id;
+      const occurredAt = event?.occurredAt;
+      const authenticatedAt = event?.authenticatedAt;
+      const verifiedAt = event?.verifiedAt;
+      if (
+        event === undefined ||
+        !nonBlank(id) ||
+        !providerEventIds.includes(id) ||
+        rows.has(id) ||
+        event.paymentId !== paymentId ||
+        event.refundTransactionId !== refundId ||
+        event.provider !== provider ||
+        event.providerTransactionId !== providerTransactionId ||
+        (event.kind !== "refund_succeeded" && event.kind !== "refund_failed") ||
+        event.amountMinor !== amountMinor ||
+        event.currency !== currency ||
+        event.authenticated !== true ||
+        event.verified !== true ||
+        !nonBlank(event.resultId) ||
+        event.immutable !== true ||
+        !(occurredAt instanceof Instant) ||
+        !(authenticatedAt instanceof Instant) ||
+        !(verifiedAt instanceof Instant) ||
+        authenticatedAt.epochMilliseconds <
+          occurredAt.epochMilliseconds - 5_000 ||
+        verifiedAt.compare(authenticatedAt) < 0
+      ) {
+        rows.clear();
+        break;
+      }
+      rows.set(id, event);
+    }
+    const authoritativeFailure = rows.get(failureEventId as string);
+    const authoritativeSuccess = rows.get(successEventId as string);
+    const priorRows = [...rows.values()].filter(
+      (event) => event.id !== successEventId,
+    );
+    const latestOccurredAt =
+      rows.size === 0
+        ? undefined
+        : Math.max(
+            ...[...rows.values()].map(
+              (event) => (event.occurredAt as Instant).epochMilliseconds,
+            ),
+          );
+    const latestRows = [...rows.values()].filter(
+      (event) =>
+        (event.occurredAt as Instant).epochMilliseconds === latestOccurredAt,
+    );
+    const exactProjection = (
+      projection: Readonly<Record<string, unknown>> | undefined,
+      authoritative: Readonly<Record<string, unknown>> | undefined,
+    ): boolean =>
+      projection !== undefined &&
+      authoritative !== undefined &&
+      projection.id === authoritative.id &&
+      projection.paymentId === authoritative.paymentId &&
+      projection.refundTransactionId === authoritative.refundTransactionId &&
+      projection.provider === authoritative.provider &&
+      projection.providerTransactionId ===
+        authoritative.providerTransactionId &&
+      projection.kind === authoritative.kind &&
+      projection.amountMinor === authoritative.amountMinor &&
+      projection.currency === authoritative.currency &&
+      projection.occurredAt instanceof Instant &&
+      authoritative.occurredAt instanceof Instant &&
+      projection.occurredAt.equals(authoritative.occurredAt) &&
+      projection.authenticatedAt instanceof Instant &&
+      authoritative.authenticatedAt instanceof Instant &&
+      projection.authenticatedAt.equals(authoritative.authenticatedAt) &&
+      projection.verifiedAt instanceof Instant &&
+      authoritative.verifiedAt instanceof Instant &&
+      projection.verifiedAt.equals(authoritative.verifiedAt) &&
+      projection.authenticated === true &&
+      projection.verified === true &&
+      projection.resultId === authoritative.resultId &&
+      projection.immutable === true;
+    exactProviderEventSet =
+      rows.size === providerEventIds.length &&
+      providerEventIds.every((id) => rows.has(id as string)) &&
+      providerEventSetResultId === finalResultId &&
+      priorRows.length >= 1 &&
+      authoritativeFailure?.kind === "refund_failed" &&
+      authoritativeSuccess?.kind === "refund_succeeded" &&
+      latestRows.length === 1 &&
+      latestRows[0]?.id === successEventId &&
+      exactProjection(failureEvent, authoritativeFailure) &&
+      exactProjection(successEvent, authoritativeSuccess);
+  }
+  const parseRefundSet = (
+    value: unknown,
+    expectedId: unknown,
+    expectedResultId: unknown,
+  ) => {
+    const snapshot = record(value);
+    const refundIds = snapshot?.refundIds;
+    const refunds = snapshot?.refundSnapshots;
+    if (
+      !nonBlank(expectedId) ||
+      !nonBlank(expectedResultId) ||
+      snapshot?.id !== expectedId ||
+      snapshot.paymentId !== paymentId ||
+      snapshot.resultId !== expectedResultId ||
+      snapshot.authoritative !== true ||
+      snapshot.complete !== true ||
+      snapshot.immutable !== true ||
+      !Array.isArray(refundIds) ||
+      !Array.isArray(refunds) ||
+      refundIds.length !== refunds.length ||
+      refundIds.some((id) => !nonBlank(id)) ||
+      new Set(refundIds).size !== refundIds.length
+    ) {
+      return undefined;
+    }
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    let succeededAmountMinor = 0n;
+    let pendingCount = 0;
+    for (const value of refunds) {
+      const row = record(value);
+      const id = row?.id;
+      const status = row?.status;
+      const rowAmountMinor = row?.amountMinor;
+      if (
+        row === undefined ||
+        !nonBlank(id) ||
+        !refundIds.includes(id) ||
+        rows.has(id) ||
+        row.paymentId !== paymentId ||
+        (status !== "pending" &&
+          status !== "succeeded" &&
+          status !== "failed") ||
+        typeof rowAmountMinor !== "bigint" ||
+        rowAmountMinor <= 0n ||
+        !nonBlank(row.resultId) ||
+        row.immutable !== true
+      ) {
+        return undefined;
+      }
+      rows.set(id, row);
+      if (status === "succeeded") succeededAmountMinor += rowAmountMinor;
+      if (status === "pending") pendingCount += 1;
+    }
+    if (refundIds.some((id) => !rows.has(id))) return undefined;
+    return { pendingCount, rows, succeededAmountMinor };
+  };
+  const refundSetBefore = parseRefundSet(
+    context?.lateRefundSuccessRefundSetBefore,
+    refundSetBeforeId,
+    refundSetBeforeResultId,
+  );
+  const refundSetAfter = parseRefundSet(
+    context?.lateRefundSuccessRefundSetAfter,
+    refundSetAfterId,
+    refundSetAfterResultId,
+  );
+  let exactRefundSetTransition = false;
+  if (
+    refundSetBefore !== undefined &&
+    refundSetAfter !== undefined &&
+    refundSetBefore.rows.size === refundSetAfter.rows.size &&
+    refundSetBefore.rows.has(refundId as string) &&
+    refundSetAfter.rows.has(refundId as string)
+  ) {
+    exactRefundSetTransition = true;
+    for (const [id, before] of refundSetBefore.rows) {
+      const after = refundSetAfter.rows.get(id);
+      if (
+        after === undefined ||
+        after.paymentId !== before.paymentId ||
+        after.amountMinor !== before.amountMinor ||
+        after.immutable !== true ||
+        (id === refundId
+          ? before.status !== "failed" ||
+            before.amountMinor !== amountMinor ||
+            before.resultId !== failureEventId ||
+            after.status !== "succeeded" ||
+            after.resultId !== finalResultId
+          : after.status !== before.status ||
+            after.resultId !== before.resultId)
+      ) {
+        exactRefundSetTransition = false;
+        break;
+      }
+    }
+  }
+  const failureVerifiedAt = failureEvent?.verifiedAt;
+  const successVerifiedAt = successEvent?.verifiedAt;
+  const failureOccurredAt = failureEvent?.occurredAt;
+  const successOccurredAt = successEvent?.occurredAt;
+  const refundCompletedAt = refund?.completedAt;
+  const derivedSucceededBefore = refundSetBefore?.succeededAmountMinor;
+  const derivedSucceededAfter = refundSetAfter?.succeededAmountMinor;
+  const expectedSource =
+    derivedSucceededBefore === 0n ? "captured" : "partially_refunded";
+  const expectedTarget =
+    derivedSucceededAfter === capturedAmountMinor
+      ? "refunded"
+      : "partially_refunded";
+
+  if (
+    context?.paymentCaptureKind !== "late_refund_success" ||
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(refundId) ||
+    !nonBlank(failureEventId) ||
+    !nonBlank(successEventId) ||
+    failureEventId === successEventId ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    !nonBlank(currency) ||
+    !nonBlank(attemptKey) ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n ||
+    !exactRefundSetTransition ||
+    refundSetBefore?.pendingCount !== 0 ||
+    refundSetAfter?.pendingCount !== 0 ||
+    derivedSucceededBefore === undefined ||
+    derivedSucceededBefore < 0n ||
+    derivedSucceededAfter === undefined ||
+    derivedSucceededAfter !== derivedSucceededBefore + amountMinor ||
+    derivedSucceededAfter > capturedAmountMinor ||
+    typeof succeededBefore !== "bigint" ||
+    succeededBefore !== derivedSucceededBefore ||
+    typeof succeededAfter !== "bigint" ||
+    succeededAfter !== derivedSucceededAfter ||
+    !exactProviderEventSet ||
+    !nonBlank(refundSetBeforeId) ||
+    !nonBlank(refundSetBeforeResultId) ||
+    !nonBlank(refundSetAfterId) ||
+    !nonBlank(refundSetAfterResultId) ||
+    refundSetBeforeId === refundSetAfterId ||
+    refundSetBeforeResultId === refundSetAfterResultId ||
+    !nonBlank(sourceResultId) ||
+    !nonBlank(sourceStateKey) ||
+    !nonBlank(interimResultId) ||
+    !nonBlank(interimStateKey) ||
+    !nonBlank(finalResultId) ||
+    command.aggregateId !== paymentId ||
+    (phase === "start" &&
+      (command.current !== expectedSource ||
+        command.target !== "refund_pending" ||
+        command.currentStateResultId !== sourceResultId ||
+        command.currentStateCommandKey !== sourceStateKey)) ||
+    (phase === "complete" &&
+      (command.current !== "refund_pending" ||
+        command.target !== expectedTarget ||
+        command.currentStateResultId !== interimResultId ||
+        command.currentStateCommandKey !== interimStateKey)) ||
+    sourcePayment?.id !== paymentId ||
+    sourcePayment.orderId !== orderId ||
+    sourcePayment.phaseId !== phaseId ||
+    sourcePayment.role !== role ||
+    sourcePayment.status !== expectedSource ||
+    sourcePayment.capturedAmountMinor !== capturedAmountMinor ||
+    sourcePayment.succeededRefundAmountMinor !== succeededBefore ||
+    sourcePayment.failedRefundTransactionId !== refundId ||
+    sourcePayment.authoritativeRefundSetId !== refundSetBeforeId ||
+    sourcePayment.authoritativeRefundSetResultId !== refundSetBeforeResultId ||
+    sourcePayment.resultId !== sourceResultId ||
+    sourcePayment.currentStateCommandKey !== sourceStateKey ||
+    sourcePayment.immutable !== true ||
+    interimPayment?.id !== paymentId ||
+    interimPayment.orderId !== orderId ||
+    interimPayment.phaseId !== phaseId ||
+    interimPayment.role !== role ||
+    interimPayment.status !== "refund_pending" ||
+    interimPayment.activeRefundTransactionId !== refundId ||
+    interimPayment.capturedAmountMinor !== capturedAmountMinor ||
+    interimPayment.succeededRefundAmountMinor !== succeededAfter ||
+    interimPayment.authoritativeRefundSetId !== refundSetAfterId ||
+    interimPayment.authoritativeRefundSetResultId !== refundSetAfterResultId ||
+    interimPayment.resultId !== interimResultId ||
+    interimPayment.currentStateCommandKey !== interimStateKey ||
+    interimPayment.immutable !== true ||
+    refund?.id !== refundId ||
+    refund.paymentId !== paymentId ||
+    refund.orderId !== orderId ||
+    refund.phaseId !== phaseId ||
+    refund.previousStatus !== "failed" ||
+    refund.targetStatus !== "succeeded" ||
+    refund.status !== "succeeded" ||
+    refund.provider !== provider ||
+    refund.providerTransactionId !== providerTransactionId ||
+    refund.amountMinor !== amountMinor ||
+    refund.currency !== currency ||
+    refund.idempotencyKey !== attemptKey ||
+    refund.failureProviderEventId !== failureEventId ||
+    refund.providerEventId !== successEventId ||
+    !(refundCompletedAt instanceof Instant) ||
+    refund.resultId !== finalResultId ||
+    refund.immutable !== true ||
+    failureEvent?.id !== failureEventId ||
+    failureEvent.paymentId !== paymentId ||
+    failureEvent.refundTransactionId !== refundId ||
+    failureEvent.provider !== provider ||
+    failureEvent.providerTransactionId !== providerTransactionId ||
+    failureEvent.kind !== "refund_failed" ||
+    failureEvent.amountMinor !== amountMinor ||
+    failureEvent.currency !== currency ||
+    failureEvent.authenticated !== true ||
+    failureEvent.verified !== true ||
+    !(failureOccurredAt instanceof Instant) ||
+    !(failureVerifiedAt instanceof Instant) ||
+    failureEvent.immutable !== true ||
+    successEvent?.id !== successEventId ||
+    successEvent.paymentId !== paymentId ||
+    successEvent.refundTransactionId !== refundId ||
+    successEvent.provider !== provider ||
+    successEvent.providerTransactionId !== providerTransactionId ||
+    successEvent.kind !== "refund_succeeded" ||
+    successEvent.amountMinor !== amountMinor ||
+    successEvent.currency !== currency ||
+    successEvent.status !== "succeeded" ||
+    successEvent.projectedTarget !== expectedTarget ||
+    successEvent.authenticated !== true ||
+    successEvent.verified !== true ||
+    !(successOccurredAt instanceof Instant) ||
+    !(successVerifiedAt instanceof Instant) ||
+    successEvent.resultId !== finalResultId ||
+    successEvent.immutable !== true ||
+    failureOccurredAt.compare(successOccurredAt) >= 0 ||
+    !refundCompletedAt.equals(successVerifiedAt) ||
+    reconciledPayment?.id !== paymentId ||
+    reconciledPayment.orderId !== orderId ||
+    reconciledPayment.phaseId !== phaseId ||
+    reconciledPayment.role !== role ||
+    reconciledPayment.previousStatus !== expectedSource ||
+    reconciledPayment.intermediateStatus !== "refund_pending" ||
+    reconciledPayment.targetStatus !== expectedTarget ||
+    reconciledPayment.capturedAmountMinor !== capturedAmountMinor ||
+    reconciledPayment.succeededRefundAmountMinor !== succeededAfter ||
+    reconciledPayment.refundTransactionId !== refundId ||
+    reconciledPayment.authoritativeRefundSetId !== refundSetAfterId ||
+    reconciledPayment.authoritativeRefundSetResultId !==
+      refundSetAfterResultId ||
+    reconciledPayment.resultId !== finalResultId ||
+    reconciledPayment.immutable !== true ||
+    context?.lateRefundSuccessPaymentResultId !== finalResultId ||
+    context?.lateRefundSuccessRefundTransactionResultId !== finalResultId ||
+    context?.lateRefundSuccessProviderEventResultId !== finalResultId ||
+    context?.lateRefundSuccessCompleted !== true ||
+    context?.lateRefundSuccessAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late refund success requires the exact failed attempt, matching provider receipts, authoritative refund-set change, and atomic Payment projection",
+    );
+  }
+}
+
 function requireExactPaymentRefundCompletion<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -1941,6 +3735,12 @@ function requireExactPaymentRefundCompletion<S extends string>(
   const context = command.context;
   const nonBlank = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
   const paymentId = context?.paymentId;
   const orderId = context?.orderId;
   const phaseId = context?.phaseId;
@@ -1950,27 +3750,139 @@ function requireExactPaymentRefundCompletion<S extends string>(
   const previousResultId = context?.refundCompletionPreviousPaymentResultId;
   const resultId = context?.refundCompletionResultId;
   const stateKey = context?.refundCompletionCurrentStateCommandKey;
-  const expectedValue = context?.refundCompletionExpectedPayment;
-  const expected =
-    typeof expectedValue === "object" &&
-    expectedValue !== null &&
-    !Array.isArray(expectedValue)
-      ? (expectedValue as Readonly<Record<string, unknown>>)
-      : undefined;
-  const refundValue = context?.refundCompletionRefundTransaction;
-  const refund =
-    typeof refundValue === "object" &&
-    refundValue !== null &&
-    !Array.isArray(refundValue)
-      ? (refundValue as Readonly<Record<string, unknown>>)
-      : undefined;
-  const eventValue = context?.refundCompletionProviderEvent;
-  const event =
-    typeof eventValue === "object" &&
-    eventValue !== null &&
-    !Array.isArray(eventValue)
-      ? (eventValue as Readonly<Record<string, unknown>>)
-      : undefined;
+  const refundSetBeforeId = context?.refundCompletionRefundSetBeforeId;
+  const refundSetBeforeResultId =
+    context?.refundCompletionRefundSetBeforeResultId;
+  const refundSetAfterId = context?.refundCompletionRefundSetAfterId;
+  const refundSetAfterResultId =
+    context?.refundCompletionRefundSetAfterResultId;
+  const expected = record(context?.refundCompletionExpectedPayment);
+  const reconciled = record(context?.refundCompletionReconciledPayment);
+  const refund = record(context?.refundCompletionRefundTransaction);
+  const event = record(context?.refundCompletionProviderEvent);
+  const lateSuccess = context?.paymentCaptureKind === "late_refund_success";
+  if (lateSuccess) {
+    requireExactLateRefundSuccessReconciliation(lifecycle, command, "complete");
+    return;
+  }
+  const parseRefundSet = (
+    value: unknown,
+    expectedId: unknown,
+    expectedResultId: unknown,
+  ) => {
+    const snapshot = record(value);
+    const refundIds = snapshot?.refundIds;
+    const refunds = snapshot?.refundSnapshots;
+    if (
+      !nonBlank(expectedId) ||
+      !nonBlank(expectedResultId) ||
+      snapshot?.id !== expectedId ||
+      snapshot.paymentId !== paymentId ||
+      snapshot.resultId !== expectedResultId ||
+      snapshot.immutable !== true ||
+      !Array.isArray(refundIds) ||
+      !Array.isArray(refunds) ||
+      refundIds.length !== refunds.length ||
+      refundIds.some((id) => !nonBlank(id)) ||
+      new Set(refundIds).size !== refundIds.length
+    ) {
+      return undefined;
+    }
+    const rows = new Map<string, Readonly<Record<string, unknown>>>();
+    let succeededAmountMinor = 0n;
+    let pendingCount = 0;
+    for (const value of refunds) {
+      const row = record(value);
+      const id = row?.id;
+      const status = row?.status;
+      const amountMinor = row?.amountMinor;
+      if (
+        row === undefined ||
+        !nonBlank(id) ||
+        !refundIds.includes(id) ||
+        rows.has(id) ||
+        row.paymentId !== paymentId ||
+        (status !== "pending" &&
+          status !== "succeeded" &&
+          status !== "failed") ||
+        typeof amountMinor !== "bigint" ||
+        amountMinor <= 0n ||
+        !nonBlank(row.resultId) ||
+        row.immutable !== true
+      ) {
+        return undefined;
+      }
+      rows.set(id, row);
+      if (status === "succeeded") succeededAmountMinor += amountMinor;
+      if (status === "pending") pendingCount += 1;
+    }
+    if (refundIds.some((id) => !rows.has(id))) return undefined;
+    return { pendingCount, rows, succeededAmountMinor };
+  };
+  const refundSetBefore = parseRefundSet(
+    context?.refundCompletionRefundSetBefore,
+    refundSetBeforeId,
+    refundSetBeforeResultId,
+  );
+  const refundSetAfter = parseRefundSet(
+    context?.refundCompletionRefundSetAfter,
+    refundSetAfterId,
+    refundSetAfterResultId,
+  );
+  const refundAmountMinor = refund?.amountMinor;
+  const refundPreviousResultId = refund?.previousResultId;
+  let exactRefundSetTransition = false;
+  if (
+    refundSetBefore !== undefined &&
+    refundSetAfter !== undefined &&
+    refundSetBefore.rows.size === refundSetAfter.rows.size &&
+    nonBlank(refundTransactionId) &&
+    refundSetBefore.rows.has(refundTransactionId) &&
+    refundSetAfter.rows.has(refundTransactionId)
+  ) {
+    exactRefundSetTransition = true;
+    for (const [id, before] of refundSetBefore.rows) {
+      const after = refundSetAfter.rows.get(id);
+      if (
+        after === undefined ||
+        after.paymentId !== before.paymentId ||
+        after.amountMinor !== before.amountMinor ||
+        after.immutable !== true ||
+        (id === refundTransactionId
+          ? before.status !== "pending" ||
+            before.amountMinor !== refundAmountMinor ||
+            before.resultId !== refundPreviousResultId ||
+            after.status !== "succeeded" ||
+            after.resultId !== resultId
+          : after.status !== before.status ||
+            after.resultId !== before.resultId)
+      ) {
+        exactRefundSetTransition = false;
+        break;
+      }
+    }
+  }
+  const capturedAmountMinor = expected?.capturedAmountMinor;
+  const succeededBefore = refundSetBefore?.succeededAmountMinor;
+  const succeededAfter = refundSetAfter?.succeededAmountMinor;
+  const expectedTarget =
+    typeof capturedAmountMinor === "bigint" &&
+    succeededAfter === capturedAmountMinor
+      ? "refunded"
+      : typeof capturedAmountMinor === "bigint" &&
+          succeededAfter !== undefined &&
+          succeededAfter > 0n &&
+          succeededAfter < capturedAmountMinor
+        ? "partially_refunded"
+        : undefined;
+  const provider = expected?.provider;
+  const currency = expected?.currency;
+  const providerTransactionId = refund?.providerTransactionId;
+  const requestedAt = refund?.requestedAt;
+  const completedAt = refund?.completedAt;
+  const occurredAt = event?.occurredAt;
+  const authenticatedAt = event?.authenticatedAt;
+  const verifiedAt = event?.verifiedAt;
   if (
     !nonBlank(paymentId) ||
     !nonBlank(orderId) ||
@@ -1981,6 +3893,30 @@ function requireExactPaymentRefundCompletion<S extends string>(
     !nonBlank(previousResultId) ||
     !nonBlank(resultId) ||
     !nonBlank(stateKey) ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    typeof currency !== "string" ||
+    !/^[A-Z]{3}$/.test(currency) ||
+    typeof refundAmountMinor !== "bigint" ||
+    refundAmountMinor <= 0n ||
+    !nonBlank(refundPreviousResultId) ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n ||
+    !exactRefundSetTransition ||
+    refundSetBefore?.pendingCount !== 1 ||
+    refundSetAfter?.pendingCount !== 0 ||
+    succeededBefore === undefined ||
+    succeededBefore < 0n ||
+    succeededAfter === undefined ||
+    succeededAfter !== succeededBefore + refundAmountMinor ||
+    succeededAfter > capturedAmountMinor ||
+    expectedTarget === undefined ||
+    !nonBlank(refundSetBeforeId) ||
+    !nonBlank(refundSetBeforeResultId) ||
+    !nonBlank(refundSetAfterId) ||
+    !nonBlank(refundSetAfterResultId) ||
+    refundSetBeforeId === refundSetAfterId ||
+    refundSetBeforeResultId === refundSetAfterResultId ||
     command.aggregateId !== paymentId ||
     !nonBlank(command.currentStateResultId) ||
     command.currentStateResultId !== previousResultId ||
@@ -1988,18 +3924,39 @@ function requireExactPaymentRefundCompletion<S extends string>(
     context?.refundWebhookPaymentId !== paymentId ||
     context?.refundWebhookRefundTransactionId !== refundTransactionId ||
     context?.refundWebhookStatus !== "succeeded" ||
-    context?.refundWebhookProjectedTarget !== command.target ||
+    context?.refundWebhookProjectedTarget !== expectedTarget ||
     context?.refundWebhookAuthenticated !== true ||
     context?.refundWebhookVerified !== true ||
     expected?.id !== paymentId ||
     expected.orderId !== orderId ||
     expected.phaseId !== phaseId ||
     expected.role !== role ||
+    expected.provider !== provider ||
+    expected.currency !== currency ||
     expected.status !== "refund_pending" ||
     expected.activeRefundTransactionId !== refundTransactionId ||
+    expected.succeededRefundAmountMinor !== succeededBefore ||
+    expected.authoritativeRefundSetId !== refundSetBeforeId ||
+    expected.authoritativeRefundSetResultId !== refundSetBeforeResultId ||
     expected.resultId !== previousResultId ||
     expected.currentStateCommandKey !== stateKey ||
     expected.immutable !== true ||
+    reconciled?.id !== paymentId ||
+    reconciled.orderId !== orderId ||
+    reconciled.phaseId !== phaseId ||
+    reconciled.role !== role ||
+    reconciled.provider !== provider ||
+    reconciled.currency !== currency ||
+    reconciled.previousStatus !== "refund_pending" ||
+    reconciled.targetStatus !== expectedTarget ||
+    reconciled.activeRefundTransactionId !== null ||
+    reconciled.capturedAmountMinor !== capturedAmountMinor ||
+    reconciled.succeededRefundAmountMinor !== succeededAfter ||
+    reconciled.refundTransactionId !== refundTransactionId ||
+    reconciled.authoritativeRefundSetId !== refundSetAfterId ||
+    reconciled.authoritativeRefundSetResultId !== refundSetAfterResultId ||
+    reconciled.resultId !== resultId ||
+    reconciled.immutable !== true ||
     refund?.id !== refundTransactionId ||
     refund.paymentId !== paymentId ||
     refund.orderId !== orderId ||
@@ -2007,18 +3964,36 @@ function requireExactPaymentRefundCompletion<S extends string>(
     refund.previousStatus !== "pending" ||
     refund.targetStatus !== "succeeded" ||
     refund.status !== "succeeded" ||
+    refund.provider !== provider ||
+    refund.currency !== currency ||
     refund.providerEventId !== providerEventId ||
+    !(requestedAt instanceof Instant) ||
+    !(completedAt instanceof Instant) ||
+    completedAt.epochMilliseconds < requestedAt.epochMilliseconds - 5_000 ||
     refund.resultId !== resultId ||
     refund.immutable !== true ||
     event?.id !== providerEventId ||
     event.paymentId !== paymentId ||
     event.refundTransactionId !== refundTransactionId ||
+    event.provider !== provider ||
+    event.providerTransactionId !== providerTransactionId ||
+    event.kind !== "refund_succeeded" ||
+    event.amountMinor !== refundAmountMinor ||
+    event.currency !== currency ||
     event.status !== "succeeded" ||
-    event.projectedTarget !== command.target ||
+    event.projectedTarget !== expectedTarget ||
     event.authenticated !== true ||
     event.verified !== true ||
+    !(occurredAt instanceof Instant) ||
+    !(authenticatedAt instanceof Instant) ||
+    !(verifiedAt instanceof Instant) ||
+    occurredAt.epochMilliseconds < requestedAt.epochMilliseconds - 5_000 ||
+    authenticatedAt.epochMilliseconds < occurredAt.epochMilliseconds - 5_000 ||
+    verifiedAt.compare(authenticatedAt) < 0 ||
+    !completedAt.equals(verifiedAt) ||
     event.resultId !== resultId ||
     event.immutable !== true ||
+    command.target !== expectedTarget ||
     context?.refundCompletionPaymentResultId !== resultId ||
     context?.refundCompletionRefundTransactionResultId !== resultId ||
     context?.refundCompletionProviderEventResultId !== resultId ||
@@ -2030,6 +4005,169 @@ function requireExactPaymentRefundCompletion<S extends string>(
       command.current,
       command.target,
       "refund completion requires the command-selected Payment, its exact RefundTransaction, provider event, and atomic result",
+    );
+  }
+}
+
+function requireExactRefundFailureRollback<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const refundTransactionId = context?.refundFailureTransactionId;
+  const providerEventId = context?.refundFailureProviderEventId;
+  const provider = context?.refundFailureProvider;
+  const providerTransactionId = context?.refundFailureProviderTransactionId;
+  const amountMinor = context?.refundFailureAmountMinor;
+  const currency = context?.refundFailureCurrency;
+  const previousResultId =
+    context?.refundFailureRollbackPreviousPaymentResultId;
+  const stateKey = context?.refundFailureRollbackCurrentStateCommandKey;
+  const resultId = context?.refundFailureRollbackResultId;
+  const attemptKey = context?.refundFailureAttemptKey;
+  const capturedAmountMinor = context?.refundFailureCapturedAmountMinor;
+  const succeededAmountMinor = context?.refundFailureSucceededAmountMinor;
+  const expectedTarget =
+    typeof succeededAmountMinor === "bigint" && succeededAmountMinor === 0n
+      ? "captured"
+      : "partially_refunded";
+  const expectedPayment = record(context?.refundFailureRollbackExpectedPayment);
+  const restoredPayment = record(context?.refundFailureRollbackRestoredPayment);
+  const refundTransaction = record(
+    context?.refundFailureRollbackRefundTransaction,
+  );
+  const failure = record(context?.refundFailureProviderEvidence);
+
+  if (
+    command.target === "captured" &&
+    typeof expectedPayment?.providerFailureEventId === "string" &&
+    expectedPayment.providerFailureEventId.trim().length > 0
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "failed-source late capture must retain compensation provenance and retry its refund",
+    );
+  }
+
+  if (
+    context?.paymentCaptureKind !== "refund_failure_rollback" ||
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(refundTransactionId) ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    !nonBlank(currency) ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(resultId) ||
+    !nonBlank(attemptKey) ||
+    typeof capturedAmountMinor !== "bigint" ||
+    capturedAmountMinor <= 0n ||
+    typeof succeededAmountMinor !== "bigint" ||
+    succeededAmountMinor < 0n ||
+    succeededAmountMinor >= capturedAmountMinor ||
+    (command.target !== "captured" &&
+      command.target !== "partially_refunded") ||
+    command.target !== expectedTarget ||
+    context?.refundFailureRollbackTargetStatus !== expectedTarget ||
+    command.aggregateId !== paymentId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedPayment?.id !== paymentId ||
+    !Object.prototype.hasOwnProperty.call(
+      expectedPayment,
+      "providerFailureEventId",
+    ) ||
+    (expectedPayment.providerFailureEventId !== null &&
+      !nonBlank(expectedPayment.providerFailureEventId)) ||
+    expectedPayment.orderId !== orderId ||
+    expectedPayment.phaseId !== phaseId ||
+    expectedPayment.role !== role ||
+    expectedPayment.provider !== provider ||
+    expectedPayment.currency !== currency ||
+    expectedPayment.status !== "refund_pending" ||
+    expectedPayment.activeRefundTransactionId !== refundTransactionId ||
+    expectedPayment.capturedAmountMinor !== capturedAmountMinor ||
+    expectedPayment.succeededRefundAmountMinor !== succeededAmountMinor ||
+    expectedPayment.resultId !== previousResultId ||
+    expectedPayment.currentStateCommandKey !== stateKey ||
+    expectedPayment.immutable !== true ||
+    restoredPayment?.id !== paymentId ||
+    !Object.prototype.hasOwnProperty.call(
+      restoredPayment,
+      "providerFailureEventId",
+    ) ||
+    restoredPayment.providerFailureEventId !==
+      expectedPayment.providerFailureEventId ||
+    restoredPayment.orderId !== orderId ||
+    restoredPayment.phaseId !== phaseId ||
+    restoredPayment.role !== role ||
+    restoredPayment.provider !== provider ||
+    restoredPayment.currency !== currency ||
+    restoredPayment.previousStatus !== "refund_pending" ||
+    restoredPayment.targetStatus !== expectedTarget ||
+    restoredPayment.capturedAmountMinor !== capturedAmountMinor ||
+    restoredPayment.succeededRefundAmountMinor !== succeededAmountMinor ||
+    restoredPayment.resultId !== resultId ||
+    restoredPayment.immutable !== true ||
+    refundTransaction?.id !== refundTransactionId ||
+    refundTransaction.paymentId !== paymentId ||
+    refundTransaction.provider !== provider ||
+    refundTransaction.providerRefundId !== providerTransactionId ||
+    refundTransaction.amountMinor !== amountMinor ||
+    refundTransaction.status !== "failed" ||
+    refundTransaction.idempotencyKey !== attemptKey ||
+    refundTransaction.resultId !== resultId ||
+    refundTransaction.immutable !== true ||
+    failure?.id !== providerEventId ||
+    failure.paymentId !== paymentId ||
+    failure.refundTransactionId !== refundTransactionId ||
+    failure.provider !== provider ||
+    failure.providerTransactionId !== providerTransactionId ||
+    failure.kind !== "REFUND_FAILED" ||
+    failure.amountMinor !== amountMinor ||
+    failure.currency !== currency ||
+    failure.attemptKey !== attemptKey ||
+    failure.outcome !== "failed" ||
+    failure.authenticated !== true ||
+    failure.verified !== true ||
+    failure.resultId !== resultId ||
+    failure.immutable !== true ||
+    context?.refundFailureRollbackPaymentResultId !== resultId ||
+    context?.refundFailureRollbackTransactionResultId !== resultId ||
+    context?.refundFailureRollbackEvidenceResultId !== resultId ||
+    context?.refundFailureLatestTransactionId !== refundTransactionId ||
+    context?.refundFailureSucceededRefundSetComplete !== true ||
+    context?.refundFailureNoPendingRefunds !== true ||
+    context?.refundFailureNoSuccessfulRefunds !==
+      (succeededAmountMinor === 0n) ||
+    context?.refundFailureRollbackCompleted !== true ||
+    context?.refundFailureRollbackAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "refund failure rollback requires the exact Payment restoration, failed latest RefundTransaction, provider failure, financial totals, and atomic result",
     );
   }
 }
@@ -2226,6 +4364,96 @@ function requireVerifiedMatchingProviderPaymentEvent<S extends string>(
   }
 }
 
+function requireExactPaymentIntentCreationFailure<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const previousResultId = context?.paymentIntentFailurePreviousPaymentResultId;
+  const stateKey = context?.paymentIntentFailureCurrentStateCommandKey;
+  const resultId = context?.paymentIntentFailureResultId;
+  const attemptKey = context?.paymentIntentFailureAttemptKey;
+  const failureId = context?.paymentIntentFailureEvidenceId;
+  const provider = context?.paymentIntentFailureProvider;
+  const expectedPayment = record(context?.paymentIntentFailureExpectedPayment);
+  const failedPayment = record(context?.paymentIntentFailureFailedPayment);
+  const failure = record(context?.paymentIntentFailureEvidence);
+  const captureCutoffAt = failedPayment?.captureCutoffAt;
+  const failedAt = failure?.failedAt;
+
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit" && role !== "balance") ||
+    !nonBlank(previousResultId) ||
+    !nonBlank(stateKey) ||
+    !nonBlank(resultId) ||
+    !nonBlank(attemptKey) ||
+    !nonBlank(failureId) ||
+    !nonBlank(provider) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateResultId !== previousResultId ||
+    command.currentStateCommandKey !== stateKey ||
+    expectedPayment?.id !== paymentId ||
+    expectedPayment.orderId !== orderId ||
+    expectedPayment.phaseId !== phaseId ||
+    expectedPayment.role !== role ||
+    expectedPayment.provider !== provider ||
+    expectedPayment.status !== "created" ||
+    expectedPayment.providerIntentId !== null ||
+    expectedPayment.resultId !== previousResultId ||
+    expectedPayment.currentStateCommandKey !== stateKey ||
+    expectedPayment.immutable !== true ||
+    failedPayment?.id !== paymentId ||
+    failedPayment.orderId !== orderId ||
+    failedPayment.phaseId !== phaseId ||
+    failedPayment.role !== role ||
+    failedPayment.provider !== provider ||
+    failedPayment.previousStatus !== "created" ||
+    failedPayment.targetStatus !== "failed" ||
+    failedPayment.providerIntentId !== null ||
+    failedPayment.intentCreationFailureResultId !== failureId ||
+    failedPayment.captureAuthorized !== false ||
+    !(captureCutoffAt instanceof Instant) ||
+    failedPayment.resultId !== resultId ||
+    failedPayment.immutable !== true ||
+    failure?.id !== failureId ||
+    failure.paymentId !== paymentId ||
+    failure.provider !== provider ||
+    failure.attemptKey !== attemptKey ||
+    failure.outcome !== "failed" ||
+    failure.providerIntentId !== null ||
+    !(failedAt instanceof Instant) ||
+    !(captureCutoffAt instanceof Instant && captureCutoffAt.equals(failedAt)) ||
+    failure.resultId !== resultId ||
+    failure.immutable !== true ||
+    context?.paymentIntentFailurePaymentResultId !== resultId ||
+    context?.paymentIntentFailureEvidenceResultId !== resultId ||
+    context?.paymentIntentFailureCompleted !== true ||
+    context?.paymentIntentFailureAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "Payment intent creation failure requires the exact created Payment, durable provider attempt failure, and atomic result",
+    );
+  }
+}
+
 function requireExactPendingPaymentFailure<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -2249,6 +4477,13 @@ function requireExactPendingPaymentFailure<S extends string>(
     !Array.isArray(expectedValue)
       ? (expectedValue as Readonly<Record<string, unknown>>)
       : undefined;
+  const failedValue = context?.paymentFailureFailedPayment;
+  const failed =
+    typeof failedValue === "object" &&
+    failedValue !== null &&
+    !Array.isArray(failedValue)
+      ? (failedValue as Readonly<Record<string, unknown>>)
+      : undefined;
   const eventValue = context?.paymentFailureProviderEvent;
   const event =
     typeof eventValue === "object" &&
@@ -2263,6 +4498,9 @@ function requireExactPendingPaymentFailure<S extends string>(
     !Array.isArray(transactionValue)
       ? (transactionValue as Readonly<Record<string, unknown>>)
       : undefined;
+  const eventOccurredAt = event?.occurredAt;
+  const eventVerifiedAt = event?.verifiedAt;
+  const captureCutoffAt = failed?.captureCutoffAt;
   if (
     !nonBlank(paymentId) ||
     !nonBlank(orderId) ||
@@ -2286,15 +4524,49 @@ function requireExactPendingPaymentFailure<S extends string>(
     expected.phaseId !== phaseId ||
     expected.role !== role ||
     expected.status !== "pending" ||
+    typeof expected.provider !== "string" ||
+    expected.provider.trim().length === 0 ||
+    expected.provider !== event?.provider ||
+    expected.providerIntentId !== providerTransactionId ||
+    typeof expected.requestedAmountMinor !== "bigint" ||
+    expected.requestedAmountMinor <= 0n ||
+    typeof expected.currency !== "string" ||
+    expected.currency.trim().length === 0 ||
+    expected.captureAuthorized !== true ||
+    expected.captureCutoffAt !== null ||
     expected.resultId !== previousResultId ||
     expected.currentStateCommandKey !== stateKey ||
     expected.immutable !== true ||
+    failed?.id !== paymentId ||
+    failed.orderId !== orderId ||
+    failed.phaseId !== phaseId ||
+    failed.role !== role ||
+    failed.previousStatus !== "pending" ||
+    failed.targetStatus !== "failed" ||
+    failed.provider !== expected.provider ||
+    failed.providerIntentId !== providerTransactionId ||
+    failed.requestedAmountMinor !== expected.requestedAmountMinor ||
+    failed.currency !== expected.currency ||
+    failed.captureAuthorized !== false ||
+    !(captureCutoffAt instanceof Instant) ||
+    failed.resultId !== resultId ||
+    failed.immutable !== true ||
     event?.id !== providerEventId ||
     event.paymentId !== paymentId ||
+    event.provider !== expected.provider ||
     event.transactionId !== providerTransactionId ||
+    event.kind !== "PAYMENT_FAILED" ||
+    event.amountMinor !== expected.requestedAmountMinor ||
+    event.currency !== expected.currency ||
     event.status !== "failed" ||
     event.authenticated !== true ||
     event.verified !== true ||
+    !(eventOccurredAt instanceof Instant) ||
+    !(eventVerifiedAt instanceof Instant) ||
+    !(
+      captureCutoffAt instanceof Instant &&
+      captureCutoffAt.equals(eventVerifiedAt)
+    ) ||
     event.resultId !== resultId ||
     event.immutable !== true ||
     transaction?.id !== providerTransactionId ||
@@ -2360,6 +4632,7 @@ function requireExactPendingCaptureWindow<S extends string>(
       : undefined;
   const opensAt = window?.opensAt;
   const cutoffAt = window?.cutoffAt;
+  const verifiedAt = event?.verifiedAt;
   const providerEventId = context?.captureProviderEventId;
   const providerTransactionId = context?.providerPaymentTransactionId;
   const windowKind = role === "balance" ? "balance_deadline" : "checkout";
@@ -2404,6 +4677,12 @@ function requireExactPendingCaptureWindow<S extends string>(
     expectedPayment.phaseId !== phaseId ||
     expectedPayment.role !== role ||
     expectedPayment.status !== "pending" ||
+    typeof expectedPayment.provider !== "string" ||
+    expectedPayment.provider.trim().length === 0 ||
+    typeof expectedPayment.requestedAmountMinor !== "bigint" ||
+    expectedPayment.requestedAmountMinor <= 0n ||
+    typeof expectedPayment.currency !== "string" ||
+    expectedPayment.currency.trim().length === 0 ||
     expectedPayment.resultId !== previousPaymentResultId ||
     expectedPayment.currentStateCommandKey !== stateKey ||
     expectedPayment.immutable !== true ||
@@ -2423,10 +4702,15 @@ function requireExactPendingCaptureWindow<S extends string>(
     context?.captureEvaluationOutcome !== expectedOutcome ||
     event?.id !== providerEventId ||
     event.paymentId !== paymentId ||
+    event.provider !== expectedPayment.provider ||
     event.transactionId !== providerTransactionId ||
+    event.kind !== "PAYMENT_CAPTURED" ||
+    event.amountMinor !== expectedPayment.requestedAmountMinor ||
+    event.currency !== expectedPayment.currency ||
     event.status !== "captured" ||
     !(event.occurredAt instanceof Instant) ||
-    !event.occurredAt.equals(evaluatedAt) ||
+    !(verifiedAt instanceof Instant) ||
+    !verifiedAt.equals(evaluatedAt) ||
     event.authenticated !== true ||
     event.verified !== true ||
     event.immutable !== true ||
@@ -2443,7 +4727,7 @@ function requireExactPendingCaptureWindow<S extends string>(
       command.current,
       command.target,
       expectedOutcome === "within_window"
-        ? "capture must bind the exact immutable Payment window and occur before its cutoff"
+        ? "capture must bind the exact immutable Payment window and be verified before its cutoff"
         : "late capture compensation must bind the exact expired Payment window",
     );
   }
@@ -2478,8 +4762,29 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
       : undefined;
   const providerTransactionId = command.context?.providerPaymentTransactionId;
   const refundTransactionId = command.context?.refundTransactionId;
+  const failureEventValue = command.context?.paymentFailureProviderEvent;
+  const failureEvent =
+    typeof failureEventValue === "object" &&
+    failureEventValue !== null &&
+    !Array.isArray(failureEventValue)
+      ? (failureEventValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const captureCutoffAt = expected?.captureCutoffAt;
+  const failureVerifiedAt = failureEvent?.verifiedAt;
+  const captureEventValue = command.context?.captureProviderEvent;
+  const captureEvent =
+    typeof captureEventValue === "object" &&
+    captureEventValue !== null &&
+    !Array.isArray(captureEventValue)
+      ? (captureEventValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const captureEventId = command.context?.lateCaptureProviderEventId;
+  const captureResultId = command.context?.lateCaptureCompensationResultId;
+  const capturedAt = command.context?.lateCaptureCapturedAt;
+  const captureOccurredAt = captureEvent?.occurredAt;
+  const captureVerifiedAt = captureEvent?.verifiedAt;
   if (
-    command.current === "voided" &&
+    (command.current === "voided" || command.current === "failed") &&
     command.target === "refund_pending" &&
     (typeof paymentId !== "string" ||
       paymentId.trim().length === 0 ||
@@ -2494,7 +4799,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
       expected.orderId !== command.context?.orderId ||
       expected.phaseId !== command.context?.phaseId ||
       expected.role !== command.context?.paymentRole ||
-      expected.status !== "voided" ||
+      expected.status !== command.current ||
       expected.resultId !== previousResultId ||
       expected.currentStateCommandKey !== stateKey ||
       expected.immutable !== true ||
@@ -2510,8 +4815,81 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
     );
   }
   if (
+    (command.current === "voided" || command.current === "failed") &&
+    command.target === "refund_pending" &&
+    (typeof expected?.provider !== "string" ||
+      expected.provider.trim().length === 0 ||
+      typeof expected.requestedAmountMinor !== "bigint" ||
+      expected.requestedAmountMinor <= 0n ||
+      typeof expected.currency !== "string" ||
+      expected.currency.trim().length === 0 ||
+      expected.captureAuthorized !== false ||
+      !(captureCutoffAt instanceof Instant) ||
+      typeof captureEventId !== "string" ||
+      captureEventId.trim().length === 0 ||
+      typeof captureResultId !== "string" ||
+      captureResultId.trim().length === 0 ||
+      command.context?.captureProviderEventId !== captureEventId ||
+      captureEvent?.id !== captureEventId ||
+      captureEvent.paymentId !== paymentId ||
+      captureEvent.provider !== expected.provider ||
+      captureEvent.transactionId !== providerTransactionId ||
+      captureEvent.kind !== "PAYMENT_CAPTURED" ||
+      captureEvent.amountMinor !== expected.requestedAmountMinor ||
+      captureEvent.currency !== expected.currency ||
+      captureEvent.status !== "captured" ||
+      captureEvent.authenticated !== true ||
+      captureEvent.verified !== true ||
+      !(captureOccurredAt instanceof Instant) ||
+      !(captureVerifiedAt instanceof Instant) ||
+      !(capturedAt instanceof Instant) ||
+      !captureVerifiedAt.equals(capturedAt) ||
+      captureVerifiedAt.compare(captureCutoffAt) < 0 ||
+      captureEvent.resultId !== captureResultId ||
+      command.context?.lateCaptureProviderEventResultId !== captureResultId ||
+      captureEvent.immutable !== true)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "late capture compensation requires the exact provider capture evidence",
+    );
+  }
+  if (
+    command.current === "failed" &&
+    (typeof expected?.providerIntentId !== "string" ||
+      expected.providerIntentId.trim().length === 0 ||
+      typeof expected.providerFailureEventId !== "string" ||
+      expected.providerFailureEventId.trim().length === 0 ||
+      command.context?.paymentFailureProviderEventId !==
+        expected.providerFailureEventId ||
+      command.context?.paymentFailureResultId !== previousResultId ||
+      failureEvent?.id !== expected.providerFailureEventId ||
+      failureEvent.paymentId !== paymentId ||
+      failureEvent.transactionId !== expected.providerIntentId ||
+      failureEvent.provider !== expected.provider ||
+      failureEvent.amountMinor !== expected.requestedAmountMinor ||
+      failureEvent.currency !== expected.currency ||
+      failureEvent.status !== "failed" ||
+      failureEvent.authenticated !== true ||
+      failureEvent.verified !== true ||
+      !(failureVerifiedAt instanceof Instant) ||
+      !(captureCutoffAt instanceof Instant) ||
+      !failureVerifiedAt.equals(captureCutoffAt) ||
+      failureEvent.resultId !== previousResultId ||
+      failureEvent.immutable !== true)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "failed-source late capture requires the exact prior provider failure evidence",
+    );
+  }
+  if (
     typeof providerTransactionId !== "string" ||
-    providerTransactionId.length === 0 ||
+    providerTransactionId.trim().length === 0 ||
     command.context?.lateCaptureCompensationProviderTransactionId !==
       providerTransactionId ||
     command.context?.lateCaptureRefundTransactionProviderTransactionId !==
@@ -2526,7 +4904,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
   }
   if (
     typeof refundTransactionId !== "string" ||
-    refundTransactionId.length === 0 ||
+    refundTransactionId.trim().length === 0 ||
     command.context?.lateCaptureCompensationRefundTransactionId !==
       refundTransactionId
   ) {
@@ -2541,7 +4919,7 @@ function requireVerifiedLateCaptureCompensation<S extends string>(
     lifecycle,
     command,
     "verifiedLateCapture",
-    "a voided payment may be refunded only after verified late capture",
+    "a closed payment may be refunded only after verified late capture",
   );
   requireFlag(
     lifecycle,
@@ -6182,6 +8560,167 @@ function requireExactPaymentIntentSetup<S extends string>(
   }
 }
 
+function requireCreatedPaymentVoidClosure<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const role = context?.paymentRole;
+  const previousPaymentResultId =
+    context?.createdPaymentVoidPreviousPaymentResultId;
+  const paymentStateKey = context?.createdPaymentVoidCurrentStateCommandKey;
+  const previousOrderResultId =
+    context?.initialCaptureClosePreviousOrderResultId;
+  const orderStateKey = context?.initialCaptureCloseOrderCurrentStateCommandKey;
+  const previousPhaseResultId =
+    context?.createdPaymentVoidPreviousPhaseResultId;
+  const phaseStateKey = context?.createdPaymentVoidPhaseCurrentStateCommandKey;
+  const resultId = context?.createdPaymentVoidResultId;
+  const reservationSetId = context?.phaseReservationSetId;
+  const orderTarget = context?.initialCaptureCloseOrderTargetStatus;
+  const expectedReason =
+    orderTarget === "expired" ? "checkout_expired" : "checkout_cancelled";
+  const expectedPayment = record(context?.createdPaymentVoidExpectedPayment);
+  const voidedPayment = record(context?.createdPaymentVoidVoidedPayment);
+  const expectedOrder = record(context?.initialCaptureCloseExpectedOrder);
+  const expectedPhase = record(context?.createdPaymentVoidExpectedPhase);
+
+  if (
+    !nonBlank(paymentId) ||
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    (role !== "full" && role !== "deposit") ||
+    !nonBlank(previousPaymentResultId) ||
+    !nonBlank(paymentStateKey) ||
+    !nonBlank(previousOrderResultId) ||
+    !nonBlank(orderStateKey) ||
+    !nonBlank(previousPhaseResultId) ||
+    !nonBlank(phaseStateKey) ||
+    !nonBlank(resultId) ||
+    !nonBlank(reservationSetId) ||
+    command.aggregateId !== paymentId ||
+    command.currentStateResultId !== previousPaymentResultId ||
+    command.currentStateCommandKey !== paymentStateKey ||
+    expectedPayment?.id !== paymentId ||
+    expectedPayment.orderId !== orderId ||
+    expectedPayment.phaseId !== phaseId ||
+    expectedPayment.role !== role ||
+    expectedPayment.status !== "created" ||
+    expectedPayment.providerIntentId !== null ||
+    expectedPayment.resultId !== previousPaymentResultId ||
+    expectedPayment.currentStateCommandKey !== paymentStateKey ||
+    expectedPayment.immutable !== true ||
+    voidedPayment?.id !== paymentId ||
+    voidedPayment.orderId !== orderId ||
+    voidedPayment.phaseId !== phaseId ||
+    voidedPayment.role !== role ||
+    voidedPayment.previousStatus !== "created" ||
+    voidedPayment.targetStatus !== "voided" ||
+    voidedPayment.providerIntentId !== null ||
+    voidedPayment.captureAuthorized !== false ||
+    !(voidedPayment.captureCutoffAt instanceof Instant) ||
+    voidedPayment.resultId !== resultId ||
+    voidedPayment.immutable !== true ||
+    expectedOrder?.id !== orderId ||
+    expectedOrder.status !== "quoted" ||
+    expectedOrder.resultId !== previousOrderResultId ||
+    expectedOrder.currentStateCommandKey !== orderStateKey ||
+    expectedOrder.immutable !== true ||
+    expectedPhase?.id !== phaseId ||
+    expectedPhase.orderId !== orderId ||
+    expectedPhase.kind !== "single" ||
+    expectedPhase.status !== "quoted" ||
+    expectedPhase.resultId !== previousPhaseResultId ||
+    expectedPhase.currentStateCommandKey !== phaseStateKey ||
+    expectedPhase.immutable !== true ||
+    context?.createdPaymentVoidProviderIntentAbsent !== true ||
+    context?.createdPaymentVoidProviderTransactionAbsent !== true ||
+    context?.createdPaymentVoidProviderVoidOutboxAbsent !== true ||
+    context?.initialPaymentRole !== role ||
+    context?.initialPaymentId !== paymentId ||
+    context?.initialPaymentOrderId !== orderId ||
+    context?.initialPaymentStatus !== "voided" ||
+    context?.initialCaptureClosePaymentId !== paymentId ||
+    context?.initialCaptureCloseOrderId !== orderId ||
+    context?.initialCaptureClosePhaseId !== phaseId ||
+    context?.initialCaptureClosePhaseOrderId !== orderId ||
+    context?.phaseKind !== "single" ||
+    context?.initialCaptureCloseReservationSetId !== reservationSetId ||
+    context?.initialCaptureCloseReservationSetOrderId !== orderId ||
+    context?.initialCaptureCloseReservationSetPhaseId !== phaseId ||
+    context?.initialCaptureCloseOrderPreviousStatus !== "quoted" ||
+    (orderTarget !== "expired" && orderTarget !== "cancelled") ||
+    context?.initialCaptureClosePhasePreviousStatus !== "quoted" ||
+    context?.initialCaptureClosePhaseTargetStatus !== "cancelled" ||
+    context?.initialCaptureCloseReason !== expectedReason ||
+    context?.createdPaymentVoidPaymentResultId !== resultId ||
+    context?.createdPaymentVoidOrderResultId !== resultId ||
+    context?.createdPaymentVoidPhaseResultId !== resultId ||
+    context?.createdPaymentVoidReservationResultId !== resultId ||
+    context?.createdPaymentVoidCompleted !== true ||
+    context?.createdPaymentVoidAtomic !== true
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "created Payment voiding requires its exact no-intent Payment, quoted checkout, cancellation result, and atomic evidence",
+    );
+  }
+
+  for (const [flag, reason] of [
+    [
+      "captureAuthorizationDisabled",
+      "created Payment voiding requires capture authorization to be disabled",
+    ],
+    [
+      "captureWindowClosed",
+      "created Payment voiding requires its capture window to be closed",
+    ],
+    [
+      "captureCutoffSet",
+      "created Payment voiding requires its capture cutoff to be recorded",
+    ],
+    [
+      "initialCaptureWindowClosed",
+      "created Payment voiding requires its initial capture window closure",
+    ],
+    [
+      "initialCaptureCutoffSet",
+      "created Payment voiding requires its immutable initial cutoff",
+    ],
+    [
+      "preCapturePhaseCancelled",
+      "created Payment voiding requires phase cancellation",
+    ],
+    [
+      "preCaptureFulfilmentSlotsCancelled",
+      "created Payment voiding requires slot cancellation",
+    ],
+    [
+      "preCaptureReservationsReleased",
+      "created Payment voiding requires reservation release",
+    ],
+    [
+      "initialCaptureCloseAtomic",
+      "created Payment voiding requires atomic checkout closure",
+    ],
+  ] as const) {
+    requireFlag(lifecycle, command, flag, reason);
+  }
+}
+
 function requireRoleSpecificPaymentVoidClosure<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -6538,18 +9077,40 @@ export type PaymentRole = "full" | "deposit" | "balance";
 export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   name: "Payment",
   initial: ["created"],
-  terminal: ["failed", "refunded"],
+  terminal: [],
+  contextualTerminal: (state, context) =>
+    (state === "refunded" && !hasExactLateRefundFailureMarker(context)) ||
+    hasExactNoIntentPaymentTerminalSnapshot(state, context),
+  sameStateReconciliationGuard: (command) => {
+    if (
+      command.current !== "refund_pending" ||
+      command.target !== "refund_pending" ||
+      command.context?.paymentCaptureKind !== "late_refund_failure"
+    ) {
+      return false;
+    }
+    requireExactLateRefundFailureReconciliation("Payment", command, "payment");
+    return true;
+  },
   transitions: {
-    created: ["pending"],
+    created: ["pending", "failed", "voided"],
     pending: ["captured", "failed", "voided", "refund_pending"],
+    failed: ["refund_pending"],
     captured: ["refund_pending"],
-    partially_refunded: ["refund_pending"],
+    partially_refunded: ["captured", "refund_pending"],
     voided: ["refund_pending"],
-    refund_pending: ["partially_refunded", "refunded"],
+    refund_pending: ["captured", "partially_refunded", "refunded"],
+    refunded: ["captured", "partially_refunded", "refund_pending"],
   },
   guard: (command) => {
     if (command.current === "created" && command.target === "pending") {
       requireExactPaymentIntentSetup("Payment", command);
+    }
+    if (command.current === "created" && command.target === "failed") {
+      requireExactPaymentIntentCreationFailure("Payment", command);
+    }
+    if (command.current === "created" && command.target === "voided") {
+      requireCreatedPaymentVoidClosure("Payment", command);
     }
     if (command.current === "pending" && command.target === "captured") {
       if (command.context?.paymentCaptureKind !== "settlement") {
@@ -6589,6 +9150,9 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
     if (command.current === "voided" && command.target === "refund_pending") {
       requireVerifiedLateCaptureCompensation("Payment", command);
     }
+    if (command.current === "failed" && command.target === "refund_pending") {
+      requireVerifiedLateCaptureCompensation("Payment", command);
+    }
     if (command.current === "pending" && command.target === "failed") {
       requireVerifiedMatchingProviderPaymentEvent("Payment", command);
       requireExactPendingPaymentFailure("Payment", command);
@@ -6597,15 +9161,22 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
       requireRoleSpecificPaymentVoidClosure("Payment", command);
     }
     if (command.current === "captured" && command.target === "refund_pending") {
-      if (command.context?.paymentCaptureKind !== "settlement") {
+      if (command.context?.paymentCaptureKind === "late_refund_success") {
+        requireExactLateRefundSuccessReconciliation(
+          "Payment",
+          command,
+          "start",
+        );
+      } else if (command.context?.paymentCaptureKind !== "settlement") {
         throw new TransitionGuardError(
           "Payment",
           command.current,
           command.target,
           "ordinary refund requires a settlement Payment",
         );
+      } else {
+        requireExactOrdinaryRefundSetup("Payment", command);
       }
-      requireExactOrdinaryRefundSetup("Payment", command);
     }
     if (
       command.current === "partially_refunded" &&
@@ -6625,6 +9196,18 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
           );
         }
         requireCompensationRefundRetry("Payment", command);
+      } else if (captureKind === "late_refund_success") {
+        requireExactLateRefundSuccessReconciliation(
+          "Payment",
+          command,
+          "start",
+        );
+      } else if (captureKind === "late_refund_failure") {
+        requireExactLateRefundFailureReconciliation(
+          "Payment",
+          command,
+          "payment",
+        );
       } else if (captureKind === "settlement") {
         requireExactOrdinaryRefundSetup("Payment", command);
       } else {
@@ -6638,9 +9221,34 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
     }
     if (
       command.current === "refund_pending" &&
+      command.target === "partially_refunded" &&
+      command.context?.paymentCaptureKind === "refund_failure_rollback"
+    ) {
+      requireExactRefundFailureRollback("Payment", command);
+    } else if (
+      command.current === "refund_pending" &&
       (command.target === "partially_refunded" || command.target === "refunded")
     ) {
       requireExactPaymentRefundCompletion("Payment", command);
+    }
+    if (command.current === "refund_pending" && command.target === "captured") {
+      requireExactRefundFailureRollback("Payment", command);
+    }
+    const lateRefundFailureEdge =
+      (command.current === "refunded" &&
+        (command.target === "captured" ||
+          command.target === "partially_refunded" ||
+          command.target === "refund_pending")) ||
+      (command.current === "partially_refunded" &&
+        (command.target === "captured" ||
+          (command.target === "refund_pending" &&
+            command.context?.paymentCaptureKind === "late_refund_failure")));
+    if (lateRefundFailureEdge) {
+      requireExactLateRefundFailureReconciliation(
+        "Payment",
+        command,
+        "payment",
+      );
     }
   },
 };
@@ -6669,12 +9277,14 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
   terminal: [
     "completed",
     "partially_fulfilled",
-    "refunded",
     "cancelled_settled",
     "expired",
   ],
   contextualTerminal: (state, context) =>
-    state === "cancelled" && context?.paymentStatus === "unpaid",
+    (state === "refunded" &&
+      !hasExactRefundedCancellationRecoveryMarker(context) &&
+      !hasExactLateRefundFailureMarker(context)) ||
+    (state === "cancelled" && context?.paymentStatus === "unpaid"),
   transitions: {
     draft: ["quoted"],
     quoted: ["confirmed", "expired", "cancelled"],
@@ -6697,7 +9307,8 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     shipped: ["delivered", "partially_fulfilled", "cancelled"],
     delivered: ["completed"],
     recovery_pending: ["qc_passed", "cancelled", "partially_fulfilled"],
-    cancelled: ["refunded", "cancelled_settled"],
+    cancelled: ["shipped", "refunded", "cancelled_settled"],
+    refunded: ["shipped", "cancelled"],
   },
   guard: (command) => {
     if (command.current === "draft" && command.target === "quoted") {
@@ -6757,6 +9368,17 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     if (command.current === "ready_to_ship" && command.target === "shipped") {
       requireAtomicOrdinaryHandoff("Order", command);
       requireZeroBalances("Order", command);
+    }
+    if (command.current === "cancelled" && command.target === "shipped") {
+      requireVerifiedMatchingCancellationRaceScan("Order", command);
+      requireExactCancellationRaceHandoffResult("Order", command);
+    }
+    if (command.current === "refunded" && command.target === "shipped") {
+      requireVerifiedMatchingCancellationRaceScan("Order", command);
+      requireExactCancellationRaceHandoffResult("Order", command);
+    }
+    if (command.current === "refunded" && command.target === "cancelled") {
+      requireExactLateRefundFailureReconciliation("Order", command, "order");
     }
     if (
       command.current === "awaiting_balance" &&
@@ -6876,14 +9498,12 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
   {
     name: "OrderPhase(single)",
     initial: ["quoted"],
-    terminal: [
-      "completed",
-      "cancelled_refunded",
-      "cancelled_settled",
-      "partially_fulfilled",
-    ],
+    terminal: ["completed", "cancelled_settled", "partially_fulfilled"],
     contextualTerminal: (state, context) =>
-      state === "cancelled" && context?.paymentStatus === "unpaid",
+      (state === "cancelled_refunded" &&
+        !hasExactRefundedCancellationRecoveryMarker(context) &&
+        !hasExactLateRefundFailureMarker(context)) ||
+      (state === "cancelled" && context?.paymentStatus === "unpaid"),
     transitions: {
       quoted: ["active", "cancelled"],
       active: ["in_production", "cancelled"],
@@ -6896,7 +9516,8 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         "partially_fulfilled",
         "cancelled_refunded",
       ],
-      cancelled: ["cancelled_refunded", "cancelled_settled"],
+      cancelled: ["shipped", "cancelled_refunded", "cancelled_settled"],
+      cancelled_refunded: ["shipped", "cancelled"],
     },
     guard: (command) => {
       if (command.current === "quoted" && command.target === "active") {
@@ -6921,6 +9542,39 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
       if (command.current === "qc_passed" && command.target === "shipped") {
         requireAtomicOrdinaryHandoff("OrderPhase(single)", command);
         requireZeroBalances("OrderPhase(single)", command);
+      }
+      if (command.current === "cancelled" && command.target === "shipped") {
+        requireVerifiedMatchingCancellationRaceScan(
+          "OrderPhase(single)",
+          command,
+        );
+        requireExactCancellationRaceHandoffResult(
+          "OrderPhase(single)",
+          command,
+        );
+      }
+      if (
+        command.current === "cancelled_refunded" &&
+        command.target === "shipped"
+      ) {
+        requireVerifiedMatchingCancellationRaceScan(
+          "OrderPhase(single)",
+          command,
+        );
+        requireExactCancellationRaceHandoffResult(
+          "OrderPhase(single)",
+          command,
+        );
+      }
+      if (
+        command.current === "cancelled_refunded" &&
+        command.target === "cancelled"
+      ) {
+        requireExactLateRefundFailureReconciliation(
+          "OrderPhase(single)",
+          command,
+          "phase",
+        );
       }
       if (command.current === "shipped" && command.target === "delivered") {
         requireAllShipmentLineageLeavesDelivered("OrderPhase(single)", command);
@@ -7310,6 +9964,10 @@ function requireExactJobHandoff<S extends string>(
     typeof value === "string" && value.trim().length > 0;
   const kind = context?.jobHandoffKind;
   const jobId = context?.jobId;
+  const cancelledSourceRecovery =
+    context?.cancellationRaceCommittedCancellation === true ||
+    context?.cancellationRaceRefundedAggregate === true;
+  const expectedJobStatus = cancelledSourceRecovery ? "cancelled" : "packed";
   const expectedValue = context?.jobHandoffExpectedJob;
   const expected =
     typeof expectedValue === "object" &&
@@ -7317,15 +9975,30 @@ function requireExactJobHandoff<S extends string>(
     !Array.isArray(expectedValue)
       ? (expectedValue as Readonly<Record<string, unknown>>)
       : undefined;
+  const expectedShipmentValue = context?.cancellationRaceExpectedShipment;
+  const expectedShipment =
+    typeof expectedShipmentValue === "object" &&
+    expectedShipmentValue !== null &&
+    !Array.isArray(expectedShipmentValue)
+      ? (expectedShipmentValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const jobCancelledAt = expected?.cancelledAt;
+  const shipmentCancelledAt = expectedShipment?.cancelledAt;
   if (
     !nonBlank(jobId) ||
+    command.current !== expectedJobStatus ||
     expected?.id !== jobId ||
     expected.kind !== kind ||
-    expected.status !== "packed" ||
+    expected.status !== expectedJobStatus ||
+    (cancelledSourceRecovery &&
+      (!(jobCancelledAt instanceof Instant) ||
+        expected.cancellationReason !== "order_cancelled" ||
+        !(shipmentCancelledAt instanceof Instant) ||
+        jobCancelledAt.compare(shipmentCancelledAt) < 0)) ||
     expected.currentLineageLeaf !== true ||
     expected.immutable !== true ||
     context?.jobHandoffJobId !== jobId ||
-    context?.jobHandoffPreviousStatus !== "packed" ||
+    context?.jobHandoffPreviousStatus !== expectedJobStatus ||
     context?.jobHandoffTargetStatus !== "handed_over" ||
     context?.jobHandoffCompleted !== true ||
     context?.jobHandoffAtomic !== true
@@ -7334,7 +10007,7 @@ function requireExactJobHandoff<S extends string>(
       lifecycle,
       command.current,
       command.target,
-      "Job handoff must bind the exact current packed Job and result",
+      "Job handoff must bind the exact current Job and result",
     );
   }
   if (kind === "ordinary") {
@@ -7344,7 +10017,8 @@ function requireExactJobHandoff<S extends string>(
       const stateKey = context?.jobHandoffCurrentStateCommandKey;
       const previousResultId = context?.jobHandoffPreviousResultId;
       if (
-        raceKind !== "ordinary" ||
+        (raceKind !== "ordinary" &&
+          raceKind !== "unauthorized_reconciliation") ||
         !nonBlank(raceResultId) ||
         !nonBlank(stateKey) ||
         !nonBlank(previousResultId) ||
@@ -7368,7 +10042,7 @@ function requireExactJobHandoff<S extends string>(
           lifecycle,
           command.current,
           command.target,
-          "ordinary Job cancellation-race handoff must bind the command-selected packed Job to the exact race result",
+          "Job cancellation-race handoff must bind the command-selected source Job to the exact race result",
         );
       }
       requireVerifiedMatchingCancellationRaceScan(lifecycle, command);
@@ -7519,7 +10193,11 @@ function requireExactJobHandoff<S extends string>(
 export const jobPolicy: TransitionPolicy<JobStatus> = {
   name: "Job",
   initial: ["created"],
-  terminal: ["settled", "qc_rejected", "failed", "cancelled"],
+  terminal: ["settled", "qc_rejected", "failed"],
+  contextualTerminal: (state, context) =>
+    state === "cancelled" &&
+    context?.cancellationRaceCommittedCancellation !== true &&
+    !hasExactRefundedCancellationRecoveryMarker(context),
   transitions: {
     created: ["accepted", "cancelled"],
     accepted: ["gcode_ready", "failed", "cancelled"],
@@ -7529,6 +10207,7 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
     photo_submitted: ["qc_approved", "qc_rejected", "failed", "cancelled"],
     qc_approved: ["packed", "failed", "cancelled"],
     packed: ["handed_over", "failed", "cancelled"],
+    cancelled: ["handed_over"],
     handed_over: ["settled"],
   },
   guard: (command) => {
@@ -7684,7 +10363,10 @@ export const jobPolicy: TransitionPolicy<JobStatus> = {
       }
       requireJobReplacementObligation("Job", command);
     }
-    if (command.current === "packed" && command.target === "handed_over") {
+    if (
+      (command.current === "packed" || command.current === "cancelled") &&
+      command.target === "handed_over"
+    ) {
       requireExactJobHandoff("Job", command);
     }
     if (command.current === "handed_over" && command.target === "settled") {
@@ -8259,9 +10941,18 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
 ): void {
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
   const shipmentId = command.context?.shipmentId;
   const providerTransactionId = command.context?.shipmentProviderTransactionId;
   const providerEventId = command.context?.providerEventId;
+  const expectedShipment = record(
+    command.context?.cancellationRaceExpectedShipment,
+  );
   if (
     typeof shipmentId !== "string" ||
     shipmentId.trim().length === 0 ||
@@ -8300,6 +10991,18 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
     "verifiedProviderScan",
     "the exact custody scan must be persisted and consumed",
   );
+
+  if (
+    expectedShipment?.status === "cancelled" &&
+    !hasExactRecoverableProviderVoidCancellationRace(command.context)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "post-void cancellation-race handoff requires an exact pre-void acceptance receipt and selected void snapshot",
+    );
+  }
 }
 
 function requireExactShipmentCancellationRequest<S extends string>(
@@ -8411,9 +11114,18 @@ function requireAtomicOrdinaryHandoff<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
   expectedStatuses: Readonly<{
-    shipmentPrevious: "label_created" | "cancellation_pending";
-    orderPrevious: "ready_to_ship" | "awaiting_balance" | "shipped";
-    phasePrevious: "qc_passed" | "shipped";
+    shipmentPrevious: "label_created" | "cancellation_pending" | "cancelled";
+    orderPrevious:
+      | "ready_to_ship"
+      | "awaiting_balance"
+      | "shipped"
+      | "cancelled"
+      | "refunded";
+    phasePrevious: "qc_passed" | "shipped" | "cancelled" | "cancelled_refunded";
+    jobPrevious?: "packed" | "cancelled";
+    slotPrevious?: "cancelled" | "cancelled_refunded";
+    orderTarget?: "shipped" | "partially_fulfilled";
+    phaseTarget?: "shipped" | "partially_fulfilled";
     allowLaterParcel?: boolean;
     resultProof?: "ordinary" | "cancellation_race";
   }> = {
@@ -8446,11 +11158,17 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     ? [...expectedJobIdsValue]
     : undefined;
   const jobs = Array.isArray(jobsValue) ? [...jobsValue] : undefined;
+  const jobPrevious = expectedStatuses.jobPrevious ?? "packed";
+  const slotPrevious =
+    expectedStatuses.slotPrevious ??
+    (jobPrevious === "cancelled" ? "cancelled" : undefined);
+  const orderTarget = expectedStatuses.orderTarget ?? "shipped";
+  const phaseTarget = expectedStatuses.phaseTarget ?? "shipped";
   const firstParcelStatusesMatch =
     context?.handoffOrderPreviousStatus === expectedStatuses.orderPrevious &&
-    context?.handoffOrderTargetStatus === "shipped" &&
+    context?.handoffOrderTargetStatus === orderTarget &&
     context?.handoffPhasePreviousStatus === expectedStatuses.phasePrevious &&
-    context?.handoffPhaseTargetStatus === "shipped";
+    context?.handoffPhaseTargetStatus === phaseTarget;
   const laterParcelStatusesMatch =
     expectedStatuses.allowLaterParcel === true &&
     context?.handoffOrderPreviousStatus === "shipped" &&
@@ -8479,7 +11197,7 @@ function requireAtomicOrdinaryHandoff<S extends string>(
     context?.handoffShipmentPreviousStatus !==
       expectedStatuses.shipmentPrevious ||
     context?.handoffShipmentTargetStatus !== "handed_over" ||
-    context?.handoffJobPreviousStatus !== "packed" ||
+    context?.handoffJobPreviousStatus !== jobPrevious ||
     context?.handoffJobTargetStatus !== "handed_over" ||
     expectedSlotIds === undefined ||
     expectedSlotIds.length === 0 ||
@@ -8605,7 +11323,10 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       slot.phaseId !== phaseId ||
       typeof slotJobId !== "string" ||
       slotJobId.trim().length === 0 ||
-      !authoritativeJobIds.includes(slotJobId)
+      !authoritativeJobIds.includes(slotJobId) ||
+      (slotPrevious !== undefined &&
+        (slot.previousOutcome !== slotPrevious ||
+          slot.targetOutcome !== "pending"))
     ) {
       throw new TransitionGuardError(
         lifecycle,
@@ -8657,7 +11378,7 @@ function requireAtomicOrdinaryHandoff<S extends string>(
       job.shipmentId !== shipmentId ||
       job.orderId !== orderId ||
       job.phaseId !== phaseId ||
-      job.previousStatus !== "packed" ||
+      job.previousStatus !== jobPrevious ||
       job.targetStatus !== "handed_over"
     ) {
       throw new TransitionGuardError(
@@ -8787,6 +11508,9 @@ const cancellationRaceHandoffKinds = new Set([
   "unauthorized_reconciliation",
 ]);
 
+type CancellationRaceShipmentSourceStatus =
+  "cancellation_pending" | "cancelled";
+
 function requireExactHandoffShipmentOrigin<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -8885,6 +11609,243 @@ function requireExactSelectedLabelledShipmentAggregate<S extends string>(
   }
 }
 
+function requireExactRefundedHandoffFinancialProof<S extends string>(
+  lifecycle: string,
+  command: TransitionCommand<S>,
+): void {
+  const context = command.context;
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const reconciliation = record(context?.handoffRefundedReconciliation);
+  const settlement = record(context?.handoffRefundedSettlement);
+  const payment = record(context?.handoffRefundedPayment);
+  const refund = record(context?.handoffRefundedRefund);
+  const refundEvent = record(context?.handoffRefundedProviderEvent);
+  const priorReconciliation = record(
+    context?.handoffRefundedPriorReconciliation,
+  );
+  const laterRefundedParcel =
+    context?.cancellationRaceLaterRefundedParcel === true;
+  const payments = Array.isArray(context?.handoffSettlementOrderPayments)
+    ? context.handoffSettlementOrderPayments.map(record)
+    : [];
+  const refunds = Array.isArray(context?.handoffSettlementOrderRefunds)
+    ? context.handoffSettlementOrderRefunds.map(record)
+    : [];
+  const authoritativePaymentIds = Array.isArray(
+    context?.handoffSettlementPaymentIds,
+  )
+    ? context.handoffSettlementPaymentIds
+    : [];
+  const authoritativeRefundIds = Array.isArray(
+    context?.handoffSettlementRefundIds,
+  )
+    ? context.handoffSettlementRefundIds
+    : [];
+  const orderId = context?.orderId;
+  const phaseId = context?.phaseId;
+  const shipmentId = context?.shipmentId;
+  const resultId = context?.cancellationRaceHandoffResultId;
+  const reconciliationId = context?.handoffReconciliationId;
+  const settlementId = context?.handoffSettlementId;
+  const paymentId = payment?.id;
+  const refundId = refund?.id;
+  const refundEventId = refundEvent?.id;
+  const currency = settlement?.currency;
+  const settlementResultId = settlement?.resultId;
+  const contractTotal = settlement?.contractTotalMinor;
+  const capturedTotal = settlement?.capturedTotalMinor;
+  const refundAmount = settlement?.refundAmountMinor;
+  const cutoffAt = settlement?.cutoffAt;
+  const settledAt = settlement?.settledAt;
+  const capturedAt = payment?.capturedAt;
+  const refundCompletedAt = refund?.completedAt;
+  const refundVerifiedAt = refundEvent?.verifiedAt;
+  const exactPaymentCount = payments.filter(
+    (candidate) => candidate?.id === paymentId,
+  ).length;
+  const exactRefundCount = refunds.filter(
+    (candidate) => candidate?.id === refundId,
+  ).length;
+  const omittedCapturedPayment = payments.some((candidate) => {
+    const amount = candidate?.capturedAmountMinor;
+    const at = candidate?.capturedAt;
+    return (
+      candidate?.id !== paymentId &&
+      typeof amount === "bigint" &&
+      amount > 0n &&
+      at instanceof Instant &&
+      cutoffAt instanceof Instant &&
+      at.compare(cutoffAt) < 0
+    );
+  });
+  const pendingRefund = refunds.some(
+    (candidate) => candidate?.status === "pending",
+  );
+  const invalidPaymentRow = payments.some((candidate) => {
+    const amount = candidate?.capturedAmountMinor;
+    return (
+      candidate === undefined ||
+      !nonBlank(candidate.id) ||
+      candidate.orderId !== orderId ||
+      typeof amount !== "bigint" ||
+      amount < 0n ||
+      (amount > 0n && !(candidate.capturedAt instanceof Instant)) ||
+      candidate.immutable !== true
+    );
+  });
+  const invalidRefundRow = refunds.some(
+    (candidate) =>
+      candidate === undefined ||
+      !nonBlank(candidate.id) ||
+      !nonBlank(candidate.paymentId) ||
+      !authoritativePaymentIds.includes(candidate.paymentId) ||
+      (candidate.status !== "pending" &&
+        candidate.status !== "succeeded" &&
+        candidate.status !== "failed") ||
+      typeof candidate.amountMinor !== "bigint" ||
+      candidate.amountMinor < 0n ||
+      candidate.immutable !== true,
+  );
+
+  if (
+    !nonBlank(orderId) ||
+    !nonBlank(phaseId) ||
+    !nonBlank(shipmentId) ||
+    !nonBlank(resultId) ||
+    !nonBlank(reconciliationId) ||
+    !nonBlank(settlementId) ||
+    !nonBlank(paymentId) ||
+    !nonBlank(refundId) ||
+    !nonBlank(refundEventId) ||
+    reconciliation?.id !== reconciliationId ||
+    reconciliation.orderId !== orderId ||
+    reconciliation.phaseId !== phaseId ||
+    reconciliation.shipmentId !== shipmentId ||
+    reconciliation.providerEventId !== context?.providerEventId ||
+    reconciliation.providerTransactionId !==
+      context?.shipmentProviderTransactionId ||
+    reconciliation.orderSettlementId !== settlementId ||
+    reconciliation.paymentId !== paymentId ||
+    reconciliation.refundTransactionId !== refundId ||
+    reconciliation.refundProviderEventId !== refundEventId ||
+    reconciliation.status !== "completed" ||
+    reconciliation.resultId !== resultId ||
+    reconciliation.immutable !== true ||
+    (laterRefundedParcel &&
+      (!nonBlank(priorReconciliation?.id) ||
+        priorReconciliation.id === reconciliationId ||
+        priorReconciliation.orderId !== orderId ||
+        priorReconciliation.phaseId !== phaseId ||
+        !nonBlank(priorReconciliation.shipmentId) ||
+        priorReconciliation.shipmentId === shipmentId ||
+        priorReconciliation.orderSettlementId !== settlementId ||
+        !nonBlank(priorReconciliation.resultId) ||
+        priorReconciliation.resultId !== settlementResultId ||
+        priorReconciliation.status !== "completed" ||
+        priorReconciliation.immutable !== true)) ||
+    settlement?.id !== settlementId ||
+    settlement.orderId !== orderId ||
+    settlement.phaseId !== phaseId ||
+    !nonBlank(settlement.orderPriceBindingId) ||
+    !nonBlank(settlement.priceSnapshotId) ||
+    settlement.paymentId !== paymentId ||
+    settlement.refundTransactionId !== refundId ||
+    settlement.kind !== "unauthorized_handoff" ||
+    !nonBlank(currency) ||
+    typeof contractTotal !== "bigint" ||
+    contractTotal <= 0n ||
+    typeof capturedTotal !== "bigint" ||
+    capturedTotal <= 0n ||
+    capturedTotal !== contractTotal ||
+    settlement.earnedAmountMinor !== 0n ||
+    settlement.retainedAmountMinor !== 0n ||
+    refundAmount !== capturedTotal ||
+    settlement.writtenOffAmountMinor !== 0n ||
+    settlement.unearnedCancelledAmountMinor !== contractTotal ||
+    settlement.amountDueMinor !== 0n ||
+    settlement.refundableBalanceMinor !== 0n ||
+    !(cutoffAt instanceof Instant) ||
+    !(settledAt instanceof Instant) ||
+    cutoffAt.compare(settledAt) !== 0 ||
+    !nonBlank(settlementResultId) ||
+    (laterRefundedParcel
+      ? settlementResultId === resultId
+      : settlementResultId !== resultId) ||
+    settlement.immutable !== true ||
+    payment?.orderId !== orderId ||
+    payment.orderPriceBindingId !== settlement.orderPriceBindingId ||
+    payment.priceSnapshotId !== settlement.priceSnapshotId ||
+    payment.status !== "refunded" ||
+    payment.currency !== currency ||
+    payment.capturedAmountMinor !== capturedTotal ||
+    payment.captureAuthorized !== false ||
+    !(capturedAt instanceof Instant) ||
+    capturedAt.compare(cutoffAt) >= 0 ||
+    !(payment.captureCutoffAt instanceof Instant) ||
+    payment.captureCutoffAt.compare(cutoffAt) !== 0 ||
+    payment.immutable !== true ||
+    refund?.paymentId !== paymentId ||
+    refund.reason !== "customer_cancellation" ||
+    refund.status !== "succeeded" ||
+    refund.amountMinor !== refundAmount ||
+    !nonBlank(refund.provider) ||
+    !nonBlank(refund.providerRefundId) ||
+    !(refundCompletedAt instanceof Instant) ||
+    refundCompletedAt.compare(settledAt) > 0 ||
+    refund.immutable !== true ||
+    refundEvent?.paymentId !== paymentId ||
+    refundEvent.refundTransactionId !== refundId ||
+    refundEvent.kind !== "refund_succeeded" ||
+    refundEvent.provider !== refund.provider ||
+    refundEvent.providerTransactionId !== refund.providerRefundId ||
+    refundEvent.amountMinor !== refundAmount ||
+    refundEvent.currency !== currency ||
+    !(refundVerifiedAt instanceof Instant) ||
+    refundVerifiedAt.compare(refundCompletedAt) !== 0 ||
+    refundEvent.immutable !== true ||
+    context?.handoffSettlementPaymentSetComplete !== true ||
+    context?.handoffSettlementRefundSetComplete !== true ||
+    authoritativePaymentIds.length === 0 ||
+    authoritativeRefundIds.length === 0 ||
+    authoritativePaymentIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    authoritativeRefundIds.some(
+      (id) => typeof id !== "string" || id.trim().length === 0,
+    ) ||
+    new Set(authoritativePaymentIds).size !== authoritativePaymentIds.length ||
+    new Set(authoritativeRefundIds).size !== authoritativeRefundIds.length ||
+    invalidPaymentRow ||
+    invalidRefundRow ||
+    !hasSameNonEmptyStringSet(
+      authoritativePaymentIds,
+      payments.map((candidate) => candidate?.id),
+    ) ||
+    !hasSameNonEmptyStringSet(
+      authoritativeRefundIds,
+      refunds.map((candidate) => candidate?.id),
+    ) ||
+    exactPaymentCount !== 1 ||
+    exactRefundCount !== 1 ||
+    omittedCapturedPayment ||
+    pendingRefund
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "refunded handoff recovery requires exact immutable order-level payment, refund, receipt, and settlement proof",
+    );
+  }
+}
+
 function requireExactCancellationRaceHandoffResult<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -8914,9 +11875,40 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
   const previousOrderResultId = context?.cancellationRacePreviousOrderResultId;
   const orderStateKey = context?.cancellationRaceCurrentOrderStateCommandKey;
   const expectedOrder = record(context?.cancellationRaceExpectedOrder);
+  const previousPhaseResultId = context?.handoffPhasePreviousResultId;
+  const phaseStateKey = context?.handoffPhaseCurrentStateCommandKey;
+  const expectedPhase = record(context?.handoffExpectedPhase);
   const cancellationRequestId = context?.shipmentCancellationRequestId;
   const cancellationRequest = record(context?.shipmentCancellationRequest);
   const carrierLabelId = context?.carrierLabelId;
+  const sourceStatusValue = expectedShipment?.status;
+  const sourceStatus =
+    sourceStatusValue === "cancelled" ||
+    sourceStatusValue === "cancellation_pending"
+      ? sourceStatusValue
+      : undefined;
+  const committedCancellation =
+    context?.cancellationRaceCommittedCancellation === true;
+  const refundedAggregate = context?.cancellationRaceRefundedAggregate === true;
+  const laterRefundedParcel =
+    context?.cancellationRaceLaterRefundedParcel === true;
+  const expectedOrderStatus =
+    kind === "unauthorized_reconciliation"
+      ? refundedAggregate
+        ? laterRefundedParcel
+          ? "shipped"
+          : "refunded"
+        : "awaiting_balance"
+      : committedCancellation
+        ? "cancelled"
+        : "ready_to_ship";
+  const expectedPhaseStatus = refundedAggregate
+    ? laterRefundedParcel
+      ? "shipped"
+      : "cancelled_refunded"
+    : committedCancellation
+      ? "cancelled"
+      : "qc_passed";
   if (
     typeof kind !== "string" ||
     !cancellationRaceHandoffKinds.has(kind) ||
@@ -8932,56 +11924,70 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     providerEventId.trim().length === 0 ||
     typeof providerTransactionId !== "string" ||
     providerTransactionId.trim().length === 0 ||
+    !nonBlank(carrierLabelId) ||
+    sourceStatus === undefined ||
+    (committedCancellation &&
+      (sourceStatus !== "cancelled" || kind !== "ordinary")) ||
+    (refundedAggregate &&
+      (sourceStatus !== "cancelled" ||
+        kind !== "unauthorized_reconciliation")) ||
+    (laterRefundedParcel &&
+      (!refundedAggregate ||
+        (lifecycle !== "Shipment" && lifecycle !== "Job"))) ||
+    !nonBlank(previousShipmentResultId) ||
+    !nonBlank(stateKey) ||
+    expectedShipment?.id !== shipmentId ||
+    expectedShipment.orderId !== orderId ||
+    expectedShipment.phaseId !== phaseId ||
+    expectedShipment.status !== sourceStatus ||
+    expectedShipment.originKind !== expectedShipmentOriginKind ||
+    expectedShipment.resultId !== previousShipmentResultId ||
+    expectedShipment.currentStateCommandKey !== stateKey ||
+    expectedShipment.immutable !== true ||
+    !nonBlank(cancellationRequestId) ||
+    cancellationRequest?.id !== cancellationRequestId ||
+    cancellationRequest.shipmentId !== shipmentId ||
+    cancellationRequest.carrierLabelId !== carrierLabelId ||
+    cancellationRequest.previousStatus !== "label_created" ||
+    cancellationRequest.targetStatus !== "cancellation_pending" ||
+    !nonBlank(cancellationRequest.resultId) ||
+    cancellationRequest.immutable !== true ||
+    context?.cancellationRaceCancellationRequestId !== cancellationRequestId ||
+    context?.cancellationRaceCancellationRequestShipmentId !== shipmentId ||
+    context?.cancellationRaceCancellationRequestResultId !==
+      cancellationRequest.resultId ||
+    context?.shipmentProviderScanCancellationRequestId !==
+      cancellationRequestId ||
     (lifecycle === "Shipment" &&
-      (!nonBlank(previousShipmentResultId) ||
-        !nonBlank(stateKey) ||
-        command.aggregateId !== shipmentId ||
+      (command.aggregateId !== shipmentId ||
         command.currentStateResultId !== previousShipmentResultId ||
-        command.currentStateCommandKey !== stateKey ||
-        expectedShipment?.id !== shipmentId ||
-        expectedShipment.status !== "cancellation_pending" ||
-        expectedShipment.originKind !== expectedShipmentOriginKind ||
-        expectedShipment.resultId !== previousShipmentResultId ||
-        expectedShipment.currentStateCommandKey !== stateKey ||
-        expectedShipment.immutable !== true ||
-        !nonBlank(cancellationRequestId) ||
-        !nonBlank(carrierLabelId) ||
-        cancellationRequest?.id !== cancellationRequestId ||
-        cancellationRequest.shipmentId !== shipmentId ||
-        cancellationRequest.carrierLabelId !== carrierLabelId ||
-        cancellationRequest.previousStatus !== "label_created" ||
-        cancellationRequest.targetStatus !== "cancellation_pending" ||
-        !nonBlank(cancellationRequest.resultId) ||
-        cancellationRequest.immutable !== true ||
-        context?.cancellationRaceCancellationRequestId !==
-          cancellationRequestId ||
-        context?.cancellationRaceCancellationRequestShipmentId !== shipmentId ||
-        context?.cancellationRaceCancellationRequestResultId !==
-          cancellationRequest.resultId ||
-        context?.shipmentProviderScanCancellationRequestId !==
-          cancellationRequestId)) ||
+        command.currentStateCommandKey !== stateKey)) ||
     (lifecycle === "Order" &&
-      (!nonBlank(previousShipmentResultId) ||
-        !nonBlank(stateKey) ||
-        expectedShipment?.id !== shipmentId ||
-        expectedShipment.orderId !== orderId ||
-        expectedShipment.phaseId !== phaseId ||
-        expectedShipment.status !== "cancellation_pending" ||
-        expectedShipment.originKind !== expectedShipmentOriginKind ||
-        expectedShipment.resultId !== previousShipmentResultId ||
-        expectedShipment.currentStateCommandKey !== stateKey ||
-        expectedShipment.immutable !== true ||
-        !nonBlank(previousOrderResultId) ||
+      (!nonBlank(previousOrderResultId) ||
         !nonBlank(orderStateKey) ||
+        command.current !== expectedOrderStatus ||
         command.aggregateId !== orderId ||
         command.currentStateResultId !== previousOrderResultId ||
         command.currentStateCommandKey !== orderStateKey ||
         expectedOrder?.id !== orderId ||
         expectedOrder.phaseId !== phaseId ||
-        expectedOrder.status !== "awaiting_balance" ||
+        expectedOrder.status !== command.current ||
         expectedOrder.resultId !== previousOrderResultId ||
         expectedOrder.currentStateCommandKey !== orderStateKey ||
         expectedOrder.immutable !== true)) ||
+    (lifecycle === "OrderPhase(single)" &&
+      (!nonBlank(previousPhaseResultId) ||
+        !nonBlank(phaseStateKey) ||
+        command.current !== expectedPhaseStatus ||
+        command.aggregateId !== phaseId ||
+        command.currentStateResultId !== previousPhaseResultId ||
+        command.currentStateCommandKey !== phaseStateKey ||
+        expectedPhase?.id !== phaseId ||
+        expectedPhase.orderId !== orderId ||
+        expectedPhase.status !== command.current ||
+        expectedPhase.resultId !== previousPhaseResultId ||
+        expectedPhase.currentStateCommandKey !== phaseStateKey ||
+        expectedPhase.immutable !== true)) ||
     context?.cancellationRaceResultKind !== kind ||
     context?.cancellationRaceResultShipmentId !== shipmentId ||
     context?.cancellationRaceResultOrderId !== orderId ||
@@ -8989,8 +11995,7 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     context?.cancellationRaceResultProviderEventId !== providerEventId ||
     context?.cancellationRaceResultProviderTransactionId !==
       providerTransactionId ||
-    context?.cancellationRaceResultShipmentPreviousStatus !==
-      "cancellation_pending" ||
+    context?.cancellationRaceResultShipmentPreviousStatus !== sourceStatus ||
     context?.cancellationRaceResultShipmentTargetStatus !== "handed_over" ||
     context?.cancellationRaceAggregateResultId !== resultId ||
     context?.cancellationRaceShipmentResultId !== resultId ||
@@ -9074,9 +12079,21 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     );
     requireZeroBalances(lifecycle, command);
     requireAtomicOrdinaryHandoff(lifecycle, command, {
-      shipmentPrevious: "cancellation_pending",
-      orderPrevious: "ready_to_ship",
-      phasePrevious: "qc_passed",
+      shipmentPrevious: sourceStatus,
+      orderPrevious: refundedAggregate
+        ? "refunded"
+        : committedCancellation
+          ? "cancelled"
+          : "ready_to_ship",
+      phasePrevious: refundedAggregate
+        ? "cancelled_refunded"
+        : committedCancellation
+          ? "cancelled"
+          : "qc_passed",
+      jobPrevious:
+        committedCancellation || refundedAggregate ? "cancelled" : "packed",
+      orderTarget: "shipped",
+      phaseTarget: "shipped",
       resultProof: "cancellation_race",
     });
     return;
@@ -9085,6 +12102,7 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
   if (kind === "unauthorized_reconciliation") {
     const reconciliationId = context?.handoffReconciliationId;
     const settlementId = context?.handoffSettlementId;
+    const refundedSettlement = record(context?.handoffRefundedSettlement);
     if (
       context?.cancellationRaceAggregateResultStatus !==
         "order_phase_shipped" ||
@@ -9107,12 +12125,14 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
       context?.handoffReconciliationAtomic !== true ||
       typeof settlementId !== "string" ||
       settlementId.trim().length === 0 ||
-      context?.handoffSettlementShipmentId !== shipmentId ||
+      (!refundedAggregate &&
+        context?.handoffSettlementShipmentId !== shipmentId) ||
       context?.handoffSettlementOrderId !== orderId ||
       context?.handoffSettlementPhaseId !== phaseId ||
       context?.handoffSettlementKind !== "handoff_reconciliation" ||
       context?.handoffSettlementImmutable !== true ||
-      context?.handoffSettlementResultId !== resultId
+      context?.handoffSettlementResultId !==
+        (refundedAggregate ? refundedSettlement?.resultId : resultId)
     ) {
       throw new TransitionGuardError(
         lifecycle,
@@ -9133,12 +12153,20 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
       "handoffSettlementCompleted",
       "unauthorized cancellation-race handoff requires its settlement",
     );
+    if (refundedAggregate) {
+      requireExactRefundedHandoffFinancialProof(lifecycle, command);
+    }
     requireZeroAmountDue(lifecycle, command);
     requireReconciliationRefundAllocation(lifecycle, command);
     requireAtomicOrdinaryHandoff(lifecycle, command, {
-      shipmentPrevious: "cancellation_pending",
-      orderPrevious: "awaiting_balance",
-      phasePrevious: "qc_passed",
+      shipmentPrevious: sourceStatus,
+      orderPrevious: refundedAggregate ? "refunded" : "awaiting_balance",
+      phasePrevious: refundedAggregate ? "cancelled_refunded" : "qc_passed",
+      jobPrevious: refundedAggregate ? "cancelled" : "packed",
+      ...(refundedAggregate
+        ? { slotPrevious: "cancelled_refunded" as const }
+        : {}),
+      allowLaterParcel: laterRefundedParcel,
       resultProof: "cancellation_race",
     });
     return;
@@ -9179,6 +12207,7 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
       command,
       shipmentId,
       true,
+      sourceStatus,
     );
     return;
   }
@@ -9210,7 +12239,13 @@ function requireExactCancellationRaceHandoffResult<S extends string>(
     "reshipmentHandoffCompleted",
     "reship cancellation-race handoff must complete its exact result",
   );
-  requireExactReshipmentHandoff(lifecycle, command, shipmentId, true);
+  requireExactReshipmentHandoff(
+    lifecycle,
+    command,
+    shipmentId,
+    true,
+    sourceStatus,
+  );
 }
 
 function requireExactLabelledShipmentHandoff<S extends string>(
@@ -9300,12 +12335,16 @@ function requireExactLabelledShipmentHandoff<S extends string>(
 export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
   name: "Shipment",
   initial: ["planned"],
-  terminal: ["delivered", "cancelled", "returned", "recovered"],
+  terminal: ["delivered", "returned", "recovered"],
+  contextualTerminal: (state, context) =>
+    state === "cancelled" &&
+    !hasExactRecoverableProviderVoidCancellationRace(context),
   transitions: {
     planned: ["label_created", "cancelled"],
     label_created: ["handed_over", "cancellation_pending"],
     cancellation_pending: ["cancelled", "handed_over"],
-    handed_over: ["in_transit"],
+    cancelled: ["handed_over"],
+    handed_over: ["in_transit", "delivered"],
     in_transit: ["delivered", "lost", "returned"],
     lost: ["recovered"],
   },
@@ -9329,7 +12368,8 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
       requireExactLabelledShipmentHandoff("Shipment", command);
     }
     if (
-      command.current === "cancellation_pending" &&
+      (command.current === "cancellation_pending" ||
+        command.current === "cancelled") &&
       command.target === "handed_over"
     ) {
       requireVerifiedMatchingCancellationRaceScan("Shipment", command);
@@ -9342,7 +12382,10 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
       requireExactVerifiedProviderVoid("Shipment", command);
       requireShipmentCancellationReleased("Shipment", command);
     }
-    if (command.current === "handed_over" && command.target === "in_transit") {
+    if (
+      command.current === "handed_over" &&
+      (command.target === "in_transit" || command.target === "delivered")
+    ) {
       requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
       requireExactShipmentProviderOutcome("Shipment", command);
     }
@@ -11392,6 +14435,7 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
   command: TransitionCommand<S>,
   selectedShipmentId?: string,
   cancellationRace = false,
+  cancellationRaceShipmentSourceStatus: CancellationRaceShipmentSourceStatus = "cancellation_pending",
 ): void {
   if (lifecycle === "ClaimSlotResolution") {
     requireExactReplacementResolutionSource(
@@ -11447,6 +14491,7 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
       command,
       selectedShipmentId,
       cancellationRace,
+      cancellationRaceShipmentSourceStatus,
     );
     return;
   }
@@ -11620,7 +14665,7 @@ function requireAtomicCompleteReplacementHandoff<S extends string>(
         : undefined;
     const expectedShipmentPreviousStatus =
       cancellationRace && selectedShipmentId === shipmentId
-        ? "cancellation_pending"
+        ? cancellationRaceShipmentSourceStatus
         : "label_created";
     if (
       typeof groupId !== "string" ||
@@ -12334,6 +15379,7 @@ function requireIndependentReplacementHandoff<S extends string>(
   command: TransitionCommand<S>,
   transitionShipmentId?: string,
   cancellationRace = false,
+  cancellationRaceShipmentSourceStatus: CancellationRaceShipmentSourceStatus = "cancellation_pending",
 ): void {
   requireIndependentReplacementResourceSet(lifecycle, command, true);
   const context = command.context;
@@ -12466,7 +15512,7 @@ function requireIndependentReplacementHandoff<S extends string>(
       const persisted = setup.get(id);
       const expectedPrevious =
         cancellationRace && transitionShipmentId === id
-          ? "cancellation_pending"
+          ? cancellationRaceShipmentSourceStatus
           : job
             ? "packed"
             : "label_created";
@@ -12750,6 +15796,7 @@ function requireExactReshipmentHandoff<S extends string>(
   command: TransitionCommand<S>,
   selectedShipmentId?: string,
   cancellationRace = false,
+  cancellationRaceShipmentSourceStatus: CancellationRaceShipmentSourceStatus = "cancellation_pending",
 ): void {
   const context = command.context;
   const claimId = context?.claimId;
@@ -12849,7 +15896,9 @@ function requireExactReshipmentHandoff<S extends string>(
     context?.reshipmentHandoffAuthorizationId !== authorizationId ||
     context?.reshipmentHandoffShipmentId !== newShipmentId ||
     context?.reshipmentHandoffShipmentPreviousStatus !==
-      (cancellationRace ? "cancellation_pending" : "label_created") ||
+      (cancellationRace
+        ? cancellationRaceShipmentSourceStatus
+        : "label_created") ||
     context?.reshipmentHandoffShipmentTargetStatus !== "handed_over" ||
     context?.reshipmentHandoffOriginalJobId !== originalJobId ||
     context?.reshipmentHandoffOriginalJobShipmentId !== originalShipmentId ||

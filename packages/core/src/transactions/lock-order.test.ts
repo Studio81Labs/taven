@@ -10,6 +10,8 @@ describe("orderLockTargets", () => {
       { kind: "order_phase", id: "phase-1" },
       { kind: "order", id: "order-1" },
       { kind: "job", id: "job-a", nodeId: "node-1" },
+      { kind: "shipment", id: "shipment-1" },
+      { kind: "shipment_plan", id: "shipment-plan-1" },
       { kind: "payment", id: "payment-a" },
       {
         kind: "inventory_reservation",
@@ -23,8 +25,10 @@ describe("orderLockTargets", () => {
     ).toEqual([
       "order:order-1",
       "order_phase:phase-1",
+      "shipment_plan:shipment-plan-1",
       "job:job-a",
       "job:job-b",
+      "shipment:shipment-1",
       "payment:payment-a",
       "payment:payment-b",
       "inventory_reservation:inventory-1",
