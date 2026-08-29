@@ -7369,7 +7369,7 @@ BEGIN
        OR (NEW."kind" = 'TRANSIT_SCAN'
            AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'))
        OR (NEW."kind" = 'DELIVERY_SCAN'
-           AND target_status NOT IN ('IN_TRANSIT', 'DELIVERED'))
+           AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'))
        OR NEW."carrier" IS DISTINCT FROM target_carrier
        OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id
        OR NEW."source_shipment_status" IS DISTINCT FROM target_status THEN
@@ -7676,6 +7676,7 @@ BEGIN
            OR (OLD."status" = 'CANCELLATION_PENDING' AND NEW."status" IN ('CANCELLED', 'HANDED_OVER'))
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'HANDED_OVER')
            OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'IN_TRANSIT')
+           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'DELIVERED')
            OR (OLD."status" = 'IN_TRANSIT' AND NEW."status" = 'DELIVERED')
        ) THEN
         RAISE EXCEPTION 'Shipment status transition is not allowed'
@@ -7720,6 +7721,19 @@ BEGIN
                AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
                AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'DELIVERED'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
+               AND NEW."handed_over_at" IS NOT DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
            OR (OLD."status" = 'IN_TRANSIT' AND NEW."status" = 'DELIVERED'
                AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
@@ -7952,7 +7966,7 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_transit_scan_confirmation_check';
     END IF;
 
-    IF OLD."status" = 'IN_TRANSIT'
+    IF OLD."status" IN ('HANDED_OVER', 'IN_TRANSIT')
        AND NEW."status" = 'DELIVERED'
        AND NOT EXISTS (
            SELECT 1

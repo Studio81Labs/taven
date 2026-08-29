@@ -9988,7 +9988,10 @@ describe("commerce persistence foundations", () => {
              WHERE id = $1`,
             [shipmentId],
           ),
-        { code: "23514", constraint: "shipment_status_transition_check" },
+        {
+          code: "23514",
+          constraint: "shipment_delivery_scan_confirmation_check",
+        },
       );
       await expectQueryError(
         client,
@@ -10026,6 +10029,121 @@ describe("commerce persistence foundations", () => {
           code: "23514",
           constraint: "shipment_delivery_scan_confirmation_check",
         },
+      );
+    });
+  });
+
+  it("reconciles a delivery scan directly from handed-over custody", async () => {
+    await rollback("delivery-before-transit", async (client, fixtures) => {
+      const foundation = await fixtures.createFoundation(
+        "delivery-before-transit",
+      );
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        foundation,
+      );
+      await activateCurrentPlan(client, fixtures, foundation, productions);
+      for (const status of [
+        "IN_PRODUCTION",
+        "QC_PASSED",
+        "READY_TO_SHIP",
+      ] as const) {
+        await advanceOrderLifecycleStep(client, foundation.orderId, status);
+      }
+      const shipmentId = foundation.shipmentIds[0];
+      if (!shipmentId || foundation.shipmentIds.length !== 1) {
+        throw new Error("direct-delivery fixture requires one Shipment");
+      }
+      const acceptanceEventId = "delivery-before-transit-acceptance";
+      const handedOverAt = await persistVerifiedAcceptanceScan(
+        client,
+        shipmentId,
+        acceptanceEventId,
+      );
+      await client.query(
+        `UPDATE jobs
+         SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, handedOverAt],
+      );
+      await client.query(
+        `UPDATE shipments
+         SET status = 'HANDED_OVER', provider_acceptance_scan_id = $2,
+             handed_over_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [shipmentId, acceptanceEventId, handedOverAt],
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [foundation.orderPhaseId, handedOverAt],
+      );
+      await client.query(
+        `UPDATE orders SET status = 'SHIPPED', updated_at = $2 WHERE id = $1`,
+        [foundation.orderId, handedOverAt],
+      );
+      await forceOrderLifecycleConstraints(client);
+      const before = (
+        await client.query<{
+          handed_over_at: Date;
+          provider_acceptance_scan_id: string;
+        }>(
+          `SELECT handed_over_at, provider_acceptance_scan_id
+           FROM shipments
+           WHERE id = $1`,
+          [shipmentId],
+        )
+      ).rows[0];
+      if (!before) throw new Error("handed-over Shipment is unavailable");
+      const deliveredAt = new Date(before.handed_over_at.getTime() + 1_000);
+
+      await persistVerifiedShipmentOutcome(
+        client,
+        shipmentId,
+        "DELIVERY_SCAN",
+        deliveredAt,
+      );
+      await advanceOrderLifecycleStep(
+        client,
+        foundation.orderId,
+        "DELIVERED",
+        deliveredAt,
+      );
+
+      const outcome = (
+        await client.query<{
+          status: string;
+          handed_over_at: Date;
+          delivered_at: Date;
+          provider_acceptance_scan_id: string;
+          transit_count: string;
+          delivery_count: string;
+        }>(
+          `SELECT shipment.status, shipment.handed_over_at,
+                  shipment.delivered_at, shipment.provider_acceptance_scan_id,
+                  count(*) FILTER (WHERE event.kind = 'TRANSIT_SCAN')::text AS transit_count,
+                  count(*) FILTER (WHERE event.kind = 'DELIVERY_SCAN')::text AS delivery_count
+           FROM shipments shipment
+           LEFT JOIN shipment_provider_events event
+             ON event.shipment_id = shipment.id
+           WHERE shipment.id = $1
+           GROUP BY shipment.id`,
+          [shipmentId],
+        )
+      ).rows[0];
+      expect(outcome).toMatchObject({
+        status: "DELIVERED",
+        provider_acceptance_scan_id: before.provider_acceptance_scan_id,
+        transit_count: "0",
+        delivery_count: "1",
+      });
+      expect(outcome?.handed_over_at.toISOString()).toBe(
+        before.handed_over_at.toISOString(),
+      );
+      expect(outcome?.delivered_at.toISOString()).toBe(
+        deliveredAt.toISOString(),
       );
     });
   });

@@ -5796,7 +5796,8 @@ function commandAnchors(
   }
   if (
     (policy.name === "Shipment" &&
-      ((current === "handed_over" && target === "in_transit") ||
+      ((current === "handed_over" &&
+        (target === "in_transit" || target === "delivered")) ||
         (current === "in_transit" &&
           (target === "delivered" ||
             target === "lost" ||
@@ -7145,6 +7146,7 @@ describe("v0 lifecycle policy tables", () => {
     [shipmentPolicy, "cancellation_pending", "handed_over"],
     [shipmentPolicy, "cancelled", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "cancelled"],
+    [shipmentPolicy, "handed_over", "delivered"],
     [shipmentPolicy, "in_transit", "delivered"],
     [shipmentPolicy, "in_transit", "lost"],
     [shipmentPolicy, "in_transit", "returned"],
@@ -10495,6 +10497,95 @@ describe("v0 lifecycle policy tables", () => {
         cancellationRaceRefundedAggregate: true,
       }),
     ).toBe(true);
+  });
+
+  it("classifies only exact provider-void cancellation races as recoverable Shipments", () => {
+    expect(isTerminal(shipmentPolicy, "cancelled")).toBe(true);
+    expect(
+      isTerminal(
+        shipmentPolicy,
+        "cancelled",
+        contextForTransition("cancelled", "planned"),
+      ),
+    ).toBe(true);
+    expect(
+      isTerminal(shipmentPolicy, "cancelled", {
+        cancellationRaceCommittedCancellation: true,
+      }),
+    ).toBe(true);
+
+    const recoverable = contextForTransition("handed_over", "cancelled");
+    expect(isTerminal(shipmentPolicy, "cancelled", recoverable)).toBe(false);
+    expect(
+      isTerminal(
+        shipmentPolicy,
+        "cancelled",
+        contextForTransition("shipped", "refunded"),
+      ),
+    ).toBe(false);
+    expect(
+      isTerminal(shipmentPolicy, "cancelled", {
+        ...recoverable,
+        providerEventAuthenticated: false,
+      }),
+    ).toBe(true);
+    expect(
+      isTerminal(shipmentPolicy, "cancelled", {
+        ...recoverable,
+        providerEventKind: "delivery_scan",
+      }),
+    ).toBe(true);
+    expect(
+      isTerminal(shipmentPolicy, "cancelled", {
+        ...recoverable,
+        cancellationRaceAcceptanceEvent: {
+          ...recoverable.cancellationRaceAcceptanceEvent,
+          occurredAt: recoverable.cancellationRaceSelectedVoidEvent.occurredAt,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("classifies only exact no-intent failed and voided Payments as terminal", () => {
+    const snapshot = (status: "failed" | "voided") => ({
+      paymentId: "payment-1",
+      paymentTerminalSnapshotResultId: `payment-${status}-result-1`,
+      paymentTerminalSnapshotCurrentStateCommandKey: `payment-${status}-command-1`,
+      paymentTerminalSnapshot: {
+        id: "payment-1",
+        status,
+        providerIntentId: null,
+        captureAuthorized: false,
+        captureCutoffAt: Instant.parse("2026-01-01T00:05:00.000Z"),
+        resultId: `payment-${status}-result-1`,
+        currentStateCommandKey: `payment-${status}-command-1`,
+        immutable: true,
+      },
+    });
+
+    expect(isTerminal(paymentPolicy, "failed")).toBe(false);
+    expect(isTerminal(paymentPolicy, "voided")).toBe(false);
+    expect(isTerminal(paymentPolicy, "failed", snapshot("failed"))).toBe(true);
+    expect(isTerminal(paymentPolicy, "voided", snapshot("voided"))).toBe(true);
+    expect(
+      isTerminal(paymentPolicy, "failed", {
+        ...snapshot("failed"),
+        paymentTerminalSnapshot: {
+          ...snapshot("failed").paymentTerminalSnapshot,
+          providerIntentId: "provider-intent-1",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isTerminal(paymentPolicy, "voided", {
+        ...snapshot("voided"),
+        paymentTerminalSnapshot: {
+          ...snapshot("voided").paymentTerminalSnapshot,
+          id: "payment-2",
+        },
+      }),
+    ).toBe(false);
+    expect(isTerminal(paymentPolicy, "refunded")).toBe(true);
   });
 
   it("reconciles a cancelled Job from the exact refunded aggregate", () => {
@@ -22600,6 +22691,12 @@ describe("v0 lifecycle policy tables", () => {
     ],
     [
       shipmentPolicy,
+      "handed_over",
+      "delivered",
+      ["providerEventAuthenticated", "providerEventVerified"],
+    ],
+    [
+      shipmentPolicy,
       "lost",
       "recovered",
       [
@@ -22682,6 +22779,7 @@ describe("v0 lifecycle policy tables", () => {
     [shipmentPolicy, "cancellation_pending", "cancelled"],
     [shipmentPolicy, "cancelled", "handed_over"],
     [shipmentPolicy, "handed_over", "in_transit"],
+    [shipmentPolicy, "handed_over", "delivered"],
     [shipmentPolicy, "lost", "recovered"],
     [claimSlotResolutionPolicy, "pending", "reship_pending"],
     [claimSlotResolutionPolicy, "recovery_pending", "reship_pending"],
@@ -26571,6 +26669,7 @@ describe("v0 lifecycle policy tables", () => {
 
   it.each([
     ["handed_over", "in_transit"],
+    ["handed_over", "delivered"],
     ["in_transit", "delivered"],
     ["in_transit", "lost"],
     ["in_transit", "returned"],

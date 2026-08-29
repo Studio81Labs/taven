@@ -40,6 +40,126 @@ function hasExactRefundedCancellationRecoveryMarker(
   );
 }
 
+function hasExactNoIntentPaymentTerminalSnapshot(
+  state: string,
+  context: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  if (state !== "failed" && state !== "voided") return false;
+  const snapshotValue = context?.paymentTerminalSnapshot;
+  const snapshot =
+    typeof snapshotValue === "object" &&
+    snapshotValue !== null &&
+    !Array.isArray(snapshotValue)
+      ? (snapshotValue as Readonly<Record<string, unknown>>)
+      : undefined;
+  const paymentId = context?.paymentId;
+  const resultId = context?.paymentTerminalSnapshotResultId;
+  const stateKey = context?.paymentTerminalSnapshotCurrentStateCommandKey;
+  return (
+    typeof paymentId === "string" &&
+    paymentId.trim().length > 0 &&
+    typeof resultId === "string" &&
+    resultId.trim().length > 0 &&
+    typeof stateKey === "string" &&
+    stateKey.trim().length > 0 &&
+    snapshot?.id === paymentId &&
+    snapshot.status === state &&
+    snapshot.providerIntentId === null &&
+    snapshot.captureAuthorized === false &&
+    snapshot.captureCutoffAt instanceof Instant &&
+    snapshot.resultId === resultId &&
+    snapshot.currentStateCommandKey === stateKey &&
+    snapshot.immutable === true
+  );
+}
+
+function hasExactRecoverableProviderVoidCancellationRace(
+  context: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const nonBlank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const record = (
+    value: unknown,
+  ): Readonly<Record<string, unknown>> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Readonly<Record<string, unknown>>)
+      : undefined;
+  const shipmentId = context?.shipmentId;
+  const carrierLabelId = context?.carrierLabelId;
+  const providerEventId = context?.providerEventId;
+  const providerTransactionId = context?.shipmentProviderTransactionId;
+  const resultId = context?.cancellationRaceHandoffResultId;
+  const expectedShipment = record(context?.cancellationRaceExpectedShipment);
+  const acceptanceEvent = record(context?.cancellationRaceAcceptanceEvent);
+  const voidEvent = record(context?.cancellationRaceSelectedVoidEvent);
+  const resultShipment = record(context?.cancellationRaceResultShipment);
+  const acceptanceOccurredAt = acceptanceEvent?.occurredAt;
+  const acceptanceVerifiedAt = acceptanceEvent?.verifiedAt;
+  const voidOccurredAt = voidEvent?.occurredAt;
+  const voidVerifiedAt = voidEvent?.verifiedAt;
+  const handedOverAt = resultShipment?.handedOverAt;
+  const providerVoidedAt = expectedShipment?.providerVoidedAt;
+  const cancelledAt = expectedShipment?.cancelledAt;
+  const voidEventId = voidEvent?.id;
+  const carrier = resultShipment?.carrier;
+
+  return (
+    nonBlank(shipmentId) &&
+    nonBlank(carrierLabelId) &&
+    nonBlank(providerEventId) &&
+    nonBlank(providerTransactionId) &&
+    nonBlank(resultId) &&
+    nonBlank(voidEventId) &&
+    nonBlank(carrier) &&
+    context?.providerEventShipmentId === shipmentId &&
+    context.providerEventTransactionId === providerTransactionId &&
+    context.shipmentProviderScanEventId === providerEventId &&
+    context.providerEventKind === "acceptance_scan" &&
+    context.providerEventStatus === "handed_over" &&
+    context.providerEventAuthenticated === true &&
+    context.providerEventVerified === true &&
+    context.verifiedProviderScan === true &&
+    expectedShipment?.id === shipmentId &&
+    expectedShipment.status === "cancelled" &&
+    expectedShipment.providerVoidId === voidEventId &&
+    providerVoidedAt instanceof Instant &&
+    cancelledAt instanceof Instant &&
+    expectedShipment.immutable === true &&
+    resultShipment?.id === shipmentId &&
+    resultShipment.previousStatus === "cancelled" &&
+    resultShipment.targetStatus === "handed_over" &&
+    resultShipment.carrierLabelId === carrierLabelId &&
+    resultShipment.providerAcceptanceScanId === providerEventId &&
+    handedOverAt instanceof Instant &&
+    resultShipment.resultId === resultId &&
+    resultShipment.immutable === true &&
+    acceptanceEvent?.id === providerEventId &&
+    acceptanceEvent.shipmentId === shipmentId &&
+    acceptanceEvent.carrier === carrier &&
+    acceptanceEvent.carrierLabelId === carrierLabelId &&
+    acceptanceEvent.transactionId === providerTransactionId &&
+    acceptanceEvent.kind === "acceptance_scan" &&
+    acceptanceEvent.authenticated === true &&
+    acceptanceEvent.verified === true &&
+    acceptanceEvent.immutable === true &&
+    acceptanceOccurredAt instanceof Instant &&
+    acceptanceVerifiedAt instanceof Instant &&
+    voidEvent?.shipmentId === shipmentId &&
+    voidEvent.carrier === carrier &&
+    voidEvent.carrierLabelId === carrierLabelId &&
+    voidEvent.kind === "label_voided" &&
+    voidEvent.authenticated === true &&
+    voidEvent.verified === true &&
+    voidEvent.immutable === true &&
+    voidOccurredAt instanceof Instant &&
+    voidVerifiedAt instanceof Instant &&
+    handedOverAt.equals(acceptanceVerifiedAt) &&
+    acceptanceOccurredAt.compare(voidOccurredAt) < 0 &&
+    providerVoidedAt.equals(voidVerifiedAt) &&
+    cancelledAt.compare(voidVerifiedAt) >= 0
+  );
+}
+
 function requireFlag<S extends string>(
   lifecycle: string,
   command: TransitionCommand<S>,
@@ -7138,6 +7258,8 @@ export const paymentPolicy: TransitionPolicy<PaymentStatus> = {
   name: "Payment",
   initial: ["created"],
   terminal: ["refunded"],
+  contextualTerminal: (state, context) =>
+    hasExactNoIntentPaymentTerminalSnapshot(state, context),
   transitions: {
     created: ["pending", "failed", "voided"],
     pending: ["captured", "failed", "voided", "refund_pending"],
@@ -8945,7 +9067,6 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
   const shipmentId = command.context?.shipmentId;
   const providerTransactionId = command.context?.shipmentProviderTransactionId;
   const providerEventId = command.context?.providerEventId;
-  const carrierLabelId = command.context?.carrierLabelId;
   const expectedShipment = record(
     command.context?.cancellationRaceExpectedShipment,
   );
@@ -8988,74 +9109,16 @@ function requireVerifiedMatchingCancellationRaceScan<S extends string>(
     "the exact custody scan must be persisted and consumed",
   );
 
-  if (expectedShipment?.status === "cancelled") {
-    const acceptanceEvent = record(
-      command.context?.cancellationRaceAcceptanceEvent,
+  if (
+    expectedShipment?.status === "cancelled" &&
+    !hasExactRecoverableProviderVoidCancellationRace(command.context)
+  ) {
+    throw new TransitionGuardError(
+      lifecycle,
+      command.current,
+      command.target,
+      "post-void cancellation-race handoff requires an exact pre-void acceptance receipt and selected void snapshot",
     );
-    const voidEvent = record(
-      command.context?.cancellationRaceSelectedVoidEvent,
-    );
-    const acceptanceOccurredAt = acceptanceEvent?.occurredAt;
-    const acceptanceVerifiedAt = acceptanceEvent?.verifiedAt;
-    const voidOccurredAt = voidEvent?.occurredAt;
-    const voidVerifiedAt = voidEvent?.verifiedAt;
-    const voidEventId = voidEvent?.id;
-    const resultShipment = record(
-      command.context?.cancellationRaceResultShipment,
-    );
-    const resultCarrier = resultShipment?.carrier;
-    const resultHandedOverAt = resultShipment?.handedOverAt;
-    if (
-      typeof carrierLabelId !== "string" ||
-      carrierLabelId.trim().length === 0 ||
-      typeof resultCarrier !== "string" ||
-      resultCarrier.trim().length === 0 ||
-      resultShipment?.id !== shipmentId ||
-      resultShipment.previousStatus !== "cancelled" ||
-      resultShipment.targetStatus !== "handed_over" ||
-      resultShipment.carrierLabelId !== carrierLabelId ||
-      resultShipment.providerAcceptanceScanId !== providerEventId ||
-      !(resultHandedOverAt instanceof Instant) ||
-      resultShipment.resultId !==
-        command.context?.cancellationRaceHandoffResultId ||
-      resultShipment.immutable !== true ||
-      acceptanceEvent?.id !== providerEventId ||
-      acceptanceEvent.shipmentId !== shipmentId ||
-      acceptanceEvent.carrier !== resultCarrier ||
-      acceptanceEvent.carrierLabelId !== carrierLabelId ||
-      acceptanceEvent.transactionId !== providerTransactionId ||
-      acceptanceEvent.kind !== "acceptance_scan" ||
-      acceptanceEvent.authenticated !== true ||
-      acceptanceEvent.verified !== true ||
-      acceptanceEvent.immutable !== true ||
-      !(acceptanceOccurredAt instanceof Instant) ||
-      !(acceptanceVerifiedAt instanceof Instant) ||
-      typeof voidEventId !== "string" ||
-      voidEventId.trim().length === 0 ||
-      voidEvent?.shipmentId !== shipmentId ||
-      voidEvent.carrier !== resultCarrier ||
-      voidEvent.carrierLabelId !== carrierLabelId ||
-      voidEvent.kind !== "label_voided" ||
-      voidEvent.authenticated !== true ||
-      voidEvent.verified !== true ||
-      voidEvent.immutable !== true ||
-      !(voidOccurredAt instanceof Instant) ||
-      !(voidVerifiedAt instanceof Instant) ||
-      !resultHandedOverAt.equals(acceptanceVerifiedAt) ||
-      acceptanceOccurredAt.compare(voidOccurredAt) >= 0 ||
-      expectedShipment?.providerVoidId !== voidEventId ||
-      !(expectedShipment.providerVoidedAt instanceof Instant) ||
-      !expectedShipment.providerVoidedAt.equals(voidVerifiedAt) ||
-      !(expectedShipment.cancelledAt instanceof Instant) ||
-      expectedShipment.cancelledAt.compare(voidVerifiedAt) < 0
-    ) {
-      throw new TransitionGuardError(
-        lifecycle,
-        command.current,
-        command.target,
-        "post-void cancellation-race handoff requires an exact pre-void acceptance receipt and selected void snapshot",
-      );
-    }
   }
 }
 
@@ -10390,12 +10453,15 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
   name: "Shipment",
   initial: ["planned"],
   terminal: ["delivered", "returned", "recovered"],
+  contextualTerminal: (state, context) =>
+    state === "cancelled" &&
+    !hasExactRecoverableProviderVoidCancellationRace(context),
   transitions: {
     planned: ["label_created", "cancelled"],
     label_created: ["handed_over", "cancellation_pending"],
     cancellation_pending: ["cancelled", "handed_over"],
     cancelled: ["handed_over"],
-    handed_over: ["in_transit"],
+    handed_over: ["in_transit", "delivered"],
     in_transit: ["delivered", "lost", "returned"],
     lost: ["recovered"],
   },
@@ -10433,7 +10499,10 @@ export const shipmentPolicy: TransitionPolicy<ShipmentStatus> = {
       requireExactVerifiedProviderVoid("Shipment", command);
       requireShipmentCancellationReleased("Shipment", command);
     }
-    if (command.current === "handed_over" && command.target === "in_transit") {
+    if (
+      command.current === "handed_over" &&
+      (command.target === "in_transit" || command.target === "delivered")
+    ) {
       requireVerifiedMatchingProviderShipmentEvent("Shipment", command);
       requireExactShipmentProviderOutcome("Shipment", command);
     }
