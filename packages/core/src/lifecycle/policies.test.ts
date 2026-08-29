@@ -8452,12 +8452,37 @@ describe("v0 lifecycle policy tables", () => {
   });
 
   it.each([
-    ["suspend_claimed", "refund_pending", "pending", 10_000n],
-    ["suspend_succeeded", "refunded", "succeeded", 10_000n],
-    ["suspend_succeeded", "partially_refunded", "succeeded", 20_000n],
+    ["suspend_claimed", "refund_pending", "pending", 10_000n, null],
+    [
+      "suspend_claimed",
+      "refund_pending",
+      "pending",
+      10_000n,
+      "provider-refund-retry-claimed-1",
+    ],
+    [
+      "suspend_succeeded",
+      "refunded",
+      "succeeded",
+      10_000n,
+      "provider-refund-retry-1",
+    ],
+    [
+      "suspend_succeeded",
+      "partially_refunded",
+      "succeeded",
+      20_000n,
+      "provider-refund-retry-1",
+    ],
   ] as const)(
     "retains financial ambiguity by applying %s to the exact retry from %s",
-    (reconciliationKind, paymentSource, retrySource, capturedAmountMinor) => {
+    (
+      reconciliationKind,
+      paymentSource,
+      retrySource,
+      capturedAmountMinor,
+      retryProviderTransactionId,
+    ) => {
       const failureAt = Instant.parse("2026-01-01T00:10:00.000Z");
       const retryClaimedAt = Instant.parse("2026-01-01T00:10:30.000Z");
       const retrySucceededAt = Instant.parse("2026-01-01T00:10:45.000Z");
@@ -8485,8 +8510,7 @@ describe("v0 lifecycle policy tables", () => {
         paymentId: "payment-1",
         status: retrySource,
         provider: "sandbox",
-        providerTransactionId:
-          retrySource === "succeeded" ? "provider-refund-retry-1" : null,
+        providerTransactionId: retryProviderTransactionId,
         providerEventId:
           retrySource === "succeeded" ? "retry-success-event-1" : null,
         amountMinor: 10_000n,
@@ -8566,7 +8590,7 @@ describe("v0 lifecycle policy tables", () => {
         paymentId: "payment-1",
         refundTransactionId: retryBefore.id,
         provider: "sandbox",
-        providerTransactionId: "provider-refund-retry-1",
+        providerTransactionId: retryProviderTransactionId,
         kind: "refund_succeeded",
         amountMinor: 10_000n,
         currency: "EUR",
@@ -8817,6 +8841,30 @@ describe("v0 lifecycle policy tables", () => {
               lateRefundSuccessRetryProviderEvent: {
                 ...retrySuccessEvent,
                 providerTransactionId: "another-retry-refund",
+              },
+            },
+          }),
+        ).toThrow(TransitionGuardError);
+      }
+      if (retrySource === "pending" && retryProviderTransactionId !== null) {
+        const changedProviderTransactionId = "changed-provider-refund-retry";
+        const changedRetryAfter = {
+          ...retryAfter,
+          providerTransactionId: changedProviderTransactionId,
+        };
+        expect(() =>
+          transition(paymentPolicy, {
+            ...command,
+            idempotencyKey: "late-claimed-retry-changed-provider-identity",
+            context: {
+              ...context,
+              lateRefundSuccessRefundSetAfter: {
+                ...refundSetAfter,
+                refundSnapshots: [sourceRefund, changedRetryAfter],
+              },
+              lateRefundSuccessReconciledRetryRefundTransaction: {
+                ...context.lateRefundSuccessReconciledRetryRefundTransaction,
+                providerTransactionId: changedProviderTransactionId,
               },
             },
           }),

@@ -3803,12 +3803,14 @@ function requireExactLateRefundSuccessReconciliation<S extends string>(
                   after.completedAt !== null
                 : suspendClaimedRetry
                   ? before.status !== "pending" ||
-                    before.providerTransactionId !== null ||
+                    (before.providerTransactionId !== null &&
+                      !nonBlank(before.providerTransactionId)) ||
                     before.providerEventId !== null ||
                     !(before.dispatchClaimedAt instanceof Instant) ||
                     before.completedAt !== null ||
                     after.status !== "suspended" ||
-                    after.providerTransactionId !== null ||
+                    after.providerTransactionId !==
+                      before.providerTransactionId ||
                     after.providerEventId !== null ||
                     !(after.dispatchClaimedAt instanceof Instant) ||
                     !after.dispatchClaimedAt.equals(before.dispatchClaimedAt) ||
