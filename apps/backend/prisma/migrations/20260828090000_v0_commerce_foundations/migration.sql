@@ -6679,11 +6679,14 @@ BEGIN
     WHERE shipment."id" = NEW."shipment_id";
 
     IF (NEW."kind" = 'LABEL_VOIDED'
-        AND target_status NOT IN ('CANCELLATION_PENDING', 'CANCELLED'))
+        AND target_status NOT IN (
+            'CANCELLATION_PENDING', 'CANCELLED', 'HANDED_OVER',
+            'IN_TRANSIT', 'DELIVERED'
+        ))
        OR (NEW."kind" = 'ACCEPTANCE_SCAN'
            AND target_status NOT IN (
                'LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER',
-               'IN_TRANSIT', 'DELIVERED'
+               'IN_TRANSIT', 'DELIVERED', 'CANCELLED'
            ))
        OR (NEW."kind" = 'TRANSIT_SCAN'
            AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'))
@@ -6693,6 +6696,45 @@ BEGIN
        OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id
        OR NEW."source_shipment_status" IS DISTINCT FROM target_status THEN
         RAISE EXCEPTION 'Shipment provider event must match the exact lifecycle scope'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
+    END IF;
+
+    IF NEW."kind" = 'LABEL_VOIDED'
+       AND target_status IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "shipments" shipment
+           JOIN "shipment_provider_events" acceptance_event
+             ON acceptance_event."shipment_id" = shipment."id"
+            AND acceptance_event."kind" = 'ACCEPTANCE_SCAN'
+            AND acceptance_event."carrier" = shipment."carrier"
+            AND acceptance_event."carrier_label_id" = shipment."carrier_label_id"
+            AND acceptance_event."provider_event_id" =
+                shipment."provider_acceptance_scan_id"
+            AND acceptance_event."verified_at" = shipment."handed_over_at"
+           WHERE shipment."id" = NEW."shipment_id"
+             AND acceptance_event."occurred_at" < NEW."occurred_at"
+       ) THEN
+        RAISE EXCEPTION 'Post-handoff provider void is a no-op only when the exact acceptance scan physically won'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
+    END IF;
+
+    IF NEW."kind" = 'ACCEPTANCE_SCAN'
+       AND target_status = 'CANCELLED'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "shipments" shipment
+           JOIN "shipment_provider_events" void_event
+             ON void_event."shipment_id" = shipment."id"
+            AND void_event."kind" = 'LABEL_VOIDED'
+            AND void_event."carrier" = shipment."carrier"
+            AND void_event."carrier_label_id" = shipment."carrier_label_id"
+            AND void_event."provider_event_id" = shipment."provider_void_id"
+            AND void_event."verified_at" = shipment."provider_voided_at"
+           WHERE shipment."id" = NEW."shipment_id"
+             AND NEW."occurred_at" < void_event."occurred_at"
+       ) THEN
+        RAISE EXCEPTION 'Cancelled Shipment accepts only custody scans that physically predate its exact provider void'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
     END IF;
 
@@ -6749,29 +6791,77 @@ BEGIN
             SELECT 1
             FROM "shipments" shipment
             WHERE shipment."id" = NEW."shipment_id"
-              AND shipment."status" = 'CANCELLED'
               AND (
                   (
-                      shipment."provider_void_id" = NEW."provider_event_id"
-                      AND shipment."provider_voided_at" = NEW."verified_at"
+                      shipment."status" = 'CANCELLED'
+                      AND (
+                          (
+                              shipment."provider_void_id" = NEW."provider_event_id"
+                              AND shipment."provider_voided_at" = NEW."verified_at"
+                          )
+                          OR EXISTS (
+                              SELECT 1
+                              FROM "shipment_provider_events" exact_event
+                              WHERE exact_event."id" <> NEW."id"
+                                AND exact_event."shipment_id" = NEW."shipment_id"
+                                AND exact_event."outbox_message_id" =
+                                    NEW."outbox_message_id"
+                                AND exact_event."carrier" = NEW."carrier"
+                                AND exact_event."carrier_label_id" =
+                                    NEW."carrier_label_id"
+                                AND exact_event."kind" = 'LABEL_VOIDED'
+                                AND exact_event."provider_event_id" =
+                                    shipment."provider_void_id"
+                                AND exact_event."provider_transaction_id" =
+                                    NEW."provider_transaction_id"
+                                AND exact_event."verified_at" =
+                                    shipment."provider_voided_at"
+                          )
+                      )
                   )
-                  OR EXISTS (
-                      SELECT 1
-                      FROM "shipment_provider_events" exact_event
-                      WHERE exact_event."id" <> NEW."id"
-                        AND exact_event."shipment_id" = NEW."shipment_id"
-                        AND exact_event."outbox_message_id" =
-                            NEW."outbox_message_id"
-                        AND exact_event."carrier" = NEW."carrier"
-                        AND exact_event."carrier_label_id" =
-                            NEW."carrier_label_id"
-                        AND exact_event."kind" = 'LABEL_VOIDED'
-                        AND exact_event."provider_event_id" =
-                            shipment."provider_void_id"
-                        AND exact_event."provider_transaction_id" =
-                            NEW."provider_transaction_id"
-                        AND exact_event."verified_at" =
-                            shipment."provider_voided_at"
+                  OR (
+                      shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+                      AND EXISTS (
+                          SELECT 1
+                          FROM "shipment_provider_events" acceptance_event
+                          WHERE acceptance_event."shipment_id" = shipment."id"
+                            AND acceptance_event."kind" = 'ACCEPTANCE_SCAN'
+                            AND acceptance_event."carrier" = shipment."carrier"
+                            AND acceptance_event."carrier_label_id" =
+                                shipment."carrier_label_id"
+                            AND acceptance_event."provider_event_id" =
+                                shipment."provider_acceptance_scan_id"
+                            AND acceptance_event."verified_at" =
+                                shipment."handed_over_at"
+                            AND (
+                                (
+                                    shipment."provider_void_id" IS NULL
+                                    AND shipment."provider_voided_at" IS NULL
+                                    AND shipment."cancelled_at" IS NULL
+                                    AND acceptance_event."occurred_at" <
+                                        NEW."occurred_at"
+                                )
+                                OR EXISTS (
+                                    SELECT 1
+                                    FROM "shipment_provider_events" selected_void
+                                    WHERE selected_void."shipment_id" = shipment."id"
+                                      AND selected_void."outbox_message_id" =
+                                          NEW."outbox_message_id"
+                                      AND selected_void."carrier" = NEW."carrier"
+                                      AND selected_void."carrier_label_id" =
+                                          NEW."carrier_label_id"
+                                      AND selected_void."kind" = 'LABEL_VOIDED'
+                                      AND selected_void."provider_event_id" =
+                                          shipment."provider_void_id"
+                                      AND selected_void."provider_transaction_id" =
+                                          NEW."provider_transaction_id"
+                                      AND selected_void."verified_at" =
+                                          shipment."provider_voided_at"
+                                      AND acceptance_event."occurred_at" <
+                                          selected_void."occurred_at"
+                                )
+                            )
+                      )
                   )
               )
         ))
@@ -6906,6 +6996,7 @@ BEGIN
            (OLD."status" = 'PLANNED' AND NEW."status" IN ('LABEL_CREATED', 'CANCELLED'))
            OR (OLD."status" = 'LABEL_CREATED' AND NEW."status" IN ('HANDED_OVER', 'CANCELLATION_PENDING'))
            OR (OLD."status" = 'CANCELLATION_PENDING' AND NEW."status" IN ('CANCELLED', 'HANDED_OVER'))
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'HANDED_OVER')
            OR (OLD."status" = 'HANDED_OVER' AND NEW."status" = 'IN_TRANSIT')
            OR (OLD."status" = 'IN_TRANSIT' AND NEW."status" = 'DELIVERED')
        ) THEN
@@ -7005,6 +7096,19 @@ BEGIN
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at")
            OR (OLD."status" = 'CANCELLATION_PENDING' AND NEW."status" = 'HANDED_OVER'
+               AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
+               AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
+               AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
+               AND NEW."tracking_code" IS NOT DISTINCT FROM OLD."tracking_code"
+               AND NEW."label_created_at" IS NOT DISTINCT FROM OLD."label_created_at"
+               AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
+               AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
+               AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
+               AND NEW."provider_acceptance_scan_id" IS DISTINCT FROM OLD."provider_acceptance_scan_id"
+               AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'HANDED_OVER'
                AND NEW."carrier" IS NOT DISTINCT FROM OLD."carrier"
                AND NEW."provider_shipment_id" IS NOT DISTINCT FROM OLD."provider_shipment_id"
                AND NEW."carrier_label_id" IS NOT DISTINCT FROM OLD."carrier_label_id"
@@ -7122,7 +7226,7 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_void_confirmation_check';
     END IF;
 
-    IF OLD."status" IN ('LABEL_CREATED', 'CANCELLATION_PENDING')
+    IF OLD."status" IN ('LABEL_CREATED', 'CANCELLATION_PENDING', 'CANCELLED')
        AND NEW."status" = 'HANDED_OVER'
        AND NEW."provider_acceptance_scan_id" IS NOT NULL
        AND NOT EXISTS (
@@ -7135,6 +7239,20 @@ BEGIN
              AND event."carrier_label_id" = NEW."carrier_label_id"
              AND event."provider_event_id" = NEW."provider_acceptance_scan_id"
              AND event."verified_at" = NEW."handed_over_at"
+             AND (
+                 OLD."status" <> 'CANCELLED'
+                 OR EXISTS (
+                     SELECT 1
+                     FROM "shipment_provider_events" void_event
+                     WHERE void_event."shipment_id" = NEW."id"
+                       AND void_event."kind" = 'LABEL_VOIDED'
+                       AND void_event."carrier" = NEW."carrier"
+                       AND void_event."carrier_label_id" = NEW."carrier_label_id"
+                       AND void_event."provider_event_id" = NEW."provider_void_id"
+                       AND void_event."verified_at" = NEW."provider_voided_at"
+                       AND event."occurred_at" < void_event."occurred_at"
+                 )
+             )
        ) THEN
         RAISE EXCEPTION 'Shipment handoff must bind its exact verified carrier acceptance scan'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_acceptance_scan_confirmation_check';
@@ -7801,7 +7919,9 @@ BEGIN
            OR (NEW."kind" = 'REFUND_SUCCEEDED'
                AND target_refund_status NOT IN ('PENDING', 'SUCCEEDED'))
            OR (NEW."kind" = 'REFUND_FAILED'
-               AND target_refund_status NOT IN ('PENDING', 'FAILED')) THEN
+               AND target_refund_status NOT IN (
+                   'PENDING', 'FAILED', 'SUCCEEDED'
+               )) THEN
             RAISE EXCEPTION 'Payment provider event does not match its exact RefundTransaction outcome scope'
                 USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
         END IF;
@@ -7899,7 +8019,7 @@ BEGIN
                FROM "refund_transactions" refund
                WHERE refund."id" = NEW."refund_transaction_id"
                  AND refund."payment_id" = NEW."payment_id"
-                 AND refund."status" = 'FAILED'
+                 AND refund."status" IN ('FAILED', 'SUCCEEDED')
                  AND refund."provider" = NEW."provider"
                  AND refund."provider_refund_id" = NEW."provider_transaction_id"
                  AND refund."amount_minor" = NEW."amount_minor"
@@ -8150,6 +8270,7 @@ BEGIN
              AND event."provider_transaction_id" = NEW."provider_intent_id"
              AND event."amount_minor" = NEW."requested_amount_minor"
              AND event."currency" = NEW."currency"
+             AND event."verified_at" = NEW."capture_cutoff_at"
        ) THEN
         RAISE EXCEPTION 'payment failure requires its exact verified provider event receipt'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_failure_provider_receipt_check';

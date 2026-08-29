@@ -227,6 +227,7 @@ const permittedContext = {
     previousStatus: "created",
     targetStatus: "failed",
     providerIntentId: null,
+    intentCreationFailureResultId: "payment-intent-failure-1",
     captureAuthorized: false,
     captureCutoffAt: Instant.parse("2026-01-01T00:05:00.000Z"),
     resultId: "payment-intent-failure-result-1",
@@ -367,8 +368,30 @@ const permittedContext = {
     phaseId: "phase-1",
     role: "full",
     status: "pending",
+    provider: "sandbox",
+    providerIntentId: "provider-transaction-1",
+    requestedAmountMinor: 10_000n,
+    currency: "EUR",
+    captureAuthorized: true,
+    captureCutoffAt: null,
     resultId: "payment-pending-result-1",
     currentStateCommandKey: "payment-pending-command-1",
+    immutable: true,
+  },
+  paymentFailureFailedPayment: {
+    id: "payment-1",
+    orderId: "order-1",
+    phaseId: "phase-1",
+    role: "full",
+    previousStatus: "pending",
+    targetStatus: "failed",
+    provider: "sandbox",
+    providerIntentId: "provider-transaction-1",
+    requestedAmountMinor: 10_000n,
+    currency: "EUR",
+    captureAuthorized: false,
+    captureCutoffAt: Instant.parse("2026-01-01T00:30:00.000Z"),
+    resultId: "payment-failure-result-1",
     immutable: true,
   },
   paymentFailureProviderEvent: {
@@ -378,7 +401,9 @@ const permittedContext = {
     provider: "sandbox",
     amountMinor: 10_000n,
     currency: "EUR",
+    kind: "PAYMENT_FAILED",
     status: "failed",
+    occurredAt: Instant.parse("2026-01-01T00:30:00.000Z"),
     authenticated: true,
     verified: true,
     verifiedAt: Instant.parse("2026-01-01T00:30:00.000Z"),
@@ -3358,6 +3383,29 @@ const permittedContext = {
     currentStateCommandKey: "shipment-cancellation-pending-command-1",
     immutable: true,
   },
+  cancellationRaceAcceptanceEvent: {
+    id: "shipment-provider-event-1",
+    shipmentId: "shipment-1",
+    carrierLabelId: "label-1",
+    transactionId: "shipment-provider-transaction-1",
+    kind: "acceptance_scan",
+    occurredAt: Instant.parse("2026-01-01T00:10:00.000Z"),
+    verifiedAt: Instant.parse("2026-01-01T00:12:00.000Z"),
+    authenticated: true,
+    verified: true,
+    immutable: true,
+  },
+  cancellationRaceSelectedVoidEvent: {
+    id: "void-event-1",
+    shipmentId: "shipment-1",
+    carrierLabelId: "label-1",
+    kind: "label_voided",
+    occurredAt: Instant.parse("2026-01-01T00:10:00.001Z"),
+    verifiedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+    authenticated: true,
+    verified: true,
+    immutable: true,
+  },
   cancellationRaceCancellationRequestId: "shipment-cancellation-request-1",
   cancellationRaceCancellationRequestShipmentId: "shipment-1",
   cancellationRaceCancellationRequestResultId: "shipment-cancellation-1",
@@ -4291,6 +4339,10 @@ function contextForTransition(target: string, current?: string) {
       ...permittedContext.paymentFailureExpectedPayment,
       role: permittedContext.paymentRole,
     },
+    paymentFailureFailedPayment: {
+      ...permittedContext.paymentFailureFailedPayment,
+      role: permittedContext.paymentRole,
+    },
     refundCompletionExpectedPayment: {
       ...permittedContext.refundCompletionExpectedPayment,
       role: permittedContext.paymentRole,
@@ -4694,10 +4746,11 @@ function contextForTransition(target: string, current?: string) {
     remedyIncidentShipmentTargetStatus: remedyIncident
       ? "lost"
       : permittedContext.remedyIncidentShipmentTargetStatus,
-    handoffShipmentPreviousStatus:
-      unauthorizedHandoffReconciliation ||
-      (current === "cancellation_pending" && target === "handed_over")
-        ? "cancellation_pending"
+    handoffShipmentPreviousStatus: unauthorizedHandoffReconciliation
+      ? "cancellation_pending"
+      : (current === "cancellation_pending" || current === "cancelled") &&
+          target === "handed_over"
+        ? current
         : permittedContext.handoffShipmentPreviousStatus,
     handoffOrderPreviousStatus: unauthorizedHandoffReconciliation
       ? "awaiting_balance"
@@ -4721,6 +4774,32 @@ function contextForTransition(target: string, current?: string) {
         ? "order-awaiting_balance-command-1"
         : permittedContext.cancellationRaceExpectedOrder.currentStateCommandKey,
     },
+    cancellationRacePreviousShipmentResultId:
+      current === "cancelled" && target === "handed_over"
+        ? "shipment-cancelled-result-1"
+        : permittedContext.cancellationRacePreviousShipmentResultId,
+    cancellationRaceCurrentStateCommandKey:
+      current === "cancelled" && target === "handed_over"
+        ? "shipment-cancelled-command-1"
+        : permittedContext.cancellationRaceCurrentStateCommandKey,
+    cancellationRaceExpectedShipment:
+      current === "cancelled" && target === "handed_over"
+        ? {
+            ...permittedContext.cancellationRaceExpectedShipment,
+            status: "cancelled",
+            providerVoidId:
+              permittedContext.cancellationRaceSelectedVoidEvent.id,
+            providerVoidedAt:
+              permittedContext.cancellationRaceSelectedVoidEvent.verifiedAt,
+            cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+            resultId: "shipment-cancelled-result-1",
+            currentStateCommandKey: "shipment-cancelled-command-1",
+          }
+        : permittedContext.cancellationRaceExpectedShipment,
+    cancellationRaceResultShipmentPreviousStatus:
+      current === "cancelled" && target === "handed_over"
+        ? "cancelled"
+        : permittedContext.cancellationRaceResultShipmentPreviousStatus,
     cancellationRaceHandoffKind: unauthorizedHandoffReconciliation
       ? "unauthorized_reconciliation"
       : current === "packed" && target === "handed_over"
@@ -4890,6 +4969,53 @@ function cancellationRaceShipmentSource(
     cancellationRaceCancellationRequestShipmentId: shipmentId,
     cancellationRaceCancellationRequestResultId: cancellationRequestResultId,
     shipmentProviderScanCancellationRequestId: cancellationRequestId,
+  } as const;
+}
+
+function postVoidCancellationRaceShipmentSource(
+  shipmentId: string,
+  originKind: "ordinary" | "replacement" | "reship" = "ordinary",
+) {
+  const source = cancellationRaceShipmentSource(
+    shipmentId,
+    "order-1",
+    "phase-1",
+    "label-1",
+    originKind,
+  );
+  const suffix = shipmentId === "shipment-1" ? "1" : shipmentId;
+  const previousShipmentResultId = `shipment-cancelled-result-${suffix}`;
+  const currentStateCommandKey = `shipment-cancelled-command-${suffix}`;
+  return {
+    ...source,
+    cancellationRacePreviousShipmentResultId: previousShipmentResultId,
+    cancellationRaceCurrentStateCommandKey: currentStateCommandKey,
+    cancellationRaceExpectedShipment: {
+      ...source.cancellationRaceExpectedShipment,
+      status: "cancelled",
+      providerVoidId: "void-event-1",
+      providerVoidedAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+      cancelledAt: Instant.parse("2026-01-01T00:11:00.000Z"),
+      resultId: previousShipmentResultId,
+      currentStateCommandKey,
+    },
+    cancellationRaceAcceptanceEvent: {
+      ...permittedContext.cancellationRaceAcceptanceEvent,
+      shipmentId,
+    },
+    cancellationRaceSelectedVoidEvent: {
+      ...permittedContext.cancellationRaceSelectedVoidEvent,
+      shipmentId,
+    },
+  } as const;
+}
+
+function postVoidCancellationRaceShipmentCommand(shipmentId: string) {
+  const suffix = shipmentId === "shipment-1" ? "1" : shipmentId;
+  return {
+    aggregateId: shipmentId,
+    currentStateCommandKey: `shipment-cancelled-command-${suffix}`,
+    currentStateResultId: `shipment-cancelled-result-${suffix}`,
   } as const;
 }
 
@@ -5156,6 +5282,17 @@ function commandAnchors(
       aggregateId: "shipment-1",
       currentStateCommandKey: "shipment-cancellation-pending-command-1",
       currentStateResultId: "shipment-cancellation-pending-result-1",
+    };
+  }
+  if (
+    policy.name === "Shipment" &&
+    current === "cancelled" &&
+    target === "handed_over"
+  ) {
+    return {
+      aggregateId: "shipment-1",
+      currentStateCommandKey: "shipment-cancelled-command-1",
+      currentStateResultId: "shipment-cancelled-result-1",
     };
   }
   if (
@@ -6629,6 +6766,7 @@ describe("v0 lifecycle policy tables", () => {
     [jobPolicy, "handed_over", "settled"],
     [shipmentPolicy, "label_created", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "handed_over"],
+    [shipmentPolicy, "cancelled", "handed_over"],
     [shipmentPolicy, "cancellation_pending", "cancelled"],
     [shipmentPolicy, "in_transit", "delivered"],
     [shipmentPolicy, "in_transit", "lost"],
@@ -9757,6 +9895,27 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("reconciles a post-void Shipment source through the Order command", () => {
+    expect(
+      transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "awaiting_balance", "shipped"),
+        current: "awaiting_balance",
+        target: "shipped",
+        idempotencyKey: "post-void-order-reconciliation",
+        context: {
+          ...unauthorizedHandoffReconciliationContext(),
+          ...postVoidCancellationRaceShipmentSource("shipment-1"),
+          handoffShipmentPreviousStatus: "cancelled",
+          cancellationRaceResultShipmentPreviousStatus: "cancelled",
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "awaiting_balance",
+      current: "shipped",
+    });
+  });
+
   it("requires zero amount due before reconciling an unauthorized handoff", () => {
     expect(() =>
       transition(orderPolicy, {
@@ -11565,6 +11724,169 @@ describe("v0 lifecycle policy tables", () => {
       });
     },
   );
+
+  it("reconciles an acceptance receipt that physically predates the selected void", () => {
+    expect(
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: "post-void-cancellation-race",
+        context: contextForTransition("handed_over", "cancelled"),
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "cancelled",
+      current: "handed_over",
+    });
+  });
+
+  it.each(["unauthorized_reconciliation", "replacement", "reship"] as const)(
+    "dispatches a post-void acceptance receipt through the %s handler",
+    (kind) => {
+      const base = contextForTransition("handed_over", "cancelled");
+      const shipmentId =
+        kind === "replacement"
+          ? "replacement-shipment-1"
+          : kind === "reship"
+            ? "reship-shipment-1"
+            : "shipment-1";
+      const context =
+        kind === "unauthorized_reconciliation"
+          ? {
+              ...base,
+              ...postVoidCancellationRaceShipmentSource("shipment-1"),
+              cancellationRaceHandoffKind: kind,
+              cancellationRaceResultKind: kind,
+              cancellationRaceFinancialResultStatus:
+                "unauthorized_handoff_settled",
+              cancellationRaceAuthorizationResultStatus:
+                "unauthorized_reconciliation",
+              handoffOrderPreviousStatus: "awaiting_balance",
+            }
+          : kind === "replacement"
+            ? {
+                ...base,
+                ...postVoidCancellationRaceShipmentSource(
+                  shipmentId,
+                  "replacement",
+                ),
+                shipmentId,
+                providerEventShipmentId: shipmentId,
+                cancellationRaceResultShipmentId: shipmentId,
+                cancellationRaceHandoffKind: kind,
+                cancellationRaceResultKind: kind,
+                labelledHandoffShipmentKind: kind,
+                labelledHandoffShipmentOriginClaimId: base.claimId,
+                labelledHandoffShipmentOriginResolutionId:
+                  base.claimSlotResolutionId,
+                cancellationRaceAggregateResultStatus:
+                  "replacement_child_shipped",
+                cancellationRaceFinancialResultStatus: "claim_remedy_no_charge",
+                cancellationRaceAuthorizationResultStatus:
+                  "replacement_authorization_consumed",
+                cancellationRaceJobResultStatus:
+                  "complete_replacement_job_set_handed_over",
+                replacementHandoffSlotBindings:
+                  base.replacementHandoffSlotBindings.map((binding) => ({
+                    ...binding,
+                    replacementShipmentPreviousStatus: "cancelled",
+                  })),
+                replacementHandoffResourceGroups:
+                  base.replacementHandoffResourceGroups.map((group) => ({
+                    ...group,
+                    replacementShipmentPreviousStatus: "cancelled",
+                  })),
+              }
+            : {
+                ...base,
+                ...postVoidCancellationRaceShipmentSource(shipmentId, "reship"),
+                shipmentId,
+                providerEventShipmentId: shipmentId,
+                cancellationRaceResultShipmentId: shipmentId,
+                cancellationRaceHandoffKind: kind,
+                cancellationRaceResultKind: kind,
+                labelledHandoffShipmentKind: kind,
+                labelledHandoffShipmentOriginClaimId: base.claimId,
+                labelledHandoffShipmentOriginResolutionId:
+                  base.claimSlotResolutionId,
+                cancellationRaceAggregateResultStatus: "reship_child_shipped",
+                cancellationRaceFinancialResultStatus: "claim_remedy_no_charge",
+                cancellationRaceAuthorizationResultStatus:
+                  "reship_authorization_consumed",
+                cancellationRaceJobResultStatus: "original_job_unchanged",
+                reshipmentHandoffShipmentPreviousStatus: "cancelled",
+              };
+      expect(
+        transition(shipmentPolicy, {
+          ...postVoidCancellationRaceShipmentCommand(shipmentId),
+          current: "cancelled",
+          target: "handed_over",
+          idempotencyKey: `post-void-cancellation-race-${kind}`,
+          context,
+        }),
+      ).toEqual({
+        kind: "changed",
+        previous: "cancelled",
+        current: "handed_over",
+      });
+    },
+  );
+
+  it.each([
+    [
+      "equal provider occurrence times",
+      {
+        cancellationRaceAcceptanceEvent: {
+          ...permittedContext.cancellationRaceAcceptanceEvent,
+          occurredAt:
+            permittedContext.cancellationRaceSelectedVoidEvent.occurredAt,
+        },
+      },
+    ],
+    [
+      "a foreign selected void",
+      {
+        cancellationRaceSelectedVoidEvent: {
+          ...permittedContext.cancellationRaceSelectedVoidEvent,
+          shipmentId: "shipment-2",
+        },
+      },
+    ],
+    [
+      "a mismatched void snapshot",
+      {
+        cancellationRaceExpectedShipment: {
+          ...contextForTransition("handed_over", "cancelled")
+            .cancellationRaceExpectedShipment,
+          providerVoidId: "another-void",
+        },
+      },
+    ],
+    [
+      "cancellation before void verification",
+      {
+        cancellationRaceExpectedShipment: {
+          ...contextForTransition("handed_over", "cancelled")
+            .cancellationRaceExpectedShipment,
+          cancelledAt: Instant.parse("2026-01-01T00:10:59.999Z"),
+        },
+      },
+    ],
+  ] as const)("rejects post-void handoff with %s", (_case, mutation) => {
+    expect(() =>
+      transition(shipmentPolicy, {
+        ...commandAnchors(shipmentPolicy, "cancelled", "handed_over"),
+        current: "cancelled",
+        target: "handed_over",
+        idempotencyKey: `post-void-cancellation-race-${_case}`,
+        context: {
+          ...contextForTransition("handed_over", "cancelled"),
+          ...mutation,
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it.each(["ordinary", "unauthorized_reconciliation"] as const)(
     "rejects a Claim-origin Shipment presented to the %s cancellation-race handler",
@@ -15683,6 +16005,16 @@ describe("v0 lifecycle policy tables", () => {
       ["paymentIntentFailureFailedPayment", "previousStatus", "pending"],
       ["paymentIntentFailureFailedPayment", "targetStatus", "voided"],
       ["paymentIntentFailureFailedPayment", "providerIntentId", "intent-1"],
+      [
+        "paymentIntentFailureFailedPayment",
+        "intentCreationFailureResultId",
+        null,
+      ],
+      [
+        "paymentIntentFailureFailedPayment",
+        "intentCreationFailureResultId",
+        "foreign-failure",
+      ],
       ["paymentIntentFailureFailedPayment", "provider", "other"],
       ["paymentIntentFailureFailedPayment", "captureAuthorized", true],
       ["paymentIntentFailureFailedPayment", "captureCutoffAt", null],
@@ -21568,6 +21900,7 @@ describe("v0 lifecycle policy tables", () => {
     [shipmentPolicy, "planned", "cancelled"],
     [shipmentPolicy, "label_created", "cancellation_pending"],
     [shipmentPolicy, "cancellation_pending", "cancelled"],
+    [shipmentPolicy, "cancelled", "handed_over"],
     [shipmentPolicy, "handed_over", "in_transit"],
     [shipmentPolicy, "lost", "recovered"],
     [claimSlotResolutionPolicy, "pending", "reship_pending"],
@@ -25269,6 +25602,10 @@ describe("v0 lifecycle policy tables", () => {
               ...context.paymentFailureExpectedPayment,
               role: paymentRole,
             },
+            paymentFailureFailedPayment: {
+              ...context.paymentFailureFailedPayment,
+              role: paymentRole,
+            },
           },
         }),
       ).toEqual({ kind: "changed", previous: "pending", current: "failed" });
@@ -25332,11 +25669,47 @@ describe("v0 lifecycle policy tables", () => {
   it.each([
     ["paymentFailureExpectedPayment", "id", "payment-2"],
     ["paymentFailureExpectedPayment", "status", "captured"],
+    ["paymentFailureExpectedPayment", "provider", "other-provider"],
+    ["paymentFailureExpectedPayment", "providerIntentId", "other-intent"],
+    ["paymentFailureExpectedPayment", "requestedAmountMinor", 9_999n],
+    ["paymentFailureExpectedPayment", "currency", "USD"],
+    ["paymentFailureExpectedPayment", "captureAuthorized", false],
+    ["paymentFailureExpectedPayment", "captureCutoffAt", "not-null"],
     ["paymentFailureExpectedPayment", "immutable", false],
+    ["paymentFailureFailedPayment", "id", "payment-2"],
+    ["paymentFailureFailedPayment", "previousStatus", "created"],
+    ["paymentFailureFailedPayment", "targetStatus", "voided"],
+    ["paymentFailureFailedPayment", "provider", "other-provider"],
+    ["paymentFailureFailedPayment", "providerIntentId", "other-intent"],
+    ["paymentFailureFailedPayment", "requestedAmountMinor", 9_999n],
+    ["paymentFailureFailedPayment", "currency", "USD"],
+    ["paymentFailureFailedPayment", "captureAuthorized", true],
+    ["paymentFailureFailedPayment", "captureCutoffAt", null],
+    ["paymentFailureFailedPayment", "captureCutoffAt", "not-an-instant"],
+    [
+      "paymentFailureFailedPayment",
+      "captureCutoffAt",
+      Instant.parse("2026-01-01T00:30:00.001Z"),
+    ],
+    ["paymentFailureFailedPayment", "resultId", "another-result"],
+    ["paymentFailureFailedPayment", "immutable", false],
     ["paymentFailureProviderEvent", "paymentId", "payment-2"],
+    ["paymentFailureProviderEvent", "provider", "other-provider"],
     ["paymentFailureProviderEvent", "transactionId", "transaction-2"],
+    ["paymentFailureProviderEvent", "kind", "PAYMENT_CAPTURED"],
+    ["paymentFailureProviderEvent", "amountMinor", 9_999n],
+    ["paymentFailureProviderEvent", "currency", "USD"],
+    ["paymentFailureProviderEvent", "occurredAt", undefined],
+    ["paymentFailureProviderEvent", "verifiedAt", undefined],
+    [
+      "paymentFailureProviderEvent",
+      "verifiedAt",
+      Instant.parse("2026-01-01T00:30:00.001Z"),
+    ],
     ["paymentFailureProviderEvent", "authenticated", false],
+    ["paymentFailureProviderEvent", "verified", false],
     ["paymentFailureProviderEvent", "resultId", "another-result"],
+    ["paymentFailureProviderEvent", "immutable", false],
     ["paymentFailureProviderTransaction", "paymentId", "payment-2"],
     ["paymentFailureProviderTransaction", "eventId", "another-event"],
     ["paymentFailureProviderTransaction", "resultId", "another-result"],
@@ -25359,6 +25732,33 @@ describe("v0 lifecycle policy tables", () => {
       ).toThrow(TransitionGuardError);
     },
   );
+
+  it("rejects a coordinated blank provider across pending failure evidence", () => {
+    const context = contextForTransition("failed", "pending");
+    expect(() =>
+      transition(paymentPolicy, {
+        ...commandAnchors(paymentPolicy, "pending", "failed"),
+        current: "pending",
+        target: "failed",
+        idempotencyKey: "payment-failure-blank-provider",
+        context: {
+          ...context,
+          paymentFailureExpectedPayment: {
+            ...context.paymentFailureExpectedPayment,
+            provider: " ",
+          },
+          paymentFailureFailedPayment: {
+            ...context.paymentFailureFailedPayment,
+            provider: " ",
+          },
+          paymentFailureProviderEvent: {
+            ...context.paymentFailureProviderEvent,
+            provider: " ",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
+  });
 
   it("rejects a coordinated foreign Payment failure substitution", () => {
     const context = contextForTransition("failed", "pending");
@@ -26920,6 +27320,71 @@ describe("v0 lifecycle policy tables", () => {
         previous: "packed",
         current: "handed_over",
       });
+    },
+  );
+
+  it("dispatches a post-void Shipment source through the Job command", () => {
+    const context = contextForTransition("handed_over", "packed");
+    const raceResultId = context.cancellationRaceHandoffResultId;
+    expect(
+      transition(jobPolicy, {
+        aggregateId: "job-1",
+        currentStateCommandKey: "job-packed-command-1",
+        currentStateResultId: context.jobHandoffPreviousResultId,
+        current: "packed",
+        target: "handed_over",
+        idempotencyKey: "job-post-void-cancellation-race",
+        context: {
+          ...context,
+          ...postVoidCancellationRaceShipmentSource("shipment-1"),
+          cancellationRaceHandoffKind: "ordinary",
+          handoffShipmentPreviousStatus: "cancelled",
+          cancellationRaceResultShipmentPreviousStatus: "cancelled",
+          jobHandoffResultId: raceResultId,
+          jobHandoffJobResultId: raceResultId,
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "packed",
+      current: "handed_over",
+    });
+  });
+
+  it.each([
+    ["id", "shipment-2"],
+    ["resultId", "another-result"],
+    ["currentStateCommandKey", "another-command"],
+    ["immutable", false],
+  ] as const)(
+    "rejects a post-void Job handoff with an invalid Shipment snapshot %s",
+    (field, value) => {
+      const context = contextForTransition("handed_over", "packed");
+      const source = postVoidCancellationRaceShipmentSource("shipment-1");
+      const raceResultId = context.cancellationRaceHandoffResultId;
+      expect(() =>
+        transition(jobPolicy, {
+          aggregateId: "job-1",
+          currentStateCommandKey: "job-packed-command-1",
+          currentStateResultId: context.jobHandoffPreviousResultId,
+          current: "packed",
+          target: "handed_over",
+          idempotencyKey: `job-post-void-invalid-shipment-${field}`,
+          context: {
+            ...context,
+            ...source,
+            cancellationRaceExpectedShipment: {
+              ...source.cancellationRaceExpectedShipment,
+              [field]: value,
+            },
+            cancellationRaceHandoffKind: "ordinary",
+            handoffShipmentPreviousStatus: "cancelled",
+            cancellationRaceResultShipmentPreviousStatus: "cancelled",
+            jobHandoffResultId: raceResultId,
+            jobHandoffJobResultId: raceResultId,
+          },
+        }),
+      ).toThrow(TransitionGuardError);
     },
   );
 
