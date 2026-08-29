@@ -358,6 +358,7 @@ CREATE TABLE "shipment_provider_events" (
     "provider_event_id" VARCHAR(255) NOT NULL,
     "provider_transaction_id" VARCHAR(255) NOT NULL,
     "kind" "shipment_provider_event_kind" NOT NULL,
+    "source_shipment_status" "shipment_status" NOT NULL DEFAULT 'PLANNED',
     "occurred_at" TIMESTAMPTZ(3) NOT NULL,
     "authenticated_at" TIMESTAMPTZ(3) NOT NULL,
     "verified_at" TIMESTAMPTZ(3) NOT NULL,
@@ -6469,6 +6470,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     evidence_now timestamptz := clock_timestamp();
+    source_shipment_status "shipment_status";
 BEGIN
     IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'Shipment provider events are immutable audit evidence'
@@ -6482,6 +6484,16 @@ BEGIN
         RAISE EXCEPTION 'Shipment provider event must contain exact provider identity evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
     END IF;
+
+    -- Receipt time and source lifecycle state are server evidence. The later
+    -- scope trigger revalidates the source after taking the order envelope,
+    -- so a concurrent lifecycle winner causes this insert to retry.
+    NEW."created_at" := statement_timestamp();
+    SELECT shipment."status"
+    INTO source_shipment_status
+    FROM "shipments" shipment
+    WHERE shipment."id" = NEW."shipment_id";
+    NEW."source_shipment_status" := source_shipment_status;
 
     IF NEW."occurred_at" > evidence_now + interval '5 seconds'
        OR NEW."authenticated_at" > evidence_now + interval '5 seconds'
@@ -6583,14 +6595,16 @@ BEGIN
         AND target_status NOT IN ('CANCELLATION_PENDING', 'CANCELLED'))
        OR (NEW."kind" = 'ACCEPTANCE_SCAN'
            AND target_status NOT IN (
-               'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'
+               'LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER',
+               'IN_TRANSIT', 'DELIVERED'
            ))
        OR (NEW."kind" = 'TRANSIT_SCAN'
            AND target_status NOT IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'))
        OR (NEW."kind" = 'DELIVERY_SCAN'
            AND target_status NOT IN ('IN_TRANSIT', 'DELIVERED'))
        OR NEW."carrier" IS DISTINCT FROM target_carrier
-       OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id THEN
+       OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id
+       OR NEW."source_shipment_status" IS DISTINCT FROM target_status THEN
         RAISE EXCEPTION 'Shipment provider event must match the exact lifecycle scope'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
     END IF;
@@ -6687,6 +6701,9 @@ BEGIN
                      )
                      OR (
                          shipment."handed_over_at" IS NOT NULL
+                         AND NEW."source_shipment_status" IN (
+                             'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED'
+                         )
                          AND shipment."provider_acceptance_scan_id"
                              IS DISTINCT FROM NEW."provider_event_id"
                      )
@@ -6832,7 +6849,6 @@ BEGIN
                AND NEW."cancellation_requested_at" IS NOT DISTINCT FROM OLD."cancellation_requested_at"
                AND NEW."provider_void_id" IS NOT DISTINCT FROM OLD."provider_void_id"
                AND NEW."provider_voided_at" IS NOT DISTINCT FROM OLD."provider_voided_at"
-               AND NEW."provider_acceptance_scan_id" IS NOT DISTINCT FROM OLD."provider_acceptance_scan_id"
                AND NEW."handed_over_at" IS DISTINCT FROM OLD."handed_over_at"
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
@@ -7019,8 +7035,9 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_void_confirmation_check';
     END IF;
 
-    IF OLD."status" = 'CANCELLATION_PENDING'
+    IF OLD."status" IN ('LABEL_CREATED', 'CANCELLATION_PENDING')
        AND NEW."status" = 'HANDED_OVER'
+       AND NEW."provider_acceptance_scan_id" IS NOT NULL
        AND NOT EXISTS (
            SELECT 1
            FROM "shipment_provider_events" event
@@ -7032,7 +7049,7 @@ BEGIN
              AND event."provider_event_id" = NEW."provider_acceptance_scan_id"
              AND event."verified_at" = NEW."handed_over_at"
        ) THEN
-        RAISE EXCEPTION 'pending cancellation may hand off only from its exact verified carrier acceptance scan'
+        RAISE EXCEPTION 'Shipment handoff must bind its exact verified carrier acceptance scan'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_acceptance_scan_confirmation_check';
     END IF;
 
@@ -8589,6 +8606,7 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    target_order_id uuid;
     captured_amount bigint;
     committed_refunds bigint;
     payment_capture_authorized boolean;
@@ -8597,6 +8615,34 @@ DECLARE
     target_order_status "order_status";
     evidence_now timestamptz := clock_timestamp();
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        SELECT payment."order_id"
+        INTO target_order_id
+        FROM "payments" payment
+        WHERE payment."id" = NEW."payment_id";
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Refund parent Payment does not exist'
+                USING ERRCODE = '23514', CONSTRAINT = 'refund_captured_payment_check';
+        END IF;
+
+        -- A new RefundTransaction is the first rank-6 row owned by this
+        -- statement. Lock its lower-ranked order envelope before Payment so
+        -- concurrent provider receipts cannot form Payment -> Order cycles.
+        PERFORM taven_lock_automatic_order_session(target_order_id);
+
+        PERFORM 1
+        FROM "orders" target_order
+        WHERE target_order."id" = target_order_id
+        FOR UPDATE;
+
+        PERFORM 1
+        FROM "order_phases" phase
+        WHERE phase."order_id" = target_order_id
+        ORDER BY phase."id"
+        FOR UPDATE;
+    END IF;
+
     SELECT payment."captured_amount_minor", payment."capture_authorized",
            payment."capture_cutoff_at", payment."captured_at",
            target_order."status"

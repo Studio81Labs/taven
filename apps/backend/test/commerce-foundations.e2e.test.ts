@@ -10223,7 +10223,7 @@ describe("commerce persistence foundations", () => {
     );
   });
 
-  it("records delayed acceptance scans as no-ops after ordinary handoff", async () => {
+  it("accepts a carrier scan before handoff and records later scans as no-ops", async () => {
     await rollback("delayed-acceptance-scan", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation(
         "delayed-acceptance-scan",
@@ -10243,16 +10243,56 @@ describe("commerce persistence foundations", () => {
       }
       await expectQueryError(
         client,
-        "acceptance_scan_before_handoff",
-        () =>
-          persistVerifiedAcceptanceScan(
+        "pre_handoff_scan_cannot_become_noop",
+        async () => {
+          await persistVerifiedAcceptanceScan(
             client,
             foundation.shipmentId,
-            "pre-handoff-acceptance-scan",
-          ),
-        { code: "23514", constraint: "shipment_provider_event_scope_check" },
+            "orphaned-pre-handoff-acceptance-scan",
+          );
+          await advanceOrderLifecycleStep(
+            client,
+            foundation.orderId,
+            "SHIPPED",
+          );
+        },
+        {
+          code: "23514",
+          constraint: "shipment_provider_event_consumption_check",
+        },
       );
-      await advanceOrderLifecycleStep(client, foundation.orderId, "SHIPPED");
+      const acceptedAt = await persistVerifiedAcceptanceScan(
+        client,
+        foundation.shipmentId,
+        "pre-handoff-acceptance-scan",
+      );
+      await client.query(
+        `UPDATE jobs
+         SET status = 'HANDED_OVER', handed_over_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, acceptedAt],
+      );
+      await client.query(
+        `UPDATE shipments
+         SET status = 'HANDED_OVER',
+             provider_acceptance_scan_id = 'pre-handoff-acceptance-scan',
+             handed_over_at = $2, updated_at = $2
+         WHERE id = $1`,
+        [foundation.shipmentId, acceptedAt],
+      );
+      await client.query(
+        `UPDATE order_phases
+         SET status = 'SHIPPED', shipped_at = $2, updated_at = $2
+         WHERE order_id = $1`,
+        [foundation.orderId, acceptedAt],
+      );
+      await client.query(
+        `UPDATE orders
+         SET status = 'SHIPPED', updated_at = $2
+         WHERE id = $1`,
+        [foundation.orderId, acceptedAt],
+      );
+      await forceOrderLifecycleConstraints(client);
 
       const original = (
         await client.query<{
@@ -10268,7 +10308,11 @@ describe("commerce persistence foundations", () => {
       if (!original?.handed_over_at) {
         throw new Error("ordinary handoff evidence is unavailable");
       }
-      expect(original.provider_acceptance_scan_id).toBeNull();
+      expect(original.provider_acceptance_scan_id).toBe(
+        "pre-handoff-acceptance-scan",
+      );
+      const transitAt = new Date(original.handed_over_at.getTime() + 100);
+      const deliveredAt = new Date(original.handed_over_at.getTime() + 200);
 
       for (const status of [
         "HANDED_OVER",
@@ -10313,12 +10357,12 @@ describe("commerce persistence foundations", () => {
           {
             event_count:
               status === "HANDED_OVER"
-                ? "1"
+                ? "2"
                 : status === "IN_TRANSIT"
-                  ? "2"
-                  : "3",
+                  ? "3"
+                  : "4",
             handed_over_at: original.handed_over_at,
-            provider_acceptance_scan_id: null,
+            provider_acceptance_scan_id: "pre-handoff-acceptance-scan",
             status,
           },
         ]);
@@ -10328,12 +10372,14 @@ describe("commerce persistence foundations", () => {
             client,
             foundation.shipmentId,
             "TRANSIT_SCAN",
+            transitAt,
           );
         } else if (status === "IN_TRANSIT") {
           await persistVerifiedShipmentOutcome(
             client,
             foundation.shipmentId,
             "DELIVERY_SCAN",
+            deliveredAt,
           );
         }
       }
@@ -10359,7 +10405,7 @@ describe("commerce persistence foundations", () => {
         client,
         foundation.shipmentId,
         "TRANSIT_SCAN",
-        new Date(),
+        new Date(original.handed_over_at.getTime() + 300),
         "delayed-post-delivery-transit",
         false,
       );
@@ -13781,10 +13827,11 @@ describe("commerce persistence foundations", () => {
     }
   });
 
-  it("locks refund receipts before their parent payment at the shared rank", async () => {
+  it("orders refund creation and receipt locks without a Payment-to-Order cycle", async () => {
     const setup = await pool.connect();
     const refundHolder = await pool.connect();
     const receiptWriter = await pool.connect();
+    let refundInsert: Promise<unknown> | undefined;
     let receiptInsert: Promise<string> | undefined;
     try {
       const fixtureScope = `${scope}:refund-receipt-lock-order`;
@@ -13813,6 +13860,73 @@ describe("commerce persistence foundations", () => {
         throw new Error("refund lock-order fixture is missing");
       }
       await setup.query("COMMIT");
+
+      await refundHolder.query("BEGIN");
+      await refundHolder.query(
+        `SELECT 1 FROM orders WHERE id = $1 FOR UPDATE`,
+        [foundation.orderId],
+      );
+
+      await receiptWriter.query("BEGIN");
+      await receiptWriter.query("SET LOCAL statement_timeout = '3s'");
+      const refundWriterPid = (
+        await receiptWriter.query<{ pid: number }>(
+          `SELECT pg_backend_pid() AS pid`,
+        )
+      ).rows[0]?.pid;
+      if (!refundWriterPid) {
+        throw new Error("refund writer backend pid is unavailable");
+      }
+      refundInsert = receiptWriter.query(
+        `INSERT INTO refund_transactions
+           (id, payment_id, idempotency_key, provider, amount_minor, reason,
+            status, requested_at, created_at, updated_at)
+         VALUES ($1,$2,$3,'test',1,'CUSTOMER_CANCELLATION','PENDING',
+                 clock_timestamp(),clock_timestamp(),clock_timestamp())`,
+        [
+          randomUUID(),
+          foundation.paymentId,
+          `${fixtureScope}:lock-ordered-refund-insert`,
+        ],
+      );
+
+      let refundInsertWaitsForOrder = false;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const activity = await refundHolder.query<{
+          wait_event_type: string | null;
+        }>(
+          `SELECT wait_event_type
+           FROM pg_stat_activity
+           WHERE pid = $1`,
+          [refundWriterPid],
+        );
+        if (activity.rows[0]?.wait_event_type === "Lock") {
+          refundInsertWaitsForOrder = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(refundInsertWaitsForOrder).toBe(true);
+      await expect(
+        refundHolder.query(
+          `SELECT 1 FROM order_phases WHERE order_id = $1 FOR UPDATE NOWAIT`,
+          [foundation.orderId],
+        ),
+      ).resolves.toBeDefined();
+      await expect(
+        refundHolder.query(
+          `SELECT 1 FROM payments WHERE id = $1 FOR UPDATE NOWAIT`,
+          [foundation.paymentId],
+        ),
+      ).resolves.toBeDefined();
+
+      await refundHolder.query("ROLLBACK");
+      await expect(refundInsert).rejects.toMatchObject({
+        code: "23514",
+        constraint: "refund_captured_payment_check",
+      });
+      await receiptWriter.query("ROLLBACK");
+      refundInsert = undefined;
 
       await refundHolder.query("BEGIN");
       await refundHolder.query(
@@ -13873,6 +13987,7 @@ describe("commerce persistence foundations", () => {
       await refundHolder.query("ROLLBACK").catch(() => undefined);
       await receiptWriter.query("ROLLBACK").catch(() => undefined);
       await receiptInsert?.catch(() => undefined);
+      await refundInsert?.catch(() => undefined);
       setup.release();
       refundHolder.release();
       receiptWriter.release();

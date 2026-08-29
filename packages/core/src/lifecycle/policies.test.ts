@@ -223,6 +223,8 @@ const permittedContext = {
     previousStatus: "created",
     targetStatus: "failed",
     providerIntentId: null,
+    captureAuthorized: false,
+    captureCutoffAt: Instant.parse("2026-01-01T00:05:00.000Z"),
     resultId: "payment-intent-failure-result-1",
     immutable: true,
   },
@@ -231,6 +233,7 @@ const permittedContext = {
     provider: "sandbox",
     outcome: "failed",
     providerIntentId: null,
+    failedAt: Instant.parse("2026-01-01T00:05:00.000Z"),
     resultId: "payment-intent-failure-result-1",
     immutable: true,
   },
@@ -479,6 +482,11 @@ const permittedContext = {
   refundFailureRollbackCurrentStateCommandKey:
     "payment-refund-pending-command-1",
   refundFailureTransactionId: "refund-1",
+  refundFailureProviderEventId: "refund-failure-event-1",
+  refundFailureProvider: "sandbox",
+  refundFailureProviderTransactionId: "provider-refund-1",
+  refundFailureAmountMinor: 1_000n,
+  refundFailureCurrency: "EUR",
   refundFailureAttemptKey: "refund-attempt-1",
   refundFailureCapturedAmountMinor: 10_000n,
   refundFailureSucceededAmountMinor: 0n,
@@ -488,6 +496,8 @@ const permittedContext = {
     orderId: "order-1",
     phaseId: "phase-1",
     role: "full",
+    provider: "sandbox",
+    currency: "EUR",
     status: "refund_pending",
     activeRefundTransactionId: "refund-1",
     capturedAmountMinor: 10_000n,
@@ -501,6 +511,8 @@ const permittedContext = {
     orderId: "order-1",
     phaseId: "phase-1",
     role: "full",
+    provider: "sandbox",
+    currency: "EUR",
     previousStatus: "refund_pending",
     targetStatus: "captured",
     capturedAmountMinor: 10_000n,
@@ -511,15 +523,27 @@ const permittedContext = {
   refundFailureRollbackRefundTransaction: {
     id: "refund-1",
     paymentId: "payment-1",
+    provider: "sandbox",
+    providerRefundId: "provider-refund-1",
+    amountMinor: 1_000n,
     status: "failed",
     idempotencyKey: "refund-attempt-1",
     resultId: "refund-failure-result-1",
     immutable: true,
   },
   refundFailureProviderEvidence: {
+    id: "refund-failure-event-1",
+    paymentId: "payment-1",
     refundTransactionId: "refund-1",
+    provider: "sandbox",
+    providerTransactionId: "provider-refund-1",
+    kind: "REFUND_FAILED",
+    amountMinor: 1_000n,
+    currency: "EUR",
     attemptKey: "refund-attempt-1",
     outcome: "failed",
+    authenticated: true,
+    verified: true,
     resultId: "refund-failure-result-1",
     immutable: true,
   },
@@ -15439,11 +15463,26 @@ describe("v0 lifecycle policy tables", () => {
       ["paymentIntentFailureFailedPayment", "previousStatus", "pending"],
       ["paymentIntentFailureFailedPayment", "targetStatus", "voided"],
       ["paymentIntentFailureFailedPayment", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureFailedPayment", "captureAuthorized", true],
+      ["paymentIntentFailureFailedPayment", "captureCutoffAt", null],
+      ["paymentIntentFailureFailedPayment", "captureCutoffAt", "2026-01-01"],
+      [
+        "paymentIntentFailureFailedPayment",
+        "captureCutoffAt",
+        Instant.parse("2026-01-01T00:06:00.000Z"),
+      ],
       ["paymentIntentFailureFailedPayment", "immutable", false],
       ["paymentIntentFailureEvidence", "attemptKey", "foreign-attempt"],
       ["paymentIntentFailureEvidence", "provider", " "],
       ["paymentIntentFailureEvidence", "outcome", "pending"],
       ["paymentIntentFailureEvidence", "providerIntentId", "intent-1"],
+      ["paymentIntentFailureEvidence", "failedAt", null],
+      ["paymentIntentFailureEvidence", "failedAt", "2026-01-01"],
+      [
+        "paymentIntentFailureEvidence",
+        "failedAt",
+        Instant.parse("2026-01-01T00:06:00.000Z"),
+      ],
       ["paymentIntentFailureEvidence", "immutable", false],
     ] as const) {
       const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
@@ -25783,6 +25822,11 @@ describe("v0 lifecycle policy tables", () => {
       ["phaseId", "phase-2"],
       ["paymentRole", "unknown"],
       ["refundFailureTransactionId", "refund-2"],
+      ["refundFailureProviderEventId", "event-2"],
+      ["refundFailureProvider", "foreign-provider"],
+      ["refundFailureProviderTransactionId", "foreign-refund"],
+      ["refundFailureAmountMinor", 999n],
+      ["refundFailureCurrency", "USD"],
       ["refundFailureRollbackPreviousPaymentResultId", "foreign-result"],
       ["refundFailureRollbackCurrentStateCommandKey", "foreign-command"],
       ["refundFailureRollbackResultId", " "],
@@ -25814,6 +25858,8 @@ describe("v0 lifecycle policy tables", () => {
     for (const [recordName, field, value] of [
       ["refundFailureRollbackExpectedPayment", "id", "payment-2"],
       ["refundFailureRollbackExpectedPayment", "status", "captured"],
+      ["refundFailureRollbackExpectedPayment", "provider", "other"],
+      ["refundFailureRollbackExpectedPayment", "currency", "USD"],
       [
         "refundFailureRollbackExpectedPayment",
         "activeRefundTransactionId",
@@ -25829,6 +25875,8 @@ describe("v0 lifecycle policy tables", () => {
       ["refundFailureRollbackRestoredPayment", "id", "payment-2"],
       ["refundFailureRollbackRestoredPayment", "previousStatus", "captured"],
       ["refundFailureRollbackRestoredPayment", "targetStatus", "refunded"],
+      ["refundFailureRollbackRestoredPayment", "provider", "other"],
+      ["refundFailureRollbackRestoredPayment", "currency", "USD"],
       ["refundFailureRollbackRestoredPayment", "capturedAmountMinor", 9_000n],
       [
         "refundFailureRollbackRestoredPayment",
@@ -25837,6 +25885,14 @@ describe("v0 lifecycle policy tables", () => {
       ],
       ["refundFailureRollbackRestoredPayment", "immutable", false],
       ["refundFailureRollbackRefundTransaction", "id", "refund-2"],
+      ["refundFailureRollbackRefundTransaction", "paymentId", "payment-2"],
+      ["refundFailureRollbackRefundTransaction", "provider", "other"],
+      [
+        "refundFailureRollbackRefundTransaction",
+        "providerRefundId",
+        "foreign-refund",
+      ],
+      ["refundFailureRollbackRefundTransaction", "amountMinor", 999n],
       ["refundFailureRollbackRefundTransaction", "status", "succeeded"],
       [
         "refundFailureRollbackRefundTransaction",
@@ -25844,8 +25900,22 @@ describe("v0 lifecycle policy tables", () => {
         "foreign-attempt",
       ],
       ["refundFailureRollbackRefundTransaction", "immutable", false],
+      ["refundFailureProviderEvidence", "id", "event-2"],
+      ["refundFailureProviderEvidence", "paymentId", "payment-2"],
       ["refundFailureProviderEvidence", "refundTransactionId", "refund-2"],
+      ["refundFailureProviderEvidence", "provider", "other"],
+      [
+        "refundFailureProviderEvidence",
+        "providerTransactionId",
+        "foreign-refund",
+      ],
+      ["refundFailureProviderEvidence", "kind", "refund_succeeded"],
+      ["refundFailureProviderEvidence", "amountMinor", 999n],
+      ["refundFailureProviderEvidence", "currency", "USD"],
       ["refundFailureProviderEvidence", "outcome", "succeeded"],
+      ["refundFailureProviderEvidence", "authenticated", false],
+      ["refundFailureProviderEvidence", "verified", false],
+      ["refundFailureProviderEvidence", "resultId", "foreign-result"],
       ["refundFailureProviderEvidence", "immutable", false],
     ] as const) {
       const snapshot = base[recordName] as Readonly<Record<string, unknown>>;
@@ -25859,6 +25929,33 @@ describe("v0 lifecycle policy tables", () => {
         }),
       ).toThrow(TransitionGuardError);
     }
+
+    expect(() =>
+      transition(paymentPolicy, {
+        ...command,
+        idempotencyKey: "refund-failure-coordinated-payment-substitution",
+        context: {
+          ...base,
+          paymentId: "payment-2",
+          refundFailureRollbackExpectedPayment: {
+            ...base.refundFailureRollbackExpectedPayment,
+            id: "payment-2",
+          },
+          refundFailureRollbackRestoredPayment: {
+            ...base.refundFailureRollbackRestoredPayment,
+            id: "payment-2",
+          },
+          refundFailureRollbackRefundTransaction: {
+            ...base.refundFailureRollbackRefundTransaction,
+            paymentId: "payment-2",
+          },
+          refundFailureProviderEvidence: {
+            ...base.refundFailureProviderEvidence,
+            paymentId: "payment-2",
+          },
+        },
+      }),
+    ).toThrow(TransitionGuardError);
   });
 
   it.each([

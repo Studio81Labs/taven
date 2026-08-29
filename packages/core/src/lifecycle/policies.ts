@@ -2052,6 +2052,11 @@ function requireExactRefundFailureRollback<S extends string>(
   const phaseId = context?.phaseId;
   const role = context?.paymentRole;
   const refundTransactionId = context?.refundFailureTransactionId;
+  const providerEventId = context?.refundFailureProviderEventId;
+  const provider = context?.refundFailureProvider;
+  const providerTransactionId = context?.refundFailureProviderTransactionId;
+  const amountMinor = context?.refundFailureAmountMinor;
+  const currency = context?.refundFailureCurrency;
   const previousResultId =
     context?.refundFailureRollbackPreviousPaymentResultId;
   const stateKey = context?.refundFailureRollbackCurrentStateCommandKey;
@@ -2077,6 +2082,12 @@ function requireExactRefundFailureRollback<S extends string>(
     !nonBlank(phaseId) ||
     (role !== "full" && role !== "deposit" && role !== "balance") ||
     !nonBlank(refundTransactionId) ||
+    !nonBlank(providerEventId) ||
+    !nonBlank(provider) ||
+    !nonBlank(providerTransactionId) ||
+    typeof amountMinor !== "bigint" ||
+    amountMinor <= 0n ||
+    !nonBlank(currency) ||
     !nonBlank(previousResultId) ||
     !nonBlank(stateKey) ||
     !nonBlank(resultId) ||
@@ -2097,6 +2108,8 @@ function requireExactRefundFailureRollback<S extends string>(
     expectedPayment.orderId !== orderId ||
     expectedPayment.phaseId !== phaseId ||
     expectedPayment.role !== role ||
+    expectedPayment.provider !== provider ||
+    expectedPayment.currency !== currency ||
     expectedPayment.status !== "refund_pending" ||
     expectedPayment.activeRefundTransactionId !== refundTransactionId ||
     expectedPayment.capturedAmountMinor !== capturedAmountMinor ||
@@ -2108,6 +2121,8 @@ function requireExactRefundFailureRollback<S extends string>(
     restoredPayment.orderId !== orderId ||
     restoredPayment.phaseId !== phaseId ||
     restoredPayment.role !== role ||
+    restoredPayment.provider !== provider ||
+    restoredPayment.currency !== currency ||
     restoredPayment.previousStatus !== "refund_pending" ||
     restoredPayment.targetStatus !== expectedTarget ||
     restoredPayment.capturedAmountMinor !== capturedAmountMinor ||
@@ -2116,13 +2131,25 @@ function requireExactRefundFailureRollback<S extends string>(
     restoredPayment.immutable !== true ||
     refundTransaction?.id !== refundTransactionId ||
     refundTransaction.paymentId !== paymentId ||
+    refundTransaction.provider !== provider ||
+    refundTransaction.providerRefundId !== providerTransactionId ||
+    refundTransaction.amountMinor !== amountMinor ||
     refundTransaction.status !== "failed" ||
     refundTransaction.idempotencyKey !== attemptKey ||
     refundTransaction.resultId !== resultId ||
     refundTransaction.immutable !== true ||
-    failure?.refundTransactionId !== refundTransactionId ||
+    failure?.id !== providerEventId ||
+    failure.paymentId !== paymentId ||
+    failure.refundTransactionId !== refundTransactionId ||
+    failure.provider !== provider ||
+    failure.providerTransactionId !== providerTransactionId ||
+    failure.kind !== "REFUND_FAILED" ||
+    failure.amountMinor !== amountMinor ||
+    failure.currency !== currency ||
     failure.attemptKey !== attemptKey ||
     failure.outcome !== "failed" ||
+    failure.authenticated !== true ||
+    failure.verified !== true ||
     failure.resultId !== resultId ||
     failure.immutable !== true ||
     context?.refundFailureRollbackPaymentResultId !== resultId ||
@@ -2361,6 +2388,8 @@ function requireExactPaymentIntentCreationFailure<S extends string>(
   const expectedPayment = record(context?.paymentIntentFailureExpectedPayment);
   const failedPayment = record(context?.paymentIntentFailureFailedPayment);
   const failure = record(context?.paymentIntentFailureEvidence);
+  const captureCutoffAt = failedPayment?.captureCutoffAt;
+  const failedAt = failure?.failedAt;
 
   if (
     !nonBlank(paymentId) ||
@@ -2390,12 +2419,16 @@ function requireExactPaymentIntentCreationFailure<S extends string>(
     failedPayment.previousStatus !== "created" ||
     failedPayment.targetStatus !== "failed" ||
     failedPayment.providerIntentId !== null ||
+    failedPayment.captureAuthorized !== false ||
+    !(captureCutoffAt instanceof Instant) ||
     failedPayment.resultId !== resultId ||
     failedPayment.immutable !== true ||
     failure?.attemptKey !== attemptKey ||
     !nonBlank(failure.provider) ||
     failure.outcome !== "failed" ||
     failure.providerIntentId !== null ||
+    !(failedAt instanceof Instant) ||
+    !(captureCutoffAt instanceof Instant && captureCutoffAt.equals(failedAt)) ||
     failure.resultId !== resultId ||
     failure.immutable !== true ||
     context?.paymentIntentFailurePaymentResultId !== resultId ||

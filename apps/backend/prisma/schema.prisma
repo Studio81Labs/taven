@@ -1496,6 +1496,7 @@ model ShipmentProviderEvent {
   providerEventId       String                    @map("provider_event_id") @db.VarChar(255)
   providerTransactionId String                    @map("provider_transaction_id") @db.VarChar(255)
   kind                  ShipmentProviderEventKind
+  sourceShipmentStatus  ShipmentStatus            @default(PLANNED) @map("source_shipment_status")
   occurredAt            DateTime                  @map("occurred_at") @db.Timestamptz(3)
   authenticatedAt       DateTime                  @map("authenticated_at") @db.Timestamptz(3)
   verifiedAt            DateTime                  @map("verified_at") @db.Timestamptz(3)
