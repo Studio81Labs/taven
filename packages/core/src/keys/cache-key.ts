@@ -22,6 +22,8 @@ export type CandidateResourceEstimateKey = string & {
 
 export interface ReferenceSliceCacheKeyInput {
   readonly geometryHash: Sha256Digest;
+  readonly modelGeometryId: string;
+  readonly geometrySelectionHash: Sha256Digest;
   readonly referenceProfileRevision: ReferenceProfileRevisionRef;
   readonly printConfigRevision: PrintConfigRevisionRef;
   readonly partsPerPlate: number | bigint;
@@ -119,8 +121,13 @@ export function buildReferenceSliceCacheKey(
   input: ReferenceSliceCacheKeyInput,
 ): SliceCacheKey {
   assertPositive(input.partsPerPlate, "partsPerPlate");
-  return buildCanonicalKey("reference-slice", 1, [
+  return buildPersistableIdentityKey("reference-slice", 2, [
     { name: "geometry_hash", value: input.geometryHash.hex },
+    { name: "model_geometry_id", value: input.modelGeometryId },
+    {
+      name: "geometry_selection_hash",
+      value: input.geometrySelectionHash.hex,
+    },
     {
       name: "reference_profile_revision_id",
       value: input.referenceProfileRevision.id,

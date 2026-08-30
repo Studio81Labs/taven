@@ -1,5 +1,7 @@
 -- A legacy item with a partial plate has no durable tail identity to recover.
 -- Lock out concurrent legacy inserts before checking and backfilling exact rows.
+BEGIN;
+
 LOCK TABLE "quote_items", "order_items" IN ACCESS EXCLUSIVE MODE;
 
 DO $$
@@ -293,3 +295,5 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+COMMIT;

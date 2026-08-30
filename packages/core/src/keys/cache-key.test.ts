@@ -27,6 +27,8 @@ describe("slice cache key builders", () => {
   it("is deterministic and changes for every reference-slice identity input", () => {
     const base = {
       geometryHash,
+      modelGeometryId: "geometry-1",
+      geometrySelectionHash,
       referenceProfileRevision: referenceProfileRevision("reference-1"),
       printConfigRevision: printConfigRevision("config-1"),
       partsPerPlate: 4,
@@ -34,10 +36,24 @@ describe("slice cache key builders", () => {
     const key = buildReferenceSliceCacheKey(base);
 
     expect(buildReferenceSliceCacheKey(base)).toBe(key);
+    expect(key).toContain("reference-slice:v2");
+    expect(key.length).toBeLessThanOrEqual(255);
     expect(
       buildReferenceSliceCacheKey({
         ...base,
         geometryHash: Sha256Digest.parse("b".repeat(64)),
+      }),
+    ).not.toBe(key);
+    expect(
+      buildReferenceSliceCacheKey({
+        ...base,
+        modelGeometryId: "geometry-2",
+      }),
+    ).not.toBe(key);
+    expect(
+      buildReferenceSliceCacheKey({
+        ...base,
+        geometrySelectionHash: Sha256Digest.parse("e".repeat(64)),
       }),
     ).not.toBe(key);
     expect(
@@ -60,6 +76,8 @@ describe("slice cache key builders", () => {
   it("keeps reference and production namespaces separate", () => {
     const reference = buildReferenceSliceCacheKey({
       geometryHash,
+      modelGeometryId: "geometry-1",
+      geometrySelectionHash,
       referenceProfileRevision: referenceProfileRevision("profile-1"),
       printConfigRevision: printConfigRevision("config-1"),
       partsPerPlate: 1,
@@ -205,6 +223,8 @@ describe("slice cache key builders", () => {
     expect(() =>
       buildReferenceSliceCacheKey({
         geometryHash,
+        modelGeometryId: "geometry-1",
+        geometrySelectionHash,
         referenceProfileRevision: referenceProfileRevision("reference-1"),
         printConfigRevision: printConfigRevision("config-1"),
         partsPerPlate: 0,

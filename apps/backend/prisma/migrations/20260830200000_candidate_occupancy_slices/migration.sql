@@ -1,6 +1,8 @@
 -- Candidate estimates created by the legacy schema cannot be given an
 -- invented tail slice. Exact-multiple estimates can be migrated losslessly;
 -- every other data set must be re-estimated before this migration.
+BEGIN;
+
 LOCK TABLE "candidate_resource_estimates" IN ACCESS EXCLUSIVE MODE;
 
 DO $$
@@ -163,3 +165,5 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+COMMIT;
