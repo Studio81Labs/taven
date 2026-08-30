@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Money } from "../primitives/money.js";
 import { prepareOrderQuote, type PrepareOrderQuoteInput } from "./prepare.js";
 
@@ -140,12 +140,65 @@ describe("prepareOrderQuote", () => {
   });
 
   it("plans and prices a binding endpoint-compatible quote", () => {
-    const prepared = prepareOrderQuote(input());
+    const quoteInput = input();
+    const shipmentPlanIdForOrdinal = vi.fn(
+      quoteInput.destinationShipment!.shipmentPlanIdForOrdinal,
+    );
+    const prepared = prepareOrderQuote({
+      ...quoteInput,
+      destinationShipment: {
+        ...quoteInput.destinationShipment!,
+        shipmentPlanIdForOrdinal,
+      },
+    });
     expect(prepared.kind).toBe("binding_quote");
     if (prepared.kind !== "binding_quote") return;
+    expect(shipmentPlanIdForOrdinal).toHaveBeenCalledOnce();
+    expect(shipmentPlanIdForOrdinal).toHaveBeenCalledWith(1);
     expect(prepared.shipmentPlan.parcels).toHaveLength(1);
     expect(prepared.price.shipmentPlanIds).toEqual(["plan-1"]);
     expect(prepared.price.contractTotal.minorUnits).toBe(120n);
+  });
+
+  it("does not bind shipment rows while the quote remains provisional", () => {
+    const quoteInput = input();
+    const shipmentPlanIdForOrdinal = vi.fn(() => "unexpected-plan");
+    const prepared = prepareOrderQuote({
+      ...quoteInput,
+      automaticQuoteFacts: {
+        ...quoteInput.automaticQuoteFacts,
+        riskAcknowledgementsComplete: false,
+      },
+      destinationShipment: {
+        ...quoteInput.destinationShipment!,
+        shipmentPlanIdForOrdinal,
+      },
+    });
+
+    expect(prepared.kind).toBe("provisional");
+    expect(prepared.reasons).toEqual(["RISK_ACKNOWLEDGEMENT_REQUIRED"]);
+    expect(shipmentPlanIdForOrdinal).not.toHaveBeenCalled();
+  });
+
+  it("does not bind shipment rows for a custom request", () => {
+    const quoteInput = input();
+    const shipmentPlanIdForOrdinal = vi.fn(() => "unexpected-plan");
+    const prepared = prepareOrderQuote({
+      ...quoteInput,
+      automaticQuoteFacts: {
+        ...quoteInput.automaticQuoteFacts,
+        supportedFormat: false,
+      },
+      destinationShipment: {
+        ...quoteInput.destinationShipment!,
+        categoryPricing: [],
+        shipmentPlanIdForOrdinal,
+      },
+    });
+
+    expect(prepared.kind).toBe("custom_request");
+    expect(prepared.reasons).toEqual(["UNSUPPORTED_FORMAT"]);
+    expect(shipmentPlanIdForOrdinal).not.toHaveBeenCalled();
   });
 
   it("routes an endpoint no-fit result to a custom request", () => {

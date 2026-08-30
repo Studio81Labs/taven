@@ -195,30 +195,6 @@ export function prepareOrderQuote(
     };
   }
 
-  const prices = categoryPricingById(destination.categoryPricing);
-  const bindingShipment: BindingShipmentPricingInput = {
-    deliveryDestinationId: destination.deliveryDestinationId,
-    deliveryCapabilitySnapshotId: destination.deliveryCapabilitySnapshotId,
-    parcels: shipmentPlan.parcels.map((parcel) => {
-      const price = prices.get(parcel.categoryId);
-      if (price === undefined) {
-        throw new DomainError(
-          "INVALID_ARGUMENT",
-          `missing pricing for shipment category ${parcel.categoryId}`,
-        );
-      }
-      return {
-        shipmentPlanId: destination.shipmentPlanIdForOrdinal(parcel.ordinal),
-        categoryId: parcel.categoryId,
-        packingUnitKeys: parcel.placements.map(
-          ({ packingUnitKey }) => packingUnitKey,
-        ),
-        carrierCost: price.carrierCost,
-        customerShippingRate: price.customerShippingRate,
-        packagingCost: price.packagingCost,
-      };
-    }),
-  };
   const gates = evaluateQuoteGates(
     gateInput(input, express, {
       destinationSelected: true,
@@ -244,6 +220,30 @@ export function prepareOrderQuote(
         };
   }
 
+  const prices = categoryPricingById(destination.categoryPricing);
+  const bindingShipment: BindingShipmentPricingInput = {
+    deliveryDestinationId: destination.deliveryDestinationId,
+    deliveryCapabilitySnapshotId: destination.deliveryCapabilitySnapshotId,
+    parcels: shipmentPlan.parcels.map((parcel) => {
+      const price = prices.get(parcel.categoryId);
+      if (price === undefined) {
+        throw new DomainError(
+          "INVALID_ARGUMENT",
+          `missing pricing for shipment category ${parcel.categoryId}`,
+        );
+      }
+      return {
+        shipmentPlanId: destination.shipmentPlanIdForOrdinal(parcel.ordinal),
+        categoryId: parcel.categoryId,
+        packingUnitKeys: parcel.placements.map(
+          ({ packingUnitKey }) => packingUnitKey,
+        ),
+        carrierCost: price.carrierCost,
+        customerShippingRate: price.customerShippingRate,
+        packagingCost: price.packagingCost,
+      };
+    }),
+  };
   const price = calculateOrderPrice({
     ...input.pricing,
     expressEligible: express.eligible,
