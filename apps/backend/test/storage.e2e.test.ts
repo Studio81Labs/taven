@@ -658,6 +658,43 @@ describe("secure object storage and retention", () => {
     expect(await objects.headObject(qcKey)).toBeNull();
   });
 
+  it("deletes expired photos stored under the legacy quote-reference namespace", async () => {
+    const photoId = randomUUID();
+    const scopeId = randomUUID();
+    const objectKey = `quote-reference/${photoId}`;
+    const bytes = png();
+    await putRaw(objectKey, bytes, "image/png");
+    cleanupKeys.add(objectKey);
+    const uploadedAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1_000);
+    const deleteAfter = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+    await prisma.photoAsset.create({
+      data: {
+        id: photoId,
+        kind: "QUOTE_REFERENCE",
+        scopeKind: "QUOTE_REQUEST",
+        scopeId,
+        storageObjectKey: objectKey,
+        contentHash: sha256(bytes),
+        mediaType: "image/png",
+        sizeBytes: BigInt(bytes.byteLength),
+        uploadedAt,
+        photoDeleteAfter: deleteAfter,
+        retentionHold: RetentionHold.LEGAL,
+      },
+    });
+    await prisma.photoAsset.update({
+      where: { id: photoId },
+      data: { retentionHold: RetentionHold.NONE },
+    });
+
+    expect(await retention.runOnce()).toBe(1);
+    expect(
+      (await prisma.photoAsset.findUniqueOrThrow({ where: { id: photoId } }))
+        .deletedAt,
+    ).not.toBeNull();
+    expect(await objects.headObject(objectKey)).toBeNull();
+  });
+
   it("expires abandoned quarantine and any orphan final copy", async () => {
     const uploadId = randomUUID();
     const assetId = randomUUID();

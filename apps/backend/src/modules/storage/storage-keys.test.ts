@@ -31,6 +31,7 @@ describe("storage object keys", () => {
 
   it("accepts persisted canonical and slice artifact namespaces", () => {
     expect(() => assertStorageObjectKey(`qc/${id}`)).not.toThrow();
+    expect(() => assertStorageObjectKey(`quote-reference/${id}`)).not.toThrow();
     expect(() =>
       assertStorageObjectKey(
         "canonical/123e4567-e89b-42d3-a456-426614174000/canonical",
@@ -47,5 +48,8 @@ describe("storage object keys", () => {
     expect(() => assertStorageObjectKey(`qc/${id}/../../secret`)).toThrow(
       "server-generated",
     );
+    expect(() =>
+      assertStorageObjectKey(`quote-reference/${id}/../../secret`),
+    ).toThrow("server-generated");
   });
 });
