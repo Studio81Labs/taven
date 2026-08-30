@@ -1558,6 +1558,9 @@ async function applyExpirationTransition(
 }
 
 function validateCreateRequest(input: CreateQuoteRequestDto) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new BadRequestException("Quote request input is required");
+  }
   const contact = validateContact(input.contact);
   return {
     description: requiredText(input.description, "description", 10_000, 10),

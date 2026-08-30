@@ -48,6 +48,19 @@ describe("QuoteRequest and tokenized individual offers", () => {
     await app?.close();
   });
 
+  it("rejects a null quote-request body as invalid client input", async () => {
+    const response = await apiJson("quote-requests", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": key("null-body"),
+      },
+      body: "null",
+    });
+
+    expect(response.response.status).toBe(400);
+  });
+
   it("submits idempotently, isolates attachments, issues, previews, and accepts once", async () => {
     const createKey = key("create");
     const requestBody = requestInput("accept");
