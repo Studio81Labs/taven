@@ -209,6 +209,45 @@ describe("secure object storage and retention", () => {
     ).toBe("REJECTED");
   });
 
+  it("accepts a structurally complete 3MF and rejects central-only entries", async () => {
+    const validBytes = threeMf();
+    const valid = await initiateModel(
+      validBytes,
+      "assembly.3mf",
+      "3MF",
+      "model/3mf",
+    );
+    cleanupKeys.add(modelSourceObjectKey(valid.assetId));
+    await putSigned(valid, validBytes);
+    const confirmed = await apiJson(
+      `storage/uploads/${valid.uploadId}/confirm`,
+      { method: "POST", headers: bearer(valid.accessToken) },
+    );
+    expect(confirmed.response.status).toBe(200);
+
+    const malformedBytes = threeMf(false);
+    const malformed = await initiateModel(
+      malformedBytes,
+      "central-only.3mf",
+      "3MF",
+      "model/3mf",
+    );
+    await putSigned(malformed, malformedBytes);
+    const rejected = await apiJson<{ code: string }>(
+      `storage/uploads/${malformed.uploadId}/confirm`,
+      { method: "POST", headers: bearer(malformed.accessToken) },
+    );
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.code).toBe("MALFORMED_ARCHIVE");
+    expect(
+      (
+        await prisma.uploadIntent.findUniqueOrThrow({
+          where: { id: malformed.uploadId },
+        })
+      ).status,
+    ).toBe("REJECTED");
+  });
+
   it("confirms a reference photo without trusting its filename as an object key", async () => {
     const bytes = png();
     const scopeId = randomUUID();
@@ -679,6 +718,75 @@ function binaryStl(triangles = 0): Uint8Array {
 
 function png(): Uint8Array {
   return Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+}
+
+function threeMf(withLocalEntries = true): Uint8Array {
+  const names = ["[Content_Types].xml", "3D/3dmodel.model"];
+  const localEntries = names.map((name) => zipLocalEntry(name));
+  const localBytes = withLocalEntries
+    ? concatBytes(...localEntries)
+    : new Uint8Array();
+  let localOffset = 0;
+  const directory = concatBytes(
+    ...names.map((name, index) => {
+      const entry = zipCentralEntry(name, localOffset);
+      localOffset += localEntries[index]?.byteLength ?? 0;
+      return entry;
+    }),
+  );
+  return concatBytes(
+    localBytes,
+    directory,
+    zipEndRecord(names.length, directory.byteLength, localBytes.byteLength),
+  );
+}
+
+function zipLocalEntry(name: string): Uint8Array {
+  const encoded = new TextEncoder().encode(name);
+  const entry = new Uint8Array(30 + encoded.byteLength);
+  const view = new DataView(entry.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(26, encoded.byteLength, true);
+  entry.set(encoded, 30);
+  return entry;
+}
+
+function zipCentralEntry(name: string, localOffset: number): Uint8Array {
+  const encoded = new TextEncoder().encode(name);
+  const entry = new Uint8Array(46 + encoded.byteLength);
+  const view = new DataView(entry.buffer);
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(28, encoded.byteLength, true);
+  view.setUint32(42, localOffset, true);
+  entry.set(encoded, 46);
+  return entry;
+}
+
+function zipEndRecord(
+  entries: number,
+  directorySize: number,
+  directoryOffset: number,
+): Uint8Array {
+  const record = new Uint8Array(22);
+  const view = new DataView(record.buffer);
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(8, entries, true);
+  view.setUint16(10, entries, true);
+  view.setUint32(12, directorySize, true);
+  view.setUint32(16, directoryOffset, true);
+  return record;
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(
+    parts.reduce((total, part) => total + part.byteLength, 0),
+  );
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.byteLength;
+  }
+  return result;
 }
 
 function sha256(bytes: Uint8Array): string {

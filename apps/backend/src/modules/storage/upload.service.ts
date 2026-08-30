@@ -43,8 +43,12 @@ import {
   UploadValidationError,
   MAX_3MF_CENTRAL_DIRECTORY_SIZE,
   MAX_ZIP_END_RECORD_SIZE,
+  inspect3mfDataDescriptor,
   inspect3mfCentralDirectory,
   inspect3mfEndRecord,
+  inspect3mfLocalEntryHeader,
+  threeMfLocalHeaderSize,
+  validate3mfLocalEntryRanges,
   validateFileSignature,
   validateModelUploadMetadata,
   validatePhotoUploadMetadata,
@@ -54,6 +58,7 @@ import {
 const RETENTION_DAYS = 90;
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const MAX_SIGNATURE_PREFIX_BYTES = 512;
+const MAX_3MF_LOCAL_HEADER_BYTES = 8 * 1024 * 1024;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -496,12 +501,73 @@ export class UploadService {
         "3MF ZIP central directory exceeds the inspection limit",
       );
     }
-    const directory = await this.objects.readObjectRange(
+    const directoryBytes = await this.objects.readObjectRange(
       intent.quarantineObjectKey,
       end.centralDirectoryOffset,
       end.centralDirectorySize,
     );
-    inspect3mfCentralDirectory(directory, end.entries);
+    const directory = inspect3mfCentralDirectory(
+      directoryBytes,
+      end.entries,
+      end.centralDirectoryOffset,
+    );
+    const ranges: Array<{ start: number; end: number }> = [];
+    let inspectedLocalHeaderBytes = 0;
+    for (const entry of directory.localEntries) {
+      const fixed = await this.objects.readObjectRange(
+        intent.quarantineObjectKey,
+        entry.localHeaderOffset,
+        30,
+      );
+      const headerSize = threeMfLocalHeaderSize(fixed);
+      if (entry.localHeaderOffset + headerSize > end.centralDirectoryOffset) {
+        throw new UploadValidationError(
+          "MALFORMED_ARCHIVE",
+          "3MF ZIP local header overlaps its central directory",
+        );
+      }
+      inspectedLocalHeaderBytes += headerSize;
+      if (inspectedLocalHeaderBytes > MAX_3MF_LOCAL_HEADER_BYTES) {
+        throw new UploadValidationError(
+          "ARCHIVE_LIMIT_EXCEEDED",
+          "3MF ZIP local headers exceed the inspection limit",
+        );
+      }
+      const header =
+        headerSize === fixed.byteLength
+          ? fixed
+          : await this.objects.readObjectRange(
+              intent.quarantineObjectKey,
+              entry.localHeaderOffset,
+              headerSize,
+            );
+      const local = inspect3mfLocalEntryHeader(
+        header,
+        entry,
+        end.centralDirectoryOffset,
+      );
+      let rangeEnd = local.dataEnd;
+      if (local.usesDataDescriptor) {
+        const descriptorBytes = Math.min(
+          16,
+          end.centralDirectoryOffset - rangeEnd,
+        );
+        if (descriptorBytes < 12) {
+          throw new UploadValidationError(
+            "MALFORMED_ARCHIVE",
+            "3MF ZIP data descriptor overlaps its central directory",
+          );
+        }
+        const descriptor = await this.objects.readObjectRange(
+          intent.quarantineObjectKey,
+          rangeEnd,
+          descriptorBytes,
+        );
+        rangeEnd += inspect3mfDataDescriptor(descriptor, entry);
+      }
+      ranges.push({ start: local.start, end: rangeEnd });
+    }
+    validate3mfLocalEntryRanges(ranges);
   }
 
   private metadataFromIntent(

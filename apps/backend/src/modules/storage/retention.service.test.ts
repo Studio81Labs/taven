@@ -4,6 +4,125 @@ import { RetentionService } from "./retention.service";
 import type { ObjectStorage } from "./object-storage.port";
 
 describe("RetentionService deletion claim recovery", () => {
+  it("continues past a stale due row to a valid deletion in the same bounded batch", async () => {
+    const deadline = new Date(Date.now() - 1_000);
+    const staleJobId = "00000000-0000-0000-0000-000000000010";
+    const uploadJobId = "00000000-0000-0000-0000-000000000011";
+    const uploadId = "00000000-0000-0000-0000-000000000012";
+    const jobs: Array<{
+      id: string;
+      asset_kind: RetentionAssetKind;
+      asset_id: string;
+      expected_delete_after: Date;
+      status: RetentionDeletionJobStatus;
+      attempts: number;
+      leaseToken: string | null;
+    }> = [
+      {
+        id: staleJobId,
+        asset_kind: RetentionAssetKind.MODEL_GEOMETRY,
+        asset_id: "00000000-0000-0000-0000-000000000013",
+        expected_delete_after: deadline,
+        status: RetentionDeletionJobStatus.PENDING,
+        attempts: 0,
+        leaseToken: null,
+      },
+      {
+        id: uploadJobId,
+        asset_kind: RetentionAssetKind.UPLOAD_INTENT,
+        asset_id: uploadId,
+        expected_delete_after: deadline,
+        status: RetentionDeletionJobStatus.PENDING,
+        attempts: 0,
+        leaseToken: null,
+      },
+    ];
+    const deleted: string[][] = [];
+    const storage: ObjectStorage = {
+      createUploadUrl: async () => ({
+        url: "",
+        method: "PUT",
+        requiredHeaders: {},
+        expiresAt: new Date(),
+      }),
+      createDownloadUrl: async () => ({
+        url: "",
+        method: "GET",
+        requiredHeaders: {},
+        expiresAt: new Date(),
+      }),
+      headObject: async () => null,
+      readObjectRange: async () => new Uint8Array(),
+      copyObject: async () => undefined,
+      deleteObjects: async (keys) => {
+        deleted.push([...keys]);
+      },
+    };
+    const transaction = {
+      $queryRaw: async (strings: TemplateStringsArray) => {
+        const sql = strings.join(" ");
+        if (sql.includes("FROM retention_deletion_jobs")) {
+          if (sql.includes("status = 'PROCESSING'")) return [];
+          const next = jobs.find(
+            ({ status }) =>
+              status === RetentionDeletionJobStatus.PENDING ||
+              status === RetentionDeletionJobStatus.FAILED,
+          );
+          return next ? [next] : [];
+        }
+        if (sql.includes("FROM upload_intents")) {
+          return [
+            {
+              status: "PENDING",
+              expires_at: deadline,
+              quarantine_object_key: "quarantine/upload",
+              final_object_key: "final/upload",
+            },
+          ];
+        }
+        return [];
+      },
+      retentionDeletionJob: {
+        update: async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          const job = jobs.find(({ id }) => id === where.id);
+          if (!job) throw new Error("unknown job");
+          if (data.status)
+            job.status = data.status as RetentionDeletionJobStatus;
+          if (data.leaseToken !== undefined)
+            job.leaseToken = data.leaseToken as string | null;
+          if ("attempts" in data) job.attempts += 1;
+          return job;
+        },
+        findFirst: async ({ where }: { where: { id: string } }) => {
+          const job = jobs.find(({ id }) => id === where.id);
+          return job?.status === RetentionDeletionJobStatus.PROCESSING
+            ? job
+            : null;
+        },
+      },
+      uploadIntent: { update: async () => ({}) },
+      modelFile: { updateMany: async () => ({ count: 0 }) },
+      photoAsset: { updateMany: async () => ({ count: 0 }) },
+    };
+    const prisma = {
+      $transaction: async <T>(
+        callback: (tx: typeof transaction) => Promise<T>,
+      ) => callback(transaction),
+    };
+
+    const service = new RetentionService(prisma as never, storage);
+    expect(await service.runOnce(2)).toBe(1);
+    expect(jobs[0]?.status).toBe(RetentionDeletionJobStatus.STALE);
+    expect(jobs[1]?.status).toBe(RetentionDeletionJobStatus.SUCCEEDED);
+    expect(deleted).toEqual([["final/upload", "quarantine/upload"]]);
+  });
+
   it("releases a failed claim so a deadline or hold can be changed before retry", async () => {
     const assetId = "00000000-0000-0000-0000-000000000001";
     const jobId = "00000000-0000-0000-0000-000000000002";

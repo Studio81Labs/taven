@@ -36,6 +36,11 @@ type DeletionClaim = {
 
 type DeletionTargets = Pick<DeletionClaim, "objectKeys" | "protectedObjectKey">;
 
+type DeletionClaimResult =
+  | { outcome: "EMPTY" }
+  | { outcome: "SKIPPED" }
+  | { outcome: "CLAIMED"; claim: DeletionClaim };
+
 @Injectable()
 export class RetentionService {
   private readonly logger = new Logger(RetentionService.name);
@@ -51,10 +56,14 @@ export class RetentionService {
       throw new Error("retention worker limit must be 1 through 1000");
     }
     await this.recoverExpiredLeases();
+    let handled = 0;
     let processed = 0;
-    while (processed < limit) {
-      const claim = await this.claimNextDueJob();
-      if (!claim) break;
+    while (handled < limit) {
+      const result = await this.claimNextDueJob();
+      if (result.outcome === "EMPTY") break;
+      handled += 1;
+      if (result.outcome === "SKIPPED") continue;
+      const { claim } = result;
       processed += 1;
       try {
         await this.objects.deleteObjects(claim.objectKeys);
@@ -101,7 +110,7 @@ export class RetentionService {
     });
   }
 
-  private async claimNextDueJob(): Promise<DeletionClaim | null> {
+  private async claimNextDueJob(): Promise<DeletionClaimResult> {
     return this.prisma.$transaction(async (transaction) => {
       const jobs = await transaction.$queryRaw<JobRow[]>`
         SELECT id, asset_kind, asset_id, expected_delete_after, status, attempts
@@ -114,7 +123,7 @@ export class RetentionService {
         LIMIT 1
       `;
       const job = jobs[0];
-      if (!job) return null;
+      if (!job) return { outcome: "EMPTY" };
 
       // A failed attempt released its asset claim. Re-arm the exact job before
       // reclaiming the asset; the database claim fence intentionally accepts
@@ -143,10 +152,10 @@ export class RetentionService {
           job.id,
           "geometry cleanup is owned by its source ModelFile job",
         );
-        return null;
+        return { outcome: "SKIPPED" };
       }
 
-      if (!targets) return null;
+      if (!targets) return { outcome: "SKIPPED" };
       await transaction.retentionDeletionJob.update({
         where: { id: job.id },
         data: {
@@ -158,12 +167,15 @@ export class RetentionService {
         },
       });
       return {
-        jobId: job.id,
-        leaseToken,
-        assetKind: job.asset_kind,
-        assetId: job.asset_id,
-        objectKeys: [...new Set(targets.objectKeys)].sort(),
-        protectedObjectKey: targets.protectedObjectKey,
+        outcome: "CLAIMED",
+        claim: {
+          jobId: job.id,
+          leaseToken,
+          assetKind: job.asset_kind,
+          assetId: job.asset_id,
+          objectKeys: [...new Set(targets.objectKeys)].sort(),
+          protectedObjectKey: targets.protectedObjectKey,
+        },
       };
     });
   }

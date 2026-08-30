@@ -6,6 +6,7 @@ import {
   inspect3mfCentralDirectory,
   inspect3mfEndRecord,
   inspect3mfArchive,
+  validate3mfLocalEntryRanges,
   validateDisplayFilename,
   validateFileSignature,
   validateModelUploadMetadata,
@@ -125,18 +126,14 @@ describe("byte signatures", () => {
 
 describe("bounded 3MF ZIP inspection", () => {
   it("accepts required 3MF entries through bounded directory inspection", () => {
-    const directory = concatBytes(
-      centralEntry("[Content_Types].xml"),
-      centralEntry("3D/3dmodel.model"),
-    );
-    const archive = concatBytes(directory, endRecord(2, directory.byteLength));
+    const { archive, centralDirectoryOffset, directory } = threeMfArchive();
 
     expect(inspect3mfEndRecord(archive)).toEqual({
       entries: 2,
-      centralDirectoryOffset: 0,
+      centralDirectoryOffset,
       centralDirectorySize: directory.byteLength,
     });
-    expect(inspect3mfCentralDirectory(directory, 2)).toEqual({
+    expect(inspect3mfCentralDirectory(directory, 2)).toMatchObject({
       entries: 2,
       expandedBytes: 0,
     });
@@ -147,24 +144,77 @@ describe("bounded 3MF ZIP inspection", () => {
   });
 
   it("ignores an EOCD signature embedded in a valid ZIP comment", () => {
-    const directory = concatBytes(
-      centralEntry("[Content_Types].xml"),
-      centralEntry("3D/3dmodel.model"),
-    );
+    const { localBytes, directory } = threeMfArchive();
     const record = new Uint8Array(52);
     const view = new DataView(record.buffer);
     view.setUint32(0, 0x06054b50, true);
     view.setUint16(8, 2, true);
     view.setUint16(10, 2, true);
     view.setUint32(12, directory.byteLength, true);
-    view.setUint32(16, 0, true);
+    view.setUint32(16, localBytes.byteLength, true);
     view.setUint16(20, 30, true);
     view.setUint32(22, 0x06054b50, true);
 
-    expect(inspect3mfArchive(concatBytes(directory, record))).toEqual({
+    expect(
+      inspect3mfArchive(concatBytes(localBytes, directory, record)),
+    ).toEqual({
       entries: 2,
       expandedBytes: 0,
     });
+  });
+
+  it("rejects directories without matching local file headers", () => {
+    const { directory } = threeMfArchive();
+    const centralOnly = concatBytes(
+      directory,
+      endRecord(2, directory.byteLength, 0),
+    );
+    expect(errorCode(() => inspect3mfArchive(centralOnly))).toBe(
+      "MALFORMED_ARCHIVE",
+    );
+  });
+
+  it("rejects local names and sizes that conflict with the directory", () => {
+    const mismatchedName = threeMfArchive().archive.slice();
+    mismatchedName[30] = "X".charCodeAt(0);
+    expect(errorCode(() => inspect3mfArchive(mismatchedName))).toBe(
+      "MALFORMED_ARCHIVE",
+    );
+
+    const mismatchedSize = threeMfArchive().archive.slice();
+    new DataView(mismatchedSize.buffer).setUint32(18, 1, true);
+    expect(errorCode(() => inspect3mfArchive(mismatchedSize))).toBe(
+      "MALFORMED_ARCHIVE",
+    );
+  });
+
+  it("accepts a matching signed data descriptor", () => {
+    const archive = threeMfArchive({ dataDescriptor: true }).archive;
+    expect(inspect3mfArchive(archive)).toEqual({
+      entries: 2,
+      expandedBytes: 0,
+    });
+  });
+
+  it("rejects malformed descriptors and overlapping local entry ranges", () => {
+    const malformed = threeMfArchive({ dataDescriptor: true }).archive.slice();
+    const firstDescriptorOffset = 30 + "[Content_Types].xml".length;
+    new DataView(malformed.buffer).setUint32(
+      firstDescriptorOffset + 4,
+      1,
+      true,
+    );
+    expect(errorCode(() => inspect3mfArchive(malformed))).toBe(
+      "MALFORMED_ARCHIVE",
+    );
+    expect(
+      errorCode(() =>
+        validate3mfLocalEntryRanges([
+          { start: 0, end: 50 },
+          { start: 49, end: 80 },
+        ]),
+      ),
+    ).toBe("MALFORMED_ARCHIVE");
   });
 
   it("rejects truncated and unsafe archives", () => {
@@ -210,24 +260,78 @@ describe("bounded 3MF ZIP inspection", () => {
   });
 });
 
-function centralEntry(name: string): Uint8Array {
+function centralEntry(
+  name: string,
+  localHeaderOffset = 0,
+  flags = 0,
+): Uint8Array {
   const encoded = new TextEncoder().encode(name);
   const entry = new Uint8Array(46 + encoded.byteLength);
   const view = new DataView(entry.buffer);
   view.setUint32(0, 0x02014b50, true);
+  view.setUint16(8, flags, true);
   view.setUint16(28, encoded.byteLength, true);
+  view.setUint32(42, localHeaderOffset, true);
   entry.set(encoded, 46);
   return entry;
 }
 
-function endRecord(entries: number, directorySize: number): Uint8Array {
+function localEntry(name: string, dataDescriptor = false): Uint8Array {
+  const encoded = new TextEncoder().encode(name);
+  const descriptorSize = dataDescriptor ? 16 : 0;
+  const entry = new Uint8Array(30 + encoded.byteLength + descriptorSize);
+  const view = new DataView(entry.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(6, dataDescriptor ? 0x0008 : 0, true);
+  view.setUint16(26, encoded.byteLength, true);
+  entry.set(encoded, 30);
+  if (dataDescriptor) {
+    view.setUint32(30 + encoded.byteLength, 0x08074b50, true);
+  }
+  return entry;
+}
+
+function threeMfArchive(options?: { dataDescriptor?: boolean }): {
+  archive: Uint8Array;
+  localBytes: Uint8Array;
+  directory: Uint8Array;
+  centralDirectoryOffset: number;
+} {
+  const dataDescriptor = options?.dataDescriptor ?? false;
+  const firstName = "[Content_Types].xml";
+  const secondName = "3D/3dmodel.model";
+  const first = localEntry(firstName, dataDescriptor);
+  const second = localEntry(secondName, dataDescriptor);
+  const localBytes = concatBytes(first, second);
+  const directory = concatBytes(
+    centralEntry(firstName, 0, dataDescriptor ? 0x0008 : 0),
+    centralEntry(secondName, first.byteLength, dataDescriptor ? 0x0008 : 0),
+  );
+  const centralDirectoryOffset = localBytes.byteLength;
+  return {
+    archive: concatBytes(
+      localBytes,
+      directory,
+      endRecord(2, directory.byteLength, centralDirectoryOffset),
+    ),
+    localBytes,
+    directory,
+    centralDirectoryOffset,
+  };
+}
+
+function endRecord(
+  entries: number,
+  directorySize: number,
+  directoryOffset = 0,
+): Uint8Array {
   const record = new Uint8Array(22);
   const view = new DataView(record.buffer);
   view.setUint32(0, 0x06054b50, true);
   view.setUint16(8, entries, true);
   view.setUint16(10, entries, true);
   view.setUint32(12, directorySize, true);
-  view.setUint32(16, 0, true);
+  view.setUint32(16, directoryOffset, true);
   return record;
 }
 

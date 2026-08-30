@@ -245,6 +245,27 @@ export interface ThreeMfInspection {
   expandedBytes: number;
 }
 
+export interface ThreeMfEntry {
+  name: string;
+  nameBytes: Uint8Array;
+  flags: number;
+  compressionMethod: number;
+  crc32: number;
+  compressedSize: number;
+  expandedSize: number;
+  localHeaderOffset: number;
+}
+
+export interface ThreeMfDirectoryInspection extends ThreeMfInspection {
+  localEntries: ThreeMfEntry[];
+}
+
+export interface ThreeMfLocalEntryInspection {
+  start: number;
+  dataEnd: number;
+  usesDataDescriptor: boolean;
+}
+
 export interface ThreeMfEndRecord {
   entries: number;
   centralDirectoryOffset: number;
@@ -303,7 +324,8 @@ export function inspect3mfEndRecord(
     );
   if (
     cdOffset + cdSize !== inputOffset + eocd ||
-    eocd + 22 + commentLength !== bytes.length
+    eocd + 22 + commentLength !== bytes.length ||
+    cdSize < entries * 46
   )
     fail("MALFORMED_ARCHIVE", "3MF ZIP directory boundary is inconsistent");
   return {
@@ -316,7 +338,8 @@ export function inspect3mfEndRecord(
 export function inspect3mfCentralDirectory(
   input: Uint8Array,
   entries: number,
-): ThreeMfInspection {
+  centralDirectoryOffset?: number,
+): ThreeMfDirectoryInspection {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   if (
     !Number.isSafeInteger(entries) ||
@@ -332,34 +355,49 @@ export function inspect3mfCentralDirectory(
   let expandedBytes = 0;
   let hasContentTypes = false;
   let hasModel = false;
+  const names = new Set<string>();
+  const localEntries: ThreeMfEntry[] = [];
   for (let i = 0; i < entries; i++) {
     if (offset + 46 > bytes.length || u32(bytes, offset) !== 0x02014b50)
       fail("MALFORMED_ARCHIVE", "Malformed 3MF central directory");
     const flags = u16(bytes, offset + 8);
+    const compressionMethod = u16(bytes, offset + 10);
+    const crc32 = u32(bytes, offset + 16);
     const compressed = u32(bytes, offset + 20);
     const expanded = u32(bytes, offset + 24);
     const nameLength = u16(bytes, offset + 28);
     const extraLength = u16(bytes, offset + 30);
     const commentLength = u16(bytes, offset + 32);
+    const diskStart = u16(bytes, offset + 34);
+    const localHeaderOffset = u32(bytes, offset + 42);
     const end = offset + 46 + nameLength + extraLength + commentLength;
     if (
       end > bytes.length ||
       (flags & 1) !== 0 ||
       compressed === 0xffffffff ||
       expanded === 0xffffffff ||
+      localHeaderOffset === 0xffffffff ||
       expanded > MAX_3MF_ENTRY_SIZE ||
       expandedBytes > MAX_3MF_TOTAL_SIZE - expanded
     )
       fail("ARCHIVE_LIMIT_EXCEEDED", "3MF ZIP entry exceeds expansion limits");
+    if (
+      diskStart !== 0 ||
+      ![0, 8].includes(compressionMethod) ||
+      (centralDirectoryOffset !== undefined &&
+        localHeaderOffset + 30 > centralDirectoryOffset)
+    )
+      fail("MALFORMED_ARCHIVE", "3MF ZIP entry location is invalid");
+    const nameBytes = bytes.slice(offset + 46, offset + 46 + nameLength);
     let name: string;
     try {
-      name = new TextDecoder("utf-8", { fatal: true }).decode(
-        bytes.subarray(offset + 46, offset + 46 + nameLength),
-      );
+      name = new TextDecoder("utf-8", { fatal: true }).decode(nameBytes);
     } catch {
       fail("ARCHIVE_UNSAFE_PATH", "3MF ZIP entry has an invalid name");
     }
     if (
+      name.length === 0 ||
+      name.includes("\u0000") ||
       name.startsWith("/") ||
       name.startsWith("\\") ||
       name.includes("\\") ||
@@ -367,6 +405,17 @@ export function inspect3mfCentralDirectory(
       name.split(/[\\/]/u).some((part) => part === "..")
     )
       fail("ARCHIVE_UNSAFE_PATH", "3MF ZIP entry has an unsafe path");
+    if (names.has(name))
+      fail("MALFORMED_ARCHIVE", "3MF ZIP contains duplicate entry names");
+    names.add(name);
+    validateZipExtraFields(
+      bytes.subarray(
+        offset + 46 + nameLength,
+        offset + 46 + nameLength + extraLength,
+      ),
+    );
+    if (compressionMethod === 0 && compressed !== expanded)
+      fail("MALFORMED_ARCHIVE", "Stored 3MF ZIP entry sizes are inconsistent");
     if (
       (compressed === 0 && expanded > 0) ||
       (compressed > 0 && expanded / compressed > 100)
@@ -377,6 +426,16 @@ export function inspect3mfCentralDirectory(
       );
     hasContentTypes ||= name === "[Content_Types].xml";
     hasModel ||= /^3D\/[^/]+\.model$/u.test(name);
+    localEntries.push({
+      name,
+      nameBytes,
+      flags,
+      compressionMethod,
+      crc32,
+      compressedSize: compressed,
+      expandedSize: expanded,
+      localHeaderOffset,
+    });
     expandedBytes += expanded;
     offset = end;
   }
@@ -384,19 +443,171 @@ export function inspect3mfCentralDirectory(
     fail("MALFORMED_ARCHIVE", "3MF central directory size is inconsistent");
   if (!hasContentTypes || !hasModel)
     fail("MALFORMED_ARCHIVE", "3MF ZIP is missing required model entries");
-  return { entries, expandedBytes };
+  return { entries, expandedBytes, localEntries };
+}
+
+export function threeMfLocalHeaderSize(input: Uint8Array): number {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  if (bytes.byteLength !== 30 || u32(bytes, 0) !== 0x04034b50)
+    fail("MALFORMED_ARCHIVE", "3MF ZIP local header is malformed");
+  return 30 + u16(bytes, 26) + u16(bytes, 28);
+}
+
+export function inspect3mfLocalEntryHeader(
+  input: Uint8Array,
+  expected: ThreeMfEntry,
+  centralDirectoryOffset: number,
+): ThreeMfLocalEntryInspection {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  const headerSize = threeMfLocalHeaderSize(bytes.subarray(0, 30));
+  if (bytes.byteLength !== headerSize)
+    fail("MALFORMED_ARCHIVE", "3MF ZIP local header size is inconsistent");
+
+  const flags = u16(bytes, 6);
+  const compressionMethod = u16(bytes, 8);
+  const crc32 = u32(bytes, 14);
+  const compressedSize = u32(bytes, 18);
+  const expandedSize = u32(bytes, 22);
+  const nameLength = u16(bytes, 26);
+  const nameBytes = bytes.subarray(30, 30 + nameLength);
+  const extraBytes = bytes.subarray(30 + nameLength);
+  if (
+    flags !== expected.flags ||
+    compressionMethod !== expected.compressionMethod ||
+    !Buffer.from(nameBytes).equals(Buffer.from(expected.nameBytes))
+  )
+    fail(
+      "MALFORMED_ARCHIVE",
+      "3MF ZIP local header conflicts with its directory entry",
+    );
+  validateZipExtraFields(extraBytes);
+
+  const usesDataDescriptor = (flags & 0x0008) !== 0;
+  if (usesDataDescriptor) {
+    if (
+      ![0, expected.crc32].includes(crc32) ||
+      ![0, expected.compressedSize].includes(compressedSize) ||
+      ![0, expected.expandedSize].includes(expandedSize)
+    )
+      fail(
+        "MALFORMED_ARCHIVE",
+        "3MF ZIP streamed local sizes conflict with its directory entry",
+      );
+  } else if (
+    crc32 !== expected.crc32 ||
+    compressedSize !== expected.compressedSize ||
+    expandedSize !== expected.expandedSize
+  ) {
+    fail(
+      "MALFORMED_ARCHIVE",
+      "3MF ZIP local sizes conflict with its directory entry",
+    );
+  }
+
+  const dataOffset = expected.localHeaderOffset + headerSize;
+  const dataEnd = dataOffset + expected.compressedSize;
+  if (
+    !Number.isSafeInteger(dataEnd) ||
+    dataOffset > centralDirectoryOffset ||
+    dataEnd > centralDirectoryOffset
+  )
+    fail(
+      "MALFORMED_ARCHIVE",
+      "3MF ZIP entry data overlaps its central directory",
+    );
+  return { start: expected.localHeaderOffset, dataEnd, usesDataDescriptor };
+}
+
+export function inspect3mfDataDescriptor(
+  input: Uint8Array,
+  expected: ThreeMfEntry,
+): number {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  const hasSignature = bytes.byteLength >= 4 && u32(bytes, 0) === 0x08074b50;
+  const descriptorSize = hasSignature ? 16 : 12;
+  const valueOffset = hasSignature ? 4 : 0;
+  if (
+    bytes.byteLength < descriptorSize ||
+    u32(bytes, valueOffset) !== expected.crc32 ||
+    u32(bytes, valueOffset + 4) !== expected.compressedSize ||
+    u32(bytes, valueOffset + 8) !== expected.expandedSize
+  )
+    fail("MALFORMED_ARCHIVE", "3MF ZIP data descriptor is inconsistent");
+  return descriptorSize;
+}
+
+export function validate3mfLocalEntryRanges(
+  ranges: ReadonlyArray<{ start: number; end: number }>,
+): void {
+  const ordered = [...ranges].sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
+  for (let index = 1; index < ordered.length; index++) {
+    const previous = ordered[index - 1];
+    const current = ordered[index];
+    if (previous && current && current.start < previous.end)
+      fail("MALFORMED_ARCHIVE", "3MF ZIP local entries overlap");
+  }
+}
+
+function validateZipExtraFields(bytes: Uint8Array): void {
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    if (offset + 4 > bytes.byteLength)
+      fail("MALFORMED_ARCHIVE", "3MF ZIP extra field is malformed");
+    const fieldId = u16(bytes, offset);
+    const fieldLength = u16(bytes, offset + 2);
+    offset += 4;
+    if (offset + fieldLength > bytes.byteLength)
+      fail("MALFORMED_ARCHIVE", "3MF ZIP extra field is malformed");
+    if (fieldId === 0x0001 || fieldId === 0x7075)
+      fail(
+        "MALFORMED_ARCHIVE",
+        "3MF ZIP uses an unsupported alternate entry identity",
+      );
+    offset += fieldLength;
+  }
 }
 
 export function inspect3mfArchive(input: Uint8Array): ThreeMfInspection {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const end = inspect3mfEndRecord(bytes);
-  return inspect3mfCentralDirectory(
+  const directory = inspect3mfCentralDirectory(
     bytes.subarray(
       end.centralDirectoryOffset,
       end.centralDirectoryOffset + end.centralDirectorySize,
     ),
     end.entries,
+    end.centralDirectoryOffset,
   );
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const entry of directory.localEntries) {
+    const fixed = bytes.subarray(
+      entry.localHeaderOffset,
+      entry.localHeaderOffset + 30,
+    );
+    const headerSize = threeMfLocalHeaderSize(fixed);
+    const header = bytes.subarray(
+      entry.localHeaderOffset,
+      entry.localHeaderOffset + headerSize,
+    );
+    const local = inspect3mfLocalEntryHeader(
+      header,
+      entry,
+      end.centralDirectoryOffset,
+    );
+    let rangeEnd = local.dataEnd;
+    if (local.usesDataDescriptor) {
+      const available = Math.min(16, end.centralDirectoryOffset - rangeEnd);
+      rangeEnd += inspect3mfDataDescriptor(
+        bytes.subarray(rangeEnd, rangeEnd + available),
+        entry,
+      );
+    }
+    ranges.push({ start: local.start, end: rangeEnd });
+  }
+  validate3mfLocalEntryRanges(ranges);
+  return { entries: directory.entries, expandedBytes: directory.expandedBytes };
 }
 
 export function validateFileSignature(
