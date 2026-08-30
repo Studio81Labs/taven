@@ -405,6 +405,13 @@ export interface operations {
                     "application/json": components["schemas"]["UploadIntentResponseDto"];
                 };
             };
+            /** @description Anonymous upload issuance limit is exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     StorageController_initiatePhotoUpload: {

@@ -478,6 +478,9 @@
               }
             },
             "description": ""
+          },
+          "429": {
+            "description": "Anonymous upload issuance limit is exhausted"
           }
         },
         "summary": "Create a direct model-file upload intent",

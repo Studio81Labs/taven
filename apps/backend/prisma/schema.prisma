@@ -572,20 +572,42 @@ model UploadIntent {
   @@map("upload_intents")
 }
 
+model AnonymousUploadLimit {
+  subjectHash     String   @id @map("subject_hash") @db.VarChar(64)
+  windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+  windowExpiresAt DateTime @map("window_expires_at") @db.Timestamptz(3)
+  issuedCount     Int      @default(0) @map("issued_count")
+  reservedBytes   BigInt   @default(0) @map("reserved_bytes")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([windowExpiresAt])
+  @@map("anonymous_upload_limits")
+}
+
+model ObjectStorageSweepCursor {
+  sweepName       String   @id @map("sweep_name") @db.VarChar(64)
+  cursorObjectKey String?  @map("cursor_object_key") @db.Text
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("object_storage_sweep_cursors")
+}
+
 model RetentionDeletionJob {
-  id                  String                     @id @default(uuid()) @db.Uuid
-  assetKind           RetentionAssetKind         @map("asset_kind")
-  assetId             String                     @map("asset_id") @db.Uuid
-  expectedDeleteAfter DateTime                   @map("expected_delete_after") @db.Timestamptz(3)
-  status              RetentionDeletionJobStatus @default(PENDING)
-  attempts            Int                        @default(0)
-  availableAt         DateTime                   @default(now()) @map("available_at") @db.Timestamptz(3)
-  leaseUntil          DateTime?                  @map("lease_until") @db.Timestamptz(3)
-  leaseToken          String?                    @map("lease_token") @db.VarChar(64)
-  lastError           String?                    @map("last_error") @db.Text
-  completedAt         DateTime?                  @map("completed_at") @db.Timestamptz(3)
-  createdAt           DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                         String                     @id @default(uuid()) @db.Uuid
+  assetKind                  RetentionAssetKind         @map("asset_kind")
+  assetId                    String                     @map("asset_id") @db.Uuid
+  expectedDeleteAfter        DateTime                   @map("expected_delete_after") @db.Timestamptz(3)
+  status                     RetentionDeletionJobStatus @default(PENDING)
+  attempts                   Int                        @default(0)
+  availableAt                DateTime                   @default(now()) @map("available_at") @db.Timestamptz(3)
+  leaseUntil                 DateTime?                  @map("lease_until") @db.Timestamptz(3)
+  leaseToken                 String?                    @map("lease_token") @db.VarChar(64)
+  uploadSettlementVerifiedAt DateTime?                  @map("upload_settlement_verified_at") @db.Timestamptz(3)
+  lastError                  String?                    @map("last_error") @db.Text
+  completedAt                DateTime?                  @map("completed_at") @db.Timestamptz(3)
+  createdAt                  DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   modelFile  ModelFile?  @relation("ModelFileRetentionDeletionJob")
   photoAsset PhotoAsset? @relation("PhotoAssetRetentionDeletionJob")

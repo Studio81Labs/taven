@@ -24,6 +24,8 @@ async function exportContract(): Promise<void> {
   process.env.TAVEN_S3_ACCESS_KEY_ID ??= "contract";
   process.env.TAVEN_S3_SECRET_ACCESS_KEY ??= "contract-only-placeholder";
   process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
+  process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??=
+    "contract-only-upload-client-hash-key";
   const { AppModule } = await import("../src/app.module.js");
   const app = await NestFactory.create(AppModule, {
     logger: false,

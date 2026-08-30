@@ -37,6 +37,22 @@ export interface StoredObjectMetadata {
   contentHash: string | null;
 }
 
+export interface ObjectStorageListRequest {
+  prefix: string;
+  startAfter?: string;
+  limit: number;
+}
+
+export interface StoredObjectSummary {
+  objectKey: string;
+  lastModified: Date;
+}
+
+export interface ObjectStorageListPage {
+  objects: StoredObjectSummary[];
+  isTruncated: boolean;
+}
+
 export interface ObjectStorage {
   createUploadUrl(input: ObjectStorageUploadRequest): Promise<SignedObjectUrl>;
   createDownloadUrl(
@@ -53,4 +69,5 @@ export interface ObjectStorage {
     destinationObjectKey: string,
   ): Promise<void>;
   deleteObjects(objectKeys: readonly string[]): Promise<void>;
+  listObjects(input: ObjectStorageListRequest): Promise<ObjectStorageListPage>;
 }

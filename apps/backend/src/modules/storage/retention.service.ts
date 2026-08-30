@@ -14,6 +14,10 @@ import {
 } from "./storage-keys";
 
 const LEASE_MILLISECONDS = 5 * 60 * 1_000;
+const UPLOAD_SETTLEMENT_RECHECK_MILLISECONDS = 60 * 60 * 1_000;
+const QUARANTINE_SWEEP_MINIMUM_AGE_MILLISECONDS = 8 * 24 * 60 * 60 * 1_000;
+const QUARANTINE_SWEEP_NAME = "quarantine-orphans-v1";
+const QUARANTINE_PREFIX = "quarantine/";
 const MAX_ERROR_LENGTH = 4_000;
 
 type JobRow = {
@@ -55,6 +59,13 @@ export class RetentionService {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
       throw new Error("retention worker limit must be 1 through 1000");
     }
+    try {
+      await this.sweepExpiredQuarantine(limit);
+    } catch (error) {
+      this.logger.error(
+        `quarantine orphan sweep failed: ${errorMessage(error)}`,
+      );
+    }
     await this.recoverExpiredLeases();
     let handled = 0;
     let processed = 0;
@@ -67,6 +78,9 @@ export class RetentionService {
       processed += 1;
       try {
         await this.objects.deleteObjects(claim.objectKeys);
+        if (claim.assetKind === RetentionAssetKind.UPLOAD_INTENT) {
+          await this.verifyUploadObjectsDeleted(claim.objectKeys);
+        }
         await this.completeClaim(claim);
       } catch (error) {
         // A failed S3 batch can already have deleted an arbitrary subset of
@@ -76,6 +90,78 @@ export class RetentionService {
       }
     }
     return processed;
+  }
+
+  private async sweepExpiredQuarantine(limit: number): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.$executeRaw`
+        INSERT INTO object_storage_sweep_cursors (
+          sweep_name, cursor_object_key, updated_at
+        ) VALUES (${QUARANTINE_SWEEP_NAME}, NULL, clock_timestamp())
+        ON CONFLICT (sweep_name) DO NOTHING
+      `;
+      const rows = await transaction.$queryRaw<
+        Array<{ cursor_object_key: string | null; observed_at: Date }>
+      >`
+        SELECT cursor_object_key, clock_timestamp() AS observed_at
+        FROM object_storage_sweep_cursors
+        WHERE sweep_name = ${QUARANTINE_SWEEP_NAME}
+        FOR UPDATE
+      `;
+      const state = rows[0];
+      if (!state) throw new Error("quarantine sweep cursor is unavailable");
+      const page = await this.objects.listObjects({
+        prefix: QUARANTINE_PREFIX,
+        ...(state.cursor_object_key
+          ? { startAfter: state.cursor_object_key }
+          : {}),
+        limit,
+      });
+      const cutoff =
+        state.observed_at.getTime() - QUARANTINE_SWEEP_MINIMUM_AGE_MILLISECONDS;
+      const expired = page.objects
+        .filter(({ lastModified }) => lastModified.getTime() <= cutoff)
+        .map(({ objectKey }) => objectKey);
+      if (expired.length > 0) await this.objects.deleteObjects(expired);
+
+      const lastObjectKey = page.objects.at(-1)?.objectKey;
+      if (page.isTruncated && !lastObjectKey) {
+        throw new Error("truncated quarantine listing has no cursor key");
+      }
+      const nextCursor = page.isTruncated ? (lastObjectKey ?? null) : null;
+      await transaction.objectStorageSweepCursor.update({
+        where: { sweepName: QUARANTINE_SWEEP_NAME },
+        data: { cursorObjectKey: nextCursor },
+      });
+    });
+  }
+
+  private async verifyUploadObjectsDeleted(
+    objectKeys: readonly string[],
+  ): Promise<void> {
+    let remaining = await this.existingObjectKeys(objectKeys);
+    if (remaining.length === 0) return;
+    await this.objects.deleteObjects(remaining);
+    remaining = await this.existingObjectKeys(remaining);
+    if (remaining.length > 0) {
+      throw new Error(
+        `upload cleanup verification found ${remaining.length} remaining object(s)`,
+      );
+    }
+  }
+
+  private async existingObjectKeys(
+    objectKeys: readonly string[],
+  ): Promise<string[]> {
+    const results = await Promise.all(
+      objectKeys.map(async (objectKey) => ({
+        objectKey,
+        exists: (await this.objects.headObject(objectKey)) !== null,
+      })),
+    );
+    return results
+      .filter(({ exists }) => exists)
+      .map(({ objectKey }) => objectKey);
   }
 
   private async recoverExpiredLeases(): Promise<void> {
@@ -382,6 +468,27 @@ export class RetentionService {
       });
       if (!job) return;
 
+      if (
+        claim.assetKind === RetentionAssetKind.UPLOAD_INTENT &&
+        !job.uploadSettlementVerifiedAt
+      ) {
+        const verifiedAt = new Date();
+        await transaction.retentionDeletionJob.update({
+          where: { id: claim.jobId },
+          data: {
+            status: RetentionDeletionJobStatus.PENDING,
+            availableAt: new Date(
+              verifiedAt.getTime() + UPLOAD_SETTLEMENT_RECHECK_MILLISECONDS,
+            ),
+            uploadSettlementVerifiedAt: verifiedAt,
+            leaseToken: null,
+            leaseUntil: null,
+            lastError: null,
+          },
+        });
+        return;
+      }
+
       if (claim.assetKind === RetentionAssetKind.MODEL_FILE) {
         await transaction.modelFile.update({
           where: {
@@ -398,6 +505,19 @@ export class RetentionService {
           },
           data: { deletedAt: new Date() },
         });
+      } else if (claim.assetKind === RetentionAssetKind.UPLOAD_INTENT) {
+        const deleted = await transaction.uploadIntent.deleteMany({
+          where: {
+            id: claim.assetId,
+            status: { in: ["EXPIRED", "REJECTED"] },
+          },
+        });
+        if (deleted.count === 1) {
+          await transaction.retentionDeletionJob.delete({
+            where: { id: claim.jobId },
+          });
+          return;
+        }
       }
       await transaction.retentionDeletionJob.update({
         where: { id: claim.jobId },

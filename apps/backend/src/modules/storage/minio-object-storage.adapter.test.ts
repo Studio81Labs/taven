@@ -3,6 +3,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -22,6 +23,7 @@ const config: ObjectStorageConfig = {
   secretAccessKey: "test-secret",
   forcePathStyle: true,
   signedUrlTtlSeconds: 900,
+  uploadClientHashKey: "test-only-upload-client-hash-key-32",
 };
 const objectKey = "quarantine/123e4567-e89b-42d3-a456-426614174000";
 const hash = "a".repeat(64);
@@ -140,6 +142,27 @@ describe("MinioObjectStorageAdapter", () => {
       "failed to delete",
     );
     expect(send).toHaveBeenLastCalledWith(expect.any(DeleteObjectsCommand));
+  });
+
+  it("lists a bounded generated namespace with modification timestamps", async () => {
+    const lastModified = new Date("2026-08-01T00:00:00.000Z");
+    send.mockResolvedValueOnce({
+      Contents: [{ Key: objectKey, LastModified: lastModified }],
+      IsTruncated: true,
+    });
+    const storage = new MinioObjectStorageAdapter(config, client);
+
+    await expect(
+      storage.listObjects({ prefix: "quarantine/", limit: 25 }),
+    ).resolves.toEqual({
+      objects: [{ objectKey, lastModified }],
+      isTruncated: true,
+    });
+    expect(send).toHaveBeenLastCalledWith(expect.any(ListObjectsV2Command));
+    expect(send.mock.calls.at(-1)?.[0].input).toMatchObject({
+      Prefix: "quarantine/",
+      MaxKeys: 25,
+    });
   });
 
   it("streams only the exact bounded byte range requested by the caller", async () => {

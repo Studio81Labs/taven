@@ -8,6 +8,7 @@ const environment = {
   TAVEN_S3_ACCESS_KEY_ID: "test-key",
   TAVEN_S3_SECRET_ACCESS_KEY: "test-secret",
   TAVEN_S3_FORCE_PATH_STYLE: "true",
+  TAVEN_UPLOAD_CLIENT_HASH_KEY: "test-only-upload-client-hash-key-32",
 };
 
 describe("readObjectStorageConfig", () => {
@@ -20,6 +21,7 @@ describe("readObjectStorageConfig", () => {
       secretAccessKey: "test-secret",
       forcePathStyle: true,
       signedUrlTtlSeconds: 900,
+      uploadClientHashKey: "test-only-upload-client-hash-key-32",
     });
   });
 
@@ -42,5 +44,11 @@ describe("readObjectStorageConfig", () => {
         TAVEN_S3_SIGNED_URL_TTL_SECONDS: "2",
       }).signedUrlTtlSeconds,
     ).toBe(2);
+    expect(() =>
+      readObjectStorageConfig({
+        ...environment,
+        TAVEN_UPLOAD_CLIENT_HASH_KEY: "too-short",
+      }),
+    ).toThrow("TAVEN_UPLOAD_CLIENT_HASH_KEY");
   });
 });

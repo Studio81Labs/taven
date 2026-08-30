@@ -1,4 +1,4 @@
-import { GoneException } from "@nestjs/common";
+import { GoneException, HttpException, HttpStatus } from "@nestjs/common";
 import {
   PhotoAssetKind,
   PhotoScopeKind,
@@ -24,6 +24,7 @@ const config: ObjectStorageConfig = {
   secretAccessKey: "test-secret",
   forcePathStyle: true,
   signedUrlTtlSeconds: 2,
+  uploadClientHashKey: "test-only-upload-client-hash-key-32",
 };
 
 const modelUpload = {
@@ -41,7 +42,7 @@ describe("UploadService URL signing", () => {
     });
 
     await expect(
-      service.initiateModelUpload(modelUpload),
+      service.initiateModelUpload(modelUpload, "127.0.0.1"),
     ).rejects.toBeInstanceOf(GoneException);
     expect(create).toHaveBeenCalledOnce();
     const uploadId = create.mock.calls[0]?.[0]?.data?.id as string;
@@ -57,7 +58,9 @@ describe("UploadService URL signing", () => {
       throw outage;
     });
 
-    await expect(service.initiateModelUpload(modelUpload)).rejects.toBe(outage);
+    await expect(
+      service.initiateModelUpload(modelUpload, "127.0.0.1"),
+    ).rejects.toBe(outage);
     expect(updateMany).not.toHaveBeenCalled();
   });
 
@@ -71,11 +74,24 @@ describe("UploadService URL signing", () => {
     }));
 
     await expect(
-      service.initiateModelUpload(modelUpload),
+      service.initiateModelUpload(modelUpload, "127.0.0.1"),
     ).resolves.toMatchObject({
       uploadUrl: "https://signed.example/upload",
       expiresAt: signedExpiry.toISOString(),
     });
+  });
+
+  it("rejects exhausted anonymous issuance before persistence or signing", async () => {
+    const signer = vi.fn();
+    const { service, create } = serviceWithSigner(signer, 100);
+
+    const rejected = service.initiateModelUpload(modelUpload, "127.0.0.1");
+    await expect(rejected).rejects.toBeInstanceOf(HttpException);
+    await expect(rejected).rejects.toMatchObject({
+      status: HttpStatus.TOO_MANY_REQUESTS,
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(signer).not.toHaveBeenCalled();
   });
 });
 
@@ -158,6 +174,7 @@ describe("UploadService confirmation response", () => {
       confirmedAt: uploadedAt,
       confirmedPhotoAssetId: photoId,
     };
+    let transactionActive = false;
     const transaction = {
       $queryRaw: vi.fn().mockResolvedValue([{ id: uploadId }]),
       uploadIntent: {
@@ -177,9 +194,19 @@ describe("UploadService confirmation response", () => {
       $transaction: vi.fn(
         async (
           callback: (value: typeof transaction) => Promise<unknown>,
-        ): Promise<unknown> => callback(transaction),
+        ): Promise<unknown> => {
+          transactionActive = true;
+          try {
+            return await callback(transaction);
+          } finally {
+            transactionActive = false;
+          }
+        },
       ),
     };
+    const copyObject = vi.fn().mockImplementation(async () => {
+      expect(transactionActive).toBe(true);
+    });
     const storage = storageWith({
       headObject: async () => ({
         contentType: "image/png",
@@ -187,6 +214,7 @@ describe("UploadService confirmation response", () => {
         contentHash,
       }),
       readObjectRange: async () => bytes,
+      copyObject,
     });
     const service = new UploadService(prisma as never, storage, config);
 
@@ -200,6 +228,7 @@ describe("UploadService confirmation response", () => {
       deleteAfter: persistedDeadline.toISOString(),
     });
     expect(transaction.photoAsset.create).toHaveBeenCalledOnce();
+    expect(copyObject).toHaveBeenCalledOnce();
     expect(prisma.photoAsset.findUnique).toHaveBeenCalledWith({
       where: { id: photoId },
       select: { uploadedAt: true, photoDeleteAfter: true },
@@ -246,14 +275,42 @@ describe("UploadService confirmation response", () => {
   });
 });
 
-function serviceWithSigner(createUploadUrl: ObjectStorage["createUploadUrl"]): {
+function serviceWithSigner(
+  createUploadUrl: ObjectStorage["createUploadUrl"],
+  issuedCount = 0,
+): {
   service: UploadService;
   create: ReturnType<typeof vi.fn>;
   updateMany: ReturnType<typeof vi.fn>;
 } {
   const create = vi.fn().mockResolvedValue({});
   const updateMany = vi.fn().mockResolvedValue({ count: 1 });
-  const prisma = { uploadIntent: { create, updateMany } };
+  const now = new Date();
+  const transaction = {
+    $executeRaw: vi.fn().mockResolvedValue(1),
+    $queryRaw: vi.fn().mockImplementation((strings: TemplateStringsArray) =>
+      strings.join(" ").includes("clock_timestamp() AS now")
+        ? [{ now }]
+        : [
+            {
+              subject_hash: "subject",
+              window_started_at: now,
+              window_expires_at: new Date(now.getTime() + 60_000),
+              issued_count: issuedCount,
+              reserved_bytes: 0n,
+            },
+          ],
+    ),
+    anonymousUploadLimit: { update: vi.fn().mockResolvedValue({}) },
+    uploadIntent: { create },
+  };
+  const prisma = {
+    uploadIntent: { updateMany },
+    $transaction: vi.fn(
+      async (callback: (value: typeof transaction) => Promise<unknown>) =>
+        callback(transaction),
+    ),
+  };
   const storage = storageWith({ createUploadUrl });
   return {
     service: new UploadService(prisma as never, storage, config),
@@ -312,6 +369,7 @@ function storageWith(overrides: Partial<ObjectStorage>): ObjectStorage {
     readObjectRange: async () => new Uint8Array(),
     copyObject: async () => undefined,
     deleteObjects: async () => undefined,
+    listObjects: async () => ({ objects: [], isTruncated: false }),
     ...overrides,
   };
 }

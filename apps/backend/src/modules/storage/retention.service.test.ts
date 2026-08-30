@@ -4,6 +4,62 @@ import { RetentionService } from "./retention.service";
 import type { ObjectStorage } from "./object-storage.port";
 
 describe("RetentionService deletion claim recovery", () => {
+  it("sweeps a late quarantine object without retaining its intent job", async () => {
+    const orphanKey = "quarantine/00000000-0000-0000-0000-000000000099";
+    const activeKey = "quarantine/00000000-0000-0000-0000-000000000098";
+    const deleted: string[][] = [];
+    const storage: ObjectStorage = {
+      createUploadUrl: async () => ({
+        url: "",
+        method: "PUT",
+        requiredHeaders: {},
+        expiresAt: new Date(),
+      }),
+      createDownloadUrl: async () => ({
+        url: "",
+        method: "GET",
+        requiredHeaders: {},
+        expiresAt: new Date(),
+      }),
+      headObject: async () => null,
+      readObjectRange: async () => new Uint8Array(),
+      copyObject: async () => undefined,
+      deleteObjects: async (keys) => {
+        deleted.push([...keys]);
+      },
+      listObjects: async () => ({
+        objects: [
+          {
+            objectKey: orphanKey,
+            lastModified: new Date(Date.now() - 9 * 24 * 60 * 60 * 1_000),
+          },
+          { objectKey: activeKey, lastModified: new Date() },
+        ],
+        isTruncated: false,
+      }),
+    };
+    const transaction = {
+      $executeRaw: async () => 1,
+      $queryRaw: async (strings: TemplateStringsArray) => {
+        const sql = strings.join(" ");
+        if (sql.includes("FROM object_storage_sweep_cursors")) {
+          return [{ cursor_object_key: null, observed_at: new Date() }];
+        }
+        return [];
+      },
+      objectStorageSweepCursor: { update: async () => ({}) },
+    };
+    const prisma = {
+      $transaction: async <T>(
+        callback: (tx: typeof transaction) => Promise<T>,
+      ) => callback(transaction),
+    };
+
+    const service = new RetentionService(prisma as never, storage);
+    expect(await service.runOnce(1)).toBe(0);
+    expect(deleted).toEqual([[orphanKey]]);
+  });
+
   it("continues past a stale due row to a valid deletion in the same bounded batch", async () => {
     const deadline = new Date(Date.now() - 1_000);
     const staleJobId = "00000000-0000-0000-0000-000000000010";
@@ -38,6 +94,7 @@ describe("RetentionService deletion claim recovery", () => {
       },
     ];
     const deleted: string[][] = [];
+    let recreatedQuarantineVisible = true;
     const storage: ObjectStorage = {
       createUploadUrl: async () => ({
         url: "",
@@ -51,16 +108,35 @@ describe("RetentionService deletion claim recovery", () => {
         requiredHeaders: {},
         expiresAt: new Date(),
       }),
-      headObject: async () => null,
+      headObject: async (objectKey) => {
+        if (
+          objectKey === "quarantine/upload" &&
+          deleted.length === 1 &&
+          recreatedQuarantineVisible
+        ) {
+          recreatedQuarantineVisible = false;
+          return {
+            contentType: "model/stl",
+            contentLength: 1,
+            contentHash: null,
+          };
+        }
+        return null;
+      },
       readObjectRange: async () => new Uint8Array(),
       copyObject: async () => undefined,
       deleteObjects: async (keys) => {
         deleted.push([...keys]);
       },
+      listObjects: async () => ({ objects: [], isTruncated: false }),
     };
     const transaction = {
+      $executeRaw: async () => 1,
       $queryRaw: async (strings: TemplateStringsArray) => {
         const sql = strings.join(" ");
+        if (sql.includes("FROM object_storage_sweep_cursors")) {
+          return [{ cursor_object_key: null, observed_at: new Date() }];
+        }
         if (sql.includes("FROM retention_deletion_jobs")) {
           if (sql.includes("status = 'PROCESSING'")) return [];
           const next = jobs.find(
@@ -105,10 +181,19 @@ describe("RetentionService deletion claim recovery", () => {
             ? job
             : null;
         },
+        delete: async ({ where }: { where: { id: string } }) => {
+          const index = jobs.findIndex(({ id }) => id === where.id);
+          if (index < 0) throw new Error("unknown job");
+          return jobs.splice(index, 1)[0];
+        },
       },
-      uploadIntent: { update: async () => ({}) },
+      uploadIntent: {
+        update: async () => ({}),
+        deleteMany: async () => ({ count: 1 }),
+      },
       modelFile: { updateMany: async () => ({ count: 0 }) },
       photoAsset: { updateMany: async () => ({ count: 0 }) },
+      objectStorageSweepCursor: { update: async () => ({}) },
     };
     const prisma = {
       $transaction: async <T>(
@@ -119,8 +204,13 @@ describe("RetentionService deletion claim recovery", () => {
     const service = new RetentionService(prisma as never, storage);
     expect(await service.runOnce(2)).toBe(1);
     expect(jobs[0]?.status).toBe(RetentionDeletionJobStatus.STALE);
-    expect(jobs[1]?.status).toBe(RetentionDeletionJobStatus.SUCCEEDED);
-    expect(deleted).toEqual([["final/upload", "quarantine/upload"]]);
+    expect(jobs.find(({ id }) => id === uploadJobId)?.status).toBe(
+      RetentionDeletionJobStatus.PENDING,
+    );
+    expect(deleted).toEqual([
+      ["final/upload", "quarantine/upload"],
+      ["quarantine/upload"],
+    ]);
   });
 
   it("retains a failed claim until an idempotent retry converges", async () => {
@@ -161,6 +251,7 @@ describe("RetentionService deletion claim recovery", () => {
         deleteAttempts += 1;
         if (deleteAttempts === 1) throw new Error("temporary outage");
       },
+      listObjects: async () => ({ objects: [], isTruncated: false }),
     };
     const job = () => ({
       id: jobId,
@@ -171,8 +262,12 @@ describe("RetentionService deletion claim recovery", () => {
       attempts: state.attempts,
     });
     const transaction = {
+      $executeRaw: async () => 1,
       $queryRaw: async (strings: TemplateStringsArray) => {
         const sql = strings.join(" ");
+        if (sql.includes("FROM object_storage_sweep_cursors")) {
+          return [{ cursor_object_key: null, observed_at: new Date() }];
+        }
         if (sql.includes("FROM retention_deletion_jobs")) {
           if (sql.includes("status = 'PROCESSING'")) {
             return state.status === RetentionDeletionJobStatus.PROCESSING
@@ -223,6 +318,7 @@ describe("RetentionService deletion claim recovery", () => {
         },
       },
       photoAsset: { updateMany: async () => ({ count: 0 }) },
+      objectStorageSweepCursor: { update: async () => ({}) },
     };
     const prisma = {
       $transaction: async <T>(

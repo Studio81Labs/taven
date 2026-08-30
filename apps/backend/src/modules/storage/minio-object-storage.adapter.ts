@@ -3,6 +3,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -11,6 +12,8 @@ import {
   ObjectStorageDeadlineError,
   type ObjectStorage,
   type ObjectStorageDownloadRequest,
+  type ObjectStorageListPage,
+  type ObjectStorageListRequest,
   type ObjectStorageUploadRequest,
   type SignedObjectUrl,
   type StoredObjectMetadata,
@@ -275,6 +278,50 @@ export class MinioObjectStorageAdapter implements ObjectStorage {
         );
       }
     }
+  }
+
+  async listObjects(
+    input: ObjectStorageListRequest,
+  ): Promise<ObjectStorageListPage> {
+    if (!/^[a-z0-9][a-z0-9-]*\/$/.test(input.prefix)) {
+      throw new Error(
+        "object storage list prefix must be a generated namespace",
+      );
+    }
+    if (input.startAfter) {
+      assertStorageObjectKey(input.startAfter);
+      if (!input.startAfter.startsWith(input.prefix)) {
+        throw new Error("object storage cursor must belong to its prefix");
+      }
+    }
+    if (
+      !Number.isSafeInteger(input.limit) ||
+      input.limit < 1 ||
+      input.limit > 1_000
+    ) {
+      throw new Error("object storage list limit must be 1 through 1000");
+    }
+    const result = await this.client.send(
+      new ListObjectsV2Command({
+        Bucket: this.config.bucket,
+        Prefix: input.prefix,
+        StartAfter: input.startAfter,
+        MaxKeys: input.limit,
+      }),
+    );
+    return {
+      objects: (result.Contents ?? []).map((object) => {
+        if (!object.Key || !object.LastModified) {
+          throw new Error("object storage returned an incomplete list entry");
+        }
+        assertStorageObjectKey(object.Key);
+        if (!object.Key.startsWith(input.prefix)) {
+          throw new Error("object storage returned a key outside its prefix");
+        }
+        return { objectKey: object.Key, lastModified: object.LastModified };
+      }),
+      isTruncated: result.IsTruncated === true,
+    };
   }
 }
 

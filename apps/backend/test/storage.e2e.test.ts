@@ -3,7 +3,7 @@ import type { INestApplication } from "@nestjs/common";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Test } from "@nestjs/testing";
 import { RetentionDeletionJobStatus, RetentionHold } from "@prisma/client";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { crc32, deflateRawSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
@@ -30,6 +30,9 @@ const s3Config = {
   secretAccessKey: process.env.TAVEN_S3_SECRET_ACCESS_KEY ?? "taven-local-only",
   forcePathStyle: (process.env.TAVEN_S3_FORCE_PATH_STYLE ?? "true") === "true",
 };
+const uploadClientHashKey =
+  process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??
+  "test-only-upload-client-hash-key-32";
 
 describe("secure object storage and retention", () => {
   let app: INestApplication;
@@ -48,6 +51,7 @@ describe("secure object storage and retention", () => {
     await app.listen(0, "127.0.0.1");
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
+    await prisma.anonymousUploadLimit.deleteMany();
     objects = app.get<ObjectStorage>(OBJECT_STORAGE);
     retention = app.get(RetentionService);
     s3 = new S3Client({
@@ -703,6 +707,7 @@ describe("secure object storage and retention", () => {
     const bytes = binaryStl();
     await putRaw(quarantineKey, bytes, "model/stl");
     await putRaw(finalKey, bytes, "model/stl");
+    const expiresAt = new Date(Date.now() - 6 * 60 * 1_000);
     await prisma.uploadIntent.create({
       data: {
         id: uploadId,
@@ -716,8 +721,8 @@ describe("secure object storage and retention", () => {
         expectedContentHash: sha256(bytes),
         quarantineObjectKey: quarantineKey,
         finalObjectKey: finalKey,
-        expiresAt: new Date(Date.now() - 1_000),
-        createdAt: new Date(Date.now() - 10_000),
+        expiresAt,
+        createdAt: new Date(Date.now() - 10 * 60 * 1_000),
       },
     });
 
@@ -726,8 +731,176 @@ describe("secure object storage and retention", () => {
       (await prisma.uploadIntent.findUniqueOrThrow({ where: { id: uploadId } }))
         .status,
     ).toBe("EXPIRED");
+    const settlementJob = await prisma.retentionDeletionJob.findUniqueOrThrow({
+      where: {
+        assetKind_assetId_expectedDeleteAfter: {
+          assetKind: "UPLOAD_INTENT",
+          assetId: uploadId,
+          expectedDeleteAfter: expiresAt,
+        },
+      },
+    });
+    expect(settlementJob.status).toBe(RetentionDeletionJobStatus.PENDING);
+    expect(settlementJob.uploadSettlementVerifiedAt).not.toBeNull();
+    expect(settlementJob.availableAt.getTime()).toBeGreaterThan(Date.now());
     expect(await objects.headObject(quarantineKey)).toBeNull();
     expect(await objects.headObject(finalKey)).toBeNull();
+
+    // Model a PUT accepted before expiry that commits after the first worker's
+    // final HEAD. The retained job must sweep that late object on its next pass.
+    await putRaw(quarantineKey, bytes, "model/stl");
+    await prisma.retentionDeletionJob.update({
+      where: { id: settlementJob.id },
+      data: { availableAt: new Date() },
+    });
+    expect(await retention.runOnce()).toBe(1);
+    expect(
+      await prisma.uploadIntent.findUnique({ where: { id: uploadId } }),
+    ).toBeNull();
+    expect(
+      await prisma.retentionDeletionJob.findUnique({
+        where: {
+          assetKind_assetId_expectedDeleteAfter: {
+            assetKind: "UPLOAD_INTENT",
+            assetId: uploadId,
+            expectedDeleteAfter: expiresAt,
+          },
+        },
+      }),
+    ).toBeNull();
+    expect(await objects.headObject(quarantineKey)).toBeNull();
+  });
+
+  it("keeps an expired signed upload in quarantine through its settlement grace", async () => {
+    const uploadId = randomUUID();
+    const assetId = randomUUID();
+    const quarantineKey = quarantineObjectKey(uploadId);
+    const finalKey = modelSourceObjectKey(assetId);
+    const bytes = binaryStl();
+    await putRaw(quarantineKey, bytes, "model/stl");
+    cleanupKeys.add(quarantineKey);
+    const expiresAt = new Date(Date.now() - 1_000);
+    await prisma.uploadIntent.create({
+      data: {
+        id: uploadId,
+        assetKind: "MODEL_FILE",
+        capabilityTokenHash: sha256(randomBytes(32)),
+        originalFilename: "settling.stl",
+        modelFormat: "STL",
+        intendedAssetId: assetId,
+        expectedContentType: "model/stl",
+        expectedSizeBytes: BigInt(bytes.byteLength),
+        expectedContentHash: sha256(bytes),
+        quarantineObjectKey: quarantineKey,
+        finalObjectKey: finalKey,
+        expiresAt,
+        createdAt: new Date(Date.now() - 10_000),
+      },
+    });
+
+    const job = await prisma.retentionDeletionJob.findUniqueOrThrow({
+      where: {
+        assetKind_assetId_expectedDeleteAfter: {
+          assetKind: "UPLOAD_INTENT",
+          assetId: uploadId,
+          expectedDeleteAfter: expiresAt,
+        },
+      },
+    });
+    expect(job.availableAt.getTime()).toBeGreaterThan(Date.now());
+    expect(await retention.runOnce()).toBe(0);
+    expect(await objects.headObject(quarantineKey)).not.toBeNull();
+  });
+
+  it("enforces the anonymous upload budget atomically and ignores spoofed forwarding headers", async () => {
+    const subjectHash = createHmac("sha256", uploadClientHashKey)
+      .update("anonymous-model-upload\0" + "127.0.0.1")
+      .digest("hex");
+    const previous = await prisma.anonymousUploadLimit.findUnique({
+      where: { subjectHash },
+    });
+    const previousGlobal = await prisma.anonymousUploadLimit.findUnique({
+      where: { subjectHash: "global" },
+    });
+    const now = new Date();
+    await prisma.anonymousUploadLimit.upsert({
+      where: { subjectHash },
+      create: {
+        subjectHash,
+        windowStartedAt: now,
+        windowExpiresAt: new Date(now.getTime() + 15 * 60 * 1_000),
+        issuedCount: 19,
+        reservedBytes: 0n,
+      },
+      update: {
+        windowStartedAt: now,
+        windowExpiresAt: new Date(now.getTime() + 15 * 60 * 1_000),
+        issuedCount: 19,
+        reservedBytes: 0n,
+      },
+    });
+
+    const bytes = binaryStl();
+    const request = (forwardedFor: string) =>
+      apiJson<{ uploadId?: string }>("storage/uploads/model-files", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": forwardedFor,
+        },
+        body: JSON.stringify({
+          format: "STL",
+          originalFilename: "limited.stl",
+          contentType: "model/stl",
+          sizeBytes: bytes.byteLength,
+          sha256: sha256(bytes),
+        }),
+      });
+    const results = await Promise.all([
+      request("203.0.113.44"),
+      request("198.51.100.22"),
+    ]);
+    expect(results.map(({ response }) => response.status).sort()).toEqual([
+      201, 429,
+    ]);
+    const createdUploadId = results.find(
+      ({ response }) => response.status === 201,
+    )?.body.uploadId;
+    expect(createdUploadId).toBeTruthy();
+    if (createdUploadId) {
+      await prisma.retentionDeletionJob.deleteMany({
+        where: { assetKind: "UPLOAD_INTENT", assetId: createdUploadId },
+      });
+      await prisma.uploadIntent.delete({ where: { id: createdUploadId } });
+    }
+    if (previous) {
+      await prisma.anonymousUploadLimit.update({
+        where: { subjectHash },
+        data: {
+          windowStartedAt: previous.windowStartedAt,
+          windowExpiresAt: previous.windowExpiresAt,
+          issuedCount: previous.issuedCount,
+          reservedBytes: previous.reservedBytes,
+        },
+      });
+    } else {
+      await prisma.anonymousUploadLimit.delete({ where: { subjectHash } });
+    }
+    if (previousGlobal) {
+      await prisma.anonymousUploadLimit.update({
+        where: { subjectHash: "global" },
+        data: {
+          windowStartedAt: previousGlobal.windowStartedAt,
+          windowExpiresAt: previousGlobal.windowExpiresAt,
+          issuedCount: previousGlobal.issuedCount,
+          reservedBytes: previousGlobal.reservedBytes,
+        },
+      });
+    } else {
+      await prisma.anonymousUploadLimit.delete({
+        where: { subjectHash: "global" },
+      });
+    }
   });
 
   it("records a failed deletion and converges through an idempotent retry", async () => {
@@ -788,6 +961,7 @@ describe("secure object storage and retention", () => {
         }
         await objects.deleteObjects(keys);
       },
+      listObjects: (input) => objects.listObjects(input),
     };
     const flakyRetention = new RetentionService(prisma, flakyStorage);
 

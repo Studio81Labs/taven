@@ -5,6 +5,7 @@ import {
   Headers,
   HttpCode,
   Inject,
+  Ip,
   Param,
   Post,
 } from "@nestjs/common";
@@ -18,6 +19,7 @@ import {
   ApiOperation,
   ApiParam,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import {
@@ -39,10 +41,14 @@ export class StorageController {
   @ApiOperation({ summary: "Create a direct model-file upload intent" })
   @ApiBody({ type: InitiateModelUploadDto })
   @ApiCreatedResponse({ type: UploadIntentResponseDto })
+  @ApiTooManyRequestsResponse({
+    description: "Anonymous upload issuance limit is exhausted",
+  })
   initiateModelUpload(
     @Body() body: InitiateModelUploadDto,
+    @Ip() clientAddress: string,
   ): Promise<UploadIntentResponseDto> {
-    return this.uploads.initiateModelUpload(body);
+    return this.uploads.initiateModelUpload(body, clientAddress);
   }
 
   @Post("uploads/photos")

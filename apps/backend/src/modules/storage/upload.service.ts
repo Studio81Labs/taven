@@ -2,6 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   GoneException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   UnauthorizedException,
@@ -10,12 +12,14 @@ import {
   ModelFileFormat,
   PhotoAssetKind,
   PhotoScopeKind,
+  Prisma,
   RetentionHold,
   UploadAssetKind,
   UploadIntentStatus,
 } from "@prisma/client";
 import {
   createHash,
+  createHmac,
   randomBytes,
   randomUUID,
   timingSafeEqual,
@@ -70,12 +74,27 @@ const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const MAX_SIGNATURE_PREFIX_BYTES = 512;
 const MAX_3MF_LOCAL_HEADER_BYTES = 8 * 1024 * 1024;
 const MAX_3MF_COMPRESSED_CHUNK_BYTES = 8 * 1024 * 1024;
+const ANONYMOUS_UPLOAD_WINDOW_MILLISECONDS = 15 * 60 * 1_000;
+const ANONYMOUS_UPLOAD_CLIENT_MAX_ISSUED = 20;
+const ANONYMOUS_UPLOAD_CLIENT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const ANONYMOUS_UPLOAD_GLOBAL_MAX_ISSUED = 100;
+const ANONYMOUS_UPLOAD_GLOBAL_MAX_BYTES = 10 * 1024 * 1024 * 1024;
+const ANONYMOUS_UPLOAD_GLOBAL_SUBJECT = "global";
+const ANONYMOUS_UPLOAD_LIMIT_CLEANUP_BATCH = 100;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type UploadIntentRecord = Awaited<
   ReturnType<PrismaService["uploadIntent"]["findUnique"]>
 >;
+
+type AnonymousUploadLimitRow = {
+  subject_hash: string;
+  window_started_at: Date;
+  window_expires_at: Date;
+  issued_count: number;
+  reserved_bytes: bigint;
+};
 
 @Injectable()
 export class UploadService {
@@ -88,6 +107,7 @@ export class UploadService {
 
   async initiateModelUpload(
     input: InitiateModelUploadDto,
+    clientAddress: string,
   ): Promise<UploadIntentResponseDto> {
     const uploadId = randomUUID();
     const assetId = randomUUID();
@@ -97,21 +117,28 @@ export class UploadService {
     const quarantineKey = quarantineObjectKey(uploadId);
     const finalKey = modelSourceObjectKey(assetId);
 
-    await this.prisma.uploadIntent.create({
-      data: {
-        id: uploadId,
-        assetKind: UploadAssetKind.MODEL_FILE,
-        capabilityTokenHash: hashToken(token),
-        originalFilename: metadata.displayFilename,
-        modelFormat: toModelFileFormat(metadata.format),
-        intendedAssetId: assetId,
-        expectedContentType: metadata.contentType,
-        expectedSizeBytes: BigInt(metadata.sizeBytes),
-        expectedContentHash: metadata.sha256,
-        quarantineObjectKey: quarantineKey,
-        finalObjectKey: finalKey,
-        expiresAt,
-      },
+    await this.prisma.$transaction(async (transaction) => {
+      await this.reserveAnonymousUpload(
+        transaction,
+        clientAddress,
+        metadata.sizeBytes,
+      );
+      await transaction.uploadIntent.create({
+        data: {
+          id: uploadId,
+          assetKind: UploadAssetKind.MODEL_FILE,
+          capabilityTokenHash: hashToken(token),
+          originalFilename: metadata.displayFilename,
+          modelFormat: toModelFileFormat(metadata.format),
+          intendedAssetId: assetId,
+          expectedContentType: metadata.contentType,
+          expectedSizeBytes: BigInt(metadata.sizeBytes),
+          expectedContentHash: metadata.sha256,
+          quarantineObjectKey: quarantineKey,
+          finalObjectKey: finalKey,
+          expiresAt,
+        },
+      });
     });
 
     return this.createUploadResponse(
@@ -255,11 +282,6 @@ export class UploadService {
       throw error;
     }
 
-    await this.objects.copyObject(
-      intent.quarantineObjectKey,
-      intent.finalObjectKey,
-    );
-
     const confirmedIntentId = intent.id;
     intent = await this.prisma.$transaction(async (transaction) => {
       const rows = await transaction.$queryRaw<Array<{ id: string }>>`
@@ -284,6 +306,13 @@ export class UploadService {
         }
         throw new GoneException("Upload intent expired");
       }
+
+      // Keep the row lock through promotion. Cleanup claims the same row, so
+      // it cannot delete the final key and then lose to an in-flight copy.
+      await this.objects.copyObject(
+        current.quarantineObjectKey,
+        current.finalObjectKey,
+      );
 
       const uploadedAt = new Date();
       const deleteAfter = addRetention(uploadedAt);
@@ -467,6 +496,150 @@ export class UploadService {
     } catch (error) {
       throw validationException(error);
     }
+  }
+
+  private async reserveAnonymousUpload(
+    transaction: Prisma.TransactionClient,
+    clientAddress: string,
+    sizeBytes: number,
+  ): Promise<void> {
+    const observedRows = await transaction.$queryRaw<Array<{ now: Date }>>`
+      SELECT clock_timestamp() AS now
+    `;
+    const observedAt = observedRows[0]?.now;
+    if (!observedAt) throw new Error("database clock is unavailable");
+    const windowExpiresAt = new Date(
+      observedAt.getTime() + ANONYMOUS_UPLOAD_WINDOW_MILLISECONDS,
+    );
+    const subjectHash = createHmac(
+      "sha256",
+      this.storageConfig.uploadClientHashKey,
+    )
+      .update(
+        `anonymous-model-upload\0${normalizeClientAddress(clientAddress)}`,
+      )
+      .digest("hex");
+
+    const global = await this.lockAnonymousUploadLimit(
+      transaction,
+      ANONYMOUS_UPLOAD_GLOBAL_SUBJECT,
+      observedAt,
+      windowExpiresAt,
+    );
+    const subject = await this.lockAnonymousUploadLimit(
+      transaction,
+      subjectHash,
+      observedAt,
+      windowExpiresAt,
+    );
+    const currentGlobal = await this.resetExpiredUploadLimit(
+      transaction,
+      global,
+      observedAt,
+      windowExpiresAt,
+    );
+    const currentSubject = await this.resetExpiredUploadLimit(
+      transaction,
+      subject,
+      observedAt,
+      windowExpiresAt,
+    );
+
+    if (
+      currentGlobal.issued_count >= ANONYMOUS_UPLOAD_GLOBAL_MAX_ISSUED ||
+      currentGlobal.reserved_bytes + BigInt(sizeBytes) >
+        BigInt(ANONYMOUS_UPLOAD_GLOBAL_MAX_BYTES) ||
+      currentSubject.issued_count >= ANONYMOUS_UPLOAD_CLIENT_MAX_ISSUED ||
+      currentSubject.reserved_bytes + BigInt(sizeBytes) >
+        BigInt(ANONYMOUS_UPLOAD_CLIENT_MAX_BYTES)
+    ) {
+      throw new HttpException(
+        "Anonymous upload issuance limit is exhausted",
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    await transaction.anonymousUploadLimit.update({
+      where: { subjectHash: ANONYMOUS_UPLOAD_GLOBAL_SUBJECT },
+      data: {
+        issuedCount: { increment: 1 },
+        reservedBytes: { increment: BigInt(sizeBytes) },
+      },
+    });
+    await transaction.anonymousUploadLimit.update({
+      where: { subjectHash },
+      data: {
+        issuedCount: { increment: 1 },
+        reservedBytes: { increment: BigInt(sizeBytes) },
+      },
+    });
+    await transaction.$executeRaw`
+      WITH expired AS (
+        SELECT subject_hash
+        FROM anonymous_upload_limits
+        WHERE subject_hash <> ${ANONYMOUS_UPLOAD_GLOBAL_SUBJECT}
+          AND window_expires_at <= ${observedAt}
+        ORDER BY window_expires_at, subject_hash
+        FOR UPDATE SKIP LOCKED
+        LIMIT ${ANONYMOUS_UPLOAD_LIMIT_CLEANUP_BATCH}
+      )
+      DELETE FROM anonymous_upload_limits limits
+      USING expired
+      WHERE limits.subject_hash = expired.subject_hash
+    `;
+  }
+
+  private async lockAnonymousUploadLimit(
+    transaction: Prisma.TransactionClient,
+    subjectHash: string,
+    windowStartedAt: Date,
+    windowExpiresAt: Date,
+  ): Promise<AnonymousUploadLimitRow> {
+    await transaction.$executeRaw`
+      INSERT INTO anonymous_upload_limits (
+        subject_hash, window_started_at, window_expires_at,
+        issued_count, reserved_bytes, updated_at
+      ) VALUES (
+        ${subjectHash}, ${windowStartedAt}, ${windowExpiresAt}, 0, 0,
+        clock_timestamp()
+      )
+      ON CONFLICT (subject_hash) DO NOTHING
+    `;
+    const rows = await transaction.$queryRaw<AnonymousUploadLimitRow[]>`
+      SELECT subject_hash, window_started_at, window_expires_at,
+             issued_count, reserved_bytes
+      FROM anonymous_upload_limits
+      WHERE subject_hash = ${subjectHash}
+      FOR UPDATE
+    `;
+    const row = rows[0];
+    if (!row) throw new Error("anonymous upload limit row is unavailable");
+    return row;
+  }
+
+  private async resetExpiredUploadLimit(
+    transaction: Prisma.TransactionClient,
+    row: AnonymousUploadLimitRow,
+    observedAt: Date,
+    windowExpiresAt: Date,
+  ): Promise<AnonymousUploadLimitRow> {
+    if (row.window_expires_at.getTime() > observedAt.getTime()) return row;
+    await transaction.anonymousUploadLimit.update({
+      where: { subjectHash: row.subject_hash },
+      data: {
+        windowStartedAt: observedAt,
+        windowExpiresAt,
+        issuedCount: 0,
+        reservedBytes: 0,
+      },
+    });
+    return {
+      ...row,
+      window_started_at: observedAt,
+      window_expires_at: windowExpiresAt,
+      issued_count: 0,
+      reserved_bytes: 0n,
+    };
   }
 
   private async validateStoredSignature(
@@ -907,6 +1080,13 @@ function createCapabilityToken(): string {
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+function normalizeClientAddress(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("::ffff:")
+    ? normalized.slice("::ffff:".length)
+    : normalized || "unknown";
 }
 
 function bearerToken(authorization?: string): string {

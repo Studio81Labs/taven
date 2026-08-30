@@ -6,12 +6,14 @@ export interface ObjectStorageConfig {
   secretAccessKey: string;
   forcePathStyle: boolean;
   signedUrlTtlSeconds: number;
+  uploadClientHashKey: string;
 }
 
 export const OBJECT_STORAGE_CONFIG = Symbol("OBJECT_STORAGE_CONFIG");
 
 const DEFAULT_SIGNED_URL_TTL_SECONDS = 15 * 60;
 const MIN_SIGNED_URL_TTL_SECONDS = 2;
+const MIN_UPLOAD_CLIENT_HASH_KEY_LENGTH = 32;
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]?.trim();
@@ -69,6 +71,13 @@ export function readObjectStorageConfig(
     throw new Error("TAVEN_S3_BUCKET must be a valid bucket name");
   }
 
+  const uploadClientHashKey = required(env, "TAVEN_UPLOAD_CLIENT_HASH_KEY");
+  if (uploadClientHashKey.length < MIN_UPLOAD_CLIENT_HASH_KEY_LENGTH) {
+    throw new Error(
+      `TAVEN_UPLOAD_CLIENT_HASH_KEY must be at least ${MIN_UPLOAD_CLIENT_HASH_KEY_LENGTH} characters`,
+    );
+  }
+
   return {
     endpoint: parsedEndpoint.toString(),
     region: required(env, "TAVEN_S3_REGION"),
@@ -80,5 +89,6 @@ export function readObjectStorageConfig(
       "TAVEN_S3_FORCE_PATH_STYLE",
     ),
     signedUrlTtlSeconds: parseTtlSeconds(env.TAVEN_S3_SIGNED_URL_TTL_SECONDS),
+    uploadClientHashKey,
   };
 }
