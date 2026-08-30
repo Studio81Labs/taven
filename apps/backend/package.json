@@ -9,6 +9,8 @@
     "dev": "nest start --watch",
     "start": "nest start",
     "start:prod": "node dist/main.js",
+    "start:balance-payment-deadline-worker": "node dist/balance-payment-deadline-worker.js",
+    "balance-payment-deadline-worker:dev": "tsx src/balance-payment-deadline-worker.ts",
     "start:retention-worker": "node dist/retention-worker.js",
     "retention-worker:dev": "tsx src/retention-worker.ts",
     "lint": "eslint .",

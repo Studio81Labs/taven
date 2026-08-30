@@ -103,6 +103,7 @@ export type CommerceItem = {
 };
 type CommercePricing = {
   orderMinimum?: number;
+  priceListRevision?: string;
   smallSurcharge?: number;
 };
 
@@ -183,6 +184,7 @@ export class PersistenceFactory {
     includeActivePriceBinding = true,
     customerOwned = true,
     includeShipments = true,
+    paymentScheduleKind?: "FULL" | "DEPOSIT_BALANCE",
   ): Promise<PersistenceFoundation> {
     if (!customerOwned && orderOrigin !== "AUTOMATIC") {
       throw new Error("only automatic foundations may begin anonymously");
@@ -638,6 +640,9 @@ export class PersistenceFactory {
       includeActivePriceBinding,
       customerOwned,
       includeShipments,
+      paymentScheduleKind:
+        paymentScheduleKind ??
+        (orderOrigin === "INDIVIDUAL" ? "DEPOSIT_BALANCE" : "FULL"),
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -682,6 +687,7 @@ export class PersistenceFactory {
     includeActivePriceBinding: boolean;
     customerOwned: boolean;
     includeShipments: boolean;
+    paymentScheduleKind: "FULL" | "DEPOSIT_BALANCE";
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
@@ -704,6 +710,8 @@ export class PersistenceFactory {
     );
     const orderMinimum = input.pricing.orderMinimum ?? 200;
     const smallSurcharge = input.pricing.smallSurcharge ?? 100;
+    const priceListRevision =
+      input.pricing.priceListRevision ?? "legacy-v0-eur";
     const contractTotal =
       componentAmounts.reduce(
         (total, amount) =>
@@ -781,12 +789,12 @@ export class PersistenceFactory {
       }
     }
     await this.sql.query(
-      "INSERT INTO price_snapshots (id, currency, contract_total_minor, pricing_revision, input_snapshot, snapshot_hash, created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)",
+      "INSERT INTO price_snapshots (id, price_list_id, currency, contract_total_minor, pricing_revision, input_snapshot, snapshot_hash, created_at) VALUES ($1,(SELECT id FROM price_lists WHERE currency = $2 AND revision = $4),$2,$3,$4,$5::jsonb,$6,$7)",
       [
         snapshotId,
         "EUR",
         contractTotal,
-        "test-commerce-v0",
+        priceListRevision,
         JSON.stringify({}),
         this.hash(`${input.name}:snapshot`),
         t,
@@ -1050,10 +1058,31 @@ export class PersistenceFactory {
         smallSurcharge,
       ],
     );
-    await this.sql.query(
-      "INSERT INTO payment_schedules (id, price_snapshot_id, sequence, role, gross_amount_minor, fee_rate_basis_points, fee_fixed_minor, provider_config, created_at) VALUES ($1,$2,0,'FULL',$3,0,0,$4::jsonb,$5)",
-      [scheduleId, snapshotId, contractTotal, JSON.stringify({}), t],
-    );
+    if (input.paymentScheduleKind === "DEPOSIT_BALANCE") {
+      if (contractTotal < 2) {
+        throw new Error(
+          "a split payment fixture requires at least two minor units",
+        );
+      }
+      const depositAmount = Math.floor(contractTotal * 0.4);
+      await this.sql.query(
+        "INSERT INTO payment_schedules (id, price_snapshot_id, sequence, role, gross_amount_minor, fee_rate_basis_points, fee_fixed_minor, provider_config, created_at) VALUES ($1,$2,0,'DEPOSIT',$3,0,0,$5::jsonb,$6),($4,$2,1,'BALANCE',$7,0,0,$5::jsonb,$6)",
+        [
+          scheduleId,
+          snapshotId,
+          depositAmount,
+          this.id(`${input.name}:balance-payment-schedule`),
+          JSON.stringify({}),
+          t,
+          contractTotal - depositAmount,
+        ],
+      );
+    } else {
+      await this.sql.query(
+        "INSERT INTO payment_schedules (id, price_snapshot_id, sequence, role, gross_amount_minor, fee_rate_basis_points, fee_fixed_minor, provider_config, created_at) VALUES ($1,$2,0,'FULL',$3,0,0,$4::jsonb,$5)",
+        [scheduleId, snapshotId, contractTotal, JSON.stringify({}), t],
+      );
+    }
     if (input.orderOrigin === "INDIVIDUAL") {
       await this.sql.query(
         "UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1",
@@ -1097,6 +1126,16 @@ export class PersistenceFactory {
         );
         individualSlotIndex += item.quantity;
       }
+      await this.sql.query(
+        `SET CONSTRAINTS
+           "quote_requests_individual_order_reconciled",
+           "individual_order_origins_request_reconciled" IMMEDIATE`,
+      );
+      await this.sql.query(
+        `SET CONSTRAINTS
+           "quote_requests_individual_order_reconciled",
+           "individual_order_origins_request_reconciled" DEFERRED`,
+      );
     }
     if (input.finalOrderStatus === "QUOTED") {
       await this.sql.query(
@@ -1106,7 +1145,13 @@ export class PersistenceFactory {
       await this.sql.query(
         `UPDATE orders
          SET accepted_order_price_binding_id = $3,
-             accepted_terms_revision = 'terms-v1',
+             accepted_terms_revision = (
+               SELECT list.terms_revision
+               FROM order_price_bindings binding
+               JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
+               JOIN price_lists list ON list.id = snapshot.price_list_id
+               WHERE binding.id = $3 AND binding.order_id = $1
+             ),
              accepted_claim_policy_revision = 'claim-policy-v1',
              withdrawal_exception_acknowledged_at = $2,
              updated_at = $2
@@ -1142,24 +1187,28 @@ export class PersistenceFactory {
     if (recordCheckoutAcceptance) {
       await this.acceptCheckoutTerms(foundation);
     }
-    const schedule = await this.sql.query<{ gross_amount_minor: string }>(
-      'SELECT "gross_amount_minor"::text FROM "payment_schedules" WHERE "id" = $1',
+    const schedule = await this.sql.query<{
+      gross_amount_minor: string;
+      role: "FULL" | "DEPOSIT" | "BALANCE";
+    }>(
+      'SELECT "gross_amount_minor"::text, "role"::text FROM "payment_schedules" WHERE "id" = $1',
       [foundation.paymentScheduleId],
     );
-    const requestedAmountMinor = schedule.rows[0]?.gross_amount_minor;
-    if (!requestedAmountMinor) {
+    const scheduledCapture = schedule.rows[0];
+    if (!scheduledCapture) {
       throw new Error("commerce topology payment schedule is missing");
     }
     await this.sql.query(
-      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, requested_amount_minor, currency, status, checkout_capture_expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'FULL',$6,$7,'EUR','CREATED',$8,$9,$9)",
+      "INSERT INTO payments (id, order_id, price_snapshot_id, order_price_binding_id, payment_schedule_id, role, provider, requested_amount_minor, currency, status, checkout_capture_expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6::payment_role,$7,$8,'EUR','CREATED',$9,$10,$10)",
       [
         foundation.paymentId,
         foundation.orderId,
         foundation.priceSnapshotId,
         foundation.orderPriceBindingId,
         foundation.paymentScheduleId,
+        scheduledCapture.role,
         provider,
-        requestedAmountMinor,
+        scheduledCapture.gross_amount_minor,
         checkoutCaptureExpiresAt,
         paymentCreatedAt,
       ],
@@ -1179,7 +1228,13 @@ export class PersistenceFactory {
     await this.sql.query(
       `UPDATE orders
        SET accepted_order_price_binding_id = $3,
-           accepted_terms_revision = 'terms-v1',
+           accepted_terms_revision = (
+             SELECT list.terms_revision
+             FROM order_price_bindings binding
+             JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
+             JOIN price_lists list ON list.id = snapshot.price_list_id
+             WHERE binding.id = $3 AND binding.order_id = $1
+           ),
            accepted_claim_policy_revision = 'claim-policy-v1',
            withdrawal_exception_acknowledged_at = $2,
            updated_at = $2

@@ -243,6 +243,8 @@ enum PriceComponentScope {
 
 enum PaymentRole {
   FULL
+  DEPOSIT
+  BALANCE
 
   @@map("payment_role")
 }
@@ -254,6 +256,7 @@ enum OrderStatus {
   CONFIRMED
   IN_PRODUCTION
   QC_PASSED
+  AWAITING_BALANCE
   READY_TO_SHIP
   SHIPPED
   DELIVERED
@@ -282,6 +285,7 @@ enum OrderPhaseStatus {
   COMPLETED
   CANCELLED
   CANCELLED_REFUNDED
+  CANCELLED_SETTLED
 
   @@map("order_phase_status")
 }
@@ -397,12 +401,14 @@ enum RefundReason {
   CUSTOMER_CANCELLATION
   PRODUCTION_FAILURE
   LATE_CAPTURE_COMPENSATION
+  BALANCE_SETTLEMENT
 
   @@map("refund_reason")
 }
 
 enum OrderSettlementKind {
   UNAUTHORIZED_HANDOFF
+  BALANCE_SETTLEMENT
 
   @@map("order_settlement_kind")
 }
@@ -1205,6 +1211,7 @@ model QuoteRequest {
   quoteSession QuoteSession? @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
   customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
   quote        Quote?
+  legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
 
   @@index([customerId, status])
   @@map("quote_requests")
@@ -1223,6 +1230,7 @@ model Quote {
   items                 QuoteItem[]
   priceBinding          QuotePriceBinding?
   individualOrderOrigin IndividualOrderOrigin?
+  legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
   auditEvents           AuditEvent[]
 
   @@unique([id, customerId], map: "quotes_id_customer_key")
@@ -1263,6 +1271,7 @@ model QuoteItem {
 
 model PriceSnapshot {
   id                 String    @id @default(uuid()) @db.Uuid
+  priceListId        String    @map("price_list_id") @db.Uuid
   currency           String    @db.Char(3)
   contractTotalMinor BigInt    @map("contract_total_minor")
   pricingRevision    String    @map("pricing_revision") @db.VarChar(100)
@@ -1271,6 +1280,7 @@ model PriceSnapshot {
   sealedAt           DateTime? @map("sealed_at") @db.Timestamptz(3)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
+  priceList        PriceList                @relation(fields: [priceListId, currency, pricingRevision], references: [id, currency, revision], onDelete: Restrict)
   quoteBinding     QuotePriceBinding?
   orderBinding     OrderPriceBinding?
   components       PriceSnapshotComponent[]
@@ -1278,9 +1288,25 @@ model PriceSnapshot {
   shipmentPlans    ShipmentPlan[]
   payments         Payment[]
   orderSettlements OrderSettlement[]
+  legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
 
   @@unique([id, currency], map: "price_snapshots_id_currency_key")
   @@map("price_snapshots")
+}
+
+model PriceList {
+  id            String   @id @default(uuid()) @db.Uuid
+  revision      String   @db.VarChar(100)
+  termsRevision String   @map("terms_revision") @db.VarChar(100)
+  currency      String   @db.Char(3)
+  parameters    Json     @db.JsonB
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  priceSnapshots PriceSnapshot[]
+
+  @@unique([currency, revision])
+  @@unique([id, currency, revision])
+  @@map("price_lists")
 }
 
 model PriceSnapshotComponent {
@@ -1401,10 +1427,37 @@ model IndividualOrderOrigin {
   orderId String @id @map("order_id") @db.Uuid
   quoteId String @unique @map("quote_id") @db.Uuid
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  order                    Order                               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  quote                    Quote                               @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  legacyFullPaymentBinding LegacyIndividualFullPaymentBinding?
 
   @@map("individual_order_origins")
+}
+
+model LegacyIndividualFullPaymentBinding {
+  orderPriceBindingId String   @id @map("order_price_binding_id") @db.Uuid
+  orderId             String   @unique(map: "legacy_individual_full_payment_bindings_order_id_key") @map("order_id") @db.Uuid
+  priceSnapshotId     String   @unique(map: "legacy_individual_full_payment_bindings_snapshot_id_key") @map("price_snapshot_id") @db.Uuid
+  recordedAt          DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  individualOrigin  IndividualOrderOrigin @relation(fields: [orderId], references: [orderId], onDelete: Restrict, map: "legacy_individual_full_payment_bindings_origin_fkey")
+  orderPriceBinding OrderPriceBinding     @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "legacy_individual_full_payment_bindings_contract_fkey")
+
+  @@unique([orderPriceBindingId, orderId, priceSnapshotId], map: "legacy_individual_full_payment_bindings_contract_key")
+  @@map("legacy_individual_full_payment_bindings")
+}
+
+model LegacyIndividualFullQuoteBinding {
+  quoteId         String   @id @map("quote_id") @db.Uuid
+  quoteRequestId  String   @unique(map: "legacy_individual_full_quote_bindings_request_id_key") @map("quote_request_id") @db.Uuid
+  priceSnapshotId String   @unique(map: "legacy_individual_full_quote_bindings_snapshot_id_key") @map("price_snapshot_id") @db.Uuid
+  recordedAt      DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  quote         Quote         @relation(fields: [quoteId], references: [id], onDelete: Restrict, map: "legacy_individual_full_quote_bindings_quote_fkey")
+  quoteRequest  QuoteRequest  @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict, map: "legacy_individual_full_quote_bindings_request_fkey")
+  priceSnapshot PriceSnapshot @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict, map: "legacy_individual_full_quote_bindings_snapshot_fkey")
+
+  @@map("legacy_individual_full_quote_bindings")
 }
 
 model OrderPriceBinding {
@@ -1415,15 +1468,16 @@ model OrderPriceBinding {
   invalidatedAt         DateTime? @map("invalidated_at") @db.Timestamptz(3)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  order                     Order                        @relation("OrderPriceBindings", fields: [orderId], references: [id], onDelete: Restrict)
-  checkoutAcceptanceOrder   Order?                       @relation("CheckoutAcceptanceBinding")
-  priceSnapshot             PriceSnapshot                @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
-  deliveryDestination       DeliveryDestination          @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  order                     Order                               @relation("OrderPriceBindings", fields: [orderId], references: [id], onDelete: Restrict)
+  checkoutAcceptanceOrder   Order?                              @relation("CheckoutAcceptanceBinding")
+  priceSnapshot             PriceSnapshot                       @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+  deliveryDestination       DeliveryDestination                 @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
   activeForOrder            OrderActivePriceBinding?
   shipmentPlans             ShipmentPlan[]
   fulfilmentSlotAllocations ShipmentPlanFulfilmentSlot[]
   payments                  Payment[]
   orderSettlements          OrderSettlement[]
+  legacyFullPaymentBinding  LegacyIndividualFullPaymentBinding?
 
   @@unique([orderId, priceSnapshotId], map: "order_price_bindings_order_snapshot_key")
   @@unique([id, orderId, priceSnapshotId], map: "order_price_bindings_payment_contract_key")
@@ -1572,6 +1626,7 @@ model FulfilmentSlot {
   orderPhaseId          String                @map("order_phase_id") @db.Uuid
   orderItemId           String                @map("order_item_id") @db.Uuid
   quantityOrdinal       Int                   @map("quantity_ordinal")
+  packingUnitKey        String                @map("packing_unit_key") @db.VarChar(255)
   settlementAmountMinor BigInt                @map("settlement_amount_minor")
   outcome               FulfilmentSlotOutcome @default(PENDING)
   createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1585,6 +1640,7 @@ model FulfilmentSlot {
   priceComponentAllocations PriceComponentFulfilmentAllocation[]
 
   @@unique([orderItemId, orderPhaseId, quantityOrdinal])
+  @@unique([orderId, packingUnitKey])
   @@index([orderPhaseId])
   @@map("fulfilment_slots")
 }
@@ -1653,7 +1709,8 @@ model OrderSettlement {
   orderPriceBindingId          String              @map("order_price_binding_id") @db.Uuid
   priceSnapshotId              String              @map("price_snapshot_id") @db.Uuid
   paymentId                    String              @map("payment_id") @db.Uuid
-  refundTransactionId          String              @unique @map("refund_transaction_id") @db.Uuid
+  balancePaymentId             String?             @map("balance_payment_id") @db.Uuid
+  refundTransactionId          String?             @unique @map("refund_transaction_id") @db.Uuid
   kind                         OrderSettlementKind @default(UNAUTHORIZED_HANDOFF)
   currency                     String              @db.Char(3)
   contractTotalMinor           BigInt              @map("contract_total_minor")
@@ -1674,7 +1731,8 @@ model OrderSettlement {
   orderPriceBinding      OrderPriceBinding       @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "order_settlements_order_snapshot_fkey")
   priceSnapshot          PriceSnapshot           @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "order_settlements_snapshot_currency_fkey")
   payment                Payment                 @relation(fields: [paymentId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_settlements_payment_scope_fkey")
-  refundTransaction      RefundTransaction       @relation(fields: [refundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "order_settlements_refund_scope_fkey")
+  balancePayment         Payment?                @relation("BalanceSettlementPayment", fields: [balancePaymentId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_settlements_balance_payment_scope_fkey")
+  refundTransaction      RefundTransaction?      @relation(fields: [refundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "order_settlements_refund_scope_fkey")
   handoffReconciliations HandoffReconciliation[]
 
   @@unique([orderId, kind])
@@ -1817,6 +1875,7 @@ model Payment {
   captureAuthorized             Boolean       @default(true) @map("capture_authorized")
   captureCutoffAt               DateTime?     @map("capture_cutoff_at") @db.Timestamptz(3)
   checkoutCaptureExpiresAt      DateTime?     @map("checkout_capture_expires_at") @db.Timestamptz(3)
+  balanceDueAt                  DateTime?     @map("balance_due_at") @db.Timestamptz(3)
   capturedAt                    DateTime?     @map("captured_at") @db.Timestamptz(3)
   createdAt                     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1831,6 +1890,7 @@ model Payment {
   auditEvents                   AuditEvent[]
   handoffReconciliations        HandoffReconciliation[]
   orderSettlements              OrderSettlement[]
+  balanceSettlements            OrderSettlement[]             @relation("BalanceSettlementPayment")
 
   @@unique([id, orderId])
   @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
@@ -1839,6 +1899,7 @@ model Payment {
   @@index([orderId, status])
   @@index([captureCutoffAt, status])
   @@index([checkoutCaptureExpiresAt, status])
+  @@index([balanceDueAt, status])
   @@map("payments")
 }
 
