@@ -2105,7 +2105,7 @@ BEGIN
          AND phase."status" = 'QC_PASSED'
          AND phase."qc_passed_at" IS NOT NULL
         WHERE target_order."id" = NEW."order_id"
-          AND target_order."status" = 'QC_PASSED'
+          AND target_order."status" IN ('QC_PASSED', 'AWAITING_BALANCE')
           AND target_order."customer_id" IS NOT NULL
           AND target_order."accepted_order_price_binding_id" = binding."id"
           AND target_order."accepted_terms_revision" IS NOT NULL
@@ -3202,9 +3202,40 @@ BEGIN
 END;
 $$;
 
--- A timeout can close either an open balance attempt or a CREATED attempt that
--- already recorded an immutable provider-intent creation failure. The latter
--- has no provider intent to void and therefore keeps its FAILED audit state.
+-- Provider-declined attempts retain their FAILED status through timeout
+-- settlement and possible late-capture compensation, so expose their immutable
+-- evidence independently of the Payment's current status.
+CREATE FUNCTION taven_balance_payment_has_verified_provider_failure(
+    target_payment_id uuid
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "payments" balance
+        WHERE balance."id" = target_payment_id
+          AND balance."role" = 'BALANCE'
+          AND NOT balance."capture_authorized"
+          AND balance."capture_cutoff_at" IS NOT NULL
+          AND balance."provider_intent_id" IS NOT NULL
+          AND balance."provider_intent_id" ~ '[^[:space:]]'
+          AND EXISTS (
+              SELECT 1
+              FROM "payment_provider_events" event
+              WHERE event."payment_id" = balance."id"
+                AND event."refund_transaction_id" IS NULL
+                AND event."provider" = balance."provider"
+                AND event."kind" = 'PAYMENT_FAILED'
+                AND event."provider_transaction_id" = balance."provider_intent_id"
+                AND event."amount_minor" = balance."requested_amount_minor"
+                AND event."currency" = balance."currency"
+                AND event."verified_at" = balance."capture_cutoff_at"
+          )
+    );
+$$;
+
+-- A timeout can close an open balance attempt or a FAILED attempt backed by
+-- immutable provider evidence. A failed attempt has no open authorization to
+-- void and therefore keeps its FAILED audit state.
 CREATE FUNCTION taven_balance_payment_is_closed_for_timeout(
     target_payment_id uuid,
     target_cutoff_at timestamptz
@@ -3225,17 +3256,24 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
               )
               OR (
                   balance."status" = 'FAILED'
-                  AND balance."provider_intent_id" IS NULL
                   AND balance."capture_cutoff_at" <= target_cutoff_at
-                  AND EXISTS (
-                      SELECT 1
-                      FROM "payment_intent_creation_failures" failure
-                      WHERE failure."id" = balance."intent_creation_failure_result_id"
-                        AND failure."payment_id" = balance."id"
-                        AND failure."provider" = balance."provider"
-                        AND failure."outcome" = 'FAILED'
-                        AND failure."provider_intent_id" IS NULL
-                        AND failure."failed_at" = balance."capture_cutoff_at"
+                  AND (
+                      (
+                          balance."provider_intent_id" IS NULL
+                          AND EXISTS (
+                              SELECT 1
+                              FROM "payment_intent_creation_failures" failure
+                              WHERE failure."id" = balance."intent_creation_failure_result_id"
+                                AND failure."payment_id" = balance."id"
+                                AND failure."provider" = balance."provider"
+                                AND failure."outcome" = 'FAILED'
+                                AND failure."provider_intent_id" IS NULL
+                                AND failure."failed_at" = balance."capture_cutoff_at"
+                          )
+                      )
+                      OR taven_balance_payment_has_verified_provider_failure(
+                          balance."id"
+                      )
                   )
               )
           )
@@ -3651,10 +3689,17 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
          AND refund."reason" = 'LATE_CAPTURE_COMPENSATION'
          AND refund."amount_minor" = balance."requested_amount_minor"
         WHERE balance."id" = target_payment_id
+          AND balance."role" = 'BALANCE'
           AND NOT balance."capture_authorized"
-          AND balance."capture_cutoff_at" = target_cutoff_at
+          AND balance."capture_cutoff_at" <= target_cutoff_at
           AND balance."captured_amount_minor" = balance."requested_amount_minor"
-          AND balance."captured_at" >= target_cutoff_at
+          AND balance."captured_at" >= balance."capture_cutoff_at"
+          AND (
+              balance."capture_cutoff_at" = target_cutoff_at
+              OR taven_balance_payment_has_verified_provider_failure(
+                  balance."id"
+              )
+          )
     );
 $$;
 
@@ -3854,13 +3899,24 @@ BEGIN
       ON settlement."order_id" = payment."order_id"
      AND settlement."kind" = 'BALANCE_SETTLEMENT'
      AND settlement."balance_payment_id" = payment."id"
-     AND settlement."cutoff_at" = payment."capture_cutoff_at"
+     AND (
+         (
+             payment."status" = 'VOIDED'
+             AND settlement."cutoff_at" = payment."capture_cutoff_at"
+         )
+         OR (
+             payment."status" = 'FAILED'
+             AND payment."capture_cutoff_at" <= settlement."cutoff_at"
+             AND taven_balance_payment_has_verified_provider_failure(
+                 payment."id"
+             )
+         )
+     )
     JOIN "orders" target_order
       ON target_order."id" = payment."order_id"
      AND target_order."status" IN ('AWAITING_BALANCE', 'CANCELLED_SETTLED')
     WHERE payment."id" = target_payment_id
       AND payment."role" = 'BALANCE'
-      AND payment."status" = 'VOIDED'
       AND NOT payment."capture_authorized"
       AND payment."capture_cutoff_at" IS NOT NULL
       AND target_captured_at >= payment."capture_cutoff_at"

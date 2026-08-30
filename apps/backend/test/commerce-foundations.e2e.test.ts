@@ -22970,6 +22970,240 @@ describe("commerce persistence foundations", () => {
            "orders_balance_readiness_reconciled" DEFERRED`,
       );
 
+      await client.query(`SAVEPOINT "failed_balance_retry_path"`);
+      try {
+        const insertBalanceAttempt = async (paymentId: string) => {
+          const attemptCreatedAt = new Date();
+          await client.query(
+            `INSERT INTO payments
+               (id, order_id, price_snapshot_id, order_price_binding_id,
+                payment_schedule_id, role, provider, requested_amount_minor,
+                currency, status, balance_due_at, created_at, updated_at)
+             SELECT $1, order_id, price_snapshot_id, order_price_binding_id,
+                    payment_schedule_id, role, provider, requested_amount_minor,
+                    currency, 'CREATED', balance_due_at, $2, $2
+             FROM payments WHERE id = $3`,
+            [paymentId, attemptCreatedAt, balancePaymentId],
+          );
+          return attemptCreatedAt;
+        };
+
+        await expectQueryError(
+          client,
+          "concurrent_balance_attempt",
+          () =>
+            insertBalanceAttempt(
+              fixtures.id("post-qc-concurrent-balance-payment"),
+            ),
+          {
+            code: "23505",
+            constraint: "payments_one_active_attempt_per_schedule_key",
+          },
+        );
+
+        const failedAt = new Date();
+        await fixtures.persistPaymentFailureEvent(
+          balancePaymentId,
+          failedAt,
+          "post-qc-provider-declined-balance",
+        );
+        await client.query(
+          `UPDATE payments
+           SET status = 'FAILED', capture_authorized = false,
+               capture_cutoff_at = $2, updated_at = $2
+           WHERE id = $1`,
+          [balancePaymentId, failedAt],
+        );
+
+        const retryPaymentId = fixtures.id(
+          "post-qc-provider-declined-balance-retry",
+        );
+        const retryCreatedAt = await insertBalanceAttempt(retryPaymentId);
+        await client.query(
+          `UPDATE payments
+           SET status = 'PENDING', provider_intent_id = $2, updated_at = $3
+           WHERE id = $1`,
+          [retryPaymentId, `intent-${retryPaymentId}`, retryCreatedAt],
+        );
+        await client.query(
+          `SET CONSTRAINTS
+             "payment_provider_events_consumed",
+             "payments_balance_waiting_reconciled" IMMEDIATE`,
+        );
+        expect(
+          (
+            await client.query<{
+              active_attempt_count: string;
+              failed_status: string;
+              order_status: string;
+              retry_status: string;
+            }>(
+              `SELECT target_order.status::text AS order_status,
+                      failed.status::text AS failed_status,
+                      retry.status::text AS retry_status,
+                      (SELECT count(*)::text
+                       FROM payments active
+                       WHERE active.payment_schedule_id = retry.payment_schedule_id
+                         AND active.status IN ('CREATED', 'PENDING', 'CAPTURED'))
+                        AS active_attempt_count
+               FROM orders target_order
+               JOIN payments failed ON failed.id = $2
+               JOIN payments retry ON retry.id = $3
+               WHERE target_order.id = $1`,
+              [individual.orderId, balancePaymentId, retryPaymentId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            active_attempt_count: "1",
+            failed_status: "FAILED",
+            order_status: "AWAITING_BALANCE",
+            retry_status: "PENDING",
+          },
+        ]);
+      } finally {
+        await client.query(`ROLLBACK TO SAVEPOINT "failed_balance_retry_path"`);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+      }
+
+      await client.query(`SAVEPOINT "provider_failed_balance_timeout_path"`);
+      try {
+        const providerFailedAt = new Date();
+        await fixtures.persistPaymentFailureEvent(
+          balancePaymentId,
+          providerFailedAt,
+          "post-qc-provider-failed-before-deadline",
+        );
+        await client.query(
+          `UPDATE payments
+           SET status = 'FAILED', capture_authorized = false,
+               capture_cutoff_at = $2, updated_at = $2
+           WHERE id = $1`,
+          [balancePaymentId, providerFailedAt],
+        );
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+        await client.query(`SET LOCAL session_replication_role = 'replica'`);
+        await client.query(
+          `UPDATE payments
+           SET balance_due_at = clock_timestamp() - interval '1 second'
+           WHERE id = $1`,
+          [balancePaymentId],
+        );
+        await client.query(`SET LOCAL session_replication_role = 'origin'`);
+
+        const providerFailedDeadlineRun = await client.query<{
+          payment_id: string;
+          settlement_id: string;
+        }>(
+          `SELECT payment_id, settlement_id
+           FROM taven_close_expired_balance_payments(10)`,
+        );
+        expect(providerFailedDeadlineRun.rows).toEqual([
+          {
+            payment_id: balancePaymentId,
+            settlement_id: expect.any(String),
+          },
+        ]);
+        expect(
+          (
+            await client.query<{
+              order_status: string;
+              payment_status: string;
+              settlement_count: string;
+              void_commands: string;
+            }>(
+              `SELECT target_order.status::text AS order_status,
+                      balance.status::text AS payment_status,
+                      (SELECT count(*)::text FROM order_settlements settlement
+                       WHERE settlement.order_id = target_order.id
+                         AND settlement.kind = 'BALANCE_SETTLEMENT') AS settlement_count,
+                      (SELECT count(*)::text FROM outbox_messages message
+                       WHERE message.deduplication_key =
+                         'void_payment:v1:' || balance.id::text) AS void_commands
+               FROM orders target_order
+               JOIN payments balance ON balance.id = $2
+               WHERE target_order.id = $1`,
+              [individual.orderId, balancePaymentId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            order_status: "AWAITING_BALANCE",
+            payment_status: "FAILED",
+            settlement_count: "1",
+            void_commands: "0",
+          },
+        ]);
+        expect(
+          (
+            await client.query(
+              `SELECT payment_id, settlement_id
+               FROM taven_close_expired_balance_payments(10)`,
+            )
+          ).rows,
+        ).toEqual([]);
+
+        const settlementCutoff = (
+          await client.query<{ cutoff_at: Date }>(
+            `SELECT cutoff_at
+             FROM order_settlements
+             WHERE order_id = $1 AND kind = 'BALANCE_SETTLEMENT'`,
+            [individual.orderId],
+          )
+        ).rows[0]?.cutoff_at;
+        if (!settlementCutoff) {
+          throw new Error("provider-failed balance settlement has no cutoff");
+        }
+        const lateCapturedAt = new Date(settlementCutoff.getTime() + 1);
+        const lateCaptureId = `late-provider-failed-${balancePaymentId}`;
+        await fixtures.persistPaymentProviderEvent(
+          balancePaymentId,
+          "PAYMENT_CAPTURED",
+          lateCaptureId,
+          lateCapturedAt,
+        );
+        const firstLateRefund = (
+          await client.query<{ refund_id: string }>(
+            `SELECT taven_record_late_balance_capture($1,$2,$3) AS refund_id`,
+            [balancePaymentId, lateCaptureId, lateCapturedAt],
+          )
+        ).rows[0]?.refund_id;
+        const repeatedLateRefund = (
+          await client.query<{ refund_id: string }>(
+            `SELECT taven_record_late_balance_capture($1,$2,$3) AS refund_id`,
+            [balancePaymentId, lateCaptureId, lateCapturedAt],
+          )
+        ).rows[0]?.refund_id;
+        expect(firstLateRefund).toEqual(expect.any(String));
+        expect(repeatedLateRefund).toBe(firstLateRefund);
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        expect(
+          (
+            await client.query<{
+              late_refunds: string;
+              payment_status: string;
+            }>(
+              `SELECT balance.status::text AS payment_status,
+                      (SELECT count(*)::text
+                       FROM refund_transactions refund
+                       WHERE refund.payment_id = balance.id
+                         AND refund.reason = 'LATE_CAPTURE_COMPENSATION')
+                        AS late_refunds
+               FROM payments balance
+               WHERE balance.id = $1`,
+              [balancePaymentId],
+            )
+          ).rows,
+        ).toEqual([{ late_refunds: "1", payment_status: "REFUND_PENDING" }]);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+      } finally {
+        await client.query(
+          `ROLLBACK TO SAVEPOINT "provider_failed_balance_timeout_path"`,
+        );
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+      }
+
       await expectQueryError(
         client,
         "split_payment_skips_awaiting_balance",
