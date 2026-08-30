@@ -243,6 +243,8 @@ enum PriceComponentScope {
 
 enum PaymentRole {
   FULL
+  DEPOSIT
+  BALANCE
 
   @@map("payment_role")
 }
@@ -1263,6 +1265,7 @@ model QuoteItem {
 
 model PriceSnapshot {
   id                 String    @id @default(uuid()) @db.Uuid
+  priceListId        String    @map("price_list_id") @db.Uuid
   currency           String    @db.Char(3)
   contractTotalMinor BigInt    @map("contract_total_minor")
   pricingRevision    String    @map("pricing_revision") @db.VarChar(100)
@@ -1271,6 +1274,7 @@ model PriceSnapshot {
   sealedAt           DateTime? @map("sealed_at") @db.Timestamptz(3)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
+  priceList        PriceList                @relation(fields: [priceListId, currency, pricingRevision], references: [id, currency, revision], onDelete: Restrict)
   quoteBinding     QuotePriceBinding?
   orderBinding     OrderPriceBinding?
   components       PriceSnapshotComponent[]
@@ -1281,6 +1285,21 @@ model PriceSnapshot {
 
   @@unique([id, currency], map: "price_snapshots_id_currency_key")
   @@map("price_snapshots")
+}
+
+model PriceList {
+  id            String   @id @default(uuid()) @db.Uuid
+  revision      String   @db.VarChar(100)
+  termsRevision String   @map("terms_revision") @db.VarChar(100)
+  currency      String   @db.Char(3)
+  parameters    Json     @db.JsonB
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  priceSnapshots PriceSnapshot[]
+
+  @@unique([currency, revision])
+  @@unique([id, currency, revision])
+  @@map("price_lists")
 }
 
 model PriceSnapshotComponent {
@@ -1572,6 +1591,7 @@ model FulfilmentSlot {
   orderPhaseId          String                @map("order_phase_id") @db.Uuid
   orderItemId           String                @map("order_item_id") @db.Uuid
   quantityOrdinal       Int                   @map("quantity_ordinal")
+  packingUnitKey        String                @map("packing_unit_key") @db.VarChar(255)
   settlementAmountMinor BigInt                @map("settlement_amount_minor")
   outcome               FulfilmentSlotOutcome @default(PENDING)
   createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1585,6 +1605,7 @@ model FulfilmentSlot {
   priceComponentAllocations PriceComponentFulfilmentAllocation[]
 
   @@unique([orderItemId, orderPhaseId, quantityOrdinal])
+  @@unique([orderId, packingUnitKey])
   @@index([orderPhaseId])
   @@map("fulfilment_slots")
 }

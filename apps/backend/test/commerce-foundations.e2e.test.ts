@@ -1812,9 +1812,10 @@ describe("commerce persistence foundations", () => {
           );
           await client.query(
             `INSERT INTO price_snapshots
-               (id, currency, contract_total_minor, pricing_revision,
+               (id, price_list_id, currency, contract_total_minor, pricing_revision,
                 input_snapshot, snapshot_hash, created_at)
-             VALUES ($1,'EUR',0,'ownership-v0','{}'::jsonb,$2,$3)`,
+             VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                     'EUR',0,'legacy-v0-eur','{}'::jsonb,$2,$3)`,
             [
               snapshotId,
               randomUUID().replaceAll("-", "").padEnd(64, "a"),
@@ -2325,9 +2326,10 @@ describe("commerce persistence foundations", () => {
         const now = new Date();
         await client.query(
           `INSERT INTO price_snapshots
-             (id, currency, contract_total_minor, pricing_revision,
+             (id, price_list_id, currency, contract_total_minor, pricing_revision,
               input_snapshot, snapshot_hash, created_at)
-           VALUES ($1,'EUR',$2,'fee-v0','{}'::jsonb,$3,$4)`,
+           VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                   'EUR',$2,'legacy-v0-eur','{}'::jsonb,$3,$4)`,
           [
             snapshotId,
             grossAmountMinor,
@@ -2687,14 +2689,13 @@ describe("commerce persistence foundations", () => {
           const createdAt = new Date();
           await client.query(
             `INSERT INTO price_snapshots
-             (id, currency, contract_total_minor, pricing_revision,
+             (id, price_list_id, currency, contract_total_minor, pricing_revision,
               input_snapshot, snapshot_hash, created_at)
-           SELECT $1, currency, contract_total_minor, $2,
-                  input_snapshot, $3, $4
-           FROM price_snapshots WHERE id = $5`,
+           SELECT $1, price_list_id, currency, contract_total_minor,
+                  pricing_revision, input_snapshot, $2, $3
+           FROM price_snapshots WHERE id = $4`,
             [
               snapshotId,
-              `replacement-${name}`,
               randomUUID().replaceAll("-", "").repeat(2),
               createdAt,
               foundation.priceSnapshotId,
@@ -3236,9 +3237,10 @@ describe("commerce persistence foundations", () => {
         .repeat(2);
       await setup.query(
         `INSERT INTO price_snapshots
-           (id, currency, contract_total_minor, pricing_revision,
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
             input_snapshot, snapshot_hash, created_at)
-         VALUES ($1,'EUR',0,'concurrency-v0','{}'::jsonb,$2,$3)`,
+         VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                 'EUR',0,'legacy-v0-eur','{}'::jsonb,$2,$3)`,
         [replacementSnapshotId, replacementSnapshotHash, new Date()],
       );
       await setup.query(
@@ -3389,9 +3391,10 @@ describe("commerce persistence foundations", () => {
         const createdAt = new Date();
         await setup.query(
           `INSERT INTO price_snapshots
-           (id, currency, contract_total_minor, pricing_revision,
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
             input_snapshot, snapshot_hash, created_at)
-         VALUES ($1,'EUR',0,'concurrency-v0','{}'::jsonb,$2,$3)`,
+         VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                 'EUR',0,'legacy-v0-eur','{}'::jsonb,$2,$3)`,
           [
             replacementSnapshotId,
             randomUUID().replaceAll("-", "").repeat(2),
@@ -3958,9 +3961,10 @@ describe("commerce persistence foundations", () => {
       const mutableSnapshotId = fixtures.id("reference-inputs:price-snapshot");
       await client.query(
         `INSERT INTO price_snapshots
-           (id, currency, contract_total_minor, pricing_revision,
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
             input_snapshot, snapshot_hash, created_at)
-         VALUES ($1,'EUR',0,'reference-inputs-v0','{}'::jsonb,$2,$3)`,
+         VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                 'EUR',0,'legacy-v0-eur','{}'::jsonb,$2,$3)`,
         [mutableSnapshotId, "6".repeat(64), quoteCreatedAt],
       );
       await client.query(
@@ -16566,9 +16570,10 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `INSERT INTO price_snapshots
-               (id, currency, contract_total_minor, pricing_revision,
+               (id, price_list_id, currency, contract_total_minor, pricing_revision,
                 input_snapshot, snapshot_hash, created_at)
-             VALUES ($1,'EUR',0,'future-creation-evidence','{}'::jsonb,$2,
+             VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                     'EUR',0,'legacy-v0-eur','{}'::jsonb,$2,
                      clock_timestamp() + interval '60 seconds')`,
             [
               fixtures.id("future-price-snapshot-creation"),
@@ -16977,10 +16982,10 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `INSERT INTO price_snapshots
-           (id, currency, contract_total_minor, pricing_revision,
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
             input_snapshot, snapshot_hash, created_at)
-         SELECT $1, currency, contract_total_minor, 'acceptance-replacement',
-                input_snapshot, $2, clock_timestamp()
+         SELECT $1, price_list_id, currency, contract_total_minor,
+                pricing_revision, input_snapshot, $2, clock_timestamp()
          FROM price_snapshots WHERE id = $3`,
         [
           replacementSnapshotId,
@@ -19133,14 +19138,14 @@ describe("commerce persistence foundations", () => {
       const replacementBindingId = fixtures.id("cancelled-replacement-binding");
       await client.query(
         `INSERT INTO price_snapshots
-           (id, currency, contract_total_minor, pricing_revision,
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
             input_snapshot, snapshot_hash, created_at)
-         SELECT $1,currency,contract_total_minor,$2,input_snapshot,$3,
+         SELECT $1,price_list_id,currency,contract_total_minor,
+                pricing_revision,input_snapshot,$2,
                 clock_timestamp()
-         FROM price_snapshots WHERE id = $4`,
+         FROM price_snapshots WHERE id = $3`,
         [
           replacementSnapshotId,
-          "cancelled-replacement",
           randomUUID().replaceAll("-", "").repeat(2),
           cancelledDraft.priceSnapshotId,
         ],
@@ -20969,9 +20974,10 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `INSERT INTO price_snapshots
-           (id, currency, contract_total_minor, pricing_revision,
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
             input_snapshot, snapshot_hash, created_at)
-         VALUES ($1,'EUR',0,'quote-issuance-v0','{}'::jsonb,$2,$3)`,
+         VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                 'EUR',0,'legacy-v0-eur','{}'::jsonb,$2,$3)`,
         [snapshotId, "7".repeat(64), now],
       );
       await client.query(
@@ -21159,9 +21165,10 @@ describe("commerce persistence foundations", () => {
       );
       await issuing.query(
         `INSERT INTO price_snapshots
-           (id, currency, contract_total_minor, pricing_revision,
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
             input_snapshot, snapshot_hash, created_at)
-         VALUES ($1,'EUR',0,'concurrent-reference-v0','{}'::jsonb,$2,$3)`,
+         VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                 'EUR',0,'legacy-v0-eur','{}'::jsonb,$2,$3)`,
         [snapshotId, randomUUID().replaceAll("-", "").repeat(2), createdAt],
       );
       await issuing.query(
@@ -21289,9 +21296,10 @@ describe("commerce persistence foundations", () => {
           }
           await client.query(
             `INSERT INTO price_snapshots
-             (id, currency, contract_total_minor, pricing_revision,
+             (id, price_list_id, currency, contract_total_minor, pricing_revision,
               input_snapshot, snapshot_hash, created_at)
-           VALUES ($1,'EUR',$2,'offer-v0','{}'::jsonb,$3,$4)`,
+           VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                   'EUR',$2,'legacy-v0-eur','{}'::jsonb,$3,$4)`,
             [snapshotId, contractTotal, snapshotHash, issuedAt],
           );
           await client.query(
@@ -21694,9 +21702,11 @@ describe("commerce persistence foundations", () => {
         ],
       );
       await client.query(
-        `INSERT INTO price_snapshots (id, currency, contract_total_minor, pricing_revision,
+        `INSERT INTO price_snapshots (id, price_list_id, currency,
+                                     contract_total_minor, pricing_revision,
                                      input_snapshot, snapshot_hash, created_at)
-         VALUES ($1,'EUR',1,'custom-v0','{}'::jsonb,$2,$3)`,
+         VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                 'EUR',1,'legacy-v0-eur','{}'::jsonb,$2,$3)`,
         [snapshotId, "b".repeat(64), now],
       );
       await client.query(
@@ -21836,10 +21846,11 @@ describe("commerce persistence foundations", () => {
         ],
       );
       await client.query(
-        `INSERT INTO price_snapshots (id, currency, contract_total_minor,
-                                     pricing_revision, input_snapshot,
+        `INSERT INTO price_snapshots (id, price_list_id, currency,
+                                     contract_total_minor, pricing_revision, input_snapshot,
                                      snapshot_hash, created_at)
-         VALUES ($1,'EUR',0,'closed-v0','{}'::jsonb,$2,$3)`,
+         VALUES ($1,(SELECT id FROM price_lists WHERE revision = 'legacy-v0-eur'),
+                 'EUR',0,'legacy-v0-eur','{}'::jsonb,$2,$3)`,
         [closedSnapshotId, "c".repeat(64), now],
       );
       await client.query(
@@ -22281,6 +22292,360 @@ describe("commerce persistence foundations", () => {
           )
         ).rows,
       ).toEqual([{ automatic_origins: "0", payments: "0" }]);
+    });
+  });
+
+  it("enforces immutable price-list provenance and deterministic packing-unit identity", async () => {
+    await rollback(
+      "price-list-and-packing-contract",
+      async (client, fixtures) => {
+        const foundation = await fixtures.createFoundation(
+          "price-list-and-packing-contract",
+        );
+
+        await expectQueryError(
+          client,
+          "price_list_update_is_immutable",
+          () =>
+            client.query(
+              `UPDATE price_lists SET parameters = '{"changed":true}'::jsonb
+             WHERE id = (SELECT price_list_id FROM price_snapshots WHERE id = $1)`,
+              [foundation.priceSnapshotId],
+            ),
+          { code: "23514", constraint: "price_lists_immutable" },
+        );
+        await expectQueryError(
+          client,
+          "price_snapshot_requires_explicit_price_list",
+          () =>
+            client.query(
+              `INSERT INTO price_snapshots
+               (id, currency, contract_total_minor, pricing_revision,
+                input_snapshot, snapshot_hash, created_at)
+             VALUES ($1,'EUR',0,'unknown-prices-v1','{}'::jsonb,$2,clock_timestamp())`,
+              [fixtures.id("missing-price-list-snapshot"), "d".repeat(64)],
+            ),
+          { code: "23502", column: "price_list_id" },
+        );
+
+        const slot = (
+          await client.query<{ packing_unit_key: string }>(
+            `SELECT packing_unit_key FROM fulfilment_slots WHERE id = $1`,
+            [foundation.fulfilmentSlotId],
+          )
+        ).rows[0];
+        expect(slot?.packing_unit_key).toBe(
+          `${foundation.orderItemId}:single:1`,
+        );
+
+        const splitSnapshotId = fixtures.id("split-capture-snapshot");
+        const splitPriceListId = fixtures.id("split-capture-price-list");
+        await client.query(
+          `INSERT INTO price_lists
+           (id, revision, terms_revision, currency, parameters, created_at)
+         VALUES ($1,'split-capture-v1','terms-v1','EUR','{}'::jsonb,clock_timestamp())`,
+          [splitPriceListId],
+        );
+        await client.query(
+          `INSERT INTO price_snapshots
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         VALUES ($1,$2,'EUR',100,'split-capture-v1','{}'::jsonb,$3,clock_timestamp())`,
+          [
+            splitSnapshotId,
+            splitPriceListId,
+            splitSnapshotId.replaceAll("-", "").repeat(2),
+          ],
+        );
+        await client.query(
+          `INSERT INTO price_snapshot_components
+           (id, price_snapshot_id, kind, scope, amount_minor, allocation, created_at)
+         VALUES ($1,$2,'ORDER_MIN_PRINT','ORDER',100,'{}'::jsonb,clock_timestamp())`,
+          [fixtures.id("split-capture-component"), splitSnapshotId],
+        );
+        await client.query(
+          `INSERT INTO payment_schedules
+           (id, price_snapshot_id, sequence, role, gross_amount_minor,
+            fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+         VALUES ($1,$2,0,'DEPOSIT',40,0,0,'{}'::jsonb,clock_timestamp()),
+                ($3,$2,1,'BALANCE',60,0,0,'{}'::jsonb,clock_timestamp())`,
+          [
+            fixtures.id("split-capture-deposit"),
+            splitSnapshotId,
+            fixtures.id("split-capture-balance"),
+          ],
+        );
+        await client.query(
+          `SET CONSTRAINTS "price_snapshots_total_reconciled",
+           "price_snapshot_components_total_reconciled",
+           "payment_schedules_total_reconciled" IMMEDIATE`,
+        );
+        expect(
+          (
+            await client.query<{ valid: boolean }>(
+              `SELECT taven_payment_schedule_is_valid($1, 100) AS valid`,
+              [splitSnapshotId],
+            )
+          ).rows,
+        ).toEqual([{ valid: true }]);
+        await client.query(
+          `SET CONSTRAINTS "price_snapshots_total_reconciled",
+           "price_snapshot_components_total_reconciled",
+           "payment_schedules_total_reconciled" DEFERRED`,
+        );
+
+        const invalidSnapshotId = fixtures.id("incomplete-capture-snapshot");
+        const invalidPriceListId = fixtures.id("incomplete-capture-price-list");
+        await client.query(
+          `INSERT INTO price_lists
+           (id, revision, terms_revision, currency, parameters, created_at)
+         VALUES ($1,'split-capture-invalid-v1','terms-v1','EUR','{}'::jsonb,clock_timestamp())`,
+          [invalidPriceListId],
+        );
+        await client.query(
+          `INSERT INTO price_snapshots
+           (id, price_list_id, currency, contract_total_minor, pricing_revision,
+            input_snapshot, snapshot_hash, created_at)
+         VALUES ($1,$2,'EUR',100,'split-capture-invalid-v1','{}'::jsonb,$3,clock_timestamp())`,
+          [
+            invalidSnapshotId,
+            invalidPriceListId,
+            invalidSnapshotId.replaceAll("-", "").repeat(2),
+          ],
+        );
+        await client.query(
+          `INSERT INTO price_snapshot_components
+           (id, price_snapshot_id, kind, scope, amount_minor, allocation, created_at)
+         VALUES ($1,$2,'ORDER_MIN_PRINT','ORDER',100,'{}'::jsonb,clock_timestamp())`,
+          [fixtures.id("incomplete-capture-component"), invalidSnapshotId],
+        );
+        await client.query(
+          `INSERT INTO payment_schedules
+           (id, price_snapshot_id, sequence, role, gross_amount_minor,
+            fee_rate_basis_points, fee_fixed_minor, provider_config, created_at)
+         VALUES ($1,$2,0,'DEPOSIT',100,0,0,'{}'::jsonb,clock_timestamp())`,
+          [fixtures.id("incomplete-capture-deposit"), invalidSnapshotId],
+        );
+        await expectQueryError(
+          client,
+          "incomplete_split_capture_rejected",
+          () =>
+            client.query(
+              `SET CONSTRAINTS "price_snapshots_total_reconciled" IMMEDIATE`,
+            ),
+          {
+            code: "23514",
+            constraint: "price_snapshot_total_reconciliation_check",
+          },
+        );
+        await client.query(
+          `SET CONSTRAINTS "price_snapshots_total_reconciled",
+           "price_snapshot_components_total_reconciled",
+           "payment_schedules_total_reconciled" DEFERRED`,
+        );
+
+        expect(
+          (
+            await client.query<{ indexdef: string }>(
+              `SELECT indexdef FROM pg_indexes
+               WHERE schemaname = current_schema()
+                 AND indexname = 'fulfilment_slots_order_id_packing_unit_key_key'`,
+            )
+          ).rows,
+        ).toEqual([
+          {
+            indexdef: expect.stringMatching(
+              /CREATE UNIQUE INDEX .*order_id.*packing_unit_key/,
+            ),
+          },
+        ]);
+      },
+    );
+  });
+
+  it("binds deposit-plus-balance only for individual quotes and orders", async () => {
+    await rollback("split-payment-binding-policy", async (client, fixtures) => {
+      const individual = await fixtures.createFoundation(
+        "individual-split-payment",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "QUOTED",
+        undefined,
+        {},
+        "INDIVIDUAL",
+        true,
+        true,
+        true,
+        "DEPOSIT_BALANCE",
+      );
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+      expect(
+        (
+          await client.query<{
+            order_status: string;
+            quote_request_status: string;
+            schedule_roles: string[];
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    request.status::text AS quote_request_status,
+                    ARRAY(
+                      SELECT schedule.role::text
+                      FROM payment_schedules schedule
+                      WHERE schedule.price_snapshot_id = binding.price_snapshot_id
+                      ORDER BY schedule.sequence
+                    ) AS schedule_roles
+             FROM orders target_order
+             JOIN individual_order_origins origin ON origin.order_id = target_order.id
+             JOIN quotes quote ON quote.id = origin.quote_id
+             JOIN quote_requests request ON request.id = quote.quote_request_id
+             JOIN order_price_bindings binding
+               ON binding.id = target_order.accepted_order_price_binding_id
+             WHERE target_order.id = $1`,
+            [individual.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "QUOTED",
+          quote_request_status: "ACCEPTED",
+          schedule_roles: ["DEPOSIT", "BALANCE"],
+        },
+      ]);
+      await client.query("SET CONSTRAINTS ALL DEFERRED");
+
+      const productions = await createCurrentPlanAndPayment(
+        client,
+        fixtures,
+        individual,
+      );
+      await activateCurrentPlan(client, fixtures, individual, productions);
+      expect(
+        (
+          await client.query<{
+            order_status: string;
+            payment_role: string;
+            payment_status: string;
+            phase_status: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    phase.status::text AS phase_status,
+                    payment.role::text AS payment_role,
+                    payment.status::text AS payment_status
+             FROM orders target_order
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             JOIN payments payment ON payment.order_id = target_order.id
+             WHERE target_order.id = $1`,
+            [individual.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "CONFIRMED",
+          payment_role: "DEPOSIT",
+          payment_status: "CAPTURED",
+          phase_status: "ACTIVE",
+        },
+      ]);
+
+      const expiringDeposit = await fixtures.createFoundation(
+        "expiring-individual-deposit",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "QUOTED",
+        undefined,
+        {},
+        "INDIVIDUAL",
+        true,
+        true,
+        true,
+        "DEPOSIT_BALANCE",
+      );
+      await expectQueryError(
+        client,
+        "expired_individual_deposit_rejected",
+        () =>
+          fixtures.finalizePayment(
+            expiringDeposit,
+            new Date(Date.now() - 1_000),
+          ),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+
+      const unclosedDeposit = await fixtures.createFoundation(
+        "unclosed-individual-deposit",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        undefined,
+        "QUOTED",
+        undefined,
+        {},
+        "INDIVIDUAL",
+        true,
+        true,
+        true,
+        "DEPOSIT_BALANCE",
+      );
+      await createCurrentPlan(client, fixtures, unclosedDeposit);
+      await fixtures.finalizePayment(unclosedDeposit);
+      await expectQueryError(
+        client,
+        "deposit_void_without_order_closure",
+        async () => {
+          await client.query(
+            `UPDATE payments
+             SET status = 'VOIDED', capture_authorized = false,
+                 capture_cutoff_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [unclosedDeposit.paymentId],
+          );
+          await client.query(
+            `SET CONSTRAINTS
+               "payments_quoted_void_closure_reconciled" IMMEDIATE`,
+          );
+        },
+        { code: "23514", constraint: "quoted_payment_void_closure_check" },
+      );
+
+      await expectQueryError(
+        client,
+        "automatic_split_payment_rejected",
+        async () => {
+          await fixtures.createFoundation(
+            "automatic-split-payment",
+            {},
+            undefined,
+            undefined,
+            undefined,
+            1,
+            undefined,
+            "QUOTED",
+            undefined,
+            {},
+            "AUTOMATIC",
+            true,
+            true,
+            true,
+            "DEPOSIT_BALANCE",
+          );
+          await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        },
+        {
+          code: "23514",
+          constraint: "price_snapshot_total_reconciliation_check",
+        },
+      );
     });
   });
 });
