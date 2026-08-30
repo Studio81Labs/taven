@@ -132,6 +132,78 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
     END IF;
 
+    IF NEW."quote_request_id" IS NOT NULL
+       AND NEW."order_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "quote_requests" request
+           JOIN "quotes" quote ON quote."quote_request_id" = request."id"
+           JOIN "individual_order_origins" origin
+             ON origin."quote_id" = quote."id"
+           WHERE request."id" = NEW."quote_request_id"
+             AND origin."order_id" = NEW."order_id"
+           UNION ALL
+           SELECT 1
+           FROM "quote_requests" request
+           JOIN "automatic_order_origins" origin
+             ON origin."quote_session_id" = request."quote_session_id"
+           WHERE request."id" = NEW."quote_request_id"
+             AND origin."order_id" = NEW."order_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event quote request must belong to its scoped order origin'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
+    IF NEW."quote_request_id" IS NOT NULL
+       AND NEW."payment_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           JOIN "individual_order_origins" origin
+             ON origin."order_id" = payment."order_id"
+           JOIN "quotes" quote ON quote."id" = origin."quote_id"
+           WHERE quote."quote_request_id" = NEW."quote_request_id"
+             AND payment."id" = NEW."payment_id"
+           UNION ALL
+           SELECT 1
+           FROM "payments" payment
+           JOIN "automatic_order_origins" origin
+             ON origin."order_id" = payment."order_id"
+           JOIN "quote_requests" request
+             ON request."quote_session_id" = origin."quote_session_id"
+           WHERE request."id" = NEW."quote_request_id"
+             AND payment."id" = NEW."payment_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event quote request must belong to its scoped payment order origin'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
+    IF NEW."quote_request_id" IS NOT NULL
+       AND NEW."refund_transaction_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "refund_transactions" refund
+           JOIN "payments" payment ON payment."id" = refund."payment_id"
+           JOIN "individual_order_origins" origin
+             ON origin."order_id" = payment."order_id"
+           JOIN "quotes" quote ON quote."id" = origin."quote_id"
+           WHERE quote."quote_request_id" = NEW."quote_request_id"
+             AND refund."id" = NEW."refund_transaction_id"
+           UNION ALL
+           SELECT 1
+           FROM "refund_transactions" refund
+           JOIN "payments" payment ON payment."id" = refund."payment_id"
+           JOIN "automatic_order_origins" origin
+             ON origin."order_id" = payment."order_id"
+           JOIN "quote_requests" request
+             ON request."quote_session_id" = origin."quote_session_id"
+           WHERE request."id" = NEW."quote_request_id"
+             AND refund."id" = NEW."refund_transaction_id"
+       ) THEN
+        RAISE EXCEPTION 'audit event quote request must belong to its scoped refund order origin'
+            USING ERRCODE = '23514', CONSTRAINT = 'audit_event_scope_reconciliation_check';
+    END IF;
+
     IF NEW."quote_id" IS NOT NULL
        AND NEW."order_id" IS NOT NULL
        AND NOT EXISTS (

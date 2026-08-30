@@ -363,6 +363,16 @@ export class QuotesService {
         if (priceList.currency !== "CZK") {
           throw new BadRequestException("Individual v0 offers must use CZK");
         }
+        if (
+          !(await individualSplitPaymentPolicyIsValid(
+            transaction,
+            priceList.id,
+          ))
+        ) {
+          throw new BadRequestException(
+            "priceListId does not support individual split payments",
+          );
+        }
         await validateOfferItemReferences(transaction, offer.items, observedAt);
 
         const quoteId = randomUUID();
@@ -1994,6 +2004,59 @@ async function databaseNow(
   const observedAt = rows[0]?.now;
   if (!observedAt) throw new Error("database clock is unavailable");
   return observedAt;
+}
+
+async function individualSplitPaymentPolicyIsValid(
+  database: Pick<Transaction, "$queryRaw">,
+  priceListId: string,
+): Promise<boolean> {
+  const rows = await database.$queryRaw<Array<{ valid: boolean }>>`
+    SELECT
+      CASE
+        WHEN jsonb_typeof("parameters" -> 'balance_payment_days') = 'number'
+         AND ("parameters" ->> 'balance_payment_days') ~ '^[1-9][0-9]*$'
+        THEN ("parameters" ->> 'balance_payment_days')::numeric <= 36500
+        ELSE false
+      END
+      AND CASE
+        WHEN jsonb_typeof(
+          "parameters" -> 'balance_timeout_earned_component_kinds'
+        ) = 'array'
+        THEN jsonb_array_length(
+          "parameters" -> 'balance_timeout_earned_component_kinds'
+        ) > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(
+            "parameters" -> 'balance_timeout_earned_component_kinds'
+          ) AS policy_kind("value")
+          WHERE jsonb_typeof(policy_kind."value") <> 'string'
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(
+            "parameters" -> 'balance_timeout_earned_component_kinds'
+          ) AS policy_kind("kind")
+          WHERE policy_kind."kind" NOT IN (
+            'ITEM_PRODUCTION', 'ITEM_QUANTITY', 'ITEM_POSTPROCESSING',
+            'ORDER_MIN_PRINT', 'ORDER_SMALL_SURCHARGE', 'SHIPMENT',
+            'EXPRESS', 'PAYMENT_FEE'
+          )
+        )
+        AND NOT EXISTS (
+          SELECT policy_kind."kind"
+          FROM jsonb_array_elements_text(
+            "parameters" -> 'balance_timeout_earned_component_kinds'
+          ) AS policy_kind("kind")
+          GROUP BY policy_kind."kind"
+          HAVING count(*) > 1
+        )
+        ELSE false
+      END AS valid
+    FROM "price_lists"
+    WHERE "id" = ${priceListId}::uuid
+  `;
+  return rows[0]?.valid === true;
 }
 
 type CoreModule = typeof import("@taven/core", {

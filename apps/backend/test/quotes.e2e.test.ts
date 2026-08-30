@@ -622,6 +622,64 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toBe(0);
   });
 
+  it("rejects price lists without a complete split-payment policy", async () => {
+    const created = await quotes.createRequest(
+      requestInput("invalid-split-policy-create"),
+      "198.51.100.25",
+      key("invalid-split-policy-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("invalid-split-policy-review"),
+    );
+    const invalidPolicies = [
+      {
+        scope: "missing-deadline",
+        parameters: {
+          balance_timeout_earned_component_kinds: ["ITEM_PRODUCTION"],
+        },
+      },
+      {
+        scope: "missing-earned-components",
+        parameters: { balance_payment_days: 7 },
+      },
+    ];
+    for (const invalid of invalidPolicies) {
+      const priceList = await prisma.priceList.create({
+        data: {
+          revision: `quote-e2e-${invalid.scope}-${randomUUID()}`,
+          termsRevision: "terms-v1",
+          currency: "CZK",
+          parameters: invalid.parameters,
+        },
+      });
+      const response = await issueOffer(
+        created.requestId,
+        key(`invalid-split-policy-${invalid.scope}`),
+        new Date(Date.now() + 60 * 60 * 1_000),
+        defaultComponents(),
+        defaultItems(),
+        priceList.id,
+      );
+
+      expect(response.response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        message: "priceListId does not support individual split payments",
+      });
+    }
+    expect(
+      await prisma.quoteRequest.findUniqueOrThrow({
+        where: { id: created.requestId },
+        select: { status: true },
+      }),
+    ).toEqual({ status: "IN_REVIEW" });
+    expect(
+      await prisma.quote.count({
+        where: { quoteRequestId: created.requestId },
+      }),
+    ).toBe(0);
+  });
+
   it("rejects invalid model references as operator input", async () => {
     const created = await quotes.createRequest(
       requestInput("invalid-model-references"),
@@ -933,6 +991,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       quoteItemOrdinal?: number;
     }> = defaultComponents(),
     items: Array<Record<string, unknown>> = defaultItems(),
+    selectedPriceListId = priceListId,
   ) {
     return apiJson<{
       quoteId: string;
@@ -951,7 +1010,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         expiresAt:
           typeof expiresAt === "string" ? expiresAt : expiresAt.toISOString(),
         promisedDate: "2026-10-01",
-        priceListId,
+        priceListId: selectedPriceListId,
         contractTotalMinor: 110_000,
         depositMinor: 33_000,
         termsSnapshot: { revisionAcceptedByOffer: true },

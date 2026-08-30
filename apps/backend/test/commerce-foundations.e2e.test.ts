@@ -18324,12 +18324,54 @@ describe("commerce persistence foundations", () => {
           constraint: "audit_event_scope_reconciliation_check",
         },
       );
+      await expectQueryError(
+        client,
+        "audit_quote_request_order_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, quote_request_id, order_id, event_type, payload, created_at)
+             VALUES ($1,$2,$3,'request.order_scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-request-order-mismatch"),
+              foundation.quoteRequestId,
+              other.orderId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "audit_quote_request_payment_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, quote_request_id, payment_id, event_type, payload, created_at)
+             VALUES ($1,$2,$3,'request.payment_scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-request-payment-mismatch"),
+              foundation.quoteRequestId,
+              other.paymentId,
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
       await client.query(
         `INSERT INTO audit_events
-         (id, quote_id, order_id, payment_id, event_type, payload, created_at)
-         VALUES ($1,$2,$3,$4,'quote.payment_scope_consistent','{}'::jsonb,$5)`,
+         (id, quote_request_id, quote_id, order_id, payment_id,
+          event_type, payload, created_at)
+         VALUES ($1,$2,$3,$4,$5,'quote.payment_scope_consistent','{}'::jsonb,$6)`,
         [
           fixtures.id("audit-quote-payment-consistent"),
+          foundation.quoteRequestId,
           foundation.quoteId,
           foundation.orderId,
           foundation.paymentId,
@@ -18782,14 +18824,37 @@ describe("commerce persistence foundations", () => {
           constraint: "audit_event_scope_reconciliation_check",
         },
       );
+      await expectQueryError(
+        client,
+        "audit_quote_request_refund_scope",
+        () =>
+          client.query(
+            `INSERT INTO audit_events
+             (id, quote_request_id, refund_transaction_id,
+              event_type, payload, created_at)
+             VALUES ($1,$2,$3,'request.refund_scope_mismatch','{}'::jsonb,$4)`,
+            [
+              fixtures.id("audit-request-refund-mismatch"),
+              other.quoteRequestId,
+              fixtures.id("refund-first"),
+              new Date(),
+            ],
+          ),
+        {
+          code: "23514",
+          constraint: "audit_event_scope_reconciliation_check",
+        },
+      );
       await client.query(
         `INSERT INTO audit_events
-         (id, quote_id, order_id, payment_id, refund_transaction_id,
-          event_type, actor_kind, actor_id, payload, created_at)
-         VALUES ($1,$2,$3,$4,$5,'refund.scope_consistent','CUSTOMER',$6,
-                 '{}'::jsonb,$7)`,
+         (id, quote_request_id, quote_id, order_id, payment_id,
+          refund_transaction_id, event_type, actor_kind, actor_id,
+          payload, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,'refund.scope_consistent','CUSTOMER',$7,
+                 '{}'::jsonb,$8)`,
         [
           fixtures.id("audit-refund-scope-consistent"),
+          foundation.quoteRequestId,
           foundation.quoteId,
           foundation.orderId,
           foundation.paymentId,
