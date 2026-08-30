@@ -22955,7 +22955,7 @@ describe("commerce persistence foundations", () => {
         await client.query(`SET LOCAL session_replication_role = 'replica'`);
         await client.query(
           `UPDATE payments
-           SET balance_due_at = clock_timestamp() - interval '1 second'
+           SET balance_due_at = statement_timestamp() - interval '1 second'
            WHERE order_id = $1 AND role = 'BALANCE'`,
           [individual.orderId],
         );
@@ -23220,7 +23220,7 @@ describe("commerce persistence foundations", () => {
         await client.query(`SET LOCAL session_replication_role = 'replica'`);
         await client.query(
           `UPDATE payments
-           SET balance_due_at = clock_timestamp() - interval '1 second'
+           SET balance_due_at = statement_timestamp() - interval '1 second'
            WHERE order_id = $1 AND role = 'BALANCE'`,
           [individual.orderId],
         );
