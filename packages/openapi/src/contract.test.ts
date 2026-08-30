@@ -54,6 +54,10 @@ describe("OpenAPI artifact", () => {
       "printConfigRevisionId",
       "material",
     ]);
+    expect(schemas.ModelOfferItemDto?.properties?.quantity).toMatchObject({
+      type: "integer",
+      maximum: 2_147_483_647,
+    });
     expect(issueOffer.contractTotalMinor).toMatchObject({ type: "integer" });
     expect(issueOffer.depositMinor).toMatchObject({ type: "integer" });
     expect(

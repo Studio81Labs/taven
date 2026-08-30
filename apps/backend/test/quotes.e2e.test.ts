@@ -58,6 +58,18 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const replay = await createRequest(createKey, requestBody);
     expect(replay.response.status).toBe(201);
     expect(replay.body).toEqual(created.body);
+    const createIdempotency = await prisma.idempotencyRecord.findUniqueOrThrow({
+      where: {
+        namespace_idempotencyKey: {
+          namespace: "quote-request.create",
+          idempotencyKey: createKey,
+        },
+      },
+    });
+    expect(createIdempotency.responseBody).not.toHaveProperty("requestToken");
+    expect(JSON.stringify(createIdempotency.responseBody)).not.toContain(
+      created.body.requestToken,
+    );
 
     const changedReplay = await createRequest(createKey, {
       ...requestBody,
@@ -103,6 +115,40 @@ describe("QuoteRequest and tokenized individual offers", () => {
         retentionDays: 90,
         photoDeleteAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1_000),
       },
+    });
+    const legalReferencePhotoId = randomUUID();
+    const claimReferencePhotoId = randomUUID();
+    await prisma.photoAsset.createMany({
+      data: [
+        {
+          id: legalReferencePhotoId,
+          kind: "QUOTE_REFERENCE",
+          scopeKind: "QUOTE_REQUEST",
+          scopeId: created.body.requestId,
+          storageObjectKey: photoOriginalObjectKey(legalReferencePhotoId),
+          contentHash: "c".repeat(64),
+          mediaType: "image/jpeg",
+          sizeBytes: 128,
+          uploadedAt: new Date(),
+          retentionDays: 90,
+          retentionHold: "LEGAL",
+          photoDeleteAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1_000),
+        },
+        {
+          id: claimReferencePhotoId,
+          kind: "QUOTE_REFERENCE",
+          scopeKind: "QUOTE_REQUEST",
+          scopeId: created.body.requestId,
+          storageObjectKey: photoOriginalObjectKey(claimReferencePhotoId),
+          contentHash: "d".repeat(64),
+          mediaType: "image/jpeg",
+          sizeBytes: 128,
+          uploadedAt: new Date(),
+          retentionDays: 90,
+          retentionHold: "ACTIVE_CLAIM",
+          photoDeleteAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1_000),
+        },
+      ],
     });
 
     const deniedAttachment = await apiJson("storage/uploads/photos", {
@@ -179,6 +225,18 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(normalizedReplay.response.status).toBe(201);
     expect(normalizedReplay.body).toEqual(issued.body);
+    const issueIdempotency = await prisma.idempotencyRecord.findUniqueOrThrow({
+      where: {
+        namespace_idempotencyKey: {
+          namespace: "quote-request.issue-offer",
+          idempotencyKey: issueKey,
+        },
+      },
+    });
+    expect(issueIdempotency.responseBody).not.toHaveProperty("offerToken");
+    expect(JSON.stringify(issueIdempotency.responseBody)).not.toContain(
+      issued.body.offerToken,
+    );
 
     const wrongOfferToken = await apiJson(`offers/${issued.body.quoteId}`, {
       headers: bearer(randomBytes(32).toString("base64url")),
@@ -337,6 +395,18 @@ describe("QuoteRequest and tokenized individual offers", () => {
         select: { retentionHold: true },
       }),
     ).toEqual({ retentionHold: "ACTIVE_ORDER" });
+    expect(
+      await prisma.photoAsset.findUniqueOrThrow({
+        where: { id: legalReferencePhotoId },
+        select: { retentionHold: true },
+      }),
+    ).toEqual({ retentionHold: "LEGAL" });
+    expect(
+      await prisma.photoAsset.findUniqueOrThrow({
+        where: { id: claimReferencePhotoId },
+        select: { retentionHold: true },
+      }),
+    ).toEqual({ retentionHold: "ACTIVE_CLAIM" });
 
     const defaultQueue = await apiJson<Array<{ requestId: string }>>(
       "admin/quote-requests",
@@ -480,21 +550,28 @@ describe("QuoteRequest and tokenized individual offers", () => {
       `admin/quote-requests/${created.requestId}/review`,
       key("invalid-model-review"),
     );
+    const unavailableReferences = {
+      kind: "MODEL",
+      sourceModelFileId: randomUUID(),
+      modelGeometryId: randomUUID(),
+      printConfigRevisionId: randomUUID(),
+      material: "PLA",
+    };
+    const oversized = await issueOffer(
+      created.requestId,
+      key("oversized-model-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      [{ ...unavailableReferences, quantity: 2_147_483_648 }],
+    );
+    expect(oversized.response.status).toBe(400);
+
     const response = await issueOffer(
       created.requestId,
       key("invalid-model-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
       defaultComponents(),
-      [
-        {
-          kind: "MODEL",
-          sourceModelFileId: randomUUID(),
-          modelGeometryId: randomUUID(),
-          printConfigRevisionId: randomUUID(),
-          material: "PLA",
-          quantity: 1,
-        },
-      ],
+      [{ ...unavailableReferences, quantity: 1 }],
     );
     expect(response.response.status).toBe(400);
     expect(

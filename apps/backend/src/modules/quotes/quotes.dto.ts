@@ -5,6 +5,8 @@ import {
   getSchemaPath,
 } from "@nestjs/swagger";
 
+const POSTGRES_INTEGER_MAX = 2_147_483_647;
+
 export class QuoteContactDto {
   @ApiProperty({ type: String, maxLength: 200 })
   name!: string;
@@ -146,7 +148,11 @@ export class ModelOfferItemDto {
   @ApiPropertyOptional({ type: String, format: "uuid" })
   tailReferenceSliceResultId?: string;
 
-  @ApiPropertyOptional({ type: "integer", minimum: 1 })
+  @ApiPropertyOptional({
+    type: "integer",
+    minimum: 1,
+    maximum: POSTGRES_INTEGER_MAX,
+  })
   referencePartsPerPlate?: number;
 
   @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
@@ -155,7 +161,11 @@ export class ModelOfferItemDto {
   @ApiPropertyOptional({ type: String, maxLength: 100 })
   color?: string;
 
-  @ApiPropertyOptional({ type: "integer", minimum: 1 })
+  @ApiPropertyOptional({
+    type: "integer",
+    minimum: 1,
+    maximum: POSTGRES_INTEGER_MAX,
+  })
   quantity?: number;
 }
 
@@ -244,7 +254,11 @@ export class OfferIssuedDto {
   @ApiProperty({ type: String, format: "uuid" })
   quoteId!: string;
 
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: POSTGRES_INTEGER_MAX,
+  })
   version!: number;
 
   @ApiProperty({ type: String })
@@ -282,7 +296,12 @@ export class OfferPreviewItemDto {
   @ApiProperty({ type: String, format: "uuid", nullable: true })
   tailReferenceSliceResultId!: string | null;
 
-  @ApiProperty({ type: "integer", minimum: 1, nullable: true })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: POSTGRES_INTEGER_MAX,
+    nullable: true,
+  })
   referencePartsPerPlate!: number | null;
 
   @ApiProperty({ type: String, enum: ["PLA", "PETG"], nullable: true })
@@ -291,7 +310,11 @@ export class OfferPreviewItemDto {
   @ApiProperty({ type: String, maxLength: 100, nullable: true })
   color!: string | null;
 
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: POSTGRES_INTEGER_MAX,
+  })
   quantity!: number;
 }
 
@@ -349,7 +372,11 @@ export class OfferPreviewDto {
   @ApiProperty({ type: String, format: "uuid" })
   quoteId!: string;
 
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: POSTGRES_INTEGER_MAX,
+  })
   version!: number;
 
   @ApiProperty({ type: String })
@@ -384,7 +411,11 @@ export class OfferPreviewDto {
 }
 
 export class AcceptOfferDto {
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: POSTGRES_INTEGER_MAX,
+  })
   version!: number;
 
   @ApiProperty({ type: String, maxLength: 100 })

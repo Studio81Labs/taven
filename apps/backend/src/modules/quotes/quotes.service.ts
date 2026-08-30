@@ -60,6 +60,7 @@ const ANONYMOUS_QUOTE_CLIENT_MAX_ISSUED = 5;
 const ANONYMOUS_QUOTE_GLOBAL_MAX_ISSUED = 100;
 const ANONYMOUS_QUOTE_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_QUOTE_LIMIT_CLEANUP_BATCH = 100;
+const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const REQUIRED_ITEM_COMPONENTS = new Set<PriceComponentKind>([
   PriceComponentKind.ITEM_PRODUCTION,
   PriceComponentKind.ITEM_QUANTITY,
@@ -89,6 +90,10 @@ type AnonymousQuoteLimitRow = {
 };
 type ExpiringResult<T> =
   Readonly<{ kind: "ok"; value: T }> | Readonly<{ kind: "expired" }>;
+type IdempotencyResponseCodec<T> = Readonly<{
+  toStoredResponse: (response: T) => unknown;
+  fromStoredResponse: (response: Prisma.JsonValue) => T;
+}>;
 
 @Injectable()
 export class QuotesService {
@@ -121,7 +126,7 @@ export class QuotesService {
       fingerprint,
     );
 
-    return this.idempotent(
+    return this.idempotent<QuoteRequestCreatedDto>(
       "quote-request.create",
       commandKey,
       fingerprint,
@@ -197,6 +202,21 @@ export class QuotesService {
           slaDueAt: slaDueAt.toISOString(),
         } satisfies QuoteRequestCreatedDto;
       },
+      {
+        toStoredResponse: (response) => ({
+          requestId: response.requestId,
+          publicReference: response.publicReference,
+          status: response.status,
+          slaDueAt: response.slaDueAt,
+        }),
+        fromStoredResponse: (stored) => {
+          const response = stored as unknown as Omit<
+            QuoteRequestCreatedDto,
+            "requestToken"
+          >;
+          return { ...response, requestToken };
+        },
+      },
     );
   }
 
@@ -262,7 +282,7 @@ export class QuotesService {
   ): Promise<QuoteRequestStatusDto> {
     assertUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
-    return this.idempotent(
+    return this.idempotent<QuoteRequestStatusDto>(
       "quote-request.review",
       commandKey,
       fingerprintOf({ requestId }),
@@ -316,7 +336,7 @@ export class QuotesService {
     const offer = validateOffer(input);
     const fingerprint = fingerprintOf({ requestId, ...offer.fingerprint });
 
-    return this.idempotent(
+    return this.idempotent<OfferIssuedDto>(
       "quote-request.issue-offer",
       commandKey,
       fingerprint,
@@ -545,6 +565,29 @@ export class QuotesService {
           expiresAt: offer.expiresAt.toISOString(),
         } satisfies OfferIssuedDto;
       },
+      {
+        toStoredResponse: (response) => ({
+          quoteId: response.quoteId,
+          version: response.version,
+          termsRevision: response.termsRevision,
+          expiresAt: response.expiresAt,
+        }),
+        fromStoredResponse: (stored) => {
+          const response = stored as unknown as Omit<
+            OfferIssuedDto,
+            "offerToken"
+          >;
+          return {
+            ...response,
+            offerToken: capabilityToken(
+              this.capabilityKey(),
+              "quote-offer",
+              response.quoteId,
+              commandKey,
+            ),
+          };
+        },
+      },
     );
   }
 
@@ -763,6 +806,7 @@ export class QuotesService {
             scopeKind: PhotoScopeKind.QUOTE_REQUEST,
             scopeId: quote.quoteRequestId,
             deletedAt: null,
+            retentionHold: RetentionHold.NONE,
           },
           data: { retentionHold: RetentionHold.ACTIVE_ORDER },
         });
@@ -1087,6 +1131,7 @@ export class QuotesService {
     idempotencyKey: string,
     requestFingerprint: string,
     operation: (transaction: Transaction) => Promise<T>,
+    responseCodec?: IdempotencyResponseCodec<T>,
   ): Promise<T> {
     return this.prisma.$transaction(async (transaction) => {
       const lockKey = `${namespace}:${idempotencyKey}`;
@@ -1110,7 +1155,9 @@ export class QuotesService {
         ) {
           throw new ConflictException("Idempotent command is incomplete");
         }
-        return existing.responseBody as T;
+        return responseCodec
+          ? responseCodec.fromStoredResponse(existing.responseBody)
+          : (existing.responseBody as T);
       }
 
       const observedAt = await databaseNow(transaction);
@@ -1123,12 +1170,18 @@ export class QuotesService {
         },
       });
       const response = await operation(transaction);
+      const storedResponse = jsonInput(
+        responseCodec ? responseCodec.toStoredResponse(response) : response,
+      );
+      if (storedResponse === undefined) {
+        throw new Error("Idempotent response is not JSON serializable");
+      }
       await transaction.idempotencyRecord.update({
         where: { id: record.id },
         data: {
           status: IdempotencyStatus.COMPLETED,
           responseStatusCode: 200,
-          responseBody: jsonInput(response)!,
+          responseBody: storedResponse,
         },
       });
       return response;
@@ -1707,11 +1760,14 @@ function validateOfferItem(input: OfferItemDto, ordinal: number) {
   const quantity = positiveInteger(
     input.quantity ?? 1,
     `items[${ordinal}].quantity`,
+    POSTGRES_INTEGER_MAX,
   );
   const referencePartsPerPlate = input.referencePartsPerPlate;
   if (
     referencePartsPerPlate !== undefined &&
-    (!Number.isInteger(referencePartsPerPlate) || referencePartsPerPlate < 1)
+    (!Number.isSafeInteger(referencePartsPerPlate) ||
+      referencePartsPerPlate < 1 ||
+      referencePartsPerPlate > POSTGRES_INTEGER_MAX)
   ) {
     throw new BadRequestException(
       `items[${ordinal}].referencePartsPerPlate is invalid`,
@@ -1860,7 +1916,7 @@ function validateExpectedOffer(input: AcceptOfferDto) {
     throw new BadRequestException("Offer version evidence is required");
   }
   return {
-    version: positiveInteger(input.version, "version"),
+    version: positiveInteger(input.version, "version", POSTGRES_INTEGER_MAX),
     termsRevision: requiredText(input.termsRevision, "termsRevision", 100),
   };
 }
@@ -2168,8 +2224,16 @@ function optionalObject(
   return value as Record<string, unknown>;
 }
 
-function positiveInteger(value: unknown, name: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+function positiveInteger(
+  value: unknown,
+  name: string,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < 1 ||
+    (value as number) > maximum
+  ) {
     throw new BadRequestException(`${name} must be a positive safe integer`);
   }
   return value as number;
