@@ -105,7 +105,15 @@ export class QuotesService {
       this.capabilityKey(),
       clientAddress,
     );
-    const fingerprint = fingerprintOf({ request, clientSubjectHash });
+    const fingerprint = fingerprintOf({
+      request: {
+        ...request,
+        requestedDate: request.requestedDate
+          ? dateOnly(request.requestedDate)
+          : undefined,
+      },
+      clientSubjectHash,
+    });
     const requestToken = capabilityToken(
       this.capabilityKey(),
       "quote-request",

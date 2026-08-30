@@ -65,6 +65,12 @@ describe("QuoteRequest and tokenized individual offers", () => {
     });
     expect(changedReplay.response.status).toBe(409);
 
+    const changedDateReplay = await createRequest(createKey, {
+      ...requestBody,
+      requestedDate: "2026-10-02",
+    });
+    expect(changedDateReplay.response.status).toBe(409);
+
     const crossTokenRead = await apiJson(
       `quote-requests/${created.body.requestId}`,
       { headers: bearer(randomBytes(32).toString("base64url")) },
