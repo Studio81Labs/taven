@@ -6,7 +6,10 @@ import type {
   CandidateEstimateResult,
 } from "@taven/slicer-contracts" with { "resolution-mode": "import" };
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
-import { ResourceConflictError } from "../src/modules/resources/resource-errors";
+import {
+  ResourceConflictError,
+  ResourceNotFoundError,
+} from "../src/modules/resources/resource-errors";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { PersistenceFactory, testTimes } from "./support/persistence-factory";
 
@@ -24,6 +27,8 @@ let contracts: typeof import("@taven/slicer-contracts", {
 
 type CandidateFixture = {
   dispatchId: string;
+  nodeId: string;
+  inventoryId: string;
   job: CandidateEstimateJob;
   success: CandidateEstimateResult;
   failure: CandidateEstimateResult;
@@ -44,13 +49,22 @@ function resultFor(
   });
 }
 
-async function createFixture(name: string): Promise<CandidateFixture> {
+async function createFixture(
+  name: string,
+  {
+    persistDispatch = true,
+    dispatchableGeometry = false,
+  }: { persistDispatch?: boolean; dispatchableGeometry?: boolean } = {},
+): Promise<CandidateFixture> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const fixtures = new PersistenceFactory(client, `${testScope}:${name}`);
     const foundation = await fixtures.createFoundation(name);
     const bodyIds = ["body-1"];
+    const modelGeometryId = dispatchableGeometry
+      ? fixtures.id(`${name}:dispatchable-geometry`)
+      : foundation.modelGeometryId;
     const geometry = {
       sourceModelFileId: foundation.modelFileId,
       sourceContentSha256: "a".repeat(64),
@@ -60,23 +74,117 @@ async function createFixture(name: string): Promise<CandidateFixture> {
       bodyIds,
       selectionSha256: contracts.geometrySelectionSha256(bodyIds),
     };
+    if (dispatchableGeometry) {
+      await client.query(
+        `INSERT INTO model_geometries (
+           id,
+           source_model_file_id,
+           canonical_object_key,
+           geometry_hash,
+           canonicalizer_revision,
+           volume_cubic_micrometers,
+           bounds_x_micrometers,
+           bounds_y_micrometers,
+           bounds_z_micrometers,
+           triangle_count
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          modelGeometryId,
+          foundation.modelFileId,
+          `geometries/${modelGeometryId}/canonical`,
+          hash(`${name}:dispatchable-geometry`),
+          "test-canonicalizer",
+          1,
+          1,
+          1,
+          1,
+          1,
+        ],
+      );
+      const persistedGeometry = await client.query<{
+        id: string;
+        source_model_file_id: string;
+        content_hash: string;
+        canonical_object_key: string;
+        geometry_hash: string;
+      }>(
+        `SELECT geometry.id,
+                geometry.source_model_file_id,
+                source.content_hash,
+                geometry.canonical_object_key,
+                geometry.geometry_hash
+         FROM model_geometries geometry
+         JOIN model_files source ON source.id = geometry.source_model_file_id
+         WHERE geometry.id = $1`,
+        [modelGeometryId],
+      );
+      const geometryRow = persistedGeometry.rows[0];
+      if (!geometryRow) {
+        throw new Error("candidate fixture geometry was not persisted");
+      }
+      Object.assign(geometry, {
+        sourceModelFileId: geometryRow.source_model_file_id,
+        sourceContentSha256: geometryRow.content_hash,
+        modelGeometryId: geometryRow.id,
+        canonicalObjectKey: geometryRow.canonical_object_key,
+        geometrySha256: geometryRow.geometry_hash,
+      });
+    }
+    const persistedRevisions = dispatchableGeometry
+      ? await client.query<{
+          profile_digest: string;
+          calibration_digest: string;
+          config_digest: string;
+          slicer_engine: string;
+          slicer_version: string;
+        }>(
+          `SELECT profile_revision.digest AS profile_digest,
+                  calibration_revision.digest AS calibration_digest,
+                  config_revision.digest AS config_digest,
+                  profile.slicer_engine,
+                  profile.slicer_version
+           FROM machine_profiles profile
+           JOIN revision_identities profile_revision
+             ON profile_revision.id = profile.id
+           JOIN revision_identities calibration_revision
+             ON calibration_revision.id = $2
+           JOIN revision_identities config_revision
+             ON config_revision.id = $3
+           WHERE profile.id = $1`,
+          [
+            foundation.machineProfileId,
+            foundation.machineCalibrationId,
+            foundation.printConfigRevisionId,
+          ],
+        )
+      : undefined;
+    const revisions = persistedRevisions?.rows[0];
+    if (dispatchableGeometry && !revisions) {
+      throw new Error("candidate fixture revisions were not persisted");
+    }
     const inputBase = {
       geometry,
       machineId: foundation.machineId,
       machineProfile: {
         revisionId: foundation.machineProfileId,
-        contentSha256: revisionDigest(foundation.machineProfileId),
-        slicerEngine: "orca",
-        slicerVersion: "test",
+        contentSha256:
+          revisions?.profile_digest ??
+          revisionDigest(foundation.machineProfileId),
+        slicerEngine: revisions?.slicer_engine ?? "orca",
+        slicerVersion: revisions?.slicer_version ?? "test",
         productionArtifactFormat: "gcode_3mf" as const,
       },
       machineCalibration: {
         revisionId: foundation.machineCalibrationId,
-        contentSha256: revisionDigest(foundation.machineCalibrationId),
+        contentSha256:
+          revisions?.calibration_digest ??
+          revisionDigest(foundation.machineCalibrationId),
       },
       printConfig: {
         revisionId: foundation.printConfigRevisionId,
-        contentSha256: revisionDigest(foundation.printConfigRevisionId),
+        contentSha256:
+          revisions?.config_digest ??
+          revisionDigest(foundation.printConfigRevisionId),
       },
       partsPerPlate: 1,
       quantity: 1,
@@ -164,27 +272,36 @@ async function createFixture(name: string): Promise<CandidateFixture> {
       retryAfterMilliseconds: 1_000,
     });
     const dispatchId = fixtures.id(`${name}:outbox`);
-    await client.query(
-      'INSERT INTO "outbox_messages" ("id", "deduplication_key", "aggregate_type", "aggregate_id", "message_type", "schema_version", "payload", "status", "attempts", "available_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $10, $10)',
-      [
-        dispatchId,
-        contracts.slicingDispatchAttemptKey(job.idempotencyKey, job.attempt),
-        "CandidateEstimateDispatch",
-        job.jobId,
-        "slicing.candidate-estimate.requested",
-        2,
-        JSON.stringify({
-          nodeId: foundation.nodeId,
-          inventoryId: foundation.inventoryId,
-          job,
-        }),
-        "PENDING",
-        0,
-        testTimes.createdAt,
-      ],
-    );
+    if (persistDispatch) {
+      await client.query(
+        'INSERT INTO "outbox_messages" ("id", "deduplication_key", "aggregate_type", "aggregate_id", "message_type", "schema_version", "payload", "status", "attempts", "available_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $10, $10)',
+        [
+          dispatchId,
+          contracts.slicingDispatchAttemptKey(job.idempotencyKey, job.attempt),
+          "CandidateEstimateDispatch",
+          job.jobId,
+          "slicing.candidate-estimate.requested",
+          2,
+          JSON.stringify({
+            nodeId: foundation.nodeId,
+            inventoryId: foundation.inventoryId,
+            job,
+          }),
+          "PENDING",
+          0,
+          testTimes.createdAt,
+        ],
+      );
+    }
     await client.query("COMMIT");
-    return { dispatchId, job, success, failure };
+    return {
+      dispatchId,
+      nodeId: foundation.nodeId,
+      inventoryId: foundation.inventoryId,
+      job,
+      success,
+      failure,
+    };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -201,6 +318,31 @@ function ingestInput(result: CandidateEstimateResult) {
     ],
     expiresAt: testTimes.expiresAt,
   };
+}
+
+function withMachineSlicerProfile(
+  job: CandidateEstimateJob,
+  slicerEngine: string,
+  slicerVersion: string,
+): CandidateEstimateJob {
+  const input = {
+    ...job.input,
+    machineProfile: {
+      ...job.input.machineProfile,
+      slicerEngine,
+      slicerVersion,
+    },
+  };
+  const inputFingerprintSha256 = contracts.slicingInputFingerprint(
+    "candidate_estimate",
+    input,
+  );
+  return contracts.CandidateEstimateJobSchema.parse({
+    ...job,
+    input,
+    inputFingerprintSha256,
+    idempotencyKey: `slicer:v2:candidate_estimate:${job.jobId}:${inputFingerprintSha256}`,
+  });
 }
 
 async function terminalRows(dispatchId: string) {
@@ -236,6 +378,46 @@ describe("candidate estimate terminal receipts", () => {
   afterAll(async () => {
     await prisma.onModuleDestroy();
     await pool.end();
+  });
+
+  it("requires the persisted machine slicer identity before creating a dispatch", async () => {
+    const fixture = await createFixture("dispatch-slicer-identity", {
+      persistDispatch: false,
+      dispatchableGeometry: true,
+    });
+    const dispatch = (job: CandidateEstimateJob) =>
+      candidates.dispatch({
+        nodeId: fixture.nodeId,
+        inventoryId: fixture.inventoryId,
+        job,
+      });
+
+    for (const mismatch of [
+      withMachineSlicerProfile(fixture.job, "mismatched-engine", "test"),
+      withMachineSlicerProfile(fixture.job, "orca", "mismatched-version"),
+    ]) {
+      await expect(dispatch(mismatch)).rejects.toBeInstanceOf(
+        ResourceNotFoundError,
+      );
+    }
+    await expect(
+      pool.query<{ count: number }>(
+        `SELECT count(*)::int AS count
+         FROM outbox_messages
+         WHERE aggregate_id = $1`,
+        [fixture.job.jobId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    await expect(dispatch(fixture.job)).resolves.toEqual(fixture.job);
+    await expect(
+      pool.query<{ count: number }>(
+        `SELECT count(*)::int AS count
+         FROM outbox_messages
+         WHERE aggregate_id = $1`,
+        [fixture.job.jobId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
 
   it("rejects a success delivered after a terminal failure", async () => {

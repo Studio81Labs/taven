@@ -1724,6 +1724,13 @@ describe("persistence foundations", () => {
         endsAt: new Date(testTimes.capacityStart.getTime() + 240_000),
       },
     ];
+    const threePlateIntervals = [
+      ...twoPlateIntervals,
+      {
+        startsAt: new Date(testTimes.capacityStart.getTime() + 240_000),
+        endsAt: new Date(testTimes.capacityStart.getTime() + 360_000),
+      },
+    ];
 
     await inRollbackTransaction(
       "candidate-quantity-full-tail",
@@ -1731,6 +1738,7 @@ describe("persistence foundations", () => {
         const foundation = await createQuantityFoundation(
           fixtures,
           "full-tail",
+          2,
         );
         const tailSliceResultId = await createTailSlice(
           client,
@@ -1741,12 +1749,12 @@ describe("persistence foundations", () => {
         const production = await fixtures.planProduction(
           foundation,
           "full-tail",
-          twoPlateIntervals,
-          150,
-          50,
+          threePlateIntervals,
+          270,
+          90,
           5,
           0,
-          { partsPerPlate: 4, tailSliceResultId },
+          { partsPerPlate: 2, tailSliceResultId },
         );
 
         await expect(
@@ -1759,7 +1767,7 @@ describe("persistence foundations", () => {
             {
               slice_result_id: foundation.sliceResultId,
               tail_slice_result_id: tailSliceResultId,
-              parts_per_plate: 4,
+              parts_per_plate: 2,
             },
           ],
         });

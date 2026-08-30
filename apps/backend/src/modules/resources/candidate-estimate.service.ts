@@ -216,7 +216,7 @@ export class CandidateEstimateService {
         await transaction.$queryRaw`
           SELECT pg_advisory_xact_lock(
             hashtextextended(${job.idempotencyKey}, 0)
-          )
+          )::text
         `;
         const existing = await this.findDispatchForAttempt(
           transaction,
@@ -314,6 +314,8 @@ export class CandidateEstimateService {
               AND profile.nozzle_diameter_micrometers = machine.installed_nozzle_micrometers
               AND profile.material = inventory.material
               AND profile.quality = config.quality
+              AND profile.slicer_engine = ${job.input.machineProfile.slicerEngine}
+              AND profile.slicer_version = ${job.input.machineProfile.slicerVersion}
               AND geometry.source_model_file_id = ${job.input.geometry.sourceModelFileId}::uuid
               AND geometry.canonical_object_key = ${job.input.geometry.canonicalObjectKey}
               AND geometry.geometry_hash = ${job.input.geometry.geometrySha256}

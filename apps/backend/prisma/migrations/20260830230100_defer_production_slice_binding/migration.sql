@@ -96,23 +96,115 @@ ALTER TABLE "production_reservations"
 CREATE INDEX "production_reservations_occupancy_slice_result_id_idx"
     ON "production_reservations"("occupancy_slice_result_id");
 
--- Candidate occupancy validation must accept only reusable analysis rows.
-DO $$
+-- Candidate totals are derived from reusable analysis occupancies: all full
+-- plates use the primary slice and a partial final plate uses its own tail
+-- slice. The stored totals may include conservative buffers, but may never
+-- understate that canonical plan.
+CREATE OR REPLACE FUNCTION taven_validate_candidate_resource_quantities()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
 DECLARE
-    definition text;
+    primary_parts_per_plate integer;
+    primary_print_seconds numeric;
+    primary_material_milligrams numeric;
+    tail_parts_per_plate integer;
+    tail_print_seconds numeric;
+    tail_material_milligrams numeric;
+    full_plate_count integer;
+    tail_part_count integer;
+    minimum_print_seconds numeric;
+    minimum_material_milligrams numeric;
 BEGIN
-    SELECT pg_get_functiondef(
-        'taven_validate_candidate_resource_quantities()'::regprocedure
-    ) INTO definition;
-    IF position('selected_slice."kind" = ''PRODUCTION''' IN definition) = 0 THEN
-        RAISE EXCEPTION 'candidate quantity validation no longer has the expected production-slice predicate';
+    IF NEW."quantity" <= 0 OR NEW."parts_per_plate" <= 0 THEN
+        RAISE EXCEPTION 'candidate quantity and plate capacity must be positive'
+            USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
     END IF;
-    definition := replace(
-        definition,
-        'selected_slice."kind" = ''PRODUCTION''',
-        'selected_slice."kind" = ''ANALYSIS'''
-    );
-    EXECUTE definition;
+
+    SELECT
+        selected_slice."parts_per_plate",
+        selected_slice."estimated_print_seconds"::numeric,
+        selected_slice."estimated_material_milligrams"::numeric
+    INTO
+        primary_parts_per_plate,
+        primary_print_seconds,
+        primary_material_milligrams
+    FROM "slice_results" selected_slice
+    WHERE selected_slice."id" = NEW."slice_result_id"
+      AND selected_slice."kind" = 'ANALYSIS'
+      AND selected_slice."model_geometry_id" = NEW."model_geometry_id"
+      AND selected_slice."print_config_revision_id" = NEW."print_config_revision_id"
+      AND selected_slice."machine_profile_id" = NEW."machine_profile_id"
+      AND selected_slice."machine_calibration_id" = NEW."machine_calibration_id";
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'candidate primary occupancy slice is incompatible'
+            USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
+    END IF;
+
+    full_plate_count := NEW."quantity" / NEW."parts_per_plate";
+    tail_part_count := NEW."quantity" % NEW."parts_per_plate";
+
+    IF full_plate_count = 0 THEN
+        IF primary_parts_per_plate <> NEW."quantity" OR NEW."tail_slice_result_id" IS NOT NULL THEN
+            RAISE EXCEPTION 'candidate below plate capacity must use its actual occupancy as the primary slice'
+                USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
+        END IF;
+        minimum_print_seconds := primary_print_seconds;
+        minimum_material_milligrams := primary_material_milligrams;
+    ELSE
+        IF primary_parts_per_plate <> NEW."parts_per_plate" THEN
+            RAISE EXCEPTION 'candidate primary slice must match planned plate capacity'
+                USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
+        END IF;
+
+        minimum_print_seconds := primary_print_seconds * full_plate_count;
+        minimum_material_milligrams := primary_material_milligrams * full_plate_count;
+
+        IF tail_part_count = 0 THEN
+            IF NEW."tail_slice_result_id" IS NOT NULL THEN
+                RAISE EXCEPTION 'an exact-multiple candidate must not persist a tail slice'
+                    USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
+            END IF;
+        ELSE
+            IF NEW."tail_slice_result_id" IS NULL THEN
+                RAISE EXCEPTION 'a partial candidate plate requires its tail occupancy slice'
+                    USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
+            END IF;
+
+            SELECT
+                selected_slice."parts_per_plate",
+                selected_slice."estimated_print_seconds"::numeric,
+                selected_slice."estimated_material_milligrams"::numeric
+            INTO
+                tail_parts_per_plate,
+                tail_print_seconds,
+                tail_material_milligrams
+            FROM "slice_results" selected_slice
+            WHERE selected_slice."id" = NEW."tail_slice_result_id"
+              AND selected_slice."kind" = 'ANALYSIS'
+              AND selected_slice."model_geometry_id" = NEW."model_geometry_id"
+              AND selected_slice."print_config_revision_id" = NEW."print_config_revision_id"
+              AND selected_slice."machine_profile_id" = NEW."machine_profile_id"
+              AND selected_slice."machine_calibration_id" = NEW."machine_calibration_id";
+
+            IF NOT FOUND OR tail_parts_per_plate <> tail_part_count THEN
+                RAISE EXCEPTION 'candidate tail slice must match the partial plate occupancy'
+                    USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
+            END IF;
+
+            minimum_print_seconds := minimum_print_seconds + tail_print_seconds;
+            minimum_material_milligrams := minimum_material_milligrams + tail_material_milligrams;
+        END IF;
+    END IF;
+
+    IF NEW."required_material_milligrams"::numeric < minimum_material_milligrams OR
+       NEW."required_machine_seconds"::numeric < minimum_print_seconds THEN
+        RAISE EXCEPTION 'candidate aggregate quantities understate its occupancy slices'
+            USING ERRCODE = '23514', CONSTRAINT = 'candidate_resource_quantity_check';
+    END IF;
+
+    RETURN NEW;
 END;
 $$;
 
