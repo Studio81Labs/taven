@@ -1838,6 +1838,7 @@ model Payment {
   captureAuthorized             Boolean       @default(true) @map("capture_authorized")
   captureCutoffAt               DateTime?     @map("capture_cutoff_at") @db.Timestamptz(3)
   checkoutCaptureExpiresAt      DateTime?     @map("checkout_capture_expires_at") @db.Timestamptz(3)
+  balanceDueAt                  DateTime?     @map("balance_due_at") @db.Timestamptz(3)
   capturedAt                    DateTime?     @map("captured_at") @db.Timestamptz(3)
   createdAt                     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1860,6 +1861,7 @@ model Payment {
   @@index([orderId, status])
   @@index([captureCutoffAt, status])
   @@index([checkoutCaptureExpiresAt, status])
+  @@index([balanceDueAt, status])
   @@map("payments")
 }
 

@@ -20,8 +20,8 @@ CREATE TABLE "price_lists" (
 
 INSERT INTO "price_lists" ("id", "revision", "terms_revision", "currency", "parameters")
 VALUES
-    ('00000000-0000-4000-8000-000000000019', 'legacy-v0-czk', 'legacy-v0', 'CZK', '{}'::jsonb),
-    ('00000000-0000-4000-8000-000000000020', 'legacy-v0-eur', 'legacy-v0', 'EUR', '{}'::jsonb);
+    ('00000000-0000-4000-8000-000000000019', 'legacy-v0-czk', 'legacy-v0', 'CZK', '{"balance_payment_days":7}'::jsonb),
+    ('00000000-0000-4000-8000-000000000020', 'legacy-v0-eur', 'legacy-v0', 'EUR', '{"balance_payment_days":7}'::jsonb);
 
 INSERT INTO "price_lists" ("id", "revision", "terms_revision", "currency", "parameters")
 SELECT md5(snapshot."currency" || ':' || snapshot."pricing_revision")::uuid,
@@ -59,6 +59,15 @@ ALTER TABLE "price_snapshots"
 
 CREATE INDEX "price_snapshots_price_list_id_idx"
     ON "price_snapshots"("price_list_id");
+
+-- The checkout deadline is intentionally limited to the initial FULL or
+-- DEPOSIT capture.  A post-QC BALANCE capture uses its own business deadline,
+-- derived from the accepted versioned PriceList.
+ALTER TABLE "payments"
+    ADD COLUMN "balance_due_at" TIMESTAMPTZ(3);
+
+CREATE INDEX "payments_balance_due_at_status_idx"
+    ON "payments"("balance_due_at", "status");
 
 CREATE FUNCTION taven_prevent_price_list_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -768,6 +777,13 @@ DECLARE
     target_order_id uuid;
     target_payment_id uuid;
 BEGIN
+    -- BALANCE capture is a post-QC readiness transition.  It must never
+    -- recreate or reactivate the initial reservation topology.
+    IF TG_TABLE_NAME = 'payments'
+       AND (to_jsonb(NEW) ->> 'role') = 'BALANCE' THEN
+        RETURN NULL;
+    END IF;
+
     CASE TG_TABLE_NAME
         WHEN 'payments' THEN
             target_order_id := (to_jsonb(NEW) ->> 'order_id')::uuid;
@@ -928,14 +944,110 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     quoted_phase_count integer;
+    balance_qc_passed_at timestamptz;
+    balance_payment_days integer;
 BEGIN
     IF NEW."status" <> 'CREATED' THEN
         RAISE EXCEPTION 'new payments must begin created'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_initial_status_check';
     END IF;
 
+    IF NEW."role" = 'BALANCE' THEN
+        IF NOT NEW."capture_authorized"
+           OR NEW."capture_cutoff_at" IS NOT NULL
+           OR NEW."checkout_capture_expires_at" IS NOT NULL
+           OR NEW."balance_due_at" IS NULL
+           OR NEW."balance_due_at" <= clock_timestamp() THEN
+            RAISE EXCEPTION 'new balance payment requires an open post-QC business deadline'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+        END IF;
+
+        PERFORM 1
+        FROM "orders"
+        WHERE "id" = NEW."order_id"
+        FOR UPDATE;
+
+        SELECT phase."qc_passed_at",
+               CASE
+                   WHEN jsonb_typeof(list."parameters" -> 'balance_payment_days') = 'number'
+                    AND (list."parameters" ->> 'balance_payment_days') ~ '^[1-9][0-9]*$'
+                   THEN (list."parameters" ->> 'balance_payment_days')::integer
+               END
+        INTO balance_qc_passed_at, balance_payment_days
+        FROM "orders" target_order
+        JOIN "individual_order_origins" origin
+          ON origin."order_id" = target_order."id"
+        JOIN "order_active_price_bindings" active
+          ON active."order_id" = target_order."id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+         AND binding."order_id" = target_order."id"
+        JOIN "price_snapshots" snapshot
+          ON snapshot."id" = binding."price_snapshot_id"
+        JOIN "price_lists" list
+          ON list."id" = snapshot."price_list_id"
+        JOIN "payment_schedules" schedule
+          ON schedule."id" = NEW."payment_schedule_id"
+         AND schedule."price_snapshot_id" = snapshot."id"
+         AND schedule."role" = 'BALANCE'
+        JOIN "order_phases" phase
+          ON phase."order_id" = target_order."id"
+         AND phase."kind" = 'SINGLE'
+         AND phase."status" = 'QC_PASSED'
+         AND phase."qc_passed_at" IS NOT NULL
+        WHERE target_order."id" = NEW."order_id"
+          AND target_order."status" = 'QC_PASSED'
+          AND target_order."customer_id" IS NOT NULL
+          AND target_order."accepted_order_price_binding_id" = binding."id"
+          AND target_order."accepted_terms_revision" IS NOT NULL
+          AND target_order."accepted_claim_policy_revision" IS NOT NULL
+          AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
+          AND binding."id" = NEW."order_price_binding_id"
+          AND binding."price_snapshot_id" = NEW."price_snapshot_id"
+          AND binding."invalidated_at" IS NULL
+          AND snapshot."currency" = NEW."currency"
+          AND (
+              SELECT count(*)
+              FROM "order_phases" single_phase
+              WHERE single_phase."order_id" = target_order."id"
+                AND single_phase."kind" = 'SINGLE'
+          ) = 1
+          AND EXISTS (
+              SELECT 1
+              FROM "payments" deposit
+              JOIN "payment_schedules" deposit_schedule
+                ON deposit_schedule."id" = deposit."payment_schedule_id"
+               AND deposit_schedule."price_snapshot_id" = deposit."price_snapshot_id"
+               AND deposit_schedule."role" = 'DEPOSIT'
+              WHERE deposit."order_id" = target_order."id"
+                AND deposit."order_price_binding_id" = binding."id"
+                AND deposit."price_snapshot_id" = snapshot."id"
+                AND deposit."status" = 'CAPTURED'
+                AND deposit."captured_amount_minor" = deposit."requested_amount_minor"
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM "order_settlements" settlement
+              WHERE settlement."order_id" = target_order."id"
+          );
+
+        IF balance_qc_passed_at IS NULL OR balance_payment_days IS NULL THEN
+            RAISE EXCEPTION 'balance payment requires the accepted post-QC split-payment topology'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_fulfilment_topology_check';
+        END IF;
+
+        IF NEW."balance_due_at" IS DISTINCT FROM
+           balance_qc_passed_at + make_interval(days => balance_payment_days) THEN
+            RAISE EXCEPTION 'balance deadline must derive from QC and the accepted PriceList'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+        END IF;
+
+        PERFORM taven_assert_order_fulfilment_money(NEW."order_id");
+        RETURN NEW;
+    END IF;
+
     IF NOT NEW."capture_authorized"
        OR NEW."capture_cutoff_at" IS NOT NULL
+       OR NEW."balance_due_at" IS NOT NULL
        OR (NEW."role" IN ('FULL', 'DEPOSIT') AND (
            NEW."checkout_capture_expires_at" IS NULL
            OR NEW."checkout_capture_expires_at" IS DISTINCT FROM
@@ -1116,6 +1228,123 @@ BEGIN
 END;
 $$;
 
+-- A BALANCE capture completes the commercial obligation after QC.  It has a
+-- distinct deferred reconciliation because the initial FULL/DEPOSIT capture
+-- owns reservation activation and must never run a second time.
+CREATE FUNCTION taven_reconcile_balance_payment_readiness()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_payment_id uuid;
+BEGIN
+    IF TG_TABLE_NAME = 'payments' THEN
+        IF (to_jsonb(NEW) ->> 'role') <> 'BALANCE' THEN
+            RETURN NULL;
+        END IF;
+        target_order_id := (to_jsonb(NEW) ->> 'order_id')::uuid;
+        target_payment_id := (to_jsonb(NEW) ->> 'id')::uuid;
+    ELSE
+        target_order_id := (to_jsonb(NEW) ->> 'id')::uuid;
+    END IF;
+
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    -- FULL-only orders do not participate in this post-QC branch.
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "order_active_price_bindings" active
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+        JOIN "payment_schedules" schedule
+          ON schedule."price_snapshot_id" = binding."price_snapshot_id"
+         AND schedule."role" = 'BALANCE'
+        WHERE active."order_id" = target_order_id
+    ) THEN
+        RETURN NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "orders" target_order
+        JOIN "individual_order_origins" origin
+          ON origin."order_id" = target_order."id"
+        JOIN "order_phases" phase
+          ON phase."order_id" = target_order."id"
+         AND phase."kind" = 'SINGLE'
+         AND phase."status" = 'QC_PASSED'
+         AND phase."qc_passed_at" IS NOT NULL
+        JOIN "order_active_price_bindings" active
+          ON active."order_id" = target_order."id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+         AND binding."order_id" = target_order."id"
+         AND binding."invalidated_at" IS NULL
+        JOIN "payments" balance
+          ON balance."order_id" = target_order."id"
+         AND balance."order_price_binding_id" = binding."id"
+         AND balance."price_snapshot_id" = binding."price_snapshot_id"
+         AND balance."role" = 'BALANCE'
+         AND balance."status" = 'CAPTURED'
+         AND balance."captured_amount_minor" = balance."requested_amount_minor"
+         AND balance."captured_at" IS NOT NULL
+         AND balance."balance_due_at" IS NOT NULL
+         AND balance."captured_at" < balance."balance_due_at"
+         AND balance."checkout_capture_expires_at" IS NULL
+        JOIN "payment_schedules" balance_schedule
+          ON balance_schedule."id" = balance."payment_schedule_id"
+         AND balance_schedule."price_snapshot_id" = balance."price_snapshot_id"
+         AND balance_schedule."role" = 'BALANCE'
+         AND balance_schedule."gross_amount_minor" = balance."requested_amount_minor"
+        WHERE target_order."id" = target_order_id
+          AND target_order."status" = 'READY_TO_SHIP'
+          AND target_order."accepted_order_price_binding_id" = binding."id"
+          AND (target_payment_id IS NULL OR balance."id" = target_payment_id)
+          AND EXISTS (
+              SELECT 1
+              FROM "payments" deposit
+              WHERE deposit."order_id" = target_order."id"
+                AND deposit."order_price_binding_id" = binding."id"
+                AND deposit."price_snapshot_id" = binding."price_snapshot_id"
+                AND deposit."role" = 'DEPOSIT'
+                AND deposit."status" = 'CAPTURED'
+                AND deposit."captured_amount_minor" = deposit."requested_amount_minor"
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM "order_settlements" settlement
+              WHERE settlement."order_id" = target_order."id"
+          )
+    ) THEN
+        RAISE EXCEPTION 'balance capture requires atomic post-QC payment and ready-to-ship reconciliation'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_payment_readiness_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "payments_balance_readiness_reconciled"
+AFTER UPDATE OF "status" ON "payments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (
+    OLD."status" = 'PENDING'
+    AND NEW."status" = 'CAPTURED'
+    AND NEW."role" = 'BALANCE'
+)
+EXECUTE FUNCTION taven_reconcile_balance_payment_readiness();
+
+CREATE CONSTRAINT TRIGGER "orders_balance_readiness_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" = 'QC_PASSED' AND NEW."status" = 'READY_TO_SHIP')
+EXECUTE FUNCTION taven_reconcile_balance_payment_readiness();
+
 CREATE OR REPLACE FUNCTION taven_protect_payment_identity()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1182,6 +1411,21 @@ BEGIN
            OR (NEW."role" IN ('FULL', 'DEPOSIT') AND (
                NEW."checkout_capture_expires_at" IS NULL
                OR NEW."checkout_capture_expires_at" <= clock_timestamp()
+           ))
+           OR (NEW."role" = 'BALANCE' AND (
+               NEW."checkout_capture_expires_at" IS NOT NULL
+               OR NEW."balance_due_at" IS NULL
+               OR NEW."balance_due_at" <= clock_timestamp()
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM "orders" target_order
+                   WHERE target_order."id" = NEW."order_id"
+                     AND target_order."status" IN ('QC_PASSED', 'READY_TO_SHIP')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM "order_settlements" settlement
+                         WHERE settlement."order_id" = target_order."id"
+                     )
+               )
            ))) THEN
             RAISE EXCEPTION 'ordinary payment capture requires an open authorization window'
                 USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
@@ -1301,6 +1545,7 @@ BEGIN
        OR NEW."requested_amount_minor" IS DISTINCT FROM OLD."requested_amount_minor"
        OR NEW."currency" IS DISTINCT FROM OLD."currency"
        OR NEW."checkout_capture_expires_at" IS DISTINCT FROM OLD."checkout_capture_expires_at"
+       OR NEW."balance_due_at" IS DISTINCT FROM OLD."balance_due_at"
        OR NEW."created_at" IS DISTINCT FROM OLD."created_at"
        OR (
            OLD."captured_amount_minor" IS NOT NULL

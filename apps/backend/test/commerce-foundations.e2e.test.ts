@@ -22551,6 +22551,153 @@ describe("commerce persistence foundations", () => {
         },
       ]);
 
+      await advanceOrderLifecycleStep(
+        client,
+        individual.orderId,
+        "IN_PRODUCTION",
+      );
+      const qcPassedAt = new Date();
+      await advanceOrderLifecycleStep(
+        client,
+        individual.orderId,
+        "QC_PASSED",
+        qcPassedAt,
+      );
+      await client.query(
+        `UPDATE phase_reservation_sets reservation_set
+         SET status = 'SETTLED', updated_at = $2
+         FROM phase_resource_plans resource_plan,
+              order_phases phase
+         WHERE reservation_set.phase_resource_plan_id = resource_plan.id
+           AND reservation_set.node_id = resource_plan.node_id
+           AND resource_plan.order_phase_id = phase.id
+           AND phase.order_id = $1
+           AND reservation_set.status = 'HELD'`,
+        [individual.orderId, qcPassedAt],
+      );
+
+      const balance = (
+        await client.query<{
+          gross_amount_minor: string;
+          id: string;
+        }>(
+          `SELECT id, gross_amount_minor::text
+           FROM payment_schedules
+           WHERE price_snapshot_id = $1 AND role = 'BALANCE'`,
+          [individual.priceSnapshotId],
+        )
+      ).rows[0];
+      if (!balance) {
+        throw new Error(
+          "split-payment fixture is missing its balance schedule",
+        );
+      }
+      const balancePaymentId = fixtures.id("post-qc-balance-payment");
+      const balanceDueAt = new Date(
+        qcPassedAt.getTime() + 7 * 24 * 60 * 60 * 1_000,
+      );
+      const insertBalancePayment = (deadline: Date) =>
+        client.query(
+          `INSERT INTO payments
+           (id, order_id, price_snapshot_id, order_price_binding_id,
+            payment_schedule_id, role, provider, requested_amount_minor,
+            currency, status, balance_due_at, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5,'BALANCE','test',$6,'EUR','CREATED',$7,$8,$8)`,
+          [
+            balancePaymentId,
+            individual.orderId,
+            individual.priceSnapshotId,
+            individual.orderPriceBindingId,
+            balance.id,
+            balance.gross_amount_minor,
+            deadline,
+            qcPassedAt,
+          ],
+        );
+
+      await expectQueryError(
+        client,
+        "arbitrary_balance_deadline_rejected",
+        () =>
+          insertBalancePayment(
+            new Date(qcPassedAt.getTime() + 6 * 24 * 60 * 60 * 1_000),
+          ),
+        { code: "23514", constraint: "payment_capture_window_check" },
+      );
+      await insertBalancePayment(balanceDueAt);
+      await client.query(
+        `UPDATE payments
+         SET status = 'PENDING', provider_intent_id = $2, updated_at = $3
+         WHERE id = $1`,
+        [balancePaymentId, `intent-${balancePaymentId}`, qcPassedAt],
+      );
+
+      const readyAt = new Date(qcPassedAt.getTime() + 1_000);
+      await advanceOrderLifecycleStep(
+        client,
+        individual.orderId,
+        "READY_TO_SHIP",
+        readyAt,
+      );
+      const balanceCaptureId = `capture-${balancePaymentId}`;
+      await fixtures.persistPaymentProviderEvent(
+        balancePaymentId,
+        "PAYMENT_CAPTURED",
+        balanceCaptureId,
+        readyAt,
+      );
+      await client.query(
+        `UPDATE payments
+         SET status = 'CAPTURED',
+             captured_amount_minor = requested_amount_minor,
+             provider_capture_id = $2, captured_at = $3, updated_at = $3
+         WHERE id = $1`,
+        [balancePaymentId, balanceCaptureId, readyAt],
+      );
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_capture_activation_reconciled",
+           "payments_balance_readiness_reconciled",
+           "orders_balance_readiness_reconciled" IMMEDIATE`,
+      );
+      expect(
+        (
+          await client.query<{
+            balance_due_at: Date;
+            order_status: string;
+            payment_statuses: string[];
+            phase_status: string;
+          }>(
+            `SELECT target_order.status::text AS order_status,
+                    phase.status::text AS phase_status,
+                    max(payment.balance_due_at) AS balance_due_at,
+                    array_agg(payment.role::text || ':' || payment.status::text
+                              ORDER BY payment.role::text) AS payment_statuses
+             FROM orders target_order
+             JOIN order_phases phase ON phase.order_id = target_order.id
+             JOIN payments payment ON payment.order_id = target_order.id
+             WHERE target_order.id = $1
+             GROUP BY target_order.status, phase.status`,
+            [individual.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          balance_due_at: balanceDueAt,
+          order_status: "READY_TO_SHIP",
+          payment_statuses: ["BALANCE:CAPTURED", "DEPOSIT:CAPTURED"],
+          phase_status: "QC_PASSED",
+        },
+      ]);
+      await client.query(
+        `SET CONSTRAINTS
+           "payment_provider_events_consumed",
+           "payments_capture_activation_reconciled",
+           "payments_balance_readiness_reconciled",
+           "orders_balance_readiness_reconciled" DEFERRED`,
+      );
+
       const expiringDeposit = await fixtures.createFoundation(
         "expiring-individual-deposit",
         {},
