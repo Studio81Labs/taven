@@ -101,6 +101,7 @@ function input(): PrepareOrderQuoteInput {
             maxXMicrometers: 100n,
             maxYMicrometers: 100n,
             maxZMicrometers: 100n,
+            maxDimensionSumMicrometers: 300n,
             maxWeightMilligrams: 1_000n,
             maxParcelVolumeCubicMicrometers: 10_000n,
           },

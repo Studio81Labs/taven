@@ -11,6 +11,7 @@ const category = (id: string, max = 100n): ShipmentCategory => ({
   maxXMicrometers: max,
   maxYMicrometers: max,
   maxZMicrometers: max,
+  maxDimensionSumMicrometers: max * 3n,
   maxWeightMilligrams: 100_000n,
   maxParcelVolumeCubicMicrometers: 1_000_000n,
 });
@@ -110,6 +111,21 @@ describe("planShipment", () => {
     expect(
       planShipment(input([unit("a", 10n, 10n, 10n)], [limited])),
     ).toMatchObject({ status: "no_fit" });
+  });
+
+  it("enforces the aggregate dimension-sum ceiling", () => {
+    const pickup = {
+      ...category("pickup", 60n),
+      maxDimensionSumMicrometers: 120n,
+      maxParcelVolumeCubicMicrometers: 64_000n,
+    };
+    const result = planShipment(input([unit("a", 60n, 50n, 11n)], [pickup]));
+
+    expect(result).toEqual({
+      status: "no_fit",
+      packingUnitKey: "a",
+      supportedCategoryIds: ["pickup"],
+    });
   });
 
   it("enumerates unique rotations and records the selected placement", () => {

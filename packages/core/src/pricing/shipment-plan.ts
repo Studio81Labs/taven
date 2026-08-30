@@ -20,6 +20,8 @@ export interface ShipmentCategory {
   readonly maxXMicrometers: bigint;
   readonly maxYMicrometers: bigint;
   readonly maxZMicrometers: bigint;
+  /** Versioned ceiling for the sum of the parcel's three dimensions. */
+  readonly maxDimensionSumMicrometers: bigint;
   readonly maxWeightMilligrams: bigint;
   readonly maxParcelVolumeCubicMicrometers: bigint;
 }
@@ -178,6 +180,8 @@ function fits(
     box.xMicrometers <= category.maxXMicrometers &&
     box.yMicrometers <= category.maxYMicrometers &&
     box.zMicrometers <= category.maxZMicrometers &&
+    box.xMicrometers + box.yMicrometers + box.zMicrometers <=
+      category.maxDimensionSumMicrometers &&
     weight <= category.maxWeightMilligrams &&
     volumeProxy <= category.maxParcelVolumeCubicMicrometers
   );
@@ -319,6 +323,10 @@ export function planShipment(input: ShipmentPlannerInput): ShipmentPlanResult {
         zMicrometers: category.maxZMicrometers,
       },
       `category ${category.id}`,
+    );
+    positive(
+      category.maxDimensionSumMicrometers,
+      `category ${category.id}.maxDimensionSumMicrometers`,
     );
     positive(
       category.maxWeightMilligrams,
