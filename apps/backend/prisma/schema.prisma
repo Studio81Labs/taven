@@ -832,16 +832,17 @@ model SliceResult {
   slicerVersion               String    @map("slicer_version") @db.VarChar(100)
   createdAt                   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  modelGeometry          ModelGeometry               @relation(fields: [modelGeometryId], references: [id], onDelete: Restrict)
-  printConfigRevision    PrintConfigRevision         @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
-  referenceProfile       ReferenceProfile?           @relation(fields: [referenceProfileId], references: [id], onDelete: Restrict)
-  machineProfile         MachineProfile?             @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
-  machineCalibration     MachineCalibration?         @relation(fields: [machineCalibrationId], references: [id], onDelete: Restrict)
-  candidateEstimates     CandidateResourceEstimate[]
-  productionReservations ProductionReservation[]
-  quoteItems             QuoteItem[]
-  orderItems             OrderItem[]
-  productionJobs         Job[]                       @relation("JobProductionSliceResult")
+  modelGeometry             ModelGeometry               @relation(fields: [modelGeometryId], references: [id], onDelete: Restrict)
+  printConfigRevision       PrintConfigRevision         @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  referenceProfile          ReferenceProfile?           @relation(fields: [referenceProfileId], references: [id], onDelete: Restrict)
+  machineProfile            MachineProfile?             @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
+  machineCalibration        MachineCalibration?         @relation(fields: [machineCalibrationId], references: [id], onDelete: Restrict)
+  primaryCandidateEstimates CandidateResourceEstimate[] @relation("CandidatePrimarySliceResult")
+  tailCandidateEstimates    CandidateResourceEstimate[] @relation("CandidateTailSliceResult")
+  productionReservations    ProductionReservation[]
+  quoteItems                QuoteItem[]
+  orderItems                OrderItem[]
+  productionJobs            Job[]                       @relation("JobProductionSliceResult")
 
   @@unique([id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId])
   @@index([modelGeometryId])
@@ -855,7 +856,8 @@ model CandidateResourceEstimate {
   nodeId                     String   @map("node_id") @db.Uuid
   estimateKey                String   @unique @map("estimate_key") @db.VarChar(255)
   modelGeometryId            String   @map("model_geometry_id") @db.Uuid
-  sliceResultId              String   @map("slice_result_id") @db.Uuid
+  primarySliceResultId       String   @map("slice_result_id") @db.Uuid
+  tailSliceResultId          String?  @map("tail_slice_result_id") @db.Uuid
   printConfigRevisionId      String   @map("print_config_revision_id") @db.Uuid
   machineProfileId           String   @map("machine_profile_id") @db.Uuid
   machineCalibrationId       String   @map("machine_calibration_id") @db.Uuid
@@ -864,6 +866,7 @@ model CandidateResourceEstimate {
   shipmentPlanId             String   @map("shipment_plan_id") @db.Uuid
   arrangementRevisionId      String   @map("arrangement_revision_id") @db.Uuid
   quantity                   Int
+  partsPerPlate              Int      @map("parts_per_plate")
   requiredMaterialMilligrams BigInt   @map("required_material_milligrams")
   requiredMachineSeconds     BigInt   @map("required_machine_seconds")
   resourceSnapshot           Json     @map("resource_snapshot") @db.JsonB
@@ -872,7 +875,8 @@ model CandidateResourceEstimate {
 
   node                  Node                        @relation(fields: [nodeId], references: [id], onDelete: Restrict)
   modelGeometry         ModelGeometry               @relation(fields: [modelGeometryId], references: [id], onDelete: Restrict)
-  sliceResult           SliceResult                 @relation(fields: [sliceResultId, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], references: [id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], onDelete: Restrict)
+  primarySliceResult    SliceResult                 @relation("CandidatePrimarySliceResult", fields: [primarySliceResultId, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], references: [id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], onDelete: Restrict)
+  tailSliceResult       SliceResult?                @relation("CandidateTailSliceResult", fields: [tailSliceResultId, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], references: [id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], onDelete: Restrict)
   printConfigRevision   PrintConfigRevision         @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
   machineProfile        MachineProfile              @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
   machineCalibration    MachineCalibration          @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
@@ -885,7 +889,8 @@ model CandidateResourceEstimate {
   @@unique([id, nodeId])
   @@index([nodeId, expiresAt])
   @@index([modelGeometryId])
-  @@index([sliceResultId])
+  @@index([primarySliceResultId])
+  @@index([tailSliceResultId])
   @@index([machineId, inventoryId])
   @@map("candidate_resource_estimates")
 }

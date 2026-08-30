@@ -47,6 +47,7 @@ export type PersistenceFoundation = {
   fulfilmentSlotModelGeometryIds: string[];
   fulfilmentSlotSliceResultIds: string[];
   fulfilmentSlotPrintConfigRevisionIds: string[];
+  fulfilmentSlotPartsPerPlate: number[];
   fulfilmentSlotQuantities: number[];
   paymentId: string;
 };
@@ -86,6 +87,10 @@ export type SliceMetrics = {
   partsPerPlate: number;
   estimatedPrintSeconds: number;
   estimatedMaterialMilligrams: number;
+};
+export type CandidateOccupancyPlan = {
+  partsPerPlate?: number;
+  tailSliceResultId?: string | null;
 };
 export type CommerceItem = {
   quantity?: number;
@@ -260,6 +265,7 @@ export class PersistenceFactory {
     const fulfilmentSlotModelGeometryIds: string[] = [];
     const fulfilmentSlotSliceResultIds: string[] = [];
     const fulfilmentSlotPrintConfigRevisionIds: string[] = [];
+    const fulfilmentSlotPartsPerPlate: number[] = [];
     const fulfilmentSlotQuantities: number[] = [];
     for (const [itemIndex, item] of resolvedItems.entries()) {
       for (
@@ -276,6 +282,7 @@ export class PersistenceFactory {
         fulfilmentSlotPrintConfigRevisionIds.push(
           printConfigRevisionIds[itemIndex]!,
         );
+        fulfilmentSlotPartsPerPlate.push(item.sliceMetrics.partsPerPlate);
         fulfilmentSlotQuantities.push(1);
       }
     }
@@ -546,6 +553,7 @@ export class PersistenceFactory {
       fulfilmentSlotModelGeometryIds,
       fulfilmentSlotSliceResultIds,
       fulfilmentSlotPrintConfigRevisionIds,
+      fulfilmentSlotPartsPerPlate,
       fulfilmentSlotQuantities,
       paymentId,
     };
@@ -1393,6 +1401,7 @@ export class PersistenceFactory {
     requiredMaterialMilligrams = 60,
     quantity = 1,
     topologyIndex = 0,
+    occupancyPlan: CandidateOccupancyPlan = {},
   ): Promise<ProductionReservationFixture> {
     const candidateId = this.id(`${name}:candidate`);
     const capacityIntervals = Array.isArray(intervalOrIntervals)
@@ -1417,9 +1426,17 @@ export class PersistenceFactory {
     if (!shipmentPlanId || !fulfilmentSlotId) {
       throw new Error(`commerce topology slot ${topologyIndex} is missing`);
     }
+    const partsPerPlate =
+      occupancyPlan.partsPerPlate ??
+      foundation.fulfilmentSlotPartsPerPlate[topologyIndex];
+    if (!partsPerPlate) {
+      throw new Error(
+        `commerce topology slot ${topologyIndex} has no plate capacity`,
+      );
+    }
 
     await this.sql.query(
-      'INSERT INTO "candidate_resource_estimates" ("id", "node_id", "estimate_key", "model_geometry_id", "slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "machine_id", "inventory_id", "shipment_plan_id", "arrangement_revision_id", "quantity", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18)',
+      'INSERT INTO "candidate_resource_estimates" ("id", "node_id", "estimate_key", "model_geometry_id", "slice_result_id", "tail_slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "machine_id", "inventory_id", "shipment_plan_id", "arrangement_revision_id", "quantity", "parts_per_plate", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, $20)',
       [
         candidateId,
         foundation.nodeId,
@@ -1428,6 +1445,7 @@ export class PersistenceFactory {
           foundation.modelGeometryId,
         foundation.fulfilmentSlotSliceResultIds[topologyIndex] ??
           foundation.sliceResultId,
+        occupancyPlan.tailSliceResultId ?? null,
         foundation.fulfilmentSlotPrintConfigRevisionIds[topologyIndex] ??
           foundation.printConfigRevisionId,
         foundation.machineProfileId,
@@ -1437,6 +1455,7 @@ export class PersistenceFactory {
         shipmentPlanId,
         this.id(`${name}:future-arrangement-revision`),
         quantity,
+        partsPerPlate,
         requiredMaterialMilligrams,
         requiredMachineSeconds,
         JSON.stringify({}),

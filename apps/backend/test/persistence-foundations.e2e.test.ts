@@ -503,6 +503,9 @@ async function createSiblingMachineFoundation(
     fulfilmentSlotSliceResultIds: foundation.fulfilmentSlotSliceResultIds.map(
       () => sliceResultId,
     ),
+    fulfilmentSlotPartsPerPlate: foundation.fulfilmentSlotPartsPerPlate.map(
+      () => 1,
+    ),
     fulfilmentSlotPrintConfigRevisionIds:
       foundation.fulfilmentSlotPrintConfigRevisionIds.map(
         () => printConfigRevisionId,
@@ -1614,16 +1617,50 @@ describe("persistence foundations", () => {
     );
   });
 
-  it("prevents candidate quantities from understating the selected slice", async () => {
+  it("persists canonical candidate occupancies without understating resources", async () => {
     const createQuantityFoundation = (
       fixtures: PersistenceFactory,
       name: string,
+      partsPerPlate = 4,
+      estimatedPrintSeconds = 120,
+      estimatedMaterialMilligrams = 40,
     ) =>
       fixtures.createFoundation(name, {}, undefined, undefined, {
-        partsPerPlate: 4,
-        estimatedPrintSeconds: 120,
-        estimatedMaterialMilligrams: 40,
+        partsPerPlate,
+        estimatedPrintSeconds,
+        estimatedMaterialMilligrams,
       });
+    const createTailSlice = async (
+      client: PoolClient,
+      fixtures: PersistenceFactory,
+      foundation: PersistenceFoundation,
+      name: string,
+      partsPerPlate = 1,
+      estimatedPrintSeconds = 30,
+      estimatedMaterialMilligrams = 10,
+    ) => {
+      const sliceResultId = fixtures.id(`${name}:tail-slice`);
+      await client.query(
+        'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+        [
+          sliceResultId,
+          "PRODUCTION",
+          `tail-${fixtures.id(`${name}:cache-key`)}`,
+          foundation.modelGeometryId,
+          foundation.printConfigRevisionId,
+          foundation.machineProfileId,
+          foundation.machineCalibrationId,
+          partsPerPlate,
+          `slices/${fixtures.id(`${name}:artifact-key`)}`,
+          "7".repeat(64),
+          estimatedPrintSeconds,
+          estimatedMaterialMilligrams,
+          "orca",
+          "test",
+        ],
+      );
+      return sliceResultId;
+    };
     const twoPlateIntervals = [
       {
         startsAt: testTimes.capacityStart,
@@ -1636,18 +1673,43 @@ describe("persistence foundations", () => {
     ];
 
     await inRollbackTransaction(
-      "candidate-quantity-exact",
-      async (_client, fixtures) => {
-        const foundation = await createQuantityFoundation(fixtures, "exact");
+      "candidate-quantity-full-tail",
+      async (client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "full-tail",
+        );
+        const tailSliceResultId = await createTailSlice(
+          client,
+          fixtures,
+          foundation,
+          "full-tail",
+        );
         const production = await fixtures.planProduction(
           foundation,
-          "exact",
+          "full-tail",
           twoPlateIntervals,
-          240,
-          80,
+          150,
+          50,
           5,
+          0,
+          { partsPerPlate: 4, tailSliceResultId },
         );
 
+        await expect(
+          client.query(
+            'SELECT "slice_result_id", "tail_slice_result_id", "parts_per_plate" FROM "candidate_resource_estimates" WHERE "id" = $1',
+            [production.candidateResourceEstimateId],
+          ),
+        ).resolves.toMatchObject({
+          rows: [
+            {
+              slice_result_id: foundation.sliceResultId,
+              tail_slice_result_id: tailSliceResultId,
+              parts_per_plate: 4,
+            },
+          ],
+        });
         await expect(
           fixtures.createResourcePlan(foundation, [production]),
         ).resolves.toBeUndefined();
@@ -1655,9 +1717,15 @@ describe("persistence foundations", () => {
     );
     await inRollbackTransaction(
       "candidate-quantity-time-understatement",
-      async (_client, fixtures) => {
+      async (client, fixtures) => {
         const foundation = await createQuantityFoundation(
           fixtures,
+          "time-understatement",
+        );
+        const tailSliceResultId = await createTailSlice(
+          client,
+          fixtures,
+          foundation,
           "time-understatement",
         );
 
@@ -1666,9 +1734,11 @@ describe("persistence foundations", () => {
             foundation,
             "time-understatement",
             twoPlateIntervals,
-            239,
-            80,
+            149,
+            50,
             5,
+            0,
+            { partsPerPlate: 4, tailSliceResultId },
           ),
         ).rejects.toMatchObject({
           code: "23514",
@@ -1678,9 +1748,15 @@ describe("persistence foundations", () => {
     );
     await inRollbackTransaction(
       "candidate-quantity-material-understatement",
-      async (_client, fixtures) => {
+      async (client, fixtures) => {
         const foundation = await createQuantityFoundation(
           fixtures,
+          "material-understatement",
+        );
+        const tailSliceResultId = await createTailSlice(
+          client,
+          fixtures,
+          foundation,
           "material-understatement",
         );
 
@@ -1689,8 +1765,33 @@ describe("persistence foundations", () => {
             foundation,
             "material-understatement",
             twoPlateIntervals,
-            240,
-            79,
+            150,
+            49,
+            5,
+            0,
+            { partsPerPlate: 4, tailSliceResultId },
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_quantity_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-missing-tail",
+      async (_client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "missing-tail",
+        );
+
+        await expect(
+          fixtures.planProduction(
+            foundation,
+            "missing-tail",
+            twoPlateIntervals,
+            150,
+            50,
             5,
           ),
         ).rejects.toMatchObject({
@@ -1700,31 +1801,171 @@ describe("persistence foundations", () => {
       },
     );
     await inRollbackTransaction(
-      "candidate-quantity-conservative-overestimate",
+      "candidate-quantity-wrong-tail",
+      async (client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "wrong-tail",
+        );
+        const tailSliceResultId = await createTailSlice(
+          client,
+          fixtures,
+          foundation,
+          "wrong-tail",
+          2,
+        );
+
+        await expect(
+          fixtures.planProduction(
+            foundation,
+            "wrong-tail",
+            twoPlateIntervals,
+            150,
+            50,
+            5,
+            0,
+            { partsPerPlate: 4, tailSliceResultId },
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_quantity_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-exact-capacity",
+      async (client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "exact-capacity",
+        );
+        const production = await fixtures.planProduction(
+          foundation,
+          "exact-capacity",
+          twoPlateIntervals[0]!,
+          120,
+          40,
+          4,
+        );
+
+        await expect(
+          client.query(
+            'SELECT "slice_result_id", "tail_slice_result_id", "parts_per_plate" FROM "candidate_resource_estimates" WHERE "id" = $1',
+            [production.candidateResourceEstimateId],
+          ),
+        ).resolves.toMatchObject({
+          rows: [
+            {
+              slice_result_id: foundation.sliceResultId,
+              tail_slice_result_id: null,
+              parts_per_plate: 4,
+            },
+          ],
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-exact-multiple",
       async (_client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "exact-multiple",
+        );
+
+        await expect(
+          fixtures.planProduction(
+            foundation,
+            "exact-multiple",
+            twoPlateIntervals,
+            240,
+            80,
+            8,
+          ),
+        ).resolves.toBeDefined();
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-unexpected-tail",
+      async (client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "unexpected-tail",
+        );
+        const tailSliceResultId = await createTailSlice(
+          client,
+          fixtures,
+          foundation,
+          "unexpected-tail",
+        );
+
+        await expect(
+          fixtures.planProduction(
+            foundation,
+            "unexpected-tail",
+            twoPlateIntervals,
+            270,
+            90,
+            8,
+            0,
+            { partsPerPlate: 4, tailSliceResultId },
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_quantity_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-conservative-overestimate",
+      async (client, fixtures) => {
         const foundation = await createQuantityFoundation(
           fixtures,
           "conservative-overestimate",
         );
-        const bufferedIntervals = [
-          twoPlateIntervals[0]!,
-          {
-            startsAt: twoPlateIntervals[1]!.startsAt,
-            endsAt: new Date(testTimes.capacityStart.getTime() + 241_000),
-          },
-        ];
-        const production = await fixtures.planProduction(
+        const tailSliceResultId = await createTailSlice(
+          client,
+          fixtures,
           foundation,
           "conservative-overestimate",
-          bufferedIntervals,
-          241,
-          81,
-          5,
         );
 
         await expect(
-          fixtures.createResourcePlan(foundation, [production]),
-        ).resolves.toBeUndefined();
+          fixtures.planProduction(
+            foundation,
+            "conservative-overestimate",
+            twoPlateIntervals,
+            151,
+            51,
+            5,
+            0,
+            { partsPerPlate: 4, tailSliceResultId },
+          ),
+        ).resolves.toBeDefined();
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-below-capacity",
+      async (_client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "below-capacity",
+          2,
+          60,
+          20,
+        );
+
+        await expect(
+          fixtures.planProduction(
+            foundation,
+            "below-capacity",
+            twoPlateIntervals[0]!,
+            60,
+            20,
+            2,
+            0,
+            { partsPerPlate: 4 },
+          ),
+        ).resolves.toBeDefined();
       },
     );
   });

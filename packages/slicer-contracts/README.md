@@ -58,9 +58,11 @@ reusable full-occupancy target; a partial job needs only its actual occupancy;
 and a full-plus-tail job carries two targets ordered full then tail. Repeated
 full plates reuse the same target. The backend upserts every `SliceResult` by
 its cache key; this package supplies the complete payload for those independent
-occupancy rows. Associating their winning IDs with the aggregate candidate is
-backend persistence/consumer work outside this contract package. Each reusable
-row uses the product production-slice identity through the bounded
+occupancy rows. `CandidateResourceEstimate` persists the planned capacity, the
+winning primary occupancy ID, and the optional tail occupancy ID; its database
+constraint rejects missing or mismatched tails and aggregate resource totals
+below those exact slices. Each reusable row uses the product production-slice
+identity through the bounded
 `buildMachineOccupancySliceCacheKey` builder (geometry, machine profile, exact
 immutable `ModelGeometry` lineage, selected body-set digest, calibration, print
 configuration, machine-specific arrangement, and concrete occupancy only) and
