@@ -113,7 +113,7 @@ function compatibleItemGroups(
     byItem.set(slot.order_item_id, itemSlots);
   }
   return [...byItem.values()]
-    .filter((itemSlots) => itemSlots.length === candidate.quantity)
+    .filter((itemSlots) => itemSlots.length >= candidate.quantity)
     .map((itemSlots) =>
       [...itemSlots].sort(
         (left, right) =>
@@ -131,11 +131,13 @@ function compatibleItemGroups(
 function plannerCandidate(
   candidate: CandidateRow,
   intervals: readonly ResourceCapacityInterval[],
-  slotIds: readonly string[],
+  itemSlots: readonly SlotRow[],
 ): ResourceCandidateEstimate {
+  const slotIds = itemSlots.map(({ id }) => id);
   return {
     id: candidate.id,
     estimateKey: candidate.estimate_key,
+    plannerOptionId: `${candidate.id}:${itemSlots[0]!.order_item_id}`,
     nodeId: candidate.node_id,
     machineId: candidate.machine_id,
     machineProfileId: candidate.machine_profile_id,
@@ -151,6 +153,7 @@ function plannerCandidate(
     expiresAt: candidate.expires_at,
     intervals,
     fulfilmentSlotIds: slotIds,
+    fulfilmentSlotCount: candidate.quantity,
     source: "candidate",
   };
 }
@@ -344,15 +347,11 @@ export class EligibilityPlanService {
 
           const plannerCandidates: ResourceCandidateEstimate[] = [];
           for (const { row, intervals } of byCandidate.values()) {
-            const itemGroup = compatibleItemGroups(row, slots)[0];
-            if (!itemGroup) continue;
-            plannerCandidates.push(
-              plannerCandidate(
-                row,
-                intervals,
-                itemGroup.map(({ id }) => id),
-              ),
-            );
+            for (const itemGroup of compatibleItemGroups(row, slots)) {
+              plannerCandidates.push(
+                plannerCandidate(row, intervals, itemGroup),
+              );
+            }
           }
           const inventory = [
             ...new Map(

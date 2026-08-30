@@ -152,6 +152,92 @@ describe("phase resource reservation execution", () => {
     ).resolves.toEqual(created);
   });
 
+  it("combines partial candidate jobs to cover every slot of one item", async () => {
+    const setupClient = await pool.connect();
+    await setupClient.query("BEGIN");
+    let nodeId: string;
+    let orderPhaseId: string;
+    let candidateIds: string[];
+    try {
+      const fixtures = new PersistenceFactory(
+        setupClient,
+        `${testScope}:split-item-eligibility`,
+      );
+      const foundation = await fixtures.createFoundation(
+        "split-item-eligibility",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        [{ quantity: 2 }],
+      );
+      const now = new Date();
+      const first = await fixtures.planProduction(
+        foundation,
+        "split-item-first-production",
+        {
+          startsAt: new Date(now.getTime() + 60 * 60 * 1_000),
+          endsAt: new Date(now.getTime() + 2 * 60 * 60 * 1_000),
+        },
+        60,
+        60,
+        1,
+        0,
+      );
+      const second = await fixtures.planProduction(
+        foundation,
+        "split-item-second-production",
+        {
+          startsAt: new Date(now.getTime() + 2 * 60 * 60 * 1_000),
+          endsAt: new Date(now.getTime() + 3 * 60 * 60 * 1_000),
+        },
+        60,
+        60,
+        1,
+        1,
+      );
+      await setupClient.query(
+        'UPDATE "inventories" SET "remaining_milligrams" = 1_000 WHERE "id" = $1',
+        [foundation.inventoryId],
+      );
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+      nodeId = foundation.nodeId;
+      orderPhaseId = foundation.orderPhaseId;
+      candidateIds = [
+        first.candidateResourceEstimateId,
+        second.candidateResourceEstimateId,
+      ].sort();
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const created = await eligibility.createCompletePlan({
+      nodeId,
+      orderPhaseId,
+      planKey: `split-item-eligibility:${testScope}`,
+    });
+    expect(created.candidateResourceEstimateIds).toEqual(candidateIds);
+
+    const topology = await pool.query<{
+      job_count: string;
+      slot_count: string;
+    }>(
+      `SELECT count(DISTINCT plan_job.id)::text AS job_count,
+              count(DISTINCT plan_slot.id)::text AS slot_count
+       FROM phase_resource_plan_jobs plan_job
+       JOIN phase_resource_plan_slots plan_slot
+         ON plan_slot.phase_resource_plan_job_id = plan_job.id
+       WHERE plan_job.phase_resource_plan_id = $1`,
+      [created.phaseResourcePlanId],
+    );
+    expect(topology.rows).toEqual([{ job_count: "2", slot_count: "2" }]);
+  });
+
   it("creates exactly one complete 15-minute reservation set and releases it as a whole", async () => {
     await inRollbackTransaction("atomic", async (client, fixtures) => {
       const foundation = await fixtures.createFoundation("atomic");

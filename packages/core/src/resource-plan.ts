@@ -13,6 +13,7 @@ export interface FulfilmentSlotResourceInput {
   readonly modelGeometryId: string;
   readonly printConfigRevisionId: string;
   readonly material: string;
+  /** Null means the customer did not constrain the inventory color. */
   readonly color: string | null;
 }
 
@@ -44,6 +45,12 @@ export interface ResourceCandidateEstimate {
   readonly id: string;
   /** Persisted deterministic identity; ID remains the final tie-break. */
   readonly estimateKey?: string;
+  /**
+   * In-memory identity for one deterministic slot-assignment alternative.
+   * Multiple alternatives may reference the same persisted candidate ID, but
+   * the solver will select that persisted candidate at most once.
+   */
+  readonly plannerOptionId?: string;
   readonly nodeId: string;
   readonly machineId: string;
   readonly machineProfileId?: string;
@@ -60,6 +67,8 @@ export interface ResourceCandidateEstimate {
   readonly intervals: readonly ResourceCapacityInterval[];
   /** Candidate estimates may produce one or more slots in one planned job. */
   readonly fulfilmentSlotIds?: readonly string[];
+  /** Exact number of compatible slot IDs produced by this candidate. */
+  readonly fulfilmentSlotCount?: number;
   /** `slotIds` is accepted as a concise adapter alias for fulfilmentSlotIds. */
   readonly slotIds?: readonly string[];
   /** Singular alias useful when a candidate is known to cover one slot. */
@@ -268,8 +277,13 @@ function matchesSlot(
     candidate.modelGeometryId === slot.modelGeometryId &&
     candidate.printConfigRevisionId === slot.printConfigRevisionId &&
     candidate.material === slot.material &&
-    normaliseColor(candidate.color) === normaliseColor(slot.color)
+    (slot.color === null ||
+      normaliseColor(candidate.color) === normaliseColor(slot.color))
   );
+}
+
+function plannerOptionIdentity(candidate: ResourceCandidateEstimate): string {
+  return candidate.plannerOptionId ?? candidate.id;
 }
 
 function compareCandidateIds(
@@ -280,7 +294,9 @@ function compareCandidateIds(
     compareStrings(
       left.estimateKey ?? left.id,
       right.estimateKey ?? right.id,
-    ) || compareStrings(left.id, right.id)
+    ) ||
+    compareStrings(left.id, right.id) ||
+    compareStrings(plannerOptionIdentity(left), plannerOptionIdentity(right))
   );
 }
 
@@ -290,6 +306,7 @@ function hasDuplicate(values: readonly string[]): boolean {
 
 interface UsableCandidate extends ResourceCandidateEstimate {
   readonly slotIds: readonly string[];
+  readonly coverageQuantity: number;
   readonly requiredMaterial: bigint;
   readonly requiredMachineSeconds: bigint;
 }
@@ -370,13 +387,48 @@ function buildLockTargets(
   return orderLockTargets(targets);
 }
 
+function forEachSlotSelection(
+  requiredSlotId: string,
+  compatibleSlotIds: readonly string[],
+  quantity: number,
+  visit: (slotIds: readonly string[]) => void,
+): void {
+  if (!compatibleSlotIds.includes(requiredSlotId)) return;
+  if (quantity === 1) {
+    visit([requiredSlotId]);
+    return;
+  }
+  const optionalSlotIds = compatibleSlotIds
+    .filter((slotId) => slotId !== requiredSlotId)
+    .sort(compareStrings);
+  const selected = [requiredSlotId];
+  const choose = (start: number): void => {
+    if (selected.length === quantity) {
+      visit([...selected].sort(compareStrings));
+      return;
+    }
+    const remaining = quantity - selected.length;
+    for (
+      let index = start;
+      index <= optionalSlotIds.length - remaining;
+      index += 1
+    ) {
+      selected.push(optionalSlotIds[index]!);
+      choose(index + 1);
+      selected.pop();
+    }
+  };
+  choose(0);
+}
+
 /**
  * Selects one complete, machine-specific resource plan, or returns undefined
  * when no all-or-none plan can cover the requested slot set.
  *
  * Candidates are immutable snapshots: reference slices are never eligible and
- * candidate inputs must match every covered slot exactly. Capacity intervals
- * are half-open, so adjacent intervals are allowed while overlaps are not.
+ * candidate inputs must match every constrained covered-slot input. Capacity
+ * intervals are half-open, so adjacent intervals are allowed while overlaps
+ * are not.
  */
 export function selectCompleteResourcePlan(
   input: ResourcePlanSelectorInput,
@@ -406,15 +458,19 @@ export function selectCompleteResourcePlan(
   const occupiedCapacity = input.occupiedCapacity ?? [];
   if (!validIntervals(occupiedCapacity)) return undefined;
   const candidatesBySlot = new Map<string, UsableCandidate[]>();
-  const candidateIds = new Set<string>();
+  const plannerOptionIds = new Set<string>();
   const usableCandidates: UsableCandidate[] = [];
   for (const candidate of input.candidates) {
     requireId(candidate.id, "candidate ID");
+    if (candidate.plannerOptionId !== undefined) {
+      requireId(candidate.plannerOptionId, "candidate planner option ID");
+    }
     requireId(candidate.nodeId, "candidate node ID");
     requireId(candidate.machineId, "candidate machine ID");
     requireId(candidate.inventoryId, "candidate inventory ID");
-    if (candidateIds.has(candidate.id)) return undefined;
-    candidateIds.add(candidate.id);
+    const plannerOptionId = plannerOptionIdentity(candidate);
+    if (plannerOptionIds.has(plannerOptionId)) return undefined;
+    plannerOptionIds.add(plannerOptionId);
     if (
       candidate.source === "reference" ||
       candidate.sliceKind === "REFERENCE" ||
@@ -434,6 +490,13 @@ export function selectCompleteResourcePlan(
     const slotIds = candidateSlots(candidate);
     if (slotIds.length === 0 || hasDuplicate(slotIds)) continue;
     if (slotIds.some((slotId) => !slotById.has(slotId))) continue;
+    const coverageQuantity = candidate.fulfilmentSlotCount ?? slotIds.length;
+    if (
+      !Number.isSafeInteger(coverageQuantity) ||
+      coverageQuantity < 1 ||
+      coverageQuantity > slotIds.length
+    )
+      continue;
     const requiredMaterial = positive(
       candidate.requiredMaterialMilligrams,
       `candidate ${candidate.id}.requiredMaterialMilligrams`,
@@ -479,6 +542,7 @@ export function selectCompleteResourcePlan(
     const usable: UsableCandidate = {
       ...candidate,
       slotIds,
+      coverageQuantity,
       requiredMaterial,
       requiredMachineSeconds,
     };
@@ -530,7 +594,10 @@ export function selectCompleteResourcePlan(
     const options = candidatesBySlot.get(uncoveredSlotId) ?? [];
     for (const candidate of options) {
       if (selected.has(candidate.id)) continue;
-      if (candidate.slotIds.some((slotId) => covered.has(slotId))) continue;
+      const availableSlotIds = candidate.slotIds.filter(
+        (slotId) => !covered.has(slotId),
+      );
+      if (availableSlotIds.length < candidate.coverageQuantity) continue;
       if (
         candidate.intervals.some((interval) =>
           usedIntervals.some((used) => intervalOverlaps(interval, used)),
@@ -540,31 +607,47 @@ export function selectCompleteResourcePlan(
       const currentInventory = usedInventory.get(candidate.inventoryId) ?? 0n;
       const available = inventoryAvailability.get(candidate.inventoryId)!;
       if (currentInventory + candidate.requiredMaterial > available) continue;
-      selected.add(candidate.id);
-      candidate.slotIds.forEach((slotId) => covered.add(slotId));
-      candidate.intervals.forEach((interval) => usedIntervals.push(interval));
-      usedInventory.set(
-        candidate.inventoryId,
-        currentInventory + candidate.requiredMaterial,
+      forEachSlotSelection(
+        uncoveredSlotId,
+        availableSlotIds,
+        candidate.coverageQuantity,
+        (selectedSlotIds) => {
+          const selectedCandidate = {
+            ...candidate,
+            slotIds: selectedSlotIds,
+          };
+          selected.add(candidate.id);
+          selectedSlotIds.forEach((slotId) => covered.add(slotId));
+          candidate.intervals.forEach((interval) =>
+            usedIntervals.push(interval),
+          );
+          usedInventory.set(
+            candidate.inventoryId,
+            currentInventory + candidate.requiredMaterial,
+          );
+          search(
+            position + selectedSlotIds.length,
+            [...chosen, selectedCandidate],
+            material + candidate.requiredMaterial,
+            machineSeconds + candidate.requiredMachineSeconds,
+          );
+          usedInventory.set(candidate.inventoryId, currentInventory);
+          candidate.intervals.forEach(() => usedIntervals.pop());
+          selectedSlotIds.forEach((slotId) => covered.delete(slotId));
+          selected.delete(candidate.id);
+        },
       );
-      search(
-        position + candidate.slotIds.length,
-        [...chosen, candidate],
-        material + candidate.requiredMaterial,
-        machineSeconds + candidate.requiredMachineSeconds,
-      );
-      usedInventory.set(candidate.inventoryId, currentInventory);
-      candidate.intervals.forEach(() => usedIntervals.pop());
-      candidate.slotIds.forEach((slotId) => covered.delete(slotId));
-      selected.delete(candidate.id);
     }
   };
   search(0, [], 0n, 0n);
   if (!best) return undefined;
 
   const selectedCandidates = [...best.candidates].sort(compareCandidateIds);
-  const selectedCandidateInputs = selectedCandidates.map(({ id }) =>
-    input.candidates.find((candidate) => candidate.id === id)!,
+  const selectedCandidateInputs = selectedCandidates.map((selected) =>
+    input.candidates.find(
+      (candidate) =>
+        plannerOptionIdentity(candidate) === plannerOptionIdentity(selected),
+    )!,
   );
   const assignments = selectedCandidates
     .flatMap((candidate) =>

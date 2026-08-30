@@ -158,6 +158,125 @@ describe("selectCompleteResourcePlan", () => {
     ).toEqual(["complete"]);
   });
 
+  it("chooses one slot-assignment alternative per persisted candidate", () => {
+    const matchingSlots = slots.map((slot) => ({
+      ...slot,
+      shipmentPlanId: "shipment",
+      modelGeometryId: "geometry",
+      printConfigRevisionId: "config",
+      material: "PLA",
+      color: "red",
+    }));
+    const shared = {
+      shipmentPlanId: "shipment",
+      modelGeometryId: "geometry",
+      printConfigRevisionId: "config",
+      material: "PLA",
+      color: "red",
+    };
+    const candidateAForFirstSlot = candidate("candidate-a", ["slot-a"], {
+      ...shared,
+      plannerOptionId: "candidate-a:slot-a",
+    });
+    const candidateAForSecondSlot = candidate("candidate-a", ["slot-b"], {
+      ...shared,
+      plannerOptionId: "candidate-a:slot-b",
+    });
+    const candidateBForFirstSlot = candidate("candidate-b", ["slot-a"], {
+      ...shared,
+      plannerOptionId: "candidate-b:slot-a",
+    });
+
+    const result = selectCompleteResourcePlan(
+      baseInput(
+        [
+          candidateAForFirstSlot,
+          candidateAForSecondSlot,
+          candidateBForFirstSlot,
+        ],
+        {
+          requiredFulfilmentSlots: matchingSlots,
+          inventory: [
+            {
+              id: candidateAForFirstSlot.inventoryId,
+              availableMilligrams: 1_000n,
+            },
+            {
+              id: candidateBForFirstSlot.inventoryId,
+              availableMilligrams: 1_000n,
+            },
+          ],
+        },
+      ),
+    );
+
+    expect(result?.candidateResourceEstimateIds).toEqual([
+      "candidate-a",
+      "candidate-b",
+    ]);
+    expect(result?.assignments).toEqual([
+      {
+        fulfilmentSlotId: "slot-a",
+        candidateResourceEstimateId: "candidate-b",
+      },
+      {
+        fulfilmentSlotId: "slot-b",
+        candidateResourceEstimateId: "candidate-a",
+      },
+    ]);
+  });
+
+  it("combines candidates that each cover a subset of compatible slots", () => {
+    const matchingSlots = slots.map((slot) => ({
+      ...slot,
+      shipmentPlanId: "shipment",
+      modelGeometryId: "geometry",
+      printConfigRevisionId: "config",
+      material: "PLA",
+      color: "red",
+    }));
+    const shared = {
+      shipmentPlanId: "shipment",
+      modelGeometryId: "geometry",
+      printConfigRevisionId: "config",
+      material: "PLA",
+      color: "red",
+      fulfilmentSlotCount: 1,
+    };
+
+    const result = selectCompleteResourcePlan(
+      baseInput(
+        [
+          candidate("candidate-a", ["slot-a", "slot-b"], shared),
+          candidate("candidate-b", ["slot-a", "slot-b"], shared),
+        ],
+        { requiredFulfilmentSlots: matchingSlots },
+      ),
+    );
+
+    expect(result?.assignments).toEqual([
+      {
+        fulfilmentSlotId: "slot-a",
+        candidateResourceEstimateId: "candidate-a",
+      },
+      {
+        fulfilmentSlotId: "slot-b",
+        candidateResourceEstimateId: "candidate-b",
+      },
+    ]);
+  });
+
+  it("treats an unspecified requested color as unconstrained", () => {
+    const colorlessSlot = { ...slots[0]!, color: null };
+    expect(
+      selectCompleteResourcePlan(
+        baseInput([candidate("red-candidate", ["slot-a"])], {
+          requiredFulfilmentSlots: [colorlessSlot],
+        }),
+      )?.candidateResourceEstimateIds,
+    ).toEqual(["red-candidate"]);
+  });
+
   it("does not substitute reference metrics, expired candidates, or duplicate coverage", () => {
     const result = selectCompleteResourcePlan(
       baseInput([
