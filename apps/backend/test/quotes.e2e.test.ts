@@ -1,13 +1,14 @@
 import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 
 const operatorToken = "test-operator-token-with-at-least-32-characters";
+const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 process.env.TAVEN_OPERATOR_API_TOKEN = operatorToken;
 process.env.TAVEN_QUOTE_CAPABILITY_KEY =
   "test-quote-capability-key-with-at-least-32-characters";
@@ -17,8 +18,7 @@ process.env.TAVEN_S3_BUCKET = "taven";
 process.env.TAVEN_S3_ACCESS_KEY_ID = "taven";
 process.env.TAVEN_S3_SECRET_ACCESS_KEY = "taven-local-only";
 process.env.TAVEN_S3_FORCE_PATH_STYLE = "true";
-process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY =
-  "test-only-upload-client-hash-key-32";
+process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY = uploadClientHashKey;
 
 describe("QuoteRequest and tokenized individual offers", () => {
   let app: INestApplication;
@@ -264,6 +264,24 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(rejected.response.status).toBe(200);
     expect(rejected.body.status).toBe("REJECTED");
 
+    const postRejectUpload = await apiJson("storage/uploads/photos", {
+      method: "POST",
+      headers: {
+        ...bearer(created.body.requestToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        kind: "QUOTE_REFERENCE",
+        scopeKind: "QUOTE_REQUEST",
+        scopeId: created.body.requestId,
+        originalFilename: "late-reference.jpg",
+        contentType: "image/jpeg",
+        sizeBytes: 128,
+        sha256: "e".repeat(64),
+      }),
+    });
+    expect(postRejectUpload.response.status).toBe(401);
+
     const acceptance = await acceptOffer(
       issued.body,
       key("post-reject-accept"),
@@ -319,6 +337,85 @@ describe("QuoteRequest and tokenized individual offers", () => {
       [...defaultComponents(), { kind: "PAYMENT_FEE", amountMinor: 0 }],
     );
     expect(response.response.status).toBe(400);
+  });
+
+  it("rejects invalid model references as operator input", async () => {
+    const created = await quotes.createRequest(
+      requestInput("invalid-model-references"),
+      "198.51.100.20",
+      key("invalid-model-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("invalid-model-review"),
+    );
+    const response = await issueOffer(
+      created.requestId,
+      key("invalid-model-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      [
+        {
+          kind: "MODEL",
+          sourceModelFileId: randomUUID(),
+          modelGeometryId: randomUUID(),
+          printConfigRevisionId: randomUUID(),
+          material: "PLA",
+          quantity: 1,
+        },
+      ],
+    );
+    expect(response.response.status).toBe(400);
+    expect(
+      await prisma.quote.count({
+        where: { quoteRequestId: created.requestId },
+      }),
+    ).toBe(0);
+  });
+
+  it("bounds quote-reference upload issuance per request capability", async () => {
+    const created = await quotes.createRequest(
+      requestInput("photo-budget"),
+      "198.51.100.21",
+      key("photo-budget-create"),
+    );
+    const capabilityHash = createHash("sha256")
+      .update(created.requestToken)
+      .digest("hex");
+    const subjectHash = createHmac("sha256", uploadClientHashKey)
+      .update(`quote-photo-upload\0${capabilityHash}`)
+      .digest("hex");
+    const now = new Date();
+    await prisma.anonymousUploadLimit.create({
+      data: {
+        subjectHash,
+        windowStartedAt: now,
+        windowExpiresAt: new Date(now.getTime() + 15 * 60 * 1_000),
+        issuedCount: 19,
+        reservedBytes: 0n,
+      },
+    });
+    const initiate = (suffix: string) =>
+      apiJson<{ uploadId?: string }>("storage/uploads/photos", {
+        method: "POST",
+        headers: {
+          ...bearer(created.requestToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          kind: "QUOTE_REFERENCE",
+          scopeKind: "QUOTE_REQUEST",
+          scopeId: created.requestId,
+          originalFilename: `reference-${suffix}.jpg`,
+          contentType: "image/jpeg",
+          sizeBytes: 128,
+          sha256: suffix.repeat(64),
+        }),
+      });
+    const results = await Promise.all([initiate("a"), initiate("b")]);
+    expect(results.map(({ response }) => response.status).sort()).toEqual([
+      201, 429,
+    ]);
   });
 
   it("limits anonymous submissions atomically and ignores spoofed forwarding headers", async () => {
@@ -415,6 +512,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       amountMinor: number;
       quoteItemOrdinal?: number;
     }> = defaultComponents(),
+    items: Array<Record<string, unknown>> = defaultItems(),
   ) {
     return apiJson<{
       quoteId: string;
@@ -437,12 +535,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         depositMinor: 33_000,
         termsSnapshot: { revisionAcceptedByOffer: true },
         inputSnapshot: { operatorEstimate: "manual-v0" },
-        items: [
-          {
-            kind: "CUSTOM_SERVICE",
-            serviceDescription: "Rebuild the damaged mounting bracket",
-          },
-        ],
+        items,
         components,
       }),
     });
@@ -464,6 +557,15 @@ describe("QuoteRequest and tokenized individual offers", () => {
         kind: "ITEM_POSTPROCESSING",
         quoteItemOrdinal: 0,
         amountMinor: 10_000,
+      },
+    ];
+  }
+
+  function defaultItems(): Array<Record<string, unknown>> {
+    return [
+      {
+        kind: "CUSTOM_SERVICE",
+        serviceDescription: "Rebuild the damaged mounting bracket",
       },
     ];
   }

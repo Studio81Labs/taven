@@ -21,6 +21,7 @@ import {
   QuoteRequestStatus,
   QuoteSessionStatus,
   RetentionHold,
+  SliceKind,
 } from "@prisma/client";
 import type { QuoteRequestStatus as DomainQuoteRequestStatus } from "@taven/core" with {
   "resolution-mode": "import",
@@ -314,6 +315,7 @@ export class QuotesService {
         if (priceList.currency !== "CZK") {
           throw new BadRequestException("Individual v0 offers must use CZK");
         }
+        await validateOfferItemReferences(transaction, offer.items, observedAt);
 
         const quoteId = randomUUID();
         const resultId = randomUUID();
@@ -1627,6 +1629,123 @@ function validateOfferItem(input: OfferItemDto, ordinal: number) {
     color: optionalText(input.color, `items[${ordinal}].color`, 100),
     quantity,
   };
+}
+
+async function validateOfferItemReferences(
+  transaction: Transaction,
+  items: Array<ReturnType<typeof validateOfferItem>>,
+  observedAt: Date,
+): Promise<void> {
+  for (const [ordinal, item] of items.entries()) {
+    if (item.kind !== CommerceItemKind.MODEL) continue;
+    if (
+      !item.sourceModelFileId ||
+      !item.modelGeometryId ||
+      !item.printConfigRevisionId ||
+      !item.material
+    ) {
+      throw invalidOfferItemReferences(ordinal);
+    }
+
+    const [geometry, printConfig, primarySlice, tailSlice] = await Promise.all([
+      transaction.modelGeometry.findUnique({
+        where: { id: item.modelGeometryId },
+        include: { sourceModelFile: true },
+      }),
+      transaction.printConfigRevision.findUnique({
+        where: { id: item.printConfigRevisionId },
+        select: { id: true },
+      }),
+      item.primaryReferenceSliceResultId
+        ? transaction.sliceResult.findUnique({
+            where: { id: item.primaryReferenceSliceResultId },
+            include: { referenceProfile: true },
+          })
+        : undefined,
+      item.tailReferenceSliceResultId
+        ? transaction.sliceResult.findUnique({
+            where: { id: item.tailReferenceSliceResultId },
+            include: { referenceProfile: true },
+          })
+        : undefined,
+    ]);
+    const source = geometry?.sourceModelFile;
+    if (
+      !geometry ||
+      !source ||
+      geometry.sourceModelFileId !== item.sourceModelFileId ||
+      geometry.deletedAt !== null ||
+      source.deletedAt !== null ||
+      (source.retentionHold === RetentionHold.NONE &&
+        source.sourceDeleteAfter.getTime() <= observedAt.getTime()) ||
+      !printConfig
+    ) {
+      throw invalidOfferItemReferences(ordinal);
+    }
+
+    if (!item.primaryReferenceSliceResultId) {
+      if (
+        item.tailReferenceSliceResultId !== undefined ||
+        item.referencePartsPerPlate !== undefined
+      ) {
+        throw invalidOfferItemReferences(ordinal);
+      }
+      continue;
+    }
+
+    const partsPerPlate = item.referencePartsPerPlate;
+    if (
+      !primarySlice ||
+      !primarySlice.referenceProfile ||
+      !partsPerPlate ||
+      primarySlice.kind !== SliceKind.REFERENCE ||
+      primarySlice.modelGeometryId !== item.modelGeometryId ||
+      primarySlice.printConfigRevisionId !== item.printConfigRevisionId ||
+      primarySlice.referenceProfile.material !== item.material
+    ) {
+      throw invalidOfferItemReferences(ordinal);
+    }
+
+    const fullPlateCount = Math.floor(item.quantity / partsPerPlate);
+    const tailPartCount = item.quantity % partsPerPlate;
+    if (fullPlateCount === 0) {
+      if (
+        primarySlice.partsPerPlate !== item.quantity ||
+        item.tailReferenceSliceResultId !== undefined
+      ) {
+        throw invalidOfferItemReferences(ordinal);
+      }
+      continue;
+    }
+    if (primarySlice.partsPerPlate !== partsPerPlate) {
+      throw invalidOfferItemReferences(ordinal);
+    }
+    if (tailPartCount === 0) {
+      if (item.tailReferenceSliceResultId !== undefined) {
+        throw invalidOfferItemReferences(ordinal);
+      }
+      continue;
+    }
+    if (
+      !tailSlice ||
+      !tailSlice.referenceProfile ||
+      tailSlice.id === primarySlice.id ||
+      tailSlice.kind !== SliceKind.REFERENCE ||
+      tailSlice.modelGeometryId !== item.modelGeometryId ||
+      tailSlice.printConfigRevisionId !== item.printConfigRevisionId ||
+      tailSlice.referenceProfileId !== primarySlice.referenceProfileId ||
+      tailSlice.referenceProfile.material !== item.material ||
+      tailSlice.partsPerPlate !== tailPartCount
+    ) {
+      throw invalidOfferItemReferences(ordinal);
+    }
+  }
+}
+
+function invalidOfferItemReferences(ordinal: number): BadRequestException {
+  return new BadRequestException(
+    `items[${ordinal}] references unavailable or incompatible model topology`,
+  );
 }
 
 function serializableItem(item: ReturnType<typeof validateOfferItem>) {

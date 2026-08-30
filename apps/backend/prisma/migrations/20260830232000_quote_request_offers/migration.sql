@@ -353,6 +353,7 @@ ALTER TABLE "quote_items"
                 AND "material" IS NOT NULL
             ) OR (
                 "kind" = 'CUSTOM_SERVICE'
+                AND "service_description" IS NOT NULL
                 AND "service_description" ~ '[^[:space:]]'
                 AND "source_model_file_id" IS NULL
                 AND "model_geometry_id" IS NULL
@@ -386,6 +387,7 @@ ALTER TABLE "order_items"
                 AND "material" IS NOT NULL
             ) OR (
                 "kind" = 'CUSTOM_SERVICE'
+                AND "service_description" IS NOT NULL
                 AND "service_description" ~ '[^[:space:]]'
                 AND "source_model_file_id" IS NULL
                 AND "model_geometry_id" IS NULL

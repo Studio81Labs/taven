@@ -116,11 +116,16 @@ export class UploadService {
     const expiresAt = this.intentExpiry();
     const quarantineKey = quarantineObjectKey(uploadId);
     const finalKey = modelSourceObjectKey(assetId);
+    const subjectHash = anonymousUploadSubject(
+      this.storageConfig.uploadClientHashKey,
+      "anonymous-model-upload",
+      normalizeClientAddress(clientAddress),
+    );
 
     await this.prisma.$transaction(async (transaction) => {
       await this.reserveAnonymousUpload(
         transaction,
-        clientAddress,
+        subjectHash,
         metadata.sizeBytes,
       );
       await transaction.uploadIntent.create({
@@ -171,28 +176,52 @@ export class UploadService {
           customer_id: string | null;
           session_customer_id: string | null;
           public_token_hash: string;
-          status: string;
+          session_status: string;
+          request_status: string;
+          offer_expires_at: Date | null;
           expires_at: Date;
           observed_at: Date;
         }>
       >`
         SELECT request.customer_id, session.customer_id AS session_customer_id,
-               session.public_token_hash, session.status::text, session.expires_at,
+               session.public_token_hash,
+               session.status::text AS session_status,
+               request.status::text AS request_status,
+               quote.expires_at AS offer_expires_at,
+               session.expires_at,
                clock_timestamp() AS observed_at
         FROM quote_requests request
         JOIN quote_sessions session ON session.id = request.quote_session_id
+        LEFT JOIN quotes quote ON quote.quote_request_id = request.id
         WHERE request.id = ${metadata.scopeId}::uuid
         FOR SHARE OF request, session
       `;
       const scope = rows[0];
+      const requestAcceptsPhotos =
+        scope?.request_status === "NEW" ||
+        scope?.request_status === "IN_REVIEW" ||
+        (scope?.request_status === "QUOTED" &&
+          scope.offer_expires_at !== null &&
+          scope.offer_expires_at.getTime() > scope.observed_at.getTime());
       if (
         !scope ||
-        scope.status !== "OPEN" ||
+        scope.session_status !== "OPEN" ||
+        !requestAcceptsPhotos ||
         scope.expires_at.getTime() <= scope.observed_at.getTime() ||
         !matchesTokenHash(scopeToken, scope.public_token_hash)
       ) {
         throw new UnauthorizedException("Quote-session capability is invalid");
       }
+      const subjectHash = anonymousUploadSubject(
+        this.storageConfig.uploadClientHashKey,
+        "quote-photo-upload",
+        scope.public_token_hash,
+      );
+      await this.reserveAnonymousUpload(
+        transaction,
+        subjectHash,
+        metadata.sizeBytes,
+      );
       await transaction.uploadIntent.create({
         data: {
           id: uploadId,
@@ -502,7 +531,7 @@ export class UploadService {
 
   private async reserveAnonymousUpload(
     transaction: Prisma.TransactionClient,
-    clientAddress: string,
+    subjectHash: string,
     sizeBytes: number,
   ): Promise<void> {
     const observedRows = await transaction.$queryRaw<Array<{ now: Date }>>`
@@ -513,15 +542,6 @@ export class UploadService {
     const windowExpiresAt = new Date(
       observedAt.getTime() + ANONYMOUS_UPLOAD_WINDOW_MILLISECONDS,
     );
-    const subjectHash = createHmac(
-      "sha256",
-      this.storageConfig.uploadClientHashKey,
-    )
-      .update(
-        `anonymous-model-upload\0${normalizeClientAddress(clientAddress)}`,
-      )
-      .digest("hex");
-
     const global = await this.lockAnonymousUploadLimit(
       transaction,
       ANONYMOUS_UPLOAD_GLOBAL_SUBJECT,
@@ -1089,6 +1109,16 @@ function normalizeClientAddress(value: string): string {
   return normalized.startsWith("::ffff:")
     ? normalized.slice("::ffff:".length)
     : normalized || "unknown";
+}
+
+function anonymousUploadSubject(
+  hashKey: string,
+  namespace: string,
+  identity: string,
+): string {
+  return createHmac("sha256", hashKey)
+    .update(`${namespace}\0${identity}`)
+    .digest("hex");
 }
 
 function bearerToken(authorization?: string): string {
