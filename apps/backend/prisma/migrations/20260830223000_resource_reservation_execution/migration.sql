@@ -672,6 +672,43 @@ BEGIN
     -- path holds the order lock and waits for the fence.
     PERFORM pg_advisory_xact_lock(hashtextextended(target_reservation_key, 0));
 
+    SELECT * INTO existing_replacement_set
+    FROM "phase_reservation_sets"
+    WHERE "reservation_key" = target_reservation_key
+    FOR UPDATE;
+
+    IF FOUND THEN
+        IF existing_replacement_set."node_id" <> target_node_id
+           OR existing_replacement_set."phase_resource_plan_id" <> target_phase_resource_plan_id THEN
+            RAISE EXCEPTION 'reservation key is already bound to another phase resource plan'
+                USING ERRCODE = '23505', CONSTRAINT = 'phase_reservation_sets_reservation_key_key';
+        END IF;
+
+        IF existing_replacement_set."status" NOT IN ('RESERVED', 'HELD')
+           OR (
+               existing_replacement_set."status" = 'RESERVED'
+               AND existing_replacement_set."expires_at" <= clock_timestamp()
+           ) THEN
+            RAISE EXCEPTION 'terminal replacement reservation cannot be revived'
+                USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_terminal_reacquire_check';
+        END IF;
+
+        RETURN QUERY
+        SELECT existing_replacement_set."id",
+               existing_replacement_set."status",
+               existing_replacement_set."expires_at";
+        RETURN;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "phase_reservation_sets"
+        WHERE "phase_resource_plan_id" = target_phase_resource_plan_id
+    ) THEN
+        RAISE EXCEPTION 'reacquisition plan is already bound to another reservation attempt'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_fresh_plan_reacquire_check';
+    END IF;
+
     PERFORM taven_lock_automatic_order_session(target_order_id);
 
     SELECT * INTO target_payment
@@ -733,43 +770,6 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'replacement reservation must remain scoped to the previous order phase'
             USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_terminal_reacquire_check';
-    END IF;
-
-    IF EXISTS (
-        SELECT 1
-        FROM "phase_reservation_sets"
-        WHERE "phase_resource_plan_id" = target_phase_resource_plan_id
-          AND (
-              "node_id" <> target_node_id
-              OR "reservation_key" <> target_reservation_key
-          )
-    ) THEN
-        RAISE EXCEPTION 'reacquisition plan is already bound to another reservation attempt'
-            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_fresh_plan_reacquire_check';
-    END IF;
-
-    SELECT * INTO existing_replacement_set
-    FROM "phase_reservation_sets"
-    WHERE "phase_resource_plan_id" = target_phase_resource_plan_id
-      AND "node_id" = target_node_id
-      AND "reservation_key" = target_reservation_key
-    FOR UPDATE;
-
-    IF FOUND THEN
-        IF existing_replacement_set."status" NOT IN ('RESERVED', 'HELD')
-           OR (
-               existing_replacement_set."status" = 'RESERVED'
-               AND existing_replacement_set."expires_at" <= clock_timestamp()
-           ) THEN
-            RAISE EXCEPTION 'terminal replacement reservation cannot be revived'
-                USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_terminal_reacquire_check';
-        END IF;
-
-        RETURN QUERY
-        SELECT existing_replacement_set."id",
-               existing_replacement_set."status",
-               existing_replacement_set."expires_at";
-        RETURN;
     END IF;
 
     RETURN QUERY

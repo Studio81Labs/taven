@@ -545,8 +545,19 @@ describe("phase resource reservation execution", () => {
     ).toEqual(["0", "1"]);
   });
 
-  it("reacquires a fresh complete set from a persisted open payment window and replays safely", async () => {
-    await inRollbackTransaction("reacquire", async (client, fixtures) => {
+  it("replays a committed reacquisition after the payment window closes and rejects a new key", async () => {
+    const setupClient = await pool.connect();
+    let previousSetId: string;
+    let nodeId: string;
+    let paymentId: string;
+    let replacementPlanId: string;
+    let expiredWindowPlanId: string;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(
+        setupClient,
+        `${testScope}:reacquire`,
+      );
       const foundation = await fixtures.createFoundation("reacquire");
       const now = new Date();
       const production = await fixtures.planProduction(
@@ -563,23 +574,24 @@ describe("phase resource reservation execution", () => {
         new Date(now.getTime() + 30 * 60 * 1_000),
         now,
       );
-      await client.query(
+      await setupClient.query(
         'UPDATE "inventories" SET "remaining_milligrams" = 1_000 WHERE "id" = $1',
         [foundation.inventoryId],
       );
-      const first = await client.query<{
+      const first = await setupClient.query<{
         phase_reservation_set_id: string;
       }>("SELECT * FROM taven_create_phase_reservation($1, $2, $3)", [
         foundation.nodeId,
         foundation.phaseResourcePlanId,
         `initial-${testScope}`,
       ]);
-      const previousSetId = first.rows[0]?.phase_reservation_set_id;
-      expect(previousSetId).toBeTruthy();
-      await fixtures.finalizePayment(foundation);
-      await client.query("SELECT taven_release_phase_reservation_set($1)", [
-        previousSetId,
-      ]);
+      const initialSetId = first.rows[0]?.phase_reservation_set_id;
+      if (!initialSetId) throw new Error("initial reservation returned no set");
+      await fixtures.finalizePayment(foundation, new Date(Date.now() + 5_000));
+      await setupClient.query(
+        "SELECT taven_release_phase_reservation_set($1)",
+        [initialSetId],
+      );
 
       const replacementFoundation = {
         ...foundation,
@@ -598,42 +610,90 @@ describe("phase resource reservation execution", () => {
         now,
       );
 
-      const replacementKey = `replacement-${testScope}`;
-      const replacement = await client.query<{
+      const expiredWindowFoundation = {
+        ...foundation,
+        eligibilitySnapshotId: fixtures.id("reacquire-expired-window-snapshot"),
+        phaseResourcePlanId: fixtures.id("reacquire-expired-window-plan"),
+      };
+      const expiredWindowProduction = {
+        ...production,
+        phaseResourcePlanJobId: fixtures.id(
+          "reacquire-expired-window-plan-job",
+        ),
+        plannedJobKey: `planned-${fixtures.id("reacquire-expired-window-plan-job")}`,
+      };
+      await fixtures.createResourcePlan(
+        expiredWindowFoundation,
+        [expiredWindowProduction],
+        new Date(now.getTime() + 30 * 60 * 1_000),
+        now,
+      );
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+
+      previousSetId = initialSetId;
+      nodeId = foundation.nodeId;
+      paymentId = foundation.paymentId;
+      replacementPlanId = replacementFoundation.phaseResourcePlanId;
+      expiredWindowPlanId = expiredWindowFoundation.phaseResourcePlanId;
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const replacementKey = `replacement-${testScope}`;
+    const replacementClient = await pool.connect();
+    let replacement: { phase_reservation_set_id: string } | undefined;
+    try {
+      await replacementClient.query("BEGIN");
+      const result = await replacementClient.query<{
         phase_reservation_set_id: string;
         phase_reservation_set_status: string;
       }>(
         "SELECT * FROM taven_reacquire_phase_reservation_for_capture($1, $2, $3, $4, $5)",
-        [
-          previousSetId,
-          foundation.nodeId,
-          replacementFoundation.phaseResourcePlanId,
-          replacementKey,
-          foundation.paymentId,
-        ],
+        [previousSetId, nodeId, replacementPlanId, replacementKey, paymentId],
       );
-      expect(replacement.rows[0]?.phase_reservation_set_status).toBe(
-        "RESERVED",
-      );
+      expect(result.rows[0]?.phase_reservation_set_status).toBe("RESERVED");
+      replacement = result.rows[0];
+      await replacementClient.query("COMMIT");
+    } catch (error) {
+      await replacementClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      replacementClient.release();
+    }
+    expect(replacement).toBeTruthy();
 
-      const replay = await client.query<{
-        phase_reservation_set_id: string;
-      }>(
+    await pool.query("SELECT pg_sleep(5.1)");
+
+    const replay = await pool.query<{
+      phase_reservation_set_id: string;
+    }>(
+      "SELECT * FROM taven_reacquire_phase_reservation_for_capture($1, $2, $3, $4, $5)",
+      [previousSetId, nodeId, replacementPlanId, replacementKey, paymentId],
+    );
+    expect(replay.rows[0]?.phase_reservation_set_id).toBe(
+      replacement?.phase_reservation_set_id,
+    );
+
+    await expect(
+      pool.query(
         "SELECT * FROM taven_reacquire_phase_reservation_for_capture($1, $2, $3, $4, $5)",
         [
           previousSetId,
-          foundation.nodeId,
-          replacementFoundation.phaseResourcePlanId,
-          replacementKey,
-          foundation.paymentId,
+          nodeId,
+          expiredWindowPlanId,
+          `expired-window-${testScope}`,
+          paymentId,
         ],
-      );
-      expect(replay.rows[0]?.phase_reservation_set_id).toBe(
-        replacement.rows[0]?.phase_reservation_set_id,
-      );
-      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint: "phase_reservation_set_capture_reacquire_guard_check",
     });
-  });
+  }, 15_000);
 
   it("releases only the failed pre-print production group and preserves held siblings", async () => {
     await inRollbackTransaction(
