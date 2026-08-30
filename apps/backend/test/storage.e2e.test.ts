@@ -34,6 +34,8 @@ const s3Config = {
 const uploadClientHashKey =
   process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??
   "test-only-upload-client-hash-key-32";
+process.env.TAVEN_QUOTE_CAPABILITY_KEY =
+  "test-quote-capability-key-with-at-least-32-characters";
 
 describe("secure object storage and retention", () => {
   let app: INestApplication;
