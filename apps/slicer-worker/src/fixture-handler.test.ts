@@ -65,6 +65,7 @@ const machineInput = {
   machineProfile: machineSlicerProfile(ids.machineProfile, "1"),
   machineCalibration: revision(ids.calibration, "2"),
   printConfig: revision(ids.printConfig, "f"),
+  arrangementRevision: revision(ids.arrangement, "3"),
   partsPerPlate: 2,
 };
 const candidateCacheIdentitySha256 =
@@ -139,7 +140,6 @@ const candidateJob = fixtureJob("candidate_estimate", {
   ...machineInput,
   quantity: 3,
   shipmentPlanId: ids.shipment,
-  arrangementRevision: revision(ids.arrangement, "3"),
   backingSliceTarget: {
     cacheIdentitySha256: candidateCacheIdentitySha256,
     analysisObjectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
@@ -150,7 +150,6 @@ const productionInput = {
   quantity: 5,
   acceptedJobId: ids.productionJob,
   productionReservationId: ids.reservation,
-  arrangementRevision: revision(ids.arrangement, "3"),
 };
 const productionJob = fixtureJob(
   "production_slice",

@@ -38,18 +38,17 @@ export interface ProductionSliceCacheKeyInput {
 export interface MachineOccupancySliceCacheKeyInput extends ProductionSliceCacheKeyInput {
   readonly modelGeometryId: string;
   readonly geometrySelectionHash: Sha256Digest;
+  readonly arrangementRevision: ArrangementRevisionRef;
 }
 
 export interface ProductionPackageKeyInput extends MachineOccupancySliceCacheKeyInput {
   readonly quantity: number | bigint;
-  readonly arrangementRevision: ArrangementRevisionRef;
   readonly acceptedJobId: string;
 }
 
 export interface CandidateResourceEstimateKeyInput extends MachineOccupancySliceCacheKeyInput {
   readonly quantity: number | bigint;
   readonly shipmentPlanId: string;
-  readonly arrangementRevision: ArrangementRevisionRef;
 }
 
 function assertPositive(value: number | bigint, label: string): void {
@@ -108,6 +107,10 @@ function machineOccupancyComponents(
       name: "print_config_revision_id",
       value: input.printConfigRevision.id,
     },
+    {
+      name: "arrangement_revision_id",
+      value: input.arrangementRevision.id,
+    },
     { name: "parts_per_plate", value: input.partsPerPlate },
   ];
 }
@@ -130,6 +133,12 @@ export function buildReferenceSliceCacheKey(
   ]) as SliceCacheKey;
 }
 
+/**
+ * @deprecated Retained for persisted v0 per-occupancy keys only. Candidate
+ * metrics must use buildMachineOccupancySliceCacheKey and accepted multi-plate
+ * jobs must use buildProductionPackageKey so selection and arrangement remain
+ * part of their identities.
+ */
 export function buildProductionSliceCacheKey(
   input: ProductionSliceCacheKeyInput,
 ): SliceCacheKey {
@@ -180,30 +189,8 @@ export function buildProductionPackageKey(
   assertPositive(input.partsPerPlate, "partsPerPlate");
   assertPositive(input.quantity, "quantity");
   return buildPersistableIdentityKey("production-package", 1, [
-    { name: "geometry_hash", value: input.geometryHash.hex },
-    { name: "model_geometry_id", value: input.modelGeometryId },
-    {
-      name: "geometry_selection_hash",
-      value: input.geometrySelectionHash.hex,
-    },
-    {
-      name: "machine_profile_revision_id",
-      value: input.machineProfileRevision.id,
-    },
-    {
-      name: "machine_calibration_revision_id",
-      value: input.machineCalibrationRevision.id,
-    },
-    {
-      name: "print_config_revision_id",
-      value: input.printConfigRevision.id,
-    },
-    { name: "parts_per_plate", value: input.partsPerPlate },
+    ...machineOccupancyComponents(input),
     { name: "quantity", value: input.quantity },
-    {
-      name: "arrangement_revision_id",
-      value: input.arrangementRevision.id,
-    },
     { name: "accepted_job_id", value: input.acceptedJobId },
   ]) as ProductionPackageKey;
 }
@@ -217,9 +204,5 @@ export function buildCandidateResourceEstimateKey(
     ...machineOccupancyComponents(input),
     { name: "quantity", value: input.quantity },
     { name: "shipment_plan_id", value: input.shipmentPlanId },
-    {
-      name: "arrangement_revision_id",
-      value: input.arrangementRevision.id,
-    },
   ]) as CandidateResourceEstimateKey;
 }

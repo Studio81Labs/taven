@@ -83,9 +83,9 @@ describe("slice cache key builders", () => {
       machineProfileRevision: machineProfileRevision("machine-profile-1"),
       machineCalibrationRevision: machineCalibrationRevision("calibration-1"),
       printConfigRevision: printConfigRevision("config-1"),
+      arrangementRevision: arrangementRevision("arrangement-1"),
       partsPerPlate: 2,
       quantity: 5,
-      arrangementRevision: arrangementRevision("arrangement-1"),
       acceptedJobId: "accepted-job-1",
     } as const;
     const key = buildProductionPackageKey(base);
@@ -123,6 +123,7 @@ describe("slice cache key builders", () => {
       machineProfileRevision: machineProfileRevision("machine-profile-1"),
       machineCalibrationRevision: machineCalibrationRevision("calibration-1"),
       printConfigRevision: printConfigRevision("config-1"),
+      arrangementRevision: arrangementRevision("arrangement-1"),
       partsPerPlate: 2,
     } as const;
     const key = buildMachineOccupancySliceCacheKey(base);
@@ -144,6 +145,7 @@ describe("slice cache key builders", () => {
         machineCalibrationRevision: machineCalibrationRevision("calibration-2"),
       },
       { ...base, printConfigRevision: printConfigRevision("config-2") },
+      { ...base, arrangementRevision: arrangementRevision("arrangement-2") },
       { ...base, partsPerPlate: 1 },
     ]) {
       expect(buildMachineOccupancySliceCacheKey(changed)).not.toBe(key);

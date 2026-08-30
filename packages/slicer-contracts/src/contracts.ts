@@ -479,6 +479,7 @@ export function machineOccupancyCacheIdentitySha256(input: {
   machineProfile: { revisionId: string };
   machineCalibration: { revisionId: string };
   printConfig: { revisionId: string };
+  arrangementRevision: { revisionId: string };
   partsPerPlate: number;
 }): string {
   return machineOccupancySliceIdentitySha256({
@@ -496,6 +497,10 @@ export function machineOccupancyCacheIdentitySha256(input: {
     printConfigRevision: RevisionRef.create(
       "print-config",
       input.printConfig.revisionId,
+    ),
+    arrangementRevision: RevisionRef.create(
+      "arrangement",
+      input.arrangementRevision.revisionId,
     ),
     partsPerPlate: input.partsPerPlate,
   }).hex;

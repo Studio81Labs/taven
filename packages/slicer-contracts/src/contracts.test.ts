@@ -144,6 +144,7 @@ const machineInput = {
   machineProfile: machineSlicerProfile(ids.profile),
   machineCalibration: revision(ids.calibration),
   printConfig: revision(ids.config),
+  arrangementRevision: revision(ids.arrangement),
   partsPerPlate: 2,
 };
 const candidateCacheIdentitySha256 =
@@ -152,7 +153,6 @@ const candidateInput = {
   ...machineInput,
   quantity: 3,
   shipmentPlanId: ids.shipment,
-  arrangementRevision: revision(ids.arrangement),
   backingSliceTarget: {
     cacheIdentitySha256: candidateCacheIdentitySha256,
     analysisObjectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
@@ -163,7 +163,6 @@ const productionInput = {
   quantity: 2,
   acceptedJobId: ids.acceptedJob,
   productionReservationId: ids.reservation,
-  arrangementRevision: revision(ids.arrangement),
 };
 const legacyV1Job = {
   contractVersion: LEGACY_V1_SLICING_CONTRACT_VERSION,
@@ -558,6 +557,33 @@ describe("versioned slicing jobs", () => {
     expect(alternateMachineInput.geometry.selectionSha256).not.toBe(
       machineInput.geometry.selectionSha256,
     );
+    expect(alternateCacheIdentitySha256).not.toBe(candidateCacheIdentitySha256);
+    expect(alternateInput.backingSliceTarget).not.toEqual(
+      candidateInput.backingSliceTarget,
+    );
+    expect(SlicingJobSchema.parse(alternateJob)).toEqual(alternateJob);
+  });
+
+  it("separates candidate backing targets for distinct arrangements", () => {
+    const alternateBase = {
+      ...candidateInput,
+      arrangementRevision: revision(ids.geometryB),
+    };
+    const alternateCacheIdentitySha256 =
+      machineOccupancyCacheIdentitySha256(alternateBase);
+    const alternateInput = {
+      ...alternateBase,
+      backingSliceTarget: {
+        cacheIdentitySha256: alternateCacheIdentitySha256,
+        analysisObjectKey: `slice-metrics/${alternateCacheIdentitySha256}/result.json`,
+      },
+    };
+    const alternateJob = envelope("candidate_estimate", alternateInput, {
+      jobId: ids.geometryB,
+    });
+
+    expect(alternateInput.geometry).toEqual(candidateInput.geometry);
+    expect(alternateInput.partsPerPlate).toBe(candidateInput.partsPerPlate);
     expect(alternateCacheIdentitySha256).not.toBe(candidateCacheIdentitySha256);
     expect(alternateInput.backingSliceTarget).not.toEqual(
       candidateInput.backingSliceTarget,

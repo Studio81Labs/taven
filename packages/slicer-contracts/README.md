@@ -43,7 +43,9 @@ arrangement revision in addition to the geometry, machine profile, calibration,
 print configuration, and plate capacity. Geometry identity includes both the
 exact immutable `ModelGeometry` lineage and selected body-set digest. Two
 packages whose bytes or Job-bound object keys can differ therefore cannot share
-the unique persisted `SliceResult.cacheKey`.
+the unique persisted `SliceResult.cacheKey`. The legacy
+`buildProductionSliceCacheKey` remains available only for persisted v0 keys and
+must not identify candidate metrics or accepted multi-plate packages.
 
 Machine-profile snapshots declare the production artifact format explicitly:
 `gcode_3mf` for Bambu, `bgcode` for Prusa, or `gcode` for Klipper. Production
@@ -57,14 +59,15 @@ occupancy use the same identity digest and object key; the backend upserts the
 product production-slice identity through the bounded
 `buildMachineOccupancySliceCacheKey` builder (geometry, machine profile,
 exact immutable `ModelGeometry` lineage, selected body-set digest, calibration,
-print configuration, and occupancy only) and contains no usable G-code. The
-contract rederives that digest with the shared core identity helper, so a
-producer cannot substitute an opaque cache identity unrelated to those immutable
-inputs. Until candidate plate-child persistence is introduced, aggregate and
-final-tail estimates remain conservative at the full-occupancy material and
-time floor. The aggregate candidate-estimate key carries the same geometry
-lineage and selection identity plus plate capacity, quantity, shipment plan, and
-arrangement revision, so persistence cannot collapse distinct selected items.
+print configuration, machine-specific arrangement, and occupancy only) and
+contains no usable G-code. The contract rederives that digest with the shared
+core identity helper, so a producer cannot substitute an opaque cache identity
+unrelated to those immutable inputs. Until candidate plate-child persistence is
+introduced, aggregate and final-tail estimates remain conservative at the
+full-occupancy material and time floor. The aggregate candidate-estimate key
+carries the same geometry lineage and selection identity plus plate capacity,
+quantity and shipment plan, so persistence cannot collapse distinct selected
+items.
 
 Model inspection is explicitly two-step for multi-body inputs. `inspect_source`
 discovers a canonical ordered body list and returns no persistable geometry.
