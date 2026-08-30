@@ -470,18 +470,20 @@ const MachineSliceInputShape = {
   partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
 } as const;
 
-export function machineOccupancyCacheIdentitySha256(input: {
-  geometry: {
-    modelGeometryId: string;
-    geometrySha256: string;
-    selectionSha256: string;
-  };
-  machineProfile: { revisionId: string };
-  machineCalibration: { revisionId: string };
-  printConfig: { revisionId: string };
-  arrangementRevision: { revisionId: string };
-  partsPerPlate: number;
-}): string {
+export function machineOccupancyCacheIdentitySha256(
+  input: {
+    geometry: {
+      modelGeometryId: string;
+      geometrySha256: string;
+      selectionSha256: string;
+    };
+    machineProfile: { revisionId: string };
+    machineCalibration: { revisionId: string };
+    printConfig: { revisionId: string };
+    arrangementRevision: { revisionId: string };
+  },
+  partsPerPlate: number,
+): string {
   return machineOccupancySliceIdentitySha256({
     geometryHash: Sha256Digest.parse(input.geometry.geometrySha256),
     modelGeometryId: input.geometry.modelGeometryId,
@@ -502,8 +504,20 @@ export function machineOccupancyCacheIdentitySha256(input: {
       "arrangement",
       input.arrangementRevision.revisionId,
     ),
-    partsPerPlate: input.partsPerPlate,
+    partsPerPlate,
   }).hex;
+}
+
+function candidateOccupancies(
+  quantity: number,
+  partsPerPlate: number,
+): number[] {
+  const fullPlateCount = Math.floor(quantity / partsPerPlate);
+  const tailParts = quantity % partsPerPlate;
+  return [
+    ...(fullPlateCount > 0 ? [partsPerPlate] : []),
+    ...(tailParts > 0 ? [tailParts] : []),
+  ];
 }
 
 function requireRepresentablePlateCount(
@@ -525,36 +539,61 @@ const CandidateEstimateInputSchema = z
     quantity: boundedPositiveInteger(MAX_QUANTITY),
     shipmentPlanId: UuidSchema,
     arrangementRevision: RevisionSnapshotSchema,
-    backingSliceTarget: z
-      .strictObject({
-        cacheIdentitySha256: Sha256Schema,
-        analysisObjectKey: SliceMetricsObjectKeySchema,
-      })
-      .superRefine((value, context) => {
-        if (
-          value.analysisObjectKey !==
-          `slice-metrics/${value.cacheIdentitySha256}/result.json`
-        ) {
-          context.addIssue({
-            code: "custom",
-            path: ["analysisObjectKey"],
-            message: "must belong to the reusable machine-occupancy target",
-          });
-        }
-      }),
+    occupancySliceTargets: z
+      .array(
+        z.strictObject({
+          partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
+          cacheIdentitySha256: Sha256Schema,
+          analysisObjectKey: SliceMetricsObjectKeySchema,
+        }),
+      )
+      .min(1)
+      .max(2),
   })
   .superRefine((value, context) => {
     requireRepresentablePlateCount(value, context);
-    if (
-      value.backingSliceTarget.cacheIdentitySha256 !==
-      machineOccupancyCacheIdentitySha256(value)
-    ) {
+    const expectedOccupancies = candidateOccupancies(
+      value.quantity,
+      value.partsPerPlate,
+    );
+    if (value.occupancySliceTargets.length !== expectedOccupancies.length) {
       context.addIssue({
         code: "custom",
-        path: ["backingSliceTarget", "cacheIdentitySha256"],
-        message: "must match the immutable machine-occupancy inputs",
+        path: ["occupancySliceTargets"],
+        message: "must contain the canonical full-then-tail occupancies",
       });
     }
+    value.occupancySliceTargets.forEach((target, index) => {
+      const expectedOccupancy = expectedOccupancies[index];
+      if (target.partsPerPlate !== expectedOccupancy) {
+        context.addIssue({
+          code: "custom",
+          path: ["occupancySliceTargets", index, "partsPerPlate"],
+          message: "must contain the canonical full-then-tail occupancies",
+        });
+      }
+      const expectedIdentity = machineOccupancyCacheIdentitySha256(
+        value,
+        target.partsPerPlate,
+      );
+      if (target.cacheIdentitySha256 !== expectedIdentity) {
+        context.addIssue({
+          code: "custom",
+          path: ["occupancySliceTargets", index, "cacheIdentitySha256"],
+          message: "must match the immutable machine-occupancy inputs",
+        });
+      }
+      if (
+        target.analysisObjectKey !==
+        `slice-metrics/${target.cacheIdentitySha256}/result.json`
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["occupancySliceTargets", index, "analysisObjectKey"],
+          message: "must belong to the reusable machine-occupancy target",
+        });
+      }
+    });
   });
 
 const ProductionSliceInputSchema = z
@@ -914,21 +953,23 @@ const PlateEstimateSchema = z.strictObject({
   estimatedMaterialMilligrams: PositiveInt64StringSchema,
 });
 
+const CandidateOccupancySliceSchema = z.strictObject({
+  partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
+  cacheIdentitySha256: Sha256Schema,
+  estimatedPrintSeconds: PositiveInt64StringSchema,
+  estimatedMaterialMilligrams: PositiveInt64StringSchema,
+  artifact: z.strictObject({
+    objectKey: SliceMetricsObjectKeySchema,
+    sha256: Sha256Schema,
+  }),
+});
+
 const CandidateEstimateSuccessSchema = z
   .strictObject({
     status: z.literal("succeeded"),
     metrics: SliceMetricsSchema,
     plates: z.array(PlateEstimateSchema).min(1).max(MAX_PLATE_COUNT),
-    backingSlice: z.strictObject({
-      cacheIdentitySha256: Sha256Schema,
-      partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
-      estimatedPrintSeconds: PositiveInt64StringSchema,
-      estimatedMaterialMilligrams: PositiveInt64StringSchema,
-      artifact: z.strictObject({
-        objectKey: SliceMetricsObjectKeySchema,
-        sha256: Sha256Schema,
-      }),
-    }),
+    occupancySlices: z.array(CandidateOccupancySliceSchema).min(1).max(2),
   })
   .superRefine((value, context) => {
     const ordinals = value.plates.map(({ plateOrdinal }) => plateOrdinal);
@@ -1018,72 +1059,77 @@ function requireExpectedProfileEngine(
   }
 }
 
-function requireCandidateBackingSlice(
+function requireCandidateOccupancySlices(
   value: {
     input: {
-      partsPerPlate: number;
-      backingSliceTarget: {
+      occupancySliceTargets: Array<{
+        partsPerPlate: number;
         cacheIdentitySha256: string;
         analysisObjectKey: string;
-      };
+      }>;
     };
     outcome:
       | { status: "failed" }
       | {
           status: "succeeded";
-          metrics: {
-            plateCount: number;
+          plates: Array<{
+            partsOnPlate: number;
             estimatedPrintSeconds: string;
             estimatedMaterialMilligrams: string;
-          };
-          backingSlice: {
-            cacheIdentitySha256: string;
+          }>;
+          occupancySlices: Array<{
             partsPerPlate: number;
+            cacheIdentitySha256: string;
             estimatedPrintSeconds: string;
             estimatedMaterialMilligrams: string;
             artifact: { objectKey: string };
-          };
+          }>;
         };
   },
   context: z.RefinementCtx,
 ): void {
   if (value.outcome.status !== "succeeded") return;
-  const backingSlice = value.outcome.backingSlice;
-  const target = value.input.backingSliceTarget;
-  if (
-    backingSlice.cacheIdentitySha256 !== target.cacheIdentitySha256 ||
-    backingSlice.artifact.objectKey !== target.analysisObjectKey
-  ) {
+  const targets = value.input.occupancySliceTargets;
+  const slices = value.outcome.occupancySlices;
+  if (slices.length !== targets.length) {
     context.addIssue({
       code: "custom",
-      path: ["outcome", "backingSlice"],
-      message: "must match the reusable machine-occupancy target",
+      path: ["outcome", "occupancySlices"],
+      message: "must match every reusable machine-occupancy target",
     });
   }
-  if (backingSlice.partsPerPlate !== value.input.partsPerPlate) {
-    context.addIssue({
-      code: "custom",
-      path: ["outcome", "backingSlice", "partsPerPlate"],
-      message: "must represent the selected full plate occupancy",
-    });
-  }
-  const minimumPrintSeconds =
-    BigInt(backingSlice.estimatedPrintSeconds) *
-    BigInt(value.outcome.metrics.plateCount);
-  const minimumMaterialMilligrams =
-    BigInt(backingSlice.estimatedMaterialMilligrams) *
-    BigInt(value.outcome.metrics.plateCount);
-  if (
-    BigInt(value.outcome.metrics.estimatedPrintSeconds) < minimumPrintSeconds ||
-    BigInt(value.outcome.metrics.estimatedMaterialMilligrams) <
-      minimumMaterialMilligrams
-  ) {
-    context.addIssue({
-      code: "custom",
-      path: ["outcome", "metrics"],
-      message: "must conservatively cover the persisted backing slice",
-    });
-  }
+  slices.forEach((slice, index) => {
+    const target = targets[index];
+    if (
+      target === undefined ||
+      slice.partsPerPlate !== target.partsPerPlate ||
+      slice.cacheIdentitySha256 !== target.cacheIdentitySha256 ||
+      slice.artifact.objectKey !== target.analysisObjectKey
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["outcome", "occupancySlices", index],
+        message: "must match the reusable machine-occupancy target",
+      });
+    }
+  });
+  const slicesByOccupancy = new Map(
+    slices.map((slice) => [slice.partsPerPlate, slice]),
+  );
+  value.outcome.plates.forEach((plate, index) => {
+    const slice = slicesByOccupancy.get(plate.partsOnPlate);
+    if (
+      slice === undefined ||
+      plate.estimatedPrintSeconds !== slice.estimatedPrintSeconds ||
+      plate.estimatedMaterialMilligrams !== slice.estimatedMaterialMilligrams
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["outcome", "plates", index],
+        message: "must equal the matching persisted occupancy slice",
+      });
+    }
+  });
 }
 
 function requireCanonicalPlatePlan(
@@ -1254,7 +1300,7 @@ const CandidateEstimateResultBase = z
     requireSelectedBodyCount(value, context);
     requireExpectedProfileEngine(value, value.input.machineProfile, context);
     requireCanonicalPlatePlan(value, context);
-    requireCandidateBackingSlice(value, context);
+    requireCandidateOccupancySlices(value, context);
   });
 const ProductionSliceResultBase = z
   .strictObject({

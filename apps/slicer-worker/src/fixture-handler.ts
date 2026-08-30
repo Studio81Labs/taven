@@ -181,42 +181,47 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
     }
     case "candidate_estimate": {
       const parts = plateParts(job.input.quantity, job.input.partsPerPlate);
-      const backingPrintSeconds = job.input.partsPerPlate * 60;
-      const backingMaterialMilligrams = job.input.partsPerPlate * 1_000;
-      const artifactSha256 = fixtureHash(
-        job.input.geometry.geometrySha256,
-        job.input.geometry.selectionSha256,
-        job.input.machineProfile.contentSha256,
-        job.input.machineCalibration.contentSha256,
-        job.input.printConfig.contentSha256,
-        job.input.partsPerPlate,
+      const occupancySlices = job.input.occupancySliceTargets.map((target) => ({
+        partsPerPlate: target.partsPerPlate,
+        cacheIdentitySha256: target.cacheIdentitySha256,
+        estimatedPrintSeconds: String(target.partsPerPlate * 60),
+        estimatedMaterialMilligrams: String(target.partsPerPlate * 1_000),
+        artifact: {
+          objectKey: target.analysisObjectKey,
+          sha256: fixtureHash(
+            job.input.geometry.geometrySha256,
+            job.input.geometry.selectionSha256,
+            job.input.machineProfile.contentSha256,
+            job.input.machineCalibration.contentSha256,
+            job.input.printConfig.contentSha256,
+            job.input.arrangementRevision.contentSha256,
+            target.partsPerPlate,
+          ),
+        },
+      }));
+      const occupancyByParts = new Map(
+        occupancySlices.map((slice) => [slice.partsPerPlate, slice]),
       );
       return slicingResultForJobSchema(job).parse({
         ...envelope,
         outcome: {
           status: "succeeded",
           metrics: sliceMetrics(
-            job.input.partsPerPlate * parts.length,
+            job.input.quantity,
             parts.length,
             job.input.geometry.bodyIds.length,
           ),
-          plates: parts.map((partsOnPlate, index) => ({
-            plateOrdinal: index + 1,
-            partsOnPlate,
-            estimatedPrintSeconds: String(backingPrintSeconds),
-            estimatedMaterialMilligrams: String(backingMaterialMilligrams),
-          })),
-          backingSlice: {
-            cacheIdentitySha256:
-              job.input.backingSliceTarget.cacheIdentitySha256,
-            partsPerPlate: job.input.partsPerPlate,
-            estimatedPrintSeconds: String(backingPrintSeconds),
-            estimatedMaterialMilligrams: String(backingMaterialMilligrams),
-            artifact: {
-              objectKey: job.input.backingSliceTarget.analysisObjectKey,
-              sha256: artifactSha256,
-            },
-          },
+          plates: parts.map((partsOnPlate, index) => {
+            const occupancy = occupancyByParts.get(partsOnPlate)!;
+            return {
+              plateOrdinal: index + 1,
+              partsOnPlate,
+              estimatedPrintSeconds: occupancy.estimatedPrintSeconds,
+              estimatedMaterialMilligrams:
+                occupancy.estimatedMaterialMilligrams,
+            };
+          }),
+          occupancySlices,
         },
       });
     }

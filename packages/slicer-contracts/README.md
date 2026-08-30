@@ -52,22 +52,23 @@ Machine-profile snapshots declare the production artifact format explicitly:
 results must use that exact format and its deterministic Job-bound suffix; the
 slicer engine name alone never selects the transport artifact.
 
-Candidate results separately return one cache-derived, full-occupancy
-machine-slice metrics artifact. Concurrent dispatches for the same immutable
-occupancy use the same identity digest and object key; the backend upserts the
-`SliceResult` by that key and uses the winning row ID. The reusable row uses the
-product production-slice identity through the bounded
-`buildMachineOccupancySliceCacheKey` builder (geometry, machine profile,
-exact immutable `ModelGeometry` lineage, selected body-set digest, calibration,
-print configuration, machine-specific arrangement, and occupancy only) and
-contains no usable G-code. The contract rederives that digest with the shared
-core identity helper, so a producer cannot substitute an opaque cache identity
-unrelated to those immutable inputs. Until candidate plate-child persistence is
-introduced, aggregate and final-tail estimates remain conservative at the
-full-occupancy material and time floor. The aggregate candidate-estimate key
-carries the same geometry lineage and selection identity plus plate capacity,
-quantity and shipment plan, so persistence cannot collapse distinct selected
-items.
+Candidate results separately return the distinct cache-derived machine-slice
+metrics artifacts used by their canonical plate plan. Exact multiples need one
+reusable full-occupancy target; a partial job needs only its actual occupancy;
+and a full-plus-tail job carries two targets ordered full then tail. Repeated
+full plates reuse the same target. The backend upserts every `SliceResult` by
+its cache key; this package supplies the complete payload for those independent
+occupancy rows. Associating their winning IDs with the aggregate candidate is
+backend persistence/consumer work outside this contract package. Each reusable
+row uses the product production-slice identity through the bounded
+`buildMachineOccupancySliceCacheKey` builder (geometry, machine profile, exact
+immutable `ModelGeometry` lineage, selected body-set digest, calibration, print
+configuration, machine-specific arrangement, and concrete occupancy only) and
+contains no usable G-code. The contract rederives every digest with the shared
+core identity helper, matches every plate to its returned occupancy metrics,
+and requires exact aggregate totals. The aggregate candidate-estimate key
+additionally carries plate capacity, quantity, and shipment plan, so persistence
+cannot collapse distinct selected items.
 
 Model inspection is explicitly two-step for multi-body inputs. `inspect_source`
 discovers a canonical ordered body list and returns no persistable geometry.

@@ -68,8 +68,27 @@ const machineInput = {
   arrangementRevision: revision(ids.arrangement, "3"),
   partsPerPlate: 2,
 };
+const occupancySliceTarget = (
+  input: Parameters<typeof machineOccupancyCacheIdentitySha256>[0],
+  partsPerPlate: number,
+) => {
+  const cacheIdentitySha256 = machineOccupancyCacheIdentitySha256(
+    input,
+    partsPerPlate,
+  );
+  return {
+    partsPerPlate,
+    cacheIdentitySha256,
+    analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
+  };
+};
+const candidateOccupancySliceTargets = [2, 1].map((partsPerPlate) =>
+  occupancySliceTarget(machineInput, partsPerPlate),
+);
 const candidateCacheIdentitySha256 =
-  machineOccupancyCacheIdentitySha256(machineInput);
+  candidateOccupancySliceTargets[0]!.cacheIdentitySha256;
+const candidateTailCacheIdentitySha256 =
+  candidateOccupancySliceTargets[1]!.cacheIdentitySha256;
 
 function fixtureJob(
   kind:
@@ -136,15 +155,13 @@ const sourceInspectionJob = fixtureJob(
   sourceInspectionInput,
 );
 const referenceJob = fixtureJob("reference_slice", referenceInput);
-const candidateJob = fixtureJob("candidate_estimate", {
+const candidateInput = {
   ...machineInput,
   quantity: 3,
   shipmentPlanId: ids.shipment,
-  backingSliceTarget: {
-    cacheIdentitySha256: candidateCacheIdentitySha256,
-    analysisObjectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
-  },
-});
+  occupancySliceTargets: candidateOccupancySliceTargets,
+};
+const candidateJob = fixtureJob("candidate_estimate", candidateInput);
 const productionInput = {
   ...machineInput,
   quantity: 5,
@@ -258,25 +275,73 @@ describe("runFixtureSlicingJob", () => {
         status: "succeeded",
         metrics: {
           plateCount: 2,
-          estimatedPrintSeconds: "240",
-          estimatedMaterialMilligrams: "4000",
+          estimatedPrintSeconds: "180",
+          estimatedMaterialMilligrams: "3000",
         },
         plates: [
           { plateOrdinal: 1, partsOnPlate: 2 },
           { plateOrdinal: 2, partsOnPlate: 1 },
         ],
-        backingSlice: {
-          cacheIdentitySha256: candidateCacheIdentitySha256,
-          partsPerPlate: 2,
-          estimatedPrintSeconds: "120",
-          estimatedMaterialMilligrams: "2000",
-          artifact: {
-            objectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
+        occupancySlices: [
+          {
+            cacheIdentitySha256: candidateCacheIdentitySha256,
+            partsPerPlate: 2,
+            estimatedPrintSeconds: "120",
+            estimatedMaterialMilligrams: "2000",
+            artifact: {
+              objectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
+            },
           },
-        },
+          {
+            cacheIdentitySha256: candidateTailCacheIdentitySha256,
+            partsPerPlate: 1,
+            estimatedPrintSeconds: "60",
+            estimatedMaterialMilligrams: "1000",
+            artifact: {
+              objectKey: `slice-metrics/${candidateTailCacheIdentitySha256}/result.json`,
+            },
+          },
+        ],
       },
     });
   });
+
+  it.each([
+    { quantity: 1, occupancies: [1], plateCount: 1 },
+    { quantity: 4, occupancies: [2], plateCount: 2 },
+  ])(
+    "emits only reusable occupancies for quantity $quantity",
+    ({ quantity, occupancies, plateCount }) => {
+      const base = {
+        ...machineInput,
+        quantity,
+        shipmentPlanId: ids.shipment,
+      };
+      const input = {
+        ...base,
+        occupancySliceTargets: occupancies.map((partsPerPlate) =>
+          occupancySliceTarget(base, partsPerPlate),
+        ),
+      };
+      const result = runFixtureSlicingJob(
+        fixtureJob("candidate_estimate", input),
+      );
+
+      expect(result).toMatchObject({
+        outcome: {
+          status: "succeeded",
+          metrics: {
+            plateCount,
+            estimatedPrintSeconds: String(quantity * 60),
+            estimatedMaterialMilligrams: String(quantity * 1_000),
+          },
+          occupancySlices: occupancies.map((partsPerPlate) => ({
+            partsPerPlate,
+          })),
+        },
+      });
+    },
+  );
 
   it("emits one persistence-compatible package for a multi-plate Job", () => {
     expect(runFixtureSlicingJob(productionJob)).toMatchObject({
@@ -322,19 +387,7 @@ describe("runFixtureSlicingJob", () => {
 
   it.each([
     ["reference_slice", referenceInput],
-    [
-      "candidate_estimate",
-      {
-        ...machineInput,
-        quantity: 3,
-        shipmentPlanId: ids.shipment,
-        arrangementRevision: revision(ids.arrangement, "3"),
-        backingSliceTarget: {
-          cacheIdentitySha256: candidateCacheIdentitySha256,
-          analysisObjectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
-        },
-      },
-    ],
+    ["candidate_estimate", candidateInput],
     [
       "production_slice",
       {
@@ -356,21 +409,25 @@ describe("runFixtureSlicingJob", () => {
         selectionSha256: geometrySelectionSha256(bodyIds),
       },
     };
-    const cacheIdentitySha256 =
+    const occupancySliceTargets =
       kind === "candidate_estimate"
-        ? machineOccupancyCacheIdentitySha256(selectedInput)
+        ? [2, 1].map((partsPerPlate) =>
+            occupancySliceTarget(
+              selectedInput as Parameters<
+                typeof machineOccupancyCacheIdentitySha256
+              >[0],
+              partsPerPlate,
+            ),
+          )
         : undefined;
     const job = fixtureJob(
       kind,
       {
         ...selectedInput,
-        ...(cacheIdentitySha256 === undefined
+        ...(occupancySliceTargets === undefined
           ? {}
           : {
-              backingSliceTarget: {
-                cacheIdentitySha256,
-                analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
-              },
+              occupancySliceTargets,
             }),
       },
       jobId,

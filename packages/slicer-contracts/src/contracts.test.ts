@@ -147,16 +147,32 @@ const machineInput = {
   arrangementRevision: revision(ids.arrangement),
   partsPerPlate: 2,
 };
+const occupancySliceTarget = (
+  input: Parameters<typeof machineOccupancyCacheIdentitySha256>[0],
+  partsPerPlate: number,
+) => {
+  const cacheIdentitySha256 = machineOccupancyCacheIdentitySha256(
+    input,
+    partsPerPlate,
+  );
+  return {
+    partsPerPlate,
+    cacheIdentitySha256,
+    analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
+  };
+};
+const candidateOccupancySliceTargets = [2, 1].map((partsPerPlate) =>
+  occupancySliceTarget(machineInput, partsPerPlate),
+);
 const candidateCacheIdentitySha256 =
-  machineOccupancyCacheIdentitySha256(machineInput);
+  candidateOccupancySliceTargets[0]!.cacheIdentitySha256;
+const candidateTailCacheIdentitySha256 =
+  candidateOccupancySliceTargets[1]!.cacheIdentitySha256;
 const candidateInput = {
   ...machineInput,
   quantity: 3,
   shipmentPlanId: ids.shipment,
-  backingSliceTarget: {
-    cacheIdentitySha256: candidateCacheIdentitySha256,
-    analysisObjectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
-  },
+  occupancySliceTargets: candidateOccupancySliceTargets,
 };
 const productionInput = {
   ...machineInput,
@@ -247,16 +263,28 @@ const productionOutcome = {
     sha256: hash("5"),
   },
 };
-const candidateBackingSlice = {
-  cacheIdentitySha256: candidateCacheIdentitySha256,
-  partsPerPlate: 2,
-  estimatedPrintSeconds: "10",
-  estimatedMaterialMilligrams: "20",
-  artifact: {
-    objectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
-    sha256: hash("6"),
+const candidateOccupancySlices = [
+  {
+    cacheIdentitySha256: candidateCacheIdentitySha256,
+    partsPerPlate: 2,
+    estimatedPrintSeconds: "10",
+    estimatedMaterialMilligrams: "20",
+    artifact: {
+      objectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
+      sha256: hash("6"),
+    },
   },
-};
+  {
+    cacheIdentitySha256: candidateTailCacheIdentitySha256,
+    partsPerPlate: 1,
+    estimatedPrintSeconds: "6",
+    estimatedMaterialMilligrams: "8",
+    artifact: {
+      objectKey: `slice-metrics/${candidateTailCacheIdentitySha256}/result.json`,
+      sha256: hash("7"),
+    },
+  },
+];
 const inspectionJob = envelope("model_inspection", inspectionInput);
 const sourceInspectionJob = envelope("model_inspection", sourceInspectionInput);
 const referenceJob = envelope("reference_slice", referenceInput);
@@ -370,10 +398,14 @@ describe("versioned slicing jobs", () => {
       SlicingJobSchema.parse(
         envelope("candidate_estimate", {
           ...candidateInput,
-          backingSliceTarget: {
-            cacheIdentitySha256: hash("9"),
-            analysisObjectKey: `slice-metrics/${hash("9")}/result.json`,
-          },
+          occupancySliceTargets: [
+            {
+              ...candidateOccupancySliceTargets[0]!,
+              cacheIdentitySha256: hash("9"),
+              analysisObjectKey: `slice-metrics/${hash("9")}/result.json`,
+            },
+            candidateOccupancySliceTargets[1]!,
+          ],
         }),
       ),
     ).toThrow();
@@ -513,8 +545,8 @@ describe("versioned slicing jobs", () => {
       jobId: ids.geometryB,
     });
 
-    expect(secondInput.backingSliceTarget).toEqual(
-      candidateInput.backingSliceTarget,
+    expect(secondInput.occupancySliceTargets).toEqual(
+      candidateInput.occupancySliceTargets,
     );
     expect(second.inputFingerprintSha256).not.toBe(
       first.inputFingerprintSha256,
@@ -533,16 +565,13 @@ describe("versioned slicing jobs", () => {
         machineInput.geometry.geometrySha256,
       ),
     };
-    const alternateCacheIdentitySha256 = machineOccupancyCacheIdentitySha256(
-      alternateMachineInput,
+    const alternateOccupancySliceTargets = [2, 1].map((partsPerPlate) =>
+      occupancySliceTarget(alternateMachineInput, partsPerPlate),
     );
     const alternateInput = {
       ...candidateInput,
       ...alternateMachineInput,
-      backingSliceTarget: {
-        cacheIdentitySha256: alternateCacheIdentitySha256,
-        analysisObjectKey: `slice-metrics/${alternateCacheIdentitySha256}/result.json`,
-      },
+      occupancySliceTargets: alternateOccupancySliceTargets,
     };
     const alternateJob = envelope("candidate_estimate", alternateInput, {
       jobId: ids.geometryB,
@@ -557,9 +586,11 @@ describe("versioned slicing jobs", () => {
     expect(alternateMachineInput.geometry.selectionSha256).not.toBe(
       machineInput.geometry.selectionSha256,
     );
-    expect(alternateCacheIdentitySha256).not.toBe(candidateCacheIdentitySha256);
-    expect(alternateInput.backingSliceTarget).not.toEqual(
-      candidateInput.backingSliceTarget,
+    expect(alternateOccupancySliceTargets).not.toEqual(
+      candidateOccupancySliceTargets,
+    );
+    expect(alternateInput.occupancySliceTargets).not.toEqual(
+      candidateInput.occupancySliceTargets,
     );
     expect(SlicingJobSchema.parse(alternateJob)).toEqual(alternateJob);
   });
@@ -569,14 +600,12 @@ describe("versioned slicing jobs", () => {
       ...candidateInput,
       arrangementRevision: revision(ids.geometryB),
     };
-    const alternateCacheIdentitySha256 =
-      machineOccupancyCacheIdentitySha256(alternateBase);
+    const alternateOccupancySliceTargets = [2, 1].map((partsPerPlate) =>
+      occupancySliceTarget(alternateBase, partsPerPlate),
+    );
     const alternateInput = {
       ...alternateBase,
-      backingSliceTarget: {
-        cacheIdentitySha256: alternateCacheIdentitySha256,
-        analysisObjectKey: `slice-metrics/${alternateCacheIdentitySha256}/result.json`,
-      },
+      occupancySliceTargets: alternateOccupancySliceTargets,
     };
     const alternateJob = envelope("candidate_estimate", alternateInput, {
       jobId: ids.geometryB,
@@ -584,11 +613,58 @@ describe("versioned slicing jobs", () => {
 
     expect(alternateInput.geometry).toEqual(candidateInput.geometry);
     expect(alternateInput.partsPerPlate).toBe(candidateInput.partsPerPlate);
-    expect(alternateCacheIdentitySha256).not.toBe(candidateCacheIdentitySha256);
-    expect(alternateInput.backingSliceTarget).not.toEqual(
-      candidateInput.backingSliceTarget,
+    expect(alternateOccupancySliceTargets).not.toEqual(
+      candidateOccupancySliceTargets,
+    );
+    expect(alternateInput.occupancySliceTargets).not.toEqual(
+      candidateInput.occupancySliceTargets,
     );
     expect(SlicingJobSchema.parse(alternateJob)).toEqual(alternateJob);
+  });
+
+  it.each([
+    { quantity: 1, capacity: 2, occupancies: [1] },
+    { quantity: 2, capacity: 2, occupancies: [2] },
+    { quantity: 4, capacity: 2, occupancies: [2] },
+    { quantity: 5, capacity: 2, occupancies: [2, 1] },
+  ])(
+    "requires canonical occupancy targets for quantity $quantity and capacity $capacity",
+    ({ quantity, capacity, occupancies }) => {
+      const base = {
+        ...machineInput,
+        partsPerPlate: capacity,
+        quantity,
+        shipmentPlanId: ids.shipment,
+      };
+      const input = {
+        ...base,
+        occupancySliceTargets: occupancies.map((partsPerPlate) =>
+          occupancySliceTarget(base, partsPerPlate),
+        ),
+      };
+      const job = envelope("candidate_estimate", input);
+
+      expect(SlicingJobSchema.parse(job)).toEqual(job);
+      expect(
+        input.occupancySliceTargets.map(({ partsPerPlate }) => partsPerPlate),
+      ).toEqual(occupancies);
+    },
+  );
+
+  it("rejects missing or misordered tail occupancy targets", () => {
+    for (const occupancySliceTargets of [
+      [candidateOccupancySliceTargets[0]!],
+      [...candidateOccupancySliceTargets].reverse(),
+    ]) {
+      expect(() =>
+        SlicingJobSchema.parse(
+          envelope("candidate_estimate", {
+            ...candidateInput,
+            occupancySliceTargets,
+          }),
+        ),
+      ).toThrow();
+    }
   });
 
   it("rejects unsafe keys, identifiers, hashes, and numeric bounds", () => {
@@ -678,8 +754,8 @@ describe("versioned slicing results", () => {
       status: "succeeded",
       metrics: {
         ...sliceMetrics,
-        estimatedPrintSeconds: "20",
-        estimatedMaterialMilligrams: "40",
+        estimatedPrintSeconds: "16",
+        estimatedMaterialMilligrams: "28",
         plateCount: 2,
       },
       plates: [
@@ -692,11 +768,11 @@ describe("versioned slicing results", () => {
         {
           plateOrdinal: 2,
           partsOnPlate: 1,
-          estimatedPrintSeconds: "10",
-          estimatedMaterialMilligrams: "20",
+          estimatedPrintSeconds: "6",
+          estimatedMaterialMilligrams: "8",
         },
       ],
-      backingSlice: candidateBackingSlice,
+      occupancySlices: candidateOccupancySlices,
     });
     const production = result(productionJob, productionOutcome);
     for (const value of [inspection, reference, candidate, production])
@@ -931,8 +1007,8 @@ describe("versioned slicing results", () => {
         status: "succeeded",
         metrics: {
           ...sliceMetrics,
-          estimatedPrintSeconds: "20",
-          estimatedMaterialMilligrams: "40",
+          estimatedPrintSeconds: "16",
+          estimatedMaterialMilligrams: "28",
           plateCount: 2,
         },
         plates: [
@@ -945,11 +1021,11 @@ describe("versioned slicing results", () => {
           {
             plateOrdinal: 2,
             partsOnPlate: 1,
-            estimatedPrintSeconds: "10",
-            estimatedMaterialMilligrams: "20",
+            estimatedPrintSeconds: "6",
+            estimatedMaterialMilligrams: "8",
           },
         ],
-        backingSlice: candidateBackingSlice,
+        occupancySlices: candidateOccupancySlices,
       }),
       result(productionJob, productionOutcome),
     ];
@@ -1107,8 +1183,8 @@ describe("versioned slicing results", () => {
       status: "succeeded",
       metrics: {
         ...sliceMetrics,
-        estimatedPrintSeconds: "20",
-        estimatedMaterialMilligrams: "40",
+        estimatedPrintSeconds: "16",
+        estimatedMaterialMilligrams: "28",
         plateCount: 2,
       },
       plates: [
@@ -1121,13 +1197,50 @@ describe("versioned slicing results", () => {
         {
           plateOrdinal: 2,
           partsOnPlate: 1,
-          estimatedPrintSeconds: "10",
-          estimatedMaterialMilligrams: "20",
+          estimatedPrintSeconds: "6",
+          estimatedMaterialMilligrams: "8",
         },
       ],
-      backingSlice: candidateBackingSlice,
+      occupancySlices: candidateOccupancySlices,
     });
     expect(CandidateEstimateResultSchema.parse(valid)).toEqual(valid);
+    expect(() =>
+      CandidateEstimateResultSchema.parse({
+        ...valid,
+        outcome: {
+          ...(valid.outcome as object),
+          metrics: {
+            ...sliceMetrics,
+            estimatedPrintSeconds: "20",
+            estimatedMaterialMilligrams: "40",
+            plateCount: 2,
+          },
+          plates: [
+            {
+              plateOrdinal: 1,
+              partsOnPlate: 2,
+              estimatedPrintSeconds: "10",
+              estimatedMaterialMilligrams: "20",
+            },
+            {
+              plateOrdinal: 2,
+              partsOnPlate: 1,
+              estimatedPrintSeconds: "10",
+              estimatedMaterialMilligrams: "20",
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      CandidateEstimateResultSchema.parse({
+        ...valid,
+        outcome: {
+          ...(valid.outcome as object),
+          occupancySlices: [candidateOccupancySlices[0]!],
+        },
+      }),
+    ).toThrow();
     expect(() =>
       CandidateEstimateResultSchema.parse({
         ...valid,
@@ -1142,10 +1255,13 @@ describe("versioned slicing results", () => {
         ...valid,
         outcome: {
           ...(valid.outcome as object),
-          backingSlice: {
-            ...candidateBackingSlice,
-            cacheIdentitySha256: hash("9"),
-          },
+          occupancySlices: [
+            {
+              ...candidateOccupancySlices[0]!,
+              cacheIdentitySha256: hash("9"),
+            },
+            candidateOccupancySlices[1]!,
+          ],
         },
       }),
     ).toThrow();
@@ -1154,10 +1270,13 @@ describe("versioned slicing results", () => {
         ...valid,
         outcome: {
           ...(valid.outcome as object),
-          backingSlice: {
-            ...candidateBackingSlice,
-            partsPerPlate: 1,
-          },
+          occupancySlices: [
+            {
+              ...candidateOccupancySlices[0]!,
+              partsPerPlate: 1,
+            },
+            candidateOccupancySlices[1]!,
+          ],
         },
       }),
     ).toThrow();
@@ -1166,10 +1285,13 @@ describe("versioned slicing results", () => {
         ...valid,
         outcome: {
           ...(valid.outcome as object),
-          backingSlice: {
-            ...candidateBackingSlice,
-            estimatedPrintSeconds: "11",
-          },
+          occupancySlices: [
+            {
+              ...candidateOccupancySlices[0]!,
+              estimatedPrintSeconds: "11",
+            },
+            candidateOccupancySlices[1]!,
+          ],
         },
       }),
     ).toThrow();
