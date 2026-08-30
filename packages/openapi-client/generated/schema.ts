@@ -4,6 +4,91 @@
  */
 
 export interface paths {
+    "/admin/quote-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the operator quote-request queue */
+        get: operations["OperatorQuoteRequestsController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one operator quote-request detail */
+        get: operations["OperatorQuoteRequestsController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/expire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Expire an overdue individual offer */
+        post: operations["OperatorQuoteRequestsController_expire"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/offers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue an immutable tokenized individual offer */
+        post: operations["OperatorQuoteRequestsController_issue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a new request into operator review */
+        post: operations["OperatorQuoteRequestsController_review"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -13,6 +98,91 @@ export interface paths {
         };
         /** Report API process health */
         get: operations["HealthController_getHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offers/{quoteId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview one immutable individual offer */
+        get: operations["OffersController_preview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offers/{quoteId}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept an offer and create its draft order */
+        post: operations["OffersController_accept"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offers/{quoteId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject an individual offer */
+        post: operations["OffersController_reject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quote-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit an individual quote request */
+        post: operations["QuoteRequestsController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quote-requests/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resume one request with its scoped capability */
+        get: operations["QuoteRequestsController_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -127,6 +297,17 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptedOfferDto: {
+            /** Format: uuid */
+            orderId: string;
+            publicReference: string;
+            /** @enum {string} */
+            status: "DRAFT";
+        };
+        AcceptOfferDto: {
+            termsRevision: string;
+            version: number;
+        };
         ConfirmedUploadResponseDto: {
             /** Format: uuid */
             assetId: string;
@@ -138,6 +319,19 @@ export interface components {
             uploadedAt: string;
             /** Format: uuid */
             uploadId: string;
+        };
+        CreateQuoteRequestDto: {
+            attribution?: {
+                [key: string]: unknown;
+            };
+            contact: components["schemas"]["QuoteContactDto"];
+            description: string;
+            measurements?: {
+                [key: string]: unknown;
+            };
+            purpose?: string;
+            /** Format: date */
+            requestedDate?: string;
         };
         HealthResponseDto: {
             /**
@@ -182,6 +376,139 @@ export interface components {
             /** @example 256000 */
             sizeBytes: number;
         };
+        IssueOfferDto: {
+            components: components["schemas"]["OfferPriceComponentDto"][];
+            contractTotalMinor: number;
+            depositMinor: number;
+            /** Format: date-time */
+            expiresAt: string;
+            inputSnapshot: {
+                [key: string]: unknown;
+            };
+            items: components["schemas"]["OfferItemDto"][];
+            /** Format: uuid */
+            priceListId: string;
+            /** Format: date */
+            promisedDate?: string;
+            summary: string;
+            termsSnapshot: {
+                [key: string]: unknown;
+            };
+        };
+        OfferIssuedDto: {
+            /** Format: date-time */
+            expiresAt: string;
+            offerToken: string;
+            /** Format: uuid */
+            quoteId: string;
+            termsRevision: string;
+            version: number;
+        };
+        OfferItemDto: {
+            color?: string;
+            /** @enum {string} */
+            kind: "MODEL" | "CUSTOM_SERVICE";
+            /** @enum {string} */
+            material?: "PLA" | "PETG";
+            /** Format: uuid */
+            modelGeometryId?: string;
+            /** Format: uuid */
+            primaryReferenceSliceResultId?: string;
+            /** Format: uuid */
+            printConfigRevisionId?: string;
+            quantity?: number;
+            referencePartsPerPlate?: number;
+            serviceDescription?: string;
+            /** Format: uuid */
+            sourceModelFileId?: string;
+            /** Format: uuid */
+            tailReferenceSliceResultId?: string;
+        };
+        OfferPreviewDto: {
+            contractTotalMinor: number;
+            currency: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date */
+            promisedDate?: string | null;
+            /** Format: uuid */
+            quoteId: string;
+            summary: string;
+            termsRevision: string;
+            termsSnapshot: {
+                [key: string]: unknown;
+            };
+            version: number;
+        };
+        OfferPriceComponentDto: {
+            allocation?: {
+                [key: string]: unknown;
+            };
+            amountMinor: number;
+            /** @enum {string} */
+            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "EXPRESS" | "PAYMENT_FEE";
+            quoteItemOrdinal?: number;
+        };
+        QuoteAttachmentDto: {
+            /** Format: date-time */
+            deleteAfter: string;
+            /** Format: uuid */
+            id: string;
+            mediaType: string;
+            sizeBytes: number;
+            /** Format: date-time */
+            uploadedAt: string;
+        };
+        QuoteContactDto: {
+            /** Format: email */
+            email: string;
+            name: string;
+            phone?: string;
+        };
+        QuoteRequestCreatedDto: {
+            publicReference: string;
+            /** Format: uuid */
+            requestId: string;
+            /** @description Request-scoped capability */
+            requestToken: string;
+            /** Format: date-time */
+            slaDueAt: string;
+            /** @enum {string} */
+            status: "NEW";
+        };
+        QuoteRequestDetailDto: {
+            attachments: components["schemas"]["QuoteAttachmentDto"][];
+            attribution?: {
+                [key: string]: unknown;
+            } | null;
+            contact: components["schemas"]["QuoteContactDto"];
+            description: string;
+            measurements?: {
+                [key: string]: unknown;
+            } | null;
+            publicReference: string;
+            purpose?: string | null;
+            /** Format: date */
+            requestedDate?: string | null;
+            /** Format: uuid */
+            requestId: string;
+            slaBreached: boolean;
+            /** Format: date-time */
+            slaDueAt: string;
+            /** @enum {string} */
+            status: "NEW" | "IN_REVIEW" | "QUOTED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
+        };
+        QuoteRequestStatusDto: {
+            /** Format: uuid */
+            requestId: string;
+            /** @enum {string} */
+            status: "IN_REVIEW" | "REJECTED" | "EXPIRED";
+        };
+        RejectOfferDto: {
+            reason?: string;
+            termsRevision: string;
+            version: number;
+        };
         ReorderEligibilityResponseDto: {
             eligible: boolean;
             /** @enum {string} */
@@ -225,6 +552,138 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    OperatorQuoteRequestsController_list: {
+        parameters: {
+            query?: {
+                status?: "NEW" | "IN_REVIEW" | "QUOTED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestDetailDto"][];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestDetailDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_expire: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestStatusDto"];
+                };
+            };
+            /** @description Offer is not overdue */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorQuoteRequestsController_issue: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueOfferDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfferIssuedDto"];
+                };
+            };
+            /** @description Request is not in review */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorQuoteRequestsController_review: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestStatusDto"];
+                };
+            };
+        };
+    };
     HealthController_getHealth: {
         parameters: {
             query?: never;
@@ -241,6 +700,193 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HealthResponseDto"];
                 };
+            };
+        };
+    };
+    OffersController_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                quoteId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfferPreviewDto"];
+                };
+            };
+            /** @description Offer capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Offer is closed or expired */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OffersController_accept: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                quoteId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptOfferDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptedOfferDto"];
+                };
+            };
+            /** @description Offer capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Offer version or terms changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Offer is closed or expired */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OffersController_reject: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                quoteId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectOfferDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestStatusDto"];
+                };
+            };
+            /** @description Offer capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Offer is closed or expired */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    QuoteRequestsController_create: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateQuoteRequestDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestCreatedDto"];
+                };
+            };
+            /** @description Idempotency input changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    QuoteRequestsController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestDetailDto"];
+                };
+            };
+            /** @description Request capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

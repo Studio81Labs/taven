@@ -227,6 +227,13 @@ enum QuoteRequestStatus {
   @@map("quote_request_status")
 }
 
+enum CommerceItemKind {
+  MODEL
+  CUSTOM_SERVICE
+
+  @@map("commerce_item_kind")
+}
+
 enum PriceComponentKind {
   ITEM_PRODUCTION
   ITEM_QUANTITY
@@ -1249,29 +1256,54 @@ model QuoteSession {
 }
 
 model QuoteRequest {
-  id             String             @id @default(uuid()) @db.Uuid
-  quoteSessionId String?            @unique @map("quote_session_id") @db.Uuid
-  customerId     String?            @map("customer_id") @db.Uuid
-  status         QuoteRequestStatus @default(NEW)
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                     String             @id @default(uuid()) @db.Uuid
+  quoteSessionId         String?            @unique @map("quote_session_id") @db.Uuid
+  customerId             String?            @map("customer_id") @db.Uuid
+  publicReference        String             @unique @default(uuid()) @map("public_reference") @db.VarChar(50)
+  status                 QuoteRequestStatus @default(NEW)
+  description            String             @default("Legacy quote request") @db.Text
+  purpose                String?            @db.Text
+  measurements           Json?              @db.JsonB
+  requestedDate          DateTime?          @map("requested_date") @db.Date
+  contactSnapshot        Json?              @map("contact_snapshot") @db.JsonB
+  attribution            Json?              @db.JsonB
+  slaDueAt               DateTime           @default(now()) @map("sla_due_at") @db.Timestamptz(3)
+  slaRespondedAt         DateTime?          @map("sla_responded_at") @db.Timestamptz(3)
+  currentStateCommandKey String             @default("legacy-import") @map("current_state_command_key") @db.VarChar(255)
+  currentStateResultId   String             @default(uuid()) @map("current_state_result_id") @db.Uuid
+  acceptedAt             DateTime?          @map("accepted_at") @db.Timestamptz(3)
+  rejectedAt             DateTime?          @map("rejected_at") @db.Timestamptz(3)
+  expiredAt              DateTime?          @map("expired_at") @db.Timestamptz(3)
+  rejectionReason        String?            @map("rejection_reason") @db.Text
+  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   quoteSession                  QuoteSession?                     @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
   customer                      Customer?                         @relation(fields: [customerId], references: [id], onDelete: Restrict)
   quote                         Quote?
+  auditEvents                   AuditEvent[]
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
 
   @@index([customerId, status])
+  @@index([status, slaDueAt])
   @@map("quote_requests")
 }
 
 model Quote {
-  id             String   @id @default(uuid()) @db.Uuid
-  quoteRequestId String   @unique @map("quote_request_id") @db.Uuid
-  customerId     String   @map("customer_id") @db.Uuid
-  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
-  issuedAt       DateTime @default(now()) @map("issued_at") @db.Timestamptz(3)
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                 String    @id @default(uuid()) @db.Uuid
+  quoteRequestId     String    @unique @map("quote_request_id") @db.Uuid
+  customerId         String    @map("customer_id") @db.Uuid
+  publicTokenHash    String?   @unique @map("public_token_hash") @db.VarChar(64)
+  version            Int       @default(1)
+  summary            String    @default("Legacy individual offer") @db.Text
+  termsRevision      String    @default("legacy-terms") @map("terms_revision") @db.VarChar(100)
+  termsSnapshot      Json      @default("{}") @map("terms_snapshot") @db.JsonB
+  promisedDate       DateTime? @map("promised_date") @db.Date
+  issuanceCommandKey String    @default("legacy-import") @map("issuance_command_key") @db.VarChar(255)
+  issuanceResultId   String    @default(uuid()) @map("issuance_result_id") @db.Uuid
+  expiresAt          DateTime  @map("expires_at") @db.Timestamptz(3)
+  issuedAt           DateTime  @default(now()) @map("issued_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   quoteRequest                  QuoteRequest                      @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
   customer                      Customer                          @relation(fields: [customerId], references: [id], onDelete: Restrict)
@@ -1287,24 +1319,26 @@ model Quote {
 }
 
 model QuoteItem {
-  id                            String   @id @default(uuid()) @db.Uuid
-  quoteId                       String   @map("quote_id") @db.Uuid
+  id                            String           @id @default(uuid()) @db.Uuid
+  quoteId                       String           @map("quote_id") @db.Uuid
   ordinal                       Int
-  sourceModelFileId             String   @map("source_model_file_id") @db.Uuid
-  modelGeometryId               String   @map("model_geometry_id") @db.Uuid
-  printConfigRevisionId         String   @map("print_config_revision_id") @db.Uuid
-  primaryReferenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
-  tailReferenceSliceResultId    String?  @map("tail_reference_slice_result_id") @db.Uuid
-  referencePartsPerPlate        Int?     @map("reference_parts_per_plate")
-  material                      Material
-  color                         String?  @db.VarChar(100)
+  kind                          CommerceItemKind @default(MODEL)
+  serviceDescription            String?          @map("service_description") @db.Text
+  sourceModelFileId             String?          @map("source_model_file_id") @db.Uuid
+  modelGeometryId               String?          @map("model_geometry_id") @db.Uuid
+  printConfigRevisionId         String?          @map("print_config_revision_id") @db.Uuid
+  primaryReferenceSliceResultId String?          @map("reference_slice_result_id") @db.Uuid
+  tailReferenceSliceResultId    String?          @map("tail_reference_slice_result_id") @db.Uuid
+  referencePartsPerPlate        Int?             @map("reference_parts_per_plate")
+  material                      Material?
+  color                         String?          @db.VarChar(100)
   quantity                      Int
-  createdAt                     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdAt                     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
   quote                       Quote                      @relation(fields: [quoteId], references: [id], onDelete: Restrict)
-  sourceModelFile             ModelFile                  @relation("QuoteItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
-  modelGeometry               ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
-  printConfigRevision         PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  sourceModelFile             ModelFile?                 @relation("QuoteItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
+  modelGeometry               ModelGeometry?             @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  printConfigRevision         PrintConfigRevision?       @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
   primaryReferenceSliceResult SliceResult?               @relation("QuoteItemPrimaryReferenceSlice", fields: [primaryReferenceSliceResultId], references: [id], onDelete: Restrict)
   tailReferenceSliceResult    SliceResult?               @relation("QuoteItemTailReferenceSlice", fields: [tailReferenceSliceResultId], references: [id], onDelete: Restrict)
   individualOrderItemSource   IndividualOrderItemSource?
@@ -1563,24 +1597,26 @@ model OrderActivePriceBinding {
 }
 
 model OrderItem {
-  id                            String   @id @default(uuid()) @db.Uuid
-  orderId                       String   @map("order_id") @db.Uuid
+  id                            String           @id @default(uuid()) @db.Uuid
+  orderId                       String           @map("order_id") @db.Uuid
   ordinal                       Int
-  sourceModelFileId             String   @map("source_model_file_id") @db.Uuid
-  modelGeometryId               String   @map("model_geometry_id") @db.Uuid
-  printConfigRevisionId         String   @map("print_config_revision_id") @db.Uuid
-  primaryReferenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
-  tailReferenceSliceResultId    String?  @map("tail_reference_slice_result_id") @db.Uuid
-  referencePartsPerPlate        Int?     @map("reference_parts_per_plate")
-  material                      Material
-  color                         String?  @db.VarChar(100)
+  kind                          CommerceItemKind @default(MODEL)
+  serviceDescription            String?          @map("service_description") @db.Text
+  sourceModelFileId             String?          @map("source_model_file_id") @db.Uuid
+  modelGeometryId               String?          @map("model_geometry_id") @db.Uuid
+  printConfigRevisionId         String?          @map("print_config_revision_id") @db.Uuid
+  primaryReferenceSliceResultId String?          @map("reference_slice_result_id") @db.Uuid
+  tailReferenceSliceResultId    String?          @map("tail_reference_slice_result_id") @db.Uuid
+  referencePartsPerPlate        Int?             @map("reference_parts_per_plate")
+  material                      Material?
+  color                         String?          @db.VarChar(100)
   quantity                      Int
-  createdAt                     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdAt                     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
   order                       Order                      @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  sourceModelFile             ModelFile                  @relation("OrderItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
-  modelGeometry               ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
-  printConfigRevision         PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  sourceModelFile             ModelFile?                 @relation("OrderItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
+  modelGeometry               ModelGeometry?             @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  printConfigRevision         PrintConfigRevision?       @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
   primaryReferenceSliceResult SliceResult?               @relation("OrderItemPrimaryReferenceSlice", fields: [primaryReferenceSliceResultId], references: [id], onDelete: Restrict)
   tailReferenceSliceResult    SliceResult?               @relation("OrderItemTailReferenceSlice", fields: [tailReferenceSliceResultId], references: [id], onDelete: Restrict)
   individualSource            IndividualOrderItemSource?
@@ -2057,6 +2093,7 @@ model PaymentProviderEvent {
 
 model AuditEvent {
   id                  String         @id @default(uuid()) @db.Uuid
+  quoteRequestId      String?        @map("quote_request_id") @db.Uuid
   quoteId             String?        @map("quote_id") @db.Uuid
   orderId             String?        @map("order_id") @db.Uuid
   paymentId           String?        @map("payment_id") @db.Uuid
@@ -2069,11 +2106,13 @@ model AuditEvent {
   payload             Json           @db.JsonB
   createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
+  quoteRequest      QuoteRequest?      @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
   quote             Quote?             @relation(fields: [quoteId], references: [id], onDelete: Restrict)
   order             Order?             @relation(fields: [orderId], references: [id], onDelete: Restrict)
   payment           Payment?           @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   refundTransaction RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
 
+  @@index([quoteRequestId, createdAt])
   @@index([quoteId, createdAt])
   @@index([orderId, createdAt])
   @@index([paymentId, createdAt])

@@ -19,7 +19,7 @@
     "typecheck": "pnpm db:generate && tsc -p tsconfig.json --noEmit",
     "pretest": "pnpm --filter @taven/core build",
     "test": "vitest run --exclude 'test/**'",
-    "pretest:e2e": "pnpm --filter @taven/slicer-contracts... build",
+    "pretest:e2e": "pnpm --filter @taven/core --filter @taven/slicer-contracts... build",
     "test:e2e": "vitest run test",
     "test:watch": "vitest --exclude 'test/**'",
     "db:generate": "prisma generate",

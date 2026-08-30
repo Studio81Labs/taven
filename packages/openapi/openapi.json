@@ -1,6 +1,46 @@
 {
   "components": {
     "schemas": {
+      "AcceptedOfferDto": {
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "publicReference": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "DRAFT"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "publicReference",
+          "status"
+        ],
+        "type": "object"
+      },
+      "AcceptOfferDto": {
+        "properties": {
+          "termsRevision": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "version",
+          "termsRevision"
+        ],
+        "type": "object"
+      },
       "ConfirmedUploadResponseDto": {
         "properties": {
           "assetId": {
@@ -33,6 +73,39 @@
           "assetKind",
           "uploadedAt",
           "deleteAfter"
+        ],
+        "type": "object"
+      },
+      "CreateQuoteRequestDto": {
+        "properties": {
+          "attribution": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "contact": {
+            "$ref": "#/components/schemas/QuoteContactDto"
+          },
+          "description": {
+            "maxLength": 10000,
+            "minLength": 10,
+            "type": "string"
+          },
+          "measurements": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "purpose": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "requestedDate": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "contact"
         ],
         "type": "object"
       },
@@ -157,6 +230,434 @@
         ],
         "type": "object"
       },
+      "IssueOfferDto": {
+        "properties": {
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPriceComponentDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "contractTotalMinor": {
+            "minimum": 2,
+            "type": "number"
+          },
+          "depositMinor": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "inputSnapshot": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfferItemDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "priceListId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "promisedDate": {
+            "format": "date",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 4000,
+            "minLength": 3,
+            "type": "string"
+          },
+          "termsSnapshot": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "summary",
+          "expiresAt",
+          "priceListId",
+          "contractTotalMinor",
+          "depositMinor",
+          "termsSnapshot",
+          "inputSnapshot",
+          "items",
+          "components"
+        ],
+        "type": "object"
+      },
+      "OfferIssuedDto": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "offerToken": {
+            "type": "string"
+          },
+          "quoteId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "termsRevision": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "quoteId",
+          "version",
+          "termsRevision",
+          "offerToken",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "OfferItemDto": {
+        "properties": {
+          "color": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "MODEL",
+              "CUSTOM_SERVICE"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "modelGeometryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "primaryReferenceSliceResultId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "referencePartsPerPlate": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "serviceDescription": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "sourceModelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "tailReferenceSliceResultId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "OfferPreviewDto": {
+        "properties": {
+          "contractTotalMinor": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "promisedDate": {
+            "format": "date",
+            "nullable": true,
+            "type": "string"
+          },
+          "quoteId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "termsRevision": {
+            "type": "string"
+          },
+          "termsSnapshot": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "version": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "quoteId",
+          "version",
+          "termsRevision",
+          "summary",
+          "termsSnapshot",
+          "currency",
+          "contractTotalMinor",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "OfferPriceComponentDto": {
+        "properties": {
+          "allocation": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "amountMinor": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "ITEM_PRODUCTION",
+              "ITEM_QUANTITY",
+              "ITEM_POSTPROCESSING",
+              "ORDER_MIN_PRINT",
+              "ORDER_SMALL_SURCHARGE",
+              "EXPRESS",
+              "PAYMENT_FEE"
+            ],
+            "type": "string"
+          },
+          "quoteItemOrdinal": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "amountMinor"
+        ],
+        "type": "object"
+      },
+      "QuoteAttachmentDto": {
+        "properties": {
+          "deleteAfter": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "number"
+          },
+          "uploadedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "mediaType",
+          "sizeBytes",
+          "uploadedAt",
+          "deleteAfter"
+        ],
+        "type": "object"
+      },
+      "QuoteContactDto": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 320,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "phone": {
+            "maxLength": 50,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestCreatedDto": {
+        "properties": {
+          "publicReference": {
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "requestToken": {
+            "description": "Request-scoped capability",
+            "type": "string"
+          },
+          "slaDueAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "NEW"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "publicReference",
+          "requestToken",
+          "status",
+          "slaDueAt"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestDetailDto": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteAttachmentDto"
+            },
+            "type": "array"
+          },
+          "attribution": {
+            "additionalProperties": true,
+            "nullable": true,
+            "type": "object"
+          },
+          "contact": {
+            "$ref": "#/components/schemas/QuoteContactDto"
+          },
+          "description": {
+            "type": "string"
+          },
+          "measurements": {
+            "additionalProperties": true,
+            "nullable": true,
+            "type": "object"
+          },
+          "publicReference": {
+            "type": "string"
+          },
+          "purpose": {
+            "nullable": true,
+            "type": "string"
+          },
+          "requestedDate": {
+            "format": "date",
+            "nullable": true,
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "slaBreached": {
+            "type": "boolean"
+          },
+          "slaDueAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "NEW",
+              "IN_REVIEW",
+              "QUOTED",
+              "ACCEPTED",
+              "REJECTED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "publicReference",
+          "status",
+          "description",
+          "contact",
+          "slaDueAt",
+          "slaBreached",
+          "attachments"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestStatusDto": {
+        "properties": {
+          "requestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "IN_REVIEW",
+              "REJECTED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RejectOfferDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "termsRevision": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "version",
+          "termsRevision"
+        ],
+        "type": "object"
+      },
       "ReorderEligibilityResponseDto": {
         "properties": {
           "eligible": {
@@ -260,6 +761,244 @@
   },
   "openapi": "3.0.0",
   "paths": {
+    "/admin/quote-requests": {
+      "get": {
+        "operationId": "OperatorQuoteRequestsController_list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "NEW",
+                "IN_REVIEW",
+                "QUOTED",
+                "ACCEPTED",
+                "REJECTED",
+                "EXPIRED"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuoteRequestDetailDto"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List the operator quote-request queue",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}": {
+      "get": {
+        "operationId": "OperatorQuoteRequestsController_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read one operator quote-request detail",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/expire": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_expire",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestStatusDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Offer is not overdue"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Expire an overdue individual offer",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/offers": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_issue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueOfferDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferIssuedDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Request is not in review"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Issue an immutable tokenized individual offer",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/review": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_review",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestStatusDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Move a new request into operator review",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_getHealth",
@@ -279,6 +1018,261 @@
         "summary": "Report API process health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/offers/{quoteId}": {
+      "get": {
+        "operationId": "OffersController_preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quoteId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferPreviewDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Offer capability is invalid"
+          },
+          "410": {
+            "description": "Offer is closed or expired"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Preview one immutable individual offer",
+        "tags": [
+          "individual offers"
+        ]
+      }
+    },
+    "/offers/{quoteId}/accept": {
+      "post": {
+        "operationId": "OffersController_accept",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quoteId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptOfferDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedOfferDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Offer capability is invalid"
+          },
+          "409": {
+            "description": "Offer version or terms changed"
+          },
+          "410": {
+            "description": "Offer is closed or expired"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Accept an offer and create its draft order",
+        "tags": [
+          "individual offers"
+        ]
+      }
+    },
+    "/offers/{quoteId}/reject": {
+      "post": {
+        "operationId": "OffersController_reject",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quoteId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectOfferDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestStatusDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Offer capability is invalid"
+          },
+          "410": {
+            "description": "Offer is closed or expired"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reject an individual offer",
+        "tags": [
+          "individual offers"
+        ]
+      }
+    },
+    "/quote-requests": {
+      "post": {
+        "operationId": "QuoteRequestsController_create",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateQuoteRequestDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestCreatedDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Idempotency input changed"
+          }
+        },
+        "summary": "Submit an individual quote request",
+        "tags": [
+          "quote requests"
+        ]
+      }
+    },
+    "/quote-requests/{requestId}": {
+      "get": {
+        "operationId": "QuoteRequestsController_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestDetailDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Request capability is invalid"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Resume one request with its scoped capability",
+        "tags": [
+          "quote requests"
         ]
       }
     },
