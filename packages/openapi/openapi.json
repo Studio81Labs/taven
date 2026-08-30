@@ -32,7 +32,7 @@
           },
           "version": {
             "minimum": 1,
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -106,6 +106,26 @@
         "required": [
           "description",
           "contact"
+        ],
+        "type": "object"
+      },
+      "CustomServiceOfferItemDto": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "CUSTOM_SERVICE"
+            ],
+            "type": "string"
+          },
+          "serviceDescription": {
+            "maxLength": 2000,
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "serviceDescription"
         ],
         "type": "object"
       },
@@ -241,11 +261,11 @@
           },
           "contractTotalMinor": {
             "minimum": 2,
-            "type": "number"
+            "type": "integer"
           },
           "depositMinor": {
             "minimum": 1,
-            "type": "number"
+            "type": "integer"
           },
           "expiresAt": {
             "format": "date-time",
@@ -257,7 +277,21 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/OfferItemDto"
+              "discriminator": {
+                "mapping": {
+                  "CUSTOM_SERVICE": "#/components/schemas/CustomServiceOfferItemDto",
+                  "MODEL": "#/components/schemas/ModelOfferItemDto"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/CustomServiceOfferItemDto"
+                },
+                {
+                  "$ref": "#/components/schemas/ModelOfferItemDto"
+                }
+              ]
             },
             "minItems": 1,
             "type": "array"
@@ -293,36 +327,7 @@
         ],
         "type": "object"
       },
-      "OfferIssuedDto": {
-        "properties": {
-          "expiresAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "offerToken": {
-            "type": "string"
-          },
-          "quoteId": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "termsRevision": {
-            "type": "string"
-          },
-          "version": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "quoteId",
-          "version",
-          "termsRevision",
-          "offerToken",
-          "expiresAt"
-        ],
-        "type": "object"
-      },
-      "OfferItemDto": {
+      "ModelOfferItemDto": {
         "properties": {
           "color": {
             "maxLength": 100,
@@ -330,8 +335,7 @@
           },
           "kind": {
             "enum": [
-              "MODEL",
-              "CUSTOM_SERVICE"
+              "MODEL"
             ],
             "type": "string"
           },
@@ -356,15 +360,11 @@
           },
           "quantity": {
             "minimum": 1,
-            "type": "number"
+            "type": "integer"
           },
           "referencePartsPerPlate": {
             "minimum": 1,
-            "type": "number"
-          },
-          "serviceDescription": {
-            "maxLength": 2000,
-            "type": "string"
+            "type": "integer"
           },
           "sourceModelFileId": {
             "format": "uuid",
@@ -376,7 +376,41 @@
           }
         },
         "required": [
-          "kind"
+          "kind",
+          "sourceModelFileId",
+          "modelGeometryId",
+          "printConfigRevisionId",
+          "material"
+        ],
+        "type": "object"
+      },
+      "OfferIssuedDto": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "offerToken": {
+            "type": "string"
+          },
+          "quoteId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "termsRevision": {
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quoteId",
+          "version",
+          "termsRevision",
+          "offerToken",
+          "expiresAt"
         ],
         "type": "object"
       },
@@ -384,15 +418,15 @@
         "properties": {
           "feeFixedMinor": {
             "minimum": 0,
-            "type": "number"
+            "type": "integer"
           },
           "feeRateBasisPoints": {
             "minimum": 0,
-            "type": "number"
+            "type": "integer"
           },
           "grossAmountMinor": {
             "minimum": 0,
-            "type": "number"
+            "type": "integer"
           },
           "role": {
             "enum": [
@@ -403,7 +437,7 @@
           },
           "sequence": {
             "minimum": 0,
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -424,7 +458,8 @@
             "type": "array"
           },
           "contractTotalMinor": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           },
           "currency": {
             "type": "string"
@@ -465,7 +500,8 @@
             "type": "object"
           },
           "version": {
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [
@@ -512,7 +548,7 @@
           },
           "ordinal": {
             "minimum": 0,
-            "type": "number"
+            "type": "integer"
           },
           "primaryReferenceSliceResultId": {
             "format": "uuid",
@@ -526,12 +562,12 @@
           },
           "quantity": {
             "minimum": 1,
-            "type": "number"
+            "type": "integer"
           },
           "referencePartsPerPlate": {
             "minimum": 1,
             "nullable": true,
-            "type": "number"
+            "type": "integer"
           },
           "serviceDescription": {
             "maxLength": 2000,
@@ -574,7 +610,7 @@
           },
           "amountMinor": {
             "minimum": 0,
-            "type": "number"
+            "type": "integer"
           },
           "kind": {
             "enum": [
@@ -590,7 +626,7 @@
           "quoteItemOrdinal": {
             "minimum": 0,
             "nullable": true,
-            "type": "number"
+            "type": "integer"
           },
           "scope": {
             "enum": [
@@ -617,7 +653,7 @@
           },
           "amountMinor": {
             "minimum": 0,
-            "type": "number"
+            "type": "integer"
           },
           "kind": {
             "enum": [
@@ -632,7 +668,7 @@
           },
           "quoteItemOrdinal": {
             "minimum": 0,
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -655,7 +691,8 @@
             "type": "string"
           },
           "sizeBytes": {
-            "type": "number"
+            "minimum": 0,
+            "type": "integer"
           },
           "uploadedAt": {
             "format": "date-time",
@@ -830,7 +867,7 @@
           },
           "version": {
             "minimum": 1,
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -947,6 +984,7 @@
         "operationId": "OperatorQuoteRequestsController_list",
         "parameters": [
           {
+            "description": "Defaults to actionable NEW, IN_REVIEW, and QUOTED requests; select a terminal status explicitly to read history",
             "in": "query",
             "name": "status",
             "required": false,

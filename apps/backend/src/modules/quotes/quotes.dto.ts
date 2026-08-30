@@ -1,4 +1,9 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  ApiExtraModels,
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from "@nestjs/swagger";
 
 export class QuoteContactDto {
   @ApiProperty({ type: String, maxLength: 200 })
@@ -55,7 +60,7 @@ export class QuoteAttachmentDto {
   @ApiProperty({ type: String })
   mediaType!: string;
 
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 0 })
   sizeBytes!: number;
 
   @ApiProperty({ type: String, format: "date-time" })
@@ -114,21 +119,26 @@ export class QuoteRequestDetailDto {
   attachments!: QuoteAttachmentDto[];
 }
 
-export class OfferItemDto {
-  @ApiProperty({ type: String, enum: ["MODEL", "CUSTOM_SERVICE"] })
-  kind!: "MODEL" | "CUSTOM_SERVICE";
+export class CustomServiceOfferItemDto {
+  @ApiProperty({ type: String, enum: ["CUSTOM_SERVICE"] })
+  kind!: "CUSTOM_SERVICE";
 
-  @ApiPropertyOptional({ type: String, maxLength: 2_000 })
-  serviceDescription?: string;
+  @ApiProperty({ type: String, minLength: 3, maxLength: 2_000 })
+  serviceDescription!: string;
+}
 
-  @ApiPropertyOptional({ type: String, format: "uuid" })
-  sourceModelFileId?: string;
+export class ModelOfferItemDto {
+  @ApiProperty({ type: String, enum: ["MODEL"] })
+  kind!: "MODEL";
 
-  @ApiPropertyOptional({ type: String, format: "uuid" })
-  modelGeometryId?: string;
+  @ApiProperty({ type: String, format: "uuid" })
+  sourceModelFileId!: string;
 
-  @ApiPropertyOptional({ type: String, format: "uuid" })
-  printConfigRevisionId?: string;
+  @ApiProperty({ type: String, format: "uuid" })
+  modelGeometryId!: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  printConfigRevisionId!: string;
 
   @ApiPropertyOptional({ type: String, format: "uuid" })
   primaryReferenceSliceResultId?: string;
@@ -136,18 +146,20 @@ export class OfferItemDto {
   @ApiPropertyOptional({ type: String, format: "uuid" })
   tailReferenceSliceResultId?: string;
 
-  @ApiPropertyOptional({ type: Number, minimum: 1 })
+  @ApiPropertyOptional({ type: "integer", minimum: 1 })
   referencePartsPerPlate?: number;
 
-  @ApiPropertyOptional({ type: String, enum: ["PLA", "PETG"] })
-  material?: "PLA" | "PETG";
+  @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
+  material!: "PLA" | "PETG";
 
   @ApiPropertyOptional({ type: String, maxLength: 100 })
   color?: string;
 
-  @ApiPropertyOptional({ type: Number, minimum: 1 })
+  @ApiPropertyOptional({ type: "integer", minimum: 1 })
   quantity?: number;
 }
+
+export type OfferItemDto = CustomServiceOfferItemDto | ModelOfferItemDto;
 
 export class OfferPriceComponentDto {
   @ApiProperty({
@@ -169,16 +181,17 @@ export class OfferPriceComponentDto {
     | "ORDER_SMALL_SURCHARGE"
     | "EXPRESS";
 
-  @ApiProperty({ type: Number, minimum: 0 })
+  @ApiProperty({ type: "integer", minimum: 0 })
   amountMinor!: number;
 
-  @ApiPropertyOptional({ type: Number, minimum: 0 })
+  @ApiPropertyOptional({ type: "integer", minimum: 0 })
   quoteItemOrdinal?: number;
 
   @ApiPropertyOptional({ type: "object", additionalProperties: true })
   allocation?: Record<string, unknown>;
 }
 
+@ApiExtraModels(CustomServiceOfferItemDto, ModelOfferItemDto)
 export class IssueOfferDto {
   @ApiProperty({ type: String, minLength: 3, maxLength: 4_000 })
   summary!: string;
@@ -192,10 +205,10 @@ export class IssueOfferDto {
   @ApiProperty({ type: String, format: "uuid" })
   priceListId!: string;
 
-  @ApiProperty({ type: Number, minimum: 2 })
+  @ApiProperty({ type: "integer", minimum: 2 })
   contractTotalMinor!: number;
 
-  @ApiProperty({ type: Number, minimum: 1 })
+  @ApiProperty({ type: "integer", minimum: 1 })
   depositMinor!: number;
 
   @ApiProperty({ type: "object", additionalProperties: true })
@@ -204,7 +217,23 @@ export class IssueOfferDto {
   @ApiProperty({ type: "object", additionalProperties: true })
   inputSnapshot!: Record<string, unknown>;
 
-  @ApiProperty({ type: [OfferItemDto], minItems: 1 })
+  @ApiProperty({
+    type: "array",
+    minItems: 1,
+    items: {
+      oneOf: [
+        { $ref: getSchemaPath(CustomServiceOfferItemDto) },
+        { $ref: getSchemaPath(ModelOfferItemDto) },
+      ],
+      discriminator: {
+        propertyName: "kind",
+        mapping: {
+          CUSTOM_SERVICE: getSchemaPath(CustomServiceOfferItemDto),
+          MODEL: getSchemaPath(ModelOfferItemDto),
+        },
+      },
+    },
+  })
   items!: OfferItemDto[];
 
   @ApiProperty({ type: [OfferPriceComponentDto], minItems: 1 })
@@ -215,7 +244,7 @@ export class OfferIssuedDto {
   @ApiProperty({ type: String, format: "uuid" })
   quoteId!: string;
 
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 1 })
   version!: number;
 
   @ApiProperty({ type: String })
@@ -229,7 +258,7 @@ export class OfferIssuedDto {
 }
 
 export class OfferPreviewItemDto {
-  @ApiProperty({ type: Number, minimum: 0 })
+  @ApiProperty({ type: "integer", minimum: 0 })
   ordinal!: number;
 
   @ApiProperty({ type: String, enum: ["MODEL", "CUSTOM_SERVICE"] })
@@ -253,7 +282,7 @@ export class OfferPreviewItemDto {
   @ApiProperty({ type: String, format: "uuid", nullable: true })
   tailReferenceSliceResultId!: string | null;
 
-  @ApiProperty({ type: Number, minimum: 1, nullable: true })
+  @ApiProperty({ type: "integer", minimum: 1, nullable: true })
   referencePartsPerPlate!: number | null;
 
   @ApiProperty({ type: String, enum: ["PLA", "PETG"], nullable: true })
@@ -262,7 +291,7 @@ export class OfferPreviewItemDto {
   @ApiProperty({ type: String, maxLength: 100, nullable: true })
   color!: string | null;
 
-  @ApiProperty({ type: Number, minimum: 1 })
+  @ApiProperty({ type: "integer", minimum: 1 })
   quantity!: number;
 }
 
@@ -289,10 +318,10 @@ export class OfferPreviewPriceComponentDto {
   @ApiProperty({ type: String, enum: ["ORDER", "QUOTE_ITEM"] })
   scope!: "ORDER" | "QUOTE_ITEM";
 
-  @ApiProperty({ type: Number, minimum: 0, nullable: true })
+  @ApiProperty({ type: "integer", minimum: 0, nullable: true })
   quoteItemOrdinal!: number | null;
 
-  @ApiProperty({ type: Number, minimum: 0 })
+  @ApiProperty({ type: "integer", minimum: 0 })
   amountMinor!: number;
 
   @ApiProperty({ type: "object", nullable: true, additionalProperties: true })
@@ -300,19 +329,19 @@ export class OfferPreviewPriceComponentDto {
 }
 
 export class OfferPaymentScheduleDto {
-  @ApiProperty({ type: Number, minimum: 0 })
+  @ApiProperty({ type: "integer", minimum: 0 })
   sequence!: number;
 
   @ApiProperty({ type: String, enum: ["DEPOSIT", "BALANCE"] })
   role!: "DEPOSIT" | "BALANCE";
 
-  @ApiProperty({ type: Number, minimum: 0 })
+  @ApiProperty({ type: "integer", minimum: 0 })
   grossAmountMinor!: number;
 
-  @ApiProperty({ type: Number, minimum: 0 })
+  @ApiProperty({ type: "integer", minimum: 0 })
   feeRateBasisPoints!: number;
 
-  @ApiProperty({ type: Number, minimum: 0 })
+  @ApiProperty({ type: "integer", minimum: 0 })
   feeFixedMinor!: number;
 }
 
@@ -320,7 +349,7 @@ export class OfferPreviewDto {
   @ApiProperty({ type: String, format: "uuid" })
   quoteId!: string;
 
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 1 })
   version!: number;
 
   @ApiProperty({ type: String })
@@ -335,7 +364,7 @@ export class OfferPreviewDto {
   @ApiProperty({ type: String })
   currency!: string;
 
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 0 })
   contractTotalMinor!: number;
 
   @ApiProperty({ type: [OfferPreviewItemDto] })
@@ -355,7 +384,7 @@ export class OfferPreviewDto {
 }
 
 export class AcceptOfferDto {
-  @ApiProperty({ type: Number, minimum: 1 })
+  @ApiProperty({ type: "integer", minimum: 1 })
   version!: number;
 
   @ApiProperty({ type: String, maxLength: 100 })

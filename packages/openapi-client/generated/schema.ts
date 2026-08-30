@@ -350,6 +350,14 @@ export interface components {
             /** Format: date */
             requestedDate?: string;
         };
+        CustomServiceOfferItemDto: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "CUSTOM_SERVICE";
+            serviceDescription: string;
+        };
         HealthResponseDto: {
             /**
              * @example taven-backend
@@ -402,7 +410,7 @@ export interface components {
             inputSnapshot: {
                 [key: string]: unknown;
             };
-            items: components["schemas"]["OfferItemDto"][];
+            items: (components["schemas"]["CustomServiceOfferItemDto"] | components["schemas"]["ModelOfferItemDto"])[];
             /** Format: uuid */
             priceListId: string;
             /** Format: date */
@@ -412,6 +420,28 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        ModelOfferItemDto: {
+            color?: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "MODEL";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** Format: uuid */
+            modelGeometryId: string;
+            /** Format: uuid */
+            primaryReferenceSliceResultId?: string;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            quantity?: number;
+            referencePartsPerPlate?: number;
+            /** Format: uuid */
+            sourceModelFileId: string;
+            /** Format: uuid */
+            tailReferenceSliceResultId?: string;
+        };
         OfferIssuedDto: {
             /** Format: date-time */
             expiresAt: string;
@@ -420,26 +450,6 @@ export interface components {
             quoteId: string;
             termsRevision: string;
             version: number;
-        };
-        OfferItemDto: {
-            color?: string;
-            /** @enum {string} */
-            kind: "MODEL" | "CUSTOM_SERVICE";
-            /** @enum {string} */
-            material?: "PLA" | "PETG";
-            /** Format: uuid */
-            modelGeometryId?: string;
-            /** Format: uuid */
-            primaryReferenceSliceResultId?: string;
-            /** Format: uuid */
-            printConfigRevisionId?: string;
-            quantity?: number;
-            referencePartsPerPlate?: number;
-            serviceDescription?: string;
-            /** Format: uuid */
-            sourceModelFileId?: string;
-            /** Format: uuid */
-            tailReferenceSliceResultId?: string;
         };
         OfferPaymentScheduleDto: {
             feeFixedMinor: number;
@@ -615,6 +625,7 @@ export interface operations {
     OperatorQuoteRequestsController_list: {
         parameters: {
             query?: {
+                /** @description Defaults to actionable NEW, IN_REVIEW, and QUOTED requests; select a terminal status explicitly to read history */
                 status?: "NEW" | "IN_REVIEW" | "QUOTED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
             };
             header?: never;

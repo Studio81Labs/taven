@@ -217,7 +217,17 @@ export class QuotesService {
     const normalizedStatus = status ? parseStatus(status) : undefined;
     const observedAt = await databaseNow(this.prisma);
     const requests = await this.prisma.quoteRequest.findMany({
-      ...(normalizedStatus ? { where: { status: normalizedStatus } } : {}),
+      where: normalizedStatus
+        ? { status: normalizedStatus }
+        : {
+            status: {
+              in: [
+                QuoteRequestStatus.NEW,
+                QuoteRequestStatus.IN_REVIEW,
+                QuoteRequestStatus.QUOTED,
+              ],
+            },
+          },
       include: { quoteSession: true, customer: true },
       orderBy: [{ slaDueAt: "asc" }, { createdAt: "asc" }],
       take: 100,

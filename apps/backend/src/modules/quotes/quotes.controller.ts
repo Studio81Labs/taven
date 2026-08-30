@@ -170,6 +170,8 @@ export class OperatorQuoteRequestsController {
     name: "status",
     required: false,
     enum: ["NEW", "IN_REVIEW", "QUOTED", "ACCEPTED", "REJECTED", "EXPIRED"],
+    description:
+      "Defaults to actionable NEW, IN_REVIEW, and QUOTED requests; select a terminal status explicitly to read history",
   })
   @ApiOkResponse({ type: QuoteRequestDetailDto, isArray: true })
   list(@Query("status") status?: string): Promise<QuoteRequestDetailDto[]> {

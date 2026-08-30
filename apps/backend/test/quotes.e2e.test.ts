@@ -326,6 +326,28 @@ describe("QuoteRequest and tokenized individual offers", () => {
         select: { retentionHold: true },
       }),
     ).toEqual({ retentionHold: "ACTIVE_ORDER" });
+
+    const defaultQueue = await apiJson<Array<{ requestId: string }>>(
+      "admin/quote-requests",
+      { headers: bearer(operatorToken) },
+    );
+    expect(defaultQueue.response.status).toBe(200);
+    expect(defaultQueue.body).not.toContainEqual(
+      expect.objectContaining({ requestId: created.body.requestId }),
+    );
+
+    const acceptedHistory = await apiJson<
+      Array<{ requestId: string; status: string }>
+    >("admin/quote-requests?status=ACCEPTED", {
+      headers: bearer(operatorToken),
+    });
+    expect(acceptedHistory.response.status).toBe(200);
+    expect(acceptedHistory.body).toContainEqual(
+      expect.objectContaining({
+        requestId: created.body.requestId,
+        status: "ACCEPTED",
+      }),
+    );
   });
 
   it("rejects a current offer idempotently and prevents later acceptance", async () => {
