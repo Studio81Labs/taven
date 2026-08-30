@@ -72,6 +72,32 @@ ALTER TABLE "price_snapshots"
 CREATE INDEX "price_snapshots_price_list_id_idx"
     ON "price_snapshots"("price_list_id");
 
+-- Individual orders created before deposit-plus-balance existed have sealed,
+-- immutable FULL schedules. Capture that exact migration-time allow-list
+-- instead of rewriting historical payment contracts or weakening new orders.
+CREATE TABLE "legacy_individual_full_payment_bindings" (
+    "order_price_binding_id" UUID NOT NULL,
+    "order_id" UUID NOT NULL,
+    "price_snapshot_id" UUID NOT NULL,
+    "recorded_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "legacy_individual_full_payment_bindings_pkey"
+        PRIMARY KEY ("order_price_binding_id"),
+    CONSTRAINT "legacy_individual_full_payment_bindings_order_id_key"
+        UNIQUE ("order_id"),
+    CONSTRAINT "legacy_individual_full_payment_bindings_snapshot_id_key"
+        UNIQUE ("price_snapshot_id"),
+    CONSTRAINT "legacy_individual_full_payment_bindings_contract_key"
+        UNIQUE ("order_price_binding_id", "order_id", "price_snapshot_id"),
+    CONSTRAINT "legacy_individual_full_payment_bindings_origin_fkey"
+        FOREIGN KEY ("order_id")
+        REFERENCES "individual_order_origins"("order_id")
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "legacy_individual_full_payment_bindings_contract_fkey"
+        FOREIGN KEY ("order_price_binding_id", "order_id", "price_snapshot_id")
+        REFERENCES "order_price_bindings"("id", "order_id", "price_snapshot_id")
+        ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
 -- The checkout deadline is intentionally limited to the initial FULL or
 -- DEPOSIT capture.  A post-QC BALANCE capture uses its own business deadline,
 -- derived from the accepted versioned PriceList.
@@ -353,6 +379,66 @@ RETURNS bigint LANGUAGE sql STABLE AS $$
       );
 $$;
 
+INSERT INTO "legacy_individual_full_payment_bindings" (
+    "order_price_binding_id", "order_id", "price_snapshot_id"
+)
+SELECT binding."id", binding."order_id", binding."price_snapshot_id"
+FROM "individual_order_origins" origin
+JOIN "order_active_price_bindings" active
+  ON active."order_id" = origin."order_id"
+JOIN "order_price_bindings" binding
+  ON binding."id" = active."order_price_binding_id"
+ AND binding."order_id" = origin."order_id"
+JOIN "price_snapshots" snapshot
+  ON snapshot."id" = binding."price_snapshot_id"
+WHERE binding."invalidated_at" IS NULL
+  AND snapshot."contract_total_minor" > 0
+  AND EXISTS (
+      SELECT 1
+      FROM "payment_schedules" schedule
+      WHERE schedule."price_snapshot_id" = snapshot."id"
+        AND schedule."role" = 'FULL'
+        AND schedule."sequence" = 0
+        AND schedule."gross_amount_minor" > 0
+  )
+  AND taven_full_payment_schedule_is_valid(
+      snapshot."id", snapshot."contract_total_minor"
+  );
+
+CREATE FUNCTION taven_prevent_legacy_individual_full_binding_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'legacy individual FULL binding allow-list is migration-owned'
+        USING ERRCODE = '23514',
+              CONSTRAINT = 'legacy_individual_full_payment_binding_immutable';
+END;
+$$;
+
+CREATE TRIGGER "legacy_individual_full_payment_bindings_immutable"
+BEFORE INSERT OR UPDATE OR DELETE ON "legacy_individual_full_payment_bindings"
+FOR EACH ROW EXECUTE FUNCTION taven_prevent_legacy_individual_full_binding_mutation();
+
+CREATE FUNCTION taven_individual_full_payment_binding_is_grandfathered(
+    target_order_id uuid,
+    target_snapshot_id uuid
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "legacy_individual_full_payment_bindings" legacy
+        JOIN "order_active_price_bindings" active
+          ON active."order_id" = legacy."order_id"
+         AND active."order_price_binding_id" = legacy."order_price_binding_id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = legacy."order_price_binding_id"
+         AND binding."order_id" = legacy."order_id"
+         AND binding."price_snapshot_id" = legacy."price_snapshot_id"
+         AND binding."invalidated_at" IS NULL
+        WHERE legacy."order_id" = target_order_id
+          AND legacy."price_snapshot_id" = target_snapshot_id
+    );
+$$;
+
 CREATE FUNCTION taven_payment_schedule_is_valid_for_order(
     target_order_id uuid,
     target_snapshot_id uuid,
@@ -369,9 +455,18 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
             SELECT 1 FROM "individual_order_origins"
             WHERE "order_id" = target_order_id
         )
-        THEN taven_split_payment_schedule_is_valid(target_snapshot_id, expected_total)
-             AND taven_price_snapshot_balance_deadline_is_valid(target_snapshot_id)
-             AND taven_price_snapshot_balance_earned_policy_is_valid(target_snapshot_id)
+        THEN (
+            taven_individual_full_payment_binding_is_grandfathered(
+                target_order_id, target_snapshot_id
+            )
+            AND taven_full_payment_schedule_is_valid(
+                target_snapshot_id, expected_total
+            )
+        ) OR (
+            taven_split_payment_schedule_is_valid(target_snapshot_id, expected_total)
+            AND taven_price_snapshot_balance_deadline_is_valid(target_snapshot_id)
+            AND taven_price_snapshot_balance_earned_policy_is_valid(target_snapshot_id)
+        )
         ELSE taven_payment_schedule_is_valid(target_snapshot_id, expected_total)
     END;
 $$;
@@ -397,9 +492,29 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
               ON origin."order_id" = binding."order_id"
             WHERE binding."price_snapshot_id" = target_snapshot_id
         )
-        THEN taven_split_payment_schedule_is_valid(target_snapshot_id, expected_total)
-             AND taven_price_snapshot_balance_deadline_is_valid(target_snapshot_id)
-             AND taven_price_snapshot_balance_earned_policy_is_valid(target_snapshot_id)
+        THEN (
+            EXISTS (
+                SELECT 1
+                FROM "order_price_bindings" binding
+                WHERE binding."price_snapshot_id" = target_snapshot_id
+                  AND taven_individual_full_payment_binding_is_grandfathered(
+                      binding."order_id", binding."price_snapshot_id"
+                  )
+            )
+            AND taven_full_payment_schedule_is_valid(
+                target_snapshot_id, expected_total
+            )
+        ) OR (
+            taven_split_payment_schedule_is_valid(
+                target_snapshot_id, expected_total
+            )
+            AND taven_price_snapshot_balance_deadline_is_valid(
+                target_snapshot_id
+            )
+            AND taven_price_snapshot_balance_earned_policy_is_valid(
+                target_snapshot_id
+            )
+        )
         ELSE taven_payment_schedule_is_valid(target_snapshot_id, expected_total)
     END;
 $$;
@@ -417,15 +532,11 @@ BEGIN
         JOIN "price_snapshots" snapshot
           ON snapshot."id" = binding."price_snapshot_id"
         WHERE binding."invalidated_at" IS NULL
-          AND (
-              NOT taven_split_payment_schedule_is_valid(
-                  snapshot."id", snapshot."contract_total_minor"
-              )
-              OR NOT taven_price_snapshot_balance_deadline_is_valid(snapshot."id")
-              OR NOT taven_price_snapshot_balance_earned_policy_is_valid(snapshot."id")
+          AND NOT taven_payment_schedule_is_valid_for_order(
+              origin."order_id", snapshot."id", snapshot."contract_total_minor"
           )
     ) THEN
-        RAISE EXCEPTION 'existing individual order has no valid deposit-plus-balance contract'
+        RAISE EXCEPTION 'existing individual order has no valid payment contract'
             USING ERRCODE = '23514', CONSTRAINT = 'individual_split_payment_migration_check';
     END IF;
 END;
@@ -2359,6 +2470,17 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    IF EXISTS (
+        SELECT 1
+        FROM "legacy_individual_full_payment_bindings" legacy
+        WHERE legacy."order_id" = NEW."id"
+          AND taven_individual_full_payment_binding_is_grandfathered(
+              legacy."order_id", legacy."price_snapshot_id"
+          )
+    ) THEN
+        RETURN NULL;
+    END IF;
+
     INSERT INTO "payments" (
         "id", "order_id", "price_snapshot_id", "order_price_binding_id",
         "payment_schedule_id", "role", "provider", "requested_amount_minor",
@@ -3045,6 +3167,40 @@ EXECUTE FUNCTION taven_reconcile_quoted_payment_void_closure();
 -- Late-capture refunds need one additional terminal source: an immutable
 -- balance settlement. Preserve every foundation refund safeguard while
 -- extending only the terminal-cutoff predicates for that source.
+-- The settlement stores the attempt selected by the deadline worker as its
+-- anchor. Every earlier attempt on that same immutable schedule remains part of
+-- the settled obligation and may independently report a late provider capture.
+CREATE FUNCTION taven_balance_attempt_belongs_to_timeout_settlement(
+    target_payment_id uuid,
+    target_settlement_id uuid
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "payments" candidate
+        JOIN "order_settlements" settlement
+          ON settlement."id" = target_settlement_id
+         AND settlement."kind" = 'BALANCE_SETTLEMENT'
+         AND settlement."order_id" = candidate."order_id"
+         AND settlement."order_price_binding_id" = candidate."order_price_binding_id"
+         AND settlement."price_snapshot_id" = candidate."price_snapshot_id"
+         AND settlement."currency" = candidate."currency"
+        JOIN "payments" anchor
+          ON anchor."id" = settlement."balance_payment_id"
+         AND anchor."order_id" = settlement."order_id"
+         AND anchor."order_price_binding_id" = settlement."order_price_binding_id"
+         AND anchor."price_snapshot_id" = settlement."price_snapshot_id"
+         AND anchor."role" = 'BALANCE'
+         AND anchor."currency" = settlement."currency"
+        WHERE candidate."id" = target_payment_id
+          AND candidate."role" = 'BALANCE'
+          AND candidate."payment_schedule_id" = anchor."payment_schedule_id"
+          AND candidate."requested_amount_minor" = anchor."requested_amount_minor"
+          AND candidate."balance_due_at" = anchor."balance_due_at"
+          AND candidate."created_at" <= settlement."cutoff_at"
+    );
+$$;
+
 CREATE OR REPLACE FUNCTION taven_validate_refund_against_capture()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -3105,9 +3261,10 @@ BEGIN
                FROM "order_settlements" settlement
                WHERE settlement."order_id" = target_order."id"
                  AND settlement."kind" = 'BALANCE_SETTLEMENT'
-                 AND settlement."balance_payment_id" = payment."id"
-                 AND settlement."cutoff_at" = payment."capture_cutoff_at"
                  AND payment."role" = 'BALANCE'
+                 AND taven_balance_attempt_belongs_to_timeout_settlement(
+                     payment."id", settlement."id"
+                 )
            )
     INTO captured_amount, payment_capture_authorized,
          payment_capture_cutoff_at, payment_captured_at,
@@ -3898,15 +4055,20 @@ BEGIN
     JOIN "order_settlements" settlement
       ON settlement."order_id" = payment."order_id"
      AND settlement."kind" = 'BALANCE_SETTLEMENT'
-     AND settlement."balance_payment_id" = payment."id"
+     AND taven_balance_attempt_belongs_to_timeout_settlement(
+         payment."id", settlement."id"
+     )
      AND (
          (
              payment."status" = 'VOIDED'
-             AND settlement."cutoff_at" = payment."capture_cutoff_at"
+             AND payment."capture_cutoff_at" <= settlement."cutoff_at"
+             AND payment."balance_due_at" <= settlement."cutoff_at"
          )
          OR (
              payment."status" = 'FAILED'
-             AND payment."capture_cutoff_at" <= settlement."cutoff_at"
+             AND taven_balance_payment_is_closed_for_timeout(
+                 payment."id", settlement."cutoff_at"
+             )
              AND taven_balance_payment_has_verified_provider_failure(
                  payment."id"
              )

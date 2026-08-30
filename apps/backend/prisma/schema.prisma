@@ -1424,10 +1424,24 @@ model IndividualOrderOrigin {
   orderId String @id @map("order_id") @db.Uuid
   quoteId String @unique @map("quote_id") @db.Uuid
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  order                    Order                               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  quote                    Quote                               @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  legacyFullPaymentBinding LegacyIndividualFullPaymentBinding?
 
   @@map("individual_order_origins")
+}
+
+model LegacyIndividualFullPaymentBinding {
+  orderPriceBindingId String   @id @map("order_price_binding_id") @db.Uuid
+  orderId             String   @unique(map: "legacy_individual_full_payment_bindings_order_id_key") @map("order_id") @db.Uuid
+  priceSnapshotId     String   @unique(map: "legacy_individual_full_payment_bindings_snapshot_id_key") @map("price_snapshot_id") @db.Uuid
+  recordedAt          DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  individualOrigin  IndividualOrderOrigin @relation(fields: [orderId], references: [orderId], onDelete: Restrict, map: "legacy_individual_full_payment_bindings_origin_fkey")
+  orderPriceBinding OrderPriceBinding     @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "legacy_individual_full_payment_bindings_contract_fkey")
+
+  @@unique([orderPriceBindingId, orderId, priceSnapshotId], map: "legacy_individual_full_payment_bindings_contract_key")
+  @@map("legacy_individual_full_payment_bindings")
 }
 
 model OrderPriceBinding {
@@ -1438,15 +1452,16 @@ model OrderPriceBinding {
   invalidatedAt         DateTime? @map("invalidated_at") @db.Timestamptz(3)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  order                     Order                        @relation("OrderPriceBindings", fields: [orderId], references: [id], onDelete: Restrict)
-  checkoutAcceptanceOrder   Order?                       @relation("CheckoutAcceptanceBinding")
-  priceSnapshot             PriceSnapshot                @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
-  deliveryDestination       DeliveryDestination          @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  order                     Order                               @relation("OrderPriceBindings", fields: [orderId], references: [id], onDelete: Restrict)
+  checkoutAcceptanceOrder   Order?                              @relation("CheckoutAcceptanceBinding")
+  priceSnapshot             PriceSnapshot                       @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+  deliveryDestination       DeliveryDestination                 @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
   activeForOrder            OrderActivePriceBinding?
   shipmentPlans             ShipmentPlan[]
   fulfilmentSlotAllocations ShipmentPlanFulfilmentSlot[]
   payments                  Payment[]
   orderSettlements          OrderSettlement[]
+  legacyFullPaymentBinding  LegacyIndividualFullPaymentBinding?
 
   @@unique([orderId, priceSnapshotId], map: "order_price_bindings_order_snapshot_key")
   @@unique([id, orderId, priceSnapshotId], map: "order_price_bindings_payment_contract_key")
@@ -1859,7 +1874,7 @@ model Payment {
   auditEvents                   AuditEvent[]
   handoffReconciliations        HandoffReconciliation[]
   orderSettlements              OrderSettlement[]
-  balanceSettlements            OrderSettlement[]          @relation("BalanceSettlementPayment")
+  balanceSettlements            OrderSettlement[]             @relation("BalanceSettlementPayment")
 
   @@unique([id, orderId])
   @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
