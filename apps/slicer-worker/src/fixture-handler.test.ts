@@ -1,6 +1,7 @@
 import {
   SlicingJobSchema,
   geometrySelectionSha256,
+  machineOccupancyCacheIdentitySha256,
   slicingInputFingerprint,
   slicingResultForJobSchema,
   type SlicingResult,
@@ -57,6 +58,8 @@ const machineInput = {
   printConfig: revision(ids.printConfig, "f"),
   partsPerPlate: 2,
 };
+const candidateCacheIdentitySha256 =
+  machineOccupancyCacheIdentitySha256(machineInput);
 
 function fixtureJob(
   kind:
@@ -74,7 +77,7 @@ function fixtureJob(
     jobId,
     correlationId: ids.correlation,
     inputFingerprintSha256,
-    idempotencyKey: `slicer:v2:${kind}:${inputFingerprintSha256}`,
+    idempotencyKey: `slicer:v2:${kind}:${jobId}:${inputFingerprintSha256}`,
     attempt: 1,
     input,
   };
@@ -123,6 +126,10 @@ const candidateJob = fixtureJob("candidate_estimate", {
   quantity: 3,
   shipmentPlanId: ids.shipment,
   arrangementRevision: revision(ids.arrangement, "3"),
+  backingSliceTarget: {
+    cacheIdentitySha256: candidateCacheIdentitySha256,
+    analysisObjectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
+  },
 });
 const productionInput = {
   ...machineInput,
@@ -193,11 +200,24 @@ describe("runFixtureSlicingJob", () => {
       },
       outcome: {
         status: "succeeded",
-        metrics: { plateCount: 2 },
+        metrics: {
+          plateCount: 2,
+          estimatedPrintSeconds: "240",
+          estimatedMaterialMilligrams: "4000",
+        },
         plates: [
           { plateOrdinal: 1, partsOnPlate: 2 },
           { plateOrdinal: 2, partsOnPlate: 1 },
         ],
+        backingSlice: {
+          cacheIdentitySha256: candidateCacheIdentitySha256,
+          partsPerPlate: 2,
+          estimatedPrintSeconds: "120",
+          estimatedMaterialMilligrams: "2000",
+          artifact: {
+            objectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
+          },
+        },
       },
     });
   });
@@ -233,6 +253,10 @@ describe("runFixtureSlicingJob", () => {
         quantity: 3,
         shipmentPlanId: ids.shipment,
         arrangementRevision: revision(ids.arrangement, "3"),
+        backingSliceTarget: {
+          cacheIdentitySha256: candidateCacheIdentitySha256,
+          analysisObjectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
+        },
       },
     ],
     [

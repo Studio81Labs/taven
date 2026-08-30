@@ -58,7 +58,7 @@ const referenceJob = {
   jobId: ids.job,
   correlationId: ids.correlation,
   inputFingerprintSha256: referenceFingerprint,
-  idempotencyKey: `slicer:v2:reference_slice:${referenceFingerprint}`,
+  idempotencyKey: `slicer:v2:reference_slice:${ids.job}:${referenceFingerprint}`,
   attempt: 1,
   input: referenceInput,
 };

@@ -10,6 +10,12 @@ export type PrintConfigRevisionRef = RevisionRef<"print-config">;
 export type ArrangementRevisionRef = RevisionRef<"arrangement">;
 
 export type SliceCacheKey = string & { readonly __brand: "SliceCacheKey" };
+export type ProductionPackageKey = string & {
+  readonly __brand: "ProductionPackageKey";
+};
+export type MachineOccupancySliceCacheKey = string & {
+  readonly __brand: "MachineOccupancySliceCacheKey";
+};
 export type CandidateResourceEstimateKey = string & {
   readonly __brand: "CandidateResourceEstimateKey";
 };
@@ -27,6 +33,9 @@ export interface ProductionSliceCacheKeyInput {
   readonly machineCalibrationRevision: MachineCalibrationRevisionRef;
   readonly printConfigRevision: PrintConfigRevisionRef;
   readonly partsPerPlate: number | bigint;
+}
+
+export interface ProductionPackageKeyInput extends ProductionSliceCacheKeyInput {
   readonly quantity: number | bigint;
   readonly arrangementRevision: ArrangementRevisionRef;
   readonly acceptedJobId: string;
@@ -59,13 +68,42 @@ function buildPersistableIdentityKey(
   version: number,
   components: Parameters<typeof buildCanonicalKey>[2],
 ): string {
-  const canonicalIdentity = buildCanonicalKey(namespace, version, components);
+  const identitySha256 = buildIdentitySha256(namespace, version, components);
   return buildCanonicalKey(namespace, version, [
     {
       name: "identity_sha256",
-      value: Sha256Digest.of(canonicalIdentity).hex,
+      value: identitySha256.hex,
     },
   ]);
+}
+
+function buildIdentitySha256(
+  namespace: string,
+  version: number,
+  components: Parameters<typeof buildCanonicalKey>[2],
+): Sha256Digest {
+  return Sha256Digest.of(buildCanonicalKey(namespace, version, components));
+}
+
+function machineOccupancyComponents(
+  input: ProductionSliceCacheKeyInput,
+): Parameters<typeof buildCanonicalKey>[2] {
+  return [
+    { name: "geometry_hash", value: input.geometryHash.hex },
+    {
+      name: "machine_profile_revision_id",
+      value: input.machineProfileRevision.id,
+    },
+    {
+      name: "machine_calibration_revision_id",
+      value: input.machineCalibrationRevision.id,
+    },
+    {
+      name: "print_config_revision_id",
+      value: input.printConfigRevision.id,
+    },
+    { name: "parts_per_plate", value: input.partsPerPlate },
+  ];
 }
 
 export function buildReferenceSliceCacheKey(
@@ -90,8 +128,52 @@ export function buildProductionSliceCacheKey(
   input: ProductionSliceCacheKeyInput,
 ): SliceCacheKey {
   assertPositive(input.partsPerPlate, "partsPerPlate");
+  return buildCanonicalKey("production-slice", 1, [
+    { name: "geometry_hash", value: input.geometryHash.hex },
+    {
+      name: "machine_profile_revision_id",
+      value: input.machineProfileRevision.id,
+    },
+    {
+      name: "machine_calibration_revision_id",
+      value: input.machineCalibrationRevision.id,
+    },
+    {
+      name: "print_config_revision_id",
+      value: input.printConfigRevision.id,
+    },
+    { name: "parts_per_plate", value: input.partsPerPlate },
+  ]) as SliceCacheKey;
+}
+
+export function buildMachineOccupancySliceCacheKey(
+  input: ProductionSliceCacheKeyInput,
+): MachineOccupancySliceCacheKey {
+  assertPositive(input.partsPerPlate, "partsPerPlate");
+  return buildPersistableIdentityKey(
+    "machine-occupancy-slice",
+    1,
+    machineOccupancyComponents(input),
+  ) as MachineOccupancySliceCacheKey;
+}
+
+export function machineOccupancySliceIdentitySha256(
+  input: ProductionSliceCacheKeyInput,
+): Sha256Digest {
+  assertPositive(input.partsPerPlate, "partsPerPlate");
+  return buildIdentitySha256(
+    "machine-occupancy-slice",
+    1,
+    machineOccupancyComponents(input),
+  );
+}
+
+export function buildProductionPackageKey(
+  input: ProductionPackageKeyInput,
+): ProductionPackageKey {
+  assertPositive(input.partsPerPlate, "partsPerPlate");
   assertPositive(input.quantity, "quantity");
-  return buildPersistableIdentityKey("production-slice", 2, [
+  return buildPersistableIdentityKey("production-package", 1, [
     { name: "geometry_hash", value: input.geometryHash.hex },
     {
       name: "machine_profile_revision_id",
@@ -112,7 +194,7 @@ export function buildProductionSliceCacheKey(
       value: input.arrangementRevision.id,
     },
     { name: "accepted_job_id", value: input.acceptedJobId },
-  ]) as SliceCacheKey;
+  ]) as ProductionPackageKey;
 }
 
 export function buildCandidateResourceEstimateKey(

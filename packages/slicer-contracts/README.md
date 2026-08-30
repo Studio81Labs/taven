@@ -19,7 +19,9 @@ active, delayed, prioritized, and paused jobs; failed jobs require explicit
 triage before the v1 consumer is removed.
 
 Every dispatch includes a schema-verified SHA-256 fingerprint of canonical
-`{ kind, input }` JSON and an idempotency key derived from it. Producers use
+`{ kind, input }` JSON and a job-scoped idempotency key derived from its kind,
+stable dispatch ID, and fingerprint. Retries keep that dispatch ID and key;
+correlation IDs and attempt numbers do not define the effect. Producers use
 `slicingInputFingerprint(kind, input)` rather than supplying their own digest.
 Body subsets use `geometrySelectionSha256(bodyIds)`, which rejects duplicate or
 non-canonical ordering and binds the digest to the exact selected body set.
@@ -35,12 +37,25 @@ matching the singular persisted `Job.productionSliceResultId` and
 `partsPerPlate` is its plate capacity, so the result contains exactly
 `ceil(quantity / partsPerPlate)` ordered plate summaries. Candidate and
 production arrangement revisions bind the same accepted plan to that package.
-The aggregate production package uses production cache-key v2. Its bounded
+The aggregate production package uses a separate production-package key. Its bounded
 identity digest includes the accepted Job ID, complete Job quantity, and
 arrangement revision in addition to the geometry, machine profile, calibration,
 print configuration, and plate capacity. Two packages whose bytes or Job-bound
 object keys can differ therefore cannot share the unique persisted
 `SliceResult.cacheKey`.
+
+Candidate results separately return one cache-derived, full-occupancy
+machine-slice metrics artifact. Concurrent dispatches for the same immutable
+occupancy use the same identity digest and object key; the backend upserts the
+`SliceResult` by that key and uses the winning row ID. The reusable row uses the
+product production-slice identity through the bounded
+`buildMachineOccupancySliceCacheKey` builder (geometry, machine profile,
+calibration, print configuration, and occupancy only) and contains no usable
+G-code. The contract rederives that digest with the shared core identity helper,
+so a producer cannot substitute an opaque cache identity unrelated to those
+immutable inputs. Until candidate plate-child persistence is introduced,
+aggregate and final-tail estimates remain conservative at the full-occupancy
+material and time floor.
 
 Model inspection is explicitly two-step for multi-body inputs. `inspect_source`
 discovers a canonical ordered body list and returns no persistable geometry.

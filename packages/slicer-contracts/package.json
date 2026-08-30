@@ -16,10 +16,12 @@
     "build": "tsc -p tsconfig.json",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm --filter @taven/core build",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@taven/core": "workspace:*",
     "zod": "4.4.3"
   }
 }

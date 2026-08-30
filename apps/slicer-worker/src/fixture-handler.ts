@@ -172,21 +172,42 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
     }
     case "candidate_estimate": {
       const parts = plateParts(job.input.quantity, job.input.partsPerPlate);
+      const backingPrintSeconds = job.input.partsPerPlate * 60;
+      const backingMaterialMilligrams = job.input.partsPerPlate * 1_000;
+      const artifactSha256 = fixtureHash(
+        job.input.geometry.geometrySha256,
+        job.input.geometry.selectionSha256,
+        job.input.machineProfile.contentSha256,
+        job.input.machineCalibration.contentSha256,
+        job.input.printConfig.contentSha256,
+        job.input.partsPerPlate,
+      );
       return slicingResultForJobSchema(job).parse({
         ...envelope,
         outcome: {
           status: "succeeded",
           metrics: sliceMetrics(
-            job.input.quantity,
+            job.input.partsPerPlate * parts.length,
             parts.length,
             job.input.geometry.bodyIds.length,
           ),
           plates: parts.map((partsOnPlate, index) => ({
             plateOrdinal: index + 1,
             partsOnPlate,
-            estimatedPrintSeconds: String(partsOnPlate * 60),
-            estimatedMaterialMilligrams: String(partsOnPlate * 1_000),
+            estimatedPrintSeconds: String(backingPrintSeconds),
+            estimatedMaterialMilligrams: String(backingMaterialMilligrams),
           })),
+          backingSlice: {
+            cacheIdentitySha256:
+              job.input.backingSliceTarget.cacheIdentitySha256,
+            partsPerPlate: job.input.partsPerPlate,
+            estimatedPrintSeconds: String(backingPrintSeconds),
+            estimatedMaterialMilligrams: String(backingMaterialMilligrams),
+            artifact: {
+              objectKey: job.input.backingSliceTarget.analysisObjectKey,
+              sha256: artifactSha256,
+            },
+          },
         },
       });
     }

@@ -31,6 +31,7 @@ export {
   TopologyMetricsSchema,
   UuidSchema,
   geometrySelectionSha256,
+  machineOccupancyCacheIdentitySha256,
   slicingInputFingerprint,
   slicingResultForJobSchema,
   type CandidateEstimateJob,

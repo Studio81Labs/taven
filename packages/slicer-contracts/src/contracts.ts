@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import {
+  RevisionRef,
+  Sha256Digest,
+  machineOccupancySliceIdentitySha256,
+} from "@taven/core";
 import { z } from "zod";
 
 /**
@@ -47,7 +52,7 @@ const MAX_SIGNED_BIGINT = 9_223_372_036_854_775_807n;
 const LOWERCASE_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const GENERATED_OBJECT_KEY_PATTERN =
-  /^(?:models|geometries|reference-slices|gcode)\/[a-z0-9][a-z0-9:-]*(?:\/[a-z0-9][a-z0-9._:-]*)*$/;
+  /^(?:models|geometries|reference-slices|slice-metrics|gcode)\/[a-z0-9][a-z0-9:-]*(?:\/[a-z0-9][a-z0-9._:-]*)*$/;
 const SAFE_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._:-]*$/;
 const SAFE_FAILURE_MESSAGE_PATTERN =
   /^(?!.*(?:[a-z][a-z0-9+.-]*:\/\/|(?:^|\s)(?:\/|[a-z]:\\)|\b(?:authorization|bearer|password|secret|token)\b)).+$/iu;
@@ -105,6 +110,10 @@ const GeometryObjectKeySchema = StorageObjectKeySchema.regex(
 const ReferenceArtifactObjectKeySchema = StorageObjectKeySchema.regex(
   /^reference-slices\/[a-z0-9][a-z0-9:-]*\/[a-z0-9][a-z0-9._:-]*$/,
   "must identify a reference-slice artifact",
+);
+const SliceMetricsObjectKeySchema = StorageObjectKeySchema.regex(
+  /^slice-metrics\/[a-f0-9]{64}\/result\.json$/,
+  "must identify a machine-slice metrics artifact",
 );
 const ProductionArtifactObjectKeySchema = StorageObjectKeySchema.regex(
   /^gcode\/[0-9a-f-]{36}\/toolpaths\.gcode\.3mf$/,
@@ -274,6 +283,23 @@ export const PreflightFindingSchema = z
     }
   });
 
+const FindingArraySchema = z
+  .array(PreflightFindingSchema)
+  .max(MAX_FINDING_COUNT)
+  .superRefine((findings, context) => {
+    const codes = new Set<string>();
+    findings.forEach(({ code }, index) => {
+      if (codes.has(code)) {
+        context.addIssue({
+          code: "custom",
+          path: [index, "code"],
+          message: "finding codes must be unique within a result",
+        });
+      }
+      codes.add(code);
+    });
+  });
+
 export const EngineIdentitySchema = z.strictObject({
   name: EngineNameSchema,
   version: EngineVersionSchema,
@@ -386,6 +412,31 @@ const MachineSliceInputShape = {
   partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
 } as const;
 
+export function machineOccupancyCacheIdentitySha256(input: {
+  geometry: { geometrySha256: string };
+  machineProfile: { revisionId: string };
+  machineCalibration: { revisionId: string };
+  printConfig: { revisionId: string };
+  partsPerPlate: number;
+}): string {
+  return machineOccupancySliceIdentitySha256({
+    geometryHash: Sha256Digest.parse(input.geometry.geometrySha256),
+    machineProfileRevision: RevisionRef.create(
+      "machine-profile",
+      input.machineProfile.revisionId,
+    ),
+    machineCalibrationRevision: RevisionRef.create(
+      "machine-calibration",
+      input.machineCalibration.revisionId,
+    ),
+    printConfigRevision: RevisionRef.create(
+      "print-config",
+      input.printConfig.revisionId,
+    ),
+    partsPerPlate: input.partsPerPlate,
+  }).hex;
+}
+
 function requireRepresentablePlateCount(
   value: { quantity: number; partsPerPlate: number },
   context: z.RefinementCtx,
@@ -405,8 +456,37 @@ const CandidateEstimateInputSchema = z
     quantity: boundedPositiveInteger(MAX_QUANTITY),
     shipmentPlanId: UuidSchema,
     arrangementRevision: RevisionSnapshotSchema,
+    backingSliceTarget: z
+      .strictObject({
+        cacheIdentitySha256: Sha256Schema,
+        analysisObjectKey: SliceMetricsObjectKeySchema,
+      })
+      .superRefine((value, context) => {
+        if (
+          value.analysisObjectKey !==
+          `slice-metrics/${value.cacheIdentitySha256}/result.json`
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["analysisObjectKey"],
+            message: "must belong to the reusable machine-occupancy target",
+          });
+        }
+      }),
   })
-  .superRefine(requireRepresentablePlateCount);
+  .superRefine((value, context) => {
+    requireRepresentablePlateCount(value, context);
+    if (
+      value.backingSliceTarget.cacheIdentitySha256 !==
+      machineOccupancyCacheIdentitySha256(value)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["backingSliceTarget", "cacheIdentitySha256"],
+        message: "must match the immutable machine-occupancy inputs",
+      });
+    }
+  });
 
 const ProductionSliceInputSchema = z
   .strictObject({
@@ -480,6 +560,7 @@ export function slicingInputFingerprint(
 function requireCanonicalJobIdentity(
   value: {
     kind: SlicingJobKind;
+    jobId: string;
     input: unknown;
     inputFingerprintSha256: string;
     idempotencyKey: string;
@@ -494,7 +575,7 @@ function requireCanonicalJobIdentity(
       message: "must be the canonical SHA-256 of kind and input",
     });
   }
-  const expected = `slicer:v${SLICING_CONTRACT_VERSION}:${value.kind}:${value.inputFingerprintSha256}`;
+  const expected = `slicer:v${SLICING_CONTRACT_VERSION}:${value.kind}:${value.jobId}:${value.inputFingerprintSha256}`;
   if (value.idempotencyKey !== expected) {
     context.addIssue({
       code: "custom",
@@ -675,7 +756,7 @@ const InspectionSuccessSchema = z
     canonicalGeometry: CanonicalGeometryArtifactSchema.nullable(),
     metrics: InspectionMetricsSchema,
     bodies: z.array(BodyInspectionSchema).min(1).max(MAX_BODY_COUNT),
-    findings: z.array(PreflightFindingSchema).max(MAX_FINDING_COUNT),
+    findings: FindingArraySchema,
   })
   .superRefine((value, context) => {
     const bodyIds = value.bodies.map(({ bodyId }) => bodyId);
@@ -750,7 +831,7 @@ const ReferenceSliceSuccessSchema = z.strictObject({
     ...SliceMetricsShape,
     plateCount: z.literal(1),
   }),
-  findings: z.array(PreflightFindingSchema).max(MAX_FINDING_COUNT),
+  findings: FindingArraySchema,
   artifact: z.strictObject({
     objectKey: ReferenceArtifactObjectKeySchema,
     sha256: Sha256Schema,
@@ -769,6 +850,16 @@ const CandidateEstimateSuccessSchema = z
     status: z.literal("succeeded"),
     metrics: SliceMetricsSchema,
     plates: z.array(PlateEstimateSchema).min(1).max(MAX_PLATE_COUNT),
+    backingSlice: z.strictObject({
+      cacheIdentitySha256: Sha256Schema,
+      partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
+      estimatedPrintSeconds: PositiveInt64StringSchema,
+      estimatedMaterialMilligrams: PositiveInt64StringSchema,
+      artifact: z.strictObject({
+        objectKey: SliceMetricsObjectKeySchema,
+        sha256: Sha256Schema,
+      }),
+    }),
   })
   .superRefine((value, context) => {
     const ordinals = value.plates.map(({ plateOrdinal }) => plateOrdinal);
@@ -854,6 +945,74 @@ function requireExpectedProfileEngine(
       code: "custom",
       path: ["engine"],
       message: "must match the slicer identity selected by the profile",
+    });
+  }
+}
+
+function requireCandidateBackingSlice(
+  value: {
+    input: {
+      partsPerPlate: number;
+      backingSliceTarget: {
+        cacheIdentitySha256: string;
+        analysisObjectKey: string;
+      };
+    };
+    outcome:
+      | { status: "failed" }
+      | {
+          status: "succeeded";
+          metrics: {
+            plateCount: number;
+            estimatedPrintSeconds: string;
+            estimatedMaterialMilligrams: string;
+          };
+          backingSlice: {
+            cacheIdentitySha256: string;
+            partsPerPlate: number;
+            estimatedPrintSeconds: string;
+            estimatedMaterialMilligrams: string;
+            artifact: { objectKey: string };
+          };
+        };
+  },
+  context: z.RefinementCtx,
+): void {
+  if (value.outcome.status !== "succeeded") return;
+  const backingSlice = value.outcome.backingSlice;
+  const target = value.input.backingSliceTarget;
+  if (
+    backingSlice.cacheIdentitySha256 !== target.cacheIdentitySha256 ||
+    backingSlice.artifact.objectKey !== target.analysisObjectKey
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["outcome", "backingSlice"],
+      message: "must match the reusable machine-occupancy target",
+    });
+  }
+  if (backingSlice.partsPerPlate !== value.input.partsPerPlate) {
+    context.addIssue({
+      code: "custom",
+      path: ["outcome", "backingSlice", "partsPerPlate"],
+      message: "must represent the selected full plate occupancy",
+    });
+  }
+  const minimumPrintSeconds =
+    BigInt(backingSlice.estimatedPrintSeconds) *
+    BigInt(value.outcome.metrics.plateCount);
+  const minimumMaterialMilligrams =
+    BigInt(backingSlice.estimatedMaterialMilligrams) *
+    BigInt(value.outcome.metrics.plateCount);
+  if (
+    BigInt(value.outcome.metrics.estimatedPrintSeconds) < minimumPrintSeconds ||
+    BigInt(value.outcome.metrics.estimatedMaterialMilligrams) <
+      minimumMaterialMilligrams
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["outcome", "metrics"],
+      message: "must conservatively cover the persisted backing slice",
     });
   }
 }
@@ -1020,6 +1179,7 @@ const CandidateEstimateResultBase = z
     requireSelectedBodyCount(value, context);
     requireExpectedProfileEngine(value, value.input.machineProfile, context);
     requireCanonicalPlatePlan(value, context);
+    requireCandidateBackingSlice(value, context);
   });
 const ProductionSliceResultBase = z
   .strictObject({

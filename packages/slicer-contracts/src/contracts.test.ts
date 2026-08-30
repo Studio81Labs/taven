@@ -16,6 +16,7 @@ import {
   SlicingJobSchema,
   SlicingResultSchema,
   geometrySelectionSha256,
+  machineOccupancyCacheIdentitySha256,
   slicingInputFingerprint,
   slicingResultForJobSchema,
   type SlicingJobKind,
@@ -73,12 +74,13 @@ const envelope = (
   overrides: Record<string, unknown> = {},
 ) => {
   const inputFingerprintSha256 = slicingInputFingerprint(kind, input);
+  const jobId = typeof overrides.jobId === "string" ? overrides.jobId : ids.job;
   return {
     contractVersion: SLICING_CONTRACT_VERSION,
-    jobId: ids.job,
+    jobId,
     correlationId: ids.correlation,
     inputFingerprintSha256,
-    idempotencyKey: key(kind, inputFingerprintSha256),
+    idempotencyKey: `${key(kind, jobId)}:${inputFingerprintSha256}`,
     attempt: 1,
     kind,
     input,
@@ -127,11 +129,17 @@ const machineInput = {
   printConfig: revision(ids.config),
   partsPerPlate: 2,
 };
+const candidateCacheIdentitySha256 =
+  machineOccupancyCacheIdentitySha256(machineInput);
 const candidateInput = {
   ...machineInput,
   quantity: 3,
   shipmentPlanId: ids.shipment,
   arrangementRevision: revision(ids.arrangement),
+  backingSliceTarget: {
+    cacheIdentitySha256: candidateCacheIdentitySha256,
+    analysisObjectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
+  },
 };
 const productionInput = {
   ...machineInput,
@@ -220,6 +228,16 @@ const productionOutcome = {
     format: "gcode_3mf" as const,
     objectKey: `gcode/${ids.acceptedJob}/toolpaths.gcode.3mf`,
     sha256: hash("5"),
+  },
+};
+const candidateBackingSlice = {
+  cacheIdentitySha256: candidateCacheIdentitySha256,
+  partsPerPlate: 2,
+  estimatedPrintSeconds: "10",
+  estimatedMaterialMilligrams: "20",
+  artifact: {
+    objectKey: `slice-metrics/${candidateCacheIdentitySha256}/result.json`,
+    sha256: hash("6"),
   },
 };
 const inspectionJob = envelope("model_inspection", inspectionInput);
@@ -331,6 +349,17 @@ describe("versioned slicing jobs", () => {
         }),
       ),
     ).toThrow();
+    expect(() =>
+      SlicingJobSchema.parse(
+        envelope("candidate_estimate", {
+          ...candidateInput,
+          backingSliceTarget: {
+            cacheIdentitySha256: hash("9"),
+            analysisObjectKey: `slice-metrics/${hash("9")}/result.json`,
+          },
+        }),
+      ),
+    ).toThrow();
   });
 
   it("binds canonicalization to discovered and selected geometry", () => {
@@ -377,6 +406,42 @@ describe("versioned slicing jobs", () => {
       }),
     ).toThrow();
     expect(() => geometrySelectionSha256(["body-b", "body-a"])).toThrow();
+  });
+
+  it("scopes idempotency to the stable dispatch effect", () => {
+    const first = envelope("reference_slice", referenceInput);
+    const second = envelope("reference_slice", referenceInput, {
+      jobId: ids.geometryB,
+    });
+    const retry = { ...first, attempt: 2 };
+
+    expect(second.inputFingerprintSha256).toBe(first.inputFingerprintSha256);
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    expect(SlicingJobSchema.parse(first)).toEqual(first);
+    expect(SlicingJobSchema.parse(second)).toEqual(second);
+    expect(SlicingJobSchema.parse(retry)).toEqual(retry);
+  });
+
+  it("reuses a cache-derived backing target across candidate effects", () => {
+    const first = envelope("candidate_estimate", candidateInput);
+    const secondInput = {
+      ...candidateInput,
+      shipmentPlanId: ids.geometryB,
+    };
+    const second = envelope("candidate_estimate", secondInput, {
+      jobId: ids.geometryB,
+    });
+
+    expect(secondInput.backingSliceTarget).toEqual(
+      candidateInput.backingSliceTarget,
+    );
+    expect(second.inputFingerprintSha256).not.toBe(
+      first.inputFingerprintSha256,
+    );
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+    expect(SlicingJobSchema.parse(first)).toEqual(first);
+    expect(SlicingJobSchema.parse(second)).toEqual(second);
   });
 
   it("rejects unsafe keys, identifiers, hashes, and numeric bounds", () => {
@@ -484,6 +549,7 @@ describe("versioned slicing results", () => {
           estimatedMaterialMilligrams: "20",
         },
       ],
+      backingSlice: candidateBackingSlice,
     });
     const production = result(productionJob, productionOutcome);
     for (const value of [inspection, reference, candidate, production])
@@ -624,6 +690,77 @@ describe("versioned slicing results", () => {
     ).toBeDefined();
   });
 
+  it("rejects duplicate finding codes in each persistence scope", () => {
+    const duplicateFindings = [
+      {
+        code: "DUPLICATE_CODE",
+        severity: "info" as const,
+        phase: "inspection" as const,
+        message: "first diagnostic",
+        acknowledgementKey: null,
+      },
+      {
+        code: "DUPLICATE_CODE",
+        severity: "blocking" as const,
+        phase: "reference_slice" as const,
+        message: "second diagnostic",
+        acknowledgementKey: null,
+      },
+    ];
+    expect(() =>
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...inspectionOutcome,
+          findings: duplicateFindings,
+        }),
+      ),
+    ).toThrow();
+    expect(() => ReferenceSliceJobSchema.parse(referenceJob)).not.toThrow();
+    expect(() =>
+      SlicingResultSchema.parse(
+        result(referenceJob, {
+          status: "succeeded",
+          metrics: { ...sliceMetrics, plateCount: 1 },
+          findings: duplicateFindings,
+          artifact: {
+            objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+            sha256: hash("4"),
+          },
+        }),
+      ),
+    ).toThrow();
+
+    const uniqueFindings = Array.from({ length: 256 }, (_, index) => ({
+      code: `FINDING_${index}`,
+      severity: "info" as const,
+      phase: "inspection" as const,
+      message: "diagnostic",
+      acknowledgementKey: null,
+    }));
+    expect(
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...inspectionOutcome,
+          findings: uniqueFindings,
+        }),
+      ),
+    ).toBeDefined();
+    expect(() =>
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...inspectionOutcome,
+          findings: [
+            ...uniqueFindings,
+            {
+              ...uniqueFindings[0],
+              code: "FINDING_OVER_LIMIT",
+            },
+          ],
+        }),
+      ),
+    ).toThrow();
+  });
+
   it("binds every slice result engine to its selected profile", () => {
     const results = [
       result(referenceJob, {
@@ -657,6 +794,7 @@ describe("versioned slicing results", () => {
             estimatedMaterialMilligrams: "20",
           },
         ],
+        backingSlice: candidateBackingSlice,
       }),
       result(productionJob, productionOutcome),
     ];
@@ -789,6 +927,7 @@ describe("versioned slicing results", () => {
           estimatedMaterialMilligrams: "20",
         },
       ],
+      backingSlice: candidateBackingSlice,
     });
     expect(CandidateEstimateResultSchema.parse(valid)).toEqual(valid);
     expect(() =>
@@ -797,6 +936,42 @@ describe("versioned slicing results", () => {
         outcome: {
           ...(valid.outcome as object),
           metrics: { ...sliceMetrics, plateCount: 2 },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      CandidateEstimateResultSchema.parse({
+        ...valid,
+        outcome: {
+          ...(valid.outcome as object),
+          backingSlice: {
+            ...candidateBackingSlice,
+            cacheIdentitySha256: hash("9"),
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      CandidateEstimateResultSchema.parse({
+        ...valid,
+        outcome: {
+          ...(valid.outcome as object),
+          backingSlice: {
+            ...candidateBackingSlice,
+            partsPerPlate: 1,
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      CandidateEstimateResultSchema.parse({
+        ...valid,
+        outcome: {
+          ...(valid.outcome as object),
+          backingSlice: {
+            ...candidateBackingSlice,
+            estimatedPrintSeconds: "11",
+          },
         },
       }),
     ).toThrow();
@@ -1039,7 +1214,10 @@ describe("versioned slicing results", () => {
     };
     const oversized = result(inspectionJob, {
       ...inspectionOutcome,
-      findings: Array.from({ length: 256 }, () => finding),
+      findings: Array.from({ length: 256 }, (_, index) => ({
+        ...finding,
+        code: `TOO_LARGE_${index}`,
+      })),
     });
     expect(
       new TextEncoder().encode(JSON.stringify(oversized)).byteLength,

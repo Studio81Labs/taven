@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCandidateResourceEstimateKey,
+  buildMachineOccupancySliceCacheKey,
+  buildProductionPackageKey,
   buildProductionSliceCacheKey,
   buildReferenceSliceCacheKey,
+  machineOccupancySliceIdentitySha256,
 } from "./cache-key.js";
 import { Sha256Digest } from "../primitives/digest.js";
 import { RevisionRef } from "../primitives/revision-ref.js";
@@ -66,9 +69,6 @@ describe("slice cache key builders", () => {
       machineCalibrationRevision: machineCalibrationRevision("calibration-1"),
       printConfigRevision: printConfigRevision("config-1"),
       partsPerPlate: 1,
-      quantity: 1,
-      arrangementRevision: arrangementRevision("arrangement-1"),
-      acceptedJobId: "accepted-job-1",
     });
 
     expect(production).not.toBe(reference);
@@ -85,7 +85,7 @@ describe("slice cache key builders", () => {
       arrangementRevision: arrangementRevision("arrangement-1"),
       acceptedJobId: "accepted-job-1",
     } as const;
-    const key = buildProductionSliceCacheKey(base);
+    const key = buildProductionPackageKey(base);
 
     for (const changed of [
       { ...base, geometryHash: Sha256Digest.parse("b".repeat(64)) },
@@ -103,8 +103,39 @@ describe("slice cache key builders", () => {
       { ...base, arrangementRevision: arrangementRevision("arrangement-2") },
       { ...base, acceptedJobId: "accepted-job-2" },
     ]) {
-      expect(buildProductionSliceCacheKey(changed)).not.toBe(key);
+      expect(buildProductionPackageKey(changed)).not.toBe(key);
     }
+  });
+
+  it("builds a bounded reusable machine-occupancy identity", () => {
+    const base = {
+      geometryHash,
+      machineProfileRevision: machineProfileRevision("machine-profile-1"),
+      machineCalibrationRevision: machineCalibrationRevision("calibration-1"),
+      printConfigRevision: printConfigRevision("config-1"),
+      partsPerPlate: 2,
+    } as const;
+    const key = buildMachineOccupancySliceCacheKey(base);
+    const identitySha256 = machineOccupancySliceIdentitySha256(base);
+
+    for (const changed of [
+      { ...base, geometryHash: Sha256Digest.parse("b".repeat(64)) },
+      {
+        ...base,
+        machineProfileRevision: machineProfileRevision("machine-profile-2"),
+      },
+      {
+        ...base,
+        machineCalibrationRevision: machineCalibrationRevision("calibration-2"),
+      },
+      { ...base, printConfigRevision: printConfigRevision("config-2") },
+      { ...base, partsPerPlate: 1 },
+    ]) {
+      expect(buildMachineOccupancySliceCacheKey(changed)).not.toBe(key);
+    }
+    expect(key).toContain(identitySha256.hex);
+    expect(machineOccupancySliceIdentitySha256(base)).toEqual(identitySha256);
+    expect(key.length).toBeLessThanOrEqual(255);
   });
 
   it("includes the complete candidate estimate identity", () => {
@@ -166,7 +197,7 @@ describe("slice cache key builders", () => {
   it("keeps the aggregate production key within its persisted varchar bound", () => {
     const uuid = (digit: string) =>
       `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`;
-    const production = buildProductionSliceCacheKey({
+    const production = buildProductionPackageKey({
       geometryHash,
       machineProfileRevision: machineProfileRevision(uuid("1")),
       machineCalibrationRevision: machineCalibrationRevision(uuid("2")),
