@@ -274,6 +274,15 @@ async function createFixture(
     const dispatchId = fixtures.id(`${name}:outbox`);
     if (persistDispatch) {
       await client.query(
+        `INSERT INTO arrangement_revisions (id, content_sha256)
+         VALUES ($1, $2)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          job.input.arrangementRevision.revisionId,
+          job.input.arrangementRevision.contentSha256,
+        ],
+      );
+      await client.query(
         'INSERT INTO "outbox_messages" ("id", "deduplication_key", "aggregate_type", "aggregate_id", "message_type", "schema_version", "payload", "status", "attempts", "available_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $10, $10)',
         [
           dispatchId,
@@ -401,7 +410,7 @@ describe("candidate estimate terminal receipts", () => {
     await pool.end();
   });
 
-  it("requires the persisted machine slicer identity before creating a dispatch", async () => {
+  it("anchors every dispatched resource revision to its persisted digest", async () => {
     const fixture = await createFixture("dispatch-slicer-identity", {
       persistDispatch: false,
       dispatchableGeometry: true,
@@ -432,11 +441,49 @@ describe("candidate estimate terminal receipts", () => {
 
     await expect(dispatch(fixture.job)).resolves.toEqual(fixture.job);
     await expect(
+      pool.query<{ content_sha256: string }>(
+        `SELECT content_sha256
+         FROM arrangement_revisions
+         WHERE id = $1`,
+        [fixture.job.input.arrangementRevision.revisionId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          content_sha256: fixture.job.input.arrangementRevision.contentSha256,
+        },
+      ],
+    });
+
+    const conflictingInput = {
+      ...fixture.job.input,
+      arrangementRevision: {
+        ...fixture.job.input.arrangementRevision,
+        contentSha256: hash("conflicting-arrangement-content"),
+      },
+    };
+    const conflictingJobId = randomUUID();
+    const conflictingFingerprint = contracts.slicingInputFingerprint(
+      "candidate_estimate",
+      conflictingInput,
+    );
+    const conflictingJob = contracts.CandidateEstimateJobSchema.parse({
+      ...fixture.job,
+      jobId: conflictingJobId,
+      correlationId: randomUUID(),
+      input: conflictingInput,
+      inputFingerprintSha256: conflictingFingerprint,
+      idempotencyKey: `slicer:v2:candidate_estimate:${conflictingJobId}:${conflictingFingerprint}`,
+    });
+    await expect(dispatch(conflictingJob)).rejects.toBeInstanceOf(
+      ResourceNotFoundError,
+    );
+    await expect(
       pool.query<{ count: number }>(
         `SELECT count(*)::int AS count
          FROM outbox_messages
-         WHERE aggregate_id = $1`,
-        [fixture.job.jobId],
+         WHERE aggregate_id IN ($1, $2)`,
+        [fixture.job.jobId, conflictingJob.jobId],
       ),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });

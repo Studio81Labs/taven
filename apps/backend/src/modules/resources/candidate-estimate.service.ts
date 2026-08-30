@@ -279,6 +279,15 @@ export class CandidateEstimateService {
           }
         }
 
+        await transaction.$executeRaw`
+          INSERT INTO arrangement_revisions (id, content_sha256)
+          VALUES (
+            ${job.input.arrangementRevision.revisionId}::uuid,
+            ${job.input.arrangementRevision.contentSha256}
+          )
+          ON CONFLICT (id) DO NOTHING
+        `;
+
         const resource = await transaction.$queryRaw<
           Array<{ exists: boolean }>
         >`
@@ -303,6 +312,8 @@ export class CandidateEstimateService {
               ON calibration_revision.id = calibration.id
             JOIN revision_identities config_revision
               ON config_revision.id = ${job.input.printConfig.revisionId}::uuid
+            JOIN arrangement_revisions arrangement_revision
+              ON arrangement_revision.id = ${job.input.arrangementRevision.revisionId}::uuid
             JOIN print_config_revisions config
               ON config.id = config_revision.id
             JOIN model_geometries geometry
@@ -341,6 +352,7 @@ export class CandidateEstimateService {
               AND profile_revision.digest = ${job.input.machineProfile.contentSha256}
               AND calibration_revision.digest = ${job.input.machineCalibration.contentSha256}
               AND config_revision.digest = ${job.input.printConfig.contentSha256}
+              AND arrangement_revision.content_sha256 = ${job.input.arrangementRevision.contentSha256}
           ) AS exists
         `;
         if (!resource[0]?.exists) {

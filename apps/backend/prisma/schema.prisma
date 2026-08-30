@@ -828,6 +828,16 @@ model Inventory {
   @@map("inventories")
 }
 
+model ArrangementRevision {
+  id            String   @id @db.Uuid
+  contentSha256 String   @map("content_sha256") @db.VarChar(64)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  candidateEstimates CandidateResourceEstimate[]
+
+  @@map("arrangement_revisions")
+}
+
 model SliceResult {
   id                          String    @id @default(uuid()) @db.Uuid
   kind                        SliceKind
@@ -903,6 +913,7 @@ model CandidateResourceEstimate {
   machine               Machine                          @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
   inventory             Inventory                        @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
   shipmentPlan          ShipmentPlan                     @relation(fields: [shipmentPlanId], references: [id], onDelete: Restrict)
+  arrangementRevision   ArrangementRevision              @relation(fields: [arrangementRevisionId], references: [id], onDelete: Restrict)
   capacityIntervals     CandidateCapacityInterval[]
   phaseResourcePlanJobs PhaseResourcePlanJob[]
   terminalResult        CandidateEstimateTerminalResult?
@@ -1018,18 +1029,23 @@ model PhaseResourcePlanSlot {
 }
 
 model PhaseReservationSet {
-  id                  String                    @id @default(uuid()) @db.Uuid
-  nodeId              String                    @map("node_id") @db.Uuid
-  phaseResourcePlanId String                    @map("phase_resource_plan_id") @db.Uuid
-  reservationKey      String                    @unique @map("reservation_key") @db.VarChar(255)
-  status              PhaseReservationSetStatus @default(BUILDING)
-  expiresAt           DateTime                  @map("expires_at") @db.Timestamptz(3)
-  createdAt           DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                                  String                    @id @default(uuid()) @db.Uuid
+  nodeId                              String                    @map("node_id") @db.Uuid
+  phaseResourcePlanId                 String                    @map("phase_resource_plan_id") @db.Uuid
+  reservationKey                      String                    @unique @map("reservation_key") @db.VarChar(255)
+  reacquiredFromPhaseReservationSetId String?                   @map("reacquired_from_phase_reservation_set_id") @db.Uuid
+  reacquisitionPaymentId              String?                   @map("reacquisition_payment_id") @db.Uuid
+  status                              PhaseReservationSetStatus @default(BUILDING)
+  expiresAt                           DateTime                  @map("expires_at") @db.Timestamptz(3)
+  createdAt                           DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                           DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  node                   Node                    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
-  phaseResourcePlan      PhaseResourcePlan       @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
-  productionReservations ProductionReservation[]
+  node                              Node                    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  phaseResourcePlan                 PhaseResourcePlan       @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  reacquiredFromPhaseReservationSet PhaseReservationSet?    @relation("PhaseReservationSetReacquisition", fields: [reacquiredFromPhaseReservationSetId], references: [id], onDelete: Restrict, map: "phase_reservation_sets_reacquired_from_fkey")
+  replacementPhaseReservationSets   PhaseReservationSet[]   @relation("PhaseReservationSetReacquisition")
+  reacquisitionPayment              Payment?                @relation(fields: [reacquisitionPaymentId], references: [id], onDelete: Restrict, map: "phase_reservation_sets_reacquisition_payment_fkey")
+  productionReservations            ProductionReservation[]
 
   @@unique([id, nodeId])
   @@unique([id, nodeId, phaseResourcePlanId])
@@ -1912,17 +1928,18 @@ model Payment {
   createdAt                     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  orderPriceBinding             OrderPriceBinding             @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
-  priceSnapshot                 PriceSnapshot                 @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
-  paymentSchedule               PaymentSchedule               @relation(fields: [paymentScheduleId, priceSnapshotId, role, requestedAmountMinor], references: [id, priceSnapshotId, role, grossAmountMinor], onDelete: Restrict, map: "payments_schedule_contract_fkey")
-  intentCreationFailureEvidence PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailurePayment")
-  intentCreationFailureResult   PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailureResult", fields: [intentCreationFailureResultId, id, provider], references: [id, paymentId, provider], onDelete: Restrict, map: "payments_intent_creation_failure_result_fkey")
-  refunds                       RefundTransaction[]
-  providerEvents                PaymentProviderEvent[]
-  auditEvents                   AuditEvent[]
-  handoffReconciliations        HandoffReconciliation[]
-  orderSettlements              OrderSettlement[]
-  balanceSettlements            OrderSettlement[]             @relation("BalanceSettlementPayment")
+  orderPriceBinding              OrderPriceBinding             @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
+  priceSnapshot                  PriceSnapshot                 @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
+  paymentSchedule                PaymentSchedule               @relation(fields: [paymentScheduleId, priceSnapshotId, role, requestedAmountMinor], references: [id, priceSnapshotId, role, grossAmountMinor], onDelete: Restrict, map: "payments_schedule_contract_fkey")
+  intentCreationFailureEvidence  PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailurePayment")
+  intentCreationFailureResult    PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailureResult", fields: [intentCreationFailureResultId, id, provider], references: [id, paymentId, provider], onDelete: Restrict, map: "payments_intent_creation_failure_result_fkey")
+  refunds                        RefundTransaction[]
+  providerEvents                 PaymentProviderEvent[]
+  auditEvents                    AuditEvent[]
+  handoffReconciliations         HandoffReconciliation[]
+  orderSettlements               OrderSettlement[]
+  balanceSettlements             OrderSettlement[]             @relation("BalanceSettlementPayment")
+  reacquiredPhaseReservationSets PhaseReservationSet[]
 
   @@unique([id, orderId])
   @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")

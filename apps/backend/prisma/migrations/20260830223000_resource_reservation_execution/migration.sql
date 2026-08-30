@@ -1,11 +1,33 @@
 BEGIN;
 
+ALTER TABLE "phase_reservation_sets"
+    ADD COLUMN "reacquired_from_phase_reservation_set_id" UUID,
+    ADD COLUMN "reacquisition_payment_id" UUID,
+    ADD CONSTRAINT "phase_reservation_sets_reacquisition_identity_check"
+        CHECK (
+            ("reacquired_from_phase_reservation_set_id" IS NULL
+             AND "reacquisition_payment_id" IS NULL)
+            OR
+            ("reacquired_from_phase_reservation_set_id" IS NOT NULL
+             AND "reacquisition_payment_id" IS NOT NULL)
+        ),
+    ADD CONSTRAINT "phase_reservation_sets_reacquired_from_fkey"
+        FOREIGN KEY ("reacquired_from_phase_reservation_set_id")
+        REFERENCES "phase_reservation_sets"("id")
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    ADD CONSTRAINT "phase_reservation_sets_reacquisition_payment_fkey"
+        FOREIGN KEY ("reacquisition_payment_id")
+        REFERENCES "payments"("id")
+        ON DELETE RESTRICT ON UPDATE CASCADE;
+
 -- Reservation execution is database-owned so the all-or-nothing resource claim
 -- remains true for every caller, including worker processes.
 CREATE FUNCTION taven_create_phase_reservation(
     target_node_id uuid,
     target_phase_resource_plan_id uuid,
-    target_reservation_key text
+    target_reservation_key text,
+    reacquired_from_phase_reservation_set_id uuid DEFAULT NULL,
+    reacquisition_payment_id uuid DEFAULT NULL
 )
 RETURNS TABLE (
     phase_reservation_set_id uuid,
@@ -40,7 +62,11 @@ BEGIN
 
     IF FOUND THEN
         IF existing_set."node_id" <> target_node_id
-           OR existing_set."phase_resource_plan_id" <> target_phase_resource_plan_id THEN
+           OR existing_set."phase_resource_plan_id" <> target_phase_resource_plan_id
+           OR existing_set."reacquired_from_phase_reservation_set_id"
+                IS DISTINCT FROM reacquired_from_phase_reservation_set_id
+           OR existing_set."reacquisition_payment_id"
+                IS DISTINCT FROM reacquisition_payment_id THEN
             RAISE EXCEPTION 'reservation key is already bound to another phase resource plan'
                 USING ERRCODE = '23505', CONSTRAINT = 'phase_reservation_sets_reservation_key_key';
         END IF;
@@ -198,9 +224,11 @@ BEGIN
 
     INSERT INTO "phase_reservation_sets" (
         "id", "node_id", "phase_resource_plan_id", "reservation_key",
+        "reacquired_from_phase_reservation_set_id", "reacquisition_payment_id",
         "status", "expires_at", "created_at", "updated_at"
     ) VALUES (
         gen_random_uuid(), target_node_id, target_phase_resource_plan_id, target_reservation_key,
+        reacquired_from_phase_reservation_set_id, reacquisition_payment_id,
         'BUILDING', reservation_expires_at, reserved_at, reserved_at
     )
     RETURNING "id" INTO created_set_id;
@@ -679,9 +707,13 @@ BEGIN
 
     IF FOUND THEN
         IF existing_replacement_set."node_id" <> target_node_id
-           OR existing_replacement_set."phase_resource_plan_id" <> target_phase_resource_plan_id THEN
-            RAISE EXCEPTION 'reservation key is already bound to another phase resource plan'
-                USING ERRCODE = '23505', CONSTRAINT = 'phase_reservation_sets_reservation_key_key';
+           OR existing_replacement_set."phase_resource_plan_id" <> target_phase_resource_plan_id
+           OR existing_replacement_set."reacquired_from_phase_reservation_set_id"
+                IS DISTINCT FROM previous_phase_reservation_set_id
+           OR existing_replacement_set."reacquisition_payment_id"
+                IS DISTINCT FROM target_payment_id THEN
+            RAISE EXCEPTION 'reservation key is already bound to another reacquisition identity'
+                USING ERRCODE = '23505', CONSTRAINT = 'phase_reservation_sets_reacquisition_identity_check';
         END IF;
 
         IF existing_replacement_set."status" NOT IN ('RESERVED', 'HELD')
@@ -777,7 +809,9 @@ BEGIN
     FROM taven_create_phase_reservation(
         target_node_id,
         target_phase_resource_plan_id,
-        target_reservation_key
+        target_reservation_key,
+        previous_phase_reservation_set_id,
+        target_payment_id
     );
 END;
 $$;

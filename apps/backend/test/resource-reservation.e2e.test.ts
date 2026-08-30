@@ -666,6 +666,42 @@ describe("phase resource reservation execution", () => {
     }
     expect(replacement).toBeTruthy();
 
+    const persistedIdentity = await pool.query<{
+      reacquired_from_phase_reservation_set_id: string | null;
+      reacquisition_payment_id: string | null;
+    }>(
+      `SELECT reacquired_from_phase_reservation_set_id,
+              reacquisition_payment_id
+       FROM phase_reservation_sets
+       WHERE id = $1`,
+      [replacement?.phase_reservation_set_id],
+    );
+    expect(persistedIdentity.rows[0]).toEqual({
+      reacquired_from_phase_reservation_set_id: previousSetId,
+      reacquisition_payment_id: paymentId,
+    });
+
+    for (const [wrongPreviousSetId, wrongPaymentId] of [
+      [randomUUID(), paymentId],
+      [previousSetId, randomUUID()],
+    ] as const) {
+      await expect(
+        pool.query(
+          "SELECT * FROM taven_reacquire_phase_reservation_for_capture($1, $2, $3, $4, $5)",
+          [
+            wrongPreviousSetId,
+            nodeId,
+            replacementPlanId,
+            replacementKey,
+            wrongPaymentId,
+          ],
+        ),
+      ).rejects.toMatchObject({
+        code: "23505",
+        constraint: "phase_reservation_sets_reacquisition_identity_check",
+      });
+    }
+
     await pool.query("SELECT pg_sleep(5.1)");
 
     const replay = await pool.query<{

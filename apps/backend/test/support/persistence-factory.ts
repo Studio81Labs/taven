@@ -1564,6 +1564,16 @@ export class PersistenceFactory {
     }
 
     await this.sql.query(
+      `INSERT INTO "arrangement_revisions" ("id", "content_sha256")
+       VALUES ($1, $2)
+       ON CONFLICT ("id") DO NOTHING`,
+      [
+        arrangementRevisionId,
+        this.hash(`arrangement-revision:${arrangementRevisionId}`),
+      ],
+    );
+
+    await this.sql.query(
       'INSERT INTO "candidate_resource_estimates" ("id", "node_id", "estimate_key", "model_geometry_id", "slice_result_id", "tail_slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "machine_id", "inventory_id", "shipment_plan_id", "arrangement_revision_id", "quantity", "parts_per_plate", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, $20)',
       [
         candidateId,

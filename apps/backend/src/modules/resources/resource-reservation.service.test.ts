@@ -34,9 +34,17 @@ describe("ResourceReservationService", () => {
     const orderLock = reacquire.indexOf(
       "PERFORM taven_lock_automatic_order_session(target_order_id);",
     );
+    const identityValidation = reacquire.indexOf(
+      "IS DISTINCT FROM previous_phase_reservation_set_id",
+    );
+    const replayReturn = reacquire.indexOf(
+      'SELECT existing_replacement_set."id",',
+    );
 
     expect(validation).toBeGreaterThanOrEqual(0);
     expect(reservationFence).toBeGreaterThan(validation);
+    expect(identityValidation).toBeGreaterThan(reservationFence);
+    expect(replayReturn).toBeGreaterThan(identityValidation);
     expect(orderLock).toBeGreaterThan(reservationFence);
   });
 
