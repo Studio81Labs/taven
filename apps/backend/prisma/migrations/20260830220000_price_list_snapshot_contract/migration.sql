@@ -20,13 +20,13 @@ CREATE TABLE "price_lists" (
 
 INSERT INTO "price_lists" ("id", "revision", "terms_revision", "currency", "parameters")
 VALUES
-    ('00000000-0000-4000-8000-000000000019', 'legacy-v0-czk', 'terms-v1', 'CZK', '{"balance_payment_days":7}'::jsonb),
-    ('00000000-0000-4000-8000-000000000020', 'legacy-v0-eur', 'terms-v1', 'EUR', '{"balance_payment_days":7}'::jsonb);
+    ('00000000-0000-4000-8000-000000000019', 'legacy-v0-czk', 'terms-v1', 'CZK', '{"balance_payment_days":7,"balance_timeout_earned_component_kinds":["ITEM_PRODUCTION","ITEM_QUANTITY","ITEM_POSTPROCESSING"]}'::jsonb),
+    ('00000000-0000-4000-8000-000000000020', 'legacy-v0-eur', 'terms-v1', 'EUR', '{"balance_payment_days":7,"balance_timeout_earned_component_kinds":["ITEM_PRODUCTION","ITEM_QUANTITY","ITEM_POSTPROCESSING"]}'::jsonb);
 
 INSERT INTO "price_lists" ("id", "revision", "terms_revision", "currency", "parameters")
 SELECT md5(snapshot."currency" || ':' || snapshot."pricing_revision")::uuid,
        snapshot."pricing_revision", 'terms-v1', snapshot."currency",
-       '{"balance_payment_days":7}'::jsonb
+       '{"balance_payment_days":7,"balance_timeout_earned_component_kinds":["ITEM_PRODUCTION","ITEM_QUANTITY","ITEM_POSTPROCESSING"]}'::jsonb
 FROM (SELECT DISTINCT "currency", "pricing_revision" FROM "price_snapshots") snapshot
 ON CONFLICT ("currency", "revision") DO NOTHING;
 
@@ -105,10 +105,26 @@ ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
 ALTER TABLE "order_settlements"
     DROP CONSTRAINT "order_settlements_unauthorized_handoff_formula_check";
 
+-- A balance timeout has two distinct payment identities: the captured DEPOSIT
+-- which may be retained/refunded, and the BALANCE intent whose capture window
+-- was closed. Keep both on the immutable settlement instead of overloading the
+-- captured payment reference. A retained deposit may produce no refund at all.
+ALTER TABLE "order_settlements"
+    ADD COLUMN "balance_payment_id" UUID,
+    ALTER COLUMN "refund_transaction_id" DROP NOT NULL;
+
+ALTER TABLE "order_settlements"
+    ADD CONSTRAINT "order_settlements_balance_payment_scope_fkey"
+    FOREIGN KEY ("balance_payment_id", "order_id")
+    REFERENCES "payments"("id", "order_id")
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
 ALTER TABLE "order_settlements"
     ADD CONSTRAINT "order_settlements_kind_formula_check" CHECK (
         (
             "kind" = 'UNAUTHORIZED_HANDOFF'
+            AND "refund_transaction_id" IS NOT NULL
+            AND "balance_payment_id" IS NULL
             AND "captured_total_minor" = "contract_total_minor"
             AND "earned_amount_minor" = 0
             AND "retained_amount_minor" = least("captured_total_minor", "earned_amount_minor")
@@ -122,13 +138,17 @@ ALTER TABLE "order_settlements"
         (
             "kind" = 'BALANCE_SETTLEMENT'
             AND "captured_total_minor" < "contract_total_minor"
-            AND "earned_amount_minor" = 0
-            AND "retained_amount_minor" = 0
-            AND "refund_amount_minor" = "captured_total_minor"
-            AND "written_off_amount_minor" = 0
-            AND "unearned_cancelled_amount_minor" = "contract_total_minor"
+            AND "balance_payment_id" IS NOT NULL
+            AND "retained_amount_minor" = least("captured_total_minor", "earned_amount_minor")
+            AND "refund_amount_minor" = "captured_total_minor" - "retained_amount_minor"
+            AND "written_off_amount_minor" = greatest(0, "earned_amount_minor" - "captured_total_minor")
+            AND "unearned_cancelled_amount_minor" = "contract_total_minor" - "earned_amount_minor"
             AND "amount_due_minor" = 0
             AND "refundable_balance_minor" = "refund_amount_minor"
+            AND (
+                ("refund_amount_minor" = 0 AND "refund_transaction_id" IS NULL)
+                OR ("refund_amount_minor" > 0 AND "refund_transaction_id" IS NOT NULL)
+            )
         )
     );
 
@@ -242,6 +262,79 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     );
 $$;
 
+-- The component kinds are a terms-bound, immutable policy input. The values
+-- are deliberately validated here instead of inferring earned value from a
+-- slot's total, which also contains shipping, fees, and other unearned work.
+CREATE FUNCTION taven_price_snapshot_balance_earned_policy_is_valid(
+    target_snapshot_id uuid
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "price_snapshots" snapshot
+        JOIN "price_lists" list ON list."id" = snapshot."price_list_id"
+        WHERE snapshot."id" = target_snapshot_id
+          AND jsonb_typeof(
+              list."parameters" -> 'balance_timeout_earned_component_kinds'
+          ) = 'array'
+          AND jsonb_array_length(
+              list."parameters" -> 'balance_timeout_earned_component_kinds'
+          ) > 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(
+                  list."parameters" -> 'balance_timeout_earned_component_kinds'
+              ) AS policy_kind("kind")
+              WHERE policy_kind."kind" NOT IN (
+                  'ITEM_PRODUCTION', 'ITEM_QUANTITY', 'ITEM_POSTPROCESSING',
+                  'ORDER_MIN_PRINT', 'ORDER_SMALL_SURCHARGE', 'SHIPMENT',
+                  'EXPRESS', 'PAYMENT_FEE'
+              )
+          )
+          AND NOT EXISTS (
+              SELECT policy_kind."kind"
+              FROM jsonb_array_elements_text(
+                  list."parameters" -> 'balance_timeout_earned_component_kinds'
+              ) AS policy_kind("kind")
+              GROUP BY policy_kind."kind"
+              HAVING count(*) > 1
+          )
+    );
+$$;
+
+CREATE FUNCTION taven_balance_timeout_earned_amount(
+    target_order_id uuid,
+    target_phase_id uuid,
+    target_binding_id uuid,
+    target_snapshot_id uuid
+)
+RETURNS bigint LANGUAGE sql STABLE AS $$
+    SELECT coalesce(sum(allocation."amount_minor"), 0)
+    FROM "orders" target_order
+    JOIN "order_price_bindings" binding
+      ON binding."id" = target_binding_id
+     AND binding."order_id" = target_order_id
+     AND binding."price_snapshot_id" = target_snapshot_id
+    JOIN "price_snapshots" snapshot ON snapshot."id" = binding."price_snapshot_id"
+    JOIN "price_lists" list ON list."id" = snapshot."price_list_id"
+    JOIN "price_snapshot_components" component
+      ON component."price_snapshot_id" = snapshot."id"
+    JOIN "price_component_fulfilment_allocations" allocation
+      ON allocation."price_snapshot_component_id" = component."id"
+    JOIN "fulfilment_slots" slot
+      ON slot."id" = allocation."fulfilment_slot_id"
+     AND slot."order_id" = target_order_id
+     AND slot."order_phase_id" = target_phase_id
+    WHERE target_order."id" = target_order_id
+      AND target_order."accepted_order_price_binding_id" = target_binding_id
+      AND target_order."accepted_terms_revision" = list."terms_revision"
+      AND component."kind"::text IN (
+          SELECT jsonb_array_elements_text(
+              list."parameters" -> 'balance_timeout_earned_component_kinds'
+          )
+      );
+$$;
+
 CREATE FUNCTION taven_payment_schedule_is_valid_for_order(
     target_order_id uuid,
     target_snapshot_id uuid,
@@ -260,6 +353,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         )
         THEN taven_split_payment_schedule_is_valid(target_snapshot_id, expected_total)
              AND taven_price_snapshot_balance_deadline_is_valid(target_snapshot_id)
+             AND taven_price_snapshot_balance_earned_policy_is_valid(target_snapshot_id)
         ELSE taven_payment_schedule_is_valid(target_snapshot_id, expected_total)
     END;
 $$;
@@ -287,6 +381,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         )
         THEN taven_split_payment_schedule_is_valid(target_snapshot_id, expected_total)
              AND taven_price_snapshot_balance_deadline_is_valid(target_snapshot_id)
+             AND taven_price_snapshot_balance_earned_policy_is_valid(target_snapshot_id)
         ELSE taven_payment_schedule_is_valid(target_snapshot_id, expected_total)
     END;
 $$;
@@ -309,6 +404,7 @@ BEGIN
                   snapshot."id", snapshot."contract_total_minor"
               )
               OR NOT taven_price_snapshot_balance_deadline_is_valid(snapshot."id")
+              OR NOT taven_price_snapshot_balance_earned_policy_is_valid(snapshot."id")
           )
     ) THEN
         RAISE EXCEPTION 'existing individual order has no valid deposit-plus-balance contract'
@@ -449,6 +545,42 @@ WHEN (
 )
 EXECUTE FUNCTION taven_validate_balance_order_status_transition();
 
+-- The foundation phase trigger predates the balance-settlement terminal phase.
+-- Preserve it on every established edge and admit only the immutable
+-- cancellation disposition used by the refund-success finalizer below.
+DROP TRIGGER "order_phases_lifecycle_protected" ON "order_phases";
+
+CREATE FUNCTION taven_validate_balance_settled_phase_transition()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD."status" <> 'CANCELLED'
+       OR NEW."status" <> 'CANCELLED_SETTLED'
+       OR NEW."cancelled_at" IS NULL
+       OR (to_jsonb(NEW) - 'status' - 'updated_at')
+          IS DISTINCT FROM (to_jsonb(OLD) - 'status' - 'updated_at') THEN
+        RAISE EXCEPTION 'balance settlement may only terminally dispose an unchanged cancelled phase'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_phase_status_transition_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "order_phases_lifecycle_protected_insert_delete"
+BEFORE INSERT OR DELETE ON "order_phases"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_order_phase_lifecycle();
+
+CREATE TRIGGER "order_phases_lifecycle_protected_update"
+BEFORE UPDATE ON "order_phases"
+FOR EACH ROW
+WHEN (NOT (OLD."status" = 'CANCELLED' AND NEW."status" = 'CANCELLED_SETTLED'))
+EXECUTE FUNCTION taven_protect_order_phase_lifecycle();
+
+CREATE TRIGGER "order_phases_balance_settled_transition_valid"
+BEFORE UPDATE ON "order_phases"
+FOR EACH ROW
+WHEN (OLD."status" = 'CANCELLED' AND NEW."status" = 'CANCELLED_SETTLED')
+EXECUTE FUNCTION taven_validate_balance_settled_phase_transition();
+
 DROP TRIGGER "orders_post_confirmation_lifecycle_reconciled" ON "orders";
 CREATE CONSTRAINT TRIGGER "orders_post_confirmation_lifecycle_reconciled"
 AFTER UPDATE OF "status" ON "orders"
@@ -485,6 +617,15 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    -- Awaiting the balance payment is a live post-QC state with its own
+    -- readiness and timeout reconciliation; the foundation lifecycle has no
+    -- branch for it, but child cancellation updates still fire this trigger.
+    IF target_status = 'AWAITING_BALANCE' THEN
+        RETURN NULL;
+    END IF;
+
+    -- The dedicated balance-timeout constraint below validates this terminal
+    -- state, including the phase disposition and completed refund lineage.
     IF target_status = 'CANCELLED_SETTLED'
        AND EXISTS (
            SELECT 1
@@ -2383,10 +2524,10 @@ WHEN (
 EXECUTE FUNCTION taven_reconcile_balance_payment_readiness();
 
 CREATE CONSTRAINT TRIGGER "payments_balance_waiting_reconciled"
-AFTER INSERT OR UPDATE OF "status" ON "payments"
+AFTER UPDATE OF "status" ON "payments"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-WHEN (NEW."role" = 'BALANCE' AND NEW."status" IN ('CREATED', 'PENDING'))
+WHEN (NEW."role" = 'BALANCE' AND NEW."status" = 'PENDING')
 EXECUTE FUNCTION taven_reconcile_balance_payment_readiness();
 
 CREATE CONSTRAINT TRIGGER "orders_balance_readiness_reconciled"
@@ -2823,6 +2964,7 @@ BEGIN
                FROM "order_settlements" settlement
                WHERE settlement."order_id" = target_order."id"
                  AND settlement."kind" = 'BALANCE_SETTLEMENT'
+                 AND settlement."balance_payment_id" = payment."id"
                  AND settlement."cutoff_at" = payment."capture_cutoff_at"
                  AND payment."role" = 'BALANCE'
            )
@@ -2882,7 +3024,7 @@ BEGIN
             target_order_status NOT IN ('EXPIRED', 'CANCELLED')
             AND NOT payment_failed_before_capture
             AND NOT (
-                target_order_status = 'CANCELLED_SETTLED'
+                target_order_status IN ('AWAITING_BALANCE', 'CANCELLED_SETTLED')
                 AND balance_settled
             )
         )
@@ -2899,7 +3041,7 @@ BEGIN
            target_order_status IN ('EXPIRED', 'CANCELLED')
            OR payment_failed_before_capture
            OR (
-               target_order_status = 'CANCELLED_SETTLED'
+               target_order_status IN ('AWAITING_BALANCE', 'CANCELLED_SETTLED')
                AND balance_settled
            )
        )
@@ -3012,7 +3154,10 @@ DECLARE
     target_deposit_amount bigint;
     target_deposit_provider varchar(100);
     target_contract_total bigint;
-    target_refund_id uuid := gen_random_uuid();
+    target_earned_amount bigint;
+    target_retained_amount bigint;
+    target_refund_amount bigint;
+    target_refund_id uuid;
     target_settlement_id uuid := gen_random_uuid();
 BEGIN
     SELECT payment."order_id"
@@ -3031,6 +3176,20 @@ BEGIN
     FOR UPDATE;
 
     IF target_order_status = 'CANCELLED_SETTLED' THEN
+        RETURN (
+            SELECT settlement."id"
+            FROM "order_settlements" settlement
+            WHERE settlement."order_id" = target_order_id
+              AND settlement."kind" = 'BALANCE_SETTLEMENT'
+        );
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "order_settlements" settlement
+        WHERE settlement."order_id" = target_order_id
+          AND settlement."kind" = 'BALANCE_SETTLEMENT'
+    ) THEN
         RETURN (
             SELECT settlement."id"
             FROM "order_settlements" settlement
@@ -3086,6 +3245,21 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
     END IF;
 
+    IF NOT taven_price_snapshot_balance_earned_policy_is_valid(target_snapshot_id) THEN
+        RAISE EXCEPTION 'expired balance requires an accepted earned-value policy'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_earned_policy_check';
+    END IF;
+
+    target_earned_amount := taven_balance_timeout_earned_amount(
+        target_order_id, target_phase_id, target_binding_id, target_snapshot_id
+    );
+    IF target_earned_amount < 0 OR target_earned_amount > target_contract_total THEN
+        RAISE EXCEPTION 'earned balance settlement amount is outside the accepted contract'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
+    END IF;
+    target_retained_amount := least(target_deposit_amount, target_earned_amount);
+    target_refund_amount := target_deposit_amount - target_retained_amount;
+
     UPDATE "payments"
     SET "status" = 'VOIDED', "capture_authorized" = false,
         "capture_cutoff_at" = target_cutoff_at, "updated_at" = target_cutoff_at
@@ -3122,41 +3296,43 @@ BEGIN
     WHERE "id" = target_phase_id
       AND "status" = 'QC_PASSED';
 
-    INSERT INTO "refund_transactions" (
-        "id", "payment_id", "idempotency_key", "provider", "amount_minor",
-        "reason", "status", "requested_at", "created_at", "updated_at"
-    ) VALUES (
-        target_refund_id, target_deposit_id,
-        'balance_settlement:' || target_order_id::text,
-        target_deposit_provider, target_deposit_amount,
-        'BALANCE_SETTLEMENT', 'PENDING', target_cutoff_at,
-        target_cutoff_at, target_cutoff_at
-    );
+    IF target_refund_amount > 0 THEN
+        target_refund_id := gen_random_uuid();
+        INSERT INTO "refund_transactions" (
+            "id", "payment_id", "idempotency_key", "provider", "amount_minor",
+            "reason", "status", "requested_at", "created_at", "updated_at"
+        ) VALUES (
+            target_refund_id, target_deposit_id,
+            'balance_settlement:' || target_order_id::text,
+            target_deposit_provider, target_refund_amount,
+            'BALANCE_SETTLEMENT', 'PENDING', target_cutoff_at,
+            target_cutoff_at, target_cutoff_at
+        );
 
-    UPDATE "payments"
-    SET "status" = 'REFUND_PENDING', "updated_at" = target_cutoff_at
-    WHERE "id" = target_deposit_id;
+        UPDATE "payments"
+        SET "status" = 'REFUND_PENDING', "updated_at" = target_cutoff_at
+        WHERE "id" = target_deposit_id;
+    END IF;
 
     INSERT INTO "order_settlements" (
         "id", "order_id", "order_phase_id", "order_price_binding_id",
-        "price_snapshot_id", "payment_id", "refund_transaction_id", "kind",
+        "price_snapshot_id", "payment_id", "balance_payment_id", "refund_transaction_id", "kind",
         "currency", "contract_total_minor", "captured_total_minor",
         "earned_amount_minor", "retained_amount_minor", "refund_amount_minor",
         "written_off_amount_minor", "unearned_cancelled_amount_minor",
         "amount_due_minor", "refundable_balance_minor", "cutoff_at", "settled_at"
     ) VALUES (
         target_settlement_id, target_order_id, target_phase_id,
-        target_binding_id, target_snapshot_id, target_deposit_id,
+        target_binding_id, target_snapshot_id, target_deposit_id, target_payment_id,
         target_refund_id, 'BALANCE_SETTLEMENT', target_currency,
-        target_contract_total, target_deposit_amount, 0, 0,
-        target_deposit_amount, 0, target_contract_total, 0,
-        target_deposit_amount, target_cutoff_at, target_cutoff_at
+        target_contract_total, target_deposit_amount, target_earned_amount,
+        target_retained_amount, target_refund_amount,
+        greatest(0, target_earned_amount - target_deposit_amount),
+        target_contract_total - target_earned_amount, 0,
+        target_refund_amount, target_cutoff_at, target_cutoff_at
     );
 
-    UPDATE "orders"
-    SET "status" = 'CANCELLED_SETTLED', "updated_at" = target_cutoff_at
-    WHERE "id" = target_order_id
-      AND "status" = 'AWAITING_BALANCE';
+    PERFORM taven_finalize_balance_timeout_settlement(target_order_id, target_cutoff_at);
 
     RETURN target_settlement_id;
 END;
@@ -3196,6 +3372,236 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION taven_balance_settlement_refund_completed(
+    target_settlement_id uuid
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    WITH RECURSIVE lineage AS (
+        SELECT refund."id", refund."payment_id", refund."amount_minor", refund."status"
+        FROM "order_settlements" settlement
+        JOIN "refund_transactions" refund
+          ON refund."id" = settlement."refund_transaction_id"
+         AND refund."payment_id" = settlement."payment_id"
+         AND refund."reason" = 'BALANCE_SETTLEMENT'
+         AND refund."amount_minor" = settlement."refund_amount_minor"
+        WHERE settlement."id" = target_settlement_id
+        UNION ALL
+        SELECT retry."id", retry."payment_id", retry."amount_minor", retry."status"
+        FROM "refund_transactions" retry
+        JOIN lineage source
+          ON retry."replaces_refund_transaction_id" = source."id"
+         AND retry."payment_id" = source."payment_id"
+    ), totals AS (
+        SELECT coalesce(sum("amount_minor") FILTER (
+                   WHERE "status" = 'SUCCEEDED'
+               ), 0) AS succeeded_amount,
+               count(*) FILTER (
+                   WHERE "status" IN ('PENDING', 'SUSPENDED')
+               ) AS active_count
+        FROM lineage
+    )
+    SELECT coalesce((
+        SELECT CASE
+            WHEN settlement."refund_amount_minor" = 0
+                THEN settlement."refund_transaction_id" IS NULL
+            ELSE settlement."refund_transaction_id" IS NOT NULL
+                 AND totals.succeeded_amount = settlement."refund_amount_minor"
+                 AND totals.active_count = 0
+                 AND NOT taven_payment_has_suspended_refund_incident(
+                     settlement."payment_id"
+                 )
+        END
+        FROM "order_settlements" settlement
+        CROSS JOIN totals
+        WHERE settlement."id" = target_settlement_id
+          AND settlement."kind" = 'BALANCE_SETTLEMENT'
+    ), false);
+$$;
+
+CREATE FUNCTION taven_has_balance_late_capture_compensation(
+    target_payment_id uuid,
+    target_cutoff_at timestamptz
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "payments" balance
+        JOIN "refund_transactions" refund
+          ON refund."payment_id" = balance."id"
+         AND refund."reason" = 'LATE_CAPTURE_COMPENSATION'
+         AND refund."amount_minor" = balance."requested_amount_minor"
+        WHERE balance."id" = target_payment_id
+          AND NOT balance."capture_authorized"
+          AND balance."capture_cutoff_at" = target_cutoff_at
+          AND balance."captured_amount_minor" = balance."requested_amount_minor"
+          AND balance."captured_at" >= target_cutoff_at
+    );
+$$;
+
+CREATE FUNCTION taven_finalize_balance_timeout_settlement(
+    target_order_id uuid,
+    target_updated_at timestamptz DEFAULT clock_timestamp()
+)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE
+    settlement record;
+BEGIN
+    SELECT target_order."status", phase."status" AS phase_status,
+           target_settlement.*, deposit."status" AS deposit_status,
+           deposit."captured_amount_minor" AS deposit_captured_amount,
+           balance."status" AS balance_status,
+           balance."capture_authorized" AS balance_capture_authorized,
+           balance."capture_cutoff_at" AS balance_capture_cutoff_at
+    INTO settlement
+    FROM "orders" target_order
+    JOIN "order_phases" phase
+      ON phase."order_id" = target_order."id" AND phase."kind" = 'SINGLE'
+    JOIN "order_settlements" target_settlement
+      ON target_settlement."order_id" = target_order."id"
+     AND target_settlement."order_phase_id" = phase."id"
+     AND target_settlement."kind" = 'BALANCE_SETTLEMENT'
+    JOIN "payments" deposit
+      ON deposit."id" = target_settlement."payment_id"
+    JOIN "payments" balance
+      ON balance."id" = target_settlement."balance_payment_id"
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE OF target_order, phase, deposit, balance;
+
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    IF settlement."status" = 'CANCELLED_SETTLED' THEN
+        RETURN settlement."id";
+    END IF;
+
+    IF settlement."status" <> 'AWAITING_BALANCE'
+       OR settlement.phase_status <> 'CANCELLED'
+       OR settlement.balance_capture_authorized
+       OR settlement.balance_capture_cutoff_at <> settlement."cutoff_at"
+       OR (
+           settlement.balance_status <> 'VOIDED'
+           AND NOT taven_has_balance_late_capture_compensation(
+               settlement."balance_payment_id", settlement."cutoff_at"
+           )
+       )
+       OR NOT taven_balance_settlement_refund_completed(settlement."id") THEN
+        RETURN NULL;
+    END IF;
+
+    IF settlement."refund_amount_minor" > 0 THEN
+        UPDATE "payments"
+        SET "status" = CASE
+                WHEN settlement."refund_amount_minor" = settlement.deposit_captured_amount
+                    THEN 'REFUNDED'::"payment_status"
+                ELSE 'PARTIALLY_REFUNDED'::"payment_status"
+            END,
+            "updated_at" = target_updated_at
+        WHERE "id" = settlement."payment_id";
+    END IF;
+
+    UPDATE "order_phases"
+    SET "status" = 'CANCELLED_SETTLED', "updated_at" = target_updated_at
+    WHERE "id" = settlement."order_phase_id" AND "status" = 'CANCELLED';
+
+    UPDATE "orders"
+    SET "status" = 'CANCELLED_SETTLED', "updated_at" = target_updated_at
+    WHERE "id" = target_order_id AND "status" = 'AWAITING_BALANCE';
+
+    RETURN settlement."id";
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION taven_reconcile_balance_timeout_terminal()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "orders" target_order
+        JOIN "individual_order_origins" origin
+          ON origin."order_id" = target_order."id"
+        JOIN "order_phases" phase
+          ON phase."order_id" = target_order."id"
+         AND phase."kind" = 'SINGLE'
+         AND phase."status" = 'CANCELLED_SETTLED'
+         AND phase."cancelled_at" IS NOT NULL
+        JOIN "order_settlements" settlement
+          ON settlement."order_id" = target_order."id"
+         AND settlement."order_phase_id" = phase."id"
+         AND settlement."kind" = 'BALANCE_SETTLEMENT'
+        JOIN "payments" deposit
+          ON deposit."id" = settlement."payment_id"
+         AND deposit."order_id" = target_order."id"
+         AND deposit."role" = 'DEPOSIT'
+         AND deposit."captured_amount_minor" = settlement."captured_total_minor"
+         AND deposit."status" = CASE
+             WHEN settlement."refund_amount_minor" = 0 THEN 'CAPTURED'::"payment_status"
+             WHEN settlement."refund_amount_minor" = settlement."captured_total_minor"
+                 THEN 'REFUNDED'::"payment_status"
+             ELSE 'PARTIALLY_REFUNDED'::"payment_status"
+         END
+        JOIN "payments" balance
+          ON balance."id" = settlement."balance_payment_id"
+         AND balance."order_id" = target_order."id"
+         AND balance."role" = 'BALANCE'
+         AND NOT balance."capture_authorized"
+         AND balance."capture_cutoff_at" = settlement."cutoff_at"
+         AND balance."balance_due_at" <= settlement."cutoff_at"
+         AND (
+             balance."status" = 'VOIDED'
+             OR taven_has_balance_late_capture_compensation(
+                 balance."id", settlement."cutoff_at"
+             )
+         )
+        WHERE target_order."id" = NEW."id"
+          AND target_order."status" = 'CANCELLED_SETTLED'
+          AND target_order."accepted_order_price_binding_id" = settlement."order_price_binding_id"
+          AND taven_balance_settlement_refund_completed(settlement."id")
+          AND NOT EXISTS (
+              SELECT 1 FROM "jobs" job
+              WHERE job."order_id" = target_order."id"
+                AND job."status" <> 'CANCELLED'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM "shipments" shipment
+              WHERE shipment."order_id" = target_order."id"
+                AND shipment."status" <> 'CANCELLED'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM "fulfilment_slots" slot
+              WHERE slot."order_id" = target_order."id"
+                AND slot."outcome" <> 'CANCELLED'
+          )
+    ) THEN
+        RAISE EXCEPTION 'cancelled-settled balance order requires a completed timeout settlement'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE FUNCTION taven_reconcile_balance_timeout_refund_finalization()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    target_order_id uuid;
+BEGIN
+    IF TG_TABLE_NAME = 'payments' THEN
+        target_order_id := NEW."order_id";
+    ELSE
+        SELECT payment."order_id" INTO target_order_id
+        FROM "payments" payment WHERE payment."id" = NEW."payment_id";
+    END IF;
+    PERFORM taven_finalize_balance_timeout_settlement(target_order_id);
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "refunds_balance_timeout_finalized"
+AFTER UPDATE OF "status" ON "refund_transactions"
+FOR EACH ROW
+WHEN (NEW."status" = 'SUCCEEDED')
+EXECUTE FUNCTION taven_reconcile_balance_timeout_refund_finalization();
+
 CREATE FUNCTION taven_record_late_balance_capture(
     target_payment_id uuid,
     target_provider_capture_id varchar(255),
@@ -3228,10 +3634,11 @@ BEGIN
     JOIN "order_settlements" settlement
       ON settlement."order_id" = payment."order_id"
      AND settlement."kind" = 'BALANCE_SETTLEMENT'
+     AND settlement."balance_payment_id" = payment."id"
      AND settlement."cutoff_at" = payment."capture_cutoff_at"
     JOIN "orders" target_order
       ON target_order."id" = payment."order_id"
-     AND target_order."status" = 'CANCELLED_SETTLED'
+     AND target_order."status" IN ('AWAITING_BALANCE', 'CANCELLED_SETTLED')
     WHERE payment."id" = target_payment_id
       AND payment."role" = 'BALANCE'
       AND payment."status" = 'VOIDED'

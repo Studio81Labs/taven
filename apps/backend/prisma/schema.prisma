@@ -285,6 +285,7 @@ enum OrderPhaseStatus {
   COMPLETED
   CANCELLED
   CANCELLED_REFUNDED
+  CANCELLED_SETTLED
 
   @@map("order_phase_status")
 }
@@ -1677,7 +1678,8 @@ model OrderSettlement {
   orderPriceBindingId          String              @map("order_price_binding_id") @db.Uuid
   priceSnapshotId              String              @map("price_snapshot_id") @db.Uuid
   paymentId                    String              @map("payment_id") @db.Uuid
-  refundTransactionId          String              @unique @map("refund_transaction_id") @db.Uuid
+  balancePaymentId             String?             @map("balance_payment_id") @db.Uuid
+  refundTransactionId          String?             @unique @map("refund_transaction_id") @db.Uuid
   kind                         OrderSettlementKind @default(UNAUTHORIZED_HANDOFF)
   currency                     String              @db.Char(3)
   contractTotalMinor           BigInt              @map("contract_total_minor")
@@ -1698,7 +1700,8 @@ model OrderSettlement {
   orderPriceBinding      OrderPriceBinding       @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "order_settlements_order_snapshot_fkey")
   priceSnapshot          PriceSnapshot           @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "order_settlements_snapshot_currency_fkey")
   payment                Payment                 @relation(fields: [paymentId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_settlements_payment_scope_fkey")
-  refundTransaction      RefundTransaction       @relation(fields: [refundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "order_settlements_refund_scope_fkey")
+  balancePayment         Payment?                @relation("BalanceSettlementPayment", fields: [balancePaymentId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_settlements_balance_payment_scope_fkey")
+  refundTransaction      RefundTransaction?      @relation(fields: [refundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "order_settlements_refund_scope_fkey")
   handoffReconciliations HandoffReconciliation[]
 
   @@unique([orderId, kind])
@@ -1856,6 +1859,7 @@ model Payment {
   auditEvents                   AuditEvent[]
   handoffReconciliations        HandoffReconciliation[]
   orderSettlements              OrderSettlement[]
+  balanceSettlements            OrderSettlement[]          @relation("BalanceSettlementPayment")
 
   @@unique([id, orderId])
   @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")

@@ -22537,7 +22537,7 @@ describe("commerce persistence foundations", () => {
         undefined,
         "QUOTED",
         undefined,
-        {},
+        { orderMinimum: 2000 },
         "INDIVIDUAL",
         true,
         true,
@@ -22688,6 +22688,25 @@ describe("commerce persistence foundations", () => {
       );
       await insertBalancePayment(balanceDueAt);
       await client.query(
+        `SET CONSTRAINTS "payments_balance_waiting_reconciled" IMMEDIATE`,
+      );
+      expect(
+        (
+          await client.query<{
+            provider_intent_id: string | null;
+            status: string;
+          }>(
+            `SELECT provider_intent_id, status::text
+             FROM payments
+             WHERE id = $1`,
+            [balancePaymentId],
+          )
+        ).rows,
+      ).toEqual([{ provider_intent_id: null, status: "CREATED" }]);
+      await client.query(
+        `SET CONSTRAINTS "payments_balance_waiting_reconciled" DEFERRED`,
+      );
+      await client.query(
         `UPDATE payments
          SET status = 'PENDING', provider_intent_id = $2, updated_at = $3
          WHERE id = $1`,
@@ -22781,6 +22800,7 @@ describe("commerce persistence foundations", () => {
               settlement_count: string;
               settlement_refunds: string;
               void_commands: string;
+              settlement_formula_valid: boolean;
             }>(
               `SELECT target_order.status::text AS order_status,
                       phase.status::text AS phase_status,
@@ -22797,7 +22817,20 @@ describe("commerce persistence foundations", () => {
                          AND refund.reason = 'LATE_CAPTURE_COMPENSATION') AS late_refunds,
                       (SELECT count(*)::text FROM outbox_messages message
                        WHERE message.deduplication_key =
-                         'void_payment:v1:' || balance.id::text) AS void_commands
+                         'void_payment:v1:' || balance.id::text) AS void_commands,
+                      (SELECT settlement.retained_amount_minor = least(
+                                  settlement.captured_total_minor,
+                                  settlement.earned_amount_minor)
+                               AND settlement.refund_amount_minor =
+                                  settlement.captured_total_minor - settlement.retained_amount_minor
+                               AND settlement.written_off_amount_minor = greatest(
+                                  0, settlement.earned_amount_minor - settlement.captured_total_minor)
+                               AND settlement.unearned_cancelled_amount_minor =
+                                  settlement.contract_total_minor - settlement.earned_amount_minor
+                       FROM order_settlements settlement
+                       WHERE settlement.order_id = target_order.id
+                         AND settlement.kind = 'BALANCE_SETTLEMENT')
+                        AS settlement_formula_valid
                FROM orders target_order
                JOIN order_phases phase ON phase.order_id = target_order.id
                JOIN payments balance
@@ -22813,11 +22846,12 @@ describe("commerce persistence foundations", () => {
             balance_status: "VOIDED",
             deposit_status: "REFUND_PENDING",
             late_refunds: "0",
-            order_status: "CANCELLED_SETTLED",
+            order_status: "AWAITING_BALANCE",
             phase_status: "CANCELLED",
             settlement_count: "1",
             settlement_refunds: "1",
             void_commands: "1",
+            settlement_formula_valid: true,
           },
         ]);
         expect(
@@ -22888,10 +22922,70 @@ describe("commerce persistence foundations", () => {
           {
             balance_status: "REFUND_PENDING",
             late_refunds: "1",
-            order_status: "CANCELLED_SETTLED",
+            order_status: "AWAITING_BALANCE",
             settlement_count: "1",
           },
         ]);
+
+        const balanceSettlementRefund = (
+          await client.query<{ id: string }>(
+            `SELECT refund.id
+             FROM refund_transactions refund
+             JOIN payments deposit ON deposit.id = refund.payment_id
+             WHERE deposit.order_id = $1
+               AND refund.reason = 'BALANCE_SETTLEMENT'`,
+            [individual.orderId],
+          )
+        ).rows[0]?.id;
+        if (!balanceSettlementRefund) {
+          throw new Error("expired balance is missing its settlement refund");
+        }
+        const normalRefundAt = new Date(lateCapturedAt.getTime() + 1);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+        await fixtures.persistRefundProviderEvent(
+          balanceSettlementRefund,
+          "REFUND_SUCCEEDED",
+          `balance-settlement-${balancePaymentId}`,
+          normalRefundAt,
+        );
+        await client.query(
+          `UPDATE refund_transactions
+           SET status = 'SUCCEEDED', provider_refund_id = $2,
+               completed_at = $3, updated_at = $3
+           WHERE id = $1`,
+          [
+            balanceSettlementRefund,
+            `balance-settlement-${balancePaymentId}`,
+            normalRefundAt,
+          ],
+        );
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        expect(
+          (
+            await client.query<{
+              deposit_status: string;
+              order_status: string;
+              phase_status: string;
+            }>(
+              `SELECT target_order.status::text AS order_status,
+                      phase.status::text AS phase_status,
+                      deposit.status::text AS deposit_status
+               FROM orders target_order
+               JOIN order_phases phase ON phase.order_id = target_order.id
+               JOIN payments deposit
+                 ON deposit.order_id = target_order.id AND deposit.role = 'DEPOSIT'
+               WHERE target_order.id = $1`,
+              [individual.orderId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            deposit_status: "PARTIALLY_REFUNDED",
+            order_status: "CANCELLED_SETTLED",
+            phase_status: "CANCELLED_SETTLED",
+          },
+        ]);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
       } finally {
         await client.query(`ROLLBACK TO SAVEPOINT "expired_balance_path"`);
         await client.query(`SET CONSTRAINTS ALL DEFERRED`);
