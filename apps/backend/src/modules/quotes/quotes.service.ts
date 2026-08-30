@@ -40,7 +40,9 @@ import type {
   IssueOfferDto,
   OfferIssuedDto,
   OfferItemDto,
+  OfferPaymentScheduleDto,
   OfferPreviewDto,
+  OfferPreviewPriceComponentDto,
   QuoteContactDto,
   QuoteRequestCreatedDto,
   QuoteRequestDetailDto,
@@ -69,6 +71,14 @@ const ORDER_COMPONENTS = new Set<PriceComponentKind>([
   PriceComponentKind.ORDER_SMALL_SURCHARGE,
   PriceComponentKind.EXPRESS,
 ]);
+const OFFER_COMPONENT_ORDER = [
+  PriceComponentKind.ITEM_PRODUCTION,
+  PriceComponentKind.ITEM_QUANTITY,
+  PriceComponentKind.ITEM_POSTPROCESSING,
+  PriceComponentKind.ORDER_MIN_PRINT,
+  PriceComponentKind.ORDER_SMALL_SURCHARGE,
+  PriceComponentKind.EXPRESS,
+] as const;
 
 type Transaction = Prisma.TransactionClient;
 type AnonymousQuoteLimitRow = {
@@ -537,6 +547,49 @@ export class QuotesService {
     }
     const snapshot = quote.priceBinding?.priceSnapshot;
     if (!snapshot) throw new ConflictException("Offer price is unavailable");
+    const itemOrdinals = new Map(
+      quote.items.map((item) => [item.id, item.ordinal]),
+    );
+    const components = snapshot.components
+      .map((component) => {
+        if (
+          !ITEM_COMPONENTS.has(component.kind) &&
+          !ORDER_COMPONENTS.has(component.kind)
+        ) {
+          throw new ConflictException("Offer price component kind is invalid");
+        }
+        if (
+          component.scope !== PriceComponentScope.ORDER &&
+          component.scope !== PriceComponentScope.QUOTE_ITEM
+        ) {
+          throw new ConflictException("Offer price component scope is invalid");
+        }
+        const quoteItemOrdinal = component.quoteItemId
+          ? itemOrdinals.get(component.quoteItemId)
+          : undefined;
+        if (
+          component.scope === PriceComponentScope.QUOTE_ITEM &&
+          quoteItemOrdinal === undefined
+        ) {
+          throw new ConflictException(
+            "Offer price component item is unavailable",
+          );
+        }
+        return {
+          kind: component.kind as OfferPreviewPriceComponentDto["kind"],
+          scope: component.scope,
+          quoteItemOrdinal: quoteItemOrdinal ?? null,
+          amountMinor: safeNumber(component.amountMinor),
+          allocation: nullableJsonObject(component.allocation),
+        };
+      })
+      .sort(
+        (left, right) =>
+          (left.quoteItemOrdinal ?? Number.MAX_SAFE_INTEGER) -
+            (right.quoteItemOrdinal ?? Number.MAX_SAFE_INTEGER) ||
+          OFFER_COMPONENT_ORDER.indexOf(left.kind) -
+            OFFER_COMPONENT_ORDER.indexOf(right.kind),
+      );
     return {
       quoteId: quote.id,
       version: quote.version,
@@ -545,6 +598,36 @@ export class QuotesService {
       termsSnapshot: jsonObject(quote.termsSnapshot),
       currency: snapshot.currency,
       contractTotalMinor: safeNumber(snapshot.contractTotalMinor),
+      items: quote.items.map((item) => ({
+        ordinal: item.ordinal,
+        kind: item.kind,
+        serviceDescription: item.serviceDescription,
+        sourceModelFileId: item.sourceModelFileId,
+        modelGeometryId: item.modelGeometryId,
+        printConfigRevisionId: item.printConfigRevisionId,
+        primaryReferenceSliceResultId: item.primaryReferenceSliceResultId,
+        tailReferenceSliceResultId: item.tailReferenceSliceResultId,
+        referencePartsPerPlate: item.referencePartsPerPlate,
+        material: item.material,
+        color: item.color,
+        quantity: item.quantity,
+      })),
+      components,
+      paymentSchedules: snapshot.paymentSchedules.map((schedule) => {
+        if (
+          schedule.role !== PaymentRole.DEPOSIT &&
+          schedule.role !== PaymentRole.BALANCE
+        ) {
+          throw new ConflictException("Offer payment schedule is invalid");
+        }
+        return {
+          sequence: schedule.sequence,
+          role: schedule.role,
+          grossAmountMinor: safeNumber(schedule.grossAmountMinor),
+          feeRateBasisPoints: schedule.feeRateBasisPoints,
+          feeFixedMinor: safeNumber(schedule.feeFixedMinor),
+        } satisfies OfferPaymentScheduleDto;
+      }),
       expiresAt: quote.expiresAt.toISOString(),
       promisedDate: dateOnly(quote.promisedDate),
     };
@@ -846,7 +929,17 @@ export class QuotesService {
       where: { id: quoteId },
       include: {
         quoteRequest: true,
-        priceBinding: { include: { priceSnapshot: true } },
+        items: { orderBy: { ordinal: "asc" } },
+        priceBinding: {
+          include: {
+            priceSnapshot: {
+              include: {
+                components: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
+                paymentSchedules: { orderBy: { sequence: "asc" } },
+              },
+            },
+          },
+        },
       },
     });
     assertOfferCapability(quote, token);

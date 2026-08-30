@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AdminAccessModule } from "../admin-access/admin-access.module";
+import { StorageModule } from "../storage/storage.module";
 import {
   OffersController,
   OperatorQuoteRequestsController,
@@ -8,7 +9,7 @@ import {
 import { QuotesService } from "./quotes.service";
 
 @Module({
-  imports: [AdminAccessModule],
+  imports: [AdminAccessModule, StorageModule],
   controllers: [
     QuoteRequestsController,
     OffersController,

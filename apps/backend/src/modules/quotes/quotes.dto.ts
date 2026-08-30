@@ -228,6 +228,94 @@ export class OfferIssuedDto {
   expiresAt!: string;
 }
 
+export class OfferPreviewItemDto {
+  @ApiProperty({ type: Number, minimum: 0 })
+  ordinal!: number;
+
+  @ApiProperty({ type: String, enum: ["MODEL", "CUSTOM_SERVICE"] })
+  kind!: "MODEL" | "CUSTOM_SERVICE";
+
+  @ApiProperty({ type: String, maxLength: 2_000, nullable: true })
+  serviceDescription!: string | null;
+
+  @ApiProperty({ type: String, format: "uuid", nullable: true })
+  sourceModelFileId!: string | null;
+
+  @ApiProperty({ type: String, format: "uuid", nullable: true })
+  modelGeometryId!: string | null;
+
+  @ApiProperty({ type: String, format: "uuid", nullable: true })
+  printConfigRevisionId!: string | null;
+
+  @ApiProperty({ type: String, format: "uuid", nullable: true })
+  primaryReferenceSliceResultId!: string | null;
+
+  @ApiProperty({ type: String, format: "uuid", nullable: true })
+  tailReferenceSliceResultId!: string | null;
+
+  @ApiProperty({ type: Number, minimum: 1, nullable: true })
+  referencePartsPerPlate!: number | null;
+
+  @ApiProperty({ type: String, enum: ["PLA", "PETG"], nullable: true })
+  material!: "PLA" | "PETG" | null;
+
+  @ApiProperty({ type: String, maxLength: 100, nullable: true })
+  color!: string | null;
+
+  @ApiProperty({ type: Number, minimum: 1 })
+  quantity!: number;
+}
+
+export class OfferPreviewPriceComponentDto {
+  @ApiProperty({
+    type: String,
+    enum: [
+      "ITEM_PRODUCTION",
+      "ITEM_QUANTITY",
+      "ITEM_POSTPROCESSING",
+      "ORDER_MIN_PRINT",
+      "ORDER_SMALL_SURCHARGE",
+      "EXPRESS",
+    ],
+  })
+  kind!:
+    | "ITEM_PRODUCTION"
+    | "ITEM_QUANTITY"
+    | "ITEM_POSTPROCESSING"
+    | "ORDER_MIN_PRINT"
+    | "ORDER_SMALL_SURCHARGE"
+    | "EXPRESS";
+
+  @ApiProperty({ type: String, enum: ["ORDER", "QUOTE_ITEM"] })
+  scope!: "ORDER" | "QUOTE_ITEM";
+
+  @ApiProperty({ type: Number, minimum: 0, nullable: true })
+  quoteItemOrdinal!: number | null;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  amountMinor!: number;
+
+  @ApiProperty({ type: "object", nullable: true, additionalProperties: true })
+  allocation!: Record<string, unknown> | null;
+}
+
+export class OfferPaymentScheduleDto {
+  @ApiProperty({ type: Number, minimum: 0 })
+  sequence!: number;
+
+  @ApiProperty({ type: String, enum: ["DEPOSIT", "BALANCE"] })
+  role!: "DEPOSIT" | "BALANCE";
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  grossAmountMinor!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  feeRateBasisPoints!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  feeFixedMinor!: number;
+}
+
 export class OfferPreviewDto {
   @ApiProperty({ type: String, format: "uuid" })
   quoteId!: string;
@@ -249,6 +337,15 @@ export class OfferPreviewDto {
 
   @ApiProperty({ type: Number })
   contractTotalMinor!: number;
+
+  @ApiProperty({ type: [OfferPreviewItemDto] })
+  items!: OfferPreviewItemDto[];
+
+  @ApiProperty({ type: [OfferPreviewPriceComponentDto] })
+  components!: OfferPreviewPriceComponentDto[];
+
+  @ApiProperty({ type: [OfferPaymentScheduleDto] })
+  paymentSchedules!: OfferPaymentScheduleDto[];
 
   @ApiProperty({ type: String, format: "date-time" })
   expiresAt!: string;

@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Inject,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
 import {
@@ -441,6 +442,32 @@ export class UploadService {
       where: { id: photoAssetId },
     });
     if (!photo) throw new UnauthorizedException("Upload capability is invalid");
+    const expiresAt = availableDownloadDeadline(
+      photo.deletedAt,
+      photo.retentionHold,
+      photo.photoDeleteAfter,
+      this.storageConfig.signedUrlTtlSeconds,
+    );
+    return this.signDownload(photo.storageObjectKey, expiresAt);
+  }
+
+  async createOperatorQuotePhotoDownload(
+    quoteRequestId: string,
+    photoAssetId: string,
+  ): Promise<SignedDownloadResponseDto> {
+    assertUuid(quoteRequestId, "requestId");
+    assertUuid(photoAssetId, "photoAssetId");
+    const photo = await this.prisma.photoAsset.findFirst({
+      where: {
+        id: photoAssetId,
+        kind: PhotoAssetKind.QUOTE_REFERENCE,
+        scopeKind: PhotoScopeKind.QUOTE_REQUEST,
+        scopeId: quoteRequestId,
+      },
+    });
+    if (!photo) {
+      throw new NotFoundException("Quote attachment was not found");
+    }
     const expiresAt = availableDownloadDeadline(
       photo.deletedAt,
       photo.retentionHold,

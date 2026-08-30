@@ -79,10 +79,13 @@ describe("quote capability expiry clock", () => {
           promisedDate: null,
           expiresAt: future,
           quoteRequest: { status: "QUOTED" },
+          items: [],
           priceBinding: {
             priceSnapshot: {
               currency: "CZK",
               contractTotalMinor: 1_000n,
+              components: [],
+              paymentSchedules: [],
             },
           },
         }),

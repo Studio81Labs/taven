@@ -380,8 +380,49 @@
         ],
         "type": "object"
       },
+      "OfferPaymentScheduleDto": {
+        "properties": {
+          "feeFixedMinor": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "feeRateBasisPoints": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "grossAmountMinor": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "role": {
+            "enum": [
+              "DEPOSIT",
+              "BALANCE"
+            ],
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "sequence",
+          "role",
+          "grossAmountMinor",
+          "feeRateBasisPoints",
+          "feeFixedMinor"
+        ],
+        "type": "object"
+      },
       "OfferPreviewDto": {
         "properties": {
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPreviewPriceComponentDto"
+            },
+            "type": "array"
+          },
           "contractTotalMinor": {
             "type": "number"
           },
@@ -391,6 +432,18 @@
           "expiresAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPreviewItemDto"
+            },
+            "type": "array"
+          },
+          "paymentSchedules": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPaymentScheduleDto"
+            },
+            "type": "array"
           },
           "promisedDate": {
             "format": "date",
@@ -423,7 +476,136 @@
           "termsSnapshot",
           "currency",
           "contractTotalMinor",
+          "items",
+          "components",
+          "paymentSchedules",
           "expiresAt"
+        ],
+        "type": "object"
+      },
+      "OfferPreviewItemDto": {
+        "properties": {
+          "color": {
+            "maxLength": 100,
+            "nullable": true,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "MODEL",
+              "CUSTOM_SERVICE"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "modelGeometryId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "primaryReferenceSliceResultId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "referencePartsPerPlate": {
+            "minimum": 1,
+            "nullable": true,
+            "type": "number"
+          },
+          "serviceDescription": {
+            "maxLength": 2000,
+            "nullable": true,
+            "type": "string"
+          },
+          "sourceModelFileId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "tailReferenceSliceResultId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "ordinal",
+          "kind",
+          "serviceDescription",
+          "sourceModelFileId",
+          "modelGeometryId",
+          "printConfigRevisionId",
+          "primaryReferenceSliceResultId",
+          "tailReferenceSliceResultId",
+          "referencePartsPerPlate",
+          "material",
+          "color",
+          "quantity"
+        ],
+        "type": "object"
+      },
+      "OfferPreviewPriceComponentDto": {
+        "properties": {
+          "allocation": {
+            "additionalProperties": true,
+            "nullable": true,
+            "type": "object"
+          },
+          "amountMinor": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "ITEM_PRODUCTION",
+              "ITEM_QUANTITY",
+              "ITEM_POSTPROCESSING",
+              "ORDER_MIN_PRINT",
+              "ORDER_SMALL_SURCHARGE",
+              "EXPRESS"
+            ],
+            "type": "string"
+          },
+          "quoteItemOrdinal": {
+            "minimum": 0,
+            "nullable": true,
+            "type": "number"
+          },
+          "scope": {
+            "enum": [
+              "ORDER",
+              "QUOTE_ITEM"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "scope",
+          "quoteItemOrdinal",
+          "amountMinor",
+          "allocation"
         ],
         "type": "object"
       },
@@ -839,6 +1021,58 @@
           }
         ],
         "summary": "Read one operator quote-request detail",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/attachments/{photoAssetId}/download": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_downloadAttachment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "photoAssetId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedDownloadResponseDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "The attachment does not belong to this quote request"
+          },
+          "410": {
+            "description": "Quote attachment is expired or deleted"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create an operator quote-attachment download URL",
         "tags": [
           "operator quote requests"
         ]

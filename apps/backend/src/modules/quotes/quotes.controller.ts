@@ -17,6 +17,7 @@ import {
   ApiCreatedResponse,
   ApiGoneResponse,
   ApiHeader,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -26,6 +27,8 @@ import {
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { SignedDownloadResponseDto } from "../storage/storage.dto";
+import { UploadService } from "../storage/upload.service";
 import {
   AcceptOfferDto,
   AcceptedOfferDto,
@@ -156,7 +159,10 @@ export class OffersController {
 @UseGuards(OperatorAccessGuard)
 @Controller("admin/quote-requests")
 export class OperatorQuoteRequestsController {
-  constructor(private readonly quotes: QuotesService) {}
+  constructor(
+    private readonly quotes: QuotesService,
+    private readonly uploads: UploadService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: "List the operator quote-request queue" })
@@ -176,6 +182,26 @@ export class OperatorQuoteRequestsController {
   @ApiOkResponse({ type: QuoteRequestDetailDto })
   get(@Param("requestId") requestId: string): Promise<QuoteRequestDetailDto> {
     return this.quotes.getOperatorRequest(requestId);
+  }
+
+  @Post(":requestId/attachments/:photoAssetId/download")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Create an operator quote-attachment download URL" })
+  @ApiParam({ name: "requestId", type: String, format: "uuid" })
+  @ApiParam({ name: "photoAssetId", type: String, format: "uuid" })
+  @ApiOkResponse({ type: SignedDownloadResponseDto })
+  @ApiNotFoundResponse({
+    description: "The attachment does not belong to this quote request",
+  })
+  @ApiGoneResponse({ description: "Quote attachment is expired or deleted" })
+  downloadAttachment(
+    @Param("requestId") requestId: string,
+    @Param("photoAssetId") photoAssetId: string,
+  ): Promise<SignedDownloadResponseDto> {
+    return this.uploads.createOperatorQuotePhotoDownload(
+      requestId,
+      photoAssetId,
+    );
   }
 
   @Post(":requestId/review")

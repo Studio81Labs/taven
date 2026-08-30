@@ -4,8 +4,9 @@ import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
-import { PrismaService } from "../src/prisma/prisma.service";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
+import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
+import { PrismaService } from "../src/prisma/prisma.service";
 
 const operatorToken = "test-operator-token-with-at-least-32-characters";
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
@@ -88,7 +89,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         kind: "QUOTE_REFERENCE",
         scopeKind: "QUOTE_REQUEST",
         scopeId: created.body.requestId,
-        storageObjectKey: `e2e/quote-reference/${referencePhotoId}`,
+        storageObjectKey: photoOriginalObjectKey(referencePhotoId),
         contentHash: "b".repeat(64),
         mediaType: "image/jpeg",
         sizeBytes: 128,
@@ -119,6 +120,33 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const deniedOperator = await apiJson("admin/quote-requests");
     expect(deniedOperator.response.status).toBe(401);
 
+    const deniedOperatorAttachment = await apiJson(
+      `admin/quote-requests/${created.body.requestId}/attachments/${referencePhotoId}/download`,
+      { method: "POST" },
+    );
+    expect(deniedOperatorAttachment.response.status).toBe(401);
+
+    const crossRequestOperatorAttachment = await apiJson(
+      `admin/quote-requests/${randomUUID()}/attachments/${referencePhotoId}/download`,
+      { method: "POST", headers: bearer(operatorToken) },
+    );
+    expect(crossRequestOperatorAttachment.response.status).toBe(404);
+
+    const operatorAttachment = await apiJson<{
+      downloadUrl: string;
+      expiresAt: string;
+    }>(
+      `admin/quote-requests/${created.body.requestId}/attachments/${referencePhotoId}/download`,
+      { method: "POST", headers: bearer(operatorToken) },
+    );
+    expect(operatorAttachment.response.status).toBe(200);
+    expect(new URL(operatorAttachment.body.downloadUrl).protocol).toMatch(
+      /^https?:$/,
+    );
+    expect(
+      new Date(operatorAttachment.body.expiresAt).getTime(),
+    ).toBeGreaterThan(Date.now());
+
     const reviewed = await operatorCommand(
       `admin/quote-requests/${created.body.requestId}/review`,
       key("review"),
@@ -143,6 +171,9 @@ describe("QuoteRequest and tokenized individual offers", () => {
       version: number;
       termsRevision: string;
       contractTotalMinor: number;
+      items: Array<Record<string, unknown>>;
+      components: Array<Record<string, unknown>>;
+      paymentSchedules: Array<Record<string, unknown>>;
     }>(`offers/${issued.body.quoteId}`, {
       headers: bearer(issued.body.offerToken),
     });
@@ -152,6 +183,61 @@ describe("QuoteRequest and tokenized individual offers", () => {
       termsRevision: issued.body.termsRevision,
       contractTotalMinor: 110_000,
     });
+    expect(preview.body.items).toEqual([
+      {
+        ordinal: 0,
+        kind: "CUSTOM_SERVICE",
+        serviceDescription: "Rebuild the damaged mounting bracket",
+        sourceModelFileId: null,
+        modelGeometryId: null,
+        printConfigRevisionId: null,
+        primaryReferenceSliceResultId: null,
+        tailReferenceSliceResultId: null,
+        referencePartsPerPlate: null,
+        material: null,
+        color: null,
+        quantity: 1,
+      },
+    ]);
+    expect(preview.body.components).toEqual([
+      {
+        kind: "ITEM_PRODUCTION",
+        scope: "QUOTE_ITEM",
+        quoteItemOrdinal: 0,
+        amountMinor: 80_000,
+        allocation: null,
+      },
+      {
+        kind: "ITEM_QUANTITY",
+        scope: "QUOTE_ITEM",
+        quoteItemOrdinal: 0,
+        amountMinor: 20_000,
+        allocation: null,
+      },
+      {
+        kind: "ITEM_POSTPROCESSING",
+        scope: "QUOTE_ITEM",
+        quoteItemOrdinal: 0,
+        amountMinor: 10_000,
+        allocation: null,
+      },
+    ]);
+    expect(preview.body.paymentSchedules).toEqual([
+      {
+        sequence: 0,
+        role: "DEPOSIT",
+        grossAmountMinor: 33_000,
+        feeRateBasisPoints: 0,
+        feeFixedMinor: 0,
+      },
+      {
+        sequence: 1,
+        role: "BALANCE",
+        grossAmountMinor: 77_000,
+        feeRateBasisPoints: 0,
+        feeFixedMinor: 0,
+      },
+    ]);
 
     const staleAcceptance = await apiJson(
       `offers/${issued.body.quoteId}/accept`,

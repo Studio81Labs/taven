@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/quote-requests/{requestId}/attachments/{photoAssetId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an operator quote-attachment download URL */
+        post: operations["OperatorQuoteRequestsController_downloadAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/quote-requests/{requestId}/expire": {
         parameters: {
             query?: never;
@@ -424,11 +441,22 @@ export interface components {
             /** Format: uuid */
             tailReferenceSliceResultId?: string;
         };
+        OfferPaymentScheduleDto: {
+            feeFixedMinor: number;
+            feeRateBasisPoints: number;
+            grossAmountMinor: number;
+            /** @enum {string} */
+            role: "DEPOSIT" | "BALANCE";
+            sequence: number;
+        };
         OfferPreviewDto: {
+            components: components["schemas"]["OfferPreviewPriceComponentDto"][];
             contractTotalMinor: number;
             currency: string;
             /** Format: date-time */
             expiresAt: string;
+            items: components["schemas"]["OfferPreviewItemDto"][];
+            paymentSchedules: components["schemas"]["OfferPaymentScheduleDto"][];
             /** Format: date */
             promisedDate?: string | null;
             /** Format: uuid */
@@ -439,6 +467,38 @@ export interface components {
                 [key: string]: unknown;
             };
             version: number;
+        };
+        OfferPreviewItemDto: {
+            color: string | null;
+            /** @enum {string} */
+            kind: "MODEL" | "CUSTOM_SERVICE";
+            /** @enum {string|null} */
+            material: "PLA" | "PETG" | null;
+            /** Format: uuid */
+            modelGeometryId: string | null;
+            ordinal: number;
+            /** Format: uuid */
+            primaryReferenceSliceResultId: string | null;
+            /** Format: uuid */
+            printConfigRevisionId: string | null;
+            quantity: number;
+            referencePartsPerPlate: number | null;
+            serviceDescription: string | null;
+            /** Format: uuid */
+            sourceModelFileId: string | null;
+            /** Format: uuid */
+            tailReferenceSliceResultId: string | null;
+        };
+        OfferPreviewPriceComponentDto: {
+            allocation: {
+                [key: string]: unknown;
+            } | null;
+            amountMinor: number;
+            /** @enum {string} */
+            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "EXPRESS";
+            quoteItemOrdinal: number | null;
+            /** @enum {string} */
+            scope: "ORDER" | "QUOTE_ITEM";
         };
         OfferPriceComponentDto: {
             allocation?: {
@@ -591,6 +651,42 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["QuoteRequestDetailDto"];
                 };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_downloadAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                photoAssetId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedDownloadResponseDto"];
+                };
+            };
+            /** @description The attachment does not belong to this quote request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Quote attachment is expired or deleted */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
