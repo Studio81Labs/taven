@@ -57,6 +57,14 @@ type ObservedResourceRow = {
   reserved_milligrams: bigint;
 };
 
+type CandidateResourceLockInput = {
+  nodeId: string;
+  inventoryId: string;
+  machineId: string;
+  machineProfileId: string;
+  machineCalibrationId: string;
+};
+
 type CandidateTerminalReceiptRow = {
   outcome: "SUCCEEDED" | "FAILED";
   result_fingerprint_sha256: string;
@@ -563,22 +571,14 @@ export class CandidateEstimateService {
           };
         }
 
-        const observedRows = await transaction.$queryRaw<ObservedResourceRow[]>`
-          SELECT clock_timestamp() AS observed_at,
-                 inventory.remaining_milligrams,
-                 inventory.reserved_milligrams
-          FROM inventories inventory
-          WHERE inventory.id = ${dispatch.inventoryId}::uuid
-            AND inventory.node_id = ${dispatch.nodeId}::uuid
-            AND inventory.machine_id = ${dispatch.job.input.machineId}::uuid
-          FOR UPDATE
-        `;
-        const observed = observedRows[0];
-        if (!observed) {
-          throw new ResourceNotFoundError(
-            "candidate inventory is no longer available in the dispatched node",
-          );
-        }
+        const observed = await this.lockCandidateResources(transaction, {
+          nodeId: dispatch.nodeId,
+          inventoryId: dispatch.inventoryId,
+          machineId: dispatch.job.input.machineId,
+          machineProfileId: dispatch.job.input.machineProfile.revisionId,
+          machineCalibrationId:
+            dispatch.job.input.machineCalibration.revisionId,
+        });
         if (input.expiresAt <= observed.observed_at) {
           throw new ResourceValidationError(
             "candidate estimate must expire after calculation",
@@ -791,6 +791,73 @@ export class CandidateEstimateService {
       );
     }
     return rows[0];
+  }
+
+  /**
+   * Takes resource locks in the same order as taven_create_phase_reservation.
+   * The slice-result trigger also takes a profile lock, so inventory must never
+   * be acquired before this sequence.
+   */
+  private async lockCandidateResources(
+    transaction: Prisma.TransactionClient,
+    resources: CandidateResourceLockInput,
+  ): Promise<ObservedResourceRow> {
+    const profileRows = await transaction.$queryRaw<Array<{ id: string }>>`
+      SELECT profile.id
+      FROM machine_profiles profile
+      WHERE profile.id = ${resources.machineProfileId}::uuid
+      FOR UPDATE
+    `;
+    if (!profileRows[0]) {
+      throw new ResourceNotFoundError(
+        "candidate machine profile is no longer available",
+      );
+    }
+
+    const machineRows = await transaction.$queryRaw<Array<{ id: string }>>`
+      SELECT machine.id
+      FROM machines machine
+      WHERE machine.id = ${resources.machineId}::uuid
+        AND machine.node_id = ${resources.nodeId}::uuid
+      FOR UPDATE
+    `;
+    if (!machineRows[0]) {
+      throw new ResourceNotFoundError(
+        "candidate machine is no longer available in the dispatched node",
+      );
+    }
+
+    const calibrationRows = await transaction.$queryRaw<Array<{ id: string }>>`
+      SELECT calibration.id
+      FROM machine_calibrations calibration
+      WHERE calibration.id = ${resources.machineCalibrationId}::uuid
+        AND calibration.node_id = ${resources.nodeId}::uuid
+        AND calibration.machine_id = ${resources.machineId}::uuid
+      FOR UPDATE
+    `;
+    if (!calibrationRows[0]) {
+      throw new ResourceNotFoundError(
+        "candidate machine calibration is no longer available on the dispatched machine",
+      );
+    }
+
+    const observedRows = await transaction.$queryRaw<ObservedResourceRow[]>`
+      SELECT clock_timestamp() AS observed_at,
+             inventory.remaining_milligrams,
+             inventory.reserved_milligrams
+      FROM inventories inventory
+      WHERE inventory.id = ${resources.inventoryId}::uuid
+        AND inventory.node_id = ${resources.nodeId}::uuid
+        AND inventory.machine_id = ${resources.machineId}::uuid
+      FOR UPDATE
+    `;
+    const observed = observedRows[0];
+    if (!observed) {
+      throw new ResourceNotFoundError(
+        "candidate inventory is no longer available in the dispatched node",
+      );
+    }
+    return observed;
   }
 
   private async hasSameDispatchEffect(
