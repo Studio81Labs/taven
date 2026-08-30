@@ -8,6 +8,7 @@ import {
   LegacyV1SlicingResultSchema,
   ModelInspectionJobSchema,
   ModelInspectionResultSchema,
+  PreflightFindingSchema,
   ProductionSliceResultSchema,
   ReferenceSliceJobSchema,
   SLICING_CONTRACT_VERSION,
@@ -855,6 +856,34 @@ describe("versioned slicing results", () => {
         outcome: { ...(deterministic.outcome as object), retryable: true },
       }),
     ).toThrow();
+    for (const message of [
+      "api_key=sk-example",
+      "apiKey: sk-example",
+      "AWS_ACCESS_KEY_ID=example",
+      "AWS_SECRET_ACCESS_KEY=example",
+      "access-token = example",
+      "refresh_token: example",
+      '"clientSecret":"example"',
+      "private_key=example",
+      "GITHUB_TOKEN=example",
+      "passwd=example",
+    ]) {
+      expect(() =>
+        SlicingResultSchema.parse({
+          ...retryable,
+          outcome: { ...(retryable.outcome as object), message },
+        }),
+      ).toThrow();
+      expect(() =>
+        PreflightFindingSchema.parse({
+          code: "SAFE_DIAGNOSTIC",
+          severity: "info",
+          phase: "inspection",
+          message,
+          acknowledgementKey: null,
+        }),
+      ).toThrow();
+    }
     expect(() =>
       SlicingResultSchema.parse({
         ...retryable,
@@ -887,6 +916,21 @@ describe("versioned slicing results", () => {
         },
       }),
     ).toBeDefined();
+    for (const message of [
+      "api key field is missing",
+      "engine profile mismatch",
+      "tokenization completed",
+    ]) {
+      expect(
+        PreflightFindingSchema.parse({
+          code: "SAFE_DIAGNOSTIC",
+          severity: "info",
+          phase: "inspection",
+          message,
+          acknowledgementKey: null,
+        }),
+      ).toBeDefined();
+    }
     expect(() =>
       SlicingResultSchema.parse({
         ...retryable,

@@ -56,6 +56,8 @@ const GENERATED_OBJECT_KEY_PATTERN =
 const SAFE_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._:-]*$/;
 const SAFE_FAILURE_MESSAGE_PATTERN =
   /^(?!.*(?:[a-z][a-z0-9+.-]*:\/\/|(?:^|\s)(?:\/|[a-z]:\\)|\b(?:authorization|bearer|password|secret|token)\b)).+$/iu;
+const CREDENTIAL_ASSIGNMENT_PATTERN =
+  /["']?(?:(?:[a-z0-9]+[_-])?(?:(?:auth|access|refresh|session|id)[_ -]?)?token|(?:[a-z0-9]+[_-])?(?:client[_ -]?)?secret|api[_ -]?key|access[_ -]?key(?:[_ -]?id)?|secret[_ -]?access[_ -]?key|private[_ -]?key|credentials?|password|passwd)["']?\s*[:=]/iu;
 
 function hasNoControlCharacters(value: string): boolean {
   return [...value].every((character) => {
@@ -142,6 +144,10 @@ const SafeFailureMessageSchema = z
   .refine(
     hasNoControlCharacters,
     "must not contain URLs, filesystem paths, credentials, or control characters",
+  )
+  .refine(
+    (value) => !CREDENTIAL_ASSIGNMENT_PATTERN.test(value),
+    "must not contain credential assignments",
   )
   .refine(
     (value) => !value.includes("/") && !value.includes("\\"),
