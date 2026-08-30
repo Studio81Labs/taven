@@ -6,7 +6,7 @@ import { z } from "zod";
  * producers must publish v2 messages to SLICING_QUEUE_NAME.
  */
 export const LEGACY_V1_SLICING_CONTRACT_VERSION = 1 as const;
-export const LEGACY_V1_SLICING_QUEUE_NAME = "taven:slicing:v1" as const;
+export const LEGACY_V1_SLICING_QUEUE_NAME = "taven-slicing-v1" as const;
 
 const LegacyV1Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 
@@ -36,7 +36,7 @@ export const LegacyV1SlicingResultSchema = z.object({
 });
 
 export const SLICING_CONTRACT_VERSION = 2 as const;
-export const SLICING_QUEUE_NAME = "taven:slicing:v2" as const;
+export const SLICING_QUEUE_NAME = "taven-slicing-v2" as const;
 export const SLICING_MESSAGE_MAX_BYTES = 64 * 1024;
 
 const MAX_BODY_COUNT = 256;
@@ -107,8 +107,8 @@ const ReferenceArtifactObjectKeySchema = StorageObjectKeySchema.regex(
   "must identify a reference-slice artifact",
 );
 const ProductionArtifactObjectKeySchema = StorageObjectKeySchema.regex(
-  /^gcode\/[a-z0-9][a-z0-9:-]*\/occupancy-[1-9][0-9]{0,5}\/[a-z0-9][a-z0-9._:-]*$/,
-  "must identify a production G-code artifact",
+  /^gcode\/[0-9a-f-]{36}\/toolpaths\.gcode\.3mf$/,
+  "must identify a production multi-plate G-code package",
 );
 
 const SafeIdentifierSchema = z
@@ -408,15 +408,7 @@ const ProductionSliceInputSchema = z
     productionReservationId: UuidSchema,
     arrangementRevision: RevisionSnapshotSchema,
   })
-  .superRefine((value, context) => {
-    if (value.quantity !== value.partsPerPlate) {
-      context.addIssue({
-        code: "custom",
-        path: ["quantity"],
-        message: "must equal the exact occupancy of this one-plate dispatch",
-      });
-    }
-  });
+  .superRefine(requireRepresentablePlateCount);
 
 const JobEnvelopeShape = {
   contractVersion: z.literal(SLICING_CONTRACT_VERSION),
@@ -767,19 +759,30 @@ const CandidateEstimateSuccessSchema = z
   });
 
 const ProductionArtifactSchema = z.strictObject({
-  format: z.enum(["gcode_3mf", "bgcode", "gcode"]),
+  format: z.literal("gcode_3mf"),
   objectKey: ProductionArtifactObjectKeySchema,
   sha256: Sha256Schema,
 });
 
-const ProductionSliceSuccessSchema = z.strictObject({
-  status: z.literal("succeeded"),
-  metrics: z.strictObject({
-    ...SliceMetricsShape,
-    plateCount: z.literal(1),
-  }),
-  artifact: ProductionArtifactSchema,
-});
+const ProductionSliceSuccessSchema = z
+  .strictObject({
+    status: z.literal("succeeded"),
+    metrics: SliceMetricsSchema,
+    plates: z.array(PlateEstimateSchema).min(1).max(MAX_PLATE_COUNT),
+    artifact: ProductionArtifactSchema,
+  })
+  .superRefine((value, context) => {
+    if (
+      value.metrics.plateCount !== value.plates.length ||
+      value.plates.some(({ plateOrdinal }, index) => plateOrdinal !== index + 1)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["plates"],
+        message: "plates must be complete and ordered from ordinal 1",
+      });
+    }
+  });
 
 const ResultEnvelopeShape = {
   contractVersion: z.literal(SLICING_CONTRACT_VERSION),
@@ -808,6 +811,75 @@ function requireSelectedBodyCount(
       code: "custom",
       path: ["outcome", "metrics", "bodyCount"],
       message: "must equal the number of selected geometry bodies",
+    });
+  }
+}
+
+function requireCanonicalPlatePlan(
+  value: {
+    input: { quantity: number; partsPerPlate: number };
+    outcome:
+      | { status: "failed" }
+      | {
+          status: "succeeded";
+          metrics: {
+            plateCount: number;
+            estimatedPrintSeconds: string;
+            estimatedMaterialMilligrams: string;
+          };
+          plates: Array<{
+            partsOnPlate: number;
+            estimatedPrintSeconds: string;
+            estimatedMaterialMilligrams: string;
+          }>;
+        };
+  },
+  context: z.RefinementCtx,
+): void {
+  if (value.outcome.status !== "succeeded") return;
+  const expectedPlateCount = Math.ceil(
+    value.input.quantity / value.input.partsPerPlate,
+  );
+  if (value.outcome.metrics.plateCount !== expectedPlateCount) {
+    context.addIssue({
+      code: "custom",
+      path: ["outcome", "metrics", "plateCount"],
+      message: "must equal the canonical plate count for the job quantity",
+    });
+  }
+  if (
+    value.outcome.plates.some(({ partsOnPlate }, index) => {
+      const expectedParts =
+        index < expectedPlateCount - 1
+          ? value.input.partsPerPlate
+          : value.input.quantity -
+            value.input.partsPerPlate * (expectedPlateCount - 1);
+      return partsOnPlate !== expectedParts;
+    })
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["outcome", "plates"],
+      message: "must use canonical full-then-tail plate occupancies",
+    });
+  }
+  const printSeconds = value.outcome.plates.reduce(
+    (sum, plate) => sum + BigInt(plate.estimatedPrintSeconds),
+    0n,
+  );
+  const materialMilligrams = value.outcome.plates.reduce(
+    (sum, plate) => sum + BigInt(plate.estimatedMaterialMilligrams),
+    0n,
+  );
+  if (
+    printSeconds !== BigInt(value.outcome.metrics.estimatedPrintSeconds) ||
+    materialMilligrams !==
+      BigInt(value.outcome.metrics.estimatedMaterialMilligrams)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["outcome", "metrics"],
+      message: "time and material totals must equal the plate estimates",
     });
   }
 }
@@ -902,48 +974,7 @@ const CandidateEstimateResultBase = z
   })
   .superRefine((value, context) => {
     requireSelectedBodyCount(value, context);
-    if (value.outcome.status !== "succeeded") return;
-    const quantity = value.outcome.plates.reduce(
-      (sum, plate) => sum + plate.partsOnPlate,
-      0,
-    );
-    if (quantity !== value.input.quantity) {
-      context.addIssue({
-        code: "custom",
-        path: ["outcome", "plates"],
-        message: "plate quantities must reconcile to input quantity",
-      });
-    }
-    if (
-      value.outcome.plates.some(
-        ({ partsOnPlate }) => partsOnPlate > value.input.partsPerPlate,
-      )
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["outcome", "plates"],
-        message: "a plate cannot exceed partsPerPlate",
-      });
-    }
-    const printSeconds = value.outcome.plates.reduce(
-      (sum, plate) => sum + BigInt(plate.estimatedPrintSeconds),
-      0n,
-    );
-    const materialMilligrams = value.outcome.plates.reduce(
-      (sum, plate) => sum + BigInt(plate.estimatedMaterialMilligrams),
-      0n,
-    );
-    if (
-      printSeconds !== BigInt(value.outcome.metrics.estimatedPrintSeconds) ||
-      materialMilligrams !==
-        BigInt(value.outcome.metrics.estimatedMaterialMilligrams)
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["outcome", "metrics"],
-        message: "time and material totals must equal the plate estimates",
-      });
-    }
+    requireCanonicalPlatePlan(value, context);
   });
 const ProductionSliceResultBase = z
   .strictObject({
@@ -955,18 +986,14 @@ const ProductionSliceResultBase = z
   .superRefine((value, context) => {
     requireAcceptedProductionJob(value, context);
     requireSelectedBodyCount(value, context);
+    requireCanonicalPlatePlan(value, context);
     if (value.outcome.status !== "succeeded") return;
-    const extension = {
-      gcode_3mf: "gcode.3mf",
-      bgcode: "bgcode",
-      gcode: "gcode",
-    }[value.outcome.artifact.format];
-    const expected = `gcode/${value.input.acceptedJobId}/occupancy-${value.input.quantity}/toolpath.${extension}`;
+    const expected = `gcode/${value.input.acceptedJobId}/toolpaths.gcode.3mf`;
     if (value.outcome.artifact.objectKey !== expected) {
       context.addIssue({
         code: "custom",
         path: ["outcome", "artifact", "objectKey"],
-        message: "must be the deterministic artifact key for the plate",
+        message: "must be the deterministic multi-plate package for the Job",
       });
     }
   });

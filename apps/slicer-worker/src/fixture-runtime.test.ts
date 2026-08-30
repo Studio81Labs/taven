@@ -73,8 +73,8 @@ describe("fixture worker runtime", () => {
     });
 
     expect(registrations.map(({ queueName }) => queueName)).toEqual([
-      "taven:slicing:v1",
-      "taven:slicing:v2",
+      "taven-slicing-v1",
+      "taven-slicing-v2",
     ]);
     expect(registrations[0]!.processor(legacyJob)).toMatchObject({
       contractVersion: 1,

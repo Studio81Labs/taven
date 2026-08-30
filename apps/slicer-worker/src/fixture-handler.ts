@@ -177,18 +177,25 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
       });
     }
     case "production_slice": {
+      const parts = plateParts(job.input.quantity, job.input.partsPerPlate);
       return slicingResultForJobSchema(job).parse({
         ...envelope,
         outcome: {
           status: "succeeded",
           metrics: sliceMetrics(
             job.input.quantity,
-            1,
+            parts.length,
             job.input.geometry.bodyIds.length,
           ),
+          plates: parts.map((partsOnPlate, index) => ({
+            plateOrdinal: index + 1,
+            partsOnPlate,
+            estimatedPrintSeconds: String(partsOnPlate * 60),
+            estimatedMaterialMilligrams: String(partsOnPlate * 1_000),
+          })),
           artifact: {
             format: "gcode_3mf",
-            objectKey: `gcode/${job.input.acceptedJobId}/occupancy-${job.input.quantity}/toolpath.gcode.3mf`,
+            objectKey: `gcode/${job.input.acceptedJobId}/toolpaths.gcode.3mf`,
             sha256: fixtureHash(
               job.input.geometry.geometrySha256,
               job.input.geometry.selectionSha256,
@@ -197,6 +204,7 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
               job.input.printConfig.contentSha256,
               job.input.arrangementRevision.contentSha256,
               job.input.partsPerPlate,
+              job.input.quantity,
             ),
           },
         },

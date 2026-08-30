@@ -200,6 +200,23 @@ const inspectionOutcome = {
   ],
   findings: [],
 };
+const productionOutcome = {
+  status: "succeeded" as const,
+  metrics: { ...sliceMetrics, plateCount: 1 },
+  plates: [
+    {
+      plateOrdinal: 1,
+      partsOnPlate: 2,
+      estimatedPrintSeconds: "10",
+      estimatedMaterialMilligrams: "20",
+    },
+  ],
+  artifact: {
+    format: "gcode_3mf" as const,
+    objectKey: `gcode/${ids.acceptedJob}/toolpaths.gcode.3mf`,
+    sha256: hash("5"),
+  },
+};
 const inspectionJob = envelope("model_inspection", inspectionInput);
 const sourceInspectionJob = envelope("model_inspection", sourceInspectionInput);
 const referenceJob = envelope("reference_slice", referenceInput);
@@ -217,9 +234,11 @@ function result(
 
 describe("versioned slicing jobs", () => {
   it("keeps the legacy v1 contract isolated for queue draining", () => {
-    expect(LEGACY_V1_SLICING_QUEUE_NAME).toBe("taven:slicing:v1");
-    expect(SLICING_QUEUE_NAME).toBe("taven:slicing:v2");
+    expect(LEGACY_V1_SLICING_QUEUE_NAME).toBe("taven-slicing-v1");
+    expect(SLICING_QUEUE_NAME).toBe("taven-slicing-v2");
     expect(LEGACY_V1_SLICING_QUEUE_NAME).not.toBe(SLICING_QUEUE_NAME);
+    expect(LEGACY_V1_SLICING_QUEUE_NAME).not.toContain(":");
+    expect(SLICING_QUEUE_NAME).not.toContain(":");
     expect(LegacyV1SlicingJobSchema.parse(legacyV1Job)).toEqual(legacyV1Job);
     expect(() => SlicingJobSchema.parse(legacyV1Job)).toThrow();
 
@@ -461,15 +480,7 @@ describe("versioned slicing results", () => {
         },
       ],
     });
-    const production = result(productionJob, {
-      status: "succeeded",
-      metrics: { ...sliceMetrics, plateCount: 1 },
-      artifact: {
-        format: "gcode_3mf",
-        objectKey: `gcode/${ids.acceptedJob}/occupancy-2/toolpath.gcode.3mf`,
-        sha256: hash("5"),
-      },
-    });
+    const production = result(productionJob, productionOutcome);
     for (const value of [inspection, reference, candidate, production])
       expect(SlicingResultSchema.parse(value)).toEqual(value);
     expect(ModelInspectionResultSchema.parse(sourceInspection)).toEqual(
@@ -622,7 +633,7 @@ describe("versioned slicing results", () => {
     ).toThrow();
   });
 
-  it("reconciles candidate quantity and keeps production to one plate", () => {
+  it("reconciles candidate and production plate topology", () => {
     const valid = result(candidateJob, {
       status: "succeeded",
       metrics: {
@@ -678,30 +689,93 @@ describe("versioned slicing results", () => {
         },
       }),
     ).toThrow();
-    const production = result(productionJob, {
+    const multiPlateInput = { ...productionInput, quantity: 5 };
+    const multiPlateJob = envelope("production_slice", multiPlateInput, {
+      jobId: ids.acceptedJob,
+    });
+    const production = result(multiPlateJob, {
       status: "succeeded",
-      metrics: { ...sliceMetrics, plateCount: 1 },
-      outputs: [
+      metrics: {
+        ...sliceMetrics,
+        estimatedPrintSeconds: "50",
+        estimatedMaterialMilligrams: "100",
+        plateCount: 3,
+      },
+      plates: [
         {
           plateOrdinal: 1,
+          partsOnPlate: 2,
+          estimatedPrintSeconds: "20",
+          estimatedMaterialMilligrams: "40",
+        },
+        {
+          plateOrdinal: 2,
+          partsOnPlate: 2,
+          estimatedPrintSeconds: "20",
+          estimatedMaterialMilligrams: "40",
+        },
+        {
+          plateOrdinal: 3,
           partsOnPlate: 1,
           estimatedPrintSeconds: "10",
           estimatedMaterialMilligrams: "20",
-          format: "gcode",
-          objectKey: `gcode/${ids.acceptedJob}/occupancy-2/toolpath.gcode`,
-          sha256: hash("5"),
         },
       ],
+      artifact: productionOutcome.artifact,
     });
-    expect(() => ProductionSliceResultSchema.parse(production)).toThrow();
+    expect(ProductionSliceResultSchema.parse(production)).toEqual(production);
     expect(() =>
-      SlicingJobSchema.parse(
-        envelope(
-          "production_slice",
-          { ...productionInput, quantity: 3 },
-          { jobId: ids.acceptedJob },
-        ),
-      ),
+      ProductionSliceResultSchema.parse({
+        ...production,
+        outcome: {
+          ...(production.outcome as object),
+          artifact: {
+            ...productionOutcome.artifact,
+            format: "gcode",
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      ProductionSliceResultSchema.parse({
+        ...production,
+        outcome: {
+          ...(production.outcome as object),
+          plates: [
+            {
+              plateOrdinal: 1,
+              partsOnPlate: 2,
+              estimatedPrintSeconds: "20",
+              estimatedMaterialMilligrams: "40",
+            },
+            {
+              plateOrdinal: 2,
+              partsOnPlate: 1,
+              estimatedPrintSeconds: "10",
+              estimatedMaterialMilligrams: "20",
+            },
+            {
+              plateOrdinal: 3,
+              partsOnPlate: 2,
+              estimatedPrintSeconds: "20",
+              estimatedMaterialMilligrams: "40",
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      ProductionSliceResultSchema.parse({
+        ...production,
+        outcome: {
+          ...(production.outcome as object),
+          metrics: {
+            ...((production.outcome as Record<string, unknown>)
+              .metrics as object),
+            estimatedPrintSeconds: "49",
+          },
+        },
+      }),
     ).toThrow();
   });
 
@@ -725,55 +799,56 @@ describe("versioned slicing results", () => {
     expect(() => SlicingResultSchema.parse(reference)).toThrow();
 
     const production = result(productionJob, {
-      status: "succeeded",
-      metrics: { ...sliceMetrics, plateCount: 1 },
+      ...productionOutcome,
       artifact: {
-        format: "gcode",
-        objectKey: `gcode/${ids.job}/occupancy-2/toolpath.gcode`,
+        ...productionOutcome.artifact,
+        objectKey: `gcode/${ids.job}/toolpaths.gcode.3mf`,
         sha256: hash("5"),
       },
     });
     expect(() => SlicingResultSchema.parse(production)).toThrow();
   });
 
-  it("gives full and partial plate Jobs distinct occupancy-bound artifacts", () => {
-    const fullObjectKey =
-      `gcode/${ids.acceptedJob}/occupancy-2/toolpath.gcode` as const;
-    const full = result(productionJob, {
-      status: "succeeded",
-      metrics: { ...sliceMetrics, plateCount: 1 },
-      artifact: {
-        format: "gcode",
-        objectKey: fullObjectKey,
-        sha256: hash("5"),
-      },
+  it("uses one accepted-Job package even when the plan spans plates", () => {
+    const threePlateInput = { ...productionInput, quantity: 5 };
+    const threePlateJob = envelope("production_slice", threePlateInput, {
+      jobId: ids.acceptedJob,
     });
-    const partialInput = {
-      ...machineInput,
-      partsPerPlate: 1,
-      quantity: 1,
-      acceptedJobId: ids.geometryB,
-      productionReservationId: ids.reservation,
-      arrangementRevision: revision(ids.arrangement),
-    };
-    const partialJob = envelope("production_slice", partialInput, {
-      jobId: ids.geometryB,
-    });
-    const partialObjectKey =
-      `gcode/${ids.geometryB}/occupancy-1/toolpath.gcode` as const;
-    const partial = result(partialJob, {
+    const threePlate = result(threePlateJob, {
       status: "succeeded",
-      metrics: { ...sliceMetrics, plateCount: 1 },
-      artifact: {
-        format: "gcode",
-        objectKey: partialObjectKey,
-        sha256: hash("6"),
+      metrics: {
+        ...sliceMetrics,
+        estimatedPrintSeconds: "50",
+        estimatedMaterialMilligrams: "100",
+        plateCount: 3,
       },
+      plates: [
+        {
+          plateOrdinal: 1,
+          partsOnPlate: 2,
+          estimatedPrintSeconds: "20",
+          estimatedMaterialMilligrams: "40",
+        },
+        {
+          plateOrdinal: 2,
+          partsOnPlate: 2,
+          estimatedPrintSeconds: "20",
+          estimatedMaterialMilligrams: "40",
+        },
+        {
+          plateOrdinal: 3,
+          partsOnPlate: 1,
+          estimatedPrintSeconds: "10",
+          estimatedMaterialMilligrams: "20",
+        },
+      ],
+      artifact: productionOutcome.artifact,
     });
 
-    expect(ProductionSliceResultSchema.parse(full)).toEqual(full);
-    expect(ProductionSliceResultSchema.parse(partial)).toEqual(partial);
-    expect(fullObjectKey).not.toBe(partialObjectKey);
+    expect(ProductionSliceResultSchema.parse(threePlate)).toEqual(threePlate);
+    expect(
+      (threePlate.outcome as typeof productionOutcome).artifact.objectKey,
+    ).toBe(`gcode/${ids.acceptedJob}/toolpaths.gcode.3mf`);
   });
 
   it("binds results to the exact job and prevents geometry collisions", () => {

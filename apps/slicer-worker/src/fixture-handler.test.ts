@@ -121,7 +121,7 @@ const candidateJob = fixtureJob("candidate_estimate", {
 });
 const productionInput = {
   ...machineInput,
-  quantity: 2,
+  quantity: 5,
   acceptedJobId: ids.productionJob,
   productionReservationId: ids.reservation,
   arrangementRevision: revision(ids.arrangement, "3"),
@@ -197,18 +197,23 @@ describe("runFixtureSlicingJob", () => {
     });
   });
 
-  it("emits one persistence-compatible artifact for one production plate", () => {
+  it("emits one persistence-compatible package for a multi-plate Job", () => {
     expect(runFixtureSlicingJob(productionJob)).toMatchObject({
       outcome: {
         status: "succeeded",
         metrics: {
-          plateCount: 1,
-          estimatedPrintSeconds: "120",
-          estimatedMaterialMilligrams: "2000",
+          plateCount: 3,
+          estimatedPrintSeconds: "300",
+          estimatedMaterialMilligrams: "5000",
         },
+        plates: [
+          { plateOrdinal: 1, partsOnPlate: 2 },
+          { plateOrdinal: 2, partsOnPlate: 2 },
+          { plateOrdinal: 3, partsOnPlate: 1 },
+        ],
         artifact: {
           format: "gcode_3mf",
-          objectKey: `gcode/${ids.productionJob}/occupancy-2/toolpath.gcode.3mf`,
+          objectKey: `gcode/${ids.productionJob}/toolpaths.gcode.3mf`,
         },
       },
     });
