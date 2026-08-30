@@ -22527,6 +22527,54 @@ describe("commerce persistence foundations", () => {
 
   it("binds deposit-plus-balance only for individual quotes and orders", async () => {
     await rollback("split-payment-binding-policy", async (client, fixtures) => {
+      const expectEarnedPolicyRejected = async (
+        name: string,
+        parameters: Record<string, unknown>,
+      ) => {
+        await expectQueryError(
+          client,
+          name,
+          async () => {
+            const revision = `${name}-v1`;
+            await client.query(
+              `INSERT INTO price_lists
+                 (id, revision, terms_revision, currency, parameters, created_at)
+               VALUES ($1,$2,'terms-v1','EUR',$3::jsonb,clock_timestamp())`,
+              [fixtures.id(`${name}:price-list`), revision, parameters],
+            );
+            await fixtures.createFoundation(
+              name,
+              {},
+              undefined,
+              undefined,
+              undefined,
+              1,
+              undefined,
+              "QUOTED",
+              undefined,
+              { priceListRevision: revision },
+              "INDIVIDUAL",
+              true,
+              true,
+              true,
+              "DEPOSIT_BALANCE",
+            );
+          },
+          {
+            code: "23514",
+            constraint: "quote_price_binding_acceptance_check",
+          },
+        );
+      };
+
+      await expectEarnedPolicyRejected("missing_earned_policy", {
+        balance_payment_days: 7,
+      });
+      await expectEarnedPolicyRejected("non_string_earned_policy", {
+        balance_payment_days: 7,
+        balance_timeout_earned_component_kinds: [null],
+      });
+
       const individual = await fixtures.createFoundation(
         "individual-split-payment",
         {},
@@ -22638,55 +22686,39 @@ describe("commerce persistence foundations", () => {
         [individual.orderId, qcPassedAt],
       );
 
-      const balance = (
-        await client.query<{
-          gross_amount_minor: string;
-          id: string;
-        }>(
-          `SELECT id, gross_amount_minor::text
-           FROM payment_schedules
-           WHERE price_snapshot_id = $1 AND role = 'BALANCE'`,
-          [individual.priceSnapshotId],
-        )
-      ).rows[0];
-      if (!balance) {
-        throw new Error(
-          "split-payment fixture is missing its balance schedule",
-        );
-      }
-      const balancePaymentId = fixtures.id("post-qc-balance-payment");
       const balanceDueAt = new Date(
         qcPassedAt.getTime() + 7 * 24 * 60 * 60 * 1_000,
       );
-      const insertBalancePayment = (deadline: Date) =>
-        client.query(
-          `INSERT INTO payments
-           (id, order_id, price_snapshot_id, order_price_binding_id,
-            payment_schedule_id, role, provider, requested_amount_minor,
-            currency, status, balance_due_at, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,'BALANCE','test',$6,'EUR','CREATED',$7,$8,$8)`,
-          [
-            balancePaymentId,
-            individual.orderId,
-            individual.priceSnapshotId,
-            individual.orderPriceBindingId,
-            balance.id,
-            balance.gross_amount_minor,
-            deadline,
-            qcPassedAt,
-          ],
-        );
-
-      await expectQueryError(
-        client,
-        "arbitrary_balance_deadline_rejected",
-        () =>
-          insertBalancePayment(
-            new Date(qcPassedAt.getTime() + 6 * 24 * 60 * 60 * 1_000),
-          ),
-        { code: "23514", constraint: "payment_capture_window_check" },
-      );
-      await insertBalancePayment(balanceDueAt);
+      const createdBalances = (
+        await client.query<{
+          balance_due_at: Date;
+          id: string;
+          order_status: string;
+          provider_intent_id: string | null;
+          status: string;
+        }>(
+          `SELECT payment.id, payment.status::text,
+                  payment.provider_intent_id, payment.balance_due_at,
+                  target_order.status::text AS order_status
+           FROM payments payment
+           JOIN orders target_order ON target_order.id = payment.order_id
+           WHERE payment.order_id = $1 AND payment.role = 'BALANCE'`,
+          [individual.orderId],
+        )
+      ).rows;
+      expect(createdBalances).toEqual([
+        {
+          id: expect.any(String),
+          status: "CREATED",
+          provider_intent_id: null,
+          balance_due_at: balanceDueAt,
+          order_status: "QC_PASSED",
+        },
+      ]);
+      const balancePaymentId = createdBalances[0]?.id;
+      if (!balancePaymentId) {
+        throw new Error("QC completion did not create its balance payment");
+      }
       await client.query(
         `SET CONSTRAINTS "payments_balance_waiting_reconciled" IMMEDIATE`,
       );
@@ -22706,6 +22738,201 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `SET CONSTRAINTS "payments_balance_waiting_reconciled" DEFERRED`,
       );
+
+      await client.query(`SAVEPOINT "created_balance_timeout_path"`);
+      try {
+        await client.query(`SET LOCAL session_replication_role = 'replica'`);
+        await client.query(
+          `UPDATE payments
+           SET balance_due_at = clock_timestamp() - interval '1 second'
+           WHERE id = $1`,
+          [balancePaymentId],
+        );
+        await client.query(`SET LOCAL session_replication_role = 'origin'`);
+
+        const closedCreatedBalance = await client.query<{
+          payment_id: string;
+          settlement_id: string;
+        }>(
+          `SELECT payment_id, settlement_id
+           FROM taven_close_expired_balance_payments(10)`,
+        );
+        expect(closedCreatedBalance.rows).toEqual([
+          {
+            payment_id: balancePaymentId,
+            settlement_id: expect.any(String),
+          },
+        ]);
+        expect(
+          (
+            await client.query<{
+              order_status: string;
+              payment_status: string;
+              settlement_count: string;
+              void_commands: string;
+            }>(
+              `SELECT target_order.status::text AS order_status,
+                      balance.status::text AS payment_status,
+                      (SELECT count(*)::text FROM order_settlements settlement
+                       WHERE settlement.order_id = target_order.id
+                         AND settlement.kind = 'BALANCE_SETTLEMENT') AS settlement_count,
+                      (SELECT count(*)::text FROM outbox_messages message
+                       WHERE message.deduplication_key =
+                         'void_payment:v1:' || balance.id::text) AS void_commands
+               FROM orders target_order
+               JOIN payments balance
+                 ON balance.order_id = target_order.id AND balance.role = 'BALANCE'
+               WHERE target_order.id = $1`,
+              [individual.orderId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            order_status: "AWAITING_BALANCE",
+            payment_status: "VOIDED",
+            settlement_count: "1",
+            void_commands: "0",
+          },
+        ]);
+        expect(
+          (
+            await client.query(
+              `SELECT payment_id, settlement_id
+               FROM taven_close_expired_balance_payments(10)`,
+            )
+          ).rows,
+        ).toEqual([]);
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+      } finally {
+        await client.query(
+          `ROLLBACK TO SAVEPOINT "created_balance_timeout_path"`,
+        );
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+      }
+
+      await client.query(`SAVEPOINT "failed_balance_timeout_path"`);
+      try {
+        const intentFailureAt = new Date();
+        const intentFailureId =
+          await fixtures.persistPaymentIntentCreationFailure(
+            balancePaymentId,
+            intentFailureAt,
+            "post-qc-balance-intent-failure",
+          );
+        await client.query(
+          `UPDATE payments
+           SET status = 'FAILED', capture_authorized = false,
+               capture_cutoff_at = $2,
+               intent_creation_failure_result_id = $3,
+               updated_at = $2
+           WHERE id = $1`,
+          [balancePaymentId, intentFailureAt, intentFailureId],
+        );
+        const retryPaymentId = fixtures.id("post-qc-balance-payment-retry");
+        const retryCreatedAt = new Date(intentFailureAt.getTime() + 1);
+        await client.query(
+          `INSERT INTO payments
+             (id, order_id, price_snapshot_id, order_price_binding_id,
+              payment_schedule_id, role, provider, requested_amount_minor,
+              currency, status, balance_due_at, created_at, updated_at)
+           SELECT $1, order_id, price_snapshot_id, order_price_binding_id,
+                  payment_schedule_id, role, provider, requested_amount_minor,
+                  currency, 'CREATED', balance_due_at, $2, $2
+           FROM payments WHERE id = $3`,
+          [retryPaymentId, retryCreatedAt, balancePaymentId],
+        );
+        const retryFailureAt = new Date(retryCreatedAt.getTime() + 1);
+        const retryFailureId =
+          await fixtures.persistPaymentIntentCreationFailure(
+            retryPaymentId,
+            retryFailureAt,
+            "post-qc-balance-intent-retry-failure",
+          );
+        await client.query(
+          `UPDATE payments
+           SET status = 'FAILED', capture_authorized = false,
+               capture_cutoff_at = $2,
+               intent_creation_failure_result_id = $3,
+               updated_at = $2
+           WHERE id = $1`,
+          [retryPaymentId, retryFailureAt, retryFailureId],
+        );
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+        await client.query(`SET LOCAL session_replication_role = 'replica'`);
+        await client.query(
+          `UPDATE payments
+           SET balance_due_at = clock_timestamp() - interval '1 second'
+           WHERE order_id = $1 AND role = 'BALANCE'`,
+          [individual.orderId],
+        );
+        await client.query(`SET LOCAL session_replication_role = 'origin'`);
+
+        expect(
+          (
+            await client.query<{
+              payment_id: string;
+              settlement_id: string;
+            }>(
+              `SELECT payment_id, settlement_id
+               FROM taven_close_expired_balance_payments(10)`,
+            )
+          ).rows,
+        ).toEqual([
+          {
+            payment_id: retryPaymentId,
+            settlement_id: expect.any(String),
+          },
+        ]);
+        expect(
+          (
+            await client.query<{
+              order_status: string;
+              payment_status: string;
+              settlement_count: string;
+              void_commands: string;
+            }>(
+              `SELECT target_order.status::text AS order_status,
+                      balance.status::text AS payment_status,
+                      (SELECT count(*)::text FROM order_settlements settlement
+                       WHERE settlement.order_id = target_order.id
+                         AND settlement.kind = 'BALANCE_SETTLEMENT') AS settlement_count,
+                      (SELECT count(*)::text FROM outbox_messages message
+                       WHERE message.deduplication_key =
+                         'void_payment:v1:' || balance.id::text) AS void_commands
+               FROM orders target_order
+               JOIN payments balance
+                 ON balance.id = $2
+               WHERE target_order.id = $1`,
+              [individual.orderId, retryPaymentId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            order_status: "AWAITING_BALANCE",
+            payment_status: "FAILED",
+            settlement_count: "1",
+            void_commands: "0",
+          },
+        ]);
+        expect(
+          (
+            await client.query(
+              `SELECT payment_id, settlement_id
+               FROM taven_close_expired_balance_payments(10)`,
+            )
+          ).rows,
+        ).toEqual([]);
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+      } finally {
+        await client.query(
+          `ROLLBACK TO SAVEPOINT "failed_balance_timeout_path"`,
+        );
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+      }
+
       await client.query(
         `UPDATE payments
          SET status = 'PENDING', provider_intent_id = $2, updated_at = $3

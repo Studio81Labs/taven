@@ -103,6 +103,7 @@ export type CommerceItem = {
 };
 type CommercePricing = {
   orderMinimum?: number;
+  priceListRevision?: string;
   smallSurcharge?: number;
 };
 
@@ -709,6 +710,8 @@ export class PersistenceFactory {
     );
     const orderMinimum = input.pricing.orderMinimum ?? 200;
     const smallSurcharge = input.pricing.smallSurcharge ?? 100;
+    const priceListRevision =
+      input.pricing.priceListRevision ?? "legacy-v0-eur";
     const contractTotal =
       componentAmounts.reduce(
         (total, amount) =>
@@ -791,7 +794,7 @@ export class PersistenceFactory {
         snapshotId,
         "EUR",
         contractTotal,
-        "legacy-v0-eur",
+        priceListRevision,
         JSON.stringify({}),
         this.hash(`${input.name}:snapshot`),
         t,

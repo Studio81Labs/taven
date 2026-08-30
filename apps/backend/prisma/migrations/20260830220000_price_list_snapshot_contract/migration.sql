@@ -282,6 +282,13 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
           ) > 0
           AND NOT EXISTS (
               SELECT 1
+              FROM jsonb_array_elements(
+                  list."parameters" -> 'balance_timeout_earned_component_kinds'
+              ) AS policy_kind("value")
+              WHERE jsonb_typeof(policy_kind."value") <> 'string'
+          )
+          AND NOT EXISTS (
+              SELECT 1
               FROM jsonb_array_elements_text(
                   list."parameters" -> 'balance_timeout_earned_component_kinds'
               ) AS policy_kind("kind")
@@ -1442,6 +1449,7 @@ BEGIN
                  snapshot."contract_total_minor"
              )
              AND taven_price_snapshot_balance_deadline_is_valid(snapshot."id")
+             AND taven_price_snapshot_balance_earned_policy_is_valid(snapshot."id")
              AND NOT EXISTS (
                  SELECT 1
                  FROM "payment_schedules" schedule
@@ -2314,6 +2322,94 @@ BEGIN
 END;
 $$;
 
+-- QC completion owns the durable balance deadline. Provider intent creation is
+-- deliberately asynchronous, but it must always start from this CREATED row so
+-- a crash cannot leave an individual order without timeout work.
+CREATE FUNCTION taven_create_post_qc_balance_payment()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "individual_order_origins" origin
+        WHERE origin."order_id" = NEW."id"
+    ) THEN
+        RETURN NULL;
+    END IF;
+
+    INSERT INTO "payments" (
+        "id", "order_id", "price_snapshot_id", "order_price_binding_id",
+        "payment_schedule_id", "role", "provider", "requested_amount_minor",
+        "currency", "status", "balance_due_at", "created_at", "updated_at"
+    )
+    SELECT gen_random_uuid(), target_order."id", snapshot."id", binding."id",
+           balance_schedule."id", 'BALANCE', deposit."provider",
+           balance_schedule."gross_amount_minor", snapshot."currency", 'CREATED',
+           phase."qc_passed_at"
+               + make_interval(
+                   days => (list."parameters" ->> 'balance_payment_days')::integer
+                 ),
+           phase."qc_passed_at", phase."qc_passed_at"
+    FROM "orders" target_order
+    JOIN "individual_order_origins" origin
+      ON origin."order_id" = target_order."id"
+    JOIN "order_phases" phase
+      ON phase."order_id" = target_order."id"
+     AND phase."kind" = 'SINGLE'
+     AND phase."status" = 'QC_PASSED'
+     AND phase."qc_passed_at" IS NOT NULL
+    JOIN "order_active_price_bindings" active
+      ON active."order_id" = target_order."id"
+    JOIN "order_price_bindings" binding
+      ON binding."id" = active."order_price_binding_id"
+     AND binding."order_id" = target_order."id"
+     AND binding."invalidated_at" IS NULL
+    JOIN "price_snapshots" snapshot
+      ON snapshot."id" = binding."price_snapshot_id"
+    JOIN "price_lists" list
+      ON list."id" = snapshot."price_list_id"
+    JOIN "payment_schedules" balance_schedule
+      ON balance_schedule."price_snapshot_id" = snapshot."id"
+     AND balance_schedule."role" = 'BALANCE'
+     AND balance_schedule."sequence" = 1
+     AND balance_schedule."gross_amount_minor" > 0
+    JOIN "payments" deposit
+      ON deposit."order_id" = target_order."id"
+     AND deposit."order_price_binding_id" = binding."id"
+     AND deposit."price_snapshot_id" = snapshot."id"
+     AND deposit."role" = 'DEPOSIT'
+     AND deposit."status" = 'CAPTURED'
+     AND deposit."captured_amount_minor" = deposit."requested_amount_minor"
+    WHERE target_order."id" = NEW."id"
+      AND target_order."status" = 'QC_PASSED'
+      AND target_order."accepted_order_price_binding_id" = binding."id"
+      AND taven_order_accepts_bound_price_list_terms(
+          target_order."id", binding."id"
+      )
+      AND taven_price_snapshot_balance_deadline_is_valid(snapshot."id")
+      AND taven_price_snapshot_balance_earned_policy_is_valid(snapshot."id")
+      AND NOT EXISTS (
+          SELECT 1
+          FROM "order_settlements" settlement
+          WHERE settlement."order_id" = target_order."id"
+      );
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'individual QC completion requires its durable balance deadline payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_payment_qc_creation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "orders_qc_balance_payment_created"
+AFTER UPDATE OF "status" ON "orders"
+FOR EACH ROW
+WHEN (OLD."status" = 'IN_PRODUCTION' AND NEW."status" = 'QC_PASSED')
+EXECUTE FUNCTION taven_create_post_qc_balance_payment();
+
 -- A BALANCE capture completes the commercial obligation after QC.  It has a
 -- distinct deferred reconciliation because the initial FULL/DEPOSIT capture
 -- owns reservation activation and must never run a second time.
@@ -2360,6 +2456,30 @@ BEGIN
        AND (to_jsonb(NEW) ->> 'status') = 'READY_TO_SHIP' THEN
         RAISE EXCEPTION 'split-payment orders must enter awaiting balance before readiness'
             USING ERRCODE = '23514', CONSTRAINT = 'balance_payment_readiness_check';
+    END IF;
+
+    IF target_order_status IN ('AWAITING_BALANCE', 'CANCELLED_SETTLED')
+       AND EXISTS (
+           SELECT 1
+           FROM "order_settlements" settlement
+           JOIN "order_phases" phase
+             ON phase."id" = settlement."order_phase_id"
+            AND phase."order_id" = settlement."order_id"
+            AND phase."status" IN ('CANCELLED', 'CANCELLED_SETTLED')
+           JOIN "payments" balance
+             ON balance."id" = settlement."balance_payment_id"
+            AND balance."order_id" = settlement."order_id"
+            AND balance."order_price_binding_id" = settlement."order_price_binding_id"
+            AND balance."price_snapshot_id" = settlement."price_snapshot_id"
+            AND balance."role" = 'BALANCE'
+           WHERE settlement."order_id" = target_order_id
+             AND settlement."kind" = 'BALANCE_SETTLEMENT'
+             AND (target_payment_id IS NULL OR balance."id" = target_payment_id)
+             AND taven_balance_payment_is_closed_for_timeout(
+                 balance."id", settlement."cutoff_at"
+             )
+       ) THEN
+        RETURN NULL;
     END IF;
 
     IF target_order_status = 'AWAITING_BALANCE' THEN
@@ -3061,6 +3181,46 @@ BEGIN
 END;
 $$;
 
+-- A timeout can close either an open balance attempt or a CREATED attempt that
+-- already recorded an immutable provider-intent creation failure. The latter
+-- has no provider intent to void and therefore keeps its FAILED audit state.
+CREATE FUNCTION taven_balance_payment_is_closed_for_timeout(
+    target_payment_id uuid,
+    target_cutoff_at timestamptz
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "payments" balance
+        WHERE balance."id" = target_payment_id
+          AND balance."role" = 'BALANCE'
+          AND NOT balance."capture_authorized"
+          AND balance."balance_due_at" IS NOT NULL
+          AND balance."balance_due_at" <= target_cutoff_at
+          AND (
+              (
+                  balance."status" = 'VOIDED'
+                  AND balance."capture_cutoff_at" = target_cutoff_at
+              )
+              OR (
+                  balance."status" = 'FAILED'
+                  AND balance."provider_intent_id" IS NULL
+                  AND balance."capture_cutoff_at" <= target_cutoff_at
+                  AND EXISTS (
+                      SELECT 1
+                      FROM "payment_intent_creation_failures" failure
+                      WHERE failure."id" = balance."intent_creation_failure_result_id"
+                        AND failure."payment_id" = balance."id"
+                        AND failure."provider" = balance."provider"
+                        AND failure."outcome" = 'FAILED'
+                        AND failure."provider_intent_id" IS NULL
+                        AND failure."failed_at" = balance."capture_cutoff_at"
+                  )
+              )
+          )
+    );
+$$;
+
 CREATE FUNCTION taven_reconcile_balance_timeout_terminal()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -3216,9 +3376,17 @@ BEGIN
       AND balance."role" = 'BALANCE'
     FOR UPDATE;
 
-    IF target_order_status <> 'AWAITING_BALANCE'
+    IF target_order_status NOT IN ('QC_PASSED', 'AWAITING_BALANCE')
        OR target_phase_id IS NULL
-       OR target_balance_status NOT IN ('CREATED', 'PENDING')
+       OR NOT (
+           target_balance_status IN ('CREATED', 'PENDING')
+           OR (
+               target_balance_status = 'FAILED'
+               AND taven_balance_payment_is_closed_for_timeout(
+                   target_payment_id, target_cutoff_at
+               )
+           )
+       )
        OR target_balance_due_at IS NULL
        OR target_balance_due_at > target_cutoff_at
        OR target_cutoff_at > clock_timestamp() + interval '5 seconds' THEN
@@ -3263,7 +3431,8 @@ BEGIN
     UPDATE "payments"
     SET "status" = 'VOIDED', "capture_authorized" = false,
         "capture_cutoff_at" = target_cutoff_at, "updated_at" = target_cutoff_at
-    WHERE "id" = target_payment_id;
+    WHERE "id" = target_payment_id
+      AND "status" IN ('CREATED', 'PENDING');
 
     UPDATE "phase_reservation_sets" reservation_set
     SET "status" = 'SETTLED', "updated_at" = target_cutoff_at
@@ -3332,6 +3501,11 @@ BEGIN
         target_refund_amount, target_cutoff_at, target_cutoff_at
     );
 
+    UPDATE "orders"
+    SET "status" = 'AWAITING_BALANCE', "updated_at" = target_cutoff_at
+    WHERE "id" = target_order_id
+      AND "status" = 'QC_PASSED';
+
     PERFORM taven_finalize_balance_timeout_settlement(target_order_id, target_cutoff_at);
 
     RETURN target_settlement_id;
@@ -3352,13 +3526,38 @@ BEGIN
     FOR candidate IN
         SELECT payment."id"
         FROM "orders" target_order
-        JOIN "payments" payment ON payment."order_id" = target_order."id"
-        WHERE target_order."status" = 'AWAITING_BALANCE'
-          AND payment."role" = 'BALANCE'
-          AND payment."status" IN ('CREATED', 'PENDING')
-          AND payment."capture_authorized"
-          AND payment."capture_cutoff_at" IS NULL
-          AND payment."balance_due_at" <= clock_timestamp()
+        JOIN LATERAL (
+            SELECT attempt."id", attempt."balance_due_at"
+            FROM "payments" attempt
+            WHERE attempt."order_id" = target_order."id"
+              AND attempt."role" = 'BALANCE'
+              AND attempt."balance_due_at" <= clock_timestamp()
+              AND (
+                  (
+                      attempt."status" IN ('CREATED', 'PENDING')
+                      AND attempt."capture_authorized"
+                      AND attempt."capture_cutoff_at" IS NULL
+                  )
+                  OR (
+                      attempt."status" = 'FAILED'
+                      AND taven_balance_payment_is_closed_for_timeout(
+                          attempt."id", clock_timestamp()
+                      )
+                  )
+              )
+            ORDER BY
+                (attempt."status" IN ('CREATED', 'PENDING')) DESC,
+                attempt."created_at" DESC,
+                attempt."id" DESC
+            LIMIT 1
+        ) payment ON true
+        WHERE target_order."status" IN ('QC_PASSED', 'AWAITING_BALANCE')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "order_settlements" settlement
+              WHERE settlement."order_id" = target_order."id"
+                AND settlement."kind" = 'BALANCE_SETTLEMENT'
+          )
         ORDER BY payment."balance_due_at", payment."id"
         FOR UPDATE OF target_order SKIP LOCKED
         LIMIT batch_limit
@@ -3477,11 +3676,11 @@ BEGIN
 
     IF settlement."status" <> 'AWAITING_BALANCE'
        OR settlement.phase_status <> 'CANCELLED'
-       OR settlement.balance_capture_authorized
-       OR settlement.balance_capture_cutoff_at <> settlement."cutoff_at"
-       OR (
-           settlement.balance_status <> 'VOIDED'
-           AND NOT taven_has_balance_late_capture_compensation(
+       OR NOT (
+           taven_balance_payment_is_closed_for_timeout(
+               settlement."balance_payment_id", settlement."cutoff_at"
+           )
+           OR taven_has_balance_late_capture_compensation(
                settlement."balance_payment_id", settlement."cutoff_at"
            )
        )
@@ -3544,11 +3743,10 @@ BEGIN
           ON balance."id" = settlement."balance_payment_id"
          AND balance."order_id" = target_order."id"
          AND balance."role" = 'BALANCE'
-         AND NOT balance."capture_authorized"
-         AND balance."capture_cutoff_at" = settlement."cutoff_at"
-         AND balance."balance_due_at" <= settlement."cutoff_at"
          AND (
-             balance."status" = 'VOIDED'
+             taven_balance_payment_is_closed_for_timeout(
+                 balance."id", settlement."cutoff_at"
+             )
              OR taven_has_balance_late_capture_compensation(
                  balance."id", settlement."cutoff_at"
              )
