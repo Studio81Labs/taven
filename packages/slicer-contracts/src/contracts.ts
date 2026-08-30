@@ -87,6 +87,21 @@ export const PositiveInt64StringSchema = NonnegativeInt64StringSchema.refine(
   "must be positive",
 );
 
+export const ProductionArtifactFormatSchema = z.enum([
+  "gcode_3mf",
+  "bgcode",
+  "gcode",
+]);
+export type ProductionArtifactFormat = z.infer<
+  typeof ProductionArtifactFormatSchema
+>;
+
+const PRODUCTION_ARTIFACT_SUFFIX = {
+  gcode_3mf: "gcode.3mf",
+  bgcode: "bgcode",
+  gcode: "gcode",
+} as const satisfies Record<ProductionArtifactFormat, string>;
+
 export const StorageObjectKeySchema = z
   .string()
   .min(1)
@@ -118,9 +133,16 @@ const SliceMetricsObjectKeySchema = StorageObjectKeySchema.regex(
   "must identify a machine-slice metrics artifact",
 );
 const ProductionArtifactObjectKeySchema = StorageObjectKeySchema.regex(
-  /^gcode\/[0-9a-f-]{36}\/toolpaths\.gcode\.3mf$/,
+  /^gcode\/[0-9a-f-]{36}\/toolpaths\.(?:gcode\.3mf|bgcode|gcode)$/,
   "must identify a production multi-plate G-code package",
 );
+
+export function productionArtifactObjectKey(
+  acceptedJobId: string,
+  format: ProductionArtifactFormat,
+): string {
+  return `gcode/${UuidSchema.parse(acceptedJobId)}/toolpaths.${PRODUCTION_ARTIFACT_SUFFIX[ProductionArtifactFormatSchema.parse(format)]}`;
+}
 
 const SafeIdentifierSchema = z
   .string()
@@ -252,6 +274,10 @@ const SlicerProfileSnapshotSchema = RevisionSnapshotSchema.extend({
   slicerVersion: EngineVersionSchema,
 });
 
+const MachineSlicerProfileSnapshotSchema = SlicerProfileSnapshotSchema.extend({
+  productionArtifactFormat: ProductionArtifactFormatSchema,
+});
+
 export const BoundingBoxSchema = z.strictObject({
   xMicrometers: NonnegativeInt64StringSchema,
   yMicrometers: NonnegativeInt64StringSchema,
@@ -336,12 +362,37 @@ const ModelGeometryTargetSchema = z
   .strictObject(ModelGeometryTargetShape)
   .superRefine(requireOwnedGeometryKey);
 
+export const ConfirmedUnitConversionSchema = z
+  .strictObject({
+    sourceUnit: z.enum(["millimeter", "inch", "meter", "custom"]),
+    targetUnit: z.literal("millimeter"),
+    scaleFactorPpm: boundedPositiveInteger(1_000_000_000),
+  })
+  .superRefine((value, context) => {
+    const canonicalScaleFactorPpm = {
+      millimeter: 1_000_000,
+      inch: 25_400_000,
+      meter: 1_000_000_000,
+    } as const;
+    if (
+      value.sourceUnit !== "custom" &&
+      value.scaleFactorPpm !== canonicalScaleFactorPpm[value.sourceUnit]
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["scaleFactorPpm"],
+        message: "must match the confirmed source-unit conversion",
+      });
+    }
+  });
+
 const CanonicalGeometryArtifactSchema = z
   .strictObject({
     ...ModelGeometryTargetShape,
     geometrySha256: Sha256Schema,
     bodyIds: sortedUniqueIdentifiers(MAX_BODY_COUNT),
     selectionSha256: Sha256Schema,
+    appliedUnitConversion: ConfirmedUnitConversionSchema,
   })
   .superRefine((value, context) => {
     requireOwnedGeometryKey(value, context);
@@ -362,6 +413,7 @@ const InspectionOperationSchema = z.discriminatedUnion("mode", [
       sourceInspectionFingerprintSha256: Sha256Schema,
       bodyIds: sortedUniqueIdentifiers(MAX_BODY_COUNT),
       selectionSha256: Sha256Schema,
+      confirmedUnitConversion: ConfirmedUnitConversionSchema,
       targetGeometry: ModelGeometryTargetSchema,
     })
     .superRefine((value, context) => {
@@ -412,7 +464,7 @@ const ReferenceSliceInputSchema = z.strictObject({
 const MachineSliceInputShape = {
   geometry: GeometrySelectionSchema,
   machineId: UuidSchema,
-  machineProfile: SlicerProfileSnapshotSchema,
+  machineProfile: MachineSlicerProfileSnapshotSchema,
   machineCalibration: RevisionSnapshotSchema,
   printConfig: RevisionSnapshotSchema,
   partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
@@ -882,7 +934,7 @@ const CandidateEstimateSuccessSchema = z
   });
 
 const ProductionArtifactSchema = z.strictObject({
-  format: z.literal("gcode_3mf"),
+  format: ProductionArtifactFormatSchema,
   objectKey: ProductionArtifactObjectKeySchema,
   sha256: Sha256Schema,
 });
@@ -1140,6 +1192,12 @@ const ModelInspectionResultBase = z
     if (
       canonicalGeometry !== null &&
       (canonicalGeometry.selectionSha256 !== operation.selectionSha256 ||
+        canonicalGeometry.appliedUnitConversion.sourceUnit !==
+          operation.confirmedUnitConversion.sourceUnit ||
+        canonicalGeometry.appliedUnitConversion.targetUnit !==
+          operation.confirmedUnitConversion.targetUnit ||
+        canonicalGeometry.appliedUnitConversion.scaleFactorPpm !==
+          operation.confirmedUnitConversion.scaleFactorPpm ||
         canonicalGeometry.bodyIds.length !== operation.bodyIds.length ||
         canonicalGeometry.bodyIds.some(
           (bodyId, index) => bodyId !== operation.bodyIds[index],
@@ -1200,12 +1258,20 @@ const ProductionSliceResultBase = z
     requireExpectedProfileEngine(value, value.input.machineProfile, context);
     requireCanonicalPlatePlan(value, context);
     if (value.outcome.status !== "succeeded") return;
-    const expected = `gcode/${value.input.acceptedJobId}/toolpaths.gcode.3mf`;
-    if (value.outcome.artifact.objectKey !== expected) {
+    const expectedFormat = value.input.machineProfile.productionArtifactFormat;
+    const expectedObjectKey = productionArtifactObjectKey(
+      value.input.acceptedJobId,
+      expectedFormat,
+    );
+    if (
+      value.outcome.artifact.format !== expectedFormat ||
+      value.outcome.artifact.objectKey !== expectedObjectKey
+    ) {
       context.addIssue({
         code: "custom",
-        path: ["outcome", "artifact", "objectKey"],
-        message: "must be the deterministic multi-plate package for the Job",
+        path: ["outcome", "artifact"],
+        message:
+          "must use the machine-profile format and deterministic Job package key",
       });
     }
   });

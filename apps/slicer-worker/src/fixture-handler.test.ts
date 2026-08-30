@@ -2,6 +2,7 @@ import {
   SlicingJobSchema,
   geometrySelectionSha256,
   machineOccupancyCacheIdentitySha256,
+  productionArtifactObjectKey,
   slicingInputFingerprint,
   slicingResultForJobSchema,
   type SlicingResult,
@@ -35,6 +36,14 @@ const slicerProfile = (revisionId: string, digest: string) => ({
   slicerEngine: "fixture",
   slicerVersion: "0.0.0",
 });
+const machineSlicerProfile = (
+  revisionId: string,
+  digest: string,
+  productionArtifactFormat: "gcode_3mf" | "bgcode" | "gcode" = "gcode_3mf",
+) => ({
+  ...slicerProfile(revisionId, digest),
+  productionArtifactFormat,
+});
 const geometry = {
   sourceModelFileId: ids.model,
   sourceContentSha256: "b".repeat(64),
@@ -53,7 +62,7 @@ const referenceInput = {
 const machineInput = {
   geometry,
   machineId: ids.machine,
-  machineProfile: slicerProfile(ids.machineProfile, "1"),
+  machineProfile: machineSlicerProfile(ids.machineProfile, "1"),
   machineCalibration: revision(ids.calibration, "2"),
   printConfig: revision(ids.printConfig, "f"),
   partsPerPlate: 2,
@@ -110,6 +119,11 @@ const inspectionJob = fixtureJob("model_inspection", {
     ),
     bodyIds: selectionBodyIds,
     selectionSha256: geometrySelectionSha256(selectionBodyIds),
+    confirmedUnitConversion: {
+      sourceUnit: "millimeter",
+      targetUnit: "millimeter",
+      scaleFactorPpm: 1_000_000,
+    },
     targetGeometry: {
       modelGeometryId: ids.geometry,
       canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
@@ -186,9 +200,52 @@ describe("runFixtureSlicingJob", () => {
           canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
           bodyIds: selectionBodyIds,
           selectionSha256: geometrySelectionSha256(selectionBodyIds),
+          appliedUnitConversion: {
+            sourceUnit: "millimeter",
+            targetUnit: "millimeter",
+            scaleFactorPpm: 1_000_000,
+          },
         },
       },
     });
+  });
+
+  it("binds confirmed unit conversion to the canonical geometry bytes", () => {
+    const millimeter = runFixtureSlicingJob(inspectionJob);
+    const inchInput = {
+      ...inspectionJob.input,
+      operation: {
+        ...inspectionJob.input.operation,
+        confirmedUnitConversion: {
+          sourceUnit: "inch" as const,
+          targetUnit: "millimeter" as const,
+          scaleFactorPpm: 25_400_000,
+        },
+      },
+    };
+    const inch = runFixtureSlicingJob(
+      fixtureJob("model_inspection", inchInput),
+    );
+
+    expect(inch.inputFingerprintSha256).not.toBe(
+      millimeter.inputFingerprintSha256,
+    );
+    expect(inch).toMatchObject({
+      outcome: {
+        canonicalGeometry: {
+          appliedUnitConversion: inchInput.operation.confirmedUnitConversion,
+        },
+      },
+    });
+    if (
+      millimeter.outcome.status !== "succeeded" ||
+      inch.outcome.status !== "succeeded"
+    ) {
+      throw new TypeError("expected successful fixture canonicalization");
+    }
+    expect(inch.outcome.canonicalGeometry?.geometrySha256).not.toBe(
+      millimeter.outcome.canonicalGeometry?.geometrySha256,
+    );
   });
 
   it("exposes the fixture engine and normalized plate results", () => {
@@ -243,6 +300,26 @@ describe("runFixtureSlicingJob", () => {
       },
     });
   });
+
+  it.each(["gcode_3mf", "bgcode", "gcode"] as const)(
+    "emits the machine-profile %s production package",
+    (format) => {
+      const input = {
+        ...productionInput,
+        machineProfile: machineSlicerProfile(ids.machineProfile, "1", format),
+      };
+      const job = fixtureJob("production_slice", input, ids.productionJob);
+
+      expect(runFixtureSlicingJob(job)).toMatchObject({
+        outcome: {
+          artifact: {
+            format,
+            objectKey: productionArtifactObjectKey(ids.productionJob, format),
+          },
+        },
+      });
+    },
+  );
 
   it.each([
     ["reference_slice", referenceInput],

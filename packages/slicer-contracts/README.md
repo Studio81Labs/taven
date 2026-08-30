@@ -31,7 +31,7 @@ result, so a stale retry or a result for another selected geometry cannot be
 associated accidentally. Successful artifact keys are also bound to the
 dispatch ID. A production dispatch and result represent one exact planned Job
 and may span multiple physical plates. The result exposes canonical
-full-then-tail plate metrics and one immutable multi-plate `gcode_3mf` package,
+full-then-tail plate metrics and one immutable machine-specific multi-plate package,
 matching the singular persisted `Job.productionSliceResultId` and
 `SliceResult.artifactObjectKey`. `quantity` is the Job's complete slot count;
 `partsPerPlate` is its plate capacity, so the result contains exactly
@@ -43,6 +43,11 @@ arrangement revision in addition to the geometry, machine profile, calibration,
 print configuration, and plate capacity. Two packages whose bytes or Job-bound
 object keys can differ therefore cannot share the unique persisted
 `SliceResult.cacheKey`.
+
+Machine-profile snapshots declare the production artifact format explicitly:
+`gcode_3mf` for Bambu, `bgcode` for Prusa, or `gcode` for Klipper. Production
+results must use that exact format and its deterministic Job-bound suffix; the
+slicer engine name alone never selects the transport artifact.
 
 Candidate results separately return one cache-derived, full-occupancy
 machine-slice metrics artifact. Concurrent dispatches for the same immutable
@@ -67,6 +72,12 @@ worker inventing persistence IDs. Dispatchers must authorize the discovery
 fingerprint against a persisted successful discovery before enqueueing the
 selection. STEP producers remain disabled until the trigger-gated issue #52;
 the schema's format support does not authorize that product flow.
+
+Every `canonicalize_selection` operation also carries the confirmed source-unit
+to millimetre conversion. Known millimetre, inch, and metre choices have exact
+scale factors; a bounded custom factor covers an explicit customer-confirmed
+conversion. The conversion participates in dispatch identity and is echoed by
+the canonical geometry, so differently scaled bytes cannot share a result.
 
 Candidate and production inputs both carry the immutable arrangement revision.
 The production dispatcher copies it from the candidate-backed reservation, and

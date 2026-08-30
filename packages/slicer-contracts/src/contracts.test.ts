@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CandidateEstimateResultSchema,
+  ConfirmedUnitConversionSchema,
   GeometrySelectionSchema,
   LEGACY_V1_SLICING_CONTRACT_VERSION,
   LEGACY_V1_SLICING_QUEUE_NAME,
@@ -9,6 +10,7 @@ import {
   ModelInspectionJobSchema,
   ModelInspectionResultSchema,
   PreflightFindingSchema,
+  ProductionArtifactFormatSchema,
   ProductionSliceResultSchema,
   ReferenceSliceJobSchema,
   SLICING_CONTRACT_VERSION,
@@ -18,6 +20,7 @@ import {
   SlicingResultSchema,
   geometrySelectionSha256,
   machineOccupancyCacheIdentitySha256,
+  productionArtifactObjectKey,
   slicingInputFingerprint,
   slicingResultForJobSchema,
   type SlicingJobKind,
@@ -69,6 +72,14 @@ const slicerProfile = (revisionId: string, contentSha256 = hash("d")) => ({
   slicerEngine: "orca",
   slicerVersion: "2.0",
 });
+const machineSlicerProfile = (
+  revisionId: string,
+  contentSha256 = hash("d"),
+  productionArtifactFormat: "gcode_3mf" | "bgcode" | "gcode" = "gcode_3mf",
+) => ({
+  ...slicerProfile(revisionId, contentSha256),
+  productionArtifactFormat,
+});
 const envelope = (
   kind: SlicingJobKind,
   input: unknown,
@@ -110,6 +121,11 @@ const inspectionInput = {
     ),
     bodyIds: selectedBodyIds,
     selectionSha256: geometrySelectionSha256(selectedBodyIds),
+    confirmedUnitConversion: {
+      sourceUnit: "millimeter" as const,
+      targetUnit: "millimeter" as const,
+      scaleFactorPpm: 1_000_000,
+    },
     targetGeometry: {
       modelGeometryId: ids.geometryA,
       canonicalObjectKey: `geometries/${ids.geometryA}/canonical`,
@@ -125,7 +141,7 @@ const referenceInput = {
 const machineInput = {
   geometry: geometry(ids.geometryA, "body-a"),
   machineId: ids.machine,
-  machineProfile: slicerProfile(ids.profile),
+  machineProfile: machineSlicerProfile(ids.profile),
   machineCalibration: revision(ids.calibration),
   printConfig: revision(ids.config),
   partsPerPlate: 2,
@@ -186,6 +202,7 @@ const inspectionOutcome = {
     geometrySha256: hash("7"),
     bodyIds: selectedBodyIds,
     selectionSha256: geometrySelectionSha256(selectedBodyIds),
+    appliedUnitConversion: inspectionInput.operation.confirmedUnitConversion,
   },
   metrics: {
     boundingBox: sliceMetrics.boundingBox,
@@ -364,6 +381,25 @@ describe("versioned slicing jobs", () => {
   });
 
   it("binds canonicalization to discovered and selected geometry", () => {
+    const conversionlessOperation: Record<string, unknown> = {
+      ...inspectionInput.operation,
+    };
+    delete conversionlessOperation.confirmedUnitConversion;
+    expect(() =>
+      SlicingJobSchema.parse(
+        envelope("model_inspection", {
+          ...inspectionInput,
+          operation: conversionlessOperation,
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      ConfirmedUnitConversionSchema.parse({
+        sourceUnit: "inch",
+        targetUnit: "millimeter",
+        scaleFactorPpm: 1_000_000,
+      }),
+    ).toThrow();
     expect(() =>
       SlicingJobSchema.parse(
         envelope("model_inspection", {
@@ -407,6 +443,50 @@ describe("versioned slicing jobs", () => {
       }),
     ).toThrow();
     expect(() => geometrySelectionSha256(["body-b", "body-a"])).toThrow();
+
+    const inchInput = {
+      ...inspectionInput,
+      operation: {
+        ...inspectionInput.operation,
+        confirmedUnitConversion: {
+          sourceUnit: "inch" as const,
+          targetUnit: "millimeter" as const,
+          scaleFactorPpm: 25_400_000,
+        },
+        targetGeometry: {
+          modelGeometryId: ids.geometryB,
+          canonicalObjectKey: `geometries/${ids.geometryB}/canonical`,
+        },
+      },
+    };
+    const millimeterJob = envelope("model_inspection", inspectionInput);
+    const inchJob = envelope("model_inspection", inchInput, {
+      jobId: ids.geometryB,
+    });
+    expect(inchInput.operation.sourceInspectionFingerprintSha256).toBe(
+      inspectionInput.operation.sourceInspectionFingerprintSha256,
+    );
+    expect(inchJob.inputFingerprintSha256).not.toBe(
+      millimeterJob.inputFingerprintSha256,
+    );
+    expect(inchJob.idempotencyKey).not.toBe(millimeterJob.idempotencyKey);
+    expect(SlicingJobSchema.parse(inchJob)).toEqual(inchJob);
+
+    expect(() =>
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...inspectionOutcome,
+          canonicalGeometry: {
+            ...inspectionOutcome.canonicalGeometry,
+            appliedUnitConversion: {
+              sourceUnit: "inch",
+              targetUnit: "millimeter",
+              scaleFactorPpm: 25_400_000,
+            },
+          },
+        }),
+      ),
+    ).toThrow();
   });
 
   it("scopes idempotency to the stable dispatch effect", () => {
@@ -601,7 +681,15 @@ describe("versioned slicing results", () => {
       GeometrySelectionSchema.parse({
         sourceModelFileId: parsedInspection.input.source.modelFileId,
         sourceContentSha256: parsedInspection.input.source.contentSha256,
-        ...parsedInspection.outcome.canonicalGeometry,
+        modelGeometryId:
+          parsedInspection.outcome.canonicalGeometry.modelGeometryId,
+        canonicalObjectKey:
+          parsedInspection.outcome.canonicalGeometry.canonicalObjectKey,
+        geometrySha256:
+          parsedInspection.outcome.canonicalGeometry.geometrySha256,
+        bodyIds: parsedInspection.outcome.canonicalGeometry.bodyIds,
+        selectionSha256:
+          parsedInspection.outcome.canonicalGeometry.selectionSha256,
       }),
     ).toBeDefined();
     for (const value of [reference, candidate, production]) {
@@ -1159,6 +1247,74 @@ describe("versioned slicing results", () => {
       },
     });
     expect(() => SlicingResultSchema.parse(production)).toThrow();
+  });
+
+  it("binds production packages to the machine-profile artifact format", () => {
+    const cases = [
+      ["gcode_3mf", "gcode.3mf", ids.profile],
+      ["bgcode", "bgcode", ids.geometryB],
+      ["gcode", "gcode", ids.job],
+    ] as const;
+    const fingerprints = new Set<string>();
+
+    for (const [
+      index,
+      [format, suffix, profileRevisionId],
+    ] of cases.entries()) {
+      const input = {
+        ...productionInput,
+        machineProfile: machineSlicerProfile(
+          profileRevisionId,
+          hash("d"),
+          format,
+        ),
+      };
+      const job = envelope("production_slice", input, {
+        jobId: ids.acceptedJob,
+      });
+      const artifact = {
+        format,
+        objectKey: `gcode/${ids.acceptedJob}/toolpaths.${suffix}`,
+        sha256: hash("5"),
+      };
+      const value = result(job, { ...productionOutcome, artifact });
+      const mismatchedFormat = cases[(index + 1) % cases.length]![0];
+
+      fingerprints.add(job.inputFingerprintSha256);
+      expect(ProductionArtifactFormatSchema.parse(format)).toBe(format);
+      expect(productionArtifactObjectKey(ids.acceptedJob, format)).toBe(
+        artifact.objectKey,
+      );
+      expect(ProductionSliceResultSchema.parse(value)).toEqual(value);
+      expect(() =>
+        ProductionSliceResultSchema.parse(
+          result(job, {
+            ...productionOutcome,
+            artifact: {
+              ...artifact,
+              format: mismatchedFormat,
+            },
+          }),
+        ),
+      ).toThrow();
+      expect(() =>
+        ProductionSliceResultSchema.parse(
+          result(job, {
+            ...productionOutcome,
+            artifact: {
+              ...artifact,
+              objectKey: productionArtifactObjectKey(
+                ids.acceptedJob,
+                mismatchedFormat,
+              ),
+            },
+          }),
+        ),
+      ).toThrow();
+    }
+
+    expect(fingerprints.size).toBe(3);
+    expect(() => ProductionArtifactFormatSchema.parse("nc")).toThrow();
   });
 
   it("uses one accepted-Job package even when the plan spans plates", () => {

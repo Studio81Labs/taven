@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   SlicingJobSchema,
+  productionArtifactObjectKey,
   slicingResultForJobSchema,
   type SlicingJob,
   type SlicingResult,
@@ -100,6 +101,12 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
         job.input.operation.mode === "canonicalize_selection"
           ? job.input.operation.selectionSha256
           : "source-discovery",
+        job.input.operation.mode === "canonicalize_selection"
+          ? job.input.operation.confirmedUnitConversion.sourceUnit
+          : "source-discovery",
+        job.input.operation.mode === "canonicalize_selection"
+          ? job.input.operation.confirmedUnitConversion.scaleFactorPpm
+          : "source-discovery",
       );
       return slicingResultForJobSchema(job).parse({
         ...envelope,
@@ -112,6 +119,8 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
                   geometrySha256,
                   bodyIds,
                   selectionSha256: job.input.operation.selectionSha256,
+                  appliedUnitConversion:
+                    job.input.operation.confirmedUnitConversion,
                 }
               : null,
           metrics: {
@@ -229,8 +238,11 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
             estimatedMaterialMilligrams: String(partsOnPlate * 1_000),
           })),
           artifact: {
-            format: "gcode_3mf",
-            objectKey: `gcode/${job.input.acceptedJobId}/toolpaths.gcode.3mf`,
+            format: job.input.machineProfile.productionArtifactFormat,
+            objectKey: productionArtifactObjectKey(
+              job.input.acceptedJobId,
+              job.input.machineProfile.productionArtifactFormat,
+            ),
             sha256: fixtureHash(
               job.input.geometry.geometrySha256,
               job.input.geometry.selectionSha256,
