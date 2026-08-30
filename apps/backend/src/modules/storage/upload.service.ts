@@ -339,6 +339,68 @@ export class UploadService {
         throw new GoneException("Upload intent expired");
       }
 
+      let photoMetadata:
+        | {
+            kind: PhotoAssetKind;
+            scopeKind: PhotoScopeKind;
+            scopeId: string;
+          }
+        | undefined;
+      if (current.assetKind === UploadAssetKind.PHOTO_ASSET) {
+        if (
+          !current.photoKind ||
+          !current.photoScopeKind ||
+          !current.photoScopeId
+        ) {
+          throw new ConflictException("Photo upload intent is incomplete");
+        }
+        photoMetadata = {
+          kind: current.photoKind,
+          scopeKind: current.photoScopeKind,
+          scopeId: current.photoScopeId,
+        };
+        if (
+          photoMetadata.kind === PhotoAssetKind.QUOTE_REFERENCE &&
+          photoMetadata.scopeKind === PhotoScopeKind.QUOTE_REQUEST
+        ) {
+          const scopeRows = await transaction.$queryRaw<
+            Array<{
+              session_status: string;
+              request_status: string;
+              offer_expires_at: Date | null;
+              session_expires_at: Date;
+              observed_at: Date;
+            }>
+          >`
+            SELECT session.status::text AS session_status,
+                   request.status::text AS request_status,
+                   quote.expires_at AS offer_expires_at,
+                   session.expires_at AS session_expires_at,
+                   clock_timestamp() AS observed_at
+            FROM quote_requests request
+            JOIN quote_sessions session ON session.id = request.quote_session_id
+            LEFT JOIN quotes quote ON quote.quote_request_id = request.id
+            WHERE request.id = ${photoMetadata.scopeId}::uuid
+            FOR UPDATE OF request
+          `;
+          const scope = scopeRows[0];
+          const requestAcceptsPhotos =
+            scope?.request_status === "NEW" ||
+            scope?.request_status === "IN_REVIEW" ||
+            (scope?.request_status === "QUOTED" &&
+              scope.offer_expires_at !== null &&
+              scope.offer_expires_at.getTime() > scope.observed_at.getTime());
+          if (
+            !scope ||
+            scope.session_status !== "OPEN" ||
+            !requestAcceptsPhotos ||
+            scope.session_expires_at.getTime() <= scope.observed_at.getTime()
+          ) {
+            throw new GoneException("Quote request no longer accepts photos");
+          }
+        }
+      }
+
       // Keep the row lock through promotion. Cleanup claims the same row, so
       // it cannot delete the final key and then lose to an in-flight copy.
       await this.objects.copyObject(
@@ -375,19 +437,16 @@ export class UploadService {
         });
       }
 
-      if (
-        !current.photoKind ||
-        !current.photoScopeKind ||
-        !current.photoScopeId
-      ) {
+      if (!photoMetadata) {
         throw new ConflictException("Photo upload intent is incomplete");
       }
+
       await transaction.photoAsset.create({
         data: {
           id: current.intendedAssetId,
-          kind: current.photoKind,
-          scopeKind: current.photoScopeKind,
-          scopeId: current.photoScopeId,
+          kind: photoMetadata.kind,
+          scopeKind: photoMetadata.scopeKind,
+          scopeId: photoMetadata.scopeId,
           storageObjectKey: current.finalObjectKey,
           contentHash: current.expectedContentHash,
           mediaType: current.expectedContentType,

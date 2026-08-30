@@ -594,6 +594,65 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toBe(0);
   });
 
+  it("extends quoted model retention and preserves source holds on acceptance", async () => {
+    const created = await quotes.createRequest(
+      requestInput("model-retention"),
+      "198.51.100.23",
+      key("model-retention-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("model-retention-review"),
+    );
+    const activeSource = await createModelOfferItem("active-source", "NONE");
+    const legalSource = await createModelOfferItem("legal-source", "LEGAL");
+    const expiresAt = new Date(Date.now() + 3 * 60 * 60 * 1_000);
+    const issued = await issueOffer(
+      created.requestId,
+      key("model-retention-issue"),
+      expiresAt,
+      [0, 1].flatMap((quoteItemOrdinal) => [
+        { kind: "ITEM_PRODUCTION", quoteItemOrdinal, amountMinor: 40_000 },
+        { kind: "ITEM_QUANTITY", quoteItemOrdinal, amountMinor: 5_000 },
+        {
+          kind: "ITEM_POSTPROCESSING",
+          quoteItemOrdinal,
+          amountMinor: 10_000,
+        },
+      ]),
+      [activeSource.item, legalSource.item],
+    );
+    expect(issued.response.status).toBe(201);
+
+    const quotedSources = await prisma.modelFile.findMany({
+      where: { id: { in: [activeSource.id, legalSource.id] } },
+      orderBy: { id: "asc" },
+    });
+    for (const source of quotedSources) {
+      expect(source.sourceDeleteAfter.getTime()).toBeGreaterThanOrEqual(
+        expiresAt.getTime() + source.sourceRetentionDays * 24 * 60 * 60 * 1_000,
+      );
+    }
+
+    const accepted = await acceptOffer(
+      issued.body,
+      key("model-retention-accept"),
+    );
+    expect(accepted.response.status).toBe(200);
+    expect(
+      await prisma.modelFile.findUniqueOrThrow({
+        where: { id: activeSource.id },
+        select: { retentionHold: true },
+      }),
+    ).toEqual({ retentionHold: "ACTIVE_ORDER" });
+    expect(
+      await prisma.modelFile.findUniqueOrThrow({
+        where: { id: legalSource.id },
+        select: { retentionHold: true },
+      }),
+    ).toEqual({ retentionHold: "LEGAL" });
+  });
+
   it("bounds quote-reference upload issuance per request capability", async () => {
     const created = await quotes.createRequest(
       requestInput("photo-budget"),
@@ -703,6 +762,77 @@ describe("QuoteRequest and tokenized individual offers", () => {
         phone: "+420123456789",
       },
       attribution: { source: "e2e" },
+    };
+  }
+
+  async function createModelOfferItem(
+    scope: string,
+    retentionHold: "NONE" | "LEGAL",
+  ) {
+    const id = randomUUID();
+    const modelGeometryId = randomUUID();
+    const printConfigRevisionId = randomUUID();
+    const uploadedAt = new Date(Date.now() - 60_000);
+    await prisma.$transaction(async (transaction) => {
+      await transaction.modelFile.create({
+        data: {
+          id,
+          format: "STL",
+          originalFilename: `${scope}.stl`,
+          storageObjectKey: `quote-tests/models/${id}`,
+          contentHash: createHash("sha256").update(scope).digest("hex"),
+          sizeBytes: 1n,
+          uploadedAt,
+          sourceDeleteAfter: new Date(Date.now() + 60 * 60 * 1_000),
+          sourceRetentionDays: 2,
+          retentionHold,
+        },
+      });
+      await transaction.modelGeometry.create({
+        data: {
+          id: modelGeometryId,
+          sourceModelFileId: id,
+          canonicalObjectKey: `quote-tests/geometries/${modelGeometryId}`,
+          geometryHash: createHash("sha256")
+            .update(`${scope}:geometry`)
+            .digest("hex"),
+          canonicalizerRevision: "quote-e2e-v1",
+          volumeCubicMicrometers: 1n,
+          boundsXMicrometers: 1n,
+          boundsYMicrometers: 1n,
+          boundsZMicrometers: 1n,
+          triangleCount: 1,
+        },
+      });
+      await transaction.revisionIdentity.create({
+        data: {
+          id: printConfigRevisionId,
+          kind: "PRINT_CONFIG",
+          digest: createHash("sha256")
+            .update(`${scope}:${printConfigRevisionId}:print-config`)
+            .digest("hex"),
+        },
+      });
+      await transaction.printConfigRevision.create({
+        data: {
+          id: printConfigRevisionId,
+          quality: "STANDARD",
+          infillPercent: 20,
+          layerHeightMicrometers: 200,
+          settings: {},
+        },
+      });
+    });
+    return {
+      id,
+      item: {
+        kind: "MODEL",
+        sourceModelFileId: id,
+        modelGeometryId,
+        printConfigRevisionId,
+        material: "PLA",
+        quantity: 1,
+      },
     };
   }
 

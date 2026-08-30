@@ -789,6 +789,23 @@ export class QuotesService {
             data: { orderItemId, quoteItemId: quoteItem.id },
           });
         }
+        const sourceModelFileIds = [
+          ...new Set(
+            quote.items.flatMap((item) =>
+              item.sourceModelFileId ? [item.sourceModelFileId] : [],
+            ),
+          ),
+        ];
+        if (sourceModelFileIds.length > 0) {
+          await transaction.modelFile.updateMany({
+            where: {
+              id: { in: sourceModelFileIds },
+              deletedAt: null,
+              retentionHold: RetentionHold.NONE,
+            },
+            data: { retentionHold: RetentionHold.ACTIVE_ORDER },
+          });
+        }
         if (quote.quoteRequest.quoteSessionId) {
           await transaction.quoteSession.updateMany({
             where: {
@@ -2273,8 +2290,8 @@ function jsonInput(value: unknown): Prisma.InputJsonValue | undefined {
 
 function jsonNullable(
   value: unknown,
-): Prisma.InputJsonValue | typeof Prisma.JsonNull {
-  return jsonInput(value) ?? Prisma.JsonNull;
+): Prisma.InputJsonValue | typeof Prisma.DbNull {
+  return jsonInput(value) ?? Prisma.DbNull;
 }
 
 function nullableJsonObject(

@@ -7,6 +7,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { crc32, deflateRawSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
+import { QuotesService } from "../src/modules/quotes/quotes.service";
 import {
   OBJECT_STORAGE,
   type ObjectStorage,
@@ -39,6 +40,7 @@ describe("secure object storage and retention", () => {
   let baseUrl: URL;
   let prisma: PrismaService;
   let objects: ObjectStorage;
+  let quotes: QuotesService;
   let retention: RetentionService;
   let s3: S3Client;
   const cleanupKeys = new Set<string>();
@@ -53,6 +55,7 @@ describe("secure object storage and retention", () => {
     prisma = app.get(PrismaService);
     await prisma.anonymousUploadLimit.deleteMany();
     objects = app.get<ObjectStorage>(OBJECT_STORAGE);
+    quotes = app.get(QuotesService);
     retention = app.get(RetentionService);
     s3 = new S3Client({
       endpoint: s3Config.endpoint,
@@ -417,6 +420,112 @@ describe("secure object storage and retention", () => {
       storageObjectKey: photoOriginalObjectKey(initiated.body.assetId),
       mediaType: "image/png",
     });
+  });
+
+  it("rejects quote-reference confirmation after the request becomes terminal", async () => {
+    const bytes = png();
+    const created = await quotes.createRequest(
+      {
+        description: "Reference photo confirmation race regression",
+        contact: {
+          name: "Storage Test",
+          email: `${randomUUID()}@example.test`,
+        },
+      },
+      "198.51.100.24",
+      `storage-terminal-create-${randomUUID()}`,
+    );
+    const scopeId = created.requestId;
+    const initiated = await apiJson<{
+      uploadId: string;
+      assetId: string;
+      accessToken: string;
+      uploadUrl: string;
+      requiredHeaders: Record<string, string>;
+    }>("storage/uploads/photos", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...bearer(created.requestToken),
+      },
+      body: JSON.stringify({
+        kind: "QUOTE_REFERENCE",
+        scopeKind: "QUOTE_REQUEST",
+        scopeId,
+        originalFilename: "late-reference.png",
+        contentType: "image/png",
+        sizeBytes: bytes.byteLength,
+        sha256: sha256(bytes),
+      }),
+    });
+    expect(initiated.response.status).toBe(201);
+    cleanupKeys.add(quarantineObjectKey(initiated.body.uploadId));
+    cleanupKeys.add(photoOriginalObjectKey(initiated.body.assetId));
+    await putSigned(initiated.body, bytes);
+    await quotes.beginReview(
+      scopeId,
+      `storage-terminal-review-${randomUUID()}`,
+    );
+    const priceList = await prisma.priceList.findFirstOrThrow({
+      where: { currency: "CZK" },
+      orderBy: { createdAt: "asc" },
+    });
+    const issued = await quotes.issueOffer(
+      scopeId,
+      {
+        summary: "Storage confirmation race offer",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+        priceListId: priceList.id,
+        contractTotalMinor: 110_000,
+        depositMinor: 33_000,
+        termsSnapshot: {},
+        inputSnapshot: {},
+        items: [
+          {
+            kind: "CUSTOM_SERVICE",
+            serviceDescription: "Create a replacement from reference photos",
+          },
+        ],
+        components: [
+          {
+            kind: "ITEM_PRODUCTION",
+            quoteItemOrdinal: 0,
+            amountMinor: 80_000,
+          },
+          {
+            kind: "ITEM_QUANTITY",
+            quoteItemOrdinal: 0,
+            amountMinor: 20_000,
+          },
+          {
+            kind: "ITEM_POSTPROCESSING",
+            quoteItemOrdinal: 0,
+            amountMinor: 10_000,
+          },
+        ],
+      },
+      `storage-terminal-issue-${randomUUID()}`,
+    );
+    await quotes.rejectOffer(
+      issued.quoteId,
+      { version: issued.version, termsRevision: issued.termsRevision },
+      `Bearer ${issued.offerToken}`,
+      `storage-terminal-reject-${randomUUID()}`,
+    );
+
+    const confirmed = await apiJson(
+      `storage/uploads/${initiated.body.uploadId}/confirm`,
+      {
+        method: "POST",
+        headers: bearer(initiated.body.accessToken),
+      },
+    );
+    expect(confirmed.response.status).toBe(410);
+    expect(
+      await prisma.photoAsset.findUnique({
+        where: { id: initiated.body.assetId },
+      }),
+    ).toBeNull();
   });
 
   it("links an account and reads history without extending source retention", async () => {

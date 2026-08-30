@@ -176,7 +176,19 @@ describe("UploadService confirmation response", () => {
     };
     let transactionActive = false;
     const transaction = {
-      $queryRaw: vi.fn().mockResolvedValue([{ id: uploadId }]),
+      $queryRaw: vi.fn().mockImplementation((strings: TemplateStringsArray) =>
+        strings.join(" ").includes("FROM upload_intents")
+          ? [{ id: uploadId }]
+          : [
+              {
+                session_status: "OPEN",
+                request_status: "NEW",
+                offer_expires_at: null,
+                session_expires_at: new Date(Date.now() + 5_000),
+                observed_at: new Date(),
+              },
+            ],
+      ),
       uploadIntent: {
         findUniqueOrThrow: vi.fn().mockResolvedValue(pendingIntent),
         update: vi.fn().mockResolvedValue(confirmedIntent),
