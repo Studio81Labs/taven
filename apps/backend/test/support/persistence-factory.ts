@@ -14,6 +14,8 @@ export type PersistenceFoundation = {
   sliceResultIds: string[];
   referenceSliceResultId: string;
   referenceSliceResultIds: string[];
+  referenceTailSliceResultId: string | null;
+  referenceTailSliceResultIds: Array<string | null>;
   printConfigRevisionId: string;
   printConfigRevisionIds: string[];
   machineProfileId: string;
@@ -47,6 +49,7 @@ export type PersistenceFoundation = {
   fulfilmentSlotModelGeometryIds: string[];
   fulfilmentSlotSliceResultIds: string[];
   fulfilmentSlotPrintConfigRevisionIds: string[];
+  fulfilmentSlotPartsPerPlate: number[];
   fulfilmentSlotQuantities: number[];
   paymentId: string;
 };
@@ -86,6 +89,10 @@ export type SliceMetrics = {
   partsPerPlate: number;
   estimatedPrintSeconds: number;
   estimatedMaterialMilligrams: number;
+};
+export type CandidateOccupancyPlan = {
+  partsPerPlate?: number;
+  tailSliceResultId?: string | null;
 };
 export type CommerceItem = {
   quantity?: number;
@@ -255,11 +262,18 @@ export class PersistenceFactory {
           : `${name}:reference-slice-result:${index}`,
       ),
     );
+    const referenceTailSliceResultIds = resolvedItems.map((item, index) => {
+      const remainder = item.quantity % item.sliceMetrics.partsPerPlate;
+      return item.quantity >= item.sliceMetrics.partsPerPlate && remainder > 0
+        ? this.id(`${name}:reference-tail-slice-result:${index}`)
+        : null;
+    });
     const fulfilmentSlotIds: string[] = [];
     const fulfilmentSlotShipmentPlanIds: string[] = [];
     const fulfilmentSlotModelGeometryIds: string[] = [];
     const fulfilmentSlotSliceResultIds: string[] = [];
     const fulfilmentSlotPrintConfigRevisionIds: string[] = [];
+    const fulfilmentSlotPartsPerPlate: number[] = [];
     const fulfilmentSlotQuantities: number[] = [];
     for (const [itemIndex, item] of resolvedItems.entries()) {
       for (
@@ -276,6 +290,7 @@ export class PersistenceFactory {
         fulfilmentSlotPrintConfigRevisionIds.push(
           printConfigRevisionIds[itemIndex]!,
         );
+        fulfilmentSlotPartsPerPlate.push(item.sliceMetrics.partsPerPlate);
         fulfilmentSlotQuantities.push(1);
       }
     }
@@ -438,6 +453,11 @@ export class PersistenceFactory {
       const configId = printConfigRevisionIds[index]!;
       const itemSliceResultId = sliceResultIds[index]!;
       const itemReferenceSliceResultId = referenceSliceResultIds[index]!;
+      const itemReferenceTailSliceResultId = referenceTailSliceResultIds[index];
+      const referencePrimaryPartsPerPlate = Math.min(
+        item.quantity,
+        item.sliceMetrics.partsPerPlate,
+      );
       await this.sql.query(
         'INSERT INTO "model_geometries" ("id", "source_model_file_id", "canonical_object_key", "geometry_hash", "canonicalizer_revision", "volume_cubic_micrometers", "bounds_x_micrometers", "bounds_y_micrometers", "bounds_z_micrometers", "triangle_count") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
         [
@@ -473,7 +493,7 @@ export class PersistenceFactory {
           itemGeometryId,
           configId,
           referenceProfileId,
-          item.sliceMetrics.partsPerPlate,
+          referencePrimaryPartsPerPlate,
           `reference-slices/${this.scope}/${name}/${index}`,
           this.hash(`${name}:reference-slice:${index}`),
           item.sliceMetrics.estimatedPrintSeconds,
@@ -482,6 +502,41 @@ export class PersistenceFactory {
           referenceSlicerVersion,
         ],
       );
+      if (itemReferenceTailSliceResultId) {
+        const tailPartsPerPlate =
+          item.quantity % item.sliceMetrics.partsPerPlate;
+        await this.sql.query(
+          'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "reference_profile_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+          [
+            itemReferenceTailSliceResultId,
+            "REFERENCE",
+            `reference-tail-slice-${this.scope}-${name}-${index}`,
+            itemGeometryId,
+            configId,
+            referenceProfileId,
+            tailPartsPerPlate,
+            `reference-slices/${this.scope}/${name}/${index}-tail`,
+            this.hash(`${name}:reference-tail-slice:${index}`),
+            Math.max(
+              1,
+              Math.ceil(
+                (item.sliceMetrics.estimatedPrintSeconds * tailPartsPerPlate) /
+                  item.sliceMetrics.partsPerPlate,
+              ),
+            ),
+            Math.max(
+              1,
+              Math.ceil(
+                (item.sliceMetrics.estimatedMaterialMilligrams *
+                  tailPartsPerPlate) /
+                  item.sliceMetrics.partsPerPlate,
+              ),
+            ),
+            referenceSlicerEngine,
+            referenceSlicerVersion,
+          ],
+        );
+      }
       await this.sql.query(
         'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
         [
@@ -513,6 +568,8 @@ export class PersistenceFactory {
       sliceResultIds,
       referenceSliceResultId: referenceSliceResultIds[0]!,
       referenceSliceResultIds,
+      referenceTailSliceResultId: referenceTailSliceResultIds[0] ?? null,
+      referenceTailSliceResultIds,
       printConfigRevisionId: printConfigRevisionIds[0]!,
       printConfigRevisionIds,
       machineProfileId,
@@ -546,6 +603,7 @@ export class PersistenceFactory {
       fulfilmentSlotModelGeometryIds,
       fulfilmentSlotSliceResultIds,
       fulfilmentSlotPrintConfigRevisionIds,
+      fulfilmentSlotPartsPerPlate,
       fulfilmentSlotQuantities,
       paymentId,
     };
@@ -568,6 +626,7 @@ export class PersistenceFactory {
       modelGeometryIds,
       printConfigRevisionIds,
       referenceSliceResultIds,
+      referenceTailSliceResultIds,
       resolvedItems,
       quoteSessionExpiresAt: new Date(testRunStartedAt + hourInMilliseconds),
       quoteExpiresAt:
@@ -607,6 +666,7 @@ export class PersistenceFactory {
     modelGeometryIds: string[];
     printConfigRevisionIds: string[];
     referenceSliceResultIds: string[];
+    referenceTailSliceResultIds: Array<string | null>;
     resolvedItems: Array<{
       color: string;
       geometryBounds: GeometryBounds;
@@ -767,7 +827,7 @@ export class PersistenceFactory {
     );
     for (const [index, item] of input.resolvedItems.entries()) {
       await this.sql.query(
-        "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, reference_slice_result_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'PLA',$8,$9,$10)",
+        "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, reference_slice_result_id, tail_reference_slice_result_id, reference_parts_per_plate, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'PLA',$10,$11,$12)",
         [
           input.orderItemIds[index],
           input.orderId,
@@ -777,6 +837,12 @@ export class PersistenceFactory {
           input.printConfigRevisionIds[index],
           input.orderOrigin === "AUTOMATIC"
             ? input.referenceSliceResultIds[index]
+            : null,
+          input.orderOrigin === "AUTOMATIC"
+            ? input.referenceTailSliceResultIds[index]
+            : null,
+          input.orderOrigin === "AUTOMATIC"
+            ? item.sliceMetrics.partsPerPlate
             : null,
           item.color,
           item.quantity,
@@ -1393,6 +1459,7 @@ export class PersistenceFactory {
     requiredMaterialMilligrams = 60,
     quantity = 1,
     topologyIndex = 0,
+    occupancyPlan: CandidateOccupancyPlan = {},
   ): Promise<ProductionReservationFixture> {
     const candidateId = this.id(`${name}:candidate`);
     const capacityIntervals = Array.isArray(intervalOrIntervals)
@@ -1417,9 +1484,17 @@ export class PersistenceFactory {
     if (!shipmentPlanId || !fulfilmentSlotId) {
       throw new Error(`commerce topology slot ${topologyIndex} is missing`);
     }
+    const partsPerPlate =
+      occupancyPlan.partsPerPlate ??
+      foundation.fulfilmentSlotPartsPerPlate[topologyIndex];
+    if (!partsPerPlate) {
+      throw new Error(
+        `commerce topology slot ${topologyIndex} has no plate capacity`,
+      );
+    }
 
     await this.sql.query(
-      'INSERT INTO "candidate_resource_estimates" ("id", "node_id", "estimate_key", "model_geometry_id", "slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "machine_id", "inventory_id", "shipment_plan_id", "arrangement_revision_id", "quantity", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18)',
+      'INSERT INTO "candidate_resource_estimates" ("id", "node_id", "estimate_key", "model_geometry_id", "slice_result_id", "tail_slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "machine_id", "inventory_id", "shipment_plan_id", "arrangement_revision_id", "quantity", "parts_per_plate", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, $20)',
       [
         candidateId,
         foundation.nodeId,
@@ -1428,6 +1503,7 @@ export class PersistenceFactory {
           foundation.modelGeometryId,
         foundation.fulfilmentSlotSliceResultIds[topologyIndex] ??
           foundation.sliceResultId,
+        occupancyPlan.tailSliceResultId ?? null,
         foundation.fulfilmentSlotPrintConfigRevisionIds[topologyIndex] ??
           foundation.printConfigRevisionId,
         foundation.machineProfileId,
@@ -1437,6 +1513,7 @@ export class PersistenceFactory {
         shipmentPlanId,
         this.id(`${name}:future-arrangement-revision`),
         quantity,
+        partsPerPlate,
         requiredMaterialMilligrams,
         requiredMachineSeconds,
         JSON.stringify({}),

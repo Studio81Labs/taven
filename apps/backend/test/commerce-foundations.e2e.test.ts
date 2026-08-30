@@ -93,6 +93,65 @@ async function forceQuoteIssuanceConstraints(
   );
 }
 
+async function createAlternateProfileReferenceSlice(
+  client: PoolClient,
+  fixtures: PersistenceFactory,
+  sourceSliceResultId: string,
+  name: string,
+): Promise<string> {
+  const referenceProfileId = fixtures.id(`${name}:reference-profile`);
+  const sliceResultId = fixtures.id(`${name}:reference-slice`);
+  await fixtures.createRevisionIdentity(
+    referenceProfileId,
+    "REFERENCE_PROFILE",
+  );
+  const activatedAt = new Date();
+  await client.query(
+    `UPDATE reference_profiles
+     SET state = 'RETIRED', retired_at = $2
+     WHERE id = (
+       SELECT reference_profile_id FROM slice_results WHERE id = $1
+     )`,
+    [sourceSliceResultId, activatedAt],
+  );
+  await client.query(
+    `INSERT INTO reference_profiles
+       (id, material, quality, slicer_engine, slicer_version, settings,
+        state, activated_at, created_at)
+     SELECT $1, profile.material, profile.quality, profile.slicer_engine,
+            profile.slicer_version, profile.settings, 'ACTIVE', $2, $2
+     FROM slice_results source
+     JOIN reference_profiles profile ON profile.id = source.reference_profile_id
+     WHERE source.id = $3`,
+    [referenceProfileId, activatedAt, sourceSliceResultId],
+  );
+  await client.query(
+    `INSERT INTO slice_results
+       (id, kind, cache_key, model_geometry_id, print_config_revision_id,
+        reference_profile_id, parts_per_plate, artifact_object_key,
+        artifact_hash, estimated_print_seconds,
+        estimated_material_milligrams, slicer_engine, slicer_version,
+        created_at)
+     SELECT $1, 'REFERENCE', $2, source.model_geometry_id,
+            source.print_config_revision_id, $3, source.parts_per_plate, $4,
+            source.artifact_hash, source.estimated_print_seconds,
+            source.estimated_material_milligrams, profile.slicer_engine,
+            profile.slicer_version, $5
+     FROM slice_results source
+     JOIN reference_profiles profile ON profile.id = $3
+     WHERE source.id = $6`,
+    [
+      sliceResultId,
+      `alternate-profile-${name}-${sliceResultId}`,
+      referenceProfileId,
+      `reference/alternate-profile/${name}/${sliceResultId}`,
+      new Date(),
+      sourceSliceResultId,
+    ],
+  );
+  return sliceResultId;
+}
+
 async function createCurrentPlan(
   client: PoolClient,
   fixtures: PersistenceFactory,
@@ -3545,6 +3604,46 @@ describe("commerce persistence foundations", () => {
           ],
         );
       }
+      const createReferenceOccupancy = async (
+        name: string,
+        partsPerPlate: number,
+      ) => {
+        const id = fixtures.id(`reference-inputs:${name}`);
+        await client.query(
+          `INSERT INTO slice_results
+             (id, kind, cache_key, model_geometry_id,
+              print_config_revision_id, reference_profile_id,
+              parts_per_plate, artifact_object_key, artifact_hash,
+              estimated_print_seconds, estimated_material_milligrams,
+              slicer_engine, slicer_version, created_at)
+           SELECT $1, 'REFERENCE', $2, source.model_geometry_id,
+                  source.print_config_revision_id, source.reference_profile_id,
+                  $3, $4, source.artifact_hash,
+                  source.estimated_print_seconds,
+                  source.estimated_material_milligrams,
+                  source.slicer_engine, source.slicer_version, $5
+           FROM slice_results source
+           WHERE source.id = $6`,
+          [
+            id,
+            `reference-${name}-${id}`,
+            partsPerPlate,
+            `reference/${name}/${id}`,
+            new Date(),
+            matchingReferenceId,
+          ],
+        );
+        return id;
+      };
+      const fullReferenceId = await createReferenceOccupancy("full", 4);
+      const shortReferenceId = await createReferenceOccupancy("short", 2);
+      const alternateProfileTailReferenceId =
+        await createAlternateProfileReferenceSlice(
+          client,
+          fixtures,
+          matchingReferenceId,
+          "reference-inputs-tail",
+        );
 
       const mutableQuoteRequestId = fixtures.id(
         "reference-inputs:quote-request",
@@ -3623,13 +3722,18 @@ describe("commerce persistence foundations", () => {
           geometryId = foundation.modelGeometryIds[0]!,
           configId = foundation.printConfigRevisionIds[0]!,
           material: "PLA" | "PETG" = "PLA",
+          referencePartsPerPlate = 1,
+          tailReferenceSliceId: string | null = null,
+          quantity = 1,
         ) =>
           client.query(
             `INSERT INTO ${table} (id, ${parentColumn}, ordinal,
                                   source_model_file_id, model_geometry_id,
                                   print_config_revision_id, reference_slice_result_id,
+                                  tail_reference_slice_result_id,
+                                  reference_parts_per_plate,
                                   material, color, quantity, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::material,'black',1,$9)`,
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::material,'black',$11,$12)`,
             [
               id,
               parentId,
@@ -3638,7 +3742,10 @@ describe("commerce persistence foundations", () => {
               geometryId,
               configId,
               referenceSliceId,
+              tailReferenceSliceId,
+              referencePartsPerPlate,
               material,
+              quantity,
               new Date(),
             ],
           );
@@ -3650,6 +3757,114 @@ describe("commerce persistence foundations", () => {
             matchingReferenceId,
           ),
         ).resolves.toBeDefined();
+        const fullTailItemId = fixtures.id(`${table}:full-tail-reference-item`);
+        await expect(
+          insertItem(
+            fullTailItemId,
+            7,
+            fullReferenceId,
+            foundation.modelGeometryIds[0]!,
+            foundation.printConfigRevisionIds[0]!,
+            "PLA",
+            4,
+            matchingReferenceId,
+            5,
+          ),
+        ).resolves.toBeDefined();
+        await expect(
+          client.query(
+            `SELECT reference_slice_result_id,
+                    tail_reference_slice_result_id,
+                    reference_parts_per_plate
+             FROM ${table} WHERE id = $1`,
+            [fullTailItemId],
+          ),
+        ).resolves.toMatchObject({
+          rows: [
+            {
+              reference_slice_result_id: fullReferenceId,
+              tail_reference_slice_result_id: matchingReferenceId,
+              reference_parts_per_plate: 4,
+            },
+          ],
+        });
+        await expect(
+          insertItem(
+            fixtures.id(`${table}:exact-reference-item`),
+            8,
+            fullReferenceId,
+            foundation.modelGeometryIds[0]!,
+            foundation.printConfigRevisionIds[0]!,
+            "PLA",
+            4,
+            null,
+            4,
+          ),
+        ).resolves.toBeDefined();
+        await expect(
+          insertItem(
+            fixtures.id(`${table}:below-capacity-reference-item`),
+            9,
+            shortReferenceId,
+            foundation.modelGeometryIds[0]!,
+            foundation.printConfigRevisionIds[0]!,
+            "PLA",
+            4,
+            null,
+            2,
+          ),
+        ).resolves.toBeDefined();
+        await expectQueryError(
+          client,
+          `${table}_missing_tail_reference`,
+          () =>
+            insertItem(
+              fixtures.id(`${table}:missing-tail-reference-item`),
+              10,
+              fullReferenceId,
+              foundation.modelGeometryIds[0]!,
+              foundation.printConfigRevisionIds[0]!,
+              "PLA",
+              4,
+              null,
+              5,
+            ),
+          { code: "23514", constraint },
+        );
+        await expectQueryError(
+          client,
+          `${table}_wrong_tail_reference`,
+          () =>
+            insertItem(
+              fixtures.id(`${table}:wrong-tail-reference-item`),
+              11,
+              fullReferenceId,
+              foundation.modelGeometryIds[0]!,
+              foundation.printConfigRevisionIds[0]!,
+              "PLA",
+              4,
+              shortReferenceId,
+              5,
+            ),
+          { code: "23514", constraint },
+        );
+        await expectQueryError(
+          client,
+          `${table}_cross_profile_tail_reference`,
+          () =>
+            insertItem(
+              fixtures.id(`${table}:cross-profile-tail-reference-item`),
+              12,
+              fullReferenceId,
+              foundation.modelGeometryIds[0]!,
+              foundation.printConfigRevisionIds[0]!,
+              "PLA",
+              4,
+              alternateProfileTailReferenceId,
+              5,
+            ),
+          { code: "23514", constraint },
+        );
         await expectQueryError(
           client,
           `${table}_production_reference`,
@@ -3698,6 +3913,18 @@ describe("commerce persistence foundations", () => {
           { code: "23514", constraint },
         );
         if (table === "order_items") {
+          await expectQueryError(
+            client,
+            "order_item_reference_quantity_update_bypass",
+            () =>
+              client.query(
+                `UPDATE order_items
+                 SET quantity = 4
+                 WHERE id = $1`,
+                [fullTailItemId],
+              ),
+            { code: "23514", constraint },
+          );
           await expectQueryError(
             client,
             "order_item_reference_update_bypass",
@@ -3774,9 +4001,108 @@ describe("commerce persistence foundations", () => {
             async (foundation) => {
               await client.query(
                 `UPDATE order_items
-                 SET reference_slice_result_id = NULL
+                 SET reference_slice_result_id = NULL,
+                     reference_parts_per_plate = NULL
                  WHERE id = $1`,
                 [foundation.orderItemId],
+              );
+            },
+          );
+          await forceQuoteIssuanceConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "automatic_order_reference_slice_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "seal_automatic_price_without_reference_tail",
+        async () => {
+          await fixtures.createFoundation(
+            "missing-reference-tail",
+            {},
+            undefined,
+            undefined,
+            undefined,
+            1,
+            [
+              {
+                quantity: 5,
+                sliceMetrics: {
+                  partsPerPlate: 4,
+                  estimatedPrintSeconds: 120,
+                  estimatedMaterialMilligrams: 40,
+                },
+              },
+            ],
+            "DRAFT",
+            async (foundation) => {
+              await client.query(
+                `SET LOCAL session_replication_role = 'replica'`,
+              );
+              await client.query(
+                `UPDATE order_items
+                 SET tail_reference_slice_result_id = NULL
+                 WHERE id = $1`,
+                [foundation.orderItemId],
+              );
+              await client.query(
+                `SET LOCAL session_replication_role = 'origin'`,
+              );
+            },
+          );
+          await forceQuoteIssuanceConstraints(client);
+        },
+        {
+          code: "23514",
+          constraint: "automatic_order_reference_slice_check",
+        },
+      );
+      await expectQueryError(
+        client,
+        "seal_automatic_price_with_cross_profile_tail",
+        async () => {
+          await fixtures.createFoundation(
+            "cross-profile-reference-tail",
+            {},
+            undefined,
+            undefined,
+            undefined,
+            1,
+            [
+              {
+                quantity: 5,
+                sliceMetrics: {
+                  partsPerPlate: 4,
+                  estimatedPrintSeconds: 120,
+                  estimatedMaterialMilligrams: 40,
+                },
+              },
+            ],
+            "DRAFT",
+            async (foundation) => {
+              if (!foundation.referenceTailSliceResultId) {
+                throw new Error("reference tail slice is missing");
+              }
+              const alternateTailReferenceId =
+                await createAlternateProfileReferenceSlice(
+                  client,
+                  fixtures,
+                  foundation.referenceTailSliceResultId,
+                  "automatic-cross-profile-tail",
+                );
+              await client.query(
+                `SET LOCAL session_replication_role = 'replica'`,
+              );
+              await client.query(
+                `UPDATE order_items
+                 SET tail_reference_slice_result_id = $2
+                 WHERE id = $1`,
+                [foundation.orderItemId, alternateTailReferenceId],
+              );
+              await client.query(
+                `SET LOCAL session_replication_role = 'origin'`,
               );
             },
           );
@@ -3800,7 +4126,10 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(`SET LOCAL session_replication_role = 'replica'`);
       await client.query(
-        `UPDATE order_items SET reference_slice_result_id = NULL WHERE id = $1`,
+        `UPDATE order_items
+         SET reference_slice_result_id = NULL,
+             reference_parts_per_plate = NULL
+         WHERE id = $1`,
         [corrupted.orderItemId],
       );
       await client.query(`SET LOCAL session_replication_role = 'origin'`);
@@ -3824,6 +4153,50 @@ describe("commerce persistence foundations", () => {
           constraint: "automatic_order_reference_slice_check",
         },
       );
+
+      const belowCapacity = await fixtures.createFoundation(
+        "automatic-below-reference-capacity",
+        {},
+        undefined,
+        undefined,
+        undefined,
+        1,
+        [
+          {
+            quantity: 2,
+            sliceMetrics: {
+              partsPerPlate: 4,
+              estimatedPrintSeconds: 120,
+              estimatedMaterialMilligrams: 40,
+            },
+          },
+        ],
+        "DRAFT",
+      );
+      expect(
+        (
+          await client.query<{
+            primary_occupancy: number;
+            reference_capacity: number;
+            tail_reference_slice_result_id: string | null;
+          }>(
+            `SELECT reference.parts_per_plate AS primary_occupancy,
+                    item.reference_parts_per_plate AS reference_capacity,
+                    item.tail_reference_slice_result_id
+             FROM order_items item
+             JOIN slice_results reference
+               ON reference.id = item.reference_slice_result_id
+             WHERE item.id = $1`,
+            [belowCapacity.orderItemId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          primary_occupancy: 2,
+          reference_capacity: 4,
+          tail_reference_slice_result_id: null,
+        },
+      ]);
 
       const individual = await fixtures.createFoundation(
         "individual-order-without-reference",
