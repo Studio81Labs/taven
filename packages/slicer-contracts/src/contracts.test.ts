@@ -259,6 +259,15 @@ describe("versioned slicing jobs", () => {
       }),
     ).toThrow();
     expect(() =>
+      SlicingJobSchema.parse(
+        envelope("candidate_estimate", {
+          ...candidateInput,
+          partsPerPlate: 1,
+          quantity: 129,
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
       SlicingJobSchema.parse({
         ...referenceJob,
         input: {
@@ -383,6 +392,21 @@ describe("versioned slicing results", () => {
         outcome: {
           ...(retryable.outcome as object),
           message: "https://secret.example/token",
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      SlicingResultSchema.parse({
+        ...retryable,
+        engine: { ...engine, version: " 2.0 " },
+      }),
+    ).toThrow();
+    expect(() =>
+      SlicingResultSchema.parse({
+        ...retryable,
+        outcome: {
+          ...(retryable.outcome as object),
+          message: " engine timed out ",
         },
       }),
     ).toThrow();

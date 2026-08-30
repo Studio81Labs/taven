@@ -1,61 +1,137 @@
-import { describe, expect, it } from "vitest";
 import { slicingInputFingerprint } from "@taven/slicer-contracts";
+import { describe, expect, it } from "vitest";
 import { runFixtureSlicingJob } from "./fixture-handler.js";
 
-const fixtureInput = {
-  geometry: {
-    sourceModelFileId: "11111111-1111-4111-8111-111111111111",
-    sourceContentSha256: "b".repeat(64),
-    modelGeometryId: "22222222-2222-4222-8222-222222222222",
-    canonicalObjectKey:
-      "geometries/22222222-2222-4222-8222-222222222222/canonical",
-    geometrySha256: "c".repeat(64),
-    bodyIds: ["body-0001"],
-    selectionSha256: "d".repeat(64),
-  },
-  referenceProfile: {
-    revisionId: "33333333-3333-4333-8333-333333333333",
-    contentSha256: "e".repeat(64),
-  },
-  printConfig: {
-    revisionId: "44444444-4444-4444-8444-444444444444",
-    contentSha256: "f".repeat(64),
-  },
+const ids = {
+  job: "93ce90b0-3ed3-4d64-8a46-f032f31fa21d",
+  productionJob: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  correlation: "bd80ab1d-5648-4f54-ae13-95fa2317150d",
+  model: "11111111-1111-4111-8111-111111111111",
+  geometry: "22222222-2222-4222-8222-222222222222",
+  referenceProfile: "33333333-3333-4333-8333-333333333333",
+  printConfig: "44444444-4444-4444-8444-444444444444",
+  machine: "55555555-5555-4555-8555-555555555555",
+  machineProfile: "66666666-6666-4666-8666-666666666666",
+  calibration: "77777777-7777-4777-8777-777777777777",
+  shipment: "88888888-8888-4888-8888-888888888888",
+  arrangement: "99999999-9999-4999-8999-999999999999",
+  reservation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+} as const;
+
+const revision = (revisionId: string, digest: string) => ({
+  revisionId,
+  contentSha256: digest.repeat(64),
+});
+const geometry = {
+  sourceModelFileId: ids.model,
+  sourceContentSha256: "b".repeat(64),
+  modelGeometryId: ids.geometry,
+  canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
+  geometrySha256: "c".repeat(64),
+  bodyIds: ["body-0001"],
+  selectionSha256: "d".repeat(64),
+};
+const referenceInput = {
+  geometry,
+  referenceProfile: revision(ids.referenceProfile, "e"),
+  printConfig: revision(ids.printConfig, "f"),
   partsPerPlate: 1,
 };
-const inputFingerprintSha256 = slicingInputFingerprint(
-  "reference_slice",
-  fixtureInput,
-);
-const fixtureJob = {
-  contractVersion: 2 as const,
-  kind: "reference_slice" as const,
-  jobId: "93ce90b0-3ed3-4d64-8a46-f032f31fa21d",
-  correlationId: "bd80ab1d-5648-4f54-ae13-95fa2317150d",
-  inputFingerprintSha256,
-  idempotencyKey: `slicer:v2:reference_slice:${inputFingerprintSha256}`,
-  attempt: 1,
-  input: fixtureInput,
+const machineInput = {
+  geometry,
+  machineId: ids.machine,
+  machineProfile: revision(ids.machineProfile, "1"),
+  machineCalibration: revision(ids.calibration, "2"),
+  printConfig: revision(ids.printConfig, "f"),
+  partsPerPlate: 2,
 };
 
+function fixtureJob(
+  kind:
+    | "model_inspection"
+    | "reference_slice"
+    | "candidate_estimate"
+    | "production_slice",
+  input: unknown,
+  jobId = ids.job,
+) {
+  const inputFingerprintSha256 = slicingInputFingerprint(kind, input);
+  return {
+    contractVersion: 2 as const,
+    kind,
+    jobId,
+    correlationId: ids.correlation,
+    inputFingerprintSha256,
+    idempotencyKey: `slicer:v2:${kind}:${inputFingerprintSha256}`,
+    attempt: 1,
+    input,
+  };
+}
+
+const inspectionJob = fixtureJob("model_inspection", {
+  source: {
+    modelFileId: ids.model,
+    format: "stl",
+    objectKey: `models/${ids.model}/source`,
+    contentSha256: "a".repeat(64),
+  },
+  inspectionRevision: "inspection-v1",
+  inspectionConfigSha256: "b".repeat(64),
+  canonicalizerRevision: "canonical-v1",
+  canonicalizerConfigSha256: "c".repeat(64),
+});
+const referenceJob = fixtureJob("reference_slice", referenceInput);
+const candidateJob = fixtureJob("candidate_estimate", {
+  ...machineInput,
+  quantity: 3,
+  shipmentPlanId: ids.shipment,
+  arrangementRevision: revision(ids.arrangement, "3"),
+});
+const productionJob = fixtureJob(
+  "production_slice",
+  {
+    ...machineInput,
+    quantity: 3,
+    acceptedJobId: ids.productionJob,
+    productionReservationId: ids.reservation,
+  },
+  ids.productionJob,
+);
+
 describe("runFixtureSlicingJob", () => {
-  it("returns identical metadata for identical input and profile", () => {
-    expect(runFixtureSlicingJob(fixtureJob)).toEqual(
-      runFixtureSlicingJob(fixtureJob),
+  it.each([
+    ["model_inspection", inspectionJob],
+    ["reference_slice", referenceJob],
+    ["candidate_estimate", candidateJob],
+    ["production_slice", productionJob],
+  ] as const)("dispatches a valid %s result", (kind, job) => {
+    expect(runFixtureSlicingJob(job)).toMatchObject({
+      kind,
+      jobId: job.jobId,
+      outcome: { status: "succeeded" },
+    });
+  });
+
+  it("returns identical results for identical immutable input", () => {
+    expect(runFixtureSlicingJob(referenceJob)).toEqual(
+      runFixtureSlicingJob(referenceJob),
     );
   });
 
-  it("exposes the fixture engine and a normalized reference result", () => {
-    expect(runFixtureSlicingJob(fixtureJob).engine).toEqual({
-      name: "fixture",
-      version: "0.0.0",
-      imageSha256: "f".repeat(64),
-    });
-    expect(runFixtureSlicingJob(fixtureJob)).toMatchObject({
-      kind: "reference_slice",
+  it("exposes the fixture engine and normalized plate results", () => {
+    expect(runFixtureSlicingJob(candidateJob)).toMatchObject({
+      engine: {
+        name: "fixture",
+        version: "0.0.0",
+        imageSha256: "f".repeat(64),
+      },
       outcome: {
         status: "succeeded",
-        metrics: { plateCount: 1 },
+        metrics: { plateCount: 2 },
+        plates: [
+          { plateOrdinal: 1, partsOnPlate: 2 },
+          { plateOrdinal: 2, partsOnPlate: 1 },
+        ],
       },
     });
   });

@@ -7,7 +7,7 @@ export const SLICING_MESSAGE_MAX_BYTES = 64 * 1024;
 
 const MAX_BODY_COUNT = 256;
 const MAX_FINDING_COUNT = 256;
-const MAX_PLATE_COUNT = 1_024;
+const MAX_PLATE_COUNT = 128;
 const MAX_QUANTITY = 100_000;
 const MAX_SIGNED_BIGINT = 9_223_372_036_854_775_807n;
 const LOWERCASE_UUID_PATTERN =
@@ -90,7 +90,6 @@ const IdempotencyKeySchema = z
   .regex(/^[a-z0-9][a-z0-9:|_-]*$/, "must be a canonical queue key");
 const SafeFailureMessageSchema = z
   .string()
-  .trim()
   .min(1)
   .max(512)
   .regex(
@@ -100,6 +99,10 @@ const SafeFailureMessageSchema = z
   .refine(
     hasNoControlCharacters,
     "must not contain URLs, filesystem paths, credentials, or control characters",
+  )
+  .refine(
+    (value) => value === value.trim(),
+    "must not contain surrounding whitespace",
   );
 
 const boundedPositiveInteger = (maximum: number) =>
@@ -213,7 +216,14 @@ export const PreflightFindingSchema = z
 
 export const EngineIdentitySchema = z.strictObject({
   name: SafeIdentifierSchema,
-  version: z.string().trim().min(1).max(100),
+  version: z
+    .string()
+    .min(1)
+    .max(100)
+    .refine(
+      (value) => value === value.trim(),
+      "must not contain surrounding whitespace",
+    ),
   imageSha256: Sha256Schema,
 });
 
@@ -241,19 +251,36 @@ const MachineSliceInputShape = {
   partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
 } as const;
 
-const CandidateEstimateInputSchema = z.strictObject({
-  ...MachineSliceInputShape,
-  quantity: boundedPositiveInteger(MAX_QUANTITY),
-  shipmentPlanId: UuidSchema,
-  arrangementRevision: RevisionSnapshotSchema,
-});
+function requireRepresentablePlateCount(
+  value: { quantity: number; partsPerPlate: number },
+  context: z.RefinementCtx,
+): void {
+  if (Math.ceil(value.quantity / value.partsPerPlate) > MAX_PLATE_COUNT) {
+    context.addIssue({
+      code: "custom",
+      path: ["quantity"],
+      message: `must fit within ${MAX_PLATE_COUNT} result plates`,
+    });
+  }
+}
 
-const ProductionSliceInputSchema = z.strictObject({
-  ...MachineSliceInputShape,
-  quantity: boundedPositiveInteger(MAX_QUANTITY),
-  acceptedJobId: UuidSchema,
-  productionReservationId: UuidSchema,
-});
+const CandidateEstimateInputSchema = z
+  .strictObject({
+    ...MachineSliceInputShape,
+    quantity: boundedPositiveInteger(MAX_QUANTITY),
+    shipmentPlanId: UuidSchema,
+    arrangementRevision: RevisionSnapshotSchema,
+  })
+  .superRefine(requireRepresentablePlateCount);
+
+const ProductionSliceInputSchema = z
+  .strictObject({
+    ...MachineSliceInputShape,
+    quantity: boundedPositiveInteger(MAX_QUANTITY),
+    acceptedJobId: UuidSchema,
+    productionReservationId: UuidSchema,
+  })
+  .superRefine(requireRepresentablePlateCount);
 
 const JobEnvelopeShape = {
   contractVersion: z.literal(SLICING_CONTRACT_VERSION),
