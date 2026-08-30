@@ -93,6 +93,7 @@ describe("secure object storage and retention", () => {
 
     const confirmed = await apiJson<{
       assetId: string;
+      uploadedAt: string;
       deleteAfter: string;
     }>(`storage/uploads/${created.uploadId}/confirm`, {
       method: "POST",
@@ -100,15 +101,28 @@ describe("secure object storage and retention", () => {
     });
     expect(confirmed.response.status).toBe(200);
     expect(confirmed.body.assetId).toBe(created.assetId);
-
-    const replay = await apiJson(
-      `storage/uploads/${created.uploadId}/confirm`,
-      {
-        method: "POST",
-        headers: bearer(created.accessToken),
-      },
+    const persistedModel = await prisma.modelFile.findUniqueOrThrow({
+      where: { id: created.assetId },
+    });
+    expect(confirmed.body.uploadedAt).toBe(
+      persistedModel.uploadedAt.toISOString(),
     );
+    expect(confirmed.body.deleteAfter).toBe(
+      persistedModel.sourceDeleteAfter.toISOString(),
+    );
+
+    const replay = await apiJson<{
+      uploadedAt: string;
+      deleteAfter: string;
+    }>(`storage/uploads/${created.uploadId}/confirm`, {
+      method: "POST",
+      headers: bearer(created.accessToken),
+    });
     expect(replay.response.status).toBe(200);
+    expect(replay.body).toMatchObject({
+      uploadedAt: persistedModel.uploadedAt.toISOString(),
+      deleteAfter: persistedModel.sourceDeleteAfter.toISOString(),
+    });
 
     const denied = await apiJson(
       `storage/model-files/${created.assetId}/reorder-eligibility`,

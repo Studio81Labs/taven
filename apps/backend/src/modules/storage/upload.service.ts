@@ -199,7 +199,7 @@ export class UploadService {
     });
     assertCapability(intent, token);
     if (intent.status === UploadIntentStatus.CONFIRMED) {
-      return confirmedResponse(intent);
+      return this.confirmedResponse(intent);
     }
     if (intent.status !== UploadIntentStatus.PENDING) {
       throw new ConflictException(
@@ -342,7 +342,7 @@ export class UploadService {
     await this.objects.deleteObjects([intent.quarantineObjectKey]).catch(() => {
       // The durable upload-intent cleanup job will retry this idempotently.
     });
-    return confirmedResponse(intent);
+    return this.confirmedResponse(intent);
   }
 
   async createModelDownload(
@@ -361,14 +361,7 @@ export class UploadService {
       model.sourceDeleteAfter,
       this.storageConfig.signedUrlTtlSeconds,
     );
-    const signed = await this.objects.createDownloadUrl({
-      objectKey: model.storageObjectKey,
-      expiresAt,
-    });
-    return {
-      downloadUrl: signed.url,
-      expiresAt: signed.expiresAt.toISOString(),
-    };
+    return this.signDownload(model.storageObjectKey, expiresAt);
   }
 
   async createPhotoDownload(
@@ -387,14 +380,7 @@ export class UploadService {
       photo.photoDeleteAfter,
       this.storageConfig.signedUrlTtlSeconds,
     );
-    const signed = await this.objects.createDownloadUrl({
-      objectKey: photo.storageObjectKey,
-      expiresAt,
-    });
-    return {
-      downloadUrl: signed.url,
-      expiresAt: signed.expiresAt.toISOString(),
-    };
+    return this.signDownload(photo.storageObjectKey, expiresAt);
   }
 
   async getReorderEligibility(
@@ -637,6 +623,63 @@ export class UploadService {
     };
   }
 
+  private async signDownload(
+    objectKey: string,
+    expiresAt: Date,
+  ): Promise<SignedDownloadResponseDto> {
+    try {
+      const signed = await this.objects.createDownloadUrl({
+        objectKey,
+        expiresAt,
+      });
+      return {
+        downloadUrl: signed.url,
+        expiresAt: signed.expiresAt.toISOString(),
+      };
+    } catch (error) {
+      if (error instanceof ObjectStorageDeadlineError) {
+        throw new GoneException("Stored asset expired");
+      }
+      throw error;
+    }
+  }
+
+  private async confirmedResponse(
+    intent: NonNullable<UploadIntentRecord>,
+  ): Promise<ConfirmedUploadResponseDto> {
+    if (!intent.confirmedAt)
+      throw new ConflictException("Confirmed upload is incomplete");
+    if (intent.confirmedModelFileId) {
+      const model = await this.prisma.modelFile.findUnique({
+        where: { id: intent.confirmedModelFileId },
+        select: { uploadedAt: true, sourceDeleteAfter: true },
+      });
+      if (!model) throw new ConflictException("Confirmed upload is incomplete");
+      return {
+        uploadId: intent.id,
+        assetId: intent.confirmedModelFileId,
+        assetKind: intent.assetKind,
+        uploadedAt: model.uploadedAt.toISOString(),
+        deleteAfter: model.sourceDeleteAfter.toISOString(),
+      };
+    }
+    if (intent.confirmedPhotoAssetId) {
+      const photo = await this.prisma.photoAsset.findUnique({
+        where: { id: intent.confirmedPhotoAssetId },
+        select: { uploadedAt: true, photoDeleteAfter: true },
+      });
+      if (!photo) throw new ConflictException("Confirmed upload is incomplete");
+      return {
+        uploadId: intent.id,
+        assetId: intent.confirmedPhotoAssetId,
+        assetKind: intent.assetKind,
+        uploadedAt: photo.uploadedAt.toISOString(),
+        deleteAfter: photo.photoDeleteAfter.toISOString(),
+      };
+    }
+    throw new ConflictException("Confirmed upload is incomplete");
+  }
+
   private intentExpiry(): Date {
     return new Date(
       Date.now() + this.storageConfig.signedUrlTtlSeconds * 1_000,
@@ -786,22 +829,6 @@ function addRetention(uploadedAt: Date): Date {
   return new Date(uploadedAt.getTime() + RETENTION_DAYS * DAY_MILLISECONDS);
 }
 
-function confirmedResponse(
-  intent: NonNullable<UploadIntentRecord>,
-): ConfirmedUploadResponseDto {
-  if (!intent.confirmedAt)
-    throw new ConflictException("Confirmed upload is incomplete");
-  const assetId = intent.confirmedModelFileId ?? intent.confirmedPhotoAssetId;
-  if (!assetId) throw new ConflictException("Confirmed upload is incomplete");
-  return {
-    uploadId: intent.id,
-    assetId,
-    assetKind: intent.assetKind,
-    uploadedAt: intent.confirmedAt.toISOString(),
-    deleteAfter: addRetention(intent.confirmedAt).toISOString(),
-  };
-}
-
 function availableDownloadDeadline(
   deletedAt: Date | null,
   hold: RetentionHold,
@@ -809,9 +836,12 @@ function availableDownloadDeadline(
   configuredTtl: number,
 ): Date {
   if (deletedAt) throw new GoneException("Stored asset was deleted");
-  const configuredDeadline = Date.now() + configuredTtl * 1_000;
-  if (hold !== RetentionHold.NONE) return new Date(configuredDeadline);
-  if (deleteAfter.getTime() <= Date.now())
-    throw new GoneException("Stored asset expired");
-  return new Date(Math.min(configuredDeadline, deleteAfter.getTime()));
+  const now = Date.now();
+  const configuredDeadline = now + configuredTtl * 1_000;
+  const deadline =
+    hold === RetentionHold.NONE
+      ? Math.min(configuredDeadline, deleteAfter.getTime())
+      : configuredDeadline;
+  if (deadline - now < 1_000) throw new GoneException("Stored asset expired");
+  return new Date(deadline);
 }
