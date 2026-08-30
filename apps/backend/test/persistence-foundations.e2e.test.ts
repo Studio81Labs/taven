@@ -498,6 +498,10 @@ async function createSiblingMachineFoundation(
     referenceSliceResultIds: foundation.referenceSliceResultIds.map(
       () => referenceSliceResultId,
     ),
+    referenceTailSliceResultId: null,
+    referenceTailSliceResultIds: foundation.referenceTailSliceResultIds.map(
+      () => null,
+    ),
     fulfilmentSlotModelGeometryIds:
       foundation.fulfilmentSlotModelGeometryIds.map(() => geometryId),
     fulfilmentSlotSliceResultIds: foundation.fulfilmentSlotSliceResultIds.map(

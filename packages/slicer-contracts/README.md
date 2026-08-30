@@ -52,6 +52,13 @@ Machine-profile snapshots declare the production artifact format explicitly:
 results must use that exact format and its deterministic Job-bound suffix; the
 slicer engine name alone never selects the transport artifact.
 
+Reference jobs also remain one exact occupancy per result. A quote dispatcher
+uses one full-capacity job and, when quantity has a remainder, one tail job;
+below capacity it dispatches only the actual occupancy. `QuoteItem` and
+`OrderItem` persist the planned reference capacity, primary result ID, and
+optional tail result ID, so their immutable price components remain linked to
+every slice input that justified customer time and material.
+
 Candidate results separately return the distinct cache-derived machine-slice
 metrics artifacts used by their canonical plate plan. Exact multiples need one
 reusable full-occupancy target; a partial job needs only its actual occupancy;

@@ -14,6 +14,8 @@ export type PersistenceFoundation = {
   sliceResultIds: string[];
   referenceSliceResultId: string;
   referenceSliceResultIds: string[];
+  referenceTailSliceResultId: string | null;
+  referenceTailSliceResultIds: Array<string | null>;
   printConfigRevisionId: string;
   printConfigRevisionIds: string[];
   machineProfileId: string;
@@ -260,6 +262,12 @@ export class PersistenceFactory {
           : `${name}:reference-slice-result:${index}`,
       ),
     );
+    const referenceTailSliceResultIds = resolvedItems.map((item, index) => {
+      const remainder = item.quantity % item.sliceMetrics.partsPerPlate;
+      return item.quantity >= item.sliceMetrics.partsPerPlate && remainder > 0
+        ? this.id(`${name}:reference-tail-slice-result:${index}`)
+        : null;
+    });
     const fulfilmentSlotIds: string[] = [];
     const fulfilmentSlotShipmentPlanIds: string[] = [];
     const fulfilmentSlotModelGeometryIds: string[] = [];
@@ -445,6 +453,11 @@ export class PersistenceFactory {
       const configId = printConfigRevisionIds[index]!;
       const itemSliceResultId = sliceResultIds[index]!;
       const itemReferenceSliceResultId = referenceSliceResultIds[index]!;
+      const itemReferenceTailSliceResultId = referenceTailSliceResultIds[index];
+      const referencePrimaryPartsPerPlate = Math.min(
+        item.quantity,
+        item.sliceMetrics.partsPerPlate,
+      );
       await this.sql.query(
         'INSERT INTO "model_geometries" ("id", "source_model_file_id", "canonical_object_key", "geometry_hash", "canonicalizer_revision", "volume_cubic_micrometers", "bounds_x_micrometers", "bounds_y_micrometers", "bounds_z_micrometers", "triangle_count") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
         [
@@ -480,7 +493,7 @@ export class PersistenceFactory {
           itemGeometryId,
           configId,
           referenceProfileId,
-          item.sliceMetrics.partsPerPlate,
+          referencePrimaryPartsPerPlate,
           `reference-slices/${this.scope}/${name}/${index}`,
           this.hash(`${name}:reference-slice:${index}`),
           item.sliceMetrics.estimatedPrintSeconds,
@@ -489,6 +502,41 @@ export class PersistenceFactory {
           referenceSlicerVersion,
         ],
       );
+      if (itemReferenceTailSliceResultId) {
+        const tailPartsPerPlate =
+          item.quantity % item.sliceMetrics.partsPerPlate;
+        await this.sql.query(
+          'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "reference_profile_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+          [
+            itemReferenceTailSliceResultId,
+            "REFERENCE",
+            `reference-tail-slice-${this.scope}-${name}-${index}`,
+            itemGeometryId,
+            configId,
+            referenceProfileId,
+            tailPartsPerPlate,
+            `reference-slices/${this.scope}/${name}/${index}-tail`,
+            this.hash(`${name}:reference-tail-slice:${index}`),
+            Math.max(
+              1,
+              Math.ceil(
+                (item.sliceMetrics.estimatedPrintSeconds * tailPartsPerPlate) /
+                  item.sliceMetrics.partsPerPlate,
+              ),
+            ),
+            Math.max(
+              1,
+              Math.ceil(
+                (item.sliceMetrics.estimatedMaterialMilligrams *
+                  tailPartsPerPlate) /
+                  item.sliceMetrics.partsPerPlate,
+              ),
+            ),
+            referenceSlicerEngine,
+            referenceSlicerVersion,
+          ],
+        );
+      }
       await this.sql.query(
         'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
         [
@@ -520,6 +568,8 @@ export class PersistenceFactory {
       sliceResultIds,
       referenceSliceResultId: referenceSliceResultIds[0]!,
       referenceSliceResultIds,
+      referenceTailSliceResultId: referenceTailSliceResultIds[0] ?? null,
+      referenceTailSliceResultIds,
       printConfigRevisionId: printConfigRevisionIds[0]!,
       printConfigRevisionIds,
       machineProfileId,
@@ -576,6 +626,7 @@ export class PersistenceFactory {
       modelGeometryIds,
       printConfigRevisionIds,
       referenceSliceResultIds,
+      referenceTailSliceResultIds,
       resolvedItems,
       quoteSessionExpiresAt: new Date(testRunStartedAt + hourInMilliseconds),
       quoteExpiresAt:
@@ -615,6 +666,7 @@ export class PersistenceFactory {
     modelGeometryIds: string[];
     printConfigRevisionIds: string[];
     referenceSliceResultIds: string[];
+    referenceTailSliceResultIds: Array<string | null>;
     resolvedItems: Array<{
       color: string;
       geometryBounds: GeometryBounds;
@@ -775,7 +827,7 @@ export class PersistenceFactory {
     );
     for (const [index, item] of input.resolvedItems.entries()) {
       await this.sql.query(
-        "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, reference_slice_result_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'PLA',$8,$9,$10)",
+        "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, reference_slice_result_id, tail_reference_slice_result_id, reference_parts_per_plate, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'PLA',$10,$11,$12)",
         [
           input.orderItemIds[index],
           input.orderId,
@@ -785,6 +837,12 @@ export class PersistenceFactory {
           input.printConfigRevisionIds[index],
           input.orderOrigin === "AUTOMATIC"
             ? input.referenceSliceResultIds[index]
+            : null,
+          input.orderOrigin === "AUTOMATIC"
+            ? input.referenceTailSliceResultIds[index]
+            : null,
+          input.orderOrigin === "AUTOMATIC"
+            ? item.sliceMetrics.partsPerPlate
             : null,
           item.color,
           item.quantity,

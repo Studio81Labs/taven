@@ -840,8 +840,10 @@ model SliceResult {
   primaryCandidateEstimates CandidateResourceEstimate[] @relation("CandidatePrimarySliceResult")
   tailCandidateEstimates    CandidateResourceEstimate[] @relation("CandidateTailSliceResult")
   productionReservations    ProductionReservation[]
-  quoteItems                QuoteItem[]
-  orderItems                OrderItem[]
+  primaryQuoteItems         QuoteItem[]                 @relation("QuoteItemPrimaryReferenceSlice")
+  tailQuoteItems            QuoteItem[]                 @relation("QuoteItemTailReferenceSlice")
+  primaryOrderItems         OrderItem[]                 @relation("OrderItemPrimaryReferenceSlice")
+  tailOrderItems            OrderItem[]                 @relation("OrderItemTailReferenceSlice")
   productionJobs            Job[]                       @relation("JobProductionSliceResult")
 
   @@unique([id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId])
@@ -1229,29 +1231,33 @@ model Quote {
 }
 
 model QuoteItem {
-  id                     String   @id @default(uuid()) @db.Uuid
-  quoteId                String   @map("quote_id") @db.Uuid
-  ordinal                Int
-  sourceModelFileId      String   @map("source_model_file_id") @db.Uuid
-  modelGeometryId        String   @map("model_geometry_id") @db.Uuid
-  printConfigRevisionId  String   @map("print_config_revision_id") @db.Uuid
-  referenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
-  material               Material
-  color                  String?  @db.VarChar(100)
-  quantity               Int
-  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                            String   @id @default(uuid()) @db.Uuid
+  quoteId                       String   @map("quote_id") @db.Uuid
+  ordinal                       Int
+  sourceModelFileId             String   @map("source_model_file_id") @db.Uuid
+  modelGeometryId               String   @map("model_geometry_id") @db.Uuid
+  printConfigRevisionId         String   @map("print_config_revision_id") @db.Uuid
+  primaryReferenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
+  tailReferenceSliceResultId    String?  @map("tail_reference_slice_result_id") @db.Uuid
+  referencePartsPerPlate        Int?     @map("reference_parts_per_plate")
+  material                      Material
+  color                         String?  @db.VarChar(100)
+  quantity                      Int
+  createdAt                     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  quote                     Quote                      @relation(fields: [quoteId], references: [id], onDelete: Restrict)
-  sourceModelFile           ModelFile                  @relation("QuoteItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
-  modelGeometry             ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
-  printConfigRevision       PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
-  referenceSliceResult      SliceResult?               @relation(fields: [referenceSliceResultId], references: [id], onDelete: Restrict)
-  individualOrderItemSource IndividualOrderItemSource?
-  priceComponents           PriceSnapshotComponent[]
+  quote                       Quote                      @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  sourceModelFile             ModelFile                  @relation("QuoteItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
+  modelGeometry               ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  printConfigRevision         PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  primaryReferenceSliceResult SliceResult?               @relation("QuoteItemPrimaryReferenceSlice", fields: [primaryReferenceSliceResultId], references: [id], onDelete: Restrict)
+  tailReferenceSliceResult    SliceResult?               @relation("QuoteItemTailReferenceSlice", fields: [tailReferenceSliceResultId], references: [id], onDelete: Restrict)
+  individualOrderItemSource   IndividualOrderItemSource?
+  priceComponents             PriceSnapshotComponent[]
 
   @@unique([quoteId, ordinal])
   @@unique([id, quoteId])
   @@index([modelGeometryId])
+  @@index([tailReferenceSliceResultId])
   @@map("quote_items")
 }
 
@@ -1455,30 +1461,34 @@ model OrderActivePriceBinding {
 }
 
 model OrderItem {
-  id                     String   @id @default(uuid()) @db.Uuid
-  orderId                String   @map("order_id") @db.Uuid
-  ordinal                Int
-  sourceModelFileId      String   @map("source_model_file_id") @db.Uuid
-  modelGeometryId        String   @map("model_geometry_id") @db.Uuid
-  printConfigRevisionId  String   @map("print_config_revision_id") @db.Uuid
-  referenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
-  material               Material
-  color                  String?  @db.VarChar(100)
-  quantity               Int
-  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                            String   @id @default(uuid()) @db.Uuid
+  orderId                       String   @map("order_id") @db.Uuid
+  ordinal                       Int
+  sourceModelFileId             String   @map("source_model_file_id") @db.Uuid
+  modelGeometryId               String   @map("model_geometry_id") @db.Uuid
+  printConfigRevisionId         String   @map("print_config_revision_id") @db.Uuid
+  primaryReferenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
+  tailReferenceSliceResultId    String?  @map("tail_reference_slice_result_id") @db.Uuid
+  referencePartsPerPlate        Int?     @map("reference_parts_per_plate")
+  material                      Material
+  color                         String?  @db.VarChar(100)
+  quantity                      Int
+  createdAt                     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  order                Order                      @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  sourceModelFile      ModelFile                  @relation("OrderItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
-  modelGeometry        ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
-  printConfigRevision  PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
-  referenceSliceResult SliceResult?               @relation(fields: [referenceSliceResultId], references: [id], onDelete: Restrict)
-  individualSource     IndividualOrderItemSource?
-  priceComponents      PriceSnapshotComponent[]
-  fulfilmentSlots      FulfilmentSlot[]
+  order                       Order                      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  sourceModelFile             ModelFile                  @relation("OrderItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
+  modelGeometry               ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  printConfigRevision         PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  primaryReferenceSliceResult SliceResult?               @relation("OrderItemPrimaryReferenceSlice", fields: [primaryReferenceSliceResultId], references: [id], onDelete: Restrict)
+  tailReferenceSliceResult    SliceResult?               @relation("OrderItemTailReferenceSlice", fields: [tailReferenceSliceResultId], references: [id], onDelete: Restrict)
+  individualSource            IndividualOrderItemSource?
+  priceComponents             PriceSnapshotComponent[]
+  fulfilmentSlots             FulfilmentSlot[]
 
   @@unique([orderId, ordinal])
   @@unique([id, orderId])
   @@index([modelGeometryId])
+  @@index([tailReferenceSliceResultId])
   @@map("order_items")
 }
 
