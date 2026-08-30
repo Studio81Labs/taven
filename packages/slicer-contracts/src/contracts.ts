@@ -107,7 +107,7 @@ const ReferenceArtifactObjectKeySchema = StorageObjectKeySchema.regex(
   "must identify a reference-slice artifact",
 );
 const ProductionArtifactObjectKeySchema = StorageObjectKeySchema.regex(
-  /^gcode\/[a-z0-9][a-z0-9:-]*\/[a-z0-9][a-z0-9._:-]*$/,
+  /^gcode\/[a-z0-9][a-z0-9:-]*\/occupancy-[1-9][0-9]{0,5}\/[a-z0-9][a-z0-9._:-]*$/,
   "must identify a production G-code artifact",
 );
 
@@ -133,6 +133,10 @@ const SafeFailureMessageSchema = z
   .refine(
     hasNoControlCharacters,
     "must not contain URLs, filesystem paths, credentials, or control characters",
+  )
+  .refine(
+    (value) => !value.includes("/") && !value.includes("\\"),
+    "must not contain path separators, URLs, or filesystem paths",
   )
   .refine(
     (value) => value === value.trim(),
@@ -769,7 +773,7 @@ const ProductionSliceResultBase = z
       bgcode: "bgcode",
       gcode: "gcode",
     }[value.outcome.artifact.format];
-    const expected = `gcode/${value.input.acceptedJobId}/toolpath.${extension}`;
+    const expected = `gcode/${value.input.acceptedJobId}/occupancy-${value.input.quantity}/toolpath.${extension}`;
     if (value.outcome.artifact.objectKey !== expected) {
       context.addIssue({
         code: "custom",

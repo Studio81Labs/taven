@@ -169,7 +169,7 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
           ),
           artifact: {
             format: "gcode_3mf",
-            objectKey: `gcode/${job.input.acceptedJobId}/toolpath.gcode.3mf`,
+            objectKey: `gcode/${job.input.acceptedJobId}/occupancy-${job.input.quantity}/toolpath.gcode.3mf`,
             sha256: fixtureHash(
               job.input.geometry.geometrySha256,
               job.input.machineProfile.contentSha256,

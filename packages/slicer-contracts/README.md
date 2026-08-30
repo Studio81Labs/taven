@@ -26,11 +26,19 @@ Every result echoes the complete immutable input identity. Consumers use
 result, so a stale retry or a result for another selected geometry cannot be
 associated accidentally. Successful artifact keys are also bound to the
 dispatch ID. A production dispatch and result represent one exact plate
-occupancy and expose one artifact, matching the persisted `SliceResult`; a
-batch's full and final partial occupancies use separate dispatches/results. For
-production, `quantity` equals that dispatch's exact `partsPerPlate` occupancy.
+occupancy and expose one occupancy-keyed artifact, matching the persisted
+`SliceResult`. Each physical plate is a distinct accepted Job/queue job ID; a
+Job may cover multiple slots only when they share that plate. A batch's full and
+final partial occupancies therefore use distinct accepted Jobs and results. For
+production, `quantity` equals that Job's exact `partsPerPlate` occupancy.
+The upstream planner and dispatcher must materialize a distinct plan job,
+reservation, and accepted Job per physical plate; a multi-plate candidate
+aggregate is planning evidence, never one production dispatch.
 
 Payloads are capped at 64 KiB and contain only generated object keys, bounded
 normalized metrics, stable codes, and immutable identifiers or hashes. Raw
 model bytes, storage URLs, filesystem paths, credentials, engine logs, stack
 traces, arbitrary JSON, and provider configuration do not belong on the queue.
+Human-readable findings and failures may not contain `/` or `\` path
+separators; processors sanitize diagnostics to stable codes and safe summaries
+before publishing them.

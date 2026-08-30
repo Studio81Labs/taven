@@ -370,7 +370,7 @@ describe("versioned slicing results", () => {
       metrics: { ...sliceMetrics, plateCount: 1 },
       artifact: {
         format: "gcode_3mf",
-        objectKey: `gcode/${ids.acceptedJob}/toolpath.gcode.3mf`,
+        objectKey: `gcode/${ids.acceptedJob}/occupancy-2/toolpath.gcode.3mf`,
         sha256: hash("5"),
       },
     });
@@ -424,6 +424,29 @@ describe("versioned slicing results", () => {
         },
       }),
     ).toThrow();
+    for (const message of [
+      "failed reading models/input.stl",
+      "failed reading ../input.stl",
+      "failed reading foo\\input.stl",
+      "failed reading \\\\server\\share\\input.stl",
+      "failed reading //server/share/input.stl",
+    ]) {
+      expect(() =>
+        SlicingResultSchema.parse({
+          ...retryable,
+          outcome: { ...(retryable.outcome as object), message },
+        }),
+      ).toThrow();
+    }
+    expect(
+      SlicingResultSchema.parse({
+        ...retryable,
+        outcome: {
+          ...(retryable.outcome as object),
+          message: "engine input could not be read",
+        },
+      }),
+    ).toBeDefined();
     expect(() =>
       SlicingResultSchema.parse({
         ...retryable,
@@ -507,7 +530,7 @@ describe("versioned slicing results", () => {
           estimatedPrintSeconds: "10",
           estimatedMaterialMilligrams: "20",
           format: "gcode",
-          objectKey: `gcode/${ids.acceptedJob}/toolpath.gcode`,
+          objectKey: `gcode/${ids.acceptedJob}/occupancy-2/toolpath.gcode`,
           sha256: hash("5"),
         },
       ],
@@ -548,11 +571,50 @@ describe("versioned slicing results", () => {
       metrics: { ...sliceMetrics, plateCount: 1 },
       artifact: {
         format: "gcode",
-        objectKey: `gcode/${ids.job}/toolpath.gcode`,
+        objectKey: `gcode/${ids.job}/occupancy-2/toolpath.gcode`,
         sha256: hash("5"),
       },
     });
     expect(() => SlicingResultSchema.parse(production)).toThrow();
+  });
+
+  it("gives full and partial plate Jobs distinct occupancy-bound artifacts", () => {
+    const fullObjectKey =
+      `gcode/${ids.acceptedJob}/occupancy-2/toolpath.gcode` as const;
+    const full = result(productionJob, {
+      status: "succeeded",
+      metrics: { ...sliceMetrics, plateCount: 1 },
+      artifact: {
+        format: "gcode",
+        objectKey: fullObjectKey,
+        sha256: hash("5"),
+      },
+    });
+    const partialInput = {
+      ...machineInput,
+      partsPerPlate: 1,
+      quantity: 1,
+      acceptedJobId: ids.geometryB,
+      productionReservationId: ids.reservation,
+    };
+    const partialJob = envelope("production_slice", partialInput, {
+      jobId: ids.geometryB,
+    });
+    const partialObjectKey =
+      `gcode/${ids.geometryB}/occupancy-1/toolpath.gcode` as const;
+    const partial = result(partialJob, {
+      status: "succeeded",
+      metrics: { ...sliceMetrics, plateCount: 1 },
+      artifact: {
+        format: "gcode",
+        objectKey: partialObjectKey,
+        sha256: hash("6"),
+      },
+    });
+
+    expect(ProductionSliceResultSchema.parse(full)).toEqual(full);
+    expect(ProductionSliceResultSchema.parse(partial)).toEqual(partial);
+    expect(fullObjectKey).not.toBe(partialObjectKey);
   });
 
   it("binds results to the exact job and prevents geometry collisions", () => {

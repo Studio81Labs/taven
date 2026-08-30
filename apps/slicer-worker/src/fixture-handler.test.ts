@@ -148,7 +148,7 @@ describe("runFixtureSlicingJob", () => {
         },
         artifact: {
           format: "gcode_3mf",
-          objectKey: `gcode/${ids.productionJob}/toolpath.gcode.3mf`,
+          objectKey: `gcode/${ids.productionJob}/occupancy-2/toolpath.gcode.3mf`,
         },
       },
     });
