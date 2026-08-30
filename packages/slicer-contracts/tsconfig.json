@@ -9,7 +9,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "noEmit": false,
-    "types": ["vitest/globals"]
+    "types": ["node", "vitest/globals"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "**/*.test.ts"]
