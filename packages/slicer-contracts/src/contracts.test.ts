@@ -62,6 +62,11 @@ const revision = (revisionId: string, contentSha256 = hash("d")) => ({
   revisionId,
   contentSha256,
 });
+const slicerProfile = (revisionId: string, contentSha256 = hash("d")) => ({
+  ...revision(revisionId, contentSha256),
+  slicerEngine: "orca",
+  slicerVersion: "2.0",
+});
 const envelope = (
   kind: SlicingJobKind,
   input: unknown,
@@ -110,14 +115,14 @@ const inspectionInput = {
 };
 const referenceInput = {
   geometry: geometry(ids.geometryA, "body-a"),
-  referenceProfile: revision(ids.profile),
+  referenceProfile: slicerProfile(ids.profile),
   printConfig: revision(ids.config),
   partsPerPlate: 1,
 };
 const machineInput = {
   geometry: geometry(ids.geometryA, "body-a"),
   machineId: ids.machine,
-  machineProfile: revision(ids.profile),
+  machineProfile: slicerProfile(ids.profile),
   machineCalibration: revision(ids.calibration),
   printConfig: revision(ids.config),
   partsPerPlate: 2,
@@ -557,6 +562,134 @@ describe("versioned slicing results", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("requires a blocking custom-request finding for painted or multimaterial input", () => {
+    const paintedOutcome = {
+      ...inspectionOutcome,
+      metrics: {
+        ...inspectionOutcome.metrics,
+        hasPaintAssignments: true,
+      },
+      bodies: inspectionOutcome.bodies.map((body) => ({
+        ...body,
+        hasPaintAssignments: true,
+      })),
+      findings: [],
+    };
+    expect(() =>
+      ModelInspectionResultSchema.parse(result(inspectionJob, paintedOutcome)),
+    ).toThrow();
+
+    const blockingFinding = {
+      code: "PAINTED_OR_MULTIMATERIAL",
+      severity: "blocking" as const,
+      phase: "inspection" as const,
+      message: "painted or multimaterial input requires a custom request",
+      acknowledgementKey: null,
+    };
+    expect(
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...paintedOutcome,
+          findings: [blockingFinding],
+        }),
+      ),
+    ).toBeDefined();
+
+    const multimaterialOutcome = {
+      ...inspectionOutcome,
+      metrics: {
+        ...inspectionOutcome.metrics,
+        materialAssignmentCount: 2,
+      },
+      bodies: inspectionOutcome.bodies.map((body) => ({
+        ...body,
+        materialAssignmentIds: ["material-a", "material-b"],
+      })),
+      findings: [],
+    };
+    expect(() =>
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, multimaterialOutcome),
+      ),
+    ).toThrow();
+    expect(
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...multimaterialOutcome,
+          findings: [blockingFinding],
+        }),
+      ),
+    ).toBeDefined();
+  });
+
+  it("binds every slice result engine to its selected profile", () => {
+    const results = [
+      result(referenceJob, {
+        status: "succeeded",
+        metrics: { ...sliceMetrics, plateCount: 1 },
+        findings: [],
+        artifact: {
+          objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+          sha256: hash("4"),
+        },
+      }),
+      result(candidateJob, {
+        status: "succeeded",
+        metrics: {
+          ...sliceMetrics,
+          estimatedPrintSeconds: "20",
+          estimatedMaterialMilligrams: "40",
+          plateCount: 2,
+        },
+        plates: [
+          {
+            plateOrdinal: 1,
+            partsOnPlate: 2,
+            estimatedPrintSeconds: "10",
+            estimatedMaterialMilligrams: "20",
+          },
+          {
+            plateOrdinal: 2,
+            partsOnPlate: 1,
+            estimatedPrintSeconds: "10",
+            estimatedMaterialMilligrams: "20",
+          },
+        ],
+      }),
+      result(productionJob, productionOutcome),
+    ];
+
+    for (const value of results) {
+      expect(() =>
+        SlicingResultSchema.parse({
+          ...value,
+          engine: { ...engine, version: "2.1" },
+        }),
+      ).toThrow();
+    }
+
+    for (const [job, mismatchedEngine] of [
+      [referenceJob, { ...engine, name: "prusa" }],
+      [candidateJob, { ...engine, version: "2.1" }],
+      [productionJob, { ...engine, name: "prusa" }],
+    ] as const) {
+      const failure = result(job, {
+        status: "failed",
+        failureClass: "retryable_infrastructure",
+        code: "ENGINE_TIMEOUT",
+        retryable: true,
+        message: "engine timed out",
+        retryAfterMilliseconds: 1000,
+      });
+      expect(() =>
+        SlicingResultSchema.parse({
+          ...failure,
+          engine: mismatchedEngine,
+        }),
+      ).toThrow();
+    }
   });
 
   it("distinguishes deterministic and retryable failures", () => {

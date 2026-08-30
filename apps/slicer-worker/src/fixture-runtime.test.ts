@@ -39,6 +39,8 @@ const referenceInput = {
   referenceProfile: {
     revisionId: ids.profile,
     contentSha256: "d".repeat(64),
+    slicerEngine: "fixture",
+    slicerVersion: "0.0.0",
   },
   printConfig: {
     revisionId: ids.config,

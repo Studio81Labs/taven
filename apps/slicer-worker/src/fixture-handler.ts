@@ -35,6 +35,20 @@ function plateParts(quantity: number, partsPerPlate: number): number[] {
 }
 
 function resultEnvelope(job: SlicingJob) {
+  const selectedEngine =
+    job.kind === "model_inspection"
+      ? FIXTURE_ENGINE
+      : job.kind === "reference_slice"
+        ? {
+            name: job.input.referenceProfile.slicerEngine,
+            version: job.input.referenceProfile.slicerVersion,
+            imageSha256: FIXTURE_ENGINE.imageSha256,
+          }
+        : {
+            name: job.input.machineProfile.slicerEngine,
+            version: job.input.machineProfile.slicerVersion,
+            imageSha256: FIXTURE_ENGINE.imageSha256,
+          };
   return {
     contractVersion: job.contractVersion,
     kind: job.kind,
@@ -44,7 +58,7 @@ function resultEnvelope(job: SlicingJob) {
     idempotencyKey: job.idempotencyKey,
     attempt: job.attempt,
     input: job.input,
-    engine: FIXTURE_ENGINE,
+    engine: selectedEngine,
   } as const;
 }
 

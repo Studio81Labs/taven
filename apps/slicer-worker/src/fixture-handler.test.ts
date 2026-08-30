@@ -29,6 +29,11 @@ const revision = (revisionId: string, digest: string) => ({
   revisionId,
   contentSha256: digest.repeat(64),
 });
+const slicerProfile = (revisionId: string, digest: string) => ({
+  ...revision(revisionId, digest),
+  slicerEngine: "fixture",
+  slicerVersion: "0.0.0",
+});
 const geometry = {
   sourceModelFileId: ids.model,
   sourceContentSha256: "b".repeat(64),
@@ -40,14 +45,14 @@ const geometry = {
 };
 const referenceInput = {
   geometry,
-  referenceProfile: revision(ids.referenceProfile, "e"),
+  referenceProfile: slicerProfile(ids.referenceProfile, "e"),
   printConfig: revision(ids.printConfig, "f"),
   partsPerPlate: 1,
 };
 const machineInput = {
   geometry,
   machineId: ids.machine,
-  machineProfile: revision(ids.machineProfile, "1"),
+  machineProfile: slicerProfile(ids.machineProfile, "1"),
   machineCalibration: revision(ids.calibration, "2"),
   printConfig: revision(ids.printConfig, "f"),
   partsPerPlate: 2,

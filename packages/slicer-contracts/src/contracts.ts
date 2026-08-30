@@ -222,6 +222,21 @@ export const RevisionSnapshotSchema = z.strictObject({
   contentSha256: Sha256Schema,
 });
 
+const EngineNameSchema = SafeIdentifierSchema;
+const EngineVersionSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .refine(
+    (value) => value === value.trim(),
+    "must not contain surrounding whitespace",
+  );
+
+const SlicerProfileSnapshotSchema = RevisionSnapshotSchema.extend({
+  slicerEngine: EngineNameSchema,
+  slicerVersion: EngineVersionSchema,
+});
+
 export const BoundingBoxSchema = z.strictObject({
   xMicrometers: NonnegativeInt64StringSchema,
   yMicrometers: NonnegativeInt64StringSchema,
@@ -260,15 +275,8 @@ export const PreflightFindingSchema = z
   });
 
 export const EngineIdentitySchema = z.strictObject({
-  name: SafeIdentifierSchema,
-  version: z
-    .string()
-    .min(1)
-    .max(100)
-    .refine(
-      (value) => value === value.trim(),
-      "must not contain surrounding whitespace",
-    ),
+  name: EngineNameSchema,
+  version: EngineVersionSchema,
   imageSha256: Sha256Schema,
 });
 
@@ -364,7 +372,7 @@ const InspectionInputSchema = z
 
 const ReferenceSliceInputSchema = z.strictObject({
   geometry: GeometrySelectionSchema,
-  referenceProfile: RevisionSnapshotSchema,
+  referenceProfile: SlicerProfileSnapshotSchema,
   printConfig: RevisionSnapshotSchema,
   partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
 });
@@ -372,7 +380,7 @@ const ReferenceSliceInputSchema = z.strictObject({
 const MachineSliceInputShape = {
   geometry: GeometrySelectionSchema,
   machineId: UuidSchema,
-  machineProfile: RevisionSnapshotSchema,
+  machineProfile: SlicerProfileSnapshotSchema,
   machineCalibration: RevisionSnapshotSchema,
   printConfig: RevisionSnapshotSchema,
   partsPerPlate: boundedPositiveInteger(MAX_QUANTITY),
@@ -716,6 +724,24 @@ const InspectionSuccessSchema = z
         message: "assignment summaries must reconcile to inspected bodies",
       });
     }
+    const requiresCustomRequest =
+      value.metrics.hasPaintAssignments ||
+      value.metrics.materialAssignmentCount > 1 ||
+      value.metrics.extruderAssignmentCount > 1;
+    const hasBlockingFinding = value.findings.some(
+      ({ code, severity, phase }) =>
+        code === "PAINTED_OR_MULTIMATERIAL" &&
+        severity === "blocking" &&
+        phase === "inspection",
+    );
+    if (requiresCustomRequest && !hasBlockingFinding) {
+      context.addIssue({
+        code: "custom",
+        path: ["findings"],
+        message:
+          "painted or multimaterial inputs require a blocking inspection finding",
+      });
+    }
   });
 
 const ReferenceSliceSuccessSchema = z.strictObject({
@@ -811,6 +837,23 @@ function requireSelectedBodyCount(
       code: "custom",
       path: ["outcome", "metrics", "bodyCount"],
       message: "must equal the number of selected geometry bodies",
+    });
+  }
+}
+
+function requireExpectedProfileEngine(
+  value: { engine: { name: string; version: string } },
+  profile: { slicerEngine: string; slicerVersion: string },
+  context: z.RefinementCtx,
+): void {
+  if (
+    value.engine.name !== profile.slicerEngine ||
+    value.engine.version !== profile.slicerVersion
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["engine"],
+      message: "must match the slicer identity selected by the profile",
     });
   }
 }
@@ -953,6 +996,7 @@ const ReferenceSliceResultBase = z
   })
   .superRefine((value, context) => {
     requireSelectedBodyCount(value, context);
+    requireExpectedProfileEngine(value, value.input.referenceProfile, context);
     if (
       value.outcome.status === "succeeded" &&
       value.outcome.artifact.objectKey !==
@@ -974,6 +1018,7 @@ const CandidateEstimateResultBase = z
   })
   .superRefine((value, context) => {
     requireSelectedBodyCount(value, context);
+    requireExpectedProfileEngine(value, value.input.machineProfile, context);
     requireCanonicalPlatePlan(value, context);
   });
 const ProductionSliceResultBase = z
@@ -986,6 +1031,7 @@ const ProductionSliceResultBase = z
   .superRefine((value, context) => {
     requireAcceptedProductionJob(value, context);
     requireSelectedBodyCount(value, context);
+    requireExpectedProfileEngine(value, value.input.machineProfile, context);
     requireCanonicalPlatePlan(value, context);
     if (value.outcome.status !== "succeeded") return;
     const expected = `gcode/${value.input.acceptedJobId}/toolpaths.gcode.3mf`;

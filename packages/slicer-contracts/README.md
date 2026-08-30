@@ -35,9 +35,12 @@ matching the singular persisted `Job.productionSliceResultId` and
 `partsPerPlate` is its plate capacity, so the result contains exactly
 `ceil(quantity / partsPerPlate)` ordered plate summaries. Candidate and
 production arrangement revisions bind the same accepted plan to that package.
-If independent per-plate persistence, retention, or audit becomes necessary,
-it requires a durable child-artifact model rather than dropping all but one
-output into the current singular `SliceResult`.
+The aggregate production package uses production cache-key v2. Its bounded
+identity digest includes the accepted Job ID, complete Job quantity, and
+arrangement revision in addition to the geometry, machine profile, calibration,
+print configuration, and plate capacity. Two packages whose bytes or Job-bound
+object keys can differ therefore cannot share the unique persisted
+`SliceResult.cacheKey`.
 
 Model inspection is explicitly two-step for multi-body inputs. `inspect_source`
 discovers a canonical ordered body list and returns no persistable geometry.

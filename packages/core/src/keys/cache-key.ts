@@ -1,5 +1,5 @@
 import { buildCanonicalKey } from "./canonical-key.js";
-import type { Sha256Digest } from "../primitives/digest.js";
+import { Sha256Digest } from "../primitives/digest.js";
 import { DomainError } from "../primitives/errors.js";
 import type { RevisionRef } from "../primitives/revision-ref.js";
 
@@ -27,6 +27,9 @@ export interface ProductionSliceCacheKeyInput {
   readonly machineCalibrationRevision: MachineCalibrationRevisionRef;
   readonly printConfigRevision: PrintConfigRevisionRef;
   readonly partsPerPlate: number | bigint;
+  readonly quantity: number | bigint;
+  readonly arrangementRevision: ArrangementRevisionRef;
+  readonly acceptedJobId: string;
 }
 
 export interface CandidateResourceEstimateKeyInput {
@@ -51,6 +54,20 @@ function assertPositive(value: number | bigint, label: string): void {
   }
 }
 
+function buildPersistableIdentityKey(
+  namespace: string,
+  version: number,
+  components: Parameters<typeof buildCanonicalKey>[2],
+): string {
+  const canonicalIdentity = buildCanonicalKey(namespace, version, components);
+  return buildCanonicalKey(namespace, version, [
+    {
+      name: "identity_sha256",
+      value: Sha256Digest.of(canonicalIdentity).hex,
+    },
+  ]);
+}
+
 export function buildReferenceSliceCacheKey(
   input: ReferenceSliceCacheKeyInput,
 ): SliceCacheKey {
@@ -73,7 +90,8 @@ export function buildProductionSliceCacheKey(
   input: ProductionSliceCacheKeyInput,
 ): SliceCacheKey {
   assertPositive(input.partsPerPlate, "partsPerPlate");
-  return buildCanonicalKey("production-slice", 1, [
+  assertPositive(input.quantity, "quantity");
+  return buildPersistableIdentityKey("production-slice", 2, [
     { name: "geometry_hash", value: input.geometryHash.hex },
     {
       name: "machine_profile_revision_id",
@@ -88,6 +106,12 @@ export function buildProductionSliceCacheKey(
       value: input.printConfigRevision.id,
     },
     { name: "parts_per_plate", value: input.partsPerPlate },
+    { name: "quantity", value: input.quantity },
+    {
+      name: "arrangement_revision_id",
+      value: input.arrangementRevision.id,
+    },
+    { name: "accepted_job_id", value: input.acceptedJobId },
   ]) as SliceCacheKey;
 }
 
