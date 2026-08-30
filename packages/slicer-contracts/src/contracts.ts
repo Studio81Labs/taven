@@ -681,6 +681,27 @@ const ResultEnvelopeShape = {
   engine: EngineIdentitySchema,
 } as const;
 
+function requireSelectedBodyCount(
+  value: {
+    input: { geometry: { bodyIds: string[] } };
+    outcome:
+      | { status: "failed" }
+      | { status: "succeeded"; metrics: { bodyCount: number } };
+  },
+  context: z.RefinementCtx,
+): void {
+  if (
+    value.outcome.status === "succeeded" &&
+    value.outcome.metrics.bodyCount !== value.input.geometry.bodyIds.length
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["outcome", "metrics", "bodyCount"],
+      message: "must equal the number of selected geometry bodies",
+    });
+  }
+}
+
 const ModelInspectionResultBase = z.strictObject({
   ...ResultEnvelopeShape,
   kind: z.literal("model_inspection"),
@@ -695,6 +716,7 @@ const ReferenceSliceResultBase = z
     outcome: z.union([ReferenceSliceSuccessSchema, SlicingFailureSchema]),
   })
   .superRefine((value, context) => {
+    requireSelectedBodyCount(value, context);
     if (
       value.outcome.status === "succeeded" &&
       value.outcome.artifact.objectKey !==
@@ -715,6 +737,7 @@ const CandidateEstimateResultBase = z
     outcome: z.union([CandidateEstimateSuccessSchema, SlicingFailureSchema]),
   })
   .superRefine((value, context) => {
+    requireSelectedBodyCount(value, context);
     if (value.outcome.status !== "succeeded") return;
     const quantity = value.outcome.plates.reduce(
       (sum, plate) => sum + plate.partsOnPlate,
@@ -767,6 +790,7 @@ const ProductionSliceResultBase = z
   })
   .superRefine((value, context) => {
     requireAcceptedProductionJob(value, context);
+    requireSelectedBodyCount(value, context);
     if (value.outcome.status !== "succeeded") return;
     const extension = {
       gcode_3mf: "gcode.3mf",

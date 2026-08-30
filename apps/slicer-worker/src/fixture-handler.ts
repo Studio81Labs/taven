@@ -116,6 +116,7 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
     case "reference_slice": {
       const artifactSha256 = fixtureHash(
         job.input.geometry.geometrySha256,
+        job.input.geometry.selectionSha256,
         job.input.referenceProfile.contentSha256,
         job.input.printConfig.contentSha256,
         job.input.partsPerPlate,
@@ -172,6 +173,7 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
             objectKey: `gcode/${job.input.acceptedJobId}/occupancy-${job.input.quantity}/toolpath.gcode.3mf`,
             sha256: fixtureHash(
               job.input.geometry.geometrySha256,
+              job.input.geometry.selectionSha256,
               job.input.machineProfile.contentSha256,
               job.input.machineCalibration.contentSha256,
               job.input.printConfig.contentSha256,

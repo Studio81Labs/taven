@@ -376,6 +376,19 @@ describe("versioned slicing results", () => {
     });
     for (const value of [inspection, reference, candidate, production])
       expect(SlicingResultSchema.parse(value)).toEqual(value);
+    for (const value of [reference, candidate, production]) {
+      const outcome = value.outcome as Record<string, unknown>;
+      const metrics = outcome.metrics as Record<string, unknown>;
+      expect(() =>
+        SlicingResultSchema.parse({
+          ...value,
+          outcome: {
+            ...outcome,
+            metrics: { ...metrics, bodyCount: 2 },
+          },
+        }),
+      ).toThrow();
+    }
     expect(() =>
       ProductionSliceResultSchema.parse({
         ...production,

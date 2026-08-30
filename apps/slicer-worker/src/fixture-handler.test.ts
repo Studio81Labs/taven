@@ -1,4 +1,7 @@
-import { slicingInputFingerprint } from "@taven/slicer-contracts";
+import {
+  slicingInputFingerprint,
+  type SlicingResult,
+} from "@taven/slicer-contracts";
 import { describe, expect, it } from "vitest";
 import { runFixtureSlicingJob } from "./fixture-handler.js";
 import { runLegacyV1FixtureSlicingJob } from "./legacy-v1-fixture-handler.js";
@@ -99,6 +102,16 @@ const productionJob = fixtureJob(
   ids.productionJob,
 );
 
+function artifactSha256(result: SlicingResult): string {
+  if (
+    (result.kind === "reference_slice" || result.kind === "production_slice") &&
+    result.outcome.status === "succeeded"
+  ) {
+    return result.outcome.artifact.sha256;
+  }
+  throw new TypeError("expected a successful artifact result");
+}
+
 describe("runFixtureSlicingJob", () => {
   it.each([
     ["model_inspection", inspectionJob],
@@ -190,6 +203,37 @@ describe("runFixtureSlicingJob", () => {
       outcome: { status: "succeeded", metrics: { bodyCount: 2 } },
     });
   });
+
+  it.each([
+    ["reference_slice", referenceInput],
+    [
+      "production_slice",
+      {
+        ...machineInput,
+        quantity: 2,
+        acceptedJobId: ids.productionJob,
+        productionReservationId: ids.reservation,
+      },
+    ],
+  ] as const)(
+    "binds %s artifact hashes to the selection digest",
+    (kind, input) => {
+      const jobId = kind === "production_slice" ? ids.productionJob : ids.job;
+      const first = fixtureJob(kind, input, jobId);
+      const secondInput = {
+        ...input,
+        geometry: {
+          ...input.geometry,
+          selectionSha256: "9".repeat(64),
+        },
+      };
+      const second = fixtureJob(kind, secondInput, jobId);
+
+      expect(artifactSha256(runFixtureSlicingJob(first))).not.toBe(
+        artifactSha256(runFixtureSlicingJob(second)),
+      );
+    },
+  );
 });
 
 describe("runLegacyV1FixtureSlicingJob", () => {
