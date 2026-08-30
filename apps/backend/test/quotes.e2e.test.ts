@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { PrismaService } from "../src/prisma/prisma.service";
@@ -290,6 +290,47 @@ describe("QuoteRequest and tokenized individual offers", () => {
         where: { id: created.body.requestId },
       }),
     ).toMatchObject({ status: "EXPIRED" });
+  });
+
+  it("limits anonymous submissions atomically and ignores spoofed forwarding headers", async () => {
+    const subjectHash = createHmac(
+      "sha256",
+      process.env.TAVEN_QUOTE_CAPABILITY_KEY!,
+    )
+      .update("anonymous-quote-request\0" + "127.0.0.1")
+      .digest("hex");
+    const now = new Date();
+    await prisma.anonymousQuoteLimit.upsert({
+      where: { subjectHash },
+      create: {
+        subjectHash,
+        windowStartedAt: now,
+        windowExpiresAt: new Date(now.getTime() + 15 * 60 * 1_000),
+        issuedCount: 4,
+      },
+      update: {
+        windowStartedAt: now,
+        windowExpiresAt: new Date(now.getTime() + 15 * 60 * 1_000),
+        issuedCount: 4,
+      },
+    });
+    const submit = (forwardedFor: string) =>
+      apiJson("quote-requests", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": key("limited-create"),
+          "x-forwarded-for": forwardedFor,
+        },
+        body: JSON.stringify(requestInput(`limited-${forwardedFor}`)),
+      });
+    const results = await Promise.all([
+      submit("203.0.113.44"),
+      submit("198.51.100.22"),
+    ]);
+    expect(results.map(({ response }) => response.status).sort()).toEqual([
+      201, 429,
+    ]);
   });
 
   function requestInput(scope: string) {

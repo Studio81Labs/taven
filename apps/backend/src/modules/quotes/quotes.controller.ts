@@ -4,6 +4,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Ip,
   Param,
   Post,
   Query,
@@ -21,6 +22,7 @@ import {
   ApiParam,
   ApiQuery,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
@@ -55,11 +57,15 @@ export class QuoteRequestsController {
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiCreatedResponse({ type: QuoteRequestCreatedDto })
   @ApiConflictResponse({ description: "Idempotency input changed" })
+  @ApiTooManyRequestsResponse({
+    description: "Anonymous quote-submission limit is exhausted",
+  })
   create(
     @Body() body: CreateQuoteRequestDto,
+    @Ip() clientAddress: string,
     @Headers("idempotency-key") idempotencyKey?: string,
   ): Promise<QuoteRequestCreatedDto> {
-    return this.quotes.createRequest(body, idempotencyKey);
+    return this.quotes.createRequest(body, clientAddress, idempotencyKey);
   }
 
   @Get(":requestId")

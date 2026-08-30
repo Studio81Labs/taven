@@ -3,6 +3,23 @@
 
 CREATE TYPE "commerce_item_kind" AS ENUM ('MODEL', 'CUSTOM_SERVICE');
 
+CREATE TABLE "anonymous_quote_limits" (
+    "subject_hash" VARCHAR(64) NOT NULL,
+    "window_started_at" TIMESTAMPTZ(3) NOT NULL,
+    "window_expires_at" TIMESTAMPTZ(3) NOT NULL,
+    "issued_count" INTEGER NOT NULL DEFAULT 0,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(3) NOT NULL,
+    CONSTRAINT "anonymous_quote_limits_pkey" PRIMARY KEY ("subject_hash"),
+    CONSTRAINT "anonymous_quote_limits_nonnegative" CHECK ("issued_count" >= 0),
+    CONSTRAINT "anonymous_quote_limits_window" CHECK (
+        "window_expires_at" > "window_started_at"
+    )
+);
+
+CREATE INDEX "anonymous_quote_limits_window_expires_at_idx"
+    ON "anonymous_quote_limits"("window_expires_at");
+
 ALTER TABLE "quote_requests"
     ADD COLUMN "public_reference" VARCHAR(50),
     ADD COLUMN "description" TEXT NOT NULL DEFAULT 'Legacy quote request',

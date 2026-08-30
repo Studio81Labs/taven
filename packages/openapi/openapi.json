@@ -1228,6 +1228,9 @@
           },
           "409": {
             "description": "Idempotency input changed"
+          },
+          "429": {
+            "description": "Anonymous quote-submission limit is exhausted"
           }
         },
         "summary": "Submit an individual quote request",

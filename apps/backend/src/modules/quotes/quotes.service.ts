@@ -2,6 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   GoneException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -50,6 +52,11 @@ const UUID_PATTERN =
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REQUEST_SESSION_DAYS = 30;
 const IDEMPOTENCY_DAYS = 7;
+const ANONYMOUS_QUOTE_WINDOW_MILLISECONDS = 15 * 60 * 1_000;
+const ANONYMOUS_QUOTE_CLIENT_MAX_ISSUED = 5;
+const ANONYMOUS_QUOTE_GLOBAL_MAX_ISSUED = 100;
+const ANONYMOUS_QUOTE_GLOBAL_SUBJECT = "global";
+const ANONYMOUS_QUOTE_LIMIT_CLEANUP_BATCH = 100;
 const REQUIRED_ITEM_COMPONENTS = new Set<PriceComponentKind>([
   PriceComponentKind.ITEM_PRODUCTION,
   PriceComponentKind.ITEM_QUANTITY,
@@ -64,6 +71,12 @@ const ORDER_COMPONENTS = new Set<PriceComponentKind>([
 ]);
 
 type Transaction = Prisma.TransactionClient;
+type AnonymousQuoteLimitRow = {
+  subject_hash: string;
+  window_started_at: Date;
+  window_expires_at: Date;
+  issued_count: number;
+};
 type ExpiringResult<T> =
   Readonly<{ kind: "ok"; value: T }> | Readonly<{ kind: "expired" }>;
 
@@ -73,6 +86,7 @@ export class QuotesService {
 
   async createRequest(
     input: CreateQuoteRequestDto,
+    clientAddress: string,
     idempotencyKey: string | undefined,
   ): Promise<QuoteRequestCreatedDto> {
     const commandKey = requireIdempotencyKey(idempotencyKey);
@@ -90,6 +104,7 @@ export class QuotesService {
       commandKey,
       fingerprint,
       async (transaction) => {
+        await this.reserveAnonymousQuote(transaction, clientAddress);
         const observedAt = await databaseNow(transaction);
         const requestId = randomUUID();
         const sessionId = randomUUID();
@@ -169,39 +184,44 @@ export class QuotesService {
   ): Promise<QuoteRequestDetailDto> {
     assertUuid(requestId, "requestId");
     const token = bearerCapability(authorization);
+    const observedAt = await databaseNow(this.prisma);
     const request = await this.prisma.quoteRequest.findUnique({
       where: { id: requestId },
       include: { quoteSession: true, customer: true },
     });
     if (
       !request?.quoteSession ||
-      request.quoteSession.expiresAt.getTime() <= Date.now() ||
+      request.quoteSession.expiresAt.getTime() <= observedAt.getTime() ||
       !matchesTokenHash(token, request.quoteSession.publicTokenHash)
     ) {
       throw new UnauthorizedException("Quote-request capability is invalid");
     }
-    return this.requestDetail(request);
+    return this.requestDetail(request, observedAt);
   }
 
   async listRequests(status?: string): Promise<QuoteRequestDetailDto[]> {
     const normalizedStatus = status ? parseStatus(status) : undefined;
+    const observedAt = await databaseNow(this.prisma);
     const requests = await this.prisma.quoteRequest.findMany({
       ...(normalizedStatus ? { where: { status: normalizedStatus } } : {}),
       include: { quoteSession: true, customer: true },
       orderBy: [{ slaDueAt: "asc" }, { createdAt: "asc" }],
       take: 100,
     });
-    return Promise.all(requests.map((request) => this.requestDetail(request)));
+    return Promise.all(
+      requests.map((request) => this.requestDetail(request, observedAt)),
+    );
   }
 
   async getOperatorRequest(requestId: string): Promise<QuoteRequestDetailDto> {
     assertUuid(requestId, "requestId");
+    const observedAt = await databaseNow(this.prisma);
     const request = await this.prisma.quoteRequest.findUnique({
       where: { id: requestId },
       include: { quoteSession: true, customer: true },
     });
     if (!request) throw new NotFoundException("Quote request was not found");
-    return this.requestDetail(request);
+    return this.requestDetail(request, observedAt);
   }
 
   async beginReview(
@@ -501,8 +521,9 @@ export class QuotesService {
   ): Promise<OfferPreviewDto> {
     assertUuid(quoteId, "quoteId");
     const token = bearerCapability(authorization);
+    const observedAt = await databaseNow(this.prisma);
     const quote = await this.offerForToken(quoteId, token);
-    if (quote.expiresAt.getTime() <= Date.now()) {
+    if (quote.expiresAt.getTime() <= observedAt.getTime()) {
       await this.expireOverdueOffer(quoteId);
       throw new GoneException("Offer is no longer available");
     }
@@ -848,6 +869,7 @@ export class QuotesService {
         phone: string | null;
       } | null;
     },
+    observedAt: Date,
   ): Promise<QuoteRequestDetailDto> {
     const attachments = await this.prisma.photoAsset.findMany({
       where: {
@@ -857,7 +879,8 @@ export class QuotesService {
       },
       orderBy: { uploadedAt: "asc" },
     });
-    const respondedAt = request.slaRespondedAt?.getTime() ?? Date.now();
+    const respondedAt =
+      request.slaRespondedAt?.getTime() ?? observedAt.getTime();
     return {
       requestId: request.id,
       publicReference: request.publicReference,
@@ -888,6 +911,76 @@ export class QuotesService {
       );
     }
     return key;
+  }
+
+  private async reserveAnonymousQuote(
+    transaction: Transaction,
+    clientAddress: string,
+  ): Promise<void> {
+    const observedAt = await databaseNow(transaction);
+    const windowExpiresAt = new Date(
+      observedAt.getTime() + ANONYMOUS_QUOTE_WINDOW_MILLISECONDS,
+    );
+    const subjectHash = createHmac("sha256", this.capabilityKey())
+      .update(
+        `anonymous-quote-request\0${normalizeClientAddress(clientAddress)}`,
+      )
+      .digest("hex");
+    const global = await lockAnonymousQuoteLimit(
+      transaction,
+      ANONYMOUS_QUOTE_GLOBAL_SUBJECT,
+      observedAt,
+      windowExpiresAt,
+    );
+    const subject = await lockAnonymousQuoteLimit(
+      transaction,
+      subjectHash,
+      observedAt,
+      windowExpiresAt,
+    );
+    const currentGlobal = await resetExpiredQuoteLimit(
+      transaction,
+      global,
+      observedAt,
+      windowExpiresAt,
+    );
+    const currentSubject = await resetExpiredQuoteLimit(
+      transaction,
+      subject,
+      observedAt,
+      windowExpiresAt,
+    );
+    if (
+      currentGlobal.issued_count >= ANONYMOUS_QUOTE_GLOBAL_MAX_ISSUED ||
+      currentSubject.issued_count >= ANONYMOUS_QUOTE_CLIENT_MAX_ISSUED
+    ) {
+      throw new HttpException(
+        "Anonymous quote-submission limit is exhausted",
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    await transaction.anonymousQuoteLimit.update({
+      where: { subjectHash: ANONYMOUS_QUOTE_GLOBAL_SUBJECT },
+      data: { issuedCount: { increment: 1 } },
+    });
+    await transaction.anonymousQuoteLimit.update({
+      where: { subjectHash },
+      data: { issuedCount: { increment: 1 } },
+    });
+    await transaction.$executeRaw`
+      WITH expired AS (
+        SELECT subject_hash
+        FROM anonymous_quote_limits
+        WHERE subject_hash <> ${ANONYMOUS_QUOTE_GLOBAL_SUBJECT}
+          AND window_expires_at <= ${observedAt}
+        ORDER BY window_expires_at, subject_hash
+        FOR UPDATE SKIP LOCKED
+        LIMIT ${ANONYMOUS_QUOTE_LIMIT_CLEANUP_BATCH}
+      )
+      DELETE FROM anonymous_quote_limits limits
+      USING expired
+      WHERE limits.subject_hash = expired.subject_hash
+    `;
   }
 
   private async idempotent<T>(
@@ -942,6 +1035,56 @@ export class QuotesService {
       return response;
     });
   }
+}
+
+async function lockAnonymousQuoteLimit(
+  transaction: Transaction,
+  subjectHash: string,
+  windowStartedAt: Date,
+  windowExpiresAt: Date,
+): Promise<AnonymousQuoteLimitRow> {
+  await transaction.$executeRaw`
+    INSERT INTO anonymous_quote_limits (
+      subject_hash, window_started_at, window_expires_at,
+      issued_count, updated_at
+    ) VALUES (
+      ${subjectHash}, ${windowStartedAt}, ${windowExpiresAt}, 0,
+      clock_timestamp()
+    )
+    ON CONFLICT (subject_hash) DO NOTHING
+  `;
+  const rows = await transaction.$queryRaw<AnonymousQuoteLimitRow[]>`
+    SELECT subject_hash, window_started_at, window_expires_at, issued_count
+    FROM anonymous_quote_limits
+    WHERE subject_hash = ${subjectHash}
+    FOR UPDATE
+  `;
+  const row = rows[0];
+  if (!row) throw new Error("anonymous quote limit row is unavailable");
+  return row;
+}
+
+async function resetExpiredQuoteLimit(
+  transaction: Transaction,
+  row: AnonymousQuoteLimitRow,
+  observedAt: Date,
+  windowExpiresAt: Date,
+): Promise<AnonymousQuoteLimitRow> {
+  if (row.window_expires_at.getTime() > observedAt.getTime()) return row;
+  await transaction.anonymousQuoteLimit.update({
+    where: { subjectHash: row.subject_hash },
+    data: {
+      windowStartedAt: observedAt,
+      windowExpiresAt,
+      issuedCount: 0,
+    },
+  });
+  return {
+    ...row,
+    window_started_at: observedAt,
+    window_expires_at: windowExpiresAt,
+    issued_count: 0,
+  };
 }
 
 async function lockedRequest(transaction: Transaction, requestId: string) {
@@ -1565,8 +1708,10 @@ function parseStatus(value: string): QuoteRequestStatus {
   return normalized as QuoteRequestStatus;
 }
 
-async function databaseNow(transaction: Transaction): Promise<Date> {
-  const rows = await transaction.$queryRaw<Array<{ now: Date }>>`
+async function databaseNow(
+  database: Pick<Transaction, "$queryRaw">,
+): Promise<Date> {
+  const rows = await database.$queryRaw<Array<{ now: Date }>>`
     SELECT clock_timestamp() AS now
   `;
   const observedAt = rows[0]?.now;
@@ -1589,6 +1734,13 @@ function capabilityToken(secret: string, ...scope: readonly string[]): string {
   return createHmac("sha256", secret)
     .update(scope.join("\0"))
     .digest("base64url");
+}
+
+function normalizeClientAddress(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("::ffff:")
+    ? normalized.slice("::ffff:".length)
+    : normalized || "unknown";
 }
 
 function hashToken(token: string): string {

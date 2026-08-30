@@ -173,10 +173,12 @@ export class UploadService {
           public_token_hash: string;
           status: string;
           expires_at: Date;
+          observed_at: Date;
         }>
       >`
         SELECT request.customer_id, session.customer_id AS session_customer_id,
-               session.public_token_hash, session.status::text, session.expires_at
+               session.public_token_hash, session.status::text, session.expires_at,
+               clock_timestamp() AS observed_at
         FROM quote_requests request
         JOIN quote_sessions session ON session.id = request.quote_session_id
         WHERE request.id = ${metadata.scopeId}::uuid
@@ -186,7 +188,7 @@ export class UploadService {
       if (
         !scope ||
         scope.status !== "OPEN" ||
-        scope.expires_at.getTime() <= Date.now() ||
+        scope.expires_at.getTime() <= scope.observed_at.getTime() ||
         !matchesTokenHash(scopeToken, scope.public_token_hash)
       ) {
         throw new UnauthorizedException("Quote-session capability is invalid");
