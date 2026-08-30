@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CandidateEstimateJobSchema,
   CandidateEstimateResultSchema,
   ConfirmedUnitConversionSchema,
   GeometrySelectionSchema,
@@ -22,7 +23,10 @@ import {
   geometrySelectionSha256,
   machineOccupancyCacheIdentitySha256,
   productionArtifactObjectKey,
+  slicingDispatchAttemptKey,
   slicingInputFingerprint,
+  slicingJobEffectFingerprint,
+  slicingResultFingerprint,
   slicingResultForJobSchema,
   type SlicingJobKind,
 } from "./contracts.js";
@@ -302,6 +306,24 @@ function result(
 }
 
 describe("versioned slicing jobs", () => {
+  it("keeps worker idempotency stable while identifying each dispatch attempt", () => {
+    const first = CandidateEstimateJobSchema.parse(candidateJob);
+    const retry = CandidateEstimateJobSchema.parse({
+      ...candidateJob,
+      attempt: 2,
+      correlationId: ids.geometryB,
+    });
+
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    expect(retry.correlationId).not.toBe(first.correlationId);
+    expect(
+      slicingDispatchAttemptKey(first.idempotencyKey, first.attempt),
+    ).not.toBe(slicingDispatchAttemptKey(retry.idempotencyKey, retry.attempt));
+    expect(slicingJobEffectFingerprint(retry)).toBe(
+      slicingJobEffectFingerprint(first),
+    );
+  });
+
   it("keeps the legacy v1 contract isolated for queue draining", () => {
     expect(LEGACY_V1_SLICING_QUEUE_NAME).toBe("taven-slicing-v1");
     expect(SLICING_QUEUE_NAME).toBe("taven-slicing-v2");
@@ -1640,6 +1662,65 @@ describe("versioned slicing results", () => {
     const reorderedJob = envelope("reference_slice", reorderedInput);
     expect(slicingResultForJobSchema(reorderedJob).parse(success)).toEqual(
       success,
+    );
+  });
+
+  it("fingerprints complete terminal results canonically", () => {
+    const candidate = CandidateEstimateResultSchema.parse(
+      result(candidateJob, {
+        status: "succeeded",
+        metrics: {
+          ...sliceMetrics,
+          estimatedPrintSeconds: "16",
+          estimatedMaterialMilligrams: "28",
+          plateCount: 2,
+        },
+        plates: [
+          {
+            plateOrdinal: 1,
+            partsOnPlate: 2,
+            estimatedPrintSeconds: "10",
+            estimatedMaterialMilligrams: "20",
+          },
+          {
+            plateOrdinal: 2,
+            partsOnPlate: 1,
+            estimatedPrintSeconds: "6",
+            estimatedMaterialMilligrams: "8",
+          },
+        ],
+        occupancySlices: candidateOccupancySlices,
+      }),
+    );
+    const reordered = {
+      outcome: candidate.outcome,
+      engine: candidate.engine,
+      input: candidate.input,
+      kind: candidate.kind,
+      attempt: candidate.attempt,
+      idempotencyKey: candidate.idempotencyKey,
+      inputFingerprintSha256: candidate.inputFingerprintSha256,
+      correlationId: candidate.correlationId,
+      jobId: candidate.jobId,
+      contractVersion: candidate.contractVersion,
+    };
+
+    expect(JSON.stringify(reordered)).not.toBe(JSON.stringify(candidate));
+    expect(slicingResultFingerprint(reordered)).toBe(
+      slicingResultFingerprint(candidate),
+    );
+    const failed = CandidateEstimateResultSchema.parse(
+      result(candidateJob, {
+        status: "failed",
+        failureClass: "retryable_infrastructure",
+        code: "ENGINE_TIMEOUT",
+        retryable: true,
+        message: "engine timed out",
+        retryAfterMilliseconds: 1_000,
+      }),
+    );
+    expect(slicingResultFingerprint(failed)).not.toBe(
+      slicingResultFingerprint(candidate),
     );
   });
 

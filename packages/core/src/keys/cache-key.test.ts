@@ -184,6 +184,7 @@ describe("slice cache key builders", () => {
       partsPerPlate: 2,
       quantity: 8,
       shipmentPlanId: "shipment-plan-1",
+      dispatchJobId: "candidate-dispatch-1",
       arrangementRevision: arrangementRevision("arrangement-1"),
     } as const;
     const key = buildCandidateResourceEstimateKey(base);
@@ -210,12 +211,13 @@ describe("slice cache key builders", () => {
       { ...base, partsPerPlate: 3 },
       { ...base, quantity: 9 },
       { ...base, shipmentPlanId: "shipment-plan-2" },
+      { ...base, dispatchJobId: "candidate-dispatch-2" },
       { ...base, arrangementRevision: arrangementRevision("arrangement-2") },
     ]) {
       expect(buildCandidateResourceEstimateKey(changed)).not.toBe(key);
     }
     expect(buildCandidateResourceEstimateKey(base)).toBe(key);
-    expect(key).toContain("candidate-resource-estimate:v2");
+    expect(key).toContain("candidate-resource-estimate:v3");
     expect(key.length).toBeLessThanOrEqual(255);
   });
 
@@ -241,6 +243,7 @@ describe("slice cache key builders", () => {
         partsPerPlate: 2,
         quantity: 1.5,
         shipmentPlanId: "shipment-plan-1",
+        dispatchJobId: "candidate-dispatch-1",
         arrangementRevision: arrangementRevision("arrangement-1"),
       }),
     ).toThrow("quantity must be a safe integer");

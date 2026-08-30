@@ -7,6 +7,7 @@ import { PricingModule } from "./modules/pricing/pricing.module";
 import { QuotesModule } from "./modules/quotes/quotes.module";
 import { SlicingModule } from "./modules/slicing/slicing.module";
 import { StorageModule } from "./modules/storage/storage.module";
+import { ResourcesModule } from "./modules/resources/resources.module";
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { StorageModule } from "./modules/storage/storage.module";
     QuotesModule,
     SlicingModule,
     PricingModule,
+    ResourcesModule,
     StorageModule,
     PaymentsModule,
     AdminAccessModule,

@@ -682,6 +682,24 @@ export function slicingInputFingerprint(
     .digest("hex");
 }
 
+/**
+ * Derives the persisted queue identity for one delivery attempt. The worker
+ * idempotency key deliberately remains stable across retries, so it cannot be
+ * used as the outbox uniqueness key for an individual attempt.
+ */
+export function slicingDispatchAttemptKey(
+  idempotencyKey: string,
+  attempt: number,
+): string {
+  const stableKey = IdempotencyKeySchema.parse(idempotencyKey);
+  const attemptNumber = boundedPositiveInteger(100).parse(attempt);
+  return `slicer-dispatch:v${SLICING_CONTRACT_VERSION}:${createHash("sha256")
+    .update(
+      canonicalJson({ attempt: attemptNumber, idempotencyKey: stableKey }),
+    )
+    .digest("hex")}`;
+}
+
 function requireCanonicalJobIdentity(
   value: {
     kind: SlicingJobKind;
@@ -1394,6 +1412,26 @@ export type CandidateEstimateResult = z.infer<
 >;
 export type ProductionSliceResult = z.infer<typeof ProductionSliceResultSchema>;
 export type SlicingFailure = z.infer<typeof SlicingFailureSchema>;
+
+/** Computes the immutable effect identity for a job across retry attempts. */
+export function slicingJobEffectFingerprint(jobInput: SlicingJob): string {
+  const job = SlicingJobSchema.parse(jobInput);
+  const { attempt: _attempt, correlationId: _correlationId, ...effect } = job;
+  return createHash("sha256").update(canonicalJson(effect)).digest("hex");
+}
+
+/**
+ * Computes a stable identity for one complete terminal slicing result.
+ *
+ * Unlike `inputFingerprintSha256`, this includes the worker outcome. Consumers
+ * use it to distinguish an exact delivery retry from a conflicting terminal
+ * result for the same persisted dispatch.
+ */
+export function slicingResultFingerprint(result: SlicingResult): string {
+  return createHash("sha256")
+    .update(canonicalJson(SlicingResultSchema.parse(result)))
+    .digest("hex");
+}
 
 /**
  * Binds result validation to one persisted dispatch. This rejects a valid but

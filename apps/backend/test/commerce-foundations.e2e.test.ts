@@ -408,6 +408,7 @@ async function advanceAcceptedJobToGcodeReady(
   jobId: string,
   transitionedAt: Date,
 ): Promise<void> {
+  await persistProductionSlices(client, { jobId });
   await client.query(
     `UPDATE jobs job
      SET status = 'GCODE_READY', gcode_ready_at = $2,
@@ -421,6 +422,71 @@ async function advanceAcceptedJobToGcodeReady(
        AND production.node_id = job.node_id
        AND production.phase_resource_plan_job_id = job.phase_resource_plan_job_id`,
     [jobId, transitionedAt],
+  );
+}
+
+async function persistProductionSlices(
+  client: PoolClient,
+  scope: { jobId: string } | { orderId: string },
+): Promise<void> {
+  const scopePredicate = "jobId" in scope ? "job.id = $1" : "job.order_id = $1";
+  const scopeId = "jobId" in scope ? scope.jobId : scope.orderId;
+  await client.query(
+    `INSERT INTO slice_results
+       (id, kind, cache_key, model_geometry_id, print_config_revision_id,
+        machine_profile_id, machine_calibration_id, arrangement_revision_id,
+        package_quantity, package_plate_count, parts_per_plate,
+        artifact_object_key, artifact_hash, estimated_print_seconds,
+        estimated_material_milligrams, slicer_engine, slicer_version)
+     SELECT gen_random_uuid(), 'PRODUCTION',
+            'production-package:' || job.id::text,
+            candidate.model_geometry_id, production.print_config_revision_id,
+            production.machine_profile_id, production.machine_calibration_id,
+            candidate.arrangement_revision_id,
+            candidate.quantity,
+            ceil(candidate.quantity::numeric / candidate.parts_per_plate::numeric)::integer,
+            occupancy.parts_per_plate,
+            'gcode/' || job.id::text || '/toolpaths.gcode',
+            repeat('e', 64), production.required_machine_seconds,
+            production.required_material_milligrams,
+            occupancy.slicer_engine, occupancy.slicer_version
+     FROM jobs job
+     JOIN production_reservations production
+       ON production.job_id = job.id
+      AND production.node_id = job.node_id
+      AND production.phase_resource_plan_job_id = job.phase_resource_plan_job_id
+     JOIN phase_resource_plan_jobs plan_job
+       ON plan_job.id = production.phase_resource_plan_job_id
+      AND plan_job.node_id = production.node_id
+      AND plan_job.phase_resource_plan_id = production.phase_resource_plan_id
+     JOIN candidate_resource_estimates candidate
+       ON candidate.id = plan_job.candidate_resource_estimate_id
+      AND candidate.node_id = plan_job.node_id
+     JOIN slice_results occupancy
+       ON occupancy.id = production.occupancy_slice_result_id
+     WHERE ${scopePredicate}
+       AND production.slice_result_id IS NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM slice_results existing
+           WHERE existing.artifact_object_key =
+                 'gcode/' || job.id::text || '/toolpaths.gcode'
+       )`,
+    [scopeId],
+  );
+  await client.query(
+    `UPDATE production_reservations production
+     SET slice_result_id = slice.id
+     FROM jobs job
+     JOIN slice_results slice
+       ON slice.artifact_object_key =
+          'gcode/' || job.id::text || '/toolpaths.gcode'
+     WHERE production.job_id = job.id
+       AND production.node_id = job.node_id
+       AND production.phase_resource_plan_job_id = job.phase_resource_plan_job_id
+       AND ${scopePredicate}
+       AND production.slice_result_id IS NULL`,
+    [scopeId],
   );
 }
 
@@ -555,6 +621,7 @@ async function advanceOrderLifecycleStep(
        WHERE order_id = $1`,
       [orderId, transitionedAt],
     );
+    await persistProductionSlices(client, { orderId });
     await client.query(
       `UPDATE jobs job
        SET status = 'GCODE_READY', gcode_ready_at = $2,
@@ -13291,6 +13358,9 @@ describe("commerce persistence foundations", () => {
              WHERE order_id = $1`,
             [foundation.orderId, transitionedAt],
           );
+          await persistProductionSlices(client, {
+            orderId: foundation.orderId,
+          });
           await client.query(
             `UPDATE jobs
              SET status = 'PRINTING', printing_at = $2, updated_at = $2
@@ -13312,6 +13382,9 @@ describe("commerce persistence foundations", () => {
              WHERE order_id = $1`,
             [foundation.orderId, transitionedAt],
           );
+          await persistProductionSlices(client, {
+            orderId: foundation.orderId,
+          });
           await client.query(
             `UPDATE jobs job
              SET status = 'GCODE_READY', gcode_ready_at = $2,
@@ -22886,7 +22959,7 @@ describe("commerce persistence foundations", () => {
         await client.query(`SET LOCAL session_replication_role = 'replica'`);
         await client.query(
           `UPDATE payments
-           SET balance_due_at = clock_timestamp() - interval '1 second'
+           SET balance_due_at = statement_timestamp() - interval '1 second'
            WHERE order_id = $1 AND role = 'BALANCE'`,
           [individual.orderId],
         );
@@ -23151,7 +23224,7 @@ describe("commerce persistence foundations", () => {
         await client.query(`SET LOCAL session_replication_role = 'replica'`);
         await client.query(
           `UPDATE payments
-           SET balance_due_at = clock_timestamp() - interval '1 second'
+           SET balance_due_at = statement_timestamp() - interval '1 second'
            WHERE order_id = $1 AND role = 'BALANCE'`,
           [individual.orderId],
         );
