@@ -274,6 +274,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(accepted.body.status).toBe("DRAFT");
     const acceptReplay = await acceptOffer(issued.body, acceptKey);
     expect(acceptReplay.body).toEqual(accepted.body);
+    const freshAcceptance = await acceptOffer(
+      issued.body,
+      key("fresh-accept-command"),
+    );
+    expect(freshAcceptance.response.status).toBe(409);
     const unauthorizedReplay = await acceptOffer(
       {
         ...issued.body,

@@ -671,21 +671,7 @@ export class QuotesService {
           return { kind: "expired" };
         }
         if (quote.quoteRequest.status === QuoteRequestStatus.ACCEPTED) {
-          const origin = await transaction.individualOrderOrigin.findUnique({
-            where: { quoteId },
-            include: { order: true },
-          });
-          if (!origin) {
-            throw new ConflictException("Accepted offer has no order");
-          }
-          return {
-            kind: "ok",
-            value: {
-              orderId: origin.order.id,
-              publicReference: origin.order.publicReference,
-              status: "DRAFT",
-            },
-          };
+          throw new ConflictException("Offer was already accepted");
         }
         if (quote.quoteRequest.status !== QuoteRequestStatus.QUOTED) {
           throw new GoneException("Offer is no longer available");
@@ -2034,11 +2020,23 @@ function addDays(value: Date, days: number): Date {
 
 export function addBusinessHours(value: Date, hours: number): Date {
   const result = new Date(value);
-  let remaining = hours;
-  while (remaining > 0) {
+  let remainingMilliseconds = hours * 60 * 60 * 1_000;
+  while (remainingMilliseconds > 0) {
     const day = result.getUTCDay();
-    result.setUTCHours(result.getUTCHours() + 1);
-    if (day !== 0 && day !== 6) remaining -= 1;
+    if (day === 0 || day === 6) {
+      result.setUTCDate(result.getUTCDate() + (day === 6 ? 2 : 1));
+      result.setUTCHours(0, 0, 0, 0);
+      continue;
+    }
+    const nextDay = new Date(result);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    nextDay.setUTCHours(0, 0, 0, 0);
+    const consumed = Math.min(
+      remainingMilliseconds,
+      nextDay.getTime() - result.getTime(),
+    );
+    result.setTime(result.getTime() + consumed);
+    remainingMilliseconds -= consumed;
   }
   return result;
 }

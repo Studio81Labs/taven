@@ -20,7 +20,10 @@ describe("quote-request SLA", () => {
   it("starts counting when a weekend submission reaches Monday", () => {
     expect(
       addBusinessHours(new Date("2026-08-29T10:30:00.000Z"), 24).toISOString(),
-    ).toBe("2026-09-01T00:30:00.000Z");
+    ).toBe("2026-09-01T00:00:00.000Z");
+    expect(
+      addBusinessHours(new Date("2026-08-30T23:59:59.999Z"), 24).toISOString(),
+    ).toBe("2026-09-01T00:00:00.000Z");
   });
 });
 
