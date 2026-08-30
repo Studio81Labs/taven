@@ -350,14 +350,6 @@ export interface components {
             /** Format: date */
             requestedDate?: string;
         };
-        CustomServiceOfferItemDto: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "CUSTOM_SERVICE";
-            serviceDescription: string;
-        };
         HealthResponseDto: {
             /**
              * @example taven-backend
@@ -410,7 +402,7 @@ export interface components {
             inputSnapshot: {
                 [key: string]: unknown;
             };
-            items: (components["schemas"]["CustomServiceOfferItemDto"] | components["schemas"]["ModelOfferItemDto"])[];
+            items: components["schemas"]["ModelOfferItemDto"][];
             /** Format: uuid */
             priceListId: string;
             /** Format: date */
@@ -422,10 +414,7 @@ export interface components {
         };
         ModelOfferItemDto: {
             color?: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
+            /** @enum {string} */
             kind: "MODEL";
             /** @enum {string} */
             material: "PLA" | "PETG";
@@ -481,21 +470,20 @@ export interface components {
         OfferPreviewItemDto: {
             color: string | null;
             /** @enum {string} */
-            kind: "MODEL" | "CUSTOM_SERVICE";
-            /** @enum {string|null} */
-            material: "PLA" | "PETG" | null;
+            kind: "MODEL";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
             /** Format: uuid */
-            modelGeometryId: string | null;
+            modelGeometryId: string;
             ordinal: number;
             /** Format: uuid */
             primaryReferenceSliceResultId: string | null;
             /** Format: uuid */
-            printConfigRevisionId: string | null;
+            printConfigRevisionId: string;
             quantity: number;
             referencePartsPerPlate: number | null;
-            serviceDescription: string | null;
             /** Format: uuid */
-            sourceModelFileId: string | null;
+            sourceModelFileId: string;
             /** Format: uuid */
             tailReferenceSliceResultId: string | null;
         };

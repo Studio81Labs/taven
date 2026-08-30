@@ -29,24 +29,10 @@ describe("OpenAPI artifact", () => {
       string,
       unknown
     >;
-    const items = issueOffer.items as {
-      items: {
-        discriminator: { propertyName: string };
-        oneOf: Array<{ $ref: string }>;
-      };
-    };
-
-    expect(items.items).toMatchObject({
-      discriminator: { propertyName: "kind" },
-      oneOf: [
-        { $ref: "#/components/schemas/CustomServiceOfferItemDto" },
-        { $ref: "#/components/schemas/ModelOfferItemDto" },
-      ],
+    expect(issueOffer.items).toMatchObject({
+      type: "array",
+      items: { $ref: "#/components/schemas/ModelOfferItemDto" },
     });
-    expect(schemas.CustomServiceOfferItemDto?.required).toEqual([
-      "kind",
-      "serviceDescription",
-    ]);
     expect(schemas.ModelOfferItemDto?.required).toEqual([
       "kind",
       "sourceModelFileId",

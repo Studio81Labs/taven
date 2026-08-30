@@ -472,6 +472,57 @@ describe("secure object storage and retention", () => {
       where: { currency: "CZK" },
       orderBy: { createdAt: "asc" },
     });
+    const modelFileId = randomUUID();
+    const modelGeometryId = randomUUID();
+    const printConfigRevisionId = randomUUID();
+    await prisma.$transaction(async (transaction) => {
+      await transaction.modelFile.create({
+        data: {
+          id: modelFileId,
+          format: "STL",
+          originalFilename: "manually-rebuilt-reference.stl",
+          storageObjectKey: `storage-tests/models/${modelFileId}`,
+          contentHash: createHash("sha256").update(modelFileId).digest("hex"),
+          sizeBytes: 1n,
+          uploadedAt: new Date(),
+          sourceDeleteAfter: new Date(Date.now() + 60 * 60 * 1_000),
+        },
+      });
+      await transaction.modelGeometry.create({
+        data: {
+          id: modelGeometryId,
+          sourceModelFileId: modelFileId,
+          canonicalObjectKey: `storage-tests/geometries/${modelGeometryId}`,
+          geometryHash: createHash("sha256")
+            .update(modelGeometryId)
+            .digest("hex"),
+          canonicalizerRevision: "storage-e2e-v1",
+          volumeCubicMicrometers: 1n,
+          boundsXMicrometers: 1n,
+          boundsYMicrometers: 1n,
+          boundsZMicrometers: 1n,
+          triangleCount: 1,
+        },
+      });
+      await transaction.revisionIdentity.create({
+        data: {
+          id: printConfigRevisionId,
+          kind: "PRINT_CONFIG",
+          digest: createHash("sha256")
+            .update(printConfigRevisionId)
+            .digest("hex"),
+        },
+      });
+      await transaction.printConfigRevision.create({
+        data: {
+          id: printConfigRevisionId,
+          quality: "STANDARD",
+          infillPercent: 20,
+          layerHeightMicrometers: 200,
+          settings: {},
+        },
+      });
+    });
     const issued = await quotes.issueOffer(
       scopeId,
       {
@@ -484,8 +535,11 @@ describe("secure object storage and retention", () => {
         inputSnapshot: {},
         items: [
           {
-            kind: "CUSTOM_SERVICE",
-            serviceDescription: "Create a replacement from reference photos",
+            kind: "MODEL",
+            sourceModelFileId: modelFileId,
+            modelGeometryId,
+            printConfigRevisionId,
+            material: "PLA",
           },
         ],
         components: [

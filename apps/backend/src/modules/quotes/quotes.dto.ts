@@ -1,9 +1,4 @@
-import {
-  ApiExtraModels,
-  ApiProperty,
-  ApiPropertyOptional,
-  getSchemaPath,
-} from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const JAVASCRIPT_SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
@@ -122,14 +117,6 @@ export class QuoteRequestDetailDto {
   attachments!: QuoteAttachmentDto[];
 }
 
-export class CustomServiceOfferItemDto {
-  @ApiProperty({ type: String, enum: ["CUSTOM_SERVICE"] })
-  kind!: "CUSTOM_SERVICE";
-
-  @ApiProperty({ type: String, minLength: 3, maxLength: 2_000 })
-  serviceDescription!: string;
-}
-
 export class ModelOfferItemDto {
   @ApiProperty({ type: String, enum: ["MODEL"] })
   kind!: "MODEL";
@@ -170,8 +157,6 @@ export class ModelOfferItemDto {
   quantity?: number;
 }
 
-export type OfferItemDto = CustomServiceOfferItemDto | ModelOfferItemDto;
-
 export class OfferPriceComponentDto {
   @ApiProperty({
     type: String,
@@ -206,7 +191,6 @@ export class OfferPriceComponentDto {
   allocation?: Record<string, unknown>;
 }
 
-@ApiExtraModels(CustomServiceOfferItemDto, ModelOfferItemDto)
 export class IssueOfferDto {
   @ApiProperty({ type: String, minLength: 3, maxLength: 4_000 })
   summary!: string;
@@ -240,24 +224,8 @@ export class IssueOfferDto {
   @ApiProperty({ type: "object", additionalProperties: true })
   inputSnapshot!: Record<string, unknown>;
 
-  @ApiProperty({
-    type: "array",
-    minItems: 1,
-    items: {
-      oneOf: [
-        { $ref: getSchemaPath(CustomServiceOfferItemDto) },
-        { $ref: getSchemaPath(ModelOfferItemDto) },
-      ],
-      discriminator: {
-        propertyName: "kind",
-        mapping: {
-          CUSTOM_SERVICE: getSchemaPath(CustomServiceOfferItemDto),
-          MODEL: getSchemaPath(ModelOfferItemDto),
-        },
-      },
-    },
-  })
-  items!: OfferItemDto[];
+  @ApiProperty({ type: [ModelOfferItemDto], minItems: 1 })
+  items!: ModelOfferItemDto[];
 
   @ApiProperty({ type: [OfferPriceComponentDto], minItems: 1 })
   components!: OfferPriceComponentDto[];
@@ -288,20 +256,17 @@ export class OfferPreviewItemDto {
   @ApiProperty({ type: "integer", minimum: 0 })
   ordinal!: number;
 
-  @ApiProperty({ type: String, enum: ["MODEL", "CUSTOM_SERVICE"] })
-  kind!: "MODEL" | "CUSTOM_SERVICE";
+  @ApiProperty({ type: String, enum: ["MODEL"] })
+  kind!: "MODEL";
 
-  @ApiProperty({ type: String, maxLength: 2_000, nullable: true })
-  serviceDescription!: string | null;
+  @ApiProperty({ type: String, format: "uuid" })
+  sourceModelFileId!: string;
 
-  @ApiProperty({ type: String, format: "uuid", nullable: true })
-  sourceModelFileId!: string | null;
+  @ApiProperty({ type: String, format: "uuid" })
+  modelGeometryId!: string;
 
-  @ApiProperty({ type: String, format: "uuid", nullable: true })
-  modelGeometryId!: string | null;
-
-  @ApiProperty({ type: String, format: "uuid", nullable: true })
-  printConfigRevisionId!: string | null;
+  @ApiProperty({ type: String, format: "uuid" })
+  printConfigRevisionId!: string;
 
   @ApiProperty({ type: String, format: "uuid", nullable: true })
   primaryReferenceSliceResultId!: string | null;
@@ -317,8 +282,8 @@ export class OfferPreviewItemDto {
   })
   referencePartsPerPlate!: number | null;
 
-  @ApiProperty({ type: String, enum: ["PLA", "PETG"], nullable: true })
-  material!: "PLA" | "PETG" | null;
+  @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
+  material!: "PLA" | "PETG";
 
   @ApiProperty({ type: String, maxLength: 100, nullable: true })
   color!: string | null;

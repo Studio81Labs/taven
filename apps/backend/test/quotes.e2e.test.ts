@@ -27,6 +27,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let prisma: PrismaService;
   let quotes: QuotesService;
   let priceListId: string;
+  let defaultOfferItem: Record<string, unknown>;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -42,6 +43,9 @@ describe("QuoteRequest and tokenized individual offers", () => {
       orderBy: { createdAt: "asc" },
     });
     priceListId = priceList.id;
+    defaultOfferItem = (
+      await createModelOfferItem("default-offer-item", "NONE")
+    ).item;
   });
 
   afterAll(async () => {
@@ -59,6 +63,25 @@ describe("QuoteRequest and tokenized individual offers", () => {
     });
 
     expect(response.response.status).toBe(400);
+  });
+
+  it("rejects JSON inputs beyond the canonicalization depth limit", async () => {
+    const response = await apiJson("quote-requests", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": key("deep-json"),
+      },
+      body: JSON.stringify({
+        ...requestInput("deep-json"),
+        measurements: nestedJson(65),
+      }),
+    });
+
+    expect(response.response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      message: "measurements must not exceed 64 levels",
+    });
   });
 
   it("submits idempotently, isolates attachments, issues, previews, and accepts once", async () => {
@@ -296,17 +319,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(preview.body.items).toEqual([
       {
         ordinal: 0,
-        kind: "CUSTOM_SERVICE",
-        serviceDescription: "Rebuild the damaged mounting bracket",
-        sourceModelFileId: null,
-        modelGeometryId: null,
-        printConfigRevisionId: null,
+        ...defaultOfferItem,
         primaryReferenceSliceResultId: null,
         tailReferenceSliceResultId: null,
         referencePartsPerPlate: null,
-        material: null,
         color: null,
-        quantity: 1,
       },
     ]);
     expect(preview.body.components).toEqual([
@@ -409,9 +426,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toEqual(["DEPOSIT", "BALANCE"]);
     expect(persisted.individualOrderOrigin?.order.items).toHaveLength(1);
     expect(persisted.individualOrderOrigin?.order.items[0]).toMatchObject({
-      kind: "CUSTOM_SERVICE",
-      serviceDescription: "Rebuild the damaged mounting bracket",
-      sourceModelFileId: null,
+      sourceModelFileId: defaultOfferItem.sourceModelFileId,
+      modelGeometryId: defaultOfferItem.modelGeometryId,
+      printConfigRevisionId: defaultOfferItem.printConfigRevisionId,
+      material: defaultOfferItem.material,
     });
     expect(
       await prisma.payment.count({
@@ -572,6 +590,36 @@ describe("QuoteRequest and tokenized individual offers", () => {
       [...defaultComponents(), { kind: "PAYMENT_FEE", amountMinor: 0 }],
     );
     expect(response.response.status).toBe(400);
+  });
+
+  it("rejects unplannable custom-service items before offer persistence", async () => {
+    const created = await createRequest(
+      key("custom-service-create"),
+      requestInput("custom-service-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.body.requestId}/review`,
+      key("custom-service-review"),
+    );
+    const response = await issueOffer(
+      created.body.requestId,
+      key("custom-service-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      [
+        {
+          kind: "CUSTOM_SERVICE",
+          serviceDescription: "Rebuild the damaged mounting bracket",
+        },
+      ],
+    );
+
+    expect(response.response.status).toBe(400);
+    expect(
+      await prisma.quote.count({
+        where: { quoteRequestId: created.body.requestId },
+      }),
+    ).toBe(0);
   });
 
   it("rejects invalid model references as operator input", async () => {
@@ -935,12 +983,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   }
 
   function defaultItems(): Array<Record<string, unknown>> {
-    return [
-      {
-        kind: "CUSTOM_SERVICE",
-        serviceDescription: "Rebuild the damaged mounting bracket",
-      },
-    ];
+    return [defaultOfferItem];
   }
 
   async function acceptOffer(
@@ -1003,4 +1046,12 @@ function rfc3339WithOffset(value: Date): string {
   return new Date(value.getTime() + 2 * 60 * 60 * 1_000)
     .toISOString()
     .replace(".000Z", "+02:00");
+}
+
+function nestedJson(depth: number): Record<string, unknown> {
+  let result: Record<string, unknown> = {};
+  for (let index = 1; index < depth; index += 1) {
+    result = { nested: result };
+  }
+  return result;
 }

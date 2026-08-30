@@ -10,7 +10,6 @@ import {
 } from "@nestjs/common";
 import {
   AuditActorKind,
-  CommerceItemKind,
   IdempotencyStatus,
   Material,
   PaymentRole,
@@ -38,8 +37,8 @@ import type {
   AcceptedOfferDto,
   CreateQuoteRequestDto,
   IssueOfferDto,
+  ModelOfferItemDto,
   OfferIssuedDto,
-  OfferItemDto,
   OfferPaymentScheduleDto,
   OfferPreviewDto,
   OfferPreviewPriceComponentDto,
@@ -61,6 +60,7 @@ const ANONYMOUS_QUOTE_GLOBAL_MAX_ISSUED = 100;
 const ANONYMOUS_QUOTE_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_QUOTE_LIMIT_CLEANUP_BATCH = 100;
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
+const JSON_MAXIMUM_DEPTH = 64;
 const REQUIRED_ITEM_COMPONENTS = new Set<PriceComponentKind>([
   PriceComponentKind.ITEM_PRODUCTION,
   PriceComponentKind.ITEM_QUANTITY,
@@ -434,11 +434,9 @@ export class QuotesService {
               id: item.id,
               quoteId,
               ordinal: item.ordinal,
-              kind: item.kind,
-              serviceDescription: item.serviceDescription ?? null,
-              sourceModelFileId: item.sourceModelFileId ?? null,
-              modelGeometryId: item.modelGeometryId ?? null,
-              printConfigRevisionId: item.printConfigRevisionId ?? null,
+              sourceModelFileId: item.sourceModelFileId,
+              modelGeometryId: item.modelGeometryId,
+              printConfigRevisionId: item.printConfigRevisionId,
               primaryReferenceSliceResultId:
                 item.primaryReferenceSliceResultId ?? null,
               tailReferenceSliceResultId:
@@ -664,8 +662,7 @@ export class QuotesService {
       contractTotalMinor: safeNumber(snapshot.contractTotalMinor),
       items: quote.items.map((item) => ({
         ordinal: item.ordinal,
-        kind: item.kind,
-        serviceDescription: item.serviceDescription,
+        kind: "MODEL" as const,
         sourceModelFileId: item.sourceModelFileId,
         modelGeometryId: item.modelGeometryId,
         printConfigRevisionId: item.printConfigRevisionId,
@@ -773,11 +770,9 @@ export class QuotesService {
               id: orderItemId,
               orderId,
               ordinal: quoteItem.ordinal,
-              kind: quoteItem.kind,
-              serviceDescription: quoteItem.serviceDescription ?? null,
-              sourceModelFileId: quoteItem.sourceModelFileId ?? null,
-              modelGeometryId: quoteItem.modelGeometryId ?? null,
-              printConfigRevisionId: quoteItem.printConfigRevisionId ?? null,
+              sourceModelFileId: quoteItem.sourceModelFileId,
+              modelGeometryId: quoteItem.modelGeometryId,
+              printConfigRevisionId: quoteItem.printConfigRevisionId,
               primaryReferenceSliceResultId:
                 quoteItem.primaryReferenceSliceResultId,
               tailReferenceSliceResultId: quoteItem.tailReferenceSliceResultId,
@@ -1732,29 +1727,9 @@ function validateOffer(input: IssueOfferDto) {
   };
 }
 
-function validateOfferItem(input: OfferItemDto, ordinal: number) {
+function validateOfferItem(input: ModelOfferItemDto, ordinal: number) {
   if (!input || typeof input !== "object") {
     throw new BadRequestException(`Item ${ordinal} is invalid`);
-  }
-  if (input.kind === "CUSTOM_SERVICE") {
-    return {
-      kind: CommerceItemKind.CUSTOM_SERVICE,
-      serviceDescription: requiredText(
-        input.serviceDescription,
-        `items[${ordinal}].serviceDescription`,
-        2_000,
-        3,
-      ),
-      sourceModelFileId: undefined,
-      modelGeometryId: undefined,
-      printConfigRevisionId: undefined,
-      primaryReferenceSliceResultId: undefined,
-      tailReferenceSliceResultId: undefined,
-      referencePartsPerPlate: undefined,
-      material: undefined,
-      color: undefined,
-      quantity: 1,
-    };
   }
   if (input.kind !== "MODEL") {
     throw new BadRequestException(`items[${ordinal}].kind is invalid`);
@@ -1797,8 +1772,7 @@ function validateOfferItem(input: OfferItemDto, ordinal: number) {
     );
   }
   return {
-    kind: CommerceItemKind.MODEL,
-    serviceDescription: undefined,
+    kind: "MODEL" as const,
     sourceModelFileId: input.sourceModelFileId,
     modelGeometryId: input.modelGeometryId,
     printConfigRevisionId: input.printConfigRevisionId,
@@ -1817,16 +1791,6 @@ async function validateOfferItemReferences(
   observedAt: Date,
 ): Promise<void> {
   for (const [ordinal, item] of items.entries()) {
-    if (item.kind !== CommerceItemKind.MODEL) continue;
-    if (
-      !item.sourceModelFileId ||
-      !item.modelGeometryId ||
-      !item.printConfigRevisionId ||
-      !item.material
-    ) {
-      throw invalidOfferItemReferences(ordinal);
-    }
-
     const [geometry, printConfig, primarySlice, tailSlice] = await Promise.all([
       transaction.modelGeometry.findUnique({
         where: { id: item.modelGeometryId },
@@ -2244,7 +2208,31 @@ function optionalObject(
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new BadRequestException(`${name} must be an object`);
   }
+  assertJsonDepth(value, name);
   return value as Record<string, unknown>;
+}
+
+function assertJsonDepth(value: object, name: string): void {
+  const pending: Array<{ depth: number; value: unknown }> = [
+    { depth: 1, value },
+  ];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.depth > JSON_MAXIMUM_DEPTH) {
+      throw new BadRequestException(
+        `${name} must not exceed ${JSON_MAXIMUM_DEPTH} levels`,
+      );
+    }
+    if (current.value === null || typeof current.value !== "object") continue;
+    const children = Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value as Record<string, unknown>);
+    for (const child of children) {
+      if (child !== null && typeof child === "object") {
+        pending.push({ depth: current.depth + 1, value: child });
+      }
+    }
+  }
 }
 
 function positiveInteger(

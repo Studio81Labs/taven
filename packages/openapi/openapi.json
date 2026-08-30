@@ -110,26 +110,6 @@
         ],
         "type": "object"
       },
-      "CustomServiceOfferItemDto": {
-        "properties": {
-          "kind": {
-            "enum": [
-              "CUSTOM_SERVICE"
-            ],
-            "type": "string"
-          },
-          "serviceDescription": {
-            "maxLength": 2000,
-            "minLength": 3,
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "serviceDescription"
-        ],
-        "type": "object"
-      },
       "HealthResponseDto": {
         "properties": {
           "service": {
@@ -280,21 +260,7 @@
           },
           "items": {
             "items": {
-              "discriminator": {
-                "mapping": {
-                  "CUSTOM_SERVICE": "#/components/schemas/CustomServiceOfferItemDto",
-                  "MODEL": "#/components/schemas/ModelOfferItemDto"
-                },
-                "propertyName": "kind"
-              },
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/CustomServiceOfferItemDto"
-                },
-                {
-                  "$ref": "#/components/schemas/ModelOfferItemDto"
-                }
-              ]
+              "$ref": "#/components/schemas/ModelOfferItemDto"
             },
             "minItems": 1,
             "type": "array"
@@ -538,8 +504,7 @@
           },
           "kind": {
             "enum": [
-              "MODEL",
-              "CUSTOM_SERVICE"
+              "MODEL"
             ],
             "type": "string"
           },
@@ -548,12 +513,10 @@
               "PLA",
               "PETG"
             ],
-            "nullable": true,
             "type": "string"
           },
           "modelGeometryId": {
             "format": "uuid",
-            "nullable": true,
             "type": "string"
           },
           "ordinal": {
@@ -567,7 +530,6 @@
           },
           "printConfigRevisionId": {
             "format": "uuid",
-            "nullable": true,
             "type": "string"
           },
           "quantity": {
@@ -581,14 +543,8 @@
             "nullable": true,
             "type": "integer"
           },
-          "serviceDescription": {
-            "maxLength": 2000,
-            "nullable": true,
-            "type": "string"
-          },
           "sourceModelFileId": {
             "format": "uuid",
-            "nullable": true,
             "type": "string"
           },
           "tailReferenceSliceResultId": {
@@ -600,7 +556,6 @@
         "required": [
           "ordinal",
           "kind",
-          "serviceDescription",
           "sourceModelFileId",
           "modelGeometryId",
           "printConfigRevisionId",
