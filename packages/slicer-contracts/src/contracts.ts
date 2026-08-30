@@ -1396,6 +1396,19 @@ export type ProductionSliceResult = z.infer<typeof ProductionSliceResultSchema>;
 export type SlicingFailure = z.infer<typeof SlicingFailureSchema>;
 
 /**
+ * Computes a stable identity for one complete terminal slicing result.
+ *
+ * Unlike `inputFingerprintSha256`, this includes the worker outcome. Consumers
+ * use it to distinguish an exact delivery retry from a conflicting terminal
+ * result for the same persisted dispatch.
+ */
+export function slicingResultFingerprint(result: SlicingResult): string {
+  return createHash("sha256")
+    .update(canonicalJson(SlicingResultSchema.parse(result)))
+    .digest("hex");
+}
+
+/**
  * Binds result validation to one persisted dispatch. This rejects a valid but
  * stale, replayed, or cross-geometry result before an adapter can persist it.
  */

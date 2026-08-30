@@ -131,6 +131,7 @@ enum InventoryStatus {
 
 enum SliceKind {
   REFERENCE
+  ANALYSIS
   PRODUCTION
 
   @@map("slice_kind")
@@ -189,6 +190,14 @@ enum OutboxStatus {
   FAILED
 
   @@map("outbox_status")
+}
+
+enum CandidateEstimateTerminalOutcome {
+  SUCCEEDED
+  FAILED
+  LEGACY_UNVERIFIABLE
+
+  @@map("candidate_estimate_terminal_outcome")
 }
 
 enum IdempotencyStatus {
@@ -845,7 +854,8 @@ model SliceResult {
   machineCalibration        MachineCalibration?         @relation(fields: [machineCalibrationId], references: [id], onDelete: Restrict)
   primaryCandidateEstimates CandidateResourceEstimate[] @relation("CandidatePrimarySliceResult")
   tailCandidateEstimates    CandidateResourceEstimate[] @relation("CandidateTailSliceResult")
-  productionReservations    ProductionReservation[]
+  productionReservations    ProductionReservation[]     @relation("ProductionReservationProductionSlice")
+  occupancyReservations     ProductionReservation[]     @relation("ProductionReservationOccupancySlice")
   primaryQuoteItems         QuoteItem[]                 @relation("QuoteItemPrimaryReferenceSlice")
   tailQuoteItems            QuoteItem[]                 @relation("QuoteItemTailReferenceSlice")
   primaryOrderItems         OrderItem[]                 @relation("OrderItemPrimaryReferenceSlice")
@@ -881,18 +891,19 @@ model CandidateResourceEstimate {
   calculatedAt               DateTime @map("calculated_at") @db.Timestamptz(3)
   expiresAt                  DateTime @map("expires_at") @db.Timestamptz(3)
 
-  node                  Node                        @relation(fields: [nodeId], references: [id], onDelete: Restrict)
-  modelGeometry         ModelGeometry               @relation(fields: [modelGeometryId], references: [id], onDelete: Restrict)
-  primarySliceResult    SliceResult                 @relation("CandidatePrimarySliceResult", fields: [primarySliceResultId, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], references: [id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], onDelete: Restrict)
-  tailSliceResult       SliceResult?                @relation("CandidateTailSliceResult", fields: [tailSliceResultId, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], references: [id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], onDelete: Restrict)
-  printConfigRevision   PrintConfigRevision         @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
-  machineProfile        MachineProfile              @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
-  machineCalibration    MachineCalibration          @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
-  machine               Machine                     @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
-  inventory             Inventory                   @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
-  shipmentPlan          ShipmentPlan                @relation(fields: [shipmentPlanId], references: [id], onDelete: Restrict)
+  node                  Node                             @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  modelGeometry         ModelGeometry                    @relation(fields: [modelGeometryId], references: [id], onDelete: Restrict)
+  primarySliceResult    SliceResult                      @relation("CandidatePrimarySliceResult", fields: [primarySliceResultId, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], references: [id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], onDelete: Restrict)
+  tailSliceResult       SliceResult?                     @relation("CandidateTailSliceResult", fields: [tailSliceResultId, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], references: [id, modelGeometryId, printConfigRevisionId, machineProfileId, machineCalibrationId], onDelete: Restrict)
+  printConfigRevision   PrintConfigRevision              @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  machineProfile        MachineProfile                   @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
+  machineCalibration    MachineCalibration               @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  machine               Machine                          @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  inventory             Inventory                        @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  shipmentPlan          ShipmentPlan                     @relation(fields: [shipmentPlanId], references: [id], onDelete: Restrict)
   capacityIntervals     CandidateCapacityInterval[]
   phaseResourcePlanJobs PhaseResourcePlanJob[]
+  terminalResult        CandidateEstimateTerminalResult?
 
   @@unique([id, nodeId])
   @@index([nodeId, expiresAt])
@@ -1035,7 +1046,8 @@ model ProductionReservation {
   jobId                      String?                     @unique @map("job_id") @db.Uuid
   machineId                  String                      @map("machine_id") @db.Uuid
   inventoryId                String                      @map("inventory_id") @db.Uuid
-  sliceResultId              String                      @map("slice_result_id") @db.Uuid
+  productionSliceResultId    String?                     @map("slice_result_id") @db.Uuid
+  occupancySliceResultId     String                      @map("occupancy_slice_result_id") @db.Uuid
   printConfigRevisionId      String                      @map("print_config_revision_id") @db.Uuid
   machineProfileId           String                      @map("machine_profile_id") @db.Uuid
   machineCalibrationId       String                      @map("machine_calibration_id") @db.Uuid
@@ -1047,19 +1059,20 @@ model ProductionReservation {
   createdAt                  DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                  DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  node                 Node                  @relation(fields: [nodeId], references: [id], onDelete: Restrict)
-  phaseReservationSet  PhaseReservationSet   @relation(fields: [phaseReservationSetId, nodeId, phaseResourcePlanId], references: [id, nodeId, phaseResourcePlanId], onDelete: Restrict)
-  phaseResourcePlan    PhaseResourcePlan     @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
-  phaseResourcePlanJob PhaseResourcePlanJob  @relation(fields: [phaseResourcePlanJobId, nodeId, phaseResourcePlanId], references: [id, nodeId, phaseResourcePlanId], onDelete: Restrict)
-  machine              Machine               @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
-  inventory            Inventory             @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
-  sliceResult          SliceResult           @relation(fields: [sliceResultId], references: [id], onDelete: Restrict)
-  printConfigRevision  PrintConfigRevision   @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
-  machineProfile       MachineProfile        @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
-  machineCalibration   MachineCalibration    @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
-  job                  Job?                  @relation("ProductionReservationJob", fields: [jobId, nodeId, phaseResourcePlanJobId], references: [id, nodeId, phaseResourcePlanJobId], onDelete: Restrict, map: "production_reservations_job_scope_fkey")
-  inventoryReservation InventoryReservation?
-  capacityReservations CapacityReservation[]
+  node                  Node                  @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  phaseReservationSet   PhaseReservationSet   @relation(fields: [phaseReservationSetId, nodeId, phaseResourcePlanId], references: [id, nodeId, phaseResourcePlanId], onDelete: Restrict)
+  phaseResourcePlan     PhaseResourcePlan     @relation(fields: [phaseResourcePlanId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  phaseResourcePlanJob  PhaseResourcePlanJob  @relation(fields: [phaseResourcePlanJobId, nodeId, phaseResourcePlanId], references: [id, nodeId, phaseResourcePlanId], onDelete: Restrict)
+  machine               Machine               @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  inventory             Inventory             @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  productionSliceResult SliceResult?          @relation("ProductionReservationProductionSlice", fields: [productionSliceResultId], references: [id], onDelete: Restrict)
+  occupancySliceResult  SliceResult           @relation("ProductionReservationOccupancySlice", fields: [occupancySliceResultId], references: [id], onDelete: Restrict)
+  printConfigRevision   PrintConfigRevision   @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  machineProfile        MachineProfile        @relation(fields: [machineProfileId], references: [id], onDelete: Restrict)
+  machineCalibration    MachineCalibration    @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  job                   Job?                  @relation("ProductionReservationJob", fields: [jobId, nodeId, phaseResourcePlanJobId], references: [id, nodeId, phaseResourcePlanJobId], onDelete: Restrict, map: "production_reservations_job_scope_fkey")
+  inventoryReservation  InventoryReservation?
+  capacityReservations  CapacityReservation[]
 
   @@unique([id, nodeId])
   @@unique([id, nodeId, machineId])
@@ -1068,7 +1081,8 @@ model ProductionReservation {
   @@index([nodeId, status, expiresAt])
   @@index([machineId])
   @@index([inventoryId])
-  @@index([sliceResultId])
+  @@index([productionSliceResultId])
+  @@index([occupancySliceResultId])
   @@index([machineCalibrationId])
   @@map("production_reservations")
 }
@@ -1138,11 +1152,27 @@ model OutboxMessage {
   createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  shipmentProviderEvents ShipmentProviderEvent[]
+  shipmentProviderEvents          ShipmentProviderEvent[]
+  candidateEstimateTerminalResult CandidateEstimateTerminalResult?
 
   @@index([status, availableAt])
   @@index([aggregateType, aggregateId])
   @@map("outbox_messages")
+}
+
+model CandidateEstimateTerminalResult {
+  outboxMessageId             String                           @id @map("outbox_message_id") @db.Uuid
+  resultFingerprintSha256     String                           @map("result_fingerprint_sha256") @db.VarChar(64)
+  outcome                     CandidateEstimateTerminalOutcome
+  candidateResourceEstimateId String?                          @unique(map: "candidate_terminal_results_candidate_key") @map("candidate_resource_estimate_id") @db.Uuid
+  failureClass                String?                          @map("failure_class") @db.VarChar(64)
+  failureCode                 String?                          @map("failure_code") @db.VarChar(64)
+  createdAt                   DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  outboxMessage             OutboxMessage              @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
+  candidateResourceEstimate CandidateResourceEstimate? @relation(fields: [candidateResourceEstimateId], references: [id], onDelete: Restrict, map: "candidate_terminal_results_candidate_fkey")
+
+  @@map("candidate_estimate_terminal_results")
 }
 
 model IdempotencyRecord {
@@ -1208,9 +1238,9 @@ model QuoteRequest {
   createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  quoteSession QuoteSession? @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
-  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  quote        Quote?
+  quoteSession                  QuoteSession?                     @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
+  customer                      Customer?                         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  quote                         Quote?
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
 
   @@index([customerId, status])
@@ -1225,13 +1255,13 @@ model Quote {
   issuedAt       DateTime @default(now()) @map("issued_at") @db.Timestamptz(3)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  quoteRequest          QuoteRequest           @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
-  customer              Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  items                 QuoteItem[]
-  priceBinding          QuotePriceBinding?
-  individualOrderOrigin IndividualOrderOrigin?
+  quoteRequest                  QuoteRequest                      @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
+  customer                      Customer                          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items                         QuoteItem[]
+  priceBinding                  QuotePriceBinding?
+  individualOrderOrigin         IndividualOrderOrigin?
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
-  auditEvents           AuditEvent[]
+  auditEvents                   AuditEvent[]
 
   @@unique([id, customerId], map: "quotes_id_customer_key")
   @@index([customerId, issuedAt])
@@ -1280,14 +1310,14 @@ model PriceSnapshot {
   sealedAt           DateTime? @map("sealed_at") @db.Timestamptz(3)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  priceList        PriceList                @relation(fields: [priceListId, currency, pricingRevision], references: [id, currency, revision], onDelete: Restrict)
-  quoteBinding     QuotePriceBinding?
-  orderBinding     OrderPriceBinding?
-  components       PriceSnapshotComponent[]
-  paymentSchedules PaymentSchedule[]
-  shipmentPlans    ShipmentPlan[]
-  payments         Payment[]
-  orderSettlements OrderSettlement[]
+  priceList                     PriceList                         @relation(fields: [priceListId, currency, pricingRevision], references: [id, currency, revision], onDelete: Restrict)
+  quoteBinding                  QuotePriceBinding?
+  orderBinding                  OrderPriceBinding?
+  components                    PriceSnapshotComponent[]
+  paymentSchedules              PaymentSchedule[]
+  shipmentPlans                 ShipmentPlan[]
+  payments                      Payment[]
+  orderSettlements              OrderSettlement[]
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
 
   @@unique([id, currency], map: "price_snapshots_id_currency_key")

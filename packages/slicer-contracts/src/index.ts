@@ -36,6 +36,7 @@ export {
   machineOccupancyCacheIdentitySha256,
   productionArtifactObjectKey,
   slicingInputFingerprint,
+  slicingResultFingerprint,
   slicingResultForJobSchema,
   type CandidateEstimateJob,
   type CandidateEstimateResult,

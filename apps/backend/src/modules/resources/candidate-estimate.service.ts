@@ -57,6 +57,15 @@ type ObservedResourceRow = {
   reserved_milligrams: bigint;
 };
 
+type CandidateTerminalReceiptRow = {
+  outcome: "SUCCEEDED" | "FAILED" | "LEGACY_UNVERIFIABLE";
+  result_fingerprint_sha256: string;
+  candidate_resource_estimate_id: string | null;
+  estimate_key: string | null;
+  failure_class: string | null;
+  failure_code: string | null;
+};
+
 async function parseDispatchPayload(value: unknown): Promise<DispatchPayload> {
   if (!value || typeof value !== "object") {
     throw new ResourceConflictError("candidate dispatch payload is missing");
@@ -336,6 +345,80 @@ export class CandidateEstimateService {
           );
         }
         const dispatch = await parseDispatchPayload(dispatchRow.payload);
+        let result: CandidateEstimateResult;
+        let resultFingerprint: string;
+        try {
+          const { slicingResultFingerprint, slicingResultForJobSchema } =
+            await import("@taven/slicer-contracts");
+          const parsed = slicingResultForJobSchema(dispatch.job).parse(
+            input.result,
+          );
+          if (parsed.kind !== "candidate_estimate") {
+            throw new Error("result is not a candidate estimate");
+          }
+          result = parsed;
+          resultFingerprint = slicingResultFingerprint(result);
+        } catch (error) {
+          throw new ResourceValidationError(
+            `candidate result does not match its persisted dispatch: ${errorMessage(error)}`,
+          );
+        }
+
+        const terminal = await this.findTerminalReceipt(
+          transaction,
+          dispatchRow.id,
+        );
+        if (terminal) {
+          if (terminal.outcome === "LEGACY_UNVERIFIABLE") {
+            throw new ResourceConflictError(
+              "candidate dispatch was delivered before a verifiable terminal receipt was persisted",
+              "candidate_estimate_terminal_receipt_delivery_check",
+            );
+          }
+          if (terminal.result_fingerprint_sha256 !== resultFingerprint) {
+            throw new ResourceConflictError(
+              "candidate dispatch already has a different terminal result",
+              "candidate_estimate_terminal_results_pkey",
+            );
+          }
+          if (terminal.outcome === "FAILED") {
+            if (!terminal.failure_class || !terminal.failure_code) {
+              throw new ResourceConflictError(
+                "candidate dispatch terminal failure receipt is incomplete",
+                "candidate_estimate_terminal_results_outcome_shape_check",
+              );
+            }
+            return {
+              status: "failed",
+              jobId: result.jobId,
+              failureClass: terminal.failure_class,
+              code: terminal.failure_code,
+            };
+          }
+          if (
+            !terminal.candidate_resource_estimate_id ||
+            !terminal.estimate_key
+          ) {
+            throw new ResourceConflictError(
+              "candidate dispatch terminal success receipt is incomplete",
+              "candidate_estimate_terminal_results_outcome_shape_check",
+            );
+          }
+          return {
+            status: "succeeded",
+            candidateResourceEstimateId:
+              terminal.candidate_resource_estimate_id,
+            estimateKey: terminal.estimate_key,
+            replayed: true,
+          };
+        }
+        if (dispatchRow.status === OutboxStatus.DELIVERED) {
+          throw new ResourceConflictError(
+            "delivered candidate dispatch is missing its terminal receipt",
+            "candidate_estimate_outbox_terminal_receipt_check",
+          );
+        }
+
         const orderScope = await transaction.$queryRaw<
           Array<{ order_id: string }>
         >`
@@ -352,33 +435,16 @@ export class CandidateEstimateService {
         await transaction.$queryRaw`
           SELECT taven_lock_automatic_order_session(${orderId}::uuid)::text
         `;
-        let result: CandidateEstimateResult;
-        try {
-          const { slicingResultForJobSchema } =
-            await import("@taven/slicer-contracts");
-          const parsed = slicingResultForJobSchema(dispatch.job).parse(
-            input.result,
-          );
-          if (parsed.kind !== "candidate_estimate") {
-            throw new Error("result is not a candidate estimate");
-          }
-          result = parsed;
-        } catch (error) {
-          throw new ResourceValidationError(
-            `candidate result does not match its persisted dispatch: ${errorMessage(error)}`,
-          );
-        }
 
         if (result.outcome.status === "failed") {
-          if (dispatchRow.status !== OutboxStatus.DELIVERED) {
-            await transaction.outboxMessage.update({
-              where: { id: dispatchRow.id },
-              data: {
-                status: OutboxStatus.DELIVERED,
-                deliveredAt: new Date(),
-              },
-            });
-          }
+          await this.recordFailedTerminalReceipt(
+            transaction,
+            dispatchRow.id,
+            resultFingerprint,
+            result.outcome.failureClass,
+            result.outcome.code,
+          );
+          await this.markDispatchDelivered(transaction, dispatchRow);
           return {
             status: "failed",
             jobId: result.jobId,
@@ -436,6 +502,12 @@ export class CandidateEstimateService {
               "candidate_resource_estimates_estimate_key_key",
             );
           }
+          await this.recordSucceededTerminalReceipt(
+            transaction,
+            dispatchRow.id,
+            resultFingerprint,
+            existing.id,
+          );
           await this.markDispatchDelivered(transaction, dispatchRow);
           return {
             status: "succeeded",
@@ -515,7 +587,7 @@ export class CandidateEstimateService {
             where: { cacheKey },
           });
           const expected = {
-            kind: SliceKind.PRODUCTION,
+            kind: SliceKind.ANALYSIS,
             modelGeometryId: dispatch.job.input.geometry.modelGeometryId,
             printConfigRevisionId: dispatch.job.input.printConfig.revisionId,
             machineProfileId: dispatch.job.input.machineProfile.revisionId,
@@ -602,16 +674,23 @@ export class CandidateEstimateService {
             resourceSnapshot,
             calculatedAt: observed.observed_at,
             expiresAt: input.expiresAt,
-            capacityIntervals: {
-              create: input.capacityWindows.map((window, intervalIndex) => ({
-                nodeId: dispatch.nodeId,
-                intervalIndex,
-                startsAt: window.startsAt,
-                endsAt: window.endsAt,
-              })),
-            },
           },
         });
+        await transaction.candidateCapacityInterval.createMany({
+          data: input.capacityWindows.map((window, intervalIndex) => ({
+            nodeId: dispatch.nodeId,
+            candidateResourceEstimateId: candidate.id,
+            intervalIndex,
+            startsAt: window.startsAt,
+            endsAt: window.endsAt,
+          })),
+        });
+        await this.recordSucceededTerminalReceipt(
+          transaction,
+          dispatchRow.id,
+          resultFingerprint,
+          candidate.id,
+        );
         await this.markDispatchDelivered(transaction, dispatchRow);
         return {
           status: "succeeded",
@@ -636,6 +715,70 @@ export class CandidateEstimateService {
       }
       throw error;
     }
+  }
+
+  private async findTerminalReceipt(
+    transaction: Prisma.TransactionClient,
+    dispatchId: string,
+  ): Promise<CandidateTerminalReceiptRow | undefined> {
+    const rows = await transaction.$queryRaw<CandidateTerminalReceiptRow[]>`
+      SELECT receipt.outcome::text AS outcome,
+             receipt.result_fingerprint_sha256,
+             receipt.candidate_resource_estimate_id,
+             candidate.estimate_key,
+             receipt.failure_class,
+             receipt.failure_code
+      FROM candidate_estimate_terminal_results receipt
+      LEFT JOIN candidate_resource_estimates candidate
+        ON candidate.id = receipt.candidate_resource_estimate_id
+      WHERE receipt.outbox_message_id = ${dispatchId}::uuid
+    `;
+    return rows[0];
+  }
+
+  private async recordFailedTerminalReceipt(
+    transaction: Prisma.TransactionClient,
+    dispatchId: string,
+    resultFingerprint: string,
+    failureClass: string,
+    failureCode: string,
+  ): Promise<void> {
+    await transaction.$executeRaw`
+      INSERT INTO candidate_estimate_terminal_results (
+        outbox_message_id,
+        result_fingerprint_sha256,
+        outcome,
+        failure_class,
+        failure_code
+      ) VALUES (
+        ${dispatchId}::uuid,
+        ${resultFingerprint},
+        'FAILED'::candidate_estimate_terminal_outcome,
+        ${failureClass},
+        ${failureCode}
+      )
+    `;
+  }
+
+  private async recordSucceededTerminalReceipt(
+    transaction: Prisma.TransactionClient,
+    dispatchId: string,
+    resultFingerprint: string,
+    candidateResourceEstimateId: string,
+  ): Promise<void> {
+    await transaction.$executeRaw`
+      INSERT INTO candidate_estimate_terminal_results (
+        outbox_message_id,
+        result_fingerprint_sha256,
+        outcome,
+        candidate_resource_estimate_id
+      ) VALUES (
+        ${dispatchId}::uuid,
+        ${resultFingerprint},
+        'SUCCEEDED'::candidate_estimate_terminal_outcome,
+        ${candidateResourceEstimateId}::uuid
+      )
+    `;
   }
 
   private async markDispatchDelivered(

@@ -317,7 +317,12 @@ export class EligibilityPlanService {
               AND candidate.expires_at > ${phase.observed_at}
               AND (
                     source.retention_hold <> 'NONE'
-                    OR source.source_delete_after > ${phase.observed_at}
+                    OR source.source_delete_after > (
+                      SELECT MAX(horizon.ends_at)
+                      FROM candidate_capacity_intervals horizon
+                      WHERE horizon.candidate_resource_estimate_id = candidate.id
+                        AND horizon.node_id = candidate.node_id
+                    )
                   )
               AND taven_geometry_fits_machine_capability(
                     candidate.model_geometry_id,

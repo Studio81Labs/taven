@@ -152,6 +152,66 @@ describe("phase resource reservation execution", () => {
     ).resolves.toEqual(created);
   });
 
+  it("requires unheld candidate sources through the latest capacity interval", async () => {
+    const setupClient = await pool.connect();
+    await setupClient.query("BEGIN");
+    let nodeId: string;
+    let orderPhaseId: string;
+    try {
+      const fixtures = new PersistenceFactory(
+        setupClient,
+        `${testScope}:eligibility-source-horizon`,
+      );
+      const foundation = await fixtures.createFoundation(
+        "eligibility-source-horizon",
+        {
+          deleteAfter: new Date(Date.now() + 105 * 60 * 1_000),
+          quoteExpiresAt: new Date(
+            Date.now() + 105 * 60 * 1_000 - 90 * 24 * 60 * 60 * 1_000,
+          ),
+        },
+      );
+      const now = new Date();
+      await fixtures.planProduction(
+        foundation,
+        "eligibility-source-horizon-production",
+        [
+          {
+            startsAt: new Date(now.getTime() + 60 * 60 * 1_000),
+            endsAt: new Date(now.getTime() + 90 * 60 * 1_000),
+          },
+          {
+            startsAt: new Date(now.getTime() + 90 * 60 * 1_000),
+            endsAt: new Date(now.getTime() + 120 * 60 * 1_000),
+          },
+        ],
+      );
+      await setupClient.query(
+        'UPDATE "inventories" SET "remaining_milligrams" = 1_000 WHERE "id" = $1',
+        [foundation.inventoryId],
+      );
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+      nodeId = foundation.nodeId;
+      orderPhaseId = foundation.orderPhaseId;
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    await expect(
+      eligibility.createCompletePlan({
+        nodeId,
+        orderPhaseId,
+        planKey: `eligibility-source-horizon:${testScope}`,
+      }),
+    ).rejects.toMatchObject({
+      message: "no complete machine-specific resource plan covers the phase",
+    });
+  });
+
   it("combines partial candidate jobs to cover every slot of one item", async () => {
     const setupClient = await pool.connect();
     await setupClient.query("BEGIN");

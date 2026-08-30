@@ -158,6 +158,50 @@ async function advanceReservationOrderToProduction(
     [foundation.orderId, printingAt],
   );
   await client.query(
+    `INSERT INTO slice_results
+       (id, kind, cache_key, model_geometry_id, print_config_revision_id,
+        machine_profile_id, machine_calibration_id, parts_per_plate,
+        artifact_object_key, artifact_hash, estimated_print_seconds,
+        estimated_material_milligrams, slicer_engine, slicer_version)
+     SELECT gen_random_uuid(), 'PRODUCTION',
+            'production-package:' || production.job_id::text,
+            candidate.model_geometry_id, production.print_config_revision_id,
+            production.machine_profile_id, production.machine_calibration_id,
+            occupancy.parts_per_plate,
+            'gcode/' || production.job_id::text || '/toolpaths.gcode',
+            repeat('f', 64), production.required_machine_seconds,
+            production.required_material_milligrams,
+            occupancy.slicer_engine, occupancy.slicer_version
+     FROM production_reservations production
+     JOIN phase_resource_plan_jobs plan_job
+       ON plan_job.id = production.phase_resource_plan_job_id
+      AND plan_job.node_id = production.node_id
+      AND plan_job.phase_resource_plan_id = production.phase_resource_plan_id
+     JOIN candidate_resource_estimates candidate
+       ON candidate.id = plan_job.candidate_resource_estimate_id
+      AND candidate.node_id = plan_job.node_id
+     JOIN slice_results occupancy
+       ON occupancy.id = production.occupancy_slice_result_id
+     WHERE production.job_id IS NOT NULL
+       AND production.status = 'PRINTING'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM slice_results existing
+           WHERE existing.artifact_object_key =
+                 'gcode/' || production.job_id::text || '/toolpaths.gcode'
+       )`,
+  );
+  await client.query(
+    `UPDATE production_reservations production
+     SET slice_result_id = slice.id
+     FROM slice_results slice
+     WHERE production.job_id IS NOT NULL
+       AND production.status = 'PRINTING'
+       AND production.slice_result_id IS NULL
+       AND slice.artifact_object_key =
+             'gcode/' || production.job_id::text || '/toolpaths.gcode'`,
+  );
+  await client.query(
     `UPDATE jobs job
      SET status = 'GCODE_READY', gcode_ready_at = $2,
          production_slice_result_id = production.slice_result_id,
@@ -464,14 +508,14 @@ async function createSiblingMachineFoundation(
     'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
     [
       sliceResultId,
-      "PRODUCTION",
-      `sibling-${fixtures.id(`${name}:cache-key`)}`,
+      "ANALYSIS",
+      `machine-occupancy-slice-${fixtures.id(`${name}:cache-key`)}`,
       geometryId,
       printConfigRevisionId,
       foundation.machineProfileId,
       calibrationId,
       1,
-      `slices/${fixtures.id(`${name}:artifact-key`)}`,
+      `slice-metrics/${randomUUID().replaceAll("-", "")}/result.json`,
       "6".repeat(64),
       60,
       60,
@@ -1648,14 +1692,14 @@ describe("persistence foundations", () => {
         'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
         [
           sliceResultId,
-          "PRODUCTION",
-          `tail-${fixtures.id(`${name}:cache-key`)}`,
+          "ANALYSIS",
+          `machine-occupancy-slice-${fixtures.id(`${name}:cache-key`)}`,
           foundation.modelGeometryId,
           foundation.printConfigRevisionId,
           foundation.machineProfileId,
           foundation.machineCalibrationId,
           partsPerPlate,
-          `slices/${fixtures.id(`${name}:artifact-key`)}`,
+          `slice-metrics/${randomUUID().replaceAll("-", "")}/result.json`,
           "7".repeat(64),
           estimatedPrintSeconds,
           estimatedMaterialMilligrams,
