@@ -180,7 +180,7 @@ BEGIN
                     AND occupancy."model_geometry_id" = slice_result."model_geometry_id"
               )
               AND slice_result."artifact_object_key" ~
-                  ('^gcode/' || NEW."job_id"::text || '/toolpaths\.(gcode_3mf|bgcode|gcode)$')
+                  ('^gcode/' || NEW."job_id"::text || '/toolpaths\.(gcode\.3mf|bgcode|gcode)$')
        ) THEN
         RAISE EXCEPTION 'production reservation may bind exactly one Job-bound production artifact'
             USING ERRCODE = '23514', CONSTRAINT = 'production_reservation_production_slice_binding_check';

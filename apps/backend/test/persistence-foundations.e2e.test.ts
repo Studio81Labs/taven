@@ -168,7 +168,7 @@ async function advanceReservationOrderToProduction(
             candidate.model_geometry_id, production.print_config_revision_id,
             production.machine_profile_id, production.machine_calibration_id,
             occupancy.parts_per_plate,
-            'gcode/' || production.job_id::text || '/toolpaths.gcode',
+            'gcode/' || production.job_id::text || '/toolpaths.gcode.3mf',
             repeat('f', 64), production.required_machine_seconds,
             production.required_material_milligrams,
             occupancy.slicer_engine, occupancy.slicer_version
@@ -188,7 +188,7 @@ async function advanceReservationOrderToProduction(
            SELECT 1
            FROM slice_results existing
            WHERE existing.artifact_object_key =
-                 'gcode/' || production.job_id::text || '/toolpaths.gcode'
+                 'gcode/' || production.job_id::text || '/toolpaths.gcode.3mf'
        )`,
   );
   await client.query(
@@ -199,7 +199,7 @@ async function advanceReservationOrderToProduction(
        AND production.status = 'PRINTING'
        AND production.slice_result_id IS NULL
        AND slice.artifact_object_key =
-             'gcode/' || production.job_id::text || '/toolpaths.gcode'`,
+             'gcode/' || production.job_id::text || '/toolpaths.gcode.3mf'`,
   );
   await client.query(
     `UPDATE jobs job
@@ -2673,6 +2673,78 @@ describe("persistence foundations", () => {
         await expect(
           client.query("SET CONSTRAINTS ALL IMMEDIATE"),
         ).resolves.toBeDefined();
+      },
+    );
+  });
+
+  it("binds a Job-scoped gcode.3mf production artifact after acceptance", async () => {
+    await inRollbackTransaction(
+      "gcode-3mf-production-slice-binding",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "gcode-3mf-production-slice-binding",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+          );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+        await activateReservationGraph(client, fixtures, foundation, [
+          production,
+        ]);
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+        await client.query("SET CONSTRAINTS ALL DEFERRED");
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.inventoryReservationId, "ALLOCATED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "SCHEDULED"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "SCHEDULED"],
+        );
+        await client.query(
+          'UPDATE "capacity_reservations" SET "status" = $2 WHERE "production_reservation_id" = $1',
+          [production.productionReservationId, "PRINTING"],
+        );
+        await client.query(
+          'UPDATE "production_reservations" SET "status" = $2 WHERE "id" = $1',
+          [production.productionReservationId, "PRINTING"],
+        );
+        await advanceReservationOrderToProduction(client, foundation);
+
+        const binding = await client.query<{
+          artifact_object_key: string;
+          occupancy_kind: string;
+          production_kind: string;
+        }>(
+          `SELECT production_slice."artifact_object_key",
+                  occupancy."kind"::text AS occupancy_kind,
+                  production_slice."kind"::text AS production_kind
+           FROM "production_reservations" production
+           JOIN "slice_results" occupancy
+             ON occupancy."id" = production."occupancy_slice_result_id"
+           JOIN "slice_results" production_slice
+             ON production_slice."id" = production."slice_result_id"
+           WHERE production."id" = $1`,
+          [production.productionReservationId],
+        );
+        expect(binding.rows).toEqual([
+          {
+            artifact_object_key: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
+            occupancy_kind: "ANALYSIS",
+            production_kind: "PRODUCTION",
+          },
+        ]);
       },
     );
   });

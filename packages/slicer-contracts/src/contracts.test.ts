@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CandidateEstimateJobSchema,
   CandidateEstimateResultSchema,
   ConfirmedUnitConversionSchema,
   GeometrySelectionSchema,
@@ -22,7 +23,9 @@ import {
   geometrySelectionSha256,
   machineOccupancyCacheIdentitySha256,
   productionArtifactObjectKey,
+  slicingDispatchAttemptKey,
   slicingInputFingerprint,
+  slicingJobEffectFingerprint,
   slicingResultFingerprint,
   slicingResultForJobSchema,
   type SlicingJobKind,
@@ -303,6 +306,22 @@ function result(
 }
 
 describe("versioned slicing jobs", () => {
+  it("keeps worker idempotency stable while identifying each dispatch attempt", () => {
+    const first = CandidateEstimateJobSchema.parse(candidateJob);
+    const retry = CandidateEstimateJobSchema.parse({
+      ...candidateJob,
+      attempt: 2,
+    });
+
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    expect(
+      slicingDispatchAttemptKey(first.idempotencyKey, first.attempt),
+    ).not.toBe(slicingDispatchAttemptKey(retry.idempotencyKey, retry.attempt));
+    expect(slicingJobEffectFingerprint(retry)).toBe(
+      slicingJobEffectFingerprint(first),
+    );
+  });
+
   it("keeps the legacy v1 contract isolated for queue draining", () => {
     expect(LEGACY_V1_SLICING_QUEUE_NAME).toBe("taven-slicing-v1");
     expect(SLICING_QUEUE_NAME).toBe("taven-slicing-v2");

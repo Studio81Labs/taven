@@ -168,7 +168,7 @@ async function createFixture(name: string): Promise<CandidateFixture> {
       'INSERT INTO "outbox_messages" ("id", "deduplication_key", "aggregate_type", "aggregate_id", "message_type", "schema_version", "payload", "status", "attempts", "available_at", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $10, $10)',
       [
         dispatchId,
-        job.idempotencyKey,
+        contracts.slicingDispatchAttemptKey(job.idempotencyKey, job.attempt),
         "CandidateEstimateDispatch",
         job.jobId,
         "slicing.candidate-estimate.requested",

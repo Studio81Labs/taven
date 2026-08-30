@@ -66,6 +66,14 @@ type CandidateTerminalReceiptRow = {
   failure_code: string | null;
 };
 
+type CandidateDispatchOutboxRow = {
+  id: string;
+  message_type: string;
+  aggregate_id: string;
+  payload: Prisma.JsonValue;
+  status: OutboxStatus;
+};
+
 async function parseDispatchPayload(value: unknown): Promise<DispatchPayload> {
   if (!value || typeof value !== "object") {
     throw new ResourceConflictError("candidate dispatch payload is missing");
@@ -197,25 +205,71 @@ export class CandidateEstimateService {
       inventoryId: input.inventoryId,
       job,
     } satisfies DispatchPayload;
+    const { slicingDispatchAttemptKey } =
+      await import("@taven/slicer-contracts");
+    const attemptDeduplicationKey = slicingDispatchAttemptKey(
+      job.idempotencyKey,
+      job.attempt,
+    );
 
     try {
       return await this.prisma.$transaction(async (transaction) => {
-        const existing = await transaction.outboxMessage.findUnique({
-          where: { deduplicationKey: job.idempotencyKey },
-        });
+        await transaction.$queryRaw`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(${job.idempotencyKey}, 0)
+          )
+        `;
+        const existing = await this.findDispatchForAttempt(
+          transaction,
+          job.idempotencyKey,
+          job.attempt,
+          attemptDeduplicationKey,
+        );
         if (existing) {
           const persisted = await parseDispatchPayload(existing.payload);
           if (
-            existing.messageType !== CANDIDATE_DISPATCH_TYPE ||
-            existing.aggregateId !== job.jobId ||
-            JSON.stringify(persisted) !== JSON.stringify(payload)
+            existing.message_type !== CANDIDATE_DISPATCH_TYPE ||
+            existing.aggregate_id !== job.jobId ||
+            persisted.job.attempt !== job.attempt ||
+            !(await this.hasSameDispatchEffect(persisted, payload))
           ) {
             throw new ResourceConflictError(
-              "candidate dispatch idempotency key belongs to different inputs",
+              "candidate dispatch attempt belongs to different inputs",
               "outbox_messages_deduplication_key_key",
             );
           }
           return persisted.job;
+        }
+
+        if (job.attempt > 1) {
+          const previousAttempt = job.attempt - 1;
+          const previous = await this.findDispatchForAttempt(
+            transaction,
+            job.idempotencyKey,
+            previousAttempt,
+            slicingDispatchAttemptKey(job.idempotencyKey, previousAttempt),
+          );
+          if (!previous) {
+            throw new ResourceConflictError(
+              "candidate dispatch retry must immediately follow a persisted attempt",
+              "candidate_estimate_dispatch_attempt_sequence_check",
+            );
+          }
+          const previousPayload = await parseDispatchPayload(previous.payload);
+          const previousTerminal = await this.findTerminalReceipt(
+            transaction,
+            previous.id,
+          );
+          if (
+            !(await this.hasSameDispatchEffect(previousPayload, payload)) ||
+            previousTerminal?.outcome !== "FAILED" ||
+            previousTerminal.failure_class !== "retryable_infrastructure"
+          ) {
+            throw new ResourceConflictError(
+              "candidate dispatch retry requires the previous exact attempt to fail retryably",
+              "candidate_estimate_dispatch_retry_check",
+            );
+          }
         }
 
         const resource = await transaction.$queryRaw<
@@ -287,7 +341,7 @@ export class CandidateEstimateService {
         }
         await transaction.outboxMessage.create({
           data: {
-            deduplicationKey: job.idempotencyKey,
+            deduplicationKey: attemptDeduplicationKey,
             aggregateType: "CandidateEstimateDispatch",
             aggregateId: job.jobId,
             messageType: CANDIDATE_DISPATCH_TYPE,
@@ -320,22 +374,27 @@ export class CandidateEstimateService {
     input: IngestCandidateEstimateInput,
   ): Promise<CandidateIngestionResult> {
     assertValidDate(input.expiresAt, "expiresAt");
+    let attemptDeduplicationKey: string;
+    try {
+      const { slicingDispatchAttemptKey } =
+        await import("@taven/slicer-contracts");
+      attemptDeduplicationKey = slicingDispatchAttemptKey(
+        input.result.idempotencyKey,
+        input.result.attempt,
+      );
+    } catch (error) {
+      throw new ResourceValidationError(
+        `candidate result dispatch identity is invalid: ${errorMessage(error)}`,
+      );
+    }
     try {
       return await this.prisma.$transaction(async (transaction) => {
-        const dispatchRows = await transaction.$queryRaw<
-          Array<{
-            id: string;
-            message_type: string;
-            payload: Prisma.JsonValue;
-            status: OutboxStatus;
-          }>
-        >`
-          SELECT id, message_type, payload, status
-          FROM outbox_messages
-          WHERE deduplication_key = ${input.result.idempotencyKey}
-          FOR UPDATE
-        `;
-        const dispatchRow = dispatchRows[0];
+        const dispatchRow = await this.findDispatchForAttempt(
+          transaction,
+          input.result.idempotencyKey,
+          input.result.attempt,
+          attemptDeduplicationKey,
+        );
         if (
           !dispatchRow ||
           dispatchRow.message_type !== CANDIDATE_DISPATCH_TYPE
@@ -715,6 +774,53 @@ export class CandidateEstimateService {
       }
       throw error;
     }
+  }
+
+  private async findDispatchForAttempt(
+    transaction: Prisma.TransactionClient,
+    idempotencyKey: string,
+    attempt: number,
+    attemptDeduplicationKey: string,
+  ): Promise<CandidateDispatchOutboxRow | undefined> {
+    const rows = await transaction.$queryRaw<CandidateDispatchOutboxRow[]>`
+      SELECT id, message_type, aggregate_id, payload, status
+      FROM outbox_messages
+      WHERE deduplication_key = ${attemptDeduplicationKey}
+         OR (
+           ${attempt} = 1
+           AND deduplication_key = ${idempotencyKey}
+         )
+      ORDER BY CASE
+        WHEN deduplication_key = ${attemptDeduplicationKey} THEN 0
+        ELSE 1
+      END
+      FOR UPDATE
+    `;
+    if (rows.length > 1) {
+      throw new ResourceConflictError(
+        "candidate dispatch has conflicting persisted identities for one attempt",
+        "candidate_estimate_dispatch_attempt_identity_check",
+      );
+    }
+    return rows[0];
+  }
+
+  private async hasSameDispatchEffect(
+    persisted: DispatchPayload,
+    attempted: DispatchPayload,
+  ): Promise<boolean> {
+    if (
+      persisted.nodeId !== attempted.nodeId ||
+      persisted.inventoryId !== attempted.inventoryId
+    ) {
+      return false;
+    }
+    const { slicingJobEffectFingerprint } =
+      await import("@taven/slicer-contracts");
+    return (
+      slicingJobEffectFingerprint(persisted.job) ===
+      slicingJobEffectFingerprint(attempted.job)
+    );
   }
 
   private async findTerminalReceipt(
