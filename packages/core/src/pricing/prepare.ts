@@ -43,8 +43,8 @@ export interface DestinationShipmentPreparation {
   readonly deliveryCapabilitySnapshotId: string;
   readonly plannerInput: ShipmentPlannerInput;
   readonly categoryPricing: readonly ShipmentCategoryPricing[];
-  /** Called once per planned parcel in ordinal order to bind its database row. */
-  readonly shipmentPlanIdForOrdinal: (ordinal: number) => string;
+  /** Immutable IDs allocated by the persistence layer, keyed by plan ordinal. */
+  readonly shipmentPlanIdsByOrdinal: ReadonlyMap<number, string>;
 }
 
 export interface PrepareOrderQuoteInput {
@@ -125,6 +125,7 @@ function gateInput(
 
 function categoryPricingById(
   values: readonly ShipmentCategoryPricing[],
+  currency: string,
 ): ReadonlyMap<string, ShipmentCategoryPricing> {
   const result = new Map<string, ShipmentCategoryPricing>();
   for (const value of values) {
@@ -134,9 +135,91 @@ function categoryPricingById(
         "shipment category pricing IDs must be non-blank and unique",
       );
     }
+    assertCurrency(value.carrierCost, currency, "carrier cost");
+    assertCurrency(
+      value.customerShippingRate,
+      currency,
+      "customer shipping rate",
+    );
+    assertCurrency(value.packagingCost, currency, "packaging cost");
     result.set(value.categoryId, value);
   }
   return result;
+}
+
+function assertIdentity(value: string, name: string): void {
+  if (value.trim().length === 0) {
+    throw new DomainError("INVALID_ARGUMENT", `${name} must not be blank`);
+  }
+}
+
+function assertCurrency(value: Money, currency: string, name: string): void {
+  if (value.currency !== currency) {
+    throw new DomainError(
+      "CURRENCY_MISMATCH",
+      `${name} must use the PriceList currency`,
+    );
+  }
+}
+
+function bindingShipmentForPlan(
+  destination: DestinationShipmentPreparation,
+  shipmentPlan: ShipmentPlanSuccess,
+  prices: ReadonlyMap<string, ShipmentCategoryPricing>,
+): BindingShipmentPricingInput {
+  const shipmentPlanIds = new Map(destination.shipmentPlanIdsByOrdinal);
+  const expectedOrdinals = new Set(
+    shipmentPlan.parcels.map(({ ordinal }) => ordinal),
+  );
+  const seenIds = new Set<string>();
+  for (const [ordinal, id] of shipmentPlanIds) {
+    if (!Number.isSafeInteger(ordinal) || !expectedOrdinals.has(ordinal)) {
+      throw new DomainError(
+        "INVALID_ARGUMENT",
+        "ShipmentPlan IDs must match planned parcel ordinals exactly",
+      );
+    }
+    assertIdentity(id, "ShipmentPlan ID");
+    if (seenIds.has(id)) {
+      throw new DomainError(
+        "INVALID_ARGUMENT",
+        "ShipmentPlan IDs must be unique",
+      );
+    }
+    seenIds.add(id);
+  }
+  if (
+    shipmentPlanIds.size !== expectedOrdinals.size ||
+    [...expectedOrdinals].some((ordinal) => !shipmentPlanIds.has(ordinal))
+  ) {
+    throw new DomainError(
+      "INVALID_ARGUMENT",
+      "ShipmentPlan IDs must match planned parcel ordinals exactly",
+    );
+  }
+  return {
+    deliveryDestinationId: destination.deliveryDestinationId,
+    deliveryCapabilitySnapshotId: destination.deliveryCapabilitySnapshotId,
+    parcels: shipmentPlan.parcels.map((parcel) => {
+      const price = prices.get(parcel.categoryId);
+      if (price === undefined) {
+        throw new DomainError(
+          "INVALID_ARGUMENT",
+          `missing pricing for shipment category ${parcel.categoryId}`,
+        );
+      }
+      return {
+        shipmentPlanId: shipmentPlanIds.get(parcel.ordinal)!,
+        categoryId: parcel.categoryId,
+        packingUnitKeys: parcel.placements.map(
+          ({ packingUnitKey }) => packingUnitKey,
+        ),
+        carrierCost: price.carrierCost,
+        customerShippingRate: price.customerShippingRate,
+        packagingCost: price.packagingCost,
+      };
+    }),
+  };
 }
 
 /**
@@ -220,30 +303,15 @@ export function prepareOrderQuote(
         };
   }
 
-  const prices = categoryPricingById(destination.categoryPricing);
-  const bindingShipment: BindingShipmentPricingInput = {
-    deliveryDestinationId: destination.deliveryDestinationId,
-    deliveryCapabilitySnapshotId: destination.deliveryCapabilitySnapshotId,
-    parcels: shipmentPlan.parcels.map((parcel) => {
-      const price = prices.get(parcel.categoryId);
-      if (price === undefined) {
-        throw new DomainError(
-          "INVALID_ARGUMENT",
-          `missing pricing for shipment category ${parcel.categoryId}`,
-        );
-      }
-      return {
-        shipmentPlanId: destination.shipmentPlanIdForOrdinal(parcel.ordinal),
-        categoryId: parcel.categoryId,
-        packingUnitKeys: parcel.placements.map(
-          ({ packingUnitKey }) => packingUnitKey,
-        ),
-        carrierCost: price.carrierCost,
-        customerShippingRate: price.customerShippingRate,
-        packagingCost: price.packagingCost,
-      };
-    }),
-  };
+  const prices = categoryPricingById(
+    destination.categoryPricing,
+    input.pricing.priceList.currency,
+  );
+  const bindingShipment = bindingShipmentForPlan(
+    destination,
+    shipmentPlan,
+    prices,
+  );
   const price = calculateOrderPrice({
     ...input.pricing,
     expressEligible: express.eligible,

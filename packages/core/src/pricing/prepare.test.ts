@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { Money } from "../primitives/money.js";
 import { prepareOrderQuote, type PrepareOrderQuoteInput } from "./prepare.js";
 
@@ -119,7 +119,87 @@ function input(): PrepareOrderQuoteInput {
           packagingCost: Money.zero("CZK"),
         },
       ],
-      shipmentPlanIdForOrdinal: (ordinal) => `plan-${ordinal}`,
+      shipmentPlanIdsByOrdinal: new Map([[1, "plan-1"]]),
+    },
+  };
+}
+
+function splitInput(): PrepareOrderQuoteInput {
+  const quoteInput = input();
+  const plannerInput = quoteInput.destinationShipment!.plannerInput;
+  return {
+    ...quoteInput,
+    pricing: {
+      ...quoteInput.pricing,
+      items: [
+        {
+          ...quoteInput.pricing.items[0]!,
+          quantity: 2n,
+          packingUnits: [
+            { id: "item-1:SINGLE:1", basis: 1n },
+            { id: "item-1:SINGLE:2", basis: 1n },
+          ],
+        },
+      ],
+    },
+    destinationShipment: {
+      ...quoteInput.destinationShipment!,
+      plannerInput: {
+        ...plannerInput,
+        units: [
+          {
+            packingUnitKey: "item-1:SINGLE:1",
+            box: {
+              xMicrometers: 100n,
+              yMicrometers: 100n,
+              zMicrometers: 100n,
+            },
+            weightMilligrams: 10n,
+          },
+          {
+            packingUnitKey: "item-1:SINGLE:2",
+            box: {
+              xMicrometers: 10n,
+              yMicrometers: 10n,
+              zMicrometers: 10n,
+            },
+            weightMilligrams: 10n,
+          },
+        ],
+        categories: [
+          {
+            id: "small",
+            maxXMicrometers: 20n,
+            maxYMicrometers: 20n,
+            maxZMicrometers: 20n,
+            maxDimensionSumMicrometers: 30n,
+            maxWeightMilligrams: 1_000n,
+            maxParcelVolumeCubicMicrometers: 10_000n,
+          },
+          {
+            id: "large",
+            maxXMicrometers: 100n,
+            maxYMicrometers: 100n,
+            maxZMicrometers: 100n,
+            maxDimensionSumMicrometers: 300n,
+            maxWeightMilligrams: 1_000n,
+            maxParcelVolumeCubicMicrometers: 1_818_182n,
+          },
+        ],
+        supportedCategoryIds: new Set(["small", "large"]),
+      },
+      categoryPricing: [
+        {
+          categoryId: "large",
+          carrierCost: Money.of(20n, "CZK"),
+          customerShippingRate: Money.of(20n, "CZK"),
+          packagingCost: Money.zero("CZK"),
+        },
+      ],
+      shipmentPlanIdsByOrdinal: new Map([
+        [1, "plan-1"],
+        [2, "plan-2"],
+      ]),
     },
   };
 }
@@ -141,20 +221,9 @@ describe("prepareOrderQuote", () => {
 
   it("plans and prices a binding endpoint-compatible quote", () => {
     const quoteInput = input();
-    const shipmentPlanIdForOrdinal = vi.fn(
-      quoteInput.destinationShipment!.shipmentPlanIdForOrdinal,
-    );
-    const prepared = prepareOrderQuote({
-      ...quoteInput,
-      destinationShipment: {
-        ...quoteInput.destinationShipment!,
-        shipmentPlanIdForOrdinal,
-      },
-    });
+    const prepared = prepareOrderQuote(quoteInput);
     expect(prepared.kind).toBe("binding_quote");
     if (prepared.kind !== "binding_quote") return;
-    expect(shipmentPlanIdForOrdinal).toHaveBeenCalledOnce();
-    expect(shipmentPlanIdForOrdinal).toHaveBeenCalledWith(1);
     expect(prepared.shipmentPlan.parcels).toHaveLength(1);
     expect(prepared.price.shipmentPlanIds).toEqual(["plan-1"]);
     expect(prepared.price.contractTotal.minorUnits).toBe(120n);
@@ -162,27 +231,20 @@ describe("prepareOrderQuote", () => {
 
   it("does not bind shipment rows while the quote remains provisional", () => {
     const quoteInput = input();
-    const shipmentPlanIdForOrdinal = vi.fn(() => "unexpected-plan");
     const prepared = prepareOrderQuote({
       ...quoteInput,
       automaticQuoteFacts: {
         ...quoteInput.automaticQuoteFacts,
         riskAcknowledgementsComplete: false,
       },
-      destinationShipment: {
-        ...quoteInput.destinationShipment!,
-        shipmentPlanIdForOrdinal,
-      },
     });
 
     expect(prepared.kind).toBe("provisional");
     expect(prepared.reasons).toEqual(["RISK_ACKNOWLEDGEMENT_REQUIRED"]);
-    expect(shipmentPlanIdForOrdinal).not.toHaveBeenCalled();
   });
 
   it("does not bind shipment rows for a custom request", () => {
     const quoteInput = input();
-    const shipmentPlanIdForOrdinal = vi.fn(() => "unexpected-plan");
     const prepared = prepareOrderQuote({
       ...quoteInput,
       automaticQuoteFacts: {
@@ -192,13 +254,11 @@ describe("prepareOrderQuote", () => {
       destinationShipment: {
         ...quoteInput.destinationShipment!,
         categoryPricing: [],
-        shipmentPlanIdForOrdinal,
       },
     });
 
     expect(prepared.kind).toBe("custom_request");
     expect(prepared.reasons).toEqual(["UNSUPPORTED_FORMAT"]);
-    expect(shipmentPlanIdForOrdinal).not.toHaveBeenCalled();
   });
 
   it("routes an endpoint no-fit result to a custom request", () => {
@@ -217,5 +277,137 @@ describe("prepareOrderQuote", () => {
     expect(prepared.reasons).toContain("SHIPMENT_INELIGIBLE");
     expect(prepared.shipmentFailure?.status).toBe("no_fit");
     expect(prepared.price.kind).toBe("provisional");
+  });
+
+  it("validates a later parcel before binding the first parcel", () => {
+    const quoteInput = splitInput();
+
+    expect(() =>
+      prepareOrderQuote({
+        ...quoteInput,
+      }),
+    ).toThrow("missing pricing for shipment category small");
+  });
+
+  it("validates shipment currencies before binding any parcel", () => {
+    const quoteInput = splitInput();
+    const categoryPricing = [
+      ...quoteInput.destinationShipment!.categoryPricing,
+      {
+        categoryId: "small",
+        carrierCost: Money.of(20n, "EUR"),
+        customerShippingRate: Money.of(20n, "EUR"),
+        packagingCost: Money.zero("EUR"),
+      },
+    ];
+
+    expect(() =>
+      prepareOrderQuote({
+        ...quoteInput,
+        destinationShipment: {
+          ...quoteInput.destinationShipment!,
+          categoryPricing,
+        },
+      }),
+    ).toThrow("carrier cost must use the PriceList currency");
+  });
+
+  it("validates duplicate category pricing IDs before binding any parcel", () => {
+    const quoteInput = splitInput();
+    const large = quoteInput.destinationShipment!.categoryPricing[0]!;
+
+    expect(() =>
+      prepareOrderQuote({
+        ...quoteInput,
+        destinationShipment: {
+          ...quoteInput.destinationShipment!,
+          categoryPricing: [large, large],
+        },
+      }),
+    ).toThrow("shipment category pricing IDs must be non-blank and unique");
+  });
+
+  it("validates the payment schedule before binding any parcel", () => {
+    const quoteInput = splitInput();
+
+    expect(() =>
+      prepareOrderQuote({
+        ...quoteInput,
+        pricing: {
+          ...quoteInput.pricing,
+          paymentSchedule: [
+            {
+              ...quoteInput.pricing.paymentSchedule[0]!,
+              id: "full-a",
+            },
+            {
+              ...quoteInput.pricing.paymentSchedule[0]!,
+              id: "full-b",
+              sequence: 1,
+              role: "BALANCE",
+            },
+          ],
+        },
+        destinationShipment: {
+          ...quoteInput.destinationShipment!,
+          categoryPricing: [
+            ...quoteInput.destinationShipment!.categoryPricing,
+            {
+              categoryId: "small",
+              carrierCost: Money.of(20n, "CZK"),
+              customerShippingRate: Money.of(20n, "CZK"),
+              packagingCost: Money.zero("CZK"),
+            },
+          ],
+        },
+      }),
+    ).toThrow(
+      "payment schedule must be FULL:0 or DEPOSIT:0 plus BALANCE:1 with shares totaling 10000 basis points",
+    );
+  });
+
+  it("rejects blank, missing, and duplicate preallocated plan IDs", () => {
+    const quoteInput = input();
+    expect(() =>
+      prepareOrderQuote({
+        ...quoteInput,
+        destinationShipment: {
+          ...quoteInput.destinationShipment!,
+          shipmentPlanIdsByOrdinal: new Map([[1, ""]]),
+        },
+      }),
+    ).toThrow("ShipmentPlan ID must not be blank");
+    expect(() =>
+      prepareOrderQuote({
+        ...quoteInput,
+        destinationShipment: {
+          ...quoteInput.destinationShipment!,
+          shipmentPlanIdsByOrdinal: new Map<number, string>(),
+        },
+      }),
+    ).toThrow("ShipmentPlan IDs must match planned parcel ordinals exactly");
+
+    const splitQuoteInput = splitInput();
+    expect(() =>
+      prepareOrderQuote({
+        ...splitQuoteInput,
+        destinationShipment: {
+          ...splitQuoteInput.destinationShipment!,
+          categoryPricing: [
+            ...splitQuoteInput.destinationShipment!.categoryPricing,
+            {
+              categoryId: "small",
+              carrierCost: Money.of(20n, "CZK"),
+              customerShippingRate: Money.of(20n, "CZK"),
+              packagingCost: Money.zero("CZK"),
+            },
+          ],
+          shipmentPlanIdsByOrdinal: new Map([
+            [1, "same"],
+            [2, "same"],
+          ]),
+        },
+      }),
+    ).toThrow("ShipmentPlan IDs must be unique");
   });
 });
