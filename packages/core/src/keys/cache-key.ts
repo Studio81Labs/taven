@@ -35,17 +35,18 @@ export interface ProductionSliceCacheKeyInput {
   readonly partsPerPlate: number | bigint;
 }
 
-export interface ProductionPackageKeyInput extends ProductionSliceCacheKeyInput {
+export interface MachineOccupancySliceCacheKeyInput extends ProductionSliceCacheKeyInput {
+  readonly modelGeometryId: string;
+  readonly geometrySelectionHash: Sha256Digest;
+}
+
+export interface ProductionPackageKeyInput extends MachineOccupancySliceCacheKeyInput {
   readonly quantity: number | bigint;
   readonly arrangementRevision: ArrangementRevisionRef;
   readonly acceptedJobId: string;
 }
 
-export interface CandidateResourceEstimateKeyInput {
-  readonly geometryHash: Sha256Digest;
-  readonly machineProfileRevision: MachineProfileRevisionRef;
-  readonly machineCalibrationRevision: MachineCalibrationRevisionRef;
-  readonly printConfigRevision: PrintConfigRevisionRef;
+export interface CandidateResourceEstimateKeyInput extends MachineOccupancySliceCacheKeyInput {
   readonly quantity: number | bigint;
   readonly shipmentPlanId: string;
   readonly arrangementRevision: ArrangementRevisionRef;
@@ -86,10 +87,15 @@ function buildIdentitySha256(
 }
 
 function machineOccupancyComponents(
-  input: ProductionSliceCacheKeyInput,
+  input: MachineOccupancySliceCacheKeyInput,
 ): Parameters<typeof buildCanonicalKey>[2] {
   return [
     { name: "geometry_hash", value: input.geometryHash.hex },
+    { name: "model_geometry_id", value: input.modelGeometryId },
+    {
+      name: "geometry_selection_hash",
+      value: input.geometrySelectionHash.hex,
+    },
     {
       name: "machine_profile_revision_id",
       value: input.machineProfileRevision.id,
@@ -147,7 +153,7 @@ export function buildProductionSliceCacheKey(
 }
 
 export function buildMachineOccupancySliceCacheKey(
-  input: ProductionSliceCacheKeyInput,
+  input: MachineOccupancySliceCacheKeyInput,
 ): MachineOccupancySliceCacheKey {
   assertPositive(input.partsPerPlate, "partsPerPlate");
   return buildPersistableIdentityKey(
@@ -158,7 +164,7 @@ export function buildMachineOccupancySliceCacheKey(
 }
 
 export function machineOccupancySliceIdentitySha256(
-  input: ProductionSliceCacheKeyInput,
+  input: MachineOccupancySliceCacheKeyInput,
 ): Sha256Digest {
   assertPositive(input.partsPerPlate, "partsPerPlate");
   return buildIdentitySha256(
@@ -175,6 +181,11 @@ export function buildProductionPackageKey(
   assertPositive(input.quantity, "quantity");
   return buildPersistableIdentityKey("production-package", 1, [
     { name: "geometry_hash", value: input.geometryHash.hex },
+    { name: "model_geometry_id", value: input.modelGeometryId },
+    {
+      name: "geometry_selection_hash",
+      value: input.geometrySelectionHash.hex,
+    },
     {
       name: "machine_profile_revision_id",
       value: input.machineProfileRevision.id,
@@ -200,21 +211,10 @@ export function buildProductionPackageKey(
 export function buildCandidateResourceEstimateKey(
   input: CandidateResourceEstimateKeyInput,
 ): CandidateResourceEstimateKey {
+  assertPositive(input.partsPerPlate, "partsPerPlate");
   assertPositive(input.quantity, "quantity");
-  return buildCanonicalKey("candidate-resource-estimate", 1, [
-    { name: "geometry_hash", value: input.geometryHash.hex },
-    {
-      name: "machine_profile_revision_id",
-      value: input.machineProfileRevision.id,
-    },
-    {
-      name: "machine_calibration_revision_id",
-      value: input.machineCalibrationRevision.id,
-    },
-    {
-      name: "print_config_revision_id",
-      value: input.printConfigRevision.id,
-    },
+  return buildPersistableIdentityKey("candidate-resource-estimate", 2, [
+    ...machineOccupancyComponents(input),
     { name: "quantity", value: input.quantity },
     { name: "shipment_plan_id", value: input.shipmentPlanId },
     {

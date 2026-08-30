@@ -525,6 +525,46 @@ describe("versioned slicing jobs", () => {
     expect(SlicingJobSchema.parse(second)).toEqual(second);
   });
 
+  it("separates candidate backing targets for distinct body selections", () => {
+    const alternateMachineInput = {
+      ...machineInput,
+      geometry: geometry(
+        ids.geometryA,
+        "body-b",
+        machineInput.geometry.geometrySha256,
+      ),
+    };
+    const alternateCacheIdentitySha256 = machineOccupancyCacheIdentitySha256(
+      alternateMachineInput,
+    );
+    const alternateInput = {
+      ...candidateInput,
+      ...alternateMachineInput,
+      backingSliceTarget: {
+        cacheIdentitySha256: alternateCacheIdentitySha256,
+        analysisObjectKey: `slice-metrics/${alternateCacheIdentitySha256}/result.json`,
+      },
+    };
+    const alternateJob = envelope("candidate_estimate", alternateInput, {
+      jobId: ids.geometryB,
+    });
+
+    expect(alternateMachineInput.geometry.geometrySha256).toBe(
+      machineInput.geometry.geometrySha256,
+    );
+    expect(alternateMachineInput.geometry.modelGeometryId).toBe(
+      machineInput.geometry.modelGeometryId,
+    );
+    expect(alternateMachineInput.geometry.selectionSha256).not.toBe(
+      machineInput.geometry.selectionSha256,
+    );
+    expect(alternateCacheIdentitySha256).not.toBe(candidateCacheIdentitySha256);
+    expect(alternateInput.backingSliceTarget).not.toEqual(
+      candidateInput.backingSliceTarget,
+    );
+    expect(SlicingJobSchema.parse(alternateJob)).toEqual(alternateJob);
+  });
+
   it("rejects unsafe keys, identifiers, hashes, and numeric bounds", () => {
     expect(() =>
       SlicingJobSchema.parse({

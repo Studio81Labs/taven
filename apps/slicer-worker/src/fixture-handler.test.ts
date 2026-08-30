@@ -349,15 +349,30 @@ describe("runFixtureSlicingJob", () => {
   ] as const)("derives %s bodyCount from selected geometry", (kind, input) => {
     const bodyIds = ["body-0001", "body-0002"];
     const jobId = kind === "production_slice" ? ids.productionJob : ids.job;
+    const selectedInput = {
+      ...input,
+      geometry: {
+        ...input.geometry,
+        bodyIds,
+        selectionSha256: geometrySelectionSha256(bodyIds),
+      },
+    };
+    const cacheIdentitySha256 =
+      kind === "candidate_estimate"
+        ? machineOccupancyCacheIdentitySha256(selectedInput)
+        : undefined;
     const job = fixtureJob(
       kind,
       {
-        ...input,
-        geometry: {
-          ...input.geometry,
-          bodyIds,
-          selectionSha256: geometrySelectionSha256(bodyIds),
-        },
+        ...selectedInput,
+        ...(cacheIdentitySha256 === undefined
+          ? {}
+          : {
+              backingSliceTarget: {
+                cacheIdentitySha256,
+                analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
+              },
+            }),
       },
       jobId,
     );

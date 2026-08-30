@@ -471,7 +471,11 @@ const MachineSliceInputShape = {
 } as const;
 
 export function machineOccupancyCacheIdentitySha256(input: {
-  geometry: { geometrySha256: string };
+  geometry: {
+    modelGeometryId: string;
+    geometrySha256: string;
+    selectionSha256: string;
+  };
   machineProfile: { revisionId: string };
   machineCalibration: { revisionId: string };
   printConfig: { revisionId: string };
@@ -479,6 +483,8 @@ export function machineOccupancyCacheIdentitySha256(input: {
 }): string {
   return machineOccupancySliceIdentitySha256({
     geometryHash: Sha256Digest.parse(input.geometry.geometrySha256),
+    modelGeometryId: input.geometry.modelGeometryId,
+    geometrySelectionHash: Sha256Digest.parse(input.geometry.selectionSha256),
     machineProfileRevision: RevisionRef.create(
       "machine-profile",
       input.machineProfile.revisionId,
