@@ -1143,6 +1143,8 @@
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
+              "maxLength": 255,
+              "minLength": 8,
               "type": "string"
             }
           }
@@ -1192,6 +1194,8 @@
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
+              "maxLength": 255,
+              "minLength": 8,
               "type": "string"
             }
           }
@@ -1251,6 +1255,8 @@
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
+              "maxLength": 255,
+              "minLength": 8,
               "type": "string"
             }
           }
@@ -1362,6 +1368,8 @@
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
+              "maxLength": 255,
+              "minLength": 8,
               "type": "string"
             }
           }
@@ -1427,6 +1435,8 @@
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
+              "maxLength": 255,
+              "minLength": 8,
               "type": "string"
             }
           }
@@ -1480,6 +1490,8 @@
             "name": "Idempotency-Key",
             "required": true,
             "schema": {
+              "maxLength": 255,
+              "minLength": 8,
               "type": "string"
             }
           }

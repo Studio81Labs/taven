@@ -67,4 +67,51 @@ describe("OpenAPI artifact", () => {
       schemas.OfferPriceComponentDto?.properties?.quoteItemOrdinal,
     ).toMatchObject({ type: "integer" });
   });
+
+  it("declares the runtime bounds for every idempotency key", async () => {
+    const contract = JSON.parse(
+      await readFile(new URL("../openapi.json", import.meta.url), "utf8"),
+    ) as {
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            parameters?: Array<{
+              name: string;
+              schema?: Record<string, unknown>;
+            }>;
+          }
+        >
+      >;
+    };
+    const idempotencyHeaders = Object.values(contract.paths).flatMap((path) =>
+      Object.values(path).flatMap(
+        (operation) =>
+          operation.parameters?.filter(
+            (parameter) => parameter.name === "Idempotency-Key",
+          ) ?? [],
+      ),
+    );
+
+    expect(idempotencyHeaders).toHaveLength(6);
+    expect(idempotencyHeaders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          schema: {
+            type: "string",
+            minLength: 8,
+            maxLength: 255,
+          },
+        }),
+      ]),
+    );
+    for (const header of idempotencyHeaders) {
+      expect(header.schema).toEqual({
+        type: "string",
+        minLength: 8,
+        maxLength: 255,
+      });
+    }
+  });
 });
