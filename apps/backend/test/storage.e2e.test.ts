@@ -558,9 +558,12 @@ describe("secure object storage and retention", () => {
 
   it("records a failed deletion and converges through an idempotent retry", async () => {
     const modelFileId = randomUUID();
+    const geometryId = randomUUID();
     const sourceKey = modelSourceObjectKey(modelFileId);
+    const geometryKey = `canonical/${geometryId}`;
     const bytes = binaryStl();
     await putRaw(sourceKey, bytes, "model/stl");
+    await putRaw(geometryKey, bytes, "model/stl");
     const uploadedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
     const deadline = new Date(Date.now() - 1_000);
     await prisma.modelFile.create({
@@ -573,7 +576,26 @@ describe("secure object storage and retention", () => {
         sizeBytes: BigInt(bytes.byteLength),
         uploadedAt,
         sourceDeleteAfter: deadline,
+        retentionHold: RetentionHold.LEGAL,
       },
+    });
+    await prisma.modelGeometry.create({
+      data: {
+        id: geometryId,
+        sourceModelFileId: modelFileId,
+        canonicalObjectKey: geometryKey,
+        geometryHash: sha256(bytes),
+        canonicalizerRevision: "storage-e2e-retry-v1",
+        volumeCubicMicrometers: 1n,
+        boundsXMicrometers: 1n,
+        boundsYMicrometers: 1n,
+        boundsZMicrometers: 1n,
+        triangleCount: 1,
+      },
+    });
+    await prisma.modelFile.update({
+      where: { id: modelFileId },
+      data: { retentionHold: RetentionHold.NONE },
     });
     let failFirstDelete = true;
     const flakyStorage: ObjectStorage = {
@@ -587,7 +609,8 @@ describe("secure object storage and retention", () => {
       deleteObjects: async (keys) => {
         if (failFirstDelete) {
           failFirstDelete = false;
-          throw new Error("simulated MinIO outage");
+          await objects.deleteObjects(keys.filter((key) => key !== sourceKey));
+          throw new Error("simulated partial MinIO deletion");
         }
         await objects.deleteObjects(keys);
       },
@@ -607,21 +630,23 @@ describe("secure object storage and retention", () => {
     expect(failed).toMatchObject({
       status: RetentionDeletionJobStatus.FAILED,
       attempts: 1,
-      lastError: "simulated MinIO outage",
+      lastError: "simulated partial MinIO deletion",
     });
     expect(await objects.headObject(sourceKey)).not.toBeNull();
+    expect(await objects.headObject(geometryKey)).toBeNull();
+    await expect(
+      prisma.modelFile.update({
+        where: { id: modelFileId },
+        data: { retentionHold: RetentionHold.LEGAL },
+      }),
+    ).rejects.toThrow();
     expect(
       (
-        await prisma.modelFile.update({
+        await prisma.modelFile.findUniqueOrThrow({
           where: { id: modelFileId },
-          data: { retentionHold: RetentionHold.LEGAL },
         })
       ).retentionDeletionJobId,
-    ).toBeNull();
-    await prisma.modelFile.update({
-      where: { id: modelFileId },
-      data: { retentionHold: RetentionHold.NONE },
-    });
+    ).toBe(failed.id);
     await prisma.retentionDeletionJob.update({
       where: { id: failed.id },
       data: { availableAt: new Date() },

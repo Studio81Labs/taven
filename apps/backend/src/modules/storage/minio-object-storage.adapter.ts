@@ -7,12 +7,13 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import type {
-  ObjectStorage,
-  ObjectStorageDownloadRequest,
-  ObjectStorageUploadRequest,
-  SignedObjectUrl,
-  StoredObjectMetadata,
+import {
+  ObjectStorageDeadlineError,
+  type ObjectStorage,
+  type ObjectStorageDownloadRequest,
+  type ObjectStorageUploadRequest,
+  type SignedObjectUrl,
+  type StoredObjectMetadata,
 } from "./object-storage.port";
 import type { ObjectStorageConfig } from "./storage.config";
 import { assertStorageObjectKey } from "./storage-keys";
@@ -57,7 +58,7 @@ function signingWindow(expiresAt: Date): {
   const signingDate = new Date();
   const expiresIn = Math.floor((deadline - signingDate.getTime()) / 1_000);
   if (expiresIn < 1) {
-    throw new Error("signed object URL deadline must be in the future");
+    throw new ObjectStorageDeadlineError();
   }
   return {
     signingDate,

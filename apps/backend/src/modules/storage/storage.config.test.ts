@@ -33,8 +33,14 @@ describe("readObjectStorageConfig", () => {
     expect(() =>
       readObjectStorageConfig({
         ...environment,
-        TAVEN_S3_SIGNED_URL_TTL_SECONDS: "0",
+        TAVEN_S3_SIGNED_URL_TTL_SECONDS: "1",
       }),
     ).toThrow("TAVEN_S3_SIGNED_URL_TTL_SECONDS");
+    expect(
+      readObjectStorageConfig({
+        ...environment,
+        TAVEN_S3_SIGNED_URL_TTL_SECONDS: "2",
+      }).signedUrlTtlSeconds,
+    ).toBe(2);
   });
 });

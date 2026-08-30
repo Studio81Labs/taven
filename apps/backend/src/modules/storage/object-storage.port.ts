@@ -4,6 +4,13 @@
  */
 export const OBJECT_STORAGE = Symbol("OBJECT_STORAGE");
 
+export class ObjectStorageDeadlineError extends Error {
+  constructor(message = "signed object URL deadline must be in the future") {
+    super(message);
+    this.name = "ObjectStorageDeadlineError";
+  }
+}
+
 export interface ObjectStorageUploadRequest {
   objectKey: string;
   contentType: string;

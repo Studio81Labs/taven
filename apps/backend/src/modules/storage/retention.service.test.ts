@@ -123,7 +123,7 @@ describe("RetentionService deletion claim recovery", () => {
     expect(deleted).toEqual([["final/upload", "quarantine/upload"]]);
   });
 
-  it("releases a failed claim so a deadline or hold can be changed before retry", async () => {
+  it("retains a failed claim until an idempotent retry converges", async () => {
     const assetId = "00000000-0000-0000-0000-000000000001";
     const jobId = "00000000-0000-0000-0000-000000000002";
     const deadline = new Date(Date.now() - 1_000);
@@ -141,7 +141,6 @@ describe("RetentionService deletion claim recovery", () => {
       leaseToken: null,
     };
     let deleteAttempts = 0;
-    let headFails = false;
     const storage: ObjectStorage = {
       createUploadUrl: async () => ({
         url: "",
@@ -155,14 +154,7 @@ describe("RetentionService deletion claim recovery", () => {
         requiredHeaders: {},
         expiresAt: new Date(),
       }),
-      headObject: async () => {
-        if (headFails) throw new Error("head unavailable");
-        return {
-          contentType: "model/stl",
-          contentLength: 84,
-          contentHash: "a".repeat(64),
-        };
-      },
+      headObject: async () => null,
       readObjectRange: async () => new Uint8Array(),
       copyObject: async () => undefined,
       deleteObjects: async () => {
@@ -238,27 +230,18 @@ describe("RetentionService deletion claim recovery", () => {
       ) => callback(transaction),
     };
 
-    // The first pass claims and fails; the service must release the claim.
+    // The first pass can have deleted an unknown subset of the batch, so the
+    // claim must remain fenced even if the protected source still exists.
     const service = new RetentionService(prisma as never, storage);
     expect(await service.runOnce(1)).toBe(1);
     expect(state.status).toBe(RetentionDeletionJobStatus.FAILED);
-    expect(state.claim).toBeNull();
-
-    // A caller can now extend the deadline/hold without the old claim blocking it.
-    state.deadline = new Date(Date.now() + 60_000);
-    expect(state.claim).toBeNull();
-
-    // Unknown object-store state is conservative: the retry remains claimed,
-    // so a hold cannot race a deletion whose result could not be inspected.
-    state.deadline = new Date(Date.now() - 1_000);
-    state.status = RetentionDeletionJobStatus.PENDING;
-    state.claim = jobId;
-    state.attempts = 0;
-    state.leaseToken = null;
-    deleteAttempts = 0;
-    headFails = true;
-    expect(await service.runOnce(1)).toBe(1);
-    expect(state.status).toBe(RetentionDeletionJobStatus.FAILED);
     expect(state.claim).toBe(jobId);
+
+    // The same job can safely reclaim its fenced asset and retry the complete
+    // idempotent key set. Only successful convergence closes the job.
+    expect(await service.runOnce(1)).toBe(1);
+    expect(state.status).toBe(RetentionDeletionJobStatus.SUCCEEDED);
+    expect(state.claim).toBe(jobId);
+    expect(deleteAttempts).toBe(2);
   });
 });

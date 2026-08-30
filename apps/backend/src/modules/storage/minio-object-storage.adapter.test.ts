@@ -9,6 +9,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MinioObjectStorageAdapter } from "./minio-object-storage.adapter";
+import { ObjectStorageDeadlineError } from "./object-storage.port";
 import type { ObjectStorageConfig } from "./storage.config";
 
 vi.mock("@aws-sdk/s3-request-presigner", () => ({ getSignedUrl: vi.fn() }));
@@ -31,6 +32,7 @@ describe("MinioObjectStorageAdapter", () => {
 
   beforeEach(() => {
     send = vi.spyOn(client, "send");
+    vi.mocked(getSignedUrl).mockClear();
     vi.mocked(getSignedUrl).mockResolvedValue("https://signed.example/object");
   });
 
@@ -94,6 +96,17 @@ describe("MinioObjectStorageAdapter", () => {
         signingDate: expect.any(Date),
       }),
     );
+  });
+
+  it("rejects a deadline with no complete signing second remaining", async () => {
+    const storage = new MinioObjectStorageAdapter(config, client);
+    await expect(
+      storage.createDownloadUrl({
+        objectKey,
+        expiresAt: new Date(Date.now() + 999),
+      }),
+    ).rejects.toBeInstanceOf(ObjectStorageDeadlineError);
+    expect(getSignedUrl).not.toHaveBeenCalled();
   });
 
   it("returns verified object metadata and treats a missing key as absent", async () => {

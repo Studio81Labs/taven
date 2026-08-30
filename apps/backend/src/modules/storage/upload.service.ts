@@ -29,7 +29,11 @@ import type {
   SignedDownloadResponseDto,
   UploadIntentResponseDto,
 } from "./storage.dto";
-import { OBJECT_STORAGE, type ObjectStorage } from "./object-storage.port";
+import {
+  OBJECT_STORAGE,
+  ObjectStorageDeadlineError,
+  type ObjectStorage,
+} from "./object-storage.port";
 import {
   OBJECT_STORAGE_CONFIG,
   type ObjectStorageConfig,
@@ -603,23 +607,32 @@ export class UploadService {
     metadata: ValidatedUploadMetadata,
     expiresAt: Date,
   ): Promise<UploadIntentResponseDto> {
-    if (expiresAt.getTime() <= Date.now()) {
+    if (expiresAt.getTime() - Date.now() < 1_000) {
       await this.expirePendingIntent(uploadId);
       throw new GoneException("Upload intent expired before URL signing");
     }
-    const signed = await this.objects.createUploadUrl({
-      objectKey: quarantineKey,
-      contentType: metadata.contentType,
-      contentHash: metadata.sha256,
-      contentLength: metadata.sizeBytes,
-      expiresAt,
-    });
+    let signed: Awaited<ReturnType<ObjectStorage["createUploadUrl"]>>;
+    try {
+      signed = await this.objects.createUploadUrl({
+        objectKey: quarantineKey,
+        contentType: metadata.contentType,
+        contentHash: metadata.sha256,
+        contentLength: metadata.sizeBytes,
+        expiresAt,
+      });
+    } catch (error) {
+      if (error instanceof ObjectStorageDeadlineError) {
+        await this.expirePendingIntent(uploadId);
+        throw new GoneException("Upload intent expired before URL signing");
+      }
+      throw error;
+    }
     return {
       uploadId,
       assetId,
       accessToken: token,
       uploadUrl: signed.url,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: signed.expiresAt.toISOString(),
       requiredHeaders: signed.requiredHeaders,
     };
   }

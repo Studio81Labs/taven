@@ -69,13 +69,10 @@ export class RetentionService {
         await this.objects.deleteObjects(claim.objectKeys);
         await this.completeClaim(claim);
       } catch (error) {
-        const canReleaseClaim = claim.protectedObjectKey
-          ? await this.objects
-              .headObject(claim.protectedObjectKey)
-              .then((object) => object !== null)
-              .catch(() => false)
-          : true;
-        await this.failClaim(claim, error, canReleaseClaim);
+        // A failed S3 batch can already have deleted an arbitrary subset of
+        // its keys. Keep the claim until an idempotent retry converges so a
+        // new hold or deadline cannot race partially missing derivatives.
+        await this.failClaim(claim, error, false);
       }
     }
     return processed;

@@ -11,6 +11,7 @@ export interface ObjectStorageConfig {
 export const OBJECT_STORAGE_CONFIG = Symbol("OBJECT_STORAGE_CONFIG");
 
 const DEFAULT_SIGNED_URL_TTL_SECONDS = 15 * 60;
+const MIN_SIGNED_URL_TTL_SECONDS = 2;
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]?.trim();
@@ -33,10 +34,10 @@ function parseTtlSeconds(value: string | undefined): number {
   const seconds = Number(value);
   if (
     !Number.isSafeInteger(seconds) ||
-    seconds < 1 ||
+    seconds < MIN_SIGNED_URL_TTL_SECONDS ||
     seconds > 7 * 24 * 60 * 60
   ) {
-    throw new Error("TAVEN_S3_SIGNED_URL_TTL_SECONDS must be 1 through 604800");
+    throw new Error("TAVEN_S3_SIGNED_URL_TTL_SECONDS must be 2 through 604800");
   }
   return seconds;
 }
