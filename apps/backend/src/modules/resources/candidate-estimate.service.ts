@@ -1,0 +1,654 @@
+import { Inject, Injectable } from "@nestjs/common";
+import { OutboxStatus, Prisma, SliceKind } from "@prisma/client";
+import type {
+  CandidateEstimateJob,
+  CandidateEstimateResult,
+} from "@taven/slicer-contracts" with { "resolution-mode": "import" };
+import { PrismaService } from "../../prisma/prisma.service";
+import {
+  ResourceConflictError,
+  ResourceNotFoundError,
+  ResourceValidationError,
+} from "./resource-errors";
+
+const CANDIDATE_DISPATCH_TYPE = "slicing.candidate-estimate.requested";
+const CANDIDATE_SCHEMA_VERSION = 2;
+
+export type CandidateEstimateDispatch = {
+  nodeId: string;
+  inventoryId: string;
+  job: CandidateEstimateJob;
+};
+
+export type CandidateCapacityWindow = {
+  startsAt: Date;
+  endsAt: Date;
+};
+
+export type IngestCandidateEstimateInput = {
+  result: CandidateEstimateResult;
+  capacityWindows: readonly CandidateCapacityWindow[];
+  expiresAt: Date;
+};
+
+export type CandidateIngestionResult =
+  | {
+      status: "failed";
+      jobId: string;
+      failureClass: string;
+      code: string;
+    }
+  | {
+      status: "succeeded";
+      candidateResourceEstimateId: string;
+      estimateKey: string;
+      replayed: boolean;
+    };
+
+type DispatchPayload = {
+  nodeId: string;
+  inventoryId: string;
+  job: CandidateEstimateJob;
+};
+
+type ObservedResourceRow = {
+  observed_at: Date;
+  remaining_milligrams: bigint;
+  reserved_milligrams: bigint;
+};
+
+async function parseDispatchPayload(value: unknown): Promise<DispatchPayload> {
+  if (!value || typeof value !== "object") {
+    throw new ResourceConflictError("candidate dispatch payload is missing");
+  }
+  const payload = value as Record<string, unknown>;
+  if (
+    typeof payload.nodeId !== "string" ||
+    typeof payload.inventoryId !== "string"
+  ) {
+    throw new ResourceConflictError("candidate dispatch context is invalid");
+  }
+  try {
+    const { CandidateEstimateJobSchema } =
+      await import("@taven/slicer-contracts");
+    return {
+      nodeId: payload.nodeId,
+      inventoryId: payload.inventoryId,
+      job: CandidateEstimateJobSchema.parse(payload.job),
+    };
+  } catch (error) {
+    throw new ResourceConflictError(
+      `persisted candidate dispatch is invalid: ${errorMessage(error)}`,
+    );
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown validation error";
+}
+
+function assertValidDate(value: Date, name: string): void {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new ResourceValidationError(`${name} must be a valid Date`);
+  }
+}
+
+function windowsOverlap(
+  left: CandidateCapacityWindow,
+  right: CandidateCapacityWindow,
+): boolean {
+  return left.startsAt < right.endsAt && right.startsAt < left.endsAt;
+}
+
+function validateCapacityWindows(
+  windows: readonly CandidateCapacityWindow[],
+  plateSeconds: readonly bigint[],
+  observedAt: Date,
+): void {
+  if (windows.length !== plateSeconds.length || windows.length === 0) {
+    throw new ResourceValidationError(
+      "capacity windows must contain exactly one interval per result plate",
+    );
+  }
+  windows.forEach((window, index) => {
+    assertValidDate(window.startsAt, `capacityWindows[${index}].startsAt`);
+    assertValidDate(window.endsAt, `capacityWindows[${index}].endsAt`);
+    if (window.startsAt <= observedAt || window.endsAt <= window.startsAt) {
+      throw new ResourceValidationError(
+        "candidate capacity windows must be future, positive half-open intervals",
+      );
+    }
+    const durationMilliseconds = BigInt(
+      window.endsAt.getTime() - window.startsAt.getTime(),
+    );
+    if (durationMilliseconds < plateSeconds[index]! * 1_000n) {
+      throw new ResourceValidationError(
+        `capacity window ${index} is shorter than its machine-specific plate estimate`,
+      );
+    }
+  });
+  for (let left = 0; left < windows.length; left += 1) {
+    for (let right = left + 1; right < windows.length; right += 1) {
+      if (windowsOverlap(windows[left]!, windows[right]!)) {
+        throw new ResourceValidationError(
+          "candidate capacity windows must not overlap",
+        );
+      }
+    }
+  }
+}
+
+function isPrismaConflict(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    ["P2002", "P2003", "P2010"].includes(error.code),
+  );
+}
+
+function constraintOf(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("meta" in error)) return;
+  const meta = error.meta;
+  if (!meta || typeof meta !== "object") return;
+  if ("constraint" in meta && typeof meta.constraint === "string") {
+    return meta.constraint;
+  }
+  if ("target" in meta) {
+    return Array.isArray(meta.target)
+      ? meta.target.join(",")
+      : typeof meta.target === "string"
+        ? meta.target
+        : undefined;
+  }
+  return;
+}
+
+@Injectable()
+export class CandidateEstimateService {
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+
+  /** Persists the exact queue dispatch before it can be published. */
+  async dispatch(
+    input: CandidateEstimateDispatch,
+  ): Promise<CandidateEstimateJob> {
+    let job: CandidateEstimateJob;
+    try {
+      const { CandidateEstimateJobSchema } =
+        await import("@taven/slicer-contracts");
+      job = CandidateEstimateJobSchema.parse(input.job);
+    } catch (error) {
+      throw new ResourceValidationError(
+        `candidate estimate job is invalid: ${errorMessage(error)}`,
+      );
+    }
+    const payload = {
+      nodeId: input.nodeId,
+      inventoryId: input.inventoryId,
+      job,
+    } satisfies DispatchPayload;
+
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const existing = await transaction.outboxMessage.findUnique({
+          where: { deduplicationKey: job.idempotencyKey },
+        });
+        if (existing) {
+          const persisted = await parseDispatchPayload(existing.payload);
+          if (
+            existing.messageType !== CANDIDATE_DISPATCH_TYPE ||
+            existing.aggregateId !== job.jobId ||
+            JSON.stringify(persisted) !== JSON.stringify(payload)
+          ) {
+            throw new ResourceConflictError(
+              "candidate dispatch idempotency key belongs to different inputs",
+              "outbox_messages_deduplication_key_key",
+            );
+          }
+          return persisted.job;
+        }
+
+        const resource = await transaction.$queryRaw<
+          Array<{ exists: boolean }>
+        >`
+          SELECT EXISTS (
+            SELECT 1
+            FROM inventories inventory
+            JOIN machines machine
+              ON machine.id = inventory.machine_id
+             AND machine.node_id = inventory.node_id
+            JOIN nodes node
+              ON node.id = machine.node_id
+            JOIN machine_profiles profile
+              ON profile.id = ${job.input.machineProfile.revisionId}::uuid
+             AND profile.machine_capability_id = machine.machine_capability_id
+            JOIN machine_calibrations calibration
+              ON calibration.id = ${job.input.machineCalibration.revisionId}::uuid
+             AND calibration.node_id = machine.node_id
+             AND calibration.machine_id = machine.id
+            JOIN revision_identities profile_revision
+              ON profile_revision.id = profile.id
+            JOIN revision_identities calibration_revision
+              ON calibration_revision.id = calibration.id
+            JOIN revision_identities config_revision
+              ON config_revision.id = ${job.input.printConfig.revisionId}::uuid
+            JOIN print_config_revisions config
+              ON config.id = config_revision.id
+            JOIN model_geometries geometry
+              ON geometry.id = ${job.input.geometry.modelGeometryId}::uuid
+            JOIN model_files source
+              ON source.id = geometry.source_model_file_id
+            JOIN shipment_plans shipment_plan
+              ON shipment_plan.id = ${job.input.shipmentPlanId}::uuid
+            WHERE inventory.id = ${input.inventoryId}::uuid
+              AND inventory.node_id = ${input.nodeId}::uuid
+              AND machine.id = ${job.input.machineId}::uuid
+              AND node.active
+              AND machine.status = 'ACTIVE'
+              AND inventory.status = 'AVAILABLE'
+              AND profile.state = 'ACTIVE'
+              AND calibration.state = 'ACTIVE'
+              AND profile.nozzle_diameter_micrometers = machine.installed_nozzle_micrometers
+              AND profile.material = inventory.material
+              AND profile.quality = config.quality
+              AND geometry.source_model_file_id = ${job.input.geometry.sourceModelFileId}::uuid
+              AND geometry.canonical_object_key = ${job.input.geometry.canonicalObjectKey}
+              AND geometry.geometry_hash = ${job.input.geometry.geometrySha256}
+              AND geometry.deleted_at IS NULL
+              AND source.content_hash = ${job.input.geometry.sourceContentSha256}
+              AND source.deleted_at IS NULL
+              AND (
+                    source.retention_hold <> 'NONE'
+                    OR source.source_delete_after > clock_timestamp()
+                  )
+              AND taven_geometry_fits_machine_capability(
+                    geometry.id,
+                    machine.machine_capability_id
+                  )
+              AND profile_revision.digest = ${job.input.machineProfile.contentSha256}
+              AND calibration_revision.digest = ${job.input.machineCalibration.contentSha256}
+              AND config_revision.digest = ${job.input.printConfig.contentSha256}
+          ) AS exists
+        `;
+        if (!resource[0]?.exists) {
+          throw new ResourceNotFoundError(
+            "candidate dispatch resources do not match persisted revisions",
+          );
+        }
+        await transaction.outboxMessage.create({
+          data: {
+            deduplicationKey: job.idempotencyKey,
+            aggregateType: "CandidateEstimateDispatch",
+            aggregateId: job.jobId,
+            messageType: CANDIDATE_DISPATCH_TYPE,
+            schemaVersion: CANDIDATE_SCHEMA_VERSION,
+            payload: payload as unknown as Prisma.InputJsonObject,
+          },
+        });
+        return job;
+      });
+    } catch (error) {
+      if (
+        error instanceof ResourceConflictError ||
+        error instanceof ResourceNotFoundError ||
+        error instanceof ResourceValidationError
+      ) {
+        throw error;
+      }
+      if (isPrismaConflict(error)) {
+        throw new ResourceConflictError(
+          "candidate dispatch conflicts with persisted state",
+          constraintOf(error),
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** Validates a worker result against its persisted dispatch and stores it once. */
+  async ingest(
+    input: IngestCandidateEstimateInput,
+  ): Promise<CandidateIngestionResult> {
+    assertValidDate(input.expiresAt, "expiresAt");
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const dispatchRows = await transaction.$queryRaw<
+          Array<{
+            id: string;
+            message_type: string;
+            payload: Prisma.JsonValue;
+            status: OutboxStatus;
+          }>
+        >`
+          SELECT id, message_type, payload, status
+          FROM outbox_messages
+          WHERE deduplication_key = ${input.result.idempotencyKey}
+          FOR UPDATE
+        `;
+        const dispatchRow = dispatchRows[0];
+        if (
+          !dispatchRow ||
+          dispatchRow.message_type !== CANDIDATE_DISPATCH_TYPE
+        ) {
+          throw new ResourceNotFoundError(
+            "persisted candidate estimate dispatch was not found",
+          );
+        }
+        const dispatch = await parseDispatchPayload(dispatchRow.payload);
+        const orderScope = await transaction.$queryRaw<
+          Array<{ order_id: string }>
+        >`
+          SELECT order_id
+          FROM shipment_plans
+          WHERE id = ${dispatch.job.input.shipmentPlanId}::uuid
+        `;
+        const orderId = orderScope[0]?.order_id;
+        if (!orderId) {
+          throw new ResourceNotFoundError(
+            "candidate dispatch shipment plan was not found",
+          );
+        }
+        await transaction.$queryRaw`
+          SELECT taven_lock_automatic_order_session(${orderId}::uuid)::text
+        `;
+        let result: CandidateEstimateResult;
+        try {
+          const { slicingResultForJobSchema } =
+            await import("@taven/slicer-contracts");
+          const parsed = slicingResultForJobSchema(dispatch.job).parse(
+            input.result,
+          );
+          if (parsed.kind !== "candidate_estimate") {
+            throw new Error("result is not a candidate estimate");
+          }
+          result = parsed;
+        } catch (error) {
+          throw new ResourceValidationError(
+            `candidate result does not match its persisted dispatch: ${errorMessage(error)}`,
+          );
+        }
+
+        if (result.outcome.status === "failed") {
+          if (dispatchRow.status !== OutboxStatus.DELIVERED) {
+            await transaction.outboxMessage.update({
+              where: { id: dispatchRow.id },
+              data: {
+                status: OutboxStatus.DELIVERED,
+                deliveredAt: new Date(),
+              },
+            });
+          }
+          return {
+            status: "failed",
+            jobId: result.jobId,
+            failureClass: result.outcome.failureClass,
+            code: result.outcome.code,
+          };
+        }
+
+        const {
+          buildCandidateResourceEstimateKey,
+          buildMachineOccupancySliceCacheKey,
+          RevisionRef,
+          Sha256Digest,
+        } = await import("@taven/core");
+        const estimateKey = buildCandidateResourceEstimateKey({
+          geometryHash: Sha256Digest.parse(
+            dispatch.job.input.geometry.geometrySha256,
+          ),
+          modelGeometryId: dispatch.job.input.geometry.modelGeometryId,
+          geometrySelectionHash: Sha256Digest.parse(
+            dispatch.job.input.geometry.selectionSha256,
+          ),
+          machineProfileRevision: RevisionRef.create(
+            "machine-profile",
+            dispatch.job.input.machineProfile.revisionId,
+          ),
+          machineCalibrationRevision: RevisionRef.create(
+            "machine-calibration",
+            dispatch.job.input.machineCalibration.revisionId,
+          ),
+          printConfigRevision: RevisionRef.create(
+            "print-config",
+            dispatch.job.input.printConfig.revisionId,
+          ),
+          arrangementRevision: RevisionRef.create(
+            "arrangement",
+            dispatch.job.input.arrangementRevision.revisionId,
+          ),
+          partsPerPlate: dispatch.job.input.partsPerPlate,
+          quantity: dispatch.job.input.quantity,
+          shipmentPlanId: dispatch.job.input.shipmentPlanId,
+        });
+        const existing = await transaction.candidateResourceEstimate.findUnique(
+          { where: { estimateKey } },
+        );
+        if (existing) {
+          const snapshot = existing.resourceSnapshot as Record<string, unknown>;
+          if (
+            snapshot.dispatchJobId !== result.jobId ||
+            existing.nodeId !== dispatch.nodeId ||
+            existing.inventoryId !== dispatch.inventoryId
+          ) {
+            throw new ResourceConflictError(
+              "candidate estimate key belongs to a different dispatch",
+              "candidate_resource_estimates_estimate_key_key",
+            );
+          }
+          await this.markDispatchDelivered(transaction, dispatchRow);
+          return {
+            status: "succeeded",
+            candidateResourceEstimateId: existing.id,
+            estimateKey,
+            replayed: true,
+          };
+        }
+
+        const observedRows = await transaction.$queryRaw<ObservedResourceRow[]>`
+          SELECT clock_timestamp() AS observed_at,
+                 inventory.remaining_milligrams,
+                 inventory.reserved_milligrams
+          FROM inventories inventory
+          WHERE inventory.id = ${dispatch.inventoryId}::uuid
+            AND inventory.node_id = ${dispatch.nodeId}::uuid
+            AND inventory.machine_id = ${dispatch.job.input.machineId}::uuid
+          FOR UPDATE
+        `;
+        const observed = observedRows[0];
+        if (!observed) {
+          throw new ResourceNotFoundError(
+            "candidate inventory is no longer available in the dispatched node",
+          );
+        }
+        if (input.expiresAt <= observed.observed_at) {
+          throw new ResourceValidationError(
+            "candidate estimate must expire after calculation",
+          );
+        }
+        const plateSeconds = result.outcome.plates.map(
+          ({ estimatedPrintSeconds }) => BigInt(estimatedPrintSeconds),
+        );
+        validateCapacityWindows(
+          input.capacityWindows,
+          plateSeconds,
+          observed.observed_at,
+        );
+        const requiredMaterialMilligrams = result.outcome.plates.reduce(
+          (total, plate) => total + BigInt(plate.estimatedMaterialMilligrams),
+          0n,
+        );
+        const requiredMachineSeconds = plateSeconds.reduce(
+          (total, seconds) => total + seconds,
+          0n,
+        );
+
+        const sliceIds: string[] = [];
+        for (const occupancy of result.outcome.occupancySlices) {
+          const cacheKey = buildMachineOccupancySliceCacheKey({
+            geometryHash: Sha256Digest.parse(
+              dispatch.job.input.geometry.geometrySha256,
+            ),
+            modelGeometryId: dispatch.job.input.geometry.modelGeometryId,
+            geometrySelectionHash: Sha256Digest.parse(
+              dispatch.job.input.geometry.selectionSha256,
+            ),
+            machineProfileRevision: RevisionRef.create(
+              "machine-profile",
+              dispatch.job.input.machineProfile.revisionId,
+            ),
+            machineCalibrationRevision: RevisionRef.create(
+              "machine-calibration",
+              dispatch.job.input.machineCalibration.revisionId,
+            ),
+            printConfigRevision: RevisionRef.create(
+              "print-config",
+              dispatch.job.input.printConfig.revisionId,
+            ),
+            arrangementRevision: RevisionRef.create(
+              "arrangement",
+              dispatch.job.input.arrangementRevision.revisionId,
+            ),
+            partsPerPlate: occupancy.partsPerPlate,
+          });
+          const existingSlice = await transaction.sliceResult.findUnique({
+            where: { cacheKey },
+          });
+          const expected = {
+            kind: SliceKind.PRODUCTION,
+            modelGeometryId: dispatch.job.input.geometry.modelGeometryId,
+            printConfigRevisionId: dispatch.job.input.printConfig.revisionId,
+            machineProfileId: dispatch.job.input.machineProfile.revisionId,
+            machineCalibrationId:
+              dispatch.job.input.machineCalibration.revisionId,
+            partsPerPlate: occupancy.partsPerPlate,
+            artifactObjectKey: occupancy.artifact.objectKey,
+            artifactHash: occupancy.artifact.sha256,
+            estimatedPrintSeconds: BigInt(occupancy.estimatedPrintSeconds),
+            estimatedMaterialMilligrams: BigInt(
+              occupancy.estimatedMaterialMilligrams,
+            ),
+            slicerEngine: result.engine.name,
+            slicerVersion: result.engine.version,
+          } as const;
+          if (existingSlice) {
+            const mismatch = Object.entries(expected).some(([key, value]) => {
+              const existingValue =
+                existingSlice[key as keyof typeof existingSlice];
+              return existingValue !== value;
+            });
+            if (mismatch) {
+              throw new ResourceConflictError(
+                "machine occupancy cache key belongs to different immutable metrics",
+                "slice_results_cache_key_key",
+              );
+            }
+            sliceIds.push(existingSlice.id);
+          } else {
+            const created = await transaction.sliceResult.create({
+              data: { cacheKey, ...expected },
+            });
+            sliceIds.push(created.id);
+          }
+        }
+        const primarySliceResultId = sliceIds[0];
+        if (!primarySliceResultId) {
+          throw new ResourceValidationError(
+            "candidate result has no machine occupancy metrics",
+          );
+        }
+        const resourceSnapshot = {
+          contractVersion: result.contractVersion,
+          dispatchJobId: result.jobId,
+          inputFingerprintSha256: result.inputFingerprintSha256,
+          inventoryId: dispatch.inventoryId,
+          inventoryRemainingMilligrams:
+            observed.remaining_milligrams.toString(),
+          inventoryReservedMilligrams: observed.reserved_milligrams.toString(),
+          machineId: dispatch.job.input.machineId,
+          machineProfileRevisionId:
+            dispatch.job.input.machineProfile.revisionId,
+          machineCalibrationRevisionId:
+            dispatch.job.input.machineCalibration.revisionId,
+          printConfigRevisionId: dispatch.job.input.printConfig.revisionId,
+          arrangementRevisionId:
+            dispatch.job.input.arrangementRevision.revisionId,
+          capacityWindows: input.capacityWindows.map((window, index) => ({
+            intervalIndex: index,
+            startsAt: window.startsAt.toISOString(),
+            endsAt: window.endsAt.toISOString(),
+          })),
+        } satisfies Prisma.InputJsonObject;
+        const candidate = await transaction.candidateResourceEstimate.create({
+          data: {
+            nodeId: dispatch.nodeId,
+            estimateKey,
+            modelGeometryId: dispatch.job.input.geometry.modelGeometryId,
+            primarySliceResultId,
+            tailSliceResultId: sliceIds[1] ?? null,
+            printConfigRevisionId: dispatch.job.input.printConfig.revisionId,
+            machineProfileId: dispatch.job.input.machineProfile.revisionId,
+            machineCalibrationId:
+              dispatch.job.input.machineCalibration.revisionId,
+            machineId: dispatch.job.input.machineId,
+            inventoryId: dispatch.inventoryId,
+            shipmentPlanId: dispatch.job.input.shipmentPlanId,
+            arrangementRevisionId:
+              dispatch.job.input.arrangementRevision.revisionId,
+            quantity: dispatch.job.input.quantity,
+            partsPerPlate: dispatch.job.input.partsPerPlate,
+            requiredMaterialMilligrams,
+            requiredMachineSeconds,
+            resourceSnapshot,
+            calculatedAt: observed.observed_at,
+            expiresAt: input.expiresAt,
+            capacityIntervals: {
+              create: input.capacityWindows.map((window, intervalIndex) => ({
+                nodeId: dispatch.nodeId,
+                intervalIndex,
+                startsAt: window.startsAt,
+                endsAt: window.endsAt,
+              })),
+            },
+          },
+        });
+        await this.markDispatchDelivered(transaction, dispatchRow);
+        return {
+          status: "succeeded",
+          candidateResourceEstimateId: candidate.id,
+          estimateKey,
+          replayed: false,
+        };
+      });
+    } catch (error) {
+      if (
+        error instanceof ResourceConflictError ||
+        error instanceof ResourceNotFoundError ||
+        error instanceof ResourceValidationError
+      ) {
+        throw error;
+      }
+      if (isPrismaConflict(error)) {
+        throw new ResourceConflictError(
+          "candidate ingestion conflicts with persisted resource state",
+          constraintOf(error),
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async markDispatchDelivered(
+    transaction: Prisma.TransactionClient,
+    dispatch: { id: string; status: OutboxStatus },
+  ): Promise<void> {
+    if (dispatch.status === OutboxStatus.DELIVERED) return;
+    await transaction.outboxMessage.update({
+      where: { id: dispatch.id },
+      data: {
+        status: OutboxStatus.DELIVERED,
+        deliveredAt: new Date(),
+      },
+    });
+  }
+}

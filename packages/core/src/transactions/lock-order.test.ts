@@ -53,17 +53,17 @@ describe("orderLockTargets", () => {
     },
   );
 
-  it("allows a phase reservation set to span node-scoped child reservations", () => {
+  it("keeps a phase reservation set and its children in one node scope", () => {
     const targets = [
-      { kind: "production_reservation", id: "reservation-b", nodeId: "node-2" },
-      { kind: "phase_reservation_set", id: "set-1" },
+      { kind: "production_reservation", id: "reservation-b", nodeId: "node-1" },
+      { kind: "phase_reservation_set", id: "set-1", nodeId: "node-1" },
       { kind: "production_reservation", id: "reservation-a", nodeId: "node-1" },
     ] as const satisfies readonly LockTarget[];
 
     expect(orderLockTargets(targets)).toEqual([
-      { kind: "phase_reservation_set", id: "set-1" },
+      { kind: "phase_reservation_set", id: "set-1", nodeId: "node-1" },
       { kind: "production_reservation", id: "reservation-a", nodeId: "node-1" },
-      { kind: "production_reservation", id: "reservation-b", nodeId: "node-2" },
+      { kind: "production_reservation", id: "reservation-b", nodeId: "node-1" },
     ]);
   });
 

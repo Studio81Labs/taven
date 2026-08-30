@@ -20,4 +20,5 @@ export * from "./pricing/shipment-plan.js";
 export * from "./pricing/types.js";
 export * from "./projections/financial.js";
 export * from "./projections/fulfilment.js";
+export * from "./resource-plan.js";
 export * from "./transactions/lock-order.js";
