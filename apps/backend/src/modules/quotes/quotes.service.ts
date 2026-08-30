@@ -1263,7 +1263,7 @@ async function expireLockedOffer(
   });
 }
 
-async function applyTransition(
+export async function applyTransition(
   request: {
     id: string;
     status: QuoteRequestStatus;
@@ -1274,9 +1274,9 @@ async function applyTransition(
   commandKey: string,
   context: Readonly<Record<string, unknown>> | undefined,
 ): Promise<void> {
+  const core = await coreModule();
   try {
-    const { quoteRequestPolicy, transition } = await coreModule();
-    transition(quoteRequestPolicy, {
+    core.transition(core.quoteRequestPolicy, {
       aggregateId: request.id,
       current: domainStatus(request.status),
       target: domainStatus(target),
@@ -1286,9 +1286,13 @@ async function applyTransition(
       ...(context ? { context } : {}),
     });
   } catch (error) {
-    throw new ConflictException(
-      error instanceof Error ? error.message : "Quote transition was rejected",
-    );
+    if (
+      error instanceof core.InvalidTransitionError ||
+      error instanceof core.TransitionGuardError
+    ) {
+      throw new ConflictException(error.message);
+    }
+    throw error;
   }
 }
 
@@ -2037,13 +2041,59 @@ function requiredInstant(value: unknown, name: string): Date {
   if (typeof value !== "string") {
     throw new BadRequestException(`${name} must be a date-time string`);
   }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) {
-    throw new BadRequestException(
-      `${name} must use canonical UTC ISO-8601 millisecond precision`,
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/.exec(
+      value,
     );
+  if (!match || !isValidDateTimeParts(match)) {
+    throw new BadRequestException(`${name} must be an RFC 3339 date-time`);
   }
-  return parsed;
+  const leapSecond = match[6] === "60";
+  const parseableValue = leapSecond
+    ? `${value.slice(0, 17)}59${value.slice(19)}`
+    : value;
+  const epochMilliseconds = Date.parse(parseableValue);
+  if (!Number.isFinite(epochMilliseconds)) {
+    throw new BadRequestException(`${name} must be an RFC 3339 date-time`);
+  }
+  return new Date(epochMilliseconds + (leapSecond ? 1_000 : 0));
+}
+
+function isValidDateTimeParts(match: RegExpExecArray): boolean {
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[7] === undefined ? 0 : Number(match[7]);
+  const offsetMinute = match[8] === undefined ? 0 : Number(match[8]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysInMonth[month - 1]! &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 60 &&
+    offsetHour <= 23 &&
+    offsetMinute <= 59
+  );
 }
 
 function optionalDate(value: unknown, name: string): Date | undefined {

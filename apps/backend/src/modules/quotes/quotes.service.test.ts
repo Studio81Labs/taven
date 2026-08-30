@@ -1,6 +1,12 @@
+import { ConflictException } from "@nestjs/common";
+import { QuoteRequestStatus } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { addBusinessHours, QuotesService } from "./quotes.service";
+import {
+  addBusinessHours,
+  applyTransition,
+  QuotesService,
+} from "./quotes.service";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -102,5 +108,39 @@ describe("quote capability expiry clock", () => {
       quoteId: "22222222-2222-4222-8222-222222222222",
       contractTotalMinor: 1_000,
     });
+  });
+});
+
+describe("quote transition error mapping", () => {
+  const request = {
+    id: "11111111-1111-4111-8111-111111111111",
+    status: QuoteRequestStatus.NEW,
+    currentStateCommandKey: "create-request",
+    currentStateResultId: "22222222-2222-4222-8222-222222222222",
+  };
+
+  it("maps expected domain transition failures to conflict", async () => {
+    await expect(
+      applyTransition(
+        request,
+        QuoteRequestStatus.ACCEPTED,
+        "invalid-transition",
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("lets unexpected programming failures propagate", async () => {
+    await expect(
+      applyTransition(
+        {
+          ...request,
+          status: 42 as unknown as QuoteRequestStatus,
+        },
+        QuoteRequestStatus.IN_REVIEW,
+        "unexpected-failure",
+        undefined,
+      ),
+    ).rejects.toBeInstanceOf(TypeError);
   });
 });

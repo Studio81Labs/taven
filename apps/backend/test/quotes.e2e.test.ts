@@ -154,13 +154,25 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(reviewed.response.status).toBe(200);
     expect(reviewed.body.status).toBe("IN_REVIEW");
 
+    const offerExpiry = new Date(
+      Math.floor((Date.now() + 60 * 60 * 1_000) / 1_000) * 1_000,
+    );
+    const issueKey = key("issue");
     const issued = await issueOffer(
       created.body.requestId,
-      key("issue"),
-      new Date(Date.now() + 60 * 60 * 1_000),
+      issueKey,
+      rfc3339WithOffset(offerExpiry),
     );
     expect(issued.response.status).toBe(201);
     expect(issued.body.version).toBe(1);
+
+    const normalizedReplay = await issueOffer(
+      created.body.requestId,
+      issueKey,
+      offerExpiry,
+    );
+    expect(normalizedReplay.response.status).toBe(201);
+    expect(normalizedReplay.body).toEqual(issued.body);
 
     const wrongOfferToken = await apiJson(`offers/${issued.body.quoteId}`, {
       headers: bearer(randomBytes(32).toString("base64url")),
@@ -592,7 +604,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   async function issueOffer(
     requestId: string,
     idempotencyKey: string,
-    expiresAt: Date,
+    expiresAt: Date | string,
     components: Array<{
       kind: string;
       amountMinor: number;
@@ -614,7 +626,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
       },
       body: JSON.stringify({
         summary: "Custom modelling and production offer",
-        expiresAt: expiresAt.toISOString(),
+        expiresAt:
+          typeof expiresAt === "string" ? expiresAt : expiresAt.toISOString(),
         promisedDate: "2026-10-01",
         priceListId,
         contractTotalMinor: 110_000,
@@ -710,4 +723,10 @@ function bearer(token: string): Record<string, string> {
 
 function key(scope: string): string {
   return `${scope}-${randomUUID()}`;
+}
+
+function rfc3339WithOffset(value: Date): string {
+  return new Date(value.getTime() + 2 * 60 * 60 * 1_000)
+    .toISOString()
+    .replace(".000Z", "+02:00");
 }
