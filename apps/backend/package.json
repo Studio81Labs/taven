@@ -17,6 +17,7 @@
     "retention-worker:dev": "tsx src/retention-worker.ts",
     "lint": "eslint .",
     "typecheck": "pnpm db:generate && tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm --filter @taven/core build",
     "test": "vitest run --exclude 'test/**'",
     "pretest:e2e": "pnpm --filter @taven/slicer-contracts... build",
     "test:e2e": "vitest run test",
