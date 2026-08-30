@@ -1211,6 +1211,7 @@ model QuoteRequest {
   quoteSession QuoteSession? @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
   customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
   quote        Quote?
+  legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
 
   @@index([customerId, status])
   @@map("quote_requests")
@@ -1229,6 +1230,7 @@ model Quote {
   items                 QuoteItem[]
   priceBinding          QuotePriceBinding?
   individualOrderOrigin IndividualOrderOrigin?
+  legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
   auditEvents           AuditEvent[]
 
   @@unique([id, customerId], map: "quotes_id_customer_key")
@@ -1286,6 +1288,7 @@ model PriceSnapshot {
   shipmentPlans    ShipmentPlan[]
   payments         Payment[]
   orderSettlements OrderSettlement[]
+  legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
 
   @@unique([id, currency], map: "price_snapshots_id_currency_key")
   @@map("price_snapshots")
@@ -1442,6 +1445,19 @@ model LegacyIndividualFullPaymentBinding {
 
   @@unique([orderPriceBindingId, orderId, priceSnapshotId], map: "legacy_individual_full_payment_bindings_contract_key")
   @@map("legacy_individual_full_payment_bindings")
+}
+
+model LegacyIndividualFullQuoteBinding {
+  quoteId         String   @id @map("quote_id") @db.Uuid
+  quoteRequestId  String   @unique(map: "legacy_individual_full_quote_bindings_request_id_key") @map("quote_request_id") @db.Uuid
+  priceSnapshotId String   @unique(map: "legacy_individual_full_quote_bindings_snapshot_id_key") @map("price_snapshot_id") @db.Uuid
+  recordedAt      DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  quote         Quote         @relation(fields: [quoteId], references: [id], onDelete: Restrict, map: "legacy_individual_full_quote_bindings_quote_fkey")
+  quoteRequest  QuoteRequest  @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict, map: "legacy_individual_full_quote_bindings_request_fkey")
+  priceSnapshot PriceSnapshot @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict, map: "legacy_individual_full_quote_bindings_snapshot_fkey")
+
+  @@map("legacy_individual_full_quote_bindings")
 }
 
 model OrderPriceBinding {

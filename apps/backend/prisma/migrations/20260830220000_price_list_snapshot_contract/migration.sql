@@ -98,6 +98,32 @@ CREATE TABLE "legacy_individual_full_payment_bindings" (
         ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
+-- A QUOTED individual request has no order binding yet, so it cannot use the
+-- order allow-list above. Preserve only the valid, sealed FULL contracts that
+-- were outstanding when this migration ran. The immutable quote/request/
+-- snapshot tuple is later followed through the individual order origin.
+CREATE TABLE "legacy_individual_full_quote_bindings" (
+    "quote_id" UUID NOT NULL,
+    "quote_request_id" UUID NOT NULL,
+    "price_snapshot_id" UUID NOT NULL,
+    "recorded_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "legacy_individual_full_quote_bindings_pkey"
+        PRIMARY KEY ("quote_id"),
+    CONSTRAINT "legacy_individual_full_quote_bindings_request_id_key"
+        UNIQUE ("quote_request_id"),
+    CONSTRAINT "legacy_individual_full_quote_bindings_snapshot_id_key"
+        UNIQUE ("price_snapshot_id"),
+    CONSTRAINT "legacy_individual_full_quote_bindings_quote_fkey"
+        FOREIGN KEY ("quote_id") REFERENCES "quotes"("id")
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "legacy_individual_full_quote_bindings_request_fkey"
+        FOREIGN KEY ("quote_request_id") REFERENCES "quote_requests"("id")
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "legacy_individual_full_quote_bindings_snapshot_fkey"
+        FOREIGN KEY ("price_snapshot_id") REFERENCES "price_snapshots"("id")
+        ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
 -- The checkout deadline is intentionally limited to the initial FULL or
 -- DEPOSIT capture.  A post-QC BALANCE capture uses its own business deadline,
 -- derived from the accepted versioned PriceList.
@@ -405,6 +431,31 @@ WHERE binding."invalidated_at" IS NULL
       snapshot."id", snapshot."contract_total_minor"
   );
 
+INSERT INTO "legacy_individual_full_quote_bindings" (
+    "quote_id", "quote_request_id", "price_snapshot_id"
+)
+SELECT quote."id", request."id", binding."price_snapshot_id"
+FROM "quote_requests" request
+JOIN "quotes" quote
+  ON quote."quote_request_id" = request."id"
+JOIN "quote_price_bindings" binding
+  ON binding."quote_id" = quote."id"
+JOIN "price_snapshots" snapshot
+  ON snapshot."id" = binding."price_snapshot_id"
+WHERE request."status" = 'QUOTED'
+  AND quote."issued_at" <= clock_timestamp()
+  AND quote."expires_at" > clock_timestamp()
+  AND snapshot."sealed_at" IS NOT NULL
+  AND snapshot."contract_total_minor" > 0
+  AND NOT EXISTS (
+      SELECT 1
+      FROM "individual_order_origins" origin
+      WHERE origin."quote_id" = quote."id"
+  )
+  AND taven_full_payment_schedule_is_valid(
+      snapshot."id", snapshot."contract_total_minor"
+  );
+
 CREATE FUNCTION taven_prevent_legacy_individual_full_binding_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -417,6 +468,41 @@ $$;
 CREATE TRIGGER "legacy_individual_full_payment_bindings_immutable"
 BEFORE INSERT OR UPDATE OR DELETE ON "legacy_individual_full_payment_bindings"
 FOR EACH ROW EXECUTE FUNCTION taven_prevent_legacy_individual_full_binding_mutation();
+
+CREATE FUNCTION taven_prevent_legacy_individual_full_quote_binding_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'legacy individual FULL quote allow-list is migration-owned'
+        USING ERRCODE = '23514',
+              CONSTRAINT = 'legacy_individual_full_quote_binding_immutable';
+END;
+$$;
+
+CREATE TRIGGER "legacy_individual_full_quote_bindings_immutable"
+BEFORE INSERT OR UPDATE OR DELETE ON "legacy_individual_full_quote_bindings"
+FOR EACH ROW EXECUTE FUNCTION taven_prevent_legacy_individual_full_quote_binding_mutation();
+
+CREATE FUNCTION taven_individual_full_quote_binding_is_grandfathered(
+    target_quote_id uuid,
+    target_snapshot_id uuid
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "legacy_individual_full_quote_bindings" legacy
+        JOIN "quotes" quote
+          ON quote."id" = legacy."quote_id"
+         AND quote."quote_request_id" = legacy."quote_request_id"
+        JOIN "quote_price_bindings" binding
+          ON binding."quote_id" = legacy."quote_id"
+         AND binding."price_snapshot_id" = legacy."price_snapshot_id"
+        JOIN "price_snapshots" snapshot
+          ON snapshot."id" = legacy."price_snapshot_id"
+         AND snapshot."sealed_at" IS NOT NULL
+        WHERE legacy."quote_id" = target_quote_id
+          AND legacy."price_snapshot_id" = target_snapshot_id
+    );
+$$;
 
 CREATE FUNCTION taven_individual_full_payment_binding_is_grandfathered(
     target_order_id uuid,
@@ -436,6 +522,20 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
          AND binding."invalidated_at" IS NULL
         WHERE legacy."order_id" = target_order_id
           AND legacy."price_snapshot_id" = target_snapshot_id
+    ) OR EXISTS (
+        SELECT 1
+        FROM "individual_order_origins" origin
+        JOIN "order_active_price_bindings" active
+          ON active."order_id" = origin."order_id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+         AND binding."order_id" = origin."order_id"
+         AND binding."price_snapshot_id" = target_snapshot_id
+         AND binding."invalidated_at" IS NULL
+        WHERE origin."order_id" = target_order_id
+          AND taven_individual_full_quote_binding_is_grandfathered(
+              origin."quote_id", target_snapshot_id
+          )
     );
 $$;
 
@@ -1566,12 +1666,23 @@ BEGIN
                  FROM "price_snapshot_components" component
                  WHERE component."price_snapshot_id" = snapshot."id"
              ) = snapshot."contract_total_minor"
-             AND taven_split_payment_schedule_is_valid(
-                 snapshot."id",
-                 snapshot."contract_total_minor"
+             AND (
+                 (
+                     taven_individual_full_quote_binding_is_grandfathered(
+                         quote."id", snapshot."id"
+                     )
+                     AND taven_full_payment_schedule_is_valid(
+                         snapshot."id", snapshot."contract_total_minor"
+                     )
+                 )
+                 OR (
+                     taven_split_payment_schedule_is_valid(
+                         snapshot."id", snapshot."contract_total_minor"
+                     )
+                     AND taven_price_snapshot_balance_deadline_is_valid(snapshot."id")
+                     AND taven_price_snapshot_balance_earned_policy_is_valid(snapshot."id")
+                 )
              )
-             AND taven_price_snapshot_balance_deadline_is_valid(snapshot."id")
-             AND taven_price_snapshot_balance_earned_policy_is_valid(snapshot."id")
              AND NOT EXISTS (
                  SELECT 1
                  FROM "payment_schedules" schedule
@@ -2472,10 +2583,14 @@ BEGIN
 
     IF EXISTS (
         SELECT 1
-        FROM "legacy_individual_full_payment_bindings" legacy
-        WHERE legacy."order_id" = NEW."id"
+        FROM "order_active_price_bindings" active
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+         AND binding."order_id" = active."order_id"
+         AND binding."invalidated_at" IS NULL
+        WHERE active."order_id" = NEW."id"
           AND taven_individual_full_payment_binding_is_grandfathered(
-              legacy."order_id", legacy."price_snapshot_id"
+              NEW."id", binding."price_snapshot_id"
           )
     ) THEN
         RETURN NULL;
@@ -3303,14 +3418,14 @@ BEGIN
         INTO committed_refunds
         FROM "refund_transactions"
         WHERE "payment_id" = NEW."payment_id"
-          AND "status" IN ('PENDING', 'SUCCEEDED')
+          AND "status" IN ('PENDING', 'SUSPENDED', 'SUCCEEDED')
           AND "id" <> OLD."id";
     ELSE
         SELECT coalesce(sum("amount_minor"), 0)
         INTO committed_refunds
         FROM "refund_transactions"
         WHERE "payment_id" = NEW."payment_id"
-          AND "status" IN ('PENDING', 'SUCCEEDED');
+          AND "status" IN ('PENDING', 'SUSPENDED', 'SUCCEEDED');
     END IF;
 
     IF NEW."reason" = 'LATE_CAPTURE_COMPENSATION' AND (
@@ -3349,7 +3464,9 @@ BEGIN
     END IF;
 
     IF committed_refunds
-       + (CASE WHEN NEW."status" IN ('PENDING', 'SUCCEEDED') THEN NEW."amount_minor" ELSE 0 END)
+       + (CASE WHEN NEW."status" IN (
+              'PENDING', 'SUSPENDED', 'SUCCEEDED'
+          ) THEN NEW."amount_minor" ELSE 0 END)
        > captured_amount THEN
         RAISE EXCEPTION 'refund amount exceeds captured payment amount'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_captured_payment_check';
@@ -3833,20 +3950,76 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     ), false);
 $$;
 
-CREATE FUNCTION taven_has_balance_late_capture_compensation(
-    target_payment_id uuid,
-    target_cutoff_at timestamptz
+CREATE FUNCTION taven_balance_late_capture_compensation_is_completed(
+    target_payment_id uuid
 )
 RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
-        SELECT 1
+    WITH RECURSIVE roots AS (
+        SELECT refund."id" AS root_id,
+               refund."payment_id",
+               balance."requested_amount_minor" AS required_amount
         FROM "payments" balance
         JOIN "refund_transactions" refund
           ON refund."payment_id" = balance."id"
          AND refund."reason" = 'LATE_CAPTURE_COMPENSATION'
          AND refund."amount_minor" = balance."requested_amount_minor"
+         AND refund."replaces_refund_transaction_id" IS NULL
         WHERE balance."id" = target_payment_id
           AND balance."role" = 'BALANCE'
+          AND balance."captured_amount_minor" = balance."requested_amount_minor"
+    ), lineage AS (
+        SELECT root.root_id,
+               root.root_id AS refund_id,
+               root.payment_id,
+               root.required_amount,
+               refund."amount_minor",
+               refund."status"
+        FROM roots root
+        JOIN "refund_transactions" refund ON refund."id" = root.root_id
+        UNION ALL
+        SELECT lineage.root_id,
+               retry."id",
+               retry."payment_id",
+               lineage.required_amount,
+               retry."amount_minor",
+               retry."status"
+        FROM lineage
+        JOIN "refund_transactions" retry
+          ON retry."replaces_refund_transaction_id" = lineage.refund_id
+         AND retry."payment_id" = lineage.payment_id
+    ), states AS (
+        SELECT root_id,
+               max(required_amount) AS required_amount,
+               coalesce(sum(amount_minor) FILTER (
+                   WHERE status = 'SUCCEEDED'
+               ), 0) AS succeeded_amount,
+               count(*) FILTER (
+                   WHERE status IN ('PENDING', 'SUSPENDED')
+               ) AS active_count
+        FROM lineage
+        GROUP BY root_id
+    )
+    SELECT count(*) = 1
+       AND bool_and(active_count = 0 AND succeeded_amount = required_amount)
+    FROM states;
+$$;
+
+CREATE FUNCTION taven_has_balance_late_capture_compensation(
+    target_payment_id uuid,
+    target_cutoff_at timestamptz
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    WITH settlement AS (
+        SELECT settlement."id"
+        FROM "order_settlements" settlement
+        WHERE settlement."balance_payment_id" = target_payment_id
+          AND settlement."kind" = 'BALANCE_SETTLEMENT'
+          AND settlement."cutoff_at" = target_cutoff_at
+    ), eligible_payments AS (
+        SELECT balance."id"
+        FROM "payments" balance
+        CROSS JOIN settlement
+        WHERE balance."role" = 'BALANCE'
           AND NOT balance."capture_authorized"
           AND balance."capture_cutoff_at" <= target_cutoff_at
           AND balance."captured_amount_minor" = balance."requested_amount_minor"
@@ -3857,7 +4030,66 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
                   balance."id"
               )
           )
-    );
+          AND taven_balance_attempt_belongs_to_timeout_settlement(
+              balance."id", settlement."id"
+          )
+    )
+    SELECT EXISTS (SELECT 1 FROM eligible_payments)
+       AND NOT EXISTS (
+           SELECT 1
+           FROM eligible_payments eligible
+           WHERE NOT taven_balance_late_capture_compensation_is_completed(
+               eligible."id"
+           )
+       );
+$$;
+
+-- A settlement is capture-closed only when its anchor is still closed with no
+-- late capture, or every late capture already has a fully successful
+-- compensation lineage. This prevents an earlier retry attempt from being
+-- hidden by a still-closed settlement anchor.
+CREATE FUNCTION taven_balance_settlement_capture_closure_is_safe(
+    target_payment_id uuid,
+    target_cutoff_at timestamptz
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    WITH settlement AS (
+        SELECT settlement."id"
+        FROM "order_settlements" settlement
+        WHERE settlement."balance_payment_id" = target_payment_id
+          AND settlement."kind" = 'BALANCE_SETTLEMENT'
+          AND settlement."cutoff_at" = target_cutoff_at
+    ), eligible_payments AS (
+        SELECT balance."id"
+        FROM "payments" balance
+        CROSS JOIN settlement
+        WHERE balance."role" = 'BALANCE'
+          AND NOT balance."capture_authorized"
+          AND balance."capture_cutoff_at" <= target_cutoff_at
+          AND balance."captured_amount_minor" = balance."requested_amount_minor"
+          AND balance."captured_at" >= balance."capture_cutoff_at"
+          AND (
+              balance."capture_cutoff_at" = target_cutoff_at
+              OR taven_balance_payment_has_verified_provider_failure(
+                  balance."id"
+              )
+          )
+          AND taven_balance_attempt_belongs_to_timeout_settlement(
+              balance."id", settlement."id"
+          )
+    )
+    SELECT EXISTS (SELECT 1 FROM settlement)
+       AND (
+           (
+               taven_balance_payment_is_closed_for_timeout(
+                   target_payment_id, target_cutoff_at
+               )
+               AND NOT EXISTS (SELECT 1 FROM eligible_payments)
+           )
+           OR taven_has_balance_late_capture_compensation(
+               target_payment_id, target_cutoff_at
+           )
+       );
 $$;
 
 CREATE FUNCTION taven_finalize_balance_timeout_settlement(
@@ -3899,14 +4131,6 @@ BEGIN
 
     IF settlement."status" <> 'AWAITING_BALANCE'
        OR settlement.phase_status <> 'CANCELLED'
-       OR NOT (
-           taven_balance_payment_is_closed_for_timeout(
-               settlement."balance_payment_id", settlement."cutoff_at"
-           )
-           OR taven_has_balance_late_capture_compensation(
-               settlement."balance_payment_id", settlement."cutoff_at"
-           )
-       )
        OR NOT taven_balance_settlement_refund_completed(settlement."id") THEN
         RETURN NULL;
     END IF;
@@ -3920,6 +4144,16 @@ BEGIN
             END,
             "updated_at" = target_updated_at
         WHERE "id" = settlement."payment_id";
+    END IF;
+
+    -- The deposit refund is financially complete at this point and its
+    -- payment projection must leave REFUND_PENDING atomically with that
+    -- provider outcome. Terminal order closure remains gated on every
+    -- unexpected late balance capture being compensated as well.
+    IF NOT taven_balance_settlement_capture_closure_is_safe(
+        settlement."balance_payment_id", settlement."cutoff_at"
+    ) THEN
+        RETURN NULL;
     END IF;
 
     UPDATE "order_phases"
@@ -3966,13 +4200,8 @@ BEGIN
           ON balance."id" = settlement."balance_payment_id"
          AND balance."order_id" = target_order."id"
          AND balance."role" = 'BALANCE'
-         AND (
-             taven_balance_payment_is_closed_for_timeout(
-                 balance."id", settlement."cutoff_at"
-             )
-             OR taven_has_balance_late_capture_compensation(
-                 balance."id", settlement."cutoff_at"
-             )
+         AND taven_balance_settlement_capture_closure_is_safe(
+             balance."id", settlement."cutoff_at"
          )
         WHERE target_order."id" = NEW."id"
           AND target_order."status" = 'CANCELLED_SETTLED'
@@ -4011,6 +4240,18 @@ BEGIN
     ELSE
         SELECT payment."order_id" INTO target_order_id
         FROM "payments" payment WHERE payment."id" = NEW."payment_id";
+
+        IF NEW."reason" = 'LATE_CAPTURE_COMPENSATION'
+           AND taven_balance_late_capture_compensation_is_completed(
+               NEW."payment_id"
+           ) THEN
+            UPDATE "payments"
+            SET "status" = 'REFUNDED', "updated_at" = NEW."updated_at"
+            WHERE "id" = NEW."payment_id"
+              AND "role" = 'BALANCE'
+              AND "status" = 'REFUND_PENDING'
+              AND "captured_amount_minor" = "requested_amount_minor";
+        END IF;
     END IF;
     PERFORM taven_finalize_balance_timeout_settlement(target_order_id);
     RETURN NULL;

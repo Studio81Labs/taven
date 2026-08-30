@@ -23246,6 +23246,11 @@ describe("commerce persistence foundations", () => {
         ).rows[0]?.refund_id;
         expect(firstLateRefund).toEqual(expect.any(String));
         expect(repeatedLateRefund).toBe(firstLateRefund);
+        if (!firstLateRefund) {
+          throw new Error(
+            "provider-failed late capture has no compensation refund",
+          );
+        }
         await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
         expect(
           (
@@ -23278,6 +23283,98 @@ describe("commerce persistence foundations", () => {
             late_refunds: "1",
             payment_status: "REFUND_PENDING",
             settlement_anchor_id: timeoutRetryPaymentId,
+          },
+        ]);
+
+        const providerSettlementRefund = (
+          await client.query<{ id: string }>(
+            `SELECT refund.id
+             FROM refund_transactions refund
+             JOIN payments deposit ON deposit.id = refund.payment_id
+             WHERE deposit.order_id = $1
+               AND refund.reason = 'BALANCE_SETTLEMENT'`,
+            [individual.orderId],
+          )
+        ).rows[0]?.id;
+        if (!providerSettlementRefund) {
+          throw new Error(
+            "provider-failed balance is missing its settlement refund",
+          );
+        }
+        const providerSettlementRefundAt = new Date(
+          lateCapturedAt.getTime() + 1,
+        );
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+        await fixtures.persistRefundProviderEvent(
+          providerSettlementRefund,
+          "REFUND_SUCCEEDED",
+          `provider-failed-settlement-${balancePaymentId}`,
+          providerSettlementRefundAt,
+        );
+        await client.query(
+          `UPDATE refund_transactions
+           SET status = 'SUCCEEDED', provider_refund_id = $2,
+               completed_at = $3, updated_at = $3
+           WHERE id = $1`,
+          [
+            providerSettlementRefund,
+            `provider-failed-settlement-${balancePaymentId}`,
+            providerSettlementRefundAt,
+          ],
+        );
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        expect(
+          (
+            await client.query<{ order_status: string; phase_status: string }>(
+              `SELECT target_order.status::text AS order_status,
+                      phase.status::text AS phase_status
+               FROM orders target_order
+               JOIN order_phases phase ON phase.order_id = target_order.id
+               WHERE target_order.id = $1`,
+              [individual.orderId],
+            )
+          ).rows,
+        ).toEqual([
+          { order_status: "AWAITING_BALANCE", phase_status: "CANCELLED" },
+        ]);
+
+        const providerLateRefundAt = new Date(
+          providerSettlementRefundAt.getTime() + 1,
+        );
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+        await fixtures.persistRefundProviderEvent(
+          firstLateRefund,
+          "REFUND_SUCCEEDED",
+          `provider-failed-late-capture-${balancePaymentId}`,
+          providerLateRefundAt,
+        );
+        await client.query(
+          `UPDATE refund_transactions
+           SET status = 'SUCCEEDED', provider_refund_id = $2,
+               completed_at = $3, updated_at = $3
+           WHERE id = $1`,
+          [
+            firstLateRefund,
+            `provider-failed-late-capture-${balancePaymentId}`,
+            providerLateRefundAt,
+          ],
+        );
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        expect(
+          (
+            await client.query<{ order_status: string; phase_status: string }>(
+              `SELECT target_order.status::text AS order_status,
+                      phase.status::text AS phase_status
+               FROM orders target_order
+               JOIN order_phases phase ON phase.order_id = target_order.id
+               WHERE target_order.id = $1`,
+              [individual.orderId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            order_status: "CANCELLED_SETTLED",
+            phase_status: "CANCELLED_SETTLED",
           },
         ]);
         await client.query(`SET CONSTRAINTS ALL DEFERRED`);
@@ -23440,6 +23537,9 @@ describe("commerce persistence foundations", () => {
           )
         ).rows[0]?.refund_id;
         expect(repeatedLateRefund).toBe(firstLateRefund);
+        if (!firstLateRefund) {
+          throw new Error("late balance capture has no compensation refund");
+        }
         await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
         expect(
           (
@@ -23503,6 +23603,48 @@ describe("commerce persistence foundations", () => {
             `balance-settlement-${balancePaymentId}`,
             normalRefundAt,
           ],
+        );
+        await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
+        expect(
+          (
+            await client.query<{
+              deposit_status: string;
+              order_status: string;
+              phase_status: string;
+            }>(
+              `SELECT target_order.status::text AS order_status,
+                      phase.status::text AS phase_status,
+                      deposit.status::text AS deposit_status
+               FROM orders target_order
+               JOIN order_phases phase ON phase.order_id = target_order.id
+               JOIN payments deposit
+                 ON deposit.order_id = target_order.id AND deposit.role = 'DEPOSIT'
+               WHERE target_order.id = $1`,
+              [individual.orderId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            deposit_status: "PARTIALLY_REFUNDED",
+            order_status: "AWAITING_BALANCE",
+            phase_status: "CANCELLED",
+          },
+        ]);
+
+        const lateRefundAt = new Date(normalRefundAt.getTime() + 1);
+        await client.query(`SET CONSTRAINTS ALL DEFERRED`);
+        await fixtures.persistRefundProviderEvent(
+          firstLateRefund,
+          "REFUND_SUCCEEDED",
+          `late-balance-${balancePaymentId}`,
+          lateRefundAt,
+        );
+        await client.query(
+          `UPDATE refund_transactions
+           SET status = 'SUCCEEDED', provider_refund_id = $2,
+               completed_at = $3, updated_at = $3
+           WHERE id = $1`,
+          [firstLateRefund, `late-balance-${balancePaymentId}`, lateRefundAt],
         );
         await client.query(`SET CONSTRAINTS ALL IMMEDIATE`);
         expect(
