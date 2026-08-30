@@ -345,6 +345,17 @@ function withMachineSlicerProfile(
   });
 }
 
+function retryWithCorrelation(
+  job: CandidateEstimateJob,
+  correlationId: string,
+): CandidateEstimateJob {
+  return contracts.CandidateEstimateJobSchema.parse({
+    ...job,
+    attempt: 2,
+    correlationId,
+  });
+}
+
 async function terminalRows(dispatchId: string) {
   return pool.query<{
     outcome: string;
@@ -418,6 +429,58 @@ describe("candidate estimate terminal receipts", () => {
         [fixture.job.jobId],
       ),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("accepts a retry whose correlation ID changes without changing its effect", async () => {
+    const fixture = await createFixture("retry-correlation", {
+      persistDispatch: false,
+      dispatchableGeometry: true,
+    });
+    const dispatch = (job: CandidateEstimateJob) =>
+      candidates.dispatch({
+        nodeId: fixture.nodeId,
+        inventoryId: fixture.inventoryId,
+        job,
+      });
+
+    await expect(dispatch(fixture.job)).resolves.toEqual(fixture.job);
+    const firstDispatch = await pool.query<{ id: string }>(
+      `SELECT id
+       FROM outbox_messages
+       WHERE aggregate_id = $1`,
+      [fixture.job.jobId],
+    );
+    const firstDispatchId = firstDispatch.rows[0]?.id;
+    if (!firstDispatchId) {
+      throw new Error("first candidate retry dispatch was not persisted");
+    }
+    await pool.query(
+      `INSERT INTO candidate_estimate_terminal_results (
+         outbox_message_id,
+         result_fingerprint_sha256,
+         outcome,
+         failure_class,
+         failure_code
+       ) VALUES ($1, $2, 'FAILED', $3, $4)`,
+      [
+        firstDispatchId,
+        hash("retry-correlation:failure"),
+        "retryable_infrastructure",
+        "ENGINE_TIMEOUT",
+      ],
+    );
+
+    const retry = retryWithCorrelation(fixture.job, randomUUID());
+    expect(retry.correlationId).not.toBe(fixture.job.correlationId);
+    await expect(dispatch(retry)).resolves.toEqual(retry);
+    await expect(
+      pool.query<{ count: number }>(
+        `SELECT count(*)::int AS count
+         FROM outbox_messages
+         WHERE aggregate_id = $1`,
+        [fixture.job.jobId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 2 }] });
   });
 
   it("rejects a success delivered after a terminal failure", async () => {

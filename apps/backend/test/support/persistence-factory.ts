@@ -540,7 +540,7 @@ export class PersistenceFactory {
         );
       }
       await this.sql.query(
-        'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+        'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
         [
           itemSliceResultId,
           "ANALYSIS",
@@ -549,6 +549,7 @@ export class PersistenceFactory {
           configId,
           machineProfileId,
           machineCalibrationId,
+          this.id(`${name}:arrangement-revision:${index}`),
           item.sliceMetrics.partsPerPlate,
           `slice-metrics/${this.hash(`${name}:occupancy:${index}`)}/result.json`,
           this.hash(`${name}:slice:${index}`),
@@ -1547,6 +1548,20 @@ export class PersistenceFactory {
         `commerce topology slot ${topologyIndex} has no plate capacity`,
       );
     }
+    const primarySliceResultId =
+      foundation.fulfilmentSlotSliceResultIds[topologyIndex] ??
+      foundation.sliceResultId;
+    const primaryArrangement = await this.sql.query<{
+      arrangement_revision_id: string | null;
+    }>(
+      'SELECT "arrangement_revision_id" FROM "slice_results" WHERE "id" = $1',
+      [primarySliceResultId],
+    );
+    const arrangementRevisionId =
+      primaryArrangement.rows[0]?.arrangement_revision_id;
+    if (!arrangementRevisionId) {
+      throw new Error("planned production primary slice has no arrangement");
+    }
 
     await this.sql.query(
       'INSERT INTO "candidate_resource_estimates" ("id", "node_id", "estimate_key", "model_geometry_id", "slice_result_id", "tail_slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "machine_id", "inventory_id", "shipment_plan_id", "arrangement_revision_id", "quantity", "parts_per_plate", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, $20)',
@@ -1556,8 +1571,7 @@ export class PersistenceFactory {
         `estimate-${this.scope}-${name}`,
         foundation.fulfilmentSlotModelGeometryIds[topologyIndex] ??
           foundation.modelGeometryId,
-        foundation.fulfilmentSlotSliceResultIds[topologyIndex] ??
-          foundation.sliceResultId,
+        primarySliceResultId,
         occupancyPlan.tailSliceResultId ?? null,
         foundation.fulfilmentSlotPrintConfigRevisionIds[topologyIndex] ??
           foundation.printConfigRevisionId,
@@ -1566,7 +1580,7 @@ export class PersistenceFactory {
         foundation.machineId,
         foundation.inventoryId,
         shipmentPlanId,
-        this.id(`${name}:future-arrangement-revision`),
+        arrangementRevisionId,
         quantity,
         partsPerPlate,
         requiredMaterialMilligrams,

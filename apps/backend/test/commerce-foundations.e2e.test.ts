@@ -434,13 +434,15 @@ async function persistProductionSlices(
   await client.query(
     `INSERT INTO slice_results
        (id, kind, cache_key, model_geometry_id, print_config_revision_id,
-        machine_profile_id, machine_calibration_id, parts_per_plate,
+        machine_profile_id, machine_calibration_id, arrangement_revision_id,
+        parts_per_plate,
         artifact_object_key, artifact_hash, estimated_print_seconds,
         estimated_material_milligrams, slicer_engine, slicer_version)
      SELECT gen_random_uuid(), 'PRODUCTION',
             'production-package:' || job.id::text,
             candidate.model_geometry_id, production.print_config_revision_id,
             production.machine_profile_id, production.machine_calibration_id,
+            candidate.arrangement_revision_id,
             occupancy.parts_per_plate,
             'gcode/' || job.id::text || '/toolpaths.gcode',
             repeat('e', 64), production.required_machine_seconds,

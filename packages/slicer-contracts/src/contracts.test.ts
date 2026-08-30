@@ -311,9 +311,11 @@ describe("versioned slicing jobs", () => {
     const retry = CandidateEstimateJobSchema.parse({
       ...candidateJob,
       attempt: 2,
+      correlationId: ids.geometryB,
     });
 
     expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    expect(retry.correlationId).not.toBe(first.correlationId);
     expect(
       slicingDispatchAttemptKey(first.idempotencyKey, first.attempt),
     ).not.toBe(slicingDispatchAttemptKey(retry.idempotencyKey, retry.attempt));

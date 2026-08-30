@@ -169,9 +169,15 @@ export class EligibilityPlanService {
     input: CreateEligibilityPlanInput,
   ): Promise<EligibilityPlanResult> {
     const planKey = nonBlank(input.planKey, "planKey");
+    const planAdvisoryKey = `eligibility-plan:${planKey}`;
     try {
       return await this.prisma.$transaction(
         async (transaction) => {
+          await transaction.$queryRaw`
+            SELECT pg_advisory_xact_lock(
+              hashtextextended(${planAdvisoryKey}, 0)
+            )::text
+          `;
           const existing = await transaction.phaseResourcePlan.findUnique({
             where: { planKey },
             include: { eligibilitySnapshot: true, jobs: true },
@@ -520,7 +526,13 @@ export class EligibilityPlanService {
             candidateResourceEstimateIds: selectedCandidateIds,
           };
         },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        // The plan-key fence serializes identical idempotency attempts before
+        // the lookup. Read Committed is intentional here: a Serializable
+        // snapshot can be established before a waiter acquires that fence,
+        // leaving an exact retry with a stale pre-winner snapshot. The key,
+        // order-session, phase, and participant row locks provide the needed
+        // write serialization without that stale-snapshot failure mode.
+        { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
       );
     } catch (error) {
       if (

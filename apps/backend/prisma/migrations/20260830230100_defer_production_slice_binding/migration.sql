@@ -44,6 +44,64 @@ ALTER TABLE "slice_results"
         ("kind" IN ('ANALYSIS', 'PRODUCTION') AND "reference_profile_id" IS NULL AND "machine_profile_id" IS NOT NULL AND "machine_calibration_id" IS NOT NULL)
     );
 
+-- Cache keys include arrangement identity, but cannot safely be parsed by
+-- database constraints. Persist it explicitly so accepted G-code can be bound
+-- to the exact arrangement selected by the reservation's candidate.
+ALTER TABLE "slice_results"
+    ADD COLUMN "arrangement_revision_id" UUID;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM (
+            SELECT candidate."slice_result_id" AS slice_result_id,
+                   candidate."arrangement_revision_id"
+            FROM "candidate_resource_estimates" candidate
+
+            UNION ALL
+
+            SELECT candidate."tail_slice_result_id" AS slice_result_id,
+                   candidate."arrangement_revision_id"
+            FROM "candidate_resource_estimates" candidate
+            WHERE candidate."tail_slice_result_id" IS NOT NULL
+
+            UNION ALL
+
+            SELECT production."slice_result_id" AS slice_result_id,
+                   candidate."arrangement_revision_id"
+            FROM "production_reservations" production
+            JOIN "phase_resource_plan_jobs" plan_job
+              ON plan_job."id" = production."phase_resource_plan_job_id"
+             AND plan_job."node_id" = production."node_id"
+             AND plan_job."phase_resource_plan_id" = production."phase_resource_plan_id"
+            JOIN "candidate_resource_estimates" candidate
+              ON candidate."id" = plan_job."candidate_resource_estimate_id"
+             AND candidate."node_id" = plan_job."node_id"
+            WHERE production."slice_result_id" IS NOT NULL
+
+            UNION ALL
+
+            SELECT job."production_slice_result_id" AS slice_result_id,
+                   candidate."arrangement_revision_id"
+            FROM "jobs" job
+            JOIN "phase_resource_plan_jobs" plan_job
+              ON plan_job."id" = job."phase_resource_plan_job_id"
+             AND plan_job."node_id" = job."node_id"
+            JOIN "candidate_resource_estimates" candidate
+              ON candidate."id" = plan_job."candidate_resource_estimate_id"
+             AND candidate."node_id" = plan_job."node_id"
+            WHERE job."production_slice_result_id" IS NOT NULL
+        ) artifact_binding
+        GROUP BY artifact_binding."slice_result_id"
+        HAVING count(DISTINCT artifact_binding."arrangement_revision_id") > 1
+    ) THEN
+        RAISE EXCEPTION 'cannot migrate a slice result with conflicting candidate or production arrangement provenance; re-estimate or re-slice before deploying'
+            USING ERRCODE = '55000';
+    END IF;
+END;
+$$;
+
 ALTER TABLE "production_reservations"
     DISABLE TRIGGER "production_reservations_payload_immutable";
 
@@ -84,6 +142,47 @@ WHERE EXISTS (
     WHERE candidate."slice_result_id" = result."id"
        OR candidate."tail_slice_result_id" = result."id"
 );
+
+UPDATE "slice_results" result
+SET "arrangement_revision_id" = candidate."arrangement_revision_id"
+FROM "candidate_resource_estimates" candidate
+WHERE (candidate."slice_result_id" = result."id"
+       OR candidate."tail_slice_result_id" = result."id")
+  AND result."arrangement_revision_id" IS NULL;
+
+UPDATE "slice_results" result
+SET "arrangement_revision_id" = candidate."arrangement_revision_id"
+FROM "production_reservations" production
+JOIN "phase_resource_plan_jobs" plan_job
+  ON plan_job."id" = production."phase_resource_plan_job_id"
+ AND plan_job."node_id" = production."node_id"
+ AND plan_job."phase_resource_plan_id" = production."phase_resource_plan_id"
+JOIN "candidate_resource_estimates" candidate
+  ON candidate."id" = plan_job."candidate_resource_estimate_id"
+ AND candidate."node_id" = plan_job."node_id"
+WHERE production."slice_result_id" = result."id"
+  AND result."arrangement_revision_id" IS NULL;
+
+UPDATE "slice_results" result
+SET "arrangement_revision_id" = candidate."arrangement_revision_id"
+FROM "jobs" job
+JOIN "phase_resource_plan_jobs" plan_job
+  ON plan_job."id" = job."phase_resource_plan_job_id"
+ AND plan_job."node_id" = job."node_id"
+JOIN "candidate_resource_estimates" candidate
+  ON candidate."id" = plan_job."candidate_resource_estimate_id"
+ AND candidate."node_id" = plan_job."node_id"
+WHERE job."production_slice_result_id" = result."id"
+  AND result."arrangement_revision_id" IS NULL;
+
+-- Existing orphaned legacy rows may not have provenance from which to recover
+-- an arrangement. NOT VALID preserves deployability for those rows while
+-- PostgreSQL validates every new or changed machine slice from this point on.
+ALTER TABLE "slice_results"
+    ADD CONSTRAINT "slice_results_arrangement_shape_check" CHECK (
+        ("kind" = 'REFERENCE' AND "arrangement_revision_id" IS NULL) OR
+        ("kind" IN ('ANALYSIS', 'PRODUCTION') AND "arrangement_revision_id" IS NOT NULL)
+    ) NOT VALID;
 
 ALTER TABLE "slice_results"
     ENABLE TRIGGER "slice_results_immutable";
@@ -135,7 +234,8 @@ BEGIN
       AND selected_slice."model_geometry_id" = NEW."model_geometry_id"
       AND selected_slice."print_config_revision_id" = NEW."print_config_revision_id"
       AND selected_slice."machine_profile_id" = NEW."machine_profile_id"
-      AND selected_slice."machine_calibration_id" = NEW."machine_calibration_id";
+      AND selected_slice."machine_calibration_id" = NEW."machine_calibration_id"
+      AND selected_slice."arrangement_revision_id" = NEW."arrangement_revision_id";
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'candidate primary occupancy slice is incompatible'
@@ -186,7 +286,8 @@ BEGIN
               AND selected_slice."model_geometry_id" = NEW."model_geometry_id"
               AND selected_slice."print_config_revision_id" = NEW."print_config_revision_id"
               AND selected_slice."machine_profile_id" = NEW."machine_profile_id"
-              AND selected_slice."machine_calibration_id" = NEW."machine_calibration_id";
+              AND selected_slice."machine_calibration_id" = NEW."machine_calibration_id"
+              AND selected_slice."arrangement_revision_id" = NEW."arrangement_revision_id";
 
             IF NOT FOUND OR tail_parts_per_plate <> tail_part_count THEN
                 RAISE EXCEPTION 'candidate tail slice must match the partial plate occupancy'
@@ -281,6 +382,7 @@ BEGIN
                     AND plan_job."phase_resource_plan_id" = NEW."phase_resource_plan_id"
                     AND candidate."slice_result_id" = NEW."occupancy_slice_result_id"
                     AND candidate."model_geometry_id" = slice_result."model_geometry_id"
+                    AND candidate."arrangement_revision_id" = slice_result."arrangement_revision_id"
                     AND candidate."parts_per_plate" = slice_result."parts_per_plate"
                     AND slice_result."estimated_print_seconds" <= candidate."required_machine_seconds"
                     AND slice_result."estimated_print_seconds" <= NEW."required_machine_seconds"

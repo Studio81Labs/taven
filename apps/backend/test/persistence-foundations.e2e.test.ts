@@ -160,13 +160,15 @@ async function advanceReservationOrderToProduction(
   await client.query(
     `INSERT INTO slice_results
        (id, kind, cache_key, model_geometry_id, print_config_revision_id,
-        machine_profile_id, machine_calibration_id, parts_per_plate,
+        machine_profile_id, machine_calibration_id, arrangement_revision_id,
+        parts_per_plate,
         artifact_object_key, artifact_hash, estimated_print_seconds,
         estimated_material_milligrams, slicer_engine, slicer_version)
      SELECT gen_random_uuid(), 'PRODUCTION',
             'production-package:' || production.job_id::text,
             candidate.model_geometry_id, production.print_config_revision_id,
             production.machine_profile_id, production.machine_calibration_id,
+            candidate.arrangement_revision_id,
             occupancy.parts_per_plate,
             'gcode/' || production.job_id::text || '/toolpaths.gcode.3mf',
             repeat('f', 64), production.required_machine_seconds,
@@ -354,12 +356,13 @@ async function createProductionSlice(
     printConfigRevisionId?: string;
     partsPerPlate?: number;
     artifactObjectKey?: string;
+    arrangementRevisionId?: string;
     estimatedPrintSeconds?: number;
     estimatedMaterialMilligrams?: number;
   } = {},
 ): Promise<void> {
   await client.query(
-    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
     [
       fixtures.id(`${name}:slice`),
       "PRODUCTION",
@@ -368,6 +371,8 @@ async function createProductionSlice(
       options.printConfigRevisionId ?? foundation.printConfigRevisionId,
       foundation.machineProfileId,
       foundation.machineCalibrationId,
+      options.arrangementRevisionId ??
+        fixtures.id(`${name}:arrangement-revision`),
       options.partsPerPlate ?? 1,
       options.artifactObjectKey ??
         `slices/${fixtures.id(`${name}:artifact-key`)}`,
@@ -510,7 +515,7 @@ async function createSiblingMachineFoundation(
     ],
   );
   await client.query(
-    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
     [
       sliceResultId,
       "ANALYSIS",
@@ -519,6 +524,7 @@ async function createSiblingMachineFoundation(
       printConfigRevisionId,
       foundation.machineProfileId,
       calibrationId,
+      fixtures.id(`${name}:arrangement-revision`),
       1,
       `slice-metrics/${randomUUID().replaceAll("-", "")}/result.json`,
       "6".repeat(64),
@@ -1137,7 +1143,7 @@ describe("persistence foundations", () => {
 
         await expect(
           client.query(
-            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
             [
               fixtures.id("expired-slice"),
               "PRODUCTION",
@@ -1146,6 +1152,7 @@ describe("persistence foundations", () => {
               foundation.printConfigRevisionId,
               foundation.machineProfileId,
               foundation.machineCalibrationId,
+              fixtures.id("expired-slice:arrangement-revision"),
               1,
               `slices/${fixtures.id("expired-slice")}`,
               "7".repeat(64),
@@ -1644,7 +1651,7 @@ describe("persistence foundations", () => {
         );
         await expect(
           client.query(
-            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
             [
               sliceResultId,
               "PRODUCTION",
@@ -1653,6 +1660,7 @@ describe("persistence foundations", () => {
               printConfigRevisionId,
               foundation.machineProfileId,
               foundation.machineCalibrationId,
+              fixtures.id("fine-slice:arrangement-revision"),
               1,
               `slices/${sliceResultId}`,
               "8".repeat(64),
@@ -1691,10 +1699,22 @@ describe("persistence foundations", () => {
       partsPerPlate = 1,
       estimatedPrintSeconds = 30,
       estimatedMaterialMilligrams = 10,
+      sliceArrangementRevisionId?: string,
     ) => {
       const sliceResultId = fixtures.id(`${name}:tail-slice`);
+      const primarySlice = await client.query<{
+        arrangement_revision_id: string | null;
+      }>(
+        'SELECT "arrangement_revision_id" FROM "slice_results" WHERE "id" = $1',
+        [foundation.sliceResultId],
+      );
+      const primaryArrangementRevisionId =
+        primarySlice.rows[0]?.arrangement_revision_id;
+      if (!primaryArrangementRevisionId) {
+        throw new Error("tail slice primary arrangement is missing");
+      }
       await client.query(
-        'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+        'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
         [
           sliceResultId,
           "ANALYSIS",
@@ -1703,6 +1723,7 @@ describe("persistence foundations", () => {
           foundation.printConfigRevisionId,
           foundation.machineProfileId,
           foundation.machineCalibrationId,
+          sliceArrangementRevisionId ?? primaryArrangementRevisionId,
           partsPerPlate,
           `slice-metrics/${randomUUID().replaceAll("-", "")}/result.json`,
           "7".repeat(64),
@@ -1880,6 +1901,41 @@ describe("persistence foundations", () => {
           fixtures.planProduction(
             foundation,
             "wrong-tail",
+            twoPlateIntervals,
+            150,
+            50,
+            5,
+            0,
+            { partsPerPlate: 4, tailSliceResultId },
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "candidate_resource_quantity_check",
+        });
+      },
+    );
+    await inRollbackTransaction(
+      "candidate-quantity-tail-arrangement-mismatch",
+      async (client, fixtures) => {
+        const foundation = await createQuantityFoundation(
+          fixtures,
+          "tail-arrangement-mismatch",
+        );
+        const tailSliceResultId = await createTailSlice(
+          client,
+          fixtures,
+          foundation,
+          "tail-arrangement-mismatch",
+          1,
+          30,
+          10,
+          fixtures.id("different-arrangement"),
+        );
+
+        await expect(
+          fixtures.planProduction(
+            foundation,
+            "tail-arrangement-mismatch",
             twoPlateIntervals,
             150,
             50,
@@ -2727,6 +2783,9 @@ describe("persistence foundations", () => {
             fixtureName,
             {
               ...options,
+              arrangementRevisionId: fixtures.id(
+                `${fixtureName}:arrangement-revision:0`,
+              ),
               artifactObjectKey: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
             },
           );
@@ -2746,6 +2805,54 @@ describe("persistence foundations", () => {
         },
       );
     }
+  });
+
+  it("rejects Job G-code from a different reserved arrangement", async () => {
+    await inRollbackTransaction(
+      "production-slice-binding-arrangement",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "production-slice-binding-arrangement",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+          );
+        await client.query(
+          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+          [foundation.phaseReservationSetId, "RESERVED"],
+        );
+        await activateReservationGraph(client, fixtures, foundation, [
+          production,
+        ]);
+        await createProductionSlice(
+          client,
+          fixtures,
+          foundation,
+          "production-slice-binding-arrangement",
+          {
+            arrangementRevisionId: fixtures.id("different-arrangement"),
+            artifactObjectKey: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
+          },
+        );
+
+        await expect(
+          client.query(
+            'UPDATE "production_reservations" SET "slice_result_id" = $2 WHERE "id" = $1',
+            [
+              production.productionReservationId,
+              fixtures.id("production-slice-binding-arrangement:slice"),
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "production_reservation_production_slice_binding_check",
+        });
+      },
+    );
   });
 
   it("binds a Job-scoped gcode.3mf production artifact after acceptance", async () => {
@@ -2797,11 +2904,22 @@ describe("persistence foundations", () => {
           artifact_object_key: string;
           occupancy_kind: string;
           production_kind: string;
+          production_arrangement_revision_id: string;
+          candidate_arrangement_revision_id: string;
         }>(
           `SELECT production_slice."artifact_object_key",
                   occupancy."kind"::text AS occupancy_kind,
-                  production_slice."kind"::text AS production_kind
+                  production_slice."kind"::text AS production_kind,
+                  production_slice."arrangement_revision_id" AS production_arrangement_revision_id,
+                  candidate."arrangement_revision_id" AS candidate_arrangement_revision_id
            FROM "production_reservations" production
+           JOIN "phase_resource_plan_jobs" plan_job
+             ON plan_job."id" = production."phase_resource_plan_job_id"
+            AND plan_job."node_id" = production."node_id"
+            AND plan_job."phase_resource_plan_id" = production."phase_resource_plan_id"
+           JOIN "candidate_resource_estimates" candidate
+             ON candidate."id" = plan_job."candidate_resource_estimate_id"
+            AND candidate."node_id" = plan_job."node_id"
            JOIN "slice_results" occupancy
              ON occupancy."id" = production."occupancy_slice_result_id"
            JOIN "slice_results" production_slice
@@ -2809,13 +2927,15 @@ describe("persistence foundations", () => {
            WHERE production."id" = $1`,
           [production.productionReservationId],
         );
-        expect(binding.rows).toEqual([
-          {
-            artifact_object_key: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
-            occupancy_kind: "ANALYSIS",
-            production_kind: "PRODUCTION",
-          },
-        ]);
+        expect(binding.rows).toHaveLength(1);
+        expect(binding.rows[0]).toMatchObject({
+          artifact_object_key: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
+          occupancy_kind: "ANALYSIS",
+          production_kind: "PRODUCTION",
+        });
+        expect(binding.rows[0]?.production_arrangement_revision_id).toBe(
+          binding.rows[0]?.candidate_arrangement_revision_id,
+        );
       },
     );
   });

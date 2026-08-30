@@ -109,11 +109,19 @@ describe("phase resource reservation execution", () => {
     }
 
     const planKey = `eligibility:${testScope}`;
-    const created = await eligibility.createCompletePlan({
-      nodeId,
-      orderPhaseId,
-      planKey,
-    });
+    const [created, replay] = await Promise.all([
+      eligibility.createCompletePlan({
+        nodeId,
+        orderPhaseId,
+        planKey,
+      }),
+      eligibility.createCompletePlan({
+        nodeId,
+        orderPhaseId,
+        planKey,
+      }),
+    ]);
+    expect(replay).toEqual(created);
     expect(created.candidateResourceEstimateIds).toEqual([candidateId]);
     expect(created.expiresAt.getTime()).toBeGreaterThan(
       Date.now() + 15 * 60 * 1_000,

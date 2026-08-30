@@ -1413,10 +1413,10 @@ export type CandidateEstimateResult = z.infer<
 export type ProductionSliceResult = z.infer<typeof ProductionSliceResultSchema>;
 export type SlicingFailure = z.infer<typeof SlicingFailureSchema>;
 
-/** Computes the immutable effect identity for a job across its attempts. */
+/** Computes the immutable effect identity for a job across retry attempts. */
 export function slicingJobEffectFingerprint(jobInput: SlicingJob): string {
   const job = SlicingJobSchema.parse(jobInput);
-  const { attempt: _attempt, ...effect } = job;
+  const { attempt: _attempt, correlationId: _correlationId, ...effect } = job;
   return createHash("sha256").update(canonicalJson(effect)).digest("hex");
 }
 

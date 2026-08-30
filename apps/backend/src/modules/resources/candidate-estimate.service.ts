@@ -638,6 +638,8 @@ export class CandidateEstimateService {
             machineProfileId: dispatch.job.input.machineProfile.revisionId,
             machineCalibrationId:
               dispatch.job.input.machineCalibration.revisionId,
+            arrangementRevisionId:
+              dispatch.job.input.arrangementRevision.revisionId,
             partsPerPlate: occupancy.partsPerPlate,
             artifactObjectKey: occupancy.artifact.objectKey,
             artifactHash: occupancy.artifact.sha256,

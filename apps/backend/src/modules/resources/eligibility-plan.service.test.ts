@@ -17,6 +17,55 @@ const inventoryId = "00000000-0000-4000-8000-00000000000d";
 const intervalId = "00000000-0000-4000-8000-00000000000e";
 
 describe("EligibilityPlanService", () => {
+  it("fences the plan key before the idempotency lookup", async () => {
+    const events: string[] = [];
+    const queryRaw = vi.fn(
+      async (query: TemplateStringsArray, ...values: unknown[]) => {
+        events.push("fence");
+        expect(query.join("")).toContain("hashtextextended");
+        expect(query.join("")).toContain(")::text");
+        expect(values).toContain("eligibility-plan:replay-plan");
+        return [];
+      },
+    );
+    const findUnique = vi.fn(async () => {
+      events.push("lookup");
+      return {
+        id: "00000000-0000-4000-8000-000000000010",
+        nodeId,
+        orderPhaseId,
+        eligibilitySnapshotId: "00000000-0000-4000-8000-000000000011",
+        planKey: "replay-plan",
+        expiresAt: new Date("2030-01-01T02:00:00.000Z"),
+        eligibilitySnapshot: {},
+        jobs: [
+          {
+            candidateResourceEstimateId: candidateId,
+          },
+        ],
+      };
+    });
+    const transaction = {
+      $queryRaw: queryRaw,
+      phaseResourcePlan: { findUnique },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback) => callback(transaction)),
+    };
+
+    await expect(
+      new EligibilityPlanService(prisma as never).createCompletePlan({
+        nodeId,
+        orderPhaseId,
+        planKey: "replay-plan",
+      }),
+    ).resolves.toMatchObject({
+      phaseResourcePlanId: "00000000-0000-4000-8000-000000000010",
+      planKey: "replay-plan",
+    });
+    expect(events).toEqual(["fence", "lookup"]);
+  });
+
   it("rejects a candidate at the exact reservation TTL from the fresh planning clock", async () => {
     const observedAt = new Date("2030-01-01T00:00:00.000Z");
     const planningNow = new Date("2030-01-01T01:00:00.000Z");
@@ -25,6 +74,7 @@ describe("EligibilityPlanService", () => {
     );
     const queryRaw = vi
       .fn()
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ order_id: orderId }])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
@@ -96,6 +146,6 @@ describe("EligibilityPlanService", () => {
       message:
         "complete plan does not remain valid for the payment reservation TTL",
     });
-    expect(queryRaw).toHaveBeenCalledTimes(8);
+    expect(queryRaw).toHaveBeenCalledTimes(9);
   });
 });
