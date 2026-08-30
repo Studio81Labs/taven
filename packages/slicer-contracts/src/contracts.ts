@@ -1,6 +1,40 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
+/**
+ * Deprecated v1 exports exist only while the legacy queue drains. New
+ * producers must publish v2 messages to SLICING_QUEUE_NAME.
+ */
+export const LEGACY_V1_SLICING_CONTRACT_VERSION = 1 as const;
+export const LEGACY_V1_SLICING_QUEUE_NAME = "taven:slicing:v1" as const;
+
+const LegacyV1Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+
+// Keep these schemas shape-compatible with the original v1 payload
+// shape. Tightening them would make already-enqueued jobs impossible to drain.
+export const LegacyV1SlicingJobSchema = z.object({
+  contractVersion: z.literal(LEGACY_V1_SLICING_CONTRACT_VERSION),
+  jobId: z.uuid(),
+  inputObjectKey: z.string().min(1),
+  inputSha256: LegacyV1Sha256Schema,
+  profileVersion: z.string().min(1),
+  profileSha256: LegacyV1Sha256Schema,
+});
+
+export const LegacyV1SlicingResultSchema = z.object({
+  contractVersion: z.literal(LEGACY_V1_SLICING_CONTRACT_VERSION),
+  jobId: z.uuid(),
+  engine: z.object({
+    name: z.string().min(1),
+    version: z.string().min(1),
+    profileSha256: LegacyV1Sha256Schema,
+  }),
+  output: z.object({
+    kind: z.literal("fixture"),
+    metadataSha256: LegacyV1Sha256Schema,
+  }),
+});
+
 export const SLICING_CONTRACT_VERSION = 2 as const;
 export const SLICING_QUEUE_NAME = "taven:slicing:v2" as const;
 export const SLICING_MESSAGE_MAX_BYTES = 64 * 1024;
@@ -280,7 +314,15 @@ const ProductionSliceInputSchema = z
     acceptedJobId: UuidSchema,
     productionReservationId: UuidSchema,
   })
-  .superRefine(requireRepresentablePlateCount);
+  .superRefine((value, context) => {
+    if (value.quantity !== value.partsPerPlate) {
+      context.addIssue({
+        code: "custom",
+        path: ["quantity"],
+        message: "must equal the exact occupancy of this one-plate dispatch",
+      });
+    }
+  });
 
 const JobEnvelopeShape = {
   contractVersion: z.literal(SLICING_CONTRACT_VERSION),
@@ -610,35 +652,20 @@ const CandidateEstimateSuccessSchema = z
     }
   });
 
-const ProductionOutputSchema = z.strictObject({
-  plateOrdinal: boundedPositiveInteger(MAX_PLATE_COUNT),
-  partsOnPlate: boundedPositiveInteger(MAX_QUANTITY),
-  estimatedPrintSeconds: PositiveInt64StringSchema,
-  estimatedMaterialMilligrams: PositiveInt64StringSchema,
+const ProductionArtifactSchema = z.strictObject({
   format: z.enum(["gcode_3mf", "bgcode", "gcode"]),
   objectKey: ProductionArtifactObjectKeySchema,
   sha256: Sha256Schema,
 });
 
-const ProductionSliceSuccessSchema = z
-  .strictObject({
-    status: z.literal("succeeded"),
-    metrics: SliceMetricsSchema,
-    outputs: z.array(ProductionOutputSchema).min(1).max(MAX_PLATE_COUNT),
-  })
-  .superRefine((value, context) => {
-    const ordinals = value.outputs.map(({ plateOrdinal }) => plateOrdinal);
-    if (
-      ordinals.some((ordinal, index) => ordinal !== index + 1) ||
-      value.metrics.plateCount !== value.outputs.length
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["outputs"],
-        message: "outputs must cover every plate in ordinal order",
-      });
-    }
-  });
+const ProductionSliceSuccessSchema = z.strictObject({
+  status: z.literal("succeeded"),
+  metrics: z.strictObject({
+    ...SliceMetricsShape,
+    plateCount: z.literal(1),
+  }),
+  artifact: ProductionArtifactSchema,
+});
 
 const ResultEnvelopeShape = {
   contractVersion: z.literal(SLICING_CONTRACT_VERSION),
@@ -737,60 +764,17 @@ const ProductionSliceResultBase = z
   .superRefine((value, context) => {
     requireAcceptedProductionJob(value, context);
     if (value.outcome.status !== "succeeded") return;
-    const quantity = value.outcome.outputs.reduce(
-      (sum, output) => sum + output.partsOnPlate,
-      0,
-    );
-    if (quantity !== value.input.quantity) {
+    const extension = {
+      gcode_3mf: "gcode.3mf",
+      bgcode: "bgcode",
+      gcode: "gcode",
+    }[value.outcome.artifact.format];
+    const expected = `gcode/${value.input.acceptedJobId}/toolpath.${extension}`;
+    if (value.outcome.artifact.objectKey !== expected) {
       context.addIssue({
         code: "custom",
-        path: ["outcome", "outputs"],
-        message: "output quantities must reconcile to input quantity",
-      });
-    }
-    if (
-      value.outcome.outputs.some(
-        ({ partsOnPlate }) => partsOnPlate > value.input.partsPerPlate,
-      )
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["outcome", "outputs"],
-        message: "an output plate cannot exceed partsPerPlate",
-      });
-    }
-    for (const output of value.outcome.outputs) {
-      const extension = {
-        gcode_3mf: "gcode.3mf",
-        bgcode: "bgcode",
-        gcode: "gcode",
-      }[output.format];
-      const expected = `gcode/${value.input.acceptedJobId}/plate-${output.plateOrdinal}.${extension}`;
-      if (output.objectKey !== expected) {
-        context.addIssue({
-          code: "custom",
-          path: ["outcome", "outputs", output.plateOrdinal - 1, "objectKey"],
-          message: "must be the deterministic artifact key for its plate",
-        });
-      }
-    }
-    const printSeconds = value.outcome.outputs.reduce(
-      (sum, output) => sum + BigInt(output.estimatedPrintSeconds),
-      0n,
-    );
-    const materialMilligrams = value.outcome.outputs.reduce(
-      (sum, output) => sum + BigInt(output.estimatedMaterialMilligrams),
-      0n,
-    );
-    if (
-      printSeconds !== BigInt(value.outcome.metrics.estimatedPrintSeconds) ||
-      materialMilligrams !==
-        BigInt(value.outcome.metrics.estimatedMaterialMilligrams)
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["outcome", "metrics"],
-        message: "time and material totals must equal the plate outputs",
+        path: ["outcome", "artifact", "objectKey"],
+        message: "must be the deterministic artifact key for the plate",
       });
     }
   });
@@ -826,6 +810,8 @@ export const SlicingResultSchema = z
 
 export type SlicingJob = z.infer<typeof SlicingJobSchema>;
 export type SlicingResult = z.infer<typeof SlicingResultSchema>;
+export type LegacyV1SlicingJob = z.infer<typeof LegacyV1SlicingJobSchema>;
+export type LegacyV1SlicingResult = z.infer<typeof LegacyV1SlicingResultSchema>;
 export type ModelInspectionJob = z.infer<typeof ModelInspectionJobSchema>;
 export type ReferenceSliceJob = z.infer<typeof ReferenceSliceJobSchema>;
 export type CandidateEstimateJob = z.infer<typeof CandidateEstimateJobSchema>;

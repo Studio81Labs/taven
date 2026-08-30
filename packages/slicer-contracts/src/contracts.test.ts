@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   CandidateEstimateResultSchema,
+  LEGACY_V1_SLICING_CONTRACT_VERSION,
+  LEGACY_V1_SLICING_QUEUE_NAME,
+  LegacyV1SlicingJobSchema,
+  LegacyV1SlicingResultSchema,
   ModelInspectionJobSchema,
   ModelInspectionResultSchema,
   ProductionSliceResultSchema,
   ReferenceSliceJobSchema,
   SLICING_CONTRACT_VERSION,
   SLICING_MESSAGE_MAX_BYTES,
+  SLICING_QUEUE_NAME,
   SlicingJobSchema,
   SlicingResultSchema,
   slicingInputFingerprint,
@@ -106,6 +111,14 @@ const productionInput = {
   acceptedJobId: ids.acceptedJob,
   productionReservationId: ids.reservation,
 };
+const legacyV1Job = {
+  contractVersion: LEGACY_V1_SLICING_CONTRACT_VERSION,
+  jobId: ids.job,
+  inputObjectKey: "fixture/input.stl",
+  inputSha256: hash("a"),
+  profileVersion: "fixture-v1",
+  profileSha256: hash("b"),
+};
 const engine = { name: "orca", version: "2.0", imageSha256: hash("2") };
 const sliceMetrics = {
   boundingBox: {
@@ -171,6 +184,29 @@ function result(
 }
 
 describe("versioned slicing jobs", () => {
+  it("keeps the legacy v1 contract isolated for queue draining", () => {
+    expect(LEGACY_V1_SLICING_QUEUE_NAME).toBe("taven:slicing:v1");
+    expect(SLICING_QUEUE_NAME).toBe("taven:slicing:v2");
+    expect(LEGACY_V1_SLICING_QUEUE_NAME).not.toBe(SLICING_QUEUE_NAME);
+    expect(LegacyV1SlicingJobSchema.parse(legacyV1Job)).toEqual(legacyV1Job);
+    expect(() => SlicingJobSchema.parse(legacyV1Job)).toThrow();
+
+    const legacyResult = {
+      contractVersion: LEGACY_V1_SLICING_CONTRACT_VERSION,
+      jobId: ids.job,
+      engine: {
+        name: "fixture",
+        version: "0.0.0",
+        profileSha256: legacyV1Job.profileSha256,
+      },
+      output: { kind: "fixture", metadataSha256: hash("c") },
+    };
+    expect(LegacyV1SlicingResultSchema.parse(legacyResult)).toEqual(
+      legacyResult,
+    );
+    expect(() => SlicingResultSchema.parse(legacyResult)).toThrow();
+  });
+
   it("accepts all four discriminated job kinds", () => {
     for (const job of [
       inspectionJob,
@@ -332,17 +368,11 @@ describe("versioned slicing results", () => {
     const production = result(productionJob, {
       status: "succeeded",
       metrics: { ...sliceMetrics, plateCount: 1 },
-      outputs: [
-        {
-          plateOrdinal: 1,
-          partsOnPlate: 2,
-          estimatedPrintSeconds: "10",
-          estimatedMaterialMilligrams: "20",
-          format: "gcode_3mf",
-          objectKey: `gcode/${ids.acceptedJob}/plate-1.gcode.3mf`,
-          sha256: hash("5"),
-        },
-      ],
+      artifact: {
+        format: "gcode_3mf",
+        objectKey: `gcode/${ids.acceptedJob}/toolpath.gcode.3mf`,
+        sha256: hash("5"),
+      },
     });
     for (const value of [inspection, reference, candidate, production])
       expect(SlicingResultSchema.parse(value)).toEqual(value);
@@ -353,8 +383,7 @@ describe("versioned slicing results", () => {
           ...(production.outcome as object),
           metrics: {
             ...sliceMetrics,
-            estimatedPrintSeconds: "11",
-            plateCount: 1,
+            plateCount: 2,
           },
         },
       }),
@@ -412,7 +441,7 @@ describe("versioned slicing results", () => {
     ).toThrow();
   });
 
-  it("reconciles quantity and parts per plate", () => {
+  it("reconciles candidate quantity and keeps production to one plate", () => {
     const valid = result(candidateJob, {
       status: "succeeded",
       metrics: {
@@ -478,12 +507,21 @@ describe("versioned slicing results", () => {
           estimatedPrintSeconds: "10",
           estimatedMaterialMilligrams: "20",
           format: "gcode",
-          objectKey: `gcode/${ids.acceptedJob}/plate-1.gcode`,
+          objectKey: `gcode/${ids.acceptedJob}/toolpath.gcode`,
           sha256: hash("5"),
         },
       ],
     });
     expect(() => ProductionSliceResultSchema.parse(production)).toThrow();
+    expect(() =>
+      SlicingJobSchema.parse(
+        envelope(
+          "production_slice",
+          { ...productionInput, quantity: 3 },
+          { jobId: ids.acceptedJob },
+        ),
+      ),
+    ).toThrow();
   });
 
   it("binds production authorization and artifact keys to their dispatch", () => {
@@ -508,17 +546,11 @@ describe("versioned slicing results", () => {
     const production = result(productionJob, {
       status: "succeeded",
       metrics: { ...sliceMetrics, plateCount: 1 },
-      outputs: [
-        {
-          plateOrdinal: 1,
-          partsOnPlate: 2,
-          estimatedPrintSeconds: "10",
-          estimatedMaterialMilligrams: "20",
-          format: "gcode",
-          objectKey: `gcode/${ids.job}/plate-1.gcode`,
-          sha256: hash("5"),
-        },
-      ],
+      artifact: {
+        format: "gcode",
+        objectKey: `gcode/${ids.job}/toolpath.gcode`,
+        sha256: hash("5"),
+      },
     });
     expect(() => SlicingResultSchema.parse(production)).toThrow();
   });

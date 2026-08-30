@@ -1,6 +1,7 @@
 import { slicingInputFingerprint } from "@taven/slicer-contracts";
 import { describe, expect, it } from "vitest";
 import { runFixtureSlicingJob } from "./fixture-handler.js";
+import { runLegacyV1FixtureSlicingJob } from "./legacy-v1-fixture-handler.js";
 
 const ids = {
   job: "93ce90b0-3ed3-4d64-8a46-f032f31fa21d",
@@ -91,7 +92,7 @@ const productionJob = fixtureJob(
   "production_slice",
   {
     ...machineInput,
-    quantity: 3,
+    quantity: 2,
     acceptedJobId: ids.productionJob,
     productionReservationId: ids.reservation,
   },
@@ -134,5 +135,83 @@ describe("runFixtureSlicingJob", () => {
         ],
       },
     });
+  });
+
+  it("emits one persistence-compatible artifact for one production plate", () => {
+    expect(runFixtureSlicingJob(productionJob)).toMatchObject({
+      outcome: {
+        status: "succeeded",
+        metrics: {
+          plateCount: 1,
+          estimatedPrintSeconds: "120",
+          estimatedMaterialMilligrams: "2000",
+        },
+        artifact: {
+          format: "gcode_3mf",
+          objectKey: `gcode/${ids.productionJob}/toolpath.gcode.3mf`,
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["reference_slice", referenceInput],
+    [
+      "candidate_estimate",
+      {
+        ...machineInput,
+        quantity: 3,
+        shipmentPlanId: ids.shipment,
+        arrangementRevision: revision(ids.arrangement, "3"),
+      },
+    ],
+    [
+      "production_slice",
+      {
+        ...machineInput,
+        quantity: 2,
+        acceptedJobId: ids.productionJob,
+        productionReservationId: ids.reservation,
+      },
+    ],
+  ] as const)("derives %s bodyCount from selected geometry", (kind, input) => {
+    const bodyIds = ["body-0001", "body-0002"];
+    const jobId = kind === "production_slice" ? ids.productionJob : ids.job;
+    const job = fixtureJob(
+      kind,
+      {
+        ...input,
+        geometry: { ...input.geometry, bodyIds },
+      },
+      jobId,
+    );
+
+    expect(runFixtureSlicingJob(job)).toMatchObject({
+      outcome: { status: "succeeded", metrics: { bodyCount: 2 } },
+    });
+  });
+});
+
+describe("runLegacyV1FixtureSlicingJob", () => {
+  const legacyJob = {
+    contractVersion: 1 as const,
+    jobId: ids.job,
+    inputObjectKey: "fixture/input.stl",
+    inputSha256: "a".repeat(64),
+    profileVersion: "fixture-v1",
+    profileSha256: "b".repeat(64),
+  };
+
+  it("keeps queued v1 jobs executable during the drain window", () => {
+    expect(runLegacyV1FixtureSlicingJob(legacyJob)).toMatchObject({
+      contractVersion: 1,
+      jobId: ids.job,
+      engine: { profileSha256: legacyJob.profileSha256 },
+      output: { kind: "fixture" },
+    });
+  });
+
+  it("does not accept v2 jobs on the v1 processor", () => {
+    expect(() => runLegacyV1FixtureSlicingJob(referenceJob)).toThrow();
   });
 });

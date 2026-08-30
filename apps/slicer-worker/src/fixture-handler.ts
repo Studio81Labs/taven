@@ -48,11 +48,11 @@ function resultEnvelope(job: SlicingJob) {
   } as const;
 }
 
-function sliceMetrics(quantity: number, plateCount: number) {
+function sliceMetrics(quantity: number, plateCount: number, bodyCount: number) {
   return {
     boundingBox: FIXTURE_BOUNDING_BOX,
     objectCount: 1,
-    bodyCount: 1,
+    bodyCount,
     topology: FIXTURE_TOPOLOGY,
     thinWallFeatureCount: 0,
     supportVolumeRatioPpm: 0,
@@ -124,7 +124,11 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
         ...envelope,
         outcome: {
           status: "succeeded",
-          metrics: sliceMetrics(job.input.partsPerPlate, 1),
+          metrics: sliceMetrics(
+            job.input.partsPerPlate,
+            1,
+            job.input.geometry.bodyIds.length,
+          ),
           findings: [],
           artifact: {
             objectKey: `reference-slices/${job.jobId}/toolpath.gcode`,
@@ -139,7 +143,11 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
         ...envelope,
         outcome: {
           status: "succeeded",
-          metrics: sliceMetrics(job.input.quantity, parts.length),
+          metrics: sliceMetrics(
+            job.input.quantity,
+            parts.length,
+            job.input.geometry.bodyIds.length,
+          ),
           plates: parts.map((partsOnPlate, index) => ({
             plateOrdinal: index + 1,
             partsOnPlate,
@@ -150,28 +158,26 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
       });
     }
     case "production_slice": {
-      const parts = plateParts(job.input.quantity, job.input.partsPerPlate);
       return slicingResultForJobSchema(job).parse({
         ...envelope,
         outcome: {
           status: "succeeded",
-          metrics: sliceMetrics(job.input.quantity, parts.length),
-          outputs: parts.map((partsOnPlate, index) => ({
-            plateOrdinal: index + 1,
-            partsOnPlate,
-            estimatedPrintSeconds: String(partsOnPlate * 60),
-            estimatedMaterialMilligrams: String(partsOnPlate * 1_000),
+          metrics: sliceMetrics(
+            job.input.quantity,
+            1,
+            job.input.geometry.bodyIds.length,
+          ),
+          artifact: {
             format: "gcode_3mf",
-            objectKey: `gcode/${job.input.acceptedJobId}/plate-${index + 1}.gcode.3mf`,
+            objectKey: `gcode/${job.input.acceptedJobId}/toolpath.gcode.3mf`,
             sha256: fixtureHash(
               job.input.geometry.geometrySha256,
               job.input.machineProfile.contentSha256,
               job.input.machineCalibration.contentSha256,
               job.input.printConfig.contentSha256,
-              index + 1,
-              partsOnPlate,
+              job.input.partsPerPlate,
             ),
-          })),
+          },
         },
       });
     }
