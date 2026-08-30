@@ -332,6 +332,23 @@ const FindingArraySchema = z
     });
   });
 
+function findingArrayForPhase(phase: "inspection" | "reference_slice") {
+  return FindingArraySchema.superRefine((findings, context) => {
+    findings.forEach((finding, index) => {
+      if (finding.phase !== phase) {
+        context.addIssue({
+          code: "custom",
+          path: [index, "phase"],
+          message: `must be ${phase} for this result`,
+        });
+      }
+    });
+  });
+}
+
+const InspectionFindingArraySchema = findingArrayForPhase("inspection");
+const ReferenceFindingArraySchema = findingArrayForPhase("reference_slice");
+
 export const EngineIdentitySchema = z.strictObject({
   name: EngineNameSchema,
   version: EngineVersionSchema,
@@ -864,7 +881,7 @@ const InspectionSuccessSchema = z
     canonicalGeometry: CanonicalGeometryArtifactSchema.nullable(),
     metrics: InspectionMetricsSchema,
     bodies: z.array(BodyInspectionSchema).min(1).max(MAX_BODY_COUNT),
-    findings: FindingArraySchema,
+    findings: InspectionFindingArraySchema,
   })
   .superRefine((value, context) => {
     const bodyIds = value.bodies.map(({ bodyId }) => bodyId);
@@ -939,7 +956,7 @@ const ReferenceSliceSuccessSchema = z.strictObject({
     ...SliceMetricsShape,
     plateCount: z.literal(1),
   }),
-  findings: FindingArraySchema,
+  findings: ReferenceFindingArraySchema,
   artifact: z.strictObject({
     objectKey: ReferenceArtifactObjectKeySchema,
     sha256: Sha256Schema,

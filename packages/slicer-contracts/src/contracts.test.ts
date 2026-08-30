@@ -13,6 +13,7 @@ import {
   ProductionArtifactFormatSchema,
   ProductionSliceResultSchema,
   ReferenceSliceJobSchema,
+  ReferenceSliceResultSchema,
   SLICING_CONTRACT_VERSION,
   SLICING_MESSAGE_MAX_BYTES,
   SLICING_QUEUE_NAME,
@@ -987,6 +988,56 @@ describe("versioned slicing results", () => {
               code: "FINDING_OVER_LIMIT",
             },
           ],
+        }),
+      ),
+    ).toThrow();
+  });
+
+  it("binds findings to the phase that produced their result", () => {
+    const finding = {
+      code: "PHASE_BOUND_FINDING",
+      severity: "info" as const,
+      message: "phase-specific diagnostic",
+      acknowledgementKey: null,
+    };
+    expect(
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...inspectionOutcome,
+          findings: [{ ...finding, phase: "inspection" as const }],
+        }),
+      ),
+    ).toBeDefined();
+    expect(() =>
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...inspectionOutcome,
+          findings: [{ ...finding, phase: "reference_slice" as const }],
+        }),
+      ),
+    ).toThrow();
+
+    const referenceOutcome = {
+      status: "succeeded" as const,
+      metrics: { ...sliceMetrics, plateCount: 1 as const },
+      artifact: {
+        objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+        sha256: hash("4"),
+      },
+    };
+    expect(
+      ReferenceSliceResultSchema.parse(
+        result(referenceJob, {
+          ...referenceOutcome,
+          findings: [{ ...finding, phase: "reference_slice" as const }],
+        }),
+      ),
+    ).toBeDefined();
+    expect(() =>
+      ReferenceSliceResultSchema.parse(
+        result(referenceJob, {
+          ...referenceOutcome,
+          findings: [{ ...finding, phase: "inspection" as const }],
         }),
       ),
     ).toThrow();
