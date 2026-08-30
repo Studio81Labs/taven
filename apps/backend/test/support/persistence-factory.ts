@@ -183,7 +183,7 @@ export class PersistenceFactory {
     includeActivePriceBinding = true,
     customerOwned = true,
     includeShipments = true,
-    paymentScheduleKind: "FULL" | "DEPOSIT_BALANCE" = "FULL",
+    paymentScheduleKind?: "FULL" | "DEPOSIT_BALANCE",
   ): Promise<PersistenceFoundation> {
     if (!customerOwned && orderOrigin !== "AUTOMATIC") {
       throw new Error("only automatic foundations may begin anonymously");
@@ -639,7 +639,9 @@ export class PersistenceFactory {
       includeActivePriceBinding,
       customerOwned,
       includeShipments,
-      paymentScheduleKind,
+      paymentScheduleKind:
+        paymentScheduleKind ??
+        (orderOrigin === "INDIVIDUAL" ? "DEPOSIT_BALANCE" : "FULL"),
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -1140,7 +1142,13 @@ export class PersistenceFactory {
       await this.sql.query(
         `UPDATE orders
          SET accepted_order_price_binding_id = $3,
-             accepted_terms_revision = 'terms-v1',
+             accepted_terms_revision = (
+               SELECT list.terms_revision
+               FROM order_price_bindings binding
+               JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
+               JOIN price_lists list ON list.id = snapshot.price_list_id
+               WHERE binding.id = $3 AND binding.order_id = $1
+             ),
              accepted_claim_policy_revision = 'claim-policy-v1',
              withdrawal_exception_acknowledged_at = $2,
              updated_at = $2
@@ -1217,7 +1225,13 @@ export class PersistenceFactory {
     await this.sql.query(
       `UPDATE orders
        SET accepted_order_price_binding_id = $3,
-           accepted_terms_revision = 'terms-v1',
+           accepted_terms_revision = (
+             SELECT list.terms_revision
+             FROM order_price_bindings binding
+             JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
+             JOIN price_lists list ON list.id = snapshot.price_list_id
+             WHERE binding.id = $3 AND binding.order_id = $1
+           ),
            accepted_claim_policy_revision = 'claim-policy-v1',
            withdrawal_exception_acknowledged_at = $2,
            updated_at = $2

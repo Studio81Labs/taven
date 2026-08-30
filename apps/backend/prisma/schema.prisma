@@ -256,6 +256,7 @@ enum OrderStatus {
   CONFIRMED
   IN_PRODUCTION
   QC_PASSED
+  AWAITING_BALANCE
   READY_TO_SHIP
   SHIPPED
   DELIVERED
@@ -399,12 +400,14 @@ enum RefundReason {
   CUSTOMER_CANCELLATION
   PRODUCTION_FAILURE
   LATE_CAPTURE_COMPENSATION
+  BALANCE_SETTLEMENT
 
   @@map("refund_reason")
 }
 
 enum OrderSettlementKind {
   UNAUTHORIZED_HANDOFF
+  BALANCE_SETTLEMENT
 
   @@map("order_settlement_kind")
 }

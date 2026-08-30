@@ -20,12 +20,13 @@ CREATE TABLE "price_lists" (
 
 INSERT INTO "price_lists" ("id", "revision", "terms_revision", "currency", "parameters")
 VALUES
-    ('00000000-0000-4000-8000-000000000019', 'legacy-v0-czk', 'legacy-v0', 'CZK', '{"balance_payment_days":7}'::jsonb),
-    ('00000000-0000-4000-8000-000000000020', 'legacy-v0-eur', 'legacy-v0', 'EUR', '{"balance_payment_days":7}'::jsonb);
+    ('00000000-0000-4000-8000-000000000019', 'legacy-v0-czk', 'terms-v1', 'CZK', '{"balance_payment_days":7}'::jsonb),
+    ('00000000-0000-4000-8000-000000000020', 'legacy-v0-eur', 'terms-v1', 'EUR', '{"balance_payment_days":7}'::jsonb);
 
 INSERT INTO "price_lists" ("id", "revision", "terms_revision", "currency", "parameters")
 SELECT md5(snapshot."currency" || ':' || snapshot."pricing_revision")::uuid,
-       snapshot."pricing_revision", 'legacy-v0', snapshot."currency", '{}'::jsonb
+       snapshot."pricing_revision", 'terms-v1', snapshot."currency",
+       '{"balance_payment_days":7}'::jsonb
 FROM (SELECT DISTINCT "currency", "pricing_revision" FROM "price_snapshots") snapshot
 ON CONFLICT ("currency", "revision") DO NOTHING;
 
@@ -68,6 +69,77 @@ ALTER TABLE "payments"
 
 CREATE INDEX "payments_balance_due_at_status_idx"
     ON "payments"("balance_due_at", "status");
+
+-- The foundation constraint enumerates every live status. Extend it with the
+-- post-QC balance state while preserving the original timestamp guarantees.
+ALTER TABLE "orders" DROP CONSTRAINT "orders_timestamps_check";
+ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
+    ("quoted_at" IS NULL OR "quoted_at" >= "created_at" - interval '5 seconds')
+    AND ("confirmed_at" IS NULL OR ("quoted_at" IS NOT NULL AND "confirmed_at" >= "quoted_at"))
+    AND (
+        "withdrawal_exception_acknowledged_at" IS NULL
+        OR (
+            "quoted_at" IS NOT NULL
+            AND "withdrawal_exception_acknowledged_at" >= "quoted_at"
+        )
+    )
+    AND (
+        ("status" = 'DRAFT' AND "quoted_at" IS NULL AND "confirmed_at" IS NULL)
+        OR ("status" IN ('QUOTED', 'EXPIRED') AND "quoted_at" IS NOT NULL AND "confirmed_at" IS NULL)
+        OR (
+            "status" IN (
+                'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED', 'AWAITING_BALANCE',
+                'READY_TO_SHIP', 'SHIPPED', 'DELIVERED', 'COMPLETED',
+                'PARTIALLY_FULFILLED'
+            )
+            AND "quoted_at" IS NOT NULL
+            AND "confirmed_at" IS NOT NULL
+        )
+        OR (
+            "status" IN ('CANCELLED', 'REFUNDED', 'CANCELLED_SETTLED')
+            AND "quoted_at" IS NOT NULL
+        )
+    )
+);
+
+ALTER TABLE "order_settlements"
+    DROP CONSTRAINT "order_settlements_unauthorized_handoff_formula_check";
+
+ALTER TABLE "order_settlements"
+    ADD CONSTRAINT "order_settlements_kind_formula_check" CHECK (
+        (
+            "kind" = 'UNAUTHORIZED_HANDOFF'
+            AND "captured_total_minor" = "contract_total_minor"
+            AND "earned_amount_minor" = 0
+            AND "retained_amount_minor" = least("captured_total_minor", "earned_amount_minor")
+            AND "refund_amount_minor" = "captured_total_minor" - "retained_amount_minor"
+            AND "written_off_amount_minor" = greatest(0, "earned_amount_minor" - "captured_total_minor")
+            AND "unearned_cancelled_amount_minor" = "contract_total_minor" - "earned_amount_minor"
+            AND "amount_due_minor" = 0
+            AND "refundable_balance_minor" = 0
+        )
+        OR
+        (
+            "kind" = 'BALANCE_SETTLEMENT'
+            AND "captured_total_minor" < "contract_total_minor"
+            AND "earned_amount_minor" = 0
+            AND "retained_amount_minor" = 0
+            AND "refund_amount_minor" = "captured_total_minor"
+            AND "written_off_amount_minor" = 0
+            AND "unearned_cancelled_amount_minor" = "contract_total_minor"
+            AND "amount_due_minor" = 0
+            AND "refundable_balance_minor" = "refund_amount_minor"
+        )
+    );
+
+DROP TRIGGER "order_settlements_refunded_handoff_reconciled"
+    ON "order_settlements";
+CREATE CONSTRAINT TRIGGER "order_settlements_refunded_handoff_reconciled"
+AFTER INSERT ON "order_settlements"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (NEW."kind" = 'UNAUTHORIZED_HANDOFF')
+EXECUTE FUNCTION taven_reconcile_refunded_handoff_record();
 
 CREATE FUNCTION taven_prevent_price_list_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -129,6 +201,47 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     ) = expected_total;
 $$;
 
+CREATE FUNCTION taven_split_payment_schedule_is_valid(target_snapshot_id uuid, expected_total bigint)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT expected_total > 1
+       AND (
+           SELECT count(*) FROM "payment_schedules"
+           WHERE "price_snapshot_id" = target_snapshot_id
+             AND "role" = 'DEPOSIT'
+             AND "sequence" = 0
+             AND "gross_amount_minor" > 0
+       ) = 1
+       AND (
+           SELECT count(*) FROM "payment_schedules"
+           WHERE "price_snapshot_id" = target_snapshot_id
+             AND "role" = 'BALANCE'
+             AND "sequence" = 1
+             AND "gross_amount_minor" > 0
+       ) = 1
+       AND (
+           SELECT count(*) FROM "payment_schedules"
+           WHERE "price_snapshot_id" = target_snapshot_id
+       ) = 2
+       AND (
+           SELECT coalesce(sum("gross_amount_minor"), 0)
+           FROM "payment_schedules"
+           WHERE "price_snapshot_id" = target_snapshot_id
+       ) = expected_total;
+$$;
+
+CREATE FUNCTION taven_price_snapshot_balance_deadline_is_valid(target_snapshot_id uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "price_snapshots" snapshot
+        JOIN "price_lists" list ON list."id" = snapshot."price_list_id"
+        WHERE snapshot."id" = target_snapshot_id
+          AND jsonb_typeof(list."parameters" -> 'balance_payment_days') = 'number'
+          AND (list."parameters" ->> 'balance_payment_days') ~ '^[1-9][0-9]*$'
+          AND (list."parameters" ->> 'balance_payment_days')::numeric <= 36500
+    );
+$$;
+
 CREATE FUNCTION taven_payment_schedule_is_valid_for_order(
     target_order_id uuid,
     target_snapshot_id uuid,
@@ -141,6 +254,12 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
             WHERE "order_id" = target_order_id
         )
         THEN taven_full_payment_schedule_is_valid(target_snapshot_id, expected_total)
+        WHEN EXISTS (
+            SELECT 1 FROM "individual_order_origins"
+            WHERE "order_id" = target_order_id
+        )
+        THEN taven_split_payment_schedule_is_valid(target_snapshot_id, expected_total)
+             AND taven_price_snapshot_balance_deadline_is_valid(target_snapshot_id)
         ELSE taven_payment_schedule_is_valid(target_snapshot_id, expected_total)
     END;
 $$;
@@ -159,10 +278,824 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
             WHERE binding."price_snapshot_id" = target_snapshot_id
         )
         THEN taven_full_payment_schedule_is_valid(target_snapshot_id, expected_total)
+        WHEN EXISTS (
+            SELECT 1
+            FROM "order_price_bindings" binding
+            JOIN "individual_order_origins" origin
+              ON origin."order_id" = binding."order_id"
+            WHERE binding."price_snapshot_id" = target_snapshot_id
+        )
+        THEN taven_split_payment_schedule_is_valid(target_snapshot_id, expected_total)
+             AND taven_price_snapshot_balance_deadline_is_valid(target_snapshot_id)
         ELSE taven_payment_schedule_is_valid(target_snapshot_id, expected_total)
     END;
 $$;
 
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "individual_order_origins" origin
+        JOIN "order_active_price_bindings" active
+          ON active."order_id" = origin."order_id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+         AND binding."order_id" = origin."order_id"
+        JOIN "price_snapshots" snapshot
+          ON snapshot."id" = binding."price_snapshot_id"
+        WHERE binding."invalidated_at" IS NULL
+          AND (
+              NOT taven_split_payment_schedule_is_valid(
+                  snapshot."id", snapshot."contract_total_minor"
+              )
+              OR NOT taven_price_snapshot_balance_deadline_is_valid(snapshot."id")
+          )
+    ) THEN
+        RAISE EXCEPTION 'existing individual order has no valid deposit-plus-balance contract'
+            USING ERRCODE = '23514', CONSTRAINT = 'individual_split_payment_migration_check';
+    END IF;
+END;
+$$;
+
+CREATE FUNCTION taven_order_accepts_bound_price_list_terms(
+    target_order_id uuid,
+    target_binding_id uuid
+)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "orders" target_order
+        JOIN "order_active_price_bindings" active
+          ON active."order_id" = target_order."id"
+         AND active."order_price_binding_id" = target_binding_id
+        JOIN "order_price_bindings" binding
+          ON binding."id" = active."order_price_binding_id"
+         AND binding."order_id" = target_order."id"
+        JOIN "price_snapshots" snapshot
+          ON snapshot."id" = binding."price_snapshot_id"
+        JOIN "price_lists" list
+          ON list."id" = snapshot."price_list_id"
+        WHERE target_order."id" = target_order_id
+          AND target_order."accepted_order_price_binding_id" = binding."id"
+          AND target_order."accepted_terms_revision" = list."terms_revision"
+    );
+$$;
+
+CREATE FUNCTION taven_require_price_list_terms_acceptance()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW."accepted_order_price_binding_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "order_active_price_bindings" active
+           JOIN "order_price_bindings" binding
+             ON binding."id" = active."order_price_binding_id"
+            AND binding."order_id" = active."order_id"
+           JOIN "price_snapshots" snapshot
+             ON snapshot."id" = binding."price_snapshot_id"
+           JOIN "price_lists" list
+             ON list."id" = snapshot."price_list_id"
+           WHERE active."order_id" = NEW."id"
+             AND active."order_price_binding_id" = NEW."accepted_order_price_binding_id"
+             AND NEW."accepted_terms_revision" = list."terms_revision"
+       ) THEN
+        RAISE EXCEPTION 'checkout acceptance must match the bound PriceList terms revision'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_terms_revision_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "orders_price_list_terms_acceptance_valid"
+BEFORE UPDATE OF "status", "accepted_order_price_binding_id", "accepted_terms_revision"
+ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_require_price_list_terms_acceptance();
+
+-- The foundation status trigger predates the post-QC balance state. Keep it
+-- authoritative for every existing edge and isolate the two new edges in a
+-- narrowly scoped validator.
+DROP TRIGGER "orders_status_transitions_valid" ON "orders";
+
+CREATE TRIGGER "orders_status_transitions_valid_insert"
+BEFORE INSERT ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_order_status_transition();
+
+CREATE TRIGGER "orders_status_transitions_valid_update"
+BEFORE UPDATE OF "id", "public_reference", "status", "quoted_at", "confirmed_at",
+    "accepted_order_price_binding_id", "accepted_terms_revision",
+    "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at", "created_at"
+ON "orders"
+FOR EACH ROW
+WHEN (
+    NOT (
+        (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
+        OR (OLD."status" = 'AWAITING_BALANCE'
+            AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED_SETTLED'))
+    )
+)
+EXECUTE FUNCTION taven_validate_order_status_transition();
+
+CREATE FUNCTION taven_validate_balance_order_status_transition()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW."id" IS DISTINCT FROM OLD."id"
+       OR NEW."public_reference" IS DISTINCT FROM OLD."public_reference"
+       OR NEW."customer_id" IS DISTINCT FROM OLD."customer_id"
+       OR NEW."quoted_at" IS DISTINCT FROM OLD."quoted_at"
+       OR NEW."confirmed_at" IS DISTINCT FROM OLD."confirmed_at"
+       OR NEW."accepted_order_price_binding_id" IS DISTINCT FROM OLD."accepted_order_price_binding_id"
+       OR NEW."accepted_terms_revision" IS DISTINCT FROM OLD."accepted_terms_revision"
+       OR NEW."accepted_claim_policy_revision" IS DISTINCT FROM OLD."accepted_claim_policy_revision"
+       OR NEW."withdrawal_exception_acknowledged_at" IS DISTINCT FROM OLD."withdrawal_exception_acknowledged_at"
+       OR NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
+        RAISE EXCEPTION 'balance lifecycle transitions cannot change order identity or acceptance evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_balance_transition_identity_check';
+    END IF;
+
+    IF NOT (
+        (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
+        OR (OLD."status" = 'AWAITING_BALANCE'
+            AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED_SETTLED'))
+    ) THEN
+        RAISE EXCEPTION 'order balance status transition is not allowed'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
+    END IF;
+
+    IF OLD."status" = 'AWAITING_BALANCE'
+       AND NEW."status" = 'CANCELLED_SETTLED'
+       AND NOT EXISTS (
+           SELECT 1 FROM "order_settlements" settlement
+           WHERE settlement."order_id" = NEW."id"
+             AND settlement."kind" = 'BALANCE_SETTLEMENT'
+       ) THEN
+        RAISE EXCEPTION 'cancelled-settled balance order requires its immutable settlement'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "orders_balance_status_transitions_valid"
+BEFORE UPDATE OF "id", "customer_id", "public_reference", "status", "quoted_at", "confirmed_at",
+    "accepted_order_price_binding_id", "accepted_terms_revision",
+    "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at", "created_at"
+ON "orders"
+FOR EACH ROW
+WHEN (
+    (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
+    OR (OLD."status" = 'AWAITING_BALANCE'
+        AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED_SETTLED'))
+)
+EXECUTE FUNCTION taven_validate_balance_order_status_transition();
+
+DROP TRIGGER "orders_post_confirmation_lifecycle_reconciled" ON "orders";
+CREATE CONSTRAINT TRIGGER "orders_post_confirmation_lifecycle_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (NEW."status" NOT IN ('AWAITING_BALANCE', 'CANCELLED_SETTLED'))
+EXECUTE FUNCTION taven_reconcile_order_post_confirmation_lifecycle();
+
+-- Preserve the complete foundation lifecycle contract while routing the new
+-- balance-settlement terminal state to its dedicated deferred validator.
+CREATE OR REPLACE FUNCTION taven_reconcile_order_post_confirmation_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_status "order_status";
+BEGIN
+    target_order_id := CASE TG_TABLE_NAME
+        WHEN 'orders' THEN (to_jsonb(NEW) ->> 'id')::uuid
+        WHEN 'order_phases' THEN (to_jsonb(NEW) ->> 'order_id')::uuid
+        WHEN 'jobs' THEN (to_jsonb(NEW) ->> 'order_id')::uuid
+        WHEN 'shipments' THEN (to_jsonb(NEW) ->> 'order_id')::uuid
+        ELSE (to_jsonb(NEW) ->> 'order_id')::uuid
+    END;
+
+    SELECT "status"
+    INTO target_status
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    IF target_status IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    IF target_status = 'CANCELLED_SETTLED'
+       AND EXISTS (
+           SELECT 1
+           FROM "order_settlements" settlement
+           WHERE settlement."order_id" = target_order_id
+             AND settlement."kind" = 'BALANCE_SETTLEMENT'
+       ) THEN
+        RETURN NULL;
+    END IF;
+
+    IF target_status IN ('SHIPPED', 'DELIVERED', 'COMPLETED')
+       AND EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           JOIN "refund_transactions" refund
+             ON refund."payment_id" = payment."id"
+           WHERE payment."order_id" = target_order_id
+             AND payment."status" = 'REFUNDED'
+             AND refund."reason" = 'CUSTOMER_CANCELLATION'
+             AND refund."status" = 'SUCCEEDED'
+       )
+       AND NOT taven_has_refunded_post_void_handoff_reconciliation(
+           target_order_id
+       ) THEN
+        RAISE EXCEPTION 'fulfilled order with a completed cancellation refund requires exact immutable handoff reconciliation and settlement proof'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_refunded_handoff_reconciliation_check';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "jobs" job
+        WHERE job."order_id" = target_order_id
+          AND (
+              (job."status" = 'HANDED_OVER'
+               AND target_status NOT IN ('SHIPPED', 'DELIVERED'))
+              OR (job."status" = 'SETTLED'
+                  AND target_status NOT IN ('DELIVERED', 'COMPLETED'))
+          )
+    ) THEN
+        RAISE EXCEPTION 'Job handoff and settlement require the corresponding delivery lifecycle'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+    END IF;
+
+    IF target_status IN ('DRAFT', 'QUOTED') THEN
+        IF EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND (
+                  phase."status" <> 'QUOTED'
+                  OR phase."activated_at" IS NOT NULL
+                  OR phase."qc_passed_at" IS NOT NULL
+                  OR phase."shipped_at" IS NOT NULL
+                  OR phase."delivered_at" IS NOT NULL
+                  OR phase."completed_at" IS NOT NULL
+                  OR phase."cancelled_at" IS NOT NULL
+              )
+        ) OR EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND (
+                  "status" <> 'PLANNED'
+                  OR "carrier" IS NOT NULL
+                  OR "provider_shipment_id" IS NOT NULL
+                  OR "carrier_label_id" IS NOT NULL
+                  OR "tracking_code" IS NOT NULL
+                  OR "label_created_at" IS NOT NULL
+                  OR "cancellation_requested_at" IS NOT NULL
+                  OR "provider_void_id" IS NOT NULL
+                  OR "provider_voided_at" IS NOT NULL
+                  OR "provider_acceptance_scan_id" IS NOT NULL
+                  OR "handed_over_at" IS NOT NULL
+                  OR "delivered_at" IS NOT NULL
+                  OR "cancelled_at" IS NOT NULL
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
+        ) THEN
+            RAISE EXCEPTION 'pre-confirmation order requires only quoted phase and initial fulfilment facts'
+                USING ERRCODE = '23514', CONSTRAINT = 'pre_confirmation_fulfilment_state_check';
+        END IF;
+    ELSIF target_status = 'EXPIRED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."kind" = 'SINGLE'
+              AND phase."status" = 'CANCELLED'
+              AND phase."cancelled_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND (
+                  phase."status" <> 'CANCELLED'
+                  OR phase."cancelled_at" IS NULL
+              )
+        ) OR EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'CANCELLED' OR shipment."cancelled_at" IS NULL)
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'CANCELLED'
+        ) THEN
+            RAISE EXCEPTION 'expired quoted order requires a closed pre-capture fulfilment graph'
+                USING ERRCODE = '23514', CONSTRAINT = 'expired_order_checkout_closure_check';
+        END IF;
+    ELSIF target_status = 'CONFIRMED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."kind" = 'SINGLE'
+              AND phase."status" = 'ACTIVE'
+              AND phase."activated_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" NOT IN ('CREATED', 'ACCEPTED', 'GCODE_READY')
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments"
+            WHERE "order_id" = target_order_id
+              AND "status" <> 'PLANNED'
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
+        ) THEN
+            RAISE EXCEPTION 'confirmed order requires its active phase and initial pre-production fulfilment facts'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'IN_PRODUCTION' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."kind" = 'SINGLE'
+              AND phase."status" = 'IN_PRODUCTION'
+        ) OR NOT EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" IN ('PRINTING', 'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED', 'PACKED')
+              AND "printing_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" <> 'PLANNED'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
+        ) THEN
+            RAISE EXCEPTION 'in-production order requires production facts and initial fulfilment state'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'QC_PASSED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'QC_PASSED'
+              AND phase."qc_passed_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND (
+                  "status" NOT IN ('QC_APPROVED', 'PACKED')
+                  OR "qc_approved_at" IS NULL
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" <> 'PLANNED'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
+        ) THEN
+            RAISE EXCEPTION 'QC-passed order requires complete QC and initial fulfilment state'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'READY_TO_SHIP' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'QC_PASSED'
+              AND phase."qc_passed_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND ("status" <> 'PACKED' OR "packed_at" IS NULL)
+        ) OR NOT EXISTS (
+            SELECT 1
+            FROM "shipment_plans" plan
+            JOIN "order_active_price_bindings" active_binding
+              ON active_binding."order_id" = plan."order_id"
+             AND active_binding."order_price_binding_id" = plan."order_price_binding_id"
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active_binding."order_price_binding_id"
+             AND binding."order_id" = plan."order_id"
+             AND binding."delivery_destination_id" = plan."delivery_destination_id"
+             AND binding."invalidated_at" IS NULL
+            WHERE plan."order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipment_plans" plan
+            JOIN "order_active_price_bindings" active_binding
+              ON active_binding."order_id" = plan."order_id"
+             AND active_binding."order_price_binding_id" = plan."order_price_binding_id"
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active_binding."order_price_binding_id"
+             AND binding."order_id" = plan."order_id"
+             AND binding."delivery_destination_id" = plan."delivery_destination_id"
+             AND binding."invalidated_at" IS NULL
+            WHERE plan."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" shipment
+                  WHERE shipment."order_id" = plan."order_id"
+                    AND shipment."order_phase_id" = plan."order_phase_id"
+                    AND shipment."shipment_plan_id" = plan."id"
+                    AND shipment."delivery_destination_id" = plan."delivery_destination_id"
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM "shipments" replacement
+                        WHERE replacement."replaces_shipment_id" = shipment."id"
+                          AND replacement."order_id" = shipment."order_id"
+                          AND replacement."order_phase_id" = shipment."order_phase_id"
+                          AND replacement."shipment_plan_id" = shipment."shipment_plan_id"
+                          AND replacement."delivery_destination_id" = shipment."delivery_destination_id"
+                    )
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+              AND (
+                  shipment."status" NOT IN ('LABEL_CREATED', 'CANCELLATION_PENDING')
+                  OR shipment."carrier" IS NULL
+                  OR shipment."provider_shipment_id" IS NULL
+                  OR shipment."carrier_label_id" IS NULL
+                  OR shipment."label_created_at" IS NULL
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'PENDING'
+        ) THEN
+            RAISE EXCEPTION 'ready-to-ship order requires every Job packed and every Shipment labelled'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'SHIPPED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'SHIPPED'
+              AND phase."shipped_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND shipment."handed_over_at" IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" NOT IN ('LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND NOT (
+                  shipment."status" = 'CANCELLED'
+                  AND taven_has_refunded_post_void_handoff_reconciliation(
+                      target_order_id
+                  )
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR NOT EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" = 'HANDED_OVER'
+              AND "handed_over_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" NOT IN ('PACKED', 'HANDED_OVER')
+              AND NOT (
+                  "status" = 'CANCELLED'
+                  AND taven_has_refunded_post_void_handoff_reconciliation(
+                      target_order_id
+                  )
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+              AND (
+                  NOT EXISTS (
+                      SELECT 1
+                      FROM "jobs" job
+                      WHERE job."order_id" = shipment."order_id"
+                        AND job."order_phase_id" = shipment."order_phase_id"
+                        AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "jobs" job
+                      WHERE job."order_id" = shipment."order_id"
+                        AND job."order_phase_id" = shipment."order_phase_id"
+                        AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                        AND (
+                            job."status" <> 'HANDED_OVER'
+                            OR job."handed_over_at" IS NULL
+                        )
+                  )
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs" job
+            WHERE job."order_id" = target_order_id
+              AND job."status" = 'HANDED_OVER'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" shipment
+                  WHERE shipment."order_id" = job."order_id"
+                    AND shipment."order_phase_id" = job."order_phase_id"
+                    AND shipment."shipment_plan_id" = job."shipment_plan_id"
+                    AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+                    AND shipment."handed_over_at" IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM "shipments" replacement
+                        WHERE replacement."replaces_shipment_id" = shipment."id"
+                    )
+              )
+        ) OR (
+            NOT EXISTS (
+                SELECT 1
+                FROM "shipments" shipment
+                WHERE shipment."order_id" = target_order_id
+                  AND shipment."status" <> 'DELIVERED'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "shipments" replacement
+                      WHERE replacement."replaces_shipment_id" = shipment."id"
+                  )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM "fulfilment_slots"
+                WHERE "order_id" = target_order_id
+                  AND "outcome" <> 'DELIVERED'
+            )
+        ) THEN
+            RAISE EXCEPTION 'shipped order requires matched handoff evidence and must advance after final delivery'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'DELIVERED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'DELIVERED'
+              AND phase."delivered_at" IS NOT NULL
+        ) OR NOT EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'DELIVERED' OR shipment."delivered_at" IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+              AND (
+                  NOT EXISTS (
+                      SELECT 1
+                      FROM "jobs" job
+                      WHERE job."order_id" = shipment."order_id"
+                        AND job."order_phase_id" = shipment."order_phase_id"
+                        AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "jobs" job
+                      WHERE job."order_id" = shipment."order_id"
+                        AND job."order_phase_id" = shipment."order_phase_id"
+                        AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                        AND (
+                            job."status" NOT IN ('HANDED_OVER', 'SETTLED')
+                            OR job."handed_over_at" IS NULL
+                        )
+                  )
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs" job
+            WHERE job."order_id" = target_order_id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" shipment
+                  WHERE shipment."order_id" = job."order_id"
+                    AND shipment."order_phase_id" = job."order_phase_id"
+                    AND shipment."shipment_plan_id" = job."shipment_plan_id"
+                    AND shipment."status" = 'DELIVERED'
+                    AND shipment."handed_over_at" IS NOT NULL
+                    AND shipment."delivered_at" IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM "shipments" replacement
+                        WHERE replacement."replaces_shipment_id" = shipment."id"
+                    )
+              )
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "fulfilment_slots" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'DELIVERED'
+        ) THEN
+            RAISE EXCEPTION 'delivered order requires every Shipment, Job, and fulfilment slot delivered'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'COMPLETED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'COMPLETED'
+              AND phase."completed_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'DELIVERED' OR shipment."delivered_at" IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'DELIVERED'
+        ) OR NOT EXISTS (
+            SELECT 1 FROM "jobs" WHERE "order_id" = target_order_id
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" <> 'SETTLED'
+        ) THEN
+            RAISE EXCEPTION 'completed order requires its complete settled delivery aggregate'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'CANCELLED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'CANCELLED'
+              AND phase."cancelled_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" NOT IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'CANCELLED' OR shipment."cancelled_at" IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'CANCELLED'
+        ) THEN
+            RAISE EXCEPTION 'cancelled order requires terminal phase, Jobs, Shipments, and slots'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSIF target_status = 'REFUNDED' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "order_phases" phase
+            WHERE phase."order_id" = target_order_id
+              AND phase."status" = 'CANCELLED_REFUNDED'
+              AND phase."cancelled_at" IS NOT NULL
+        ) OR EXISTS (
+            SELECT 1
+            FROM "jobs"
+            WHERE "order_id" = target_order_id
+              AND "status" NOT IN ('CANCELLED', 'FAILED', 'QC_REJECTED')
+        ) OR EXISTS (
+            SELECT 1
+            FROM "shipments" shipment
+            WHERE shipment."order_id" = target_order_id
+              AND (shipment."status" <> 'CANCELLED' OR shipment."cancelled_at" IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "shipments" replacement
+                  WHERE replacement."replaces_shipment_id" = shipment."id"
+              )
+        ) OR EXISTS (
+            SELECT 1
+            FROM "fulfilment_slots"
+            WHERE "order_id" = target_order_id
+              AND "outcome" <> 'CANCELLED_REFUNDED'
+        ) THEN
+            RAISE EXCEPTION 'refunded order requires terminal cancelled phase, Jobs, Shipments, and slots'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+        END IF;
+    ELSE
+        RAISE EXCEPTION 'order status requires persistence not available in this tranche'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_post_confirmation_lifecycle_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
 
 -- Quote acceptance and order readiness originally assumed one FULL capture.
 -- Individual offers may instead use the immutable DEPOSIT + BALANCE schedule,
@@ -363,10 +1296,11 @@ BEGIN
                  FROM "price_snapshot_components" component
                  WHERE component."price_snapshot_id" = snapshot."id"
              ) = snapshot."contract_total_minor"
-             AND taven_payment_schedule_is_valid(
+             AND taven_split_payment_schedule_is_valid(
                  snapshot."id",
                  snapshot."contract_total_minor"
              )
+             AND taven_price_snapshot_balance_deadline_is_valid(snapshot."id")
              AND NOT EXISTS (
                  SELECT 1
                  FROM "payment_schedules" schedule
@@ -776,6 +1710,7 @@ AS $$
 DECLARE
     target_order_id uuid;
     target_payment_id uuid;
+    target_order_status "order_status";
 BEGIN
     -- BALANCE capture is a post-QC readiness transition.  It must never
     -- recreate or reactivate the initial reservation topology.
@@ -803,7 +1738,8 @@ BEGIN
             WHERE reservation_set."id" = (to_jsonb(NEW) ->> 'id')::uuid;
     END CASE;
 
-    PERFORM 1
+    SELECT "status"
+    INTO target_order_status
     FROM "orders"
     WHERE "id" = target_order_id
     FOR UPDATE;
@@ -837,6 +1773,9 @@ BEGIN
           AND target_order."confirmed_at" IS NOT NULL
           AND target_order."accepted_order_price_binding_id" = payment."order_price_binding_id"
           AND target_order."accepted_terms_revision" IS NOT NULL
+          AND taven_order_accepts_bound_price_list_terms(
+              target_order."id", payment."order_price_binding_id"
+          )
           AND target_order."accepted_claim_policy_revision" IS NOT NULL
           AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
           AND target_order."confirmed_at" >= payment."captured_at" - interval '5 seconds'
@@ -1000,6 +1939,9 @@ BEGIN
           AND target_order."customer_id" IS NOT NULL
           AND target_order."accepted_order_price_binding_id" = binding."id"
           AND target_order."accepted_terms_revision" IS NOT NULL
+          AND taven_order_accepts_bound_price_list_terms(
+              target_order."id", binding."id"
+          )
           AND target_order."accepted_claim_policy_revision" IS NOT NULL
           AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
           AND binding."id" = NEW."order_price_binding_id"
@@ -1099,6 +2041,9 @@ BEGIN
         WHERE target_order."id" = NEW."order_id"
           AND target_order."accepted_order_price_binding_id" = NEW."order_price_binding_id"
           AND target_order."accepted_terms_revision" IS NOT NULL
+          AND taven_order_accepts_bound_price_list_terms(
+              target_order."id", NEW."order_price_binding_id"
+          )
           AND target_order."accepted_claim_policy_revision" IS NOT NULL
           AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
     ) THEN
@@ -1238,6 +2183,7 @@ AS $$
 DECLARE
     target_order_id uuid;
     target_payment_id uuid;
+    target_order_status "order_status";
 BEGIN
     IF TG_TABLE_NAME = 'payments' THEN
         IF (to_jsonb(NEW) ->> 'role') <> 'BALANCE' THEN
@@ -1249,7 +2195,7 @@ BEGIN
         target_order_id := (to_jsonb(NEW) ->> 'id')::uuid;
     END IF;
 
-    PERFORM 1
+    SELECT "status" INTO target_order_status
     FROM "orders"
     WHERE "id" = target_order_id
     FOR UPDATE;
@@ -1265,6 +2211,104 @@ BEGIN
          AND schedule."role" = 'BALANCE'
         WHERE active."order_id" = target_order_id
     ) THEN
+        RETURN NULL;
+    END IF;
+
+    IF TG_TABLE_NAME = 'orders'
+       AND (to_jsonb(OLD) ->> 'status') = 'QC_PASSED'
+       AND (to_jsonb(NEW) ->> 'status') = 'READY_TO_SHIP' THEN
+        RAISE EXCEPTION 'split-payment orders must enter awaiting balance before readiness'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_payment_readiness_check';
+    END IF;
+
+    IF target_order_status = 'AWAITING_BALANCE' THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM "orders" target_order
+            JOIN "individual_order_origins" origin
+              ON origin."order_id" = target_order."id"
+            JOIN "order_phases" phase
+              ON phase."order_id" = target_order."id"
+             AND phase."kind" = 'SINGLE'
+             AND phase."status" = 'QC_PASSED'
+             AND phase."qc_passed_at" IS NOT NULL
+            JOIN "order_active_price_bindings" active
+              ON active."order_id" = target_order."id"
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active."order_price_binding_id"
+             AND binding."order_id" = target_order."id"
+             AND binding."invalidated_at" IS NULL
+            JOIN "price_snapshots" snapshot
+              ON snapshot."id" = binding."price_snapshot_id"
+            JOIN "price_lists" list
+              ON list."id" = snapshot."price_list_id"
+            JOIN "payments" balance
+              ON balance."order_id" = target_order."id"
+             AND balance."order_price_binding_id" = binding."id"
+             AND balance."price_snapshot_id" = binding."price_snapshot_id"
+             AND balance."role" = 'BALANCE'
+             AND balance."status" = 'PENDING'
+             AND balance."provider_intent_id" IS NOT NULL
+             AND balance."provider_intent_id" ~ '[^[:space:]]'
+             AND balance."capture_authorized"
+             AND balance."capture_cutoff_at" IS NULL
+             AND balance."checkout_capture_expires_at" IS NULL
+             AND balance."balance_due_at" = phase."qc_passed_at"
+                 + make_interval(days => (list."parameters" ->> 'balance_payment_days')::integer)
+             AND balance."balance_due_at" > clock_timestamp()
+            WHERE target_order."id" = target_order_id
+              AND target_order."accepted_order_price_binding_id" = binding."id"
+              AND taven_order_accepts_bound_price_list_terms(
+                  target_order."id", binding."id"
+              )
+              AND EXISTS (
+                  SELECT 1
+                  FROM "payments" deposit
+                  WHERE deposit."order_id" = target_order."id"
+                    AND deposit."order_price_binding_id" = binding."id"
+                    AND deposit."price_snapshot_id" = binding."price_snapshot_id"
+                    AND deposit."role" = 'DEPOSIT'
+                    AND deposit."status" = 'CAPTURED'
+                    AND deposit."captured_amount_minor" = deposit."requested_amount_minor"
+              )
+              AND (
+                  SELECT count(*) FROM "payments" candidate
+                  WHERE candidate."order_id" = target_order."id"
+                    AND candidate."role" = 'BALANCE'
+                    AND candidate."status" <> 'FAILED'
+              ) = 1
+              AND EXISTS (
+                  SELECT 1 FROM "jobs" job
+                  WHERE job."order_id" = target_order."id"
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM "jobs" job
+                  WHERE job."order_id" = target_order."id"
+                    AND (job."status" <> 'QC_APPROVED'
+                         OR job."qc_approved_at" IS NULL)
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM "shipments" shipment
+                  WHERE shipment."order_id" = target_order."id"
+                    AND shipment."status" <> 'PLANNED'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM "shipments" replacement
+                        WHERE replacement."replaces_shipment_id" = shipment."id"
+                    )
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM "fulfilment_slots" slot
+                  WHERE slot."order_id" = target_order."id"
+                    AND slot."outcome" <> 'PENDING'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM "order_settlements" settlement
+                  WHERE settlement."order_id" = target_order."id"
+              )
+        ) THEN
+            RAISE EXCEPTION 'awaiting-balance order requires its exact pending post-QC payment topology'
+                USING ERRCODE = '23514', CONSTRAINT = 'balance_payment_waiting_check';
+        END IF;
         RETURN NULL;
     END IF;
 
@@ -1338,11 +2382,23 @@ WHEN (
 )
 EXECUTE FUNCTION taven_reconcile_balance_payment_readiness();
 
+CREATE CONSTRAINT TRIGGER "payments_balance_waiting_reconciled"
+AFTER INSERT OR UPDATE OF "status" ON "payments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (NEW."role" = 'BALANCE' AND NEW."status" IN ('CREATED', 'PENDING'))
+EXECUTE FUNCTION taven_reconcile_balance_payment_readiness();
+
 CREATE CONSTRAINT TRIGGER "orders_balance_readiness_reconciled"
 AFTER UPDATE OF "status" ON "orders"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-WHEN (OLD."status" = 'QC_PASSED' AND NEW."status" = 'READY_TO_SHIP')
+WHEN (
+    (OLD."status" = 'QC_PASSED'
+     AND NEW."status" IN ('AWAITING_BALANCE', 'READY_TO_SHIP'))
+    OR (OLD."status" = 'AWAITING_BALANCE'
+        AND NEW."status" = 'READY_TO_SHIP')
+)
 EXECUTE FUNCTION taven_reconcile_balance_payment_readiness();
 
 CREATE OR REPLACE FUNCTION taven_protect_payment_identity()
@@ -1420,7 +2476,7 @@ BEGIN
                    SELECT 1
                    FROM "orders" target_order
                    WHERE target_order."id" = NEW."order_id"
-                     AND target_order."status" IN ('QC_PASSED', 'READY_TO_SHIP')
+                     AND target_order."status" IN ('AWAITING_BALANCE', 'READY_TO_SHIP')
                      AND NOT EXISTS (
                          SELECT 1 FROM "order_settlements" settlement
                          WHERE settlement."order_id" = target_order."id"
@@ -1703,3 +2759,533 @@ WHEN (
     AND NEW."role" IN ('FULL', 'DEPOSIT')
 )
 EXECUTE FUNCTION taven_reconcile_quoted_payment_void_closure();
+
+-- Late-capture refunds need one additional terminal source: an immutable
+-- balance settlement. Preserve every foundation refund safeguard while
+-- extending only the terminal-cutoff predicates for that source.
+CREATE OR REPLACE FUNCTION taven_validate_refund_against_capture()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    captured_amount bigint;
+    committed_refunds bigint;
+    payment_capture_authorized boolean;
+    payment_capture_cutoff_at timestamptz;
+    payment_captured_at timestamptz;
+    payment_failed_before_capture boolean;
+    target_order_status "order_status";
+    balance_settled boolean;
+    evidence_now timestamptz := clock_timestamp();
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        SELECT payment."order_id"
+        INTO target_order_id
+        FROM "payments" payment
+        WHERE payment."id" = NEW."payment_id";
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Refund parent Payment does not exist'
+                USING ERRCODE = '23514', CONSTRAINT = 'refund_captured_payment_check';
+        END IF;
+
+        PERFORM taven_lock_automatic_order_session(target_order_id);
+
+        PERFORM 1
+        FROM "orders" target_order
+        WHERE target_order."id" = target_order_id
+        FOR UPDATE;
+
+        PERFORM 1
+        FROM "order_phases" phase
+        WHERE phase."order_id" = target_order_id
+        ORDER BY phase."id"
+        FOR UPDATE;
+    END IF;
+
+    SELECT payment."captured_amount_minor", payment."capture_authorized",
+           payment."capture_cutoff_at", payment."captured_at",
+           EXISTS (
+               SELECT 1
+               FROM "payment_provider_events" event
+               WHERE event."payment_id" = payment."id"
+                 AND event."refund_transaction_id" IS NULL
+                 AND event."provider" = payment."provider"
+                 AND event."kind" = 'PAYMENT_FAILED'
+                 AND event."provider_transaction_id" = payment."provider_intent_id"
+                 AND event."amount_minor" = payment."requested_amount_minor"
+                 AND event."currency" = payment."currency"
+                 AND event."verified_at" = payment."capture_cutoff_at"
+           ), target_order."status",
+           EXISTS (
+               SELECT 1
+               FROM "order_settlements" settlement
+               WHERE settlement."order_id" = target_order."id"
+                 AND settlement."kind" = 'BALANCE_SETTLEMENT'
+                 AND settlement."cutoff_at" = payment."capture_cutoff_at"
+                 AND payment."role" = 'BALANCE'
+           )
+    INTO captured_amount, payment_capture_authorized,
+         payment_capture_cutoff_at, payment_captured_at,
+         payment_failed_before_capture, target_order_status,
+         balance_settled
+    FROM "payments" payment
+    JOIN "orders" target_order ON target_order."id" = payment."order_id"
+    WHERE payment."id" = NEW."payment_id"
+    FOR UPDATE OF payment;
+
+    IF captured_amount IS NULL OR captured_amount <= 0 THEN
+        RAISE EXCEPTION 'refund requires a captured payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_captured_payment_check';
+    END IF;
+
+    IF NEW."requested_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'refund request evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_request_evidence_check';
+    END IF;
+
+    IF NEW."completed_at" IS NOT NULL
+       AND NEW."completed_at" > evidence_now + interval '5 seconds' THEN
+        RAISE EXCEPTION 'refund completion evidence cannot be in the future'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_completion_evidence_check';
+    END IF;
+
+    IF NEW."requested_at" < payment_captured_at - interval '5 seconds'
+       OR (NEW."completed_at" IS NOT NULL
+           AND NEW."completed_at" < payment_captured_at - interval '5 seconds') THEN
+        RAISE EXCEPTION 'refund evidence cannot predate payment capture'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_capture_timestamp_order_check';
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        SELECT coalesce(sum("amount_minor"), 0)
+        INTO committed_refunds
+        FROM "refund_transactions"
+        WHERE "payment_id" = NEW."payment_id"
+          AND "status" IN ('PENDING', 'SUCCEEDED')
+          AND "id" <> OLD."id";
+    ELSE
+        SELECT coalesce(sum("amount_minor"), 0)
+        INTO committed_refunds
+        FROM "refund_transactions"
+        WHERE "payment_id" = NEW."payment_id"
+          AND "status" IN ('PENDING', 'SUCCEEDED');
+    END IF;
+
+    IF NEW."reason" = 'LATE_CAPTURE_COMPENSATION' AND (
+        payment_capture_authorized
+        OR payment_capture_cutoff_at IS NULL
+        OR payment_captured_at IS NULL
+        OR payment_captured_at < payment_capture_cutoff_at
+        OR (
+            target_order_status NOT IN ('EXPIRED', 'CANCELLED')
+            AND NOT payment_failed_before_capture
+            AND NOT (
+                target_order_status = 'CANCELLED_SETTLED'
+                AND balance_settled
+            )
+        )
+        OR NEW."amount_minor" <> captured_amount - committed_refunds
+    ) THEN
+        RAISE EXCEPTION 'late-capture compensation requires the full remaining capture after a terminal cutoff'
+            USING ERRCODE = '23514', CONSTRAINT = 'late_capture_compensation_check';
+    END IF;
+
+    IF NOT payment_capture_authorized
+       AND payment_capture_cutoff_at IS NOT NULL
+       AND payment_captured_at >= payment_capture_cutoff_at
+       AND (
+           target_order_status IN ('EXPIRED', 'CANCELLED')
+           OR payment_failed_before_capture
+           OR (
+               target_order_status = 'CANCELLED_SETTLED'
+               AND balance_settled
+           )
+       )
+       AND NEW."reason" <> 'LATE_CAPTURE_COMPENSATION' THEN
+        RAISE EXCEPTION 'a capture after a terminal cutoff requires late-capture compensation'
+            USING ERRCODE = '23514', CONSTRAINT = 'late_capture_compensation_reason_check';
+    END IF;
+
+    IF committed_refunds
+       + (CASE WHEN NEW."status" IN ('PENDING', 'SUCCEEDED') THEN NEW."amount_minor" ELSE 0 END)
+       > captured_amount THEN
+        RAISE EXCEPTION 'refund amount exceeds captured payment amount'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_captured_payment_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION taven_reconcile_balance_timeout_terminal()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "orders" target_order
+        JOIN "individual_order_origins" origin
+          ON origin."order_id" = target_order."id"
+        JOIN "order_phases" phase
+          ON phase."order_id" = target_order."id"
+         AND phase."kind" = 'SINGLE'
+         AND phase."status" = 'CANCELLED'
+         AND phase."cancelled_at" IS NOT NULL
+        JOIN "order_settlements" settlement
+          ON settlement."order_id" = target_order."id"
+         AND settlement."order_phase_id" = phase."id"
+         AND settlement."kind" = 'BALANCE_SETTLEMENT'
+        JOIN "payments" deposit
+          ON deposit."id" = settlement."payment_id"
+         AND deposit."order_id" = target_order."id"
+         AND deposit."role" = 'DEPOSIT'
+         AND deposit."status" = 'REFUND_PENDING'
+         AND deposit."captured_amount_minor" = settlement."captured_total_minor"
+        JOIN "refund_transactions" refund
+          ON refund."id" = settlement."refund_transaction_id"
+         AND refund."payment_id" = deposit."id"
+         AND refund."reason" = 'BALANCE_SETTLEMENT'
+         AND refund."status" = 'PENDING'
+         AND refund."amount_minor" = settlement."refund_amount_minor"
+        JOIN "payments" balance
+          ON balance."order_id" = target_order."id"
+         AND balance."order_price_binding_id" = settlement."order_price_binding_id"
+         AND balance."price_snapshot_id" = settlement."price_snapshot_id"
+         AND balance."role" = 'BALANCE'
+         AND balance."status" = 'VOIDED'
+         AND NOT balance."capture_authorized"
+         AND balance."capture_cutoff_at" = settlement."cutoff_at"
+         AND balance."balance_due_at" <= settlement."cutoff_at"
+        WHERE target_order."id" = NEW."id"
+          AND target_order."status" = 'CANCELLED_SETTLED'
+          AND target_order."accepted_order_price_binding_id" = settlement."order_price_binding_id"
+          AND NOT EXISTS (
+              SELECT 1 FROM "jobs" job
+              WHERE job."order_id" = target_order."id"
+                AND job."status" <> 'CANCELLED'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM "shipments" shipment
+              WHERE shipment."order_id" = target_order."id"
+                AND shipment."status" <> 'CANCELLED'
+                AND NOT EXISTS (
+                    SELECT 1 FROM "shipments" replacement
+                    WHERE replacement."replaces_shipment_id" = shipment."id"
+                )
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM "fulfilment_slots" slot
+              WHERE slot."order_id" = target_order."id"
+                AND slot."outcome" <> 'CANCELLED'
+          )
+    ) THEN
+        RAISE EXCEPTION 'cancelled-settled balance order requires its atomic timeout settlement'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "orders_balance_timeout_settlement_reconciled"
+AFTER UPDATE OF "status" ON "orders"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (OLD."status" = 'AWAITING_BALANCE' AND NEW."status" = 'CANCELLED_SETTLED')
+EXECUTE FUNCTION taven_reconcile_balance_timeout_terminal();
+
+CREATE FUNCTION taven_close_expired_balance_payment(
+    target_payment_id uuid,
+    target_cutoff_at timestamptz DEFAULT clock_timestamp()
+)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE
+    target_order_id uuid;
+    target_order_status "order_status";
+    target_phase_id uuid;
+    target_binding_id uuid;
+    target_snapshot_id uuid;
+    target_currency char(3);
+    target_balance_due_at timestamptz;
+    target_balance_status "payment_status";
+    target_deposit_id uuid;
+    target_deposit_amount bigint;
+    target_deposit_provider varchar(100);
+    target_contract_total bigint;
+    target_refund_id uuid := gen_random_uuid();
+    target_settlement_id uuid := gen_random_uuid();
+BEGIN
+    SELECT payment."order_id"
+    INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = target_payment_id;
+
+    IF target_order_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT target_order."status"
+    INTO target_order_status
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    IF target_order_status = 'CANCELLED_SETTLED' THEN
+        RETURN (
+            SELECT settlement."id"
+            FROM "order_settlements" settlement
+            WHERE settlement."order_id" = target_order_id
+              AND settlement."kind" = 'BALANCE_SETTLEMENT'
+        );
+    END IF;
+
+    SELECT phase."id"
+    INTO target_phase_id
+    FROM "order_phases" phase
+    WHERE phase."order_id" = target_order_id
+      AND phase."kind" = 'SINGLE'
+    ORDER BY phase."id"
+    FOR UPDATE;
+
+    SELECT balance."order_price_binding_id", balance."price_snapshot_id",
+           balance."currency", balance."balance_due_at", balance."status"
+    INTO target_binding_id, target_snapshot_id, target_currency,
+         target_balance_due_at, target_balance_status
+    FROM "payments" balance
+    WHERE balance."id" = target_payment_id
+      AND balance."order_id" = target_order_id
+      AND balance."role" = 'BALANCE'
+    FOR UPDATE;
+
+    IF target_order_status <> 'AWAITING_BALANCE'
+       OR target_phase_id IS NULL
+       OR target_balance_status NOT IN ('CREATED', 'PENDING')
+       OR target_balance_due_at IS NULL
+       OR target_balance_due_at > target_cutoff_at
+       OR target_cutoff_at > clock_timestamp() + interval '5 seconds' THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT deposit."id", deposit."captured_amount_minor", deposit."provider",
+           snapshot."contract_total_minor"
+    INTO target_deposit_id, target_deposit_amount, target_deposit_provider,
+         target_contract_total
+    FROM "payments" deposit
+    JOIN "price_snapshots" snapshot
+      ON snapshot."id" = deposit."price_snapshot_id"
+    WHERE deposit."order_id" = target_order_id
+      AND deposit."order_price_binding_id" = target_binding_id
+      AND deposit."price_snapshot_id" = target_snapshot_id
+      AND deposit."role" = 'DEPOSIT'
+      AND deposit."status" = 'CAPTURED'
+      AND deposit."captured_amount_minor" = deposit."requested_amount_minor"
+    FOR UPDATE OF deposit;
+
+    IF target_deposit_id IS NULL OR target_deposit_amount IS NULL THEN
+        RAISE EXCEPTION 'expired balance requires its captured deposit'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
+    END IF;
+
+    UPDATE "payments"
+    SET "status" = 'VOIDED', "capture_authorized" = false,
+        "capture_cutoff_at" = target_cutoff_at, "updated_at" = target_cutoff_at
+    WHERE "id" = target_payment_id;
+
+    UPDATE "phase_reservation_sets" reservation_set
+    SET "status" = 'SETTLED', "updated_at" = target_cutoff_at
+    FROM "phase_resource_plans" resource_plan
+    WHERE reservation_set."phase_resource_plan_id" = resource_plan."id"
+      AND reservation_set."node_id" = resource_plan."node_id"
+      AND resource_plan."order_phase_id" = target_phase_id
+      AND reservation_set."status" = 'HELD';
+
+    UPDATE "jobs"
+    SET "status" = 'CANCELLED', "cancelled_at" = target_cutoff_at,
+        "cancellation_reason" = 'ORDER_CANCELLED', "updated_at" = target_cutoff_at
+    WHERE "order_id" = target_order_id
+      AND "status" = 'QC_APPROVED';
+
+    UPDATE "shipments"
+    SET "status" = 'CANCELLED', "cancelled_at" = target_cutoff_at,
+        "updated_at" = target_cutoff_at
+    WHERE "order_id" = target_order_id
+      AND "status" = 'PLANNED';
+
+    UPDATE "fulfilment_slots"
+    SET "outcome" = 'CANCELLED', "updated_at" = target_cutoff_at
+    WHERE "order_id" = target_order_id
+      AND "outcome" = 'PENDING';
+
+    UPDATE "order_phases"
+    SET "status" = 'CANCELLED', "cancelled_at" = target_cutoff_at,
+        "updated_at" = target_cutoff_at
+    WHERE "id" = target_phase_id
+      AND "status" = 'QC_PASSED';
+
+    INSERT INTO "refund_transactions" (
+        "id", "payment_id", "idempotency_key", "provider", "amount_minor",
+        "reason", "status", "requested_at", "created_at", "updated_at"
+    ) VALUES (
+        target_refund_id, target_deposit_id,
+        'balance_settlement:' || target_order_id::text,
+        target_deposit_provider, target_deposit_amount,
+        'BALANCE_SETTLEMENT', 'PENDING', target_cutoff_at,
+        target_cutoff_at, target_cutoff_at
+    );
+
+    UPDATE "payments"
+    SET "status" = 'REFUND_PENDING', "updated_at" = target_cutoff_at
+    WHERE "id" = target_deposit_id;
+
+    INSERT INTO "order_settlements" (
+        "id", "order_id", "order_phase_id", "order_price_binding_id",
+        "price_snapshot_id", "payment_id", "refund_transaction_id", "kind",
+        "currency", "contract_total_minor", "captured_total_minor",
+        "earned_amount_minor", "retained_amount_minor", "refund_amount_minor",
+        "written_off_amount_minor", "unearned_cancelled_amount_minor",
+        "amount_due_minor", "refundable_balance_minor", "cutoff_at", "settled_at"
+    ) VALUES (
+        target_settlement_id, target_order_id, target_phase_id,
+        target_binding_id, target_snapshot_id, target_deposit_id,
+        target_refund_id, 'BALANCE_SETTLEMENT', target_currency,
+        target_contract_total, target_deposit_amount, 0, 0,
+        target_deposit_amount, 0, target_contract_total, 0,
+        target_deposit_amount, target_cutoff_at, target_cutoff_at
+    );
+
+    UPDATE "orders"
+    SET "status" = 'CANCELLED_SETTLED', "updated_at" = target_cutoff_at
+    WHERE "id" = target_order_id
+      AND "status" = 'AWAITING_BALANCE';
+
+    RETURN target_settlement_id;
+END;
+$$;
+
+CREATE FUNCTION taven_close_expired_balance_payments(batch_limit integer DEFAULT 100)
+RETURNS TABLE(payment_id uuid, settlement_id uuid)
+LANGUAGE plpgsql AS $$
+DECLARE
+    candidate record;
+BEGIN
+    IF batch_limit < 1 OR batch_limit > 1000 THEN
+        RAISE EXCEPTION 'balance timeout batch limit must be between 1 and 1000'
+            USING ERRCODE = '22023';
+    END IF;
+
+    FOR candidate IN
+        SELECT payment."id"
+        FROM "orders" target_order
+        JOIN "payments" payment ON payment."order_id" = target_order."id"
+        WHERE target_order."status" = 'AWAITING_BALANCE'
+          AND payment."role" = 'BALANCE'
+          AND payment."status" IN ('CREATED', 'PENDING')
+          AND payment."capture_authorized"
+          AND payment."capture_cutoff_at" IS NULL
+          AND payment."balance_due_at" <= clock_timestamp()
+        ORDER BY payment."balance_due_at", payment."id"
+        FOR UPDATE OF target_order SKIP LOCKED
+        LIMIT batch_limit
+    LOOP
+        payment_id := candidate."id";
+        settlement_id := taven_close_expired_balance_payment(payment_id);
+        IF settlement_id IS NOT NULL THEN
+            RETURN NEXT;
+        END IF;
+    END LOOP;
+END;
+$$;
+
+CREATE FUNCTION taven_record_late_balance_capture(
+    target_payment_id uuid,
+    target_provider_capture_id varchar(255),
+    target_captured_at timestamptz
+)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE
+    target_order_id uuid;
+    target_refund_id uuid := gen_random_uuid();
+    target_amount bigint;
+    target_provider varchar(100);
+BEGIN
+    SELECT payment."order_id"
+    INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = target_payment_id;
+
+    PERFORM 1 FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    PERFORM 1 FROM "order_phases"
+    WHERE "order_id" = target_order_id
+    ORDER BY "id"
+    FOR UPDATE;
+
+    SELECT payment."requested_amount_minor", payment."provider"
+    INTO target_amount, target_provider
+    FROM "payments" payment
+    JOIN "order_settlements" settlement
+      ON settlement."order_id" = payment."order_id"
+     AND settlement."kind" = 'BALANCE_SETTLEMENT'
+     AND settlement."cutoff_at" = payment."capture_cutoff_at"
+    JOIN "orders" target_order
+      ON target_order."id" = payment."order_id"
+     AND target_order."status" = 'CANCELLED_SETTLED'
+    WHERE payment."id" = target_payment_id
+      AND payment."role" = 'BALANCE'
+      AND payment."status" = 'VOIDED'
+      AND NOT payment."capture_authorized"
+      AND payment."capture_cutoff_at" IS NOT NULL
+      AND target_captured_at >= payment."capture_cutoff_at"
+      AND EXISTS (
+          SELECT 1 FROM "payment_provider_events" event
+          WHERE event."payment_id" = payment."id"
+            AND event."refund_transaction_id" IS NULL
+            AND event."provider" = payment."provider"
+            AND event."kind" = 'PAYMENT_CAPTURED'
+            AND event."provider_transaction_id" = target_provider_capture_id
+            AND event."amount_minor" = payment."requested_amount_minor"
+            AND event."currency" = payment."currency"
+            AND event."verified_at" = target_captured_at
+      )
+    FOR UPDATE OF payment;
+
+    IF target_amount IS NULL THEN
+        RETURN (
+            SELECT refund."id"
+            FROM "refund_transactions" refund
+            WHERE refund."payment_id" = target_payment_id
+              AND refund."idempotency_key" =
+                  'late_balance_capture:' || target_provider_capture_id
+        );
+    END IF;
+
+    UPDATE "payments"
+    SET "status" = 'REFUND_PENDING',
+        "captured_amount_minor" = target_amount,
+        "provider_capture_id" = target_provider_capture_id,
+        "captured_at" = target_captured_at,
+        "updated_at" = target_captured_at
+    WHERE "id" = target_payment_id;
+
+    INSERT INTO "refund_transactions" (
+        "id", "payment_id", "idempotency_key", "provider", "amount_minor",
+        "reason", "status", "requested_at", "created_at", "updated_at"
+    ) VALUES (
+        target_refund_id, target_payment_id,
+        'late_balance_capture:' || target_provider_capture_id,
+        target_provider, target_amount, 'LATE_CAPTURE_COMPENSATION',
+        'PENDING', target_captured_at, target_captured_at, target_captured_at
+    )
+    ON CONFLICT ("payment_id", "idempotency_key") DO NOTHING;
+
+    RETURN coalesce(
+        (SELECT refund."id" FROM "refund_transactions" refund
+         WHERE refund."payment_id" = target_payment_id
+           AND refund."idempotency_key" =
+               'late_balance_capture:' || target_provider_capture_id),
+        target_refund_id
+    );
+END;
+$$;
