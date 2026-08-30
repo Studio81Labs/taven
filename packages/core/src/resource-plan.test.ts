@@ -266,6 +266,103 @@ describe("selectCompleteResourcePlan", () => {
     ]);
   });
 
+  it("keeps distinct slot option sets available to complete a plan", () => {
+    const matchingSlots = slots.map((slot) => ({
+      ...slot,
+      shipmentPlanId: "shipment",
+      modelGeometryId: "geometry",
+      printConfigRevisionId: "config",
+      material: "PLA",
+      color: "red",
+    }));
+    const shared = {
+      shipmentPlanId: "shipment",
+      modelGeometryId: "geometry",
+      printConfigRevisionId: "config",
+      material: "PLA",
+      color: "red",
+      fulfilmentSlotCount: 1,
+    };
+
+    const result = selectCompleteResourcePlan(
+      baseInput(
+        [
+          candidate("candidate-a", ["slot-a", "slot-b"], shared),
+          candidate("candidate-b", ["slot-a"], shared),
+        ],
+        { requiredFulfilmentSlots: matchingSlots },
+      ),
+    );
+
+    expect(result?.assignments).toEqual([
+      {
+        fulfilmentSlotId: "slot-a",
+        candidateResourceEstimateId: "candidate-b",
+      },
+      {
+        fulfilmentSlotId: "slot-b",
+        candidateResourceEstimateId: "candidate-a",
+      },
+    ]);
+  });
+
+  it("assigns a large interchangeable slot group without expanding its subsets", () => {
+    const interchangeableSlots = Array.from({ length: 29 }, (_, index) => ({
+      id: `slot-${String(index).padStart(2, "0")}`,
+      shipmentPlanId: "shipment",
+      modelGeometryId: "geometry",
+      printConfigRevisionId: "config",
+      material: "PLA",
+      color: "red",
+    }));
+    const interchangeableCandidate = (
+      id: string,
+      quantity: number,
+    ): ResourceCandidateEstimate => ({
+      id,
+      nodeId: "node-1",
+      machineId: `${id}-machine`,
+      inventoryId: `${id}-inventory`,
+      shipmentPlanId: "shipment",
+      modelGeometryId: "geometry",
+      printConfigRevisionId: "config",
+      material: "PLA",
+      color: "red",
+      requiredMaterialMilligrams: 100n,
+      requiredMachineSeconds: 60n,
+      expiresAt: later,
+      intervals: [
+        {
+          machineId: `${id}-machine`,
+          startsAt: later,
+          endsAt: end,
+        },
+      ],
+      fulfilmentSlotIds: interchangeableSlots.map(({ id: slotId }) => slotId),
+      fulfilmentSlotCount: quantity,
+    });
+
+    const result = selectCompleteResourcePlan({
+      requiredFulfilmentSlots: interchangeableSlots,
+      candidates: [
+        interchangeableCandidate("candidate-a", 14),
+        interchangeableCandidate("candidate-b", 15),
+      ],
+      inventory: [
+        { id: "candidate-a-inventory", availableMilligrams: 1_000n },
+        { id: "candidate-b-inventory", availableMilligrams: 1_000n },
+      ],
+      now,
+    });
+
+    expect(result?.assignments).toEqual(
+      interchangeableSlots.map(({ id: fulfilmentSlotId }, index) => ({
+        fulfilmentSlotId,
+        candidateResourceEstimateId: index < 14 ? "candidate-a" : "candidate-b",
+      })),
+    );
+  }, 1_000);
+
   it("treats an unspecified requested color as unconstrained", () => {
     const colorlessSlot = { ...slots[0]!, color: null };
     expect(

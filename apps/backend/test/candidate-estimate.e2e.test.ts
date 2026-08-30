@@ -356,6 +356,16 @@ function retryWithCorrelation(
   });
 }
 
+function redispatch(job: CandidateEstimateJob): CandidateEstimateJob {
+  const jobId = randomUUID();
+  return contracts.CandidateEstimateJobSchema.parse({
+    ...job,
+    jobId,
+    correlationId: randomUUID(),
+    idempotencyKey: `slicer:v2:candidate_estimate:${jobId}:${job.inputFingerprintSha256}`,
+  });
+}
+
 async function terminalRows(dispatchId: string) {
   return pool.query<{
     outcome: string;
@@ -481,6 +491,22 @@ describe("candidate estimate terminal receipts", () => {
         [fixture.job.jobId],
       ),
     ).resolves.toMatchObject({ rows: [{ count: 2 }] });
+
+    const retrySuccess = resultFor(retry, fixture.success.outcome);
+    const ingested = await candidates.ingest(ingestInput(retrySuccess));
+    expect(ingested).toMatchObject({
+      status: "succeeded",
+      replayed: false,
+    });
+    if (ingested.status !== "succeeded") {
+      throw new Error("candidate retry success was not ingested");
+    }
+    await expect(candidates.ingest(ingestInput(retrySuccess))).resolves.toEqual(
+      {
+        ...ingested,
+        replayed: true,
+      },
+    );
   });
 
   it("rejects a success delivered after a terminal failure", async () => {
@@ -570,6 +596,107 @@ describe("candidate estimate terminal receipts", () => {
         },
       ],
     });
+  });
+
+  it("records a new resource snapshot after an equivalent candidate expires", async () => {
+    const fixture = await createFixture("expired-candidate-refresh", {
+      dispatchableGeometry: true,
+    });
+    const firstExpiresAt = new Date(Date.now() + 2_000);
+    const firstCapacityWindows = [
+      { startsAt: testTimes.capacityStart, endsAt: testTimes.capacityEnd },
+    ];
+    const firstInput = {
+      result: fixture.success,
+      capacityWindows: firstCapacityWindows,
+      expiresAt: firstExpiresAt,
+    };
+    const first = await candidates.ingest(firstInput);
+    if (first.status !== "succeeded") {
+      throw new Error("initial candidate ingestion unexpectedly failed");
+    }
+
+    await new Promise<void>((resolve) => {
+      setTimeout(
+        resolve,
+        Math.max(0, firstExpiresAt.getTime() - Date.now() + 25),
+      );
+    });
+
+    const refreshedJob = redispatch(fixture.job);
+    const refreshedSuccess = resultFor(refreshedJob, fixture.success.outcome);
+    const refreshedCapacityWindows = [
+      {
+        startsAt: testTimes.capacityOneAndHalfHours,
+        endsAt: testTimes.capacityTwoHours,
+      },
+    ];
+    await expect(
+      candidates.dispatch({
+        nodeId: fixture.nodeId,
+        inventoryId: fixture.inventoryId,
+        job: refreshedJob,
+      }),
+    ).resolves.toEqual(refreshedJob);
+
+    const refreshed = await candidates.ingest({
+      result: refreshedSuccess,
+      capacityWindows: refreshedCapacityWindows,
+      expiresAt: testTimes.expiresAt,
+    });
+    expect(refreshed).toMatchObject({ status: "succeeded", replayed: false });
+    if (refreshed.status !== "succeeded") {
+      throw new Error("refreshed candidate ingestion unexpectedly failed");
+    }
+    expect(refreshed.candidateResourceEstimateId).not.toBe(
+      first.candidateResourceEstimateId,
+    );
+    expect(refreshed.estimateKey).not.toBe(first.estimateKey);
+    await expect(candidates.ingest(firstInput)).resolves.toEqual({
+      ...first,
+      replayed: true,
+    });
+
+    const snapshots = await pool.query<{
+      dispatch_job_id: string;
+      expires_at: Date;
+      primary_slice_result_id: string;
+      starts_at: Date;
+      ends_at: Date;
+    }>(
+      `SELECT candidate.resource_snapshot ->> 'dispatchJobId' AS dispatch_job_id,
+                candidate.expires_at,
+                candidate.slice_result_id AS primary_slice_result_id,
+                candidate_interval.starts_at,
+                candidate_interval.ends_at
+         FROM candidate_resource_estimates candidate
+         JOIN candidate_capacity_intervals candidate_interval
+           ON candidate_interval.candidate_resource_estimate_id = candidate.id
+         WHERE candidate.id = ANY($1::uuid[])
+         ORDER BY candidate.expires_at`,
+      [
+        [
+          first.candidateResourceEstimateId,
+          refreshed.candidateResourceEstimateId,
+        ],
+      ],
+    );
+    expect(snapshots.rows).toHaveLength(2);
+    const [expired, fresh] = snapshots.rows;
+    expect(expired).toMatchObject({
+      dispatch_job_id: fixture.job.jobId,
+      expires_at: firstExpiresAt,
+      starts_at: firstCapacityWindows[0]!.startsAt,
+      ends_at: firstCapacityWindows[0]!.endsAt,
+    });
+    expect(fresh).toMatchObject({
+      dispatch_job_id: refreshedJob.jobId,
+      starts_at: refreshedCapacityWindows[0]!.startsAt,
+      ends_at: refreshedCapacityWindows[0]!.endsAt,
+    });
+    expect(expired?.primary_slice_result_id).toBe(
+      fresh?.primary_slice_result_id,
+    );
   });
 
   it("allows dispatch delivery without a receipt, then records the terminal result", async () => {

@@ -48,7 +48,9 @@ ALTER TABLE "slice_results"
 -- database constraints. Persist it explicitly so accepted G-code can be bound
 -- to the exact arrangement selected by the reservation's candidate.
 ALTER TABLE "slice_results"
-    ADD COLUMN "arrangement_revision_id" UUID;
+    ADD COLUMN "arrangement_revision_id" UUID,
+    ADD COLUMN "package_quantity" INTEGER,
+    ADD COLUMN "package_plate_count" INTEGER;
 
 DO $$
 BEGIN
@@ -99,6 +101,64 @@ BEGIN
         RAISE EXCEPTION 'cannot migrate a slice result with conflicting candidate or production arrangement provenance; re-estimate or re-slice before deploying'
             USING ERRCODE = '55000';
     END IF;
+
+    -- A previously persisted production artifact can be reached through both
+    -- a reservation and a Job. Its arrangement alone is not enough to make
+    -- package topology backfill deterministic: the linked candidates must
+    -- also agree on the sealed quantity, plates, and per-plate occupancy.
+    IF EXISTS (
+        SELECT 1
+        FROM (
+            SELECT production."slice_result_id" AS slice_result_id,
+                   candidate."arrangement_revision_id",
+                   candidate."quantity" AS package_quantity,
+                   ceil(
+                       candidate."quantity"::numeric / candidate."parts_per_plate"::numeric
+                   )::integer AS package_plate_count,
+                   candidate."parts_per_plate"
+            FROM "production_reservations" production
+            JOIN "phase_resource_plan_jobs" plan_job
+              ON plan_job."id" = production."phase_resource_plan_job_id"
+             AND plan_job."node_id" = production."node_id"
+             AND plan_job."phase_resource_plan_id" = production."phase_resource_plan_id"
+            JOIN "candidate_resource_estimates" candidate
+              ON candidate."id" = plan_job."candidate_resource_estimate_id"
+             AND candidate."node_id" = plan_job."node_id"
+            -- Old reservation creation copied the candidate primary slice ID
+            -- into this column. It is cleared below and is not production
+            -- artifact provenance.
+            WHERE production."slice_result_id" IS NOT NULL
+              AND production."slice_result_id" <> candidate."slice_result_id"
+
+            UNION ALL
+
+            SELECT job."production_slice_result_id" AS slice_result_id,
+                   candidate."arrangement_revision_id",
+                   candidate."quantity" AS package_quantity,
+                   ceil(
+                       candidate."quantity"::numeric / candidate."parts_per_plate"::numeric
+                   )::integer AS package_plate_count,
+                   candidate."parts_per_plate"
+            FROM "jobs" job
+            JOIN "phase_resource_plan_jobs" plan_job
+              ON plan_job."id" = job."phase_resource_plan_job_id"
+             AND plan_job."node_id" = job."node_id"
+            JOIN "candidate_resource_estimates" candidate
+              ON candidate."id" = plan_job."candidate_resource_estimate_id"
+             AND candidate."node_id" = plan_job."node_id"
+            WHERE job."production_slice_result_id" IS NOT NULL
+        ) production_binding
+        GROUP BY production_binding."slice_result_id"
+        HAVING count(DISTINCT (
+            production_binding."arrangement_revision_id",
+            production_binding."package_quantity",
+            production_binding."package_plate_count",
+            production_binding."parts_per_plate"
+        )) > 1
+    ) THEN
+        RAISE EXCEPTION 'cannot migrate a production slice result with conflicting candidate package topology provenance; re-slice before deploying'
+            USING ERRCODE = '55000';
+    END IF;
 END;
 $$;
 
@@ -131,6 +191,43 @@ WHERE plan_job."id" = production."phase_resource_plan_job_id"
 ALTER TABLE "production_reservations"
     ENABLE TRIGGER "production_reservations_payload_immutable";
 
+-- Candidate occupancy slices and an actual production artifact have different
+-- immutable roles. The legacy copied primary binding is cleared above; any
+-- remaining overlap would otherwise be marked ANALYSIS before the production
+-- topology backfill, which leaves the package fields unresolved.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM (
+            SELECT candidate."slice_result_id" AS slice_result_id
+            FROM "candidate_resource_estimates" candidate
+
+            UNION ALL
+
+            SELECT candidate."tail_slice_result_id" AS slice_result_id
+            FROM "candidate_resource_estimates" candidate
+            WHERE candidate."tail_slice_result_id" IS NOT NULL
+        ) occupancy
+        JOIN (
+            SELECT production."slice_result_id" AS slice_result_id
+            FROM "production_reservations" production
+            WHERE production."slice_result_id" IS NOT NULL
+
+            UNION ALL
+
+            SELECT job."production_slice_result_id" AS slice_result_id
+            FROM "jobs" job
+            WHERE job."production_slice_result_id" IS NOT NULL
+        ) production
+          ON production."slice_result_id" = occupancy."slice_result_id"
+    ) THEN
+        RAISE EXCEPTION 'cannot migrate a slice result used as both candidate occupancy and an actual production artifact; re-estimate or re-slice before deploying'
+            USING ERRCODE = '55000';
+    END IF;
+END;
+$$;
+
 ALTER TABLE "slice_results"
     DISABLE TRIGGER "slice_results_immutable";
 
@@ -151,7 +248,11 @@ WHERE (candidate."slice_result_id" = result."id"
   AND result."arrangement_revision_id" IS NULL;
 
 UPDATE "slice_results" result
-SET "arrangement_revision_id" = candidate."arrangement_revision_id"
+SET "arrangement_revision_id" = candidate."arrangement_revision_id",
+    "package_quantity" = candidate."quantity",
+    "package_plate_count" = ceil(
+        candidate."quantity"::numeric / candidate."parts_per_plate"::numeric
+    )::integer
 FROM "production_reservations" production
 JOIN "phase_resource_plan_jobs" plan_job
   ON plan_job."id" = production."phase_resource_plan_job_id"
@@ -164,7 +265,11 @@ WHERE production."slice_result_id" = result."id"
   AND result."arrangement_revision_id" IS NULL;
 
 UPDATE "slice_results" result
-SET "arrangement_revision_id" = candidate."arrangement_revision_id"
+SET "arrangement_revision_id" = candidate."arrangement_revision_id",
+    "package_quantity" = candidate."quantity",
+    "package_plate_count" = ceil(
+        candidate."quantity"::numeric / candidate."parts_per_plate"::numeric
+    )::integer
 FROM "jobs" job
 JOIN "phase_resource_plan_jobs" plan_job
   ON plan_job."id" = job."phase_resource_plan_job_id"
@@ -180,8 +285,21 @@ WHERE job."production_slice_result_id" = result."id"
 -- PostgreSQL validates every new or changed machine slice from this point on.
 ALTER TABLE "slice_results"
     ADD CONSTRAINT "slice_results_arrangement_shape_check" CHECK (
-        ("kind" = 'REFERENCE' AND "arrangement_revision_id" IS NULL) OR
-        ("kind" IN ('ANALYSIS', 'PRODUCTION') AND "arrangement_revision_id" IS NOT NULL)
+        ("kind" = 'REFERENCE'
+            AND "arrangement_revision_id" IS NULL
+            AND "package_quantity" IS NULL
+            AND "package_plate_count" IS NULL) OR
+        ("kind" = 'ANALYSIS'
+            AND "arrangement_revision_id" IS NOT NULL
+            AND "package_quantity" IS NULL
+            AND "package_plate_count" IS NULL) OR
+        ("kind" = 'PRODUCTION'
+            AND "arrangement_revision_id" IS NOT NULL
+            AND "package_quantity" > 0
+            AND "package_plate_count" > 0
+            AND "package_plate_count" = ceil(
+                "package_quantity"::numeric / "parts_per_plate"::numeric
+            )::integer)
     ) NOT VALID;
 
 ALTER TABLE "slice_results"
@@ -384,6 +502,10 @@ BEGIN
                     AND candidate."model_geometry_id" = slice_result."model_geometry_id"
                     AND candidate."arrangement_revision_id" = slice_result."arrangement_revision_id"
                     AND candidate."parts_per_plate" = slice_result."parts_per_plate"
+                    AND candidate."quantity" = slice_result."package_quantity"
+                    AND ceil(
+                        candidate."quantity"::numeric / candidate."parts_per_plate"::numeric
+                    )::integer = slice_result."package_plate_count"
                     AND slice_result."estimated_print_seconds" <= candidate."required_machine_seconds"
                     AND slice_result."estimated_print_seconds" <= NEW."required_machine_seconds"
                     AND slice_result."estimated_material_milligrams" <= candidate."required_material_milligrams"

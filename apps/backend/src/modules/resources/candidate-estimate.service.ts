@@ -532,6 +532,7 @@ export class CandidateEstimateService {
           partsPerPlate: dispatch.job.input.partsPerPlate,
           quantity: dispatch.job.input.quantity,
           shipmentPlanId: dispatch.job.input.shipmentPlanId,
+          dispatchJobId: result.jobId,
         });
         const existing = await transaction.candidateResourceEstimate.findUnique(
           { where: { estimateKey } },

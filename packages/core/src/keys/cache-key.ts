@@ -51,6 +51,12 @@ export interface ProductionPackageKeyInput extends MachineOccupancySliceCacheKey
 export interface CandidateResourceEstimateKeyInput extends MachineOccupancySliceCacheKeyInput {
   readonly quantity: number | bigint;
   readonly shipmentPlanId: string;
+  /**
+   * Identifies the logical candidate dispatch that observed mutable resources.
+   * Retries retain this ID; a later dispatch receives a new ID and therefore
+   * cannot overwrite or be mistaken for the prior immutable observation.
+   */
+  readonly dispatchJobId: string;
 }
 
 function assertPositive(value: number | bigint, label: string): void {
@@ -207,9 +213,10 @@ export function buildCandidateResourceEstimateKey(
 ): CandidateResourceEstimateKey {
   assertPositive(input.partsPerPlate, "partsPerPlate");
   assertPositive(input.quantity, "quantity");
-  return buildPersistableIdentityKey("candidate-resource-estimate", 2, [
+  return buildPersistableIdentityKey("candidate-resource-estimate", 3, [
     ...machineOccupancyComponents(input),
     { name: "quantity", value: input.quantity },
     { name: "shipment_plan_id", value: input.shipmentPlanId },
+    { name: "dispatch_job_id", value: input.dispatchJobId },
   ]) as CandidateResourceEstimateKey;
 }

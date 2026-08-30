@@ -161,7 +161,7 @@ async function advanceReservationOrderToProduction(
     `INSERT INTO slice_results
        (id, kind, cache_key, model_geometry_id, print_config_revision_id,
         machine_profile_id, machine_calibration_id, arrangement_revision_id,
-        parts_per_plate,
+        package_quantity, package_plate_count, parts_per_plate,
         artifact_object_key, artifact_hash, estimated_print_seconds,
         estimated_material_milligrams, slicer_engine, slicer_version)
      SELECT gen_random_uuid(), 'PRODUCTION',
@@ -169,6 +169,8 @@ async function advanceReservationOrderToProduction(
             candidate.model_geometry_id, production.print_config_revision_id,
             production.machine_profile_id, production.machine_calibration_id,
             candidate.arrangement_revision_id,
+            candidate.quantity,
+            ceil(candidate.quantity::numeric / candidate.parts_per_plate::numeric)::integer,
             occupancy.parts_per_plate,
             'gcode/' || production.job_id::text || '/toolpaths.gcode.3mf',
             repeat('f', 64), production.required_machine_seconds,
@@ -357,12 +359,14 @@ async function createProductionSlice(
     partsPerPlate?: number;
     artifactObjectKey?: string;
     arrangementRevisionId?: string;
+    packageQuantity?: number;
+    packagePlateCount?: number;
     estimatedPrintSeconds?: number;
     estimatedMaterialMilligrams?: number;
   } = {},
 ): Promise<void> {
   await client.query(
-    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+    'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "package_quantity", "package_plate_count", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)',
     [
       fixtures.id(`${name}:slice`),
       "PRODUCTION",
@@ -373,6 +377,8 @@ async function createProductionSlice(
       foundation.machineCalibrationId,
       options.arrangementRevisionId ??
         fixtures.id(`${name}:arrangement-revision`),
+      options.packageQuantity ?? 1,
+      options.packagePlateCount ?? 1,
       options.partsPerPlate ?? 1,
       options.artifactObjectKey ??
         `slices/${fixtures.id(`${name}:artifact-key`)}`,
@@ -1143,7 +1149,7 @@ describe("persistence foundations", () => {
 
         await expect(
           client.query(
-            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "package_quantity", "package_plate_count", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)',
             [
               fixtures.id("expired-slice"),
               "PRODUCTION",
@@ -1153,6 +1159,8 @@ describe("persistence foundations", () => {
               foundation.machineProfileId,
               foundation.machineCalibrationId,
               fixtures.id("expired-slice:arrangement-revision"),
+              1,
+              1,
               1,
               `slices/${fixtures.id("expired-slice")}`,
               "7".repeat(64),
@@ -1651,7 +1659,7 @@ describe("persistence foundations", () => {
         );
         await expect(
           client.query(
-            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+            'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "package_quantity", "package_plate_count", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)',
             [
               sliceResultId,
               "PRODUCTION",
@@ -1661,6 +1669,8 @@ describe("persistence foundations", () => {
               foundation.machineProfileId,
               foundation.machineCalibrationId,
               fixtures.id("fine-slice:arrangement-revision"),
+              1,
+              1,
               1,
               `slices/${sliceResultId}`,
               "8".repeat(64),
@@ -2850,6 +2860,186 @@ describe("persistence foundations", () => {
         ).rejects.toMatchObject({
           code: "23514",
           constraint: "production_reservation_production_slice_binding_check",
+        });
+      },
+    );
+  });
+
+  it("binds only the complete reserved full-plus-tail production package", async () => {
+    const createFullTailReservation = async (
+      client: PoolClient,
+      fixtures: PersistenceFactory,
+      name: string,
+    ) => {
+      const foundation = await fixtures.createFoundation(
+        name,
+        {},
+        undefined,
+        undefined,
+        {
+          partsPerPlate: 2,
+          estimatedPrintSeconds: 120,
+          estimatedMaterialMilligrams: 40,
+        },
+      );
+      const tailSliceResultId = fixtures.id(`${name}:tail-slice`);
+      await client.query(
+        'INSERT INTO "slice_results" ("id", "kind", "cache_key", "model_geometry_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "arrangement_revision_id", "parts_per_plate", "artifact_object_key", "artifact_hash", "estimated_print_seconds", "estimated_material_milligrams", "slicer_engine", "slicer_version") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+        [
+          tailSliceResultId,
+          "ANALYSIS",
+          `machine-occupancy-slice-${fixtures.id(`${name}:tail-cache-key`)}`,
+          foundation.modelGeometryId,
+          foundation.printConfigRevisionId,
+          foundation.machineProfileId,
+          foundation.machineCalibrationId,
+          fixtures.id(`${name}:arrangement-revision:0`),
+          1,
+          `slice-metrics/${fixtures.id(`${name}:tail-artifact-key`)}`,
+          "7".repeat(64),
+          30,
+          10,
+          "orca",
+          "test",
+        ],
+      );
+      const production = await fixtures.planProduction(
+        foundation,
+        "full-tail",
+        [
+          {
+            startsAt: testTimes.capacityStart,
+            endsAt: new Date(testTimes.capacityStart.getTime() + 120_000),
+          },
+          {
+            startsAt: new Date(testTimes.capacityStart.getTime() + 120_000),
+            endsAt: new Date(testTimes.capacityStart.getTime() + 240_000),
+          },
+          {
+            startsAt: new Date(testTimes.capacityStart.getTime() + 240_000),
+            endsAt: new Date(testTimes.capacityStart.getTime() + 360_000),
+          },
+        ],
+        270,
+        90,
+        5,
+        0,
+        { partsPerPlate: 2, tailSliceResultId },
+      );
+      await fixtures.createResourcePlan(foundation, [production]);
+      await fixtures.createPhaseReservationSet(foundation);
+      await fixtures.createProductionReservation(foundation, production);
+      await fixtures.createJob(foundation, production);
+      await client.query(
+        'UPDATE "production_reservations" SET "status" = $2, "job_id" = $3 WHERE "id" = $1',
+        [production.productionReservationId, "HELD", production.jobId],
+      );
+      return { foundation, production };
+    };
+
+    await inRollbackTransaction(
+      "production-slice-binding-full-tail",
+      async (client, fixtures) => {
+        const { foundation, production } = await createFullTailReservation(
+          client,
+          fixtures,
+          "full-tail-complete",
+        );
+        await createProductionSlice(
+          client,
+          fixtures,
+          foundation,
+          "full-tail-complete",
+          {
+            arrangementRevisionId: fixtures.id(
+              "full-tail-complete:arrangement-revision:0",
+            ),
+            partsPerPlate: 2,
+            packageQuantity: 5,
+            packagePlateCount: 3,
+            artifactObjectKey: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
+          },
+        );
+
+        await expect(
+          client.query(
+            'UPDATE "production_reservations" SET "slice_result_id" = $2 WHERE "id" = $1',
+            [
+              production.productionReservationId,
+              fixtures.id("full-tail-complete:slice"),
+            ],
+          ),
+        ).resolves.toBeDefined();
+      },
+    );
+
+    await inRollbackTransaction(
+      "production-slice-binding-subset",
+      async (client, fixtures) => {
+        const { foundation, production } = await createFullTailReservation(
+          client,
+          fixtures,
+          "full-tail-subset",
+        );
+        await createProductionSlice(
+          client,
+          fixtures,
+          foundation,
+          "full-tail-subset",
+          {
+            arrangementRevisionId: fixtures.id(
+              "full-tail-subset:arrangement-revision:0",
+            ),
+            partsPerPlate: 2,
+            packageQuantity: 4,
+            packagePlateCount: 2,
+            artifactObjectKey: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
+          },
+        );
+
+        await expect(
+          client.query(
+            'UPDATE "production_reservations" SET "slice_result_id" = $2 WHERE "id" = $1',
+            [
+              production.productionReservationId,
+              fixtures.id("full-tail-subset:slice"),
+            ],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "production_reservation_production_slice_binding_check",
+        });
+      },
+    );
+
+    await inRollbackTransaction(
+      "production-slice-binding-wrong-plate-count",
+      async (client, fixtures) => {
+        const { foundation, production } = await createFullTailReservation(
+          client,
+          fixtures,
+          "full-tail-wrong-plate-count",
+        );
+
+        await expect(
+          createProductionSlice(
+            client,
+            fixtures,
+            foundation,
+            "full-tail-wrong-plate-count",
+            {
+              arrangementRevisionId: fixtures.id(
+                "full-tail-wrong-plate-count:arrangement-revision:0",
+              ),
+              partsPerPlate: 2,
+              packageQuantity: 5,
+              packagePlateCount: 2,
+              artifactObjectKey: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
+            },
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "slice_results_arrangement_shape_check",
         });
       },
     );

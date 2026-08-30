@@ -387,38 +387,78 @@ function buildLockTargets(
   return orderLockTargets(targets);
 }
 
-function forEachSlotSelection(
+/**
+ * Visits one canonical selection for every materially different distribution
+ * of a candidate's coverage across the remaining slots.
+ *
+ * Slots with the same usable planner-option set are interchangeable: choosing
+ * a different ID from that set cannot change candidate eligibility, inventory,
+ * capacity, or the plan ranking.  Assign their lexicographically first IDs
+ * instead of enumerating every subset.  Different option sets remain separate
+ * groups, so assignments that can change a feasible candidate set are still
+ * explored.
+ */
+function forEachCanonicalSlotSelection(
   requiredSlotId: string,
   compatibleSlotIds: readonly string[],
   quantity: number,
+  slotOptionSet: ReadonlyMap<string, string>,
   visit: (slotIds: readonly string[]) => void,
 ): void {
   if (!compatibleSlotIds.includes(requiredSlotId)) return;
-  if (quantity === 1) {
-    visit([requiredSlotId]);
-    return;
+  const slotGroups = new Map<string, string[]>();
+  for (const slotId of compatibleSlotIds) {
+    const optionSet = slotOptionSet.get(slotId);
+    if (optionSet === undefined) return;
+    const group = slotGroups.get(optionSet) ?? [];
+    group.push(slotId);
+    slotGroups.set(optionSet, group);
   }
-  const optionalSlotIds = compatibleSlotIds
-    .filter((slotId) => slotId !== requiredSlotId)
-    .sort(compareStrings);
-  const selected = [requiredSlotId];
-  const choose = (start: number): void => {
-    if (selected.length === quantity) {
-      visit([...selected].sort(compareStrings));
+  const requiredOptionSet = slotOptionSet.get(requiredSlotId);
+  if (requiredOptionSet === undefined) return;
+  const groups = [...slotGroups.entries()]
+    .map(([optionSet, slotIds]) => ({
+      optionSet,
+      slotIds: slotIds.sort(compareStrings),
+      minimum: optionSet === requiredOptionSet ? 1 : 0,
+    }))
+    .sort(
+      (left, right) =>
+        compareStrings(left.optionSet, right.optionSet) ||
+        compareStrings(left.slotIds[0]!, right.slotIds[0]!),
+    );
+  const selected: string[] = [];
+  const choose = (groupIndex: number, remaining: number): void => {
+    if (groupIndex === groups.length) {
+      if (remaining === 0) visit([...selected].sort(compareStrings));
       return;
     }
-    const remaining = quantity - selected.length;
-    for (
-      let index = start;
-      index <= optionalSlotIds.length - remaining;
-      index += 1
-    ) {
-      selected.push(optionalSlotIds[index]!);
-      choose(index + 1);
-      selected.pop();
+    const group = groups[groupIndex]!;
+    const maximum = Math.min(group.slotIds.length, remaining);
+    for (let count = group.minimum; count <= maximum; count += 1) {
+      if (
+        remaining - count >
+        groups
+          .slice(groupIndex + 1)
+          .reduce((total, next) => total + next.slotIds.length, 0)
+      ) {
+        continue;
+      }
+      const canonicalSlotIds =
+        group.optionSet === requiredOptionSet
+          ? [
+              requiredSlotId,
+              ...group.slotIds
+                .filter((slotId) => slotId !== requiredSlotId)
+                .slice(0, count - 1),
+            ]
+          : group.slotIds.slice(0, count);
+      selected.push(...canonicalSlotIds);
+      choose(groupIndex + 1, remaining - count);
+      selected.length -= canonicalSlotIds.length;
     }
   };
-  choose(0);
+  choose(0, quantity);
 }
 
 /**
@@ -428,7 +468,9 @@ function forEachSlotSelection(
  * Candidates are immutable snapshots: reference slices are never eligible and
  * candidate inputs must match every constrained covered-slot input. Capacity
  * intervals are half-open, so adjacent intervals are allowed while overlaps
- * are not.
+ * are not. Plans are ranked by fewest candidates, then material, then machine
+ * seconds, then the sorted estimate-key/ID/planner-option tuple. Within an
+ * interchangeable slot group, assignments use lexicographically first IDs.
  */
 export function selectCompleteResourcePlan(
   input: ResourcePlanSelectorInput,
@@ -565,6 +607,14 @@ export function selectCompleteResourcePlan(
   )
     return undefined;
 
+  const slotOptionSet = new Map<string, string>();
+  for (const [slotId, candidates] of candidatesBySlot) {
+    slotOptionSet.set(
+      slotId,
+      JSON.stringify(candidates.map(plannerOptionIdentity)),
+    );
+  }
+
   let best: PlanChoice | undefined;
   const selected = new Set<string>();
   const covered = new Set<string>();
@@ -607,10 +657,11 @@ export function selectCompleteResourcePlan(
       const currentInventory = usedInventory.get(candidate.inventoryId) ?? 0n;
       const available = inventoryAvailability.get(candidate.inventoryId)!;
       if (currentInventory + candidate.requiredMaterial > available) continue;
-      forEachSlotSelection(
+      forEachCanonicalSlotSelection(
         uncoveredSlotId,
         availableSlotIds,
         candidate.coverageQuantity,
+        slotOptionSet,
         (selectedSlotIds) => {
           const selectedCandidate = {
             ...candidate,

@@ -838,6 +838,8 @@ model SliceResult {
   machineProfileId            String?   @map("machine_profile_id") @db.Uuid
   machineCalibrationId        String?   @map("machine_calibration_id") @db.Uuid
   arrangementRevisionId       String?   @map("arrangement_revision_id") @db.Uuid
+  packageQuantity             Int?      @map("package_quantity")
+  packagePlateCount           Int?      @map("package_plate_count")
   partsPerPlate               Int       @map("parts_per_plate")
   artifactObjectKey           String    @unique @map("artifact_object_key") @db.Text
   artifactHash                String    @map("artifact_hash") @db.VarChar(64)
