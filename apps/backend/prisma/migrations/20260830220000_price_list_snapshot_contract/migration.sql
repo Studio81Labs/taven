@@ -33,13 +33,24 @@ ON CONFLICT ("currency", "revision") DO NOTHING;
 ALTER TABLE "price_snapshots"
     ADD COLUMN "price_list_id" UUID;
 
-UPDATE "price_snapshots"
-SET "price_list_id" = (
-    SELECT list."id" FROM "price_lists" list
-    WHERE list."currency" = "price_snapshots"."currency"
-      AND list."revision" = "price_snapshots"."pricing_revision"
-)
-WHERE "price_list_id" IS NULL;
+-- Existing snapshots are immutable. Suspend only that user trigger inside one
+-- atomic statement while assigning the deterministic legacy list. If the
+-- backfill fails, PostgreSQL restores the trigger before surfacing the error.
+DO $$
+BEGIN
+    EXECUTE 'ALTER TABLE "price_snapshots" DISABLE TRIGGER "price_snapshots_immutable"';
+
+    UPDATE "price_snapshots"
+    SET "price_list_id" = (
+        SELECT list."id" FROM "price_lists" list
+        WHERE list."currency" = "price_snapshots"."currency"
+          AND list."revision" = "price_snapshots"."pricing_revision"
+    )
+    WHERE "price_list_id" IS NULL;
+
+    EXECUTE 'ALTER TABLE "price_snapshots" ENABLE TRIGGER "price_snapshots_immutable"';
+END;
+$$;
 
 ALTER TABLE "price_snapshots"
     ALTER COLUMN "price_list_id" SET NOT NULL;
@@ -1687,13 +1698,23 @@ ALTER TABLE "payment_schedules"
 ALTER TABLE "fulfilment_slots"
     ADD COLUMN "packing_unit_key" VARCHAR(255);
 
-UPDATE "fulfilment_slots" slot
-SET "packing_unit_key" = slot."order_item_id"::text
-    || ':' || lower(phase."kind"::text)
-    || ':' || slot."quantity_ordinal"::text
-FROM "order_phases" phase
-WHERE phase."id" = slot."order_phase_id"
-  AND phase."order_id" = slot."order_id";
+-- Stable slots predate the canonical key. Suspend only their topology guard
+-- inside one atomic statement for the deterministic one-time backfill.
+DO $$
+BEGIN
+    EXECUTE 'ALTER TABLE "fulfilment_slots" DISABLE TRIGGER "fulfilment_slots_topology_protected"';
+
+    UPDATE "fulfilment_slots" slot
+    SET "packing_unit_key" = slot."order_item_id"::text
+        || ':' || lower(phase."kind"::text)
+        || ':' || slot."quantity_ordinal"::text
+    FROM "order_phases" phase
+    WHERE phase."id" = slot."order_phase_id"
+      AND phase."order_id" = slot."order_id";
+
+    EXECUTE 'ALTER TABLE "fulfilment_slots" ENABLE TRIGGER "fulfilment_slots_topology_protected"';
+END;
+$$;
 
 ALTER TABLE "fulfilment_slots"
     ALTER COLUMN "packing_unit_key" SET NOT NULL,
