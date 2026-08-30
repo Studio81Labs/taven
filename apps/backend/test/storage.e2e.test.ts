@@ -4,6 +4,7 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Test } from "@nestjs/testing";
 import { RetentionDeletionJobStatus, RetentionHold } from "@prisma/client";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { crc32, deflateRawSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import {
@@ -160,6 +161,39 @@ describe("secure object storage and retention", () => {
     expect((await fetch(shortLivedUrl.url)).status).toBe(403);
   });
 
+  it("rejects non-string upload metadata with a structured bad request", async () => {
+    const base = {
+      originalFilename: "part.stl",
+      sizeBytes: 84,
+      sha256: "a".repeat(64),
+    };
+    const invalidContentType = await apiJson<{ code: string }>(
+      "storage/uploads/model-files",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...base, format: "STL", contentType: null }),
+      },
+    );
+    expect(invalidContentType.response.status).toBe(400);
+    expect(invalidContentType.body.code).toBe("CONTENT_TYPE_MISMATCH");
+
+    const invalidFormat = await apiJson<{ code: string }>(
+      "storage/uploads/model-files",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...base,
+          format: 42,
+          contentType: "model/stl",
+        }),
+      },
+    );
+    expect(invalidFormat.response.status).toBe(400);
+    expect(invalidFormat.body.code).toBe("UNSUPPORTED_FORMAT");
+  });
+
   it("rejects a stored object whose verified hash differs from the intent", async () => {
     const declared = binaryStl();
     const actual = binaryStl(1);
@@ -223,7 +257,7 @@ describe("secure object storage and retention", () => {
     ).toBe("REJECTED");
   });
 
-  it("accepts a structurally complete 3MF and rejects central-only entries", async () => {
+  it("accepts a complete 3MF and rejects malformed or deceptive entries", async () => {
     const validBytes = threeMf();
     const valid = await initiateModel(
       validBytes,
@@ -238,6 +272,21 @@ describe("secure object storage and retention", () => {
       { method: "POST", headers: bearer(valid.accessToken) },
     );
     expect(confirmed.response.status).toBe(200);
+
+    const compressedBytes = compressedThreeMf();
+    const compressed = await initiateModel(
+      compressedBytes,
+      "compressed.3mf",
+      "3MF",
+      "model/3mf",
+    );
+    cleanupKeys.add(modelSourceObjectKey(compressed.assetId));
+    await putSigned(compressed, compressedBytes);
+    const compressedConfirmation = await apiJson(
+      `storage/uploads/${compressed.uploadId}/confirm`,
+      { method: "POST", headers: bearer(compressed.accessToken) },
+    );
+    expect(compressedConfirmation.response.status).toBe(200);
 
     const malformedBytes = threeMf(false);
     const malformed = await initiateModel(
@@ -260,6 +309,43 @@ describe("secure object storage and retention", () => {
         })
       ).status,
     ).toBe("REJECTED");
+
+    const deceptiveBytes = deceptiveThreeMf();
+    const deceptive = await initiateModel(
+      deceptiveBytes,
+      "expansion-bomb.3mf",
+      "3MF",
+      "model/3mf",
+    );
+    await putSigned(deceptive, deceptiveBytes);
+    const expansionRejected = await apiJson<{ code: string }>(
+      `storage/uploads/${deceptive.uploadId}/confirm`,
+      { method: "POST", headers: bearer(deceptive.accessToken) },
+    );
+    expect(expansionRejected.response.status).toBe(409);
+    expect(expansionRejected.body.code).toBe("ARCHIVE_LIMIT_EXCEEDED");
+    expect(
+      (
+        await prisma.uploadIntent.findUniqueOrThrow({
+          where: { id: deceptive.uploadId },
+        })
+      ).status,
+    ).toBe("REJECTED");
+
+    const corruptBytes = corruptCrcThreeMf();
+    const corrupt = await initiateModel(
+      corruptBytes,
+      "corrupt-crc.3mf",
+      "3MF",
+      "model/3mf",
+    );
+    await putSigned(corrupt, corruptBytes);
+    const corruptRejected = await apiJson<{ code: string }>(
+      `storage/uploads/${corrupt.uploadId}/confirm`,
+      { method: "POST", headers: bearer(corrupt.accessToken) },
+    );
+    expect(corruptRejected.response.status).toBe(409);
+    expect(corruptRejected.body.code).toBe("MALFORMED_ARCHIVE");
   });
 
   it("confirms a reference photo without trusting its filename as an object key", async () => {
@@ -535,6 +621,43 @@ describe("secure object storage and retention", () => {
     for (const key of keys) expect(await objects.headObject(key)).toBeNull();
   });
 
+  it("deletes expired QC photos stored under the persisted QC namespace", async () => {
+    const photoId = randomUUID();
+    const jobId = randomUUID();
+    const qcKey = `qc/${jobId}`;
+    const bytes = png();
+    await putRaw(qcKey, bytes, "image/png");
+    cleanupKeys.add(qcKey);
+    const uploadedAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1_000);
+    const deleteAfter = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+    await prisma.photoAsset.create({
+      data: {
+        id: photoId,
+        kind: "QC",
+        scopeKind: "JOB",
+        scopeId: jobId,
+        storageObjectKey: qcKey,
+        contentHash: sha256(bytes),
+        mediaType: "image/png",
+        sizeBytes: BigInt(bytes.byteLength),
+        uploadedAt,
+        photoDeleteAfter: deleteAfter,
+        retentionHold: RetentionHold.LEGAL,
+      },
+    });
+    await prisma.photoAsset.update({
+      where: { id: photoId },
+      data: { retentionHold: RetentionHold.NONE },
+    });
+
+    expect(await retention.runOnce()).toBe(1);
+    expect(
+      (await prisma.photoAsset.findUniqueOrThrow({ where: { id: photoId } }))
+        .deletedAt,
+    ).not.toBeNull();
+    expect(await objects.headObject(qcKey)).toBeNull();
+  });
+
   it("expires abandoned quarantine and any orphan final copy", async () => {
     const uploadId = randomUUID();
     const assetId = randomUUID();
@@ -780,21 +903,116 @@ function threeMf(withLocalEntries = true): Uint8Array {
   );
 }
 
-function zipLocalEntry(name: string): Uint8Array {
+function deceptiveThreeMf(): Uint8Array {
+  const expanded = new Uint8Array(1024 * 1024);
+  const compressed = new Uint8Array(deflateRawSync(expanded));
+  const declaredExpandedSize = 8;
+  return payloadThreeMf([
+    {
+      compressed,
+      compressionMethod: 8,
+      expandedSize: declaredExpandedSize,
+      crc: crc32(expanded.subarray(0, declaredExpandedSize)),
+    },
+    EMPTY_ZIP_ENTRY,
+  ]);
+}
+
+function compressedThreeMf(): Uint8Array {
+  const contents = [
+    new TextEncoder().encode("<Types/>"),
+    new TextEncoder().encode("<model/>"),
+  ];
+  return payloadThreeMf(
+    contents.map((expanded) => ({
+      compressed: new Uint8Array(deflateRawSync(expanded)),
+      compressionMethod: 8,
+      expandedSize: expanded.byteLength,
+      crc: crc32(expanded),
+    })),
+  );
+}
+
+function corruptCrcThreeMf(): Uint8Array {
+  const expanded = new TextEncoder().encode("<Types/>");
+  return payloadThreeMf([
+    {
+      compressed: new Uint8Array(deflateRawSync(expanded)),
+      compressionMethod: 8,
+      expandedSize: expanded.byteLength,
+      crc: (crc32(expanded) + 1) >>> 0,
+    },
+    EMPTY_ZIP_ENTRY,
+  ]);
+}
+
+function payloadThreeMf(payloads: readonly ZipEntryPayload[]): Uint8Array {
+  const names = ["[Content_Types].xml", "3D/3dmodel.model"];
+  const contentTypes = payloads[0] ?? EMPTY_ZIP_ENTRY;
+  const model = payloads[1] ?? EMPTY_ZIP_ENTRY;
+  const localEntries = [
+    zipLocalEntry(names[0]!, contentTypes),
+    zipLocalEntry(names[1]!, model),
+  ];
+  const localBytes = concatBytes(...localEntries);
+  const directory = concatBytes(
+    zipCentralEntry(names[0]!, 0, contentTypes),
+    zipCentralEntry(names[1]!, localEntries[0]!.byteLength, model),
+  );
+  return concatBytes(
+    localBytes,
+    directory,
+    zipEndRecord(names.length, directory.byteLength, localBytes.byteLength),
+  );
+}
+
+interface ZipEntryPayload {
+  compressed: Uint8Array;
+  compressionMethod: number;
+  expandedSize: number;
+  crc: number;
+}
+
+const EMPTY_ZIP_ENTRY: ZipEntryPayload = {
+  compressed: new Uint8Array(),
+  compressionMethod: 0,
+  expandedSize: 0,
+  crc: 0,
+};
+
+function zipLocalEntry(
+  name: string,
+  payload: ZipEntryPayload = EMPTY_ZIP_ENTRY,
+): Uint8Array {
   const encoded = new TextEncoder().encode(name);
-  const entry = new Uint8Array(30 + encoded.byteLength);
+  const entry = new Uint8Array(
+    30 + encoded.byteLength + payload.compressed.byteLength,
+  );
   const view = new DataView(entry.buffer);
   view.setUint32(0, 0x04034b50, true);
+  view.setUint16(8, payload.compressionMethod, true);
+  view.setUint32(14, payload.crc, true);
+  view.setUint32(18, payload.compressed.byteLength, true);
+  view.setUint32(22, payload.expandedSize, true);
   view.setUint16(26, encoded.byteLength, true);
   entry.set(encoded, 30);
+  entry.set(payload.compressed, 30 + encoded.byteLength);
   return entry;
 }
 
-function zipCentralEntry(name: string, localOffset: number): Uint8Array {
+function zipCentralEntry(
+  name: string,
+  localOffset: number,
+  payload: ZipEntryPayload = EMPTY_ZIP_ENTRY,
+): Uint8Array {
   const encoded = new TextEncoder().encode(name);
   const entry = new Uint8Array(46 + encoded.byteLength);
   const view = new DataView(entry.buffer);
   view.setUint32(0, 0x02014b50, true);
+  view.setUint16(10, payload.compressionMethod, true);
+  view.setUint32(16, payload.crc, true);
+  view.setUint32(20, payload.compressed.byteLength, true);
+  view.setUint32(24, payload.expandedSize, true);
   view.setUint16(28, encoded.byteLength, true);
   view.setUint32(42, localOffset, true);
   entry.set(encoded, 46);

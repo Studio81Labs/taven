@@ -3,8 +3,8 @@ import { Buffer } from "node:buffer";
 export const MAX_MODEL_SIZE_BYTES = 100 * 1024 * 1024;
 export const MAX_PHOTO_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_3MF_ENTRIES = 1_024;
-const MAX_3MF_TOTAL_SIZE = 512 * 1024 * 1024;
-const MAX_3MF_ENTRY_SIZE = 128 * 1024 * 1024;
+export const MAX_3MF_TOTAL_SIZE = 512 * 1024 * 1024;
+export const MAX_3MF_ENTRY_SIZE = 128 * 1024 * 1024;
 export const MAX_3MF_CENTRAL_DIRECTORY_SIZE = 8 * 1024 * 1024;
 export const MAX_ZIP_END_RECORD_SIZE = 65_557;
 
@@ -165,10 +165,18 @@ export function validateUploadMetadata(
   kind: UploadKind,
 ): ValidatedUploadMetadata {
   const scopeId = validateScopeId(input.scopeId);
+  if (typeof input.extension !== "string")
+    fail("UNSUPPORTED_FORMAT", `Unsupported ${kind} file format`, "extension");
   const extension = normalizeExtension(input.extension);
   const spec = (kind === "model" ? MODEL_FORMATS : PHOTO_FORMATS)[extension];
   if (!spec)
     fail("UNSUPPORTED_FORMAT", `Unsupported ${kind} file format`, "extension");
+  if (typeof input.contentType !== "string")
+    fail(
+      "CONTENT_TYPE_MISMATCH",
+      "contentType does not match the file format",
+      "contentType",
+    );
   const contentType =
     input.contentType.trim().toLowerCase().split(";", 1)[0] ?? "";
   if (!spec.contentTypes.includes(contentType))
@@ -195,6 +203,8 @@ export function validateUploadMetadata(
       "sizeBytes",
     );
   const displayFilename = validateDisplayFilename(input.displayFilename);
+  if (input.format !== undefined && typeof input.format !== "string")
+    fail("UNSUPPORTED_FORMAT", "format does not match extension", "format");
   if (
     input.format !== undefined &&
     normalizeExtension(input.format) !== extension &&
@@ -262,6 +272,7 @@ export interface ThreeMfDirectoryInspection extends ThreeMfInspection {
 
 export interface ThreeMfLocalEntryInspection {
   start: number;
+  dataOffset: number;
   dataEnd: number;
   usesDataDescriptor: boolean;
 }
@@ -515,7 +526,12 @@ export function inspect3mfLocalEntryHeader(
       "MALFORMED_ARCHIVE",
       "3MF ZIP entry data overlaps its central directory",
     );
-  return { start: expected.localHeaderOffset, dataEnd, usesDataDescriptor };
+  return {
+    start: expected.localHeaderOffset,
+    dataOffset,
+    dataEnd,
+    usesDataDescriptor,
+  };
 }
 
 export function inspect3mfDataDescriptor(

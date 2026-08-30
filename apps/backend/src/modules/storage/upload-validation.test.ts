@@ -98,6 +98,33 @@ describe("upload metadata validation", () => {
     ).toBe("UNSAFE_FILENAME");
     expect(MAX_PHOTO_SIZE_BYTES).toBe(20 * 1024 * 1024);
   });
+
+  it("rejects non-string normalized fields with structured validation errors", () => {
+    expect(
+      errorCode(() =>
+        validateModelUploadMetadata({
+          ...metadata("stl", "model/stl"),
+          extension: null,
+        } as never),
+      ),
+    ).toBe("UNSUPPORTED_FORMAT");
+    expect(
+      errorCode(() =>
+        validatePhotoUploadMetadata({
+          ...metadata("png", "image/png"),
+          contentType: null,
+        } as never),
+      ),
+    ).toBe("CONTENT_TYPE_MISMATCH");
+    expect(
+      errorCode(() =>
+        validateModelUploadMetadata({
+          ...metadata("stl", "model/stl"),
+          format: 42,
+        } as never),
+      ),
+    ).toBe("UNSUPPORTED_FORMAT");
+  });
 });
 
 describe("byte signatures", () => {

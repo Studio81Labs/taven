@@ -20,6 +20,9 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
+import { PassThrough, Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createInflateRaw, crc32 } from "node:zlib";
 import { PrismaService } from "../../prisma/prisma.service";
 import type {
   ConfirmedUploadResponseDto,
@@ -45,6 +48,8 @@ import {
 } from "./storage-keys";
 import {
   UploadValidationError,
+  MAX_3MF_ENTRY_SIZE,
+  MAX_3MF_TOTAL_SIZE,
   MAX_3MF_CENTRAL_DIRECTORY_SIZE,
   MAX_ZIP_END_RECORD_SIZE,
   inspect3mfDataDescriptor,
@@ -56,6 +61,7 @@ import {
   validateFileSignature,
   validateModelUploadMetadata,
   validatePhotoUploadMetadata,
+  type ThreeMfEntry,
   type ValidatedUploadMetadata,
 } from "./upload-validation";
 
@@ -63,6 +69,7 @@ const RETENTION_DAYS = 90;
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const MAX_SIGNATURE_PREFIX_BYTES = 512;
 const MAX_3MF_LOCAL_HEADER_BYTES = 8 * 1024 * 1024;
+const MAX_3MF_COMPRESSED_CHUNK_BYTES = 8 * 1024 * 1024;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -502,6 +509,7 @@ export class UploadService {
       end.centralDirectoryOffset,
     );
     const ranges: Array<{ start: number; end: number }> = [];
+    const payloads: Array<{ entry: ThreeMfEntry; dataOffset: number }> = [];
     let inspectedLocalHeaderBytes = 0;
     for (const entry of directory.localEntries) {
       const fixed = await this.objects.readObjectRange(
@@ -556,8 +564,94 @@ export class UploadService {
         rangeEnd += inspect3mfDataDescriptor(descriptor, entry);
       }
       ranges.push({ start: local.start, end: rangeEnd });
+      payloads.push({ entry, dataOffset: local.dataOffset });
     }
     validate3mfLocalEntryRanges(ranges);
+    let expandedArchiveBytes = 0;
+    for (const payload of payloads) {
+      expandedArchiveBytes = await this.verify3mfEntryPayload(
+        intent.quarantineObjectKey,
+        payload.entry,
+        payload.dataOffset,
+        expandedArchiveBytes,
+      );
+    }
+  }
+
+  private async verify3mfEntryPayload(
+    objectKey: string,
+    entry: ThreeMfEntry,
+    dataOffset: number,
+    expandedArchiveBytes: number,
+  ): Promise<number> {
+    let expandedEntryBytes = 0;
+    let actualCrc32 = 0;
+    const compressed = Readable.from(
+      this.readObjectRangeChunks(objectKey, dataOffset, entry.compressedSize),
+    );
+    const decoder =
+      entry.compressionMethod === 8 ? createInflateRaw() : new PassThrough();
+
+    try {
+      await pipeline(compressed, decoder, async (payload) => {
+        for await (const chunk of payload) {
+          const bytes = objectStreamBytes(chunk);
+          if (
+            bytes.byteLength > MAX_3MF_ENTRY_SIZE - expandedEntryBytes ||
+            bytes.byteLength > entry.expandedSize - expandedEntryBytes ||
+            bytes.byteLength >
+              MAX_3MF_TOTAL_SIZE - expandedArchiveBytes - expandedEntryBytes
+          ) {
+            throw new UploadValidationError(
+              "ARCHIVE_LIMIT_EXCEEDED",
+              "3MF ZIP entry exceeds actual expansion limits",
+            );
+          }
+          expandedEntryBytes += bytes.byteLength;
+          actualCrc32 = crc32(bytes, actualCrc32);
+        }
+      });
+    } catch (error) {
+      if (error instanceof UploadValidationError) throw error;
+      if (isZlibError(error)) {
+        throw new UploadValidationError(
+          "MALFORMED_ARCHIVE",
+          "3MF ZIP entry payload is invalid",
+        );
+      }
+      throw error;
+    }
+
+    if (
+      expandedEntryBytes !== entry.expandedSize ||
+      actualCrc32 !== entry.crc32
+    ) {
+      throw new UploadValidationError(
+        "MALFORMED_ARCHIVE",
+        "3MF ZIP entry payload conflicts with its directory",
+      );
+    }
+    return expandedArchiveBytes + expandedEntryBytes;
+  }
+
+  private async *readObjectRangeChunks(
+    objectKey: string,
+    offset: number,
+    length: number,
+  ): AsyncGenerator<Uint8Array> {
+    let consumed = 0;
+    while (consumed < length) {
+      const chunkLength = Math.min(
+        MAX_3MF_COMPRESSED_CHUNK_BYTES,
+        length - consumed,
+      );
+      yield await this.objects.readObjectRange(
+        objectKey,
+        offset + consumed,
+        chunkLength,
+      );
+      consumed += chunkLength;
+    }
   }
 
   private metadataFromIntent(
@@ -741,8 +835,27 @@ function extensionOf(filename: string): string {
   return index < 0 ? "" : filename.slice(index + 1);
 }
 
-function normalizeContentType(value: string): string {
+function normalizeContentType(value: unknown): string {
+  if (typeof value !== "string") return "";
   return value.trim().toLowerCase().split(";", 1)[0] ?? "";
+}
+
+function objectStreamBytes(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  throw new UploadValidationError(
+    "MALFORMED_ARCHIVE",
+    "ZIP decoder returned a non-binary stream chunk",
+  );
+}
+
+function isZlibError(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code.startsWith("Z_")
+  );
 }
 
 function toModelFileFormat(format: string): ModelFileFormat {
