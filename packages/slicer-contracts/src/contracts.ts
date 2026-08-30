@@ -208,6 +208,13 @@ export const GeometrySelectionSchema = z
         message: "must belong to modelGeometryId",
       });
     }
+    if (value.selectionSha256 !== geometrySelectionSha256(value.bodyIds)) {
+      context.addIssue({
+        code: "custom",
+        path: ["selectionSha256"],
+        message: "must be the canonical digest of bodyIds",
+      });
+    }
   });
 
 export const RevisionSnapshotSchema = z.strictObject({
@@ -265,13 +272,95 @@ export const EngineIdentitySchema = z.strictObject({
   imageSha256: Sha256Schema,
 });
 
-const InspectionInputSchema = z.strictObject({
-  source: ModelFileIdentitySchema,
-  inspectionRevision: RevisionNameSchema,
-  inspectionConfigSha256: Sha256Schema,
-  canonicalizerRevision: RevisionNameSchema,
-  canonicalizerConfigSha256: Sha256Schema,
-});
+const ModelGeometryTargetShape = {
+  modelGeometryId: UuidSchema,
+  canonicalObjectKey: GeometryObjectKeySchema,
+} as const;
+
+function requireOwnedGeometryKey(
+  value: { modelGeometryId: string; canonicalObjectKey: string },
+  context: z.RefinementCtx,
+): void {
+  if (
+    value.canonicalObjectKey !== `geometries/${value.modelGeometryId}/canonical`
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["canonicalObjectKey"],
+      message: "must belong to modelGeometryId",
+    });
+  }
+}
+
+const ModelGeometryTargetSchema = z
+  .strictObject(ModelGeometryTargetShape)
+  .superRefine(requireOwnedGeometryKey);
+
+const CanonicalGeometryArtifactSchema = z
+  .strictObject({
+    ...ModelGeometryTargetShape,
+    geometrySha256: Sha256Schema,
+    bodyIds: sortedUniqueIdentifiers(MAX_BODY_COUNT),
+    selectionSha256: Sha256Schema,
+  })
+  .superRefine((value, context) => {
+    requireOwnedGeometryKey(value, context);
+    if (value.selectionSha256 !== geometrySelectionSha256(value.bodyIds)) {
+      context.addIssue({
+        code: "custom",
+        path: ["selectionSha256"],
+        message: "must be the canonical digest of bodyIds",
+      });
+    }
+  });
+
+const InspectionOperationSchema = z.discriminatedUnion("mode", [
+  z.strictObject({ mode: z.literal("inspect_source") }),
+  z
+    .strictObject({
+      mode: z.literal("canonicalize_selection"),
+      sourceInspectionFingerprintSha256: Sha256Schema,
+      bodyIds: sortedUniqueIdentifiers(MAX_BODY_COUNT),
+      selectionSha256: Sha256Schema,
+      targetGeometry: ModelGeometryTargetSchema,
+    })
+    .superRefine((value, context) => {
+      if (value.selectionSha256 !== geometrySelectionSha256(value.bodyIds)) {
+        context.addIssue({
+          code: "custom",
+          path: ["selectionSha256"],
+          message: "must be the canonical digest of bodyIds",
+        });
+      }
+    }),
+]);
+
+const InspectionInputSchema = z
+  .strictObject({
+    source: ModelFileIdentitySchema,
+    operation: InspectionOperationSchema,
+    inspectionRevision: RevisionNameSchema,
+    inspectionConfigSha256: Sha256Schema,
+    canonicalizerRevision: RevisionNameSchema,
+    canonicalizerConfigSha256: Sha256Schema,
+  })
+  .superRefine((value, context) => {
+    if (value.operation.mode !== "canonicalize_selection") return;
+    const sourceInspectionFingerprintSha256 = slicingInputFingerprint(
+      "model_inspection",
+      { ...value, operation: { mode: "inspect_source" } },
+    );
+    if (
+      value.operation.sourceInspectionFingerprintSha256 !==
+      sourceInspectionFingerprintSha256
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["operation", "sourceInspectionFingerprintSha256"],
+        message: "must identify discovery for the same immutable source inputs",
+      });
+    }
+  });
 
 const ReferenceSliceInputSchema = z.strictObject({
   geometry: GeometrySelectionSchema,
@@ -317,6 +406,7 @@ const ProductionSliceInputSchema = z
     quantity: boundedPositiveInteger(MAX_QUANTITY),
     acceptedJobId: UuidSchema,
     productionReservationId: UuidSchema,
+    arrangementRevision: RevisionSnapshotSchema,
   })
   .superRefine((value, context) => {
     if (value.quantity !== value.partsPerPlate) {
@@ -359,6 +449,16 @@ function canonicalJson(value: unknown): string {
       .join(",")}}`;
   }
   throw new TypeError("contract identity contains an unsupported value");
+}
+
+/** Computes the canonical identity for one sorted, unique selected body set. */
+export function geometrySelectionSha256(bodyIds: readonly string[]): string {
+  const canonicalBodyIds = sortedUniqueIdentifiers(MAX_BODY_COUNT).parse([
+    ...bodyIds,
+  ]);
+  return createHash("sha256")
+    .update(canonicalJson({ bodyIds: canonicalBodyIds }))
+    .digest("hex");
 }
 
 export type SlicingJobKind =
@@ -572,6 +672,7 @@ export const SlicingFailureSchema = z.discriminatedUnion("failureClass", [
 const InspectionSuccessSchema = z
   .strictObject({
     status: z.literal("succeeded"),
+    canonicalGeometry: CanonicalGeometryArtifactSchema.nullable(),
     metrics: InspectionMetricsSchema,
     bodies: z.array(BodyInspectionSchema).min(1).max(MAX_BODY_COUNT),
     findings: z.array(PreflightFindingSchema).max(MAX_FINDING_COUNT),
@@ -583,6 +684,15 @@ const InspectionSuccessSchema = z
         code: "custom",
         path: ["bodies"],
         message: "bodyId values must be unique",
+      });
+    }
+    if (
+      bodyIds.some((bodyId, index) => index > 0 && bodyId < bodyIds[index - 1]!)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["bodies"],
+        message: "bodyId values must use canonical lexical order",
       });
     }
     if (value.metrics.bodyCount !== value.bodies.length) {
@@ -702,12 +812,66 @@ function requireSelectedBodyCount(
   }
 }
 
-const ModelInspectionResultBase = z.strictObject({
-  ...ResultEnvelopeShape,
-  kind: z.literal("model_inspection"),
-  input: InspectionInputSchema,
-  outcome: z.union([InspectionSuccessSchema, SlicingFailureSchema]),
-});
+const ModelInspectionResultBase = z
+  .strictObject({
+    ...ResultEnvelopeShape,
+    kind: z.literal("model_inspection"),
+    input: InspectionInputSchema,
+    outcome: z.union([InspectionSuccessSchema, SlicingFailureSchema]),
+  })
+  .superRefine((value, context) => {
+    if (value.outcome.status !== "succeeded") return;
+    if (value.input.operation.mode === "inspect_source") {
+      if (value.outcome.canonicalGeometry === null) return;
+      context.addIssue({
+        code: "custom",
+        path: ["outcome", "canonicalGeometry"],
+        message: "must be null for source discovery",
+      });
+      return;
+    }
+
+    const operation = value.input.operation;
+    const canonicalGeometry = value.outcome.canonicalGeometry;
+    if (
+      canonicalGeometry === null ||
+      canonicalGeometry.modelGeometryId !==
+        operation.targetGeometry.modelGeometryId ||
+      canonicalGeometry.canonicalObjectKey !==
+        operation.targetGeometry.canonicalObjectKey
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["outcome", "canonicalGeometry"],
+        message: "must match the preallocated selected-geometry target",
+      });
+    }
+    const bodyIds = value.outcome.bodies.map(({ bodyId }) => bodyId);
+    if (
+      bodyIds.length !== operation.bodyIds.length ||
+      bodyIds.some((bodyId, index) => bodyId !== operation.bodyIds[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["outcome", "bodies"],
+        message: "must match the canonical selected body set",
+      });
+    }
+    if (
+      canonicalGeometry !== null &&
+      (canonicalGeometry.selectionSha256 !== operation.selectionSha256 ||
+        canonicalGeometry.bodyIds.length !== operation.bodyIds.length ||
+        canonicalGeometry.bodyIds.some(
+          (bodyId, index) => bodyId !== operation.bodyIds[index],
+        ))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["outcome", "canonicalGeometry"],
+        message: "must identify the canonical selected body set",
+      });
+    }
+  });
 const ReferenceSliceResultBase = z
   .strictObject({
     ...ResultEnvelopeShape,

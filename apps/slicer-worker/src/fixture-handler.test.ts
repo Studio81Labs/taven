@@ -1,5 +1,8 @@
 import {
+  SlicingJobSchema,
+  geometrySelectionSha256,
   slicingInputFingerprint,
+  slicingResultForJobSchema,
   type SlicingResult,
 } from "@taven/slicer-contracts";
 import { describe, expect, it } from "vitest";
@@ -33,7 +36,7 @@ const geometry = {
   canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
   geometrySha256: "c".repeat(64),
   bodyIds: ["body-0001"],
-  selectionSha256: "d".repeat(64),
+  selectionSha256: geometrySelectionSha256(["body-0001"]),
 };
 const referenceInput = {
   geometry,
@@ -72,7 +75,7 @@ function fixtureJob(
   };
 }
 
-const inspectionJob = fixtureJob("model_inspection", {
+const inspectionInputBase = {
   source: {
     modelFileId: ids.model,
     format: "stl",
@@ -83,7 +86,32 @@ const inspectionJob = fixtureJob("model_inspection", {
   inspectionConfigSha256: "b".repeat(64),
   canonicalizerRevision: "canonical-v1",
   canonicalizerConfigSha256: "c".repeat(64),
+};
+const sourceInspectionInput = {
+  ...inspectionInputBase,
+  operation: { mode: "inspect_source" as const },
+};
+const selectionBodyIds = ["body-0001"];
+const inspectionJob = fixtureJob("model_inspection", {
+  ...inspectionInputBase,
+  operation: {
+    mode: "canonicalize_selection",
+    sourceInspectionFingerprintSha256: slicingInputFingerprint(
+      "model_inspection",
+      sourceInspectionInput,
+    ),
+    bodyIds: selectionBodyIds,
+    selectionSha256: geometrySelectionSha256(selectionBodyIds),
+    targetGeometry: {
+      modelGeometryId: ids.geometry,
+      canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
+    },
+  },
 });
+const sourceInspectionJob = fixtureJob(
+  "model_inspection",
+  sourceInspectionInput,
+);
 const referenceJob = fixtureJob("reference_slice", referenceInput);
 const candidateJob = fixtureJob("candidate_estimate", {
   ...machineInput,
@@ -91,14 +119,16 @@ const candidateJob = fixtureJob("candidate_estimate", {
   shipmentPlanId: ids.shipment,
   arrangementRevision: revision(ids.arrangement, "3"),
 });
+const productionInput = {
+  ...machineInput,
+  quantity: 2,
+  acceptedJobId: ids.productionJob,
+  productionReservationId: ids.reservation,
+  arrangementRevision: revision(ids.arrangement, "3"),
+};
 const productionJob = fixtureJob(
   "production_slice",
-  {
-    ...machineInput,
-    quantity: 2,
-    acceptedJobId: ids.productionJob,
-    productionReservationId: ids.reservation,
-  },
+  productionInput,
   ids.productionJob,
 );
 
@@ -130,6 +160,23 @@ describe("runFixtureSlicingJob", () => {
     expect(runFixtureSlicingJob(referenceJob)).toEqual(
       runFixtureSlicingJob(referenceJob),
     );
+  });
+
+  it("separates source discovery from selected geometry persistence", () => {
+    expect(runFixtureSlicingJob(sourceInspectionJob)).toMatchObject({
+      outcome: { status: "succeeded", canonicalGeometry: null },
+    });
+    expect(runFixtureSlicingJob(inspectionJob)).toMatchObject({
+      outcome: {
+        status: "succeeded",
+        canonicalGeometry: {
+          modelGeometryId: ids.geometry,
+          canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
+          bodyIds: selectionBodyIds,
+          selectionSha256: geometrySelectionSha256(selectionBodyIds),
+        },
+      },
+    });
   });
 
   it("exposes the fixture engine and normalized plate results", () => {
@@ -185,6 +232,7 @@ describe("runFixtureSlicingJob", () => {
         quantity: 2,
         acceptedJobId: ids.productionJob,
         productionReservationId: ids.reservation,
+        arrangementRevision: revision(ids.arrangement, "3"),
       },
     ],
   ] as const)("derives %s bodyCount from selected geometry", (kind, input) => {
@@ -194,7 +242,11 @@ describe("runFixtureSlicingJob", () => {
       kind,
       {
         ...input,
-        geometry: { ...input.geometry, bodyIds },
+        geometry: {
+          ...input.geometry,
+          bodyIds,
+          selectionSha256: geometrySelectionSha256(bodyIds),
+        },
       },
       jobId,
     );
@@ -213,10 +265,11 @@ describe("runFixtureSlicingJob", () => {
         quantity: 2,
         acceptedJobId: ids.productionJob,
         productionReservationId: ids.reservation,
+        arrangementRevision: revision(ids.arrangement, "3"),
       },
     ],
   ] as const)(
-    "binds %s artifact hashes to the selection digest",
+    "binds %s artifact hashes to the selected body set",
     (kind, input) => {
       const jobId = kind === "production_slice" ? ids.productionJob : ids.job;
       const first = fixtureJob(kind, input, jobId);
@@ -224,7 +277,8 @@ describe("runFixtureSlicingJob", () => {
         ...input,
         geometry: {
           ...input.geometry,
-          selectionSha256: "9".repeat(64),
+          bodyIds: ["body-0002"],
+          selectionSha256: geometrySelectionSha256(["body-0002"]),
         },
       };
       const second = fixtureJob(kind, secondInput, jobId);
@@ -234,6 +288,33 @@ describe("runFixtureSlicingJob", () => {
       );
     },
   );
+
+  it("binds production identity and output to the accepted arrangement", () => {
+    const changedInput = {
+      ...productionInput,
+      arrangementRevision: revision(ids.arrangement, "4"),
+    };
+    const changedJob = fixtureJob(
+      "production_slice",
+      changedInput,
+      ids.productionJob,
+    );
+    const originalResult = runFixtureSlicingJob(productionJob);
+    const changedResult = runFixtureSlicingJob(changedJob);
+
+    expect(changedJob.inputFingerprintSha256).not.toBe(
+      productionJob.inputFingerprintSha256,
+    );
+    expect(changedJob.idempotencyKey).not.toBe(productionJob.idempotencyKey);
+    expect(artifactSha256(changedResult)).not.toBe(
+      artifactSha256(originalResult),
+    );
+    expect(() =>
+      slicingResultForJobSchema(SlicingJobSchema.parse(changedJob)).parse(
+        originalResult,
+      ),
+    ).toThrow();
+  });
 });
 
 describe("runLegacyV1FixtureSlicingJob", () => {

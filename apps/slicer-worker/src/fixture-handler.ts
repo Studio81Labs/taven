@@ -75,19 +75,35 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
 
   switch (job.kind) {
     case "model_inspection": {
-      const bodySha256 = fixtureHash(
+      const bodyIds =
+        job.input.operation.mode === "canonicalize_selection"
+          ? job.input.operation.bodyIds
+          : ["body-0001"];
+      const geometrySha256 = fixtureHash(
         job.input.source.contentSha256,
-        job.input.inspectionConfigSha256,
+        job.input.canonicalizerRevision,
         job.input.canonicalizerConfigSha256,
+        job.input.operation.mode === "canonicalize_selection"
+          ? job.input.operation.selectionSha256
+          : "source-discovery",
       );
       return slicingResultForJobSchema(job).parse({
         ...envelope,
         outcome: {
           status: "succeeded",
+          canonicalGeometry:
+            job.input.operation.mode === "canonicalize_selection"
+              ? {
+                  ...job.input.operation.targetGeometry,
+                  geometrySha256,
+                  bodyIds,
+                  selectionSha256: job.input.operation.selectionSha256,
+                }
+              : null,
           metrics: {
             boundingBox: FIXTURE_BOUNDING_BOX,
             objectCount: 1,
-            bodyCount: 1,
+            bodyCount: bodyIds.length,
             unitHint: "millimeter",
             scaleAssessment: "trusted",
             suggestedScaleFactorPpm: null,
@@ -96,19 +112,21 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
             materialAssignmentCount: 0,
             extruderAssignmentCount: 0,
           },
-          bodies: [
-            {
-              bodyId: "body-0001",
-              bodySha256,
-              boundingBox: FIXTURE_BOUNDING_BOX,
-              volumeCubicMicrometers: "8000000000000",
-              triangleCount: 12,
-              topology: FIXTURE_TOPOLOGY,
-              hasPaintAssignments: false,
-              materialAssignmentIds: [],
-              extruderAssignmentIds: [],
-            },
-          ],
+          bodies: bodyIds.map((bodyId) => ({
+            bodyId,
+            bodySha256: fixtureHash(
+              geometrySha256,
+              job.input.inspectionConfigSha256,
+              bodyId,
+            ),
+            boundingBox: FIXTURE_BOUNDING_BOX,
+            volumeCubicMicrometers: "8000000000000",
+            triangleCount: 12,
+            topology: FIXTURE_TOPOLOGY,
+            hasPaintAssignments: false,
+            materialAssignmentIds: [],
+            extruderAssignmentIds: [],
+          })),
           findings: [],
         },
       });
@@ -177,6 +195,7 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
               job.input.machineProfile.contentSha256,
               job.input.machineCalibration.contentSha256,
               job.input.printConfig.contentSha256,
+              job.input.arrangementRevision.contentSha256,
               job.input.partsPerPlate,
             ),
           },

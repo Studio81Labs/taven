@@ -1,4 +1,7 @@
-import { slicingInputFingerprint } from "@taven/slicer-contracts";
+import {
+  geometrySelectionSha256,
+  slicingInputFingerprint,
+} from "@taven/slicer-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   closeFixtureWorkers,
@@ -31,7 +34,7 @@ const referenceInput = {
     canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
     geometrySha256: "b".repeat(64),
     bodyIds: ["body-0001"],
-    selectionSha256: "c".repeat(64),
+    selectionSha256: geometrySelectionSha256(["body-0001"]),
   },
   referenceProfile: {
     revisionId: ids.profile,

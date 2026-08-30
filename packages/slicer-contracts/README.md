@@ -21,6 +21,8 @@ triage before the v1 consumer is removed.
 Every dispatch includes a schema-verified SHA-256 fingerprint of canonical
 `{ kind, input }` JSON and an idempotency key derived from it. Producers use
 `slicingInputFingerprint(kind, input)` rather than supplying their own digest.
+Body subsets use `geometrySelectionSha256(bodyIds)`, which rejects duplicate or
+non-canonical ordering and binds the digest to the exact selected body set.
 Every result echoes the complete immutable input identity. Consumers use
 `slicingResultForJobSchema(job)` against the persisted dispatch before saving a
 result, so a stale retry or a result for another selected geometry cannot be
@@ -34,6 +36,21 @@ production, `quantity` equals that Job's exact `partsPerPlate` occupancy.
 The upstream planner and dispatcher must materialize a distinct plan job,
 reservation, and accepted Job per physical plate; a multi-plate candidate
 aggregate is planning evidence, never one production dispatch.
+
+Model inspection is explicitly two-step for multi-body inputs. `inspect_source`
+discovers a canonical ordered body list and returns no persistable geometry.
+`canonicalize_selection` carries the successful source-inspection fingerprint,
+the exact body set, and a retry-stable backend-allocated `ModelGeometry` ID and
+object key. Its success returns that same identity plus the canonical geometry
+digest, which is sufficient to construct `GeometrySelectionSchema` without the
+worker inventing persistence IDs. Dispatchers must authorize the discovery
+fingerprint against a persisted successful discovery before enqueueing the
+selection. STEP producers remain disabled until the trigger-gated issue #52;
+the schema's format support does not authorize that product flow.
+
+Candidate and production inputs both carry the immutable arrangement revision.
+The production dispatcher copies it from the candidate-backed reservation, and
+its content digest participates in dispatch and fixture artifact identity.
 
 Payloads are capped at 64 KiB and contain only generated object keys, bounded
 normalized metrics, stable codes, and immutable identifiers or hashes. Raw

@@ -30,6 +30,7 @@ export {
   StorageObjectKeySchema,
   TopologyMetricsSchema,
   UuidSchema,
+  geometrySelectionSha256,
   slicingInputFingerprint,
   slicingResultForJobSchema,
   type CandidateEstimateJob,

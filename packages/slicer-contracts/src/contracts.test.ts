@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CandidateEstimateResultSchema,
+  GeometrySelectionSchema,
   LEGACY_V1_SLICING_CONTRACT_VERSION,
   LEGACY_V1_SLICING_QUEUE_NAME,
   LegacyV1SlicingJobSchema,
@@ -14,6 +15,7 @@ import {
   SLICING_QUEUE_NAME,
   SlicingJobSchema,
   SlicingResultSchema,
+  geometrySelectionSha256,
   slicingInputFingerprint,
   slicingResultForJobSchema,
   type SlicingJobKind,
@@ -54,7 +56,7 @@ const geometry = (
   canonicalObjectKey: `geometries/${modelGeometryId}/canonical`,
   geometrySha256,
   bodyIds: [bodyId],
-  selectionSha256: hash("c"),
+  selectionSha256: geometrySelectionSha256([bodyId]),
 });
 const revision = (revisionId: string, contentSha256 = hash("d")) => ({
   revisionId,
@@ -78,12 +80,33 @@ const envelope = (
     ...overrides,
   };
 };
-const inspectionInput = {
+const inspectionInputBase = {
   source,
   inspectionRevision: "inspection-v1",
   inspectionConfigSha256: hash("e"),
   canonicalizerRevision: "canonical-v1",
   canonicalizerConfigSha256: hash("1"),
+};
+const sourceInspectionInput = {
+  ...inspectionInputBase,
+  operation: { mode: "inspect_source" as const },
+};
+const selectedBodyIds = ["body-a"];
+const inspectionInput = {
+  ...inspectionInputBase,
+  operation: {
+    mode: "canonicalize_selection" as const,
+    sourceInspectionFingerprintSha256: slicingInputFingerprint(
+      "model_inspection",
+      sourceInspectionInput,
+    ),
+    bodyIds: selectedBodyIds,
+    selectionSha256: geometrySelectionSha256(selectedBodyIds),
+    targetGeometry: {
+      modelGeometryId: ids.geometryA,
+      canonicalObjectKey: `geometries/${ids.geometryA}/canonical`,
+    },
+  },
 };
 const referenceInput = {
   geometry: geometry(ids.geometryA, "body-a"),
@@ -110,6 +133,7 @@ const productionInput = {
   quantity: 2,
   acceptedJobId: ids.acceptedJob,
   productionReservationId: ids.reservation,
+  arrangementRevision: revision(ids.arrangement),
 };
 const legacyV1Job = {
   contractVersion: LEGACY_V1_SLICING_CONTRACT_VERSION,
@@ -142,6 +166,13 @@ const sliceMetrics = {
 };
 const inspectionOutcome = {
   status: "succeeded" as const,
+  canonicalGeometry: {
+    modelGeometryId: ids.geometryA,
+    canonicalObjectKey: `geometries/${ids.geometryA}/canonical`,
+    geometrySha256: hash("7"),
+    bodyIds: selectedBodyIds,
+    selectionSha256: geometrySelectionSha256(selectedBodyIds),
+  },
   metrics: {
     boundingBox: sliceMetrics.boundingBox,
     objectCount: 1,
@@ -170,6 +201,7 @@ const inspectionOutcome = {
   findings: [],
 };
 const inspectionJob = envelope("model_inspection", inspectionInput);
+const sourceInspectionJob = envelope("model_inspection", sourceInspectionInput);
 const referenceJob = envelope("reference_slice", referenceInput);
 const candidateJob = envelope("candidate_estimate", candidateInput);
 const productionJob = envelope("production_slice", productionInput, {
@@ -216,6 +248,9 @@ describe("versioned slicing jobs", () => {
     ]) {
       expect(SlicingJobSchema.parse(job)).toEqual(job);
     }
+    expect(SlicingJobSchema.parse(sourceInspectionJob)).toEqual(
+      sourceInspectionJob,
+    );
   });
 
   it("rejects unknown versions and unknown fields at every level", () => {
@@ -261,6 +296,63 @@ describe("versioned slicing jobs", () => {
         input: { ...candidateInput, machineProfile: undefined },
       }),
     ).toThrow();
+    const productionWithoutArrangement: Record<string, unknown> = {
+      ...productionInput,
+    };
+    delete productionWithoutArrangement.arrangementRevision;
+    expect(() =>
+      SlicingJobSchema.parse(
+        envelope("production_slice", productionWithoutArrangement, {
+          jobId: ids.acceptedJob,
+        }),
+      ),
+    ).toThrow();
+  });
+
+  it("binds canonicalization to discovered and selected geometry", () => {
+    expect(() =>
+      SlicingJobSchema.parse(
+        envelope("model_inspection", {
+          ...inspectionInput,
+          operation: {
+            ...inspectionInput.operation,
+            sourceInspectionFingerprintSha256: hash("9"),
+          },
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      SlicingJobSchema.parse(
+        envelope("model_inspection", {
+          ...inspectionInput,
+          operation: {
+            ...inspectionInput.operation,
+            selectionSha256: hash("8"),
+          },
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      SlicingJobSchema.parse(
+        envelope("model_inspection", {
+          ...inspectionInput,
+          operation: {
+            ...inspectionInput.operation,
+            targetGeometry: {
+              ...inspectionInput.operation.targetGeometry,
+              canonicalObjectKey: `geometries/${ids.geometryB}/canonical`,
+            },
+          },
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      GeometrySelectionSchema.parse({
+        ...referenceInput.geometry,
+        selectionSha256: hash("8"),
+      }),
+    ).toThrow();
+    expect(() => geometrySelectionSha256(["body-b", "body-a"])).toThrow();
   });
 
   it("rejects unsafe keys, identifiers, hashes, and numeric bounds", () => {
@@ -333,6 +425,10 @@ describe("versioned slicing jobs", () => {
 describe("versioned slicing results", () => {
   it("accepts success results for inspection, reference, candidate, and production", () => {
     const inspection = result(inspectionJob, inspectionOutcome);
+    const sourceInspection = result(sourceInspectionJob, {
+      ...inspectionOutcome,
+      canonicalGeometry: null,
+    });
     const reference = result(referenceJob, {
       status: "succeeded",
       metrics: { ...sliceMetrics, plateCount: 1 },
@@ -376,6 +472,55 @@ describe("versioned slicing results", () => {
     });
     for (const value of [inspection, reference, candidate, production])
       expect(SlicingResultSchema.parse(value)).toEqual(value);
+    expect(ModelInspectionResultSchema.parse(sourceInspection)).toEqual(
+      sourceInspection,
+    );
+    expect(() =>
+      ModelInspectionResultSchema.parse({
+        ...sourceInspection,
+        outcome: inspectionOutcome,
+      }),
+    ).toThrow();
+    expect(() =>
+      ModelInspectionResultSchema.parse({
+        ...inspection,
+        outcome: {
+          ...inspectionOutcome,
+          canonicalGeometry: {
+            ...inspectionOutcome.canonicalGeometry,
+            modelGeometryId: ids.geometryB,
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      ModelInspectionResultSchema.parse({
+        ...inspection,
+        outcome: {
+          ...inspectionOutcome,
+          canonicalGeometry: {
+            ...inspectionOutcome.canonicalGeometry,
+            bodyIds: ["body-b"],
+            selectionSha256: geometrySelectionSha256(["body-b"]),
+          },
+        },
+      }),
+    ).toThrow();
+    const parsedInspection = ModelInspectionResultSchema.parse(inspection);
+    if (
+      parsedInspection.outcome.status !== "succeeded" ||
+      parsedInspection.outcome.canonicalGeometry === null ||
+      parsedInspection.input.operation.mode !== "canonicalize_selection"
+    ) {
+      throw new TypeError("expected selected canonical geometry");
+    }
+    expect(
+      GeometrySelectionSchema.parse({
+        sourceModelFileId: parsedInspection.input.source.modelFileId,
+        sourceContentSha256: parsedInspection.input.source.contentSha256,
+        ...parsedInspection.outcome.canonicalGeometry,
+      }),
+    ).toBeDefined();
     for (const value of [reference, candidate, production]) {
       const outcome = value.outcome as Record<string, unknown>;
       const metrics = outcome.metrics as Record<string, unknown>;
@@ -609,6 +754,7 @@ describe("versioned slicing results", () => {
       quantity: 1,
       acceptedJobId: ids.geometryB,
       productionReservationId: ids.reservation,
+      arrangementRevision: revision(ids.arrangement),
     };
     const partialJob = envelope("production_slice", partialInput, {
       jobId: ids.geometryB,
