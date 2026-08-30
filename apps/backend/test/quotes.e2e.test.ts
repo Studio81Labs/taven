@@ -250,6 +250,27 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(JSON.stringify(issueIdempotency.responseBody)).not.toContain(
       issued.body.offerToken,
     );
+    const issueOutbox = await prisma.outboxMessage.findUniqueOrThrow({
+      where: {
+        deduplicationKey: `quote-offer-issued:${issued.body.quoteId}:1`,
+      },
+    });
+    expect(issueOutbox.payload).not.toHaveProperty("offerToken");
+    expect(JSON.stringify(issueOutbox.payload)).not.toContain(
+      issued.body.offerToken,
+    );
+    expect(issueOutbox.payload).toMatchObject({
+      quoteId: issued.body.quoteId,
+      offerTokenDerivation: {
+        quoteId: issued.body.quoteId,
+        issuanceCommandKey: issueKey,
+      },
+    });
+    expect(
+      createHmac("sha256", process.env.TAVEN_QUOTE_CAPABILITY_KEY!)
+        .update(["quote-offer", issued.body.quoteId, issueKey].join("\0"))
+        .digest("base64url"),
+    ).toBe(issued.body.offerToken);
 
     const wrongOfferToken = await apiJson(`offers/${issued.body.quoteId}`, {
       headers: bearer(randomBytes(32).toString("base64url")),

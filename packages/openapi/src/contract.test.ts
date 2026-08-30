@@ -58,11 +58,32 @@ describe("OpenAPI artifact", () => {
       type: "integer",
       maximum: 2_147_483_647,
     });
-    expect(issueOffer.contractTotalMinor).toMatchObject({ type: "integer" });
-    expect(issueOffer.depositMinor).toMatchObject({ type: "integer" });
+    expect(issueOffer.contractTotalMinor).toMatchObject({
+      type: "integer",
+      maximum: Number.MAX_SAFE_INTEGER,
+    });
+    expect(issueOffer.depositMinor).toMatchObject({
+      type: "integer",
+      maximum: Number.MAX_SAFE_INTEGER,
+    });
     expect(
       schemas.OfferPriceComponentDto?.properties?.amountMinor,
-    ).toMatchObject({ type: "integer" });
+    ).toMatchObject({
+      type: "integer",
+      maximum: Number.MAX_SAFE_INTEGER,
+    });
+    expect(
+      schemas.OfferPreviewPriceComponentDto?.properties?.amountMinor,
+    ).toMatchObject({ maximum: Number.MAX_SAFE_INTEGER });
+    expect(
+      schemas.OfferPaymentScheduleDto?.properties?.grossAmountMinor,
+    ).toMatchObject({ maximum: Number.MAX_SAFE_INTEGER });
+    expect(
+      schemas.OfferPaymentScheduleDto?.properties?.feeFixedMinor,
+    ).toMatchObject({ maximum: Number.MAX_SAFE_INTEGER });
+    expect(
+      schemas.OfferPreviewDto?.properties?.contractTotalMinor,
+    ).toMatchObject({ maximum: Number.MAX_SAFE_INTEGER });
     expect(
       schemas.OfferPriceComponentDto?.properties?.quoteItemOrdinal,
     ).toMatchObject({ type: "integer" });

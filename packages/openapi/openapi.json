@@ -261,10 +261,12 @@
             "type": "array"
           },
           "contractTotalMinor": {
+            "maximum": 9007199254740991,
             "minimum": 2,
             "type": "integer"
           },
           "depositMinor": {
+            "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
           },
@@ -421,6 +423,7 @@
       "OfferPaymentScheduleDto": {
         "properties": {
           "feeFixedMinor": {
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -429,6 +432,7 @@
             "type": "integer"
           },
           "grossAmountMinor": {
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -462,6 +466,7 @@
             "type": "array"
           },
           "contractTotalMinor": {
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -616,6 +621,7 @@
             "type": "object"
           },
           "amountMinor": {
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
@@ -659,6 +665,7 @@
             "type": "object"
           },
           "amountMinor": {
+            "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },

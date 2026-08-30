@@ -6,6 +6,7 @@ import {
 } from "@nestjs/swagger";
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
+const JAVASCRIPT_SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 
 export class QuoteContactDto {
   @ApiProperty({ type: String, maxLength: 200 })
@@ -191,7 +192,11 @@ export class OfferPriceComponentDto {
     | "ORDER_SMALL_SURCHARGE"
     | "EXPRESS";
 
-  @ApiProperty({ type: "integer", minimum: 0 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
   amountMinor!: number;
 
   @ApiPropertyOptional({ type: "integer", minimum: 0 })
@@ -215,10 +220,18 @@ export class IssueOfferDto {
   @ApiProperty({ type: String, format: "uuid" })
   priceListId!: string;
 
-  @ApiProperty({ type: "integer", minimum: 2 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 2,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
   contractTotalMinor!: number;
 
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
   depositMinor!: number;
 
   @ApiProperty({ type: "object", additionalProperties: true })
@@ -344,7 +357,11 @@ export class OfferPreviewPriceComponentDto {
   @ApiProperty({ type: "integer", minimum: 0, nullable: true })
   quoteItemOrdinal!: number | null;
 
-  @ApiProperty({ type: "integer", minimum: 0 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
   amountMinor!: number;
 
   @ApiProperty({ type: "object", nullable: true, additionalProperties: true })
@@ -358,13 +375,21 @@ export class OfferPaymentScheduleDto {
   @ApiProperty({ type: String, enum: ["DEPOSIT", "BALANCE"] })
   role!: "DEPOSIT" | "BALANCE";
 
-  @ApiProperty({ type: "integer", minimum: 0 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
   grossAmountMinor!: number;
 
   @ApiProperty({ type: "integer", minimum: 0 })
   feeRateBasisPoints!: number;
 
-  @ApiProperty({ type: "integer", minimum: 0 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
   feeFixedMinor!: number;
 }
 
@@ -391,7 +416,11 @@ export class OfferPreviewDto {
   @ApiProperty({ type: String })
   currency!: string;
 
-  @ApiProperty({ type: "integer", minimum: 0 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
   contractTotalMinor!: number;
 
   @ApiProperty({ type: [OfferPreviewItemDto] })

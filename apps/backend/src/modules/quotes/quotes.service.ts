@@ -549,7 +549,10 @@ export class QuotesService {
               quoteId,
               version: 1,
               recipient: contactFrom(request.contactSnapshot, undefined).email,
-              offerToken,
+              offerTokenDerivation: {
+                quoteId,
+                issuanceCommandKey: commandKey,
+              },
               expiresAt: offer.expiresAt.toISOString(),
             })!,
             createdAt: issuedAt,
