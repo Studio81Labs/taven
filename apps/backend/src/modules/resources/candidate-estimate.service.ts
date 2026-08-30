@@ -1,5 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { OutboxStatus, Prisma, SliceKind } from "@prisma/client";
+import { Prisma, SliceKind } from "@prisma/client";
 import type {
   CandidateEstimateJob,
   CandidateEstimateResult,
@@ -58,7 +58,7 @@ type ObservedResourceRow = {
 };
 
 type CandidateTerminalReceiptRow = {
-  outcome: "SUCCEEDED" | "FAILED" | "LEGACY_UNVERIFIABLE";
+  outcome: "SUCCEEDED" | "FAILED";
   result_fingerprint_sha256: string;
   candidate_resource_estimate_id: string | null;
   estimate_key: string | null;
@@ -71,7 +71,6 @@ type CandidateDispatchOutboxRow = {
   message_type: string;
   aggregate_id: string;
   payload: Prisma.JsonValue;
-  status: OutboxStatus;
 };
 
 async function parseDispatchPayload(value: unknown): Promise<DispatchPayload> {
@@ -428,12 +427,6 @@ export class CandidateEstimateService {
           dispatchRow.id,
         );
         if (terminal) {
-          if (terminal.outcome === "LEGACY_UNVERIFIABLE") {
-            throw new ResourceConflictError(
-              "candidate dispatch was delivered before a verifiable terminal receipt was persisted",
-              "candidate_estimate_terminal_receipt_delivery_check",
-            );
-          }
           if (terminal.result_fingerprint_sha256 !== resultFingerprint) {
             throw new ResourceConflictError(
               "candidate dispatch already has a different terminal result",
@@ -471,13 +464,6 @@ export class CandidateEstimateService {
             replayed: true,
           };
         }
-        if (dispatchRow.status === OutboxStatus.DELIVERED) {
-          throw new ResourceConflictError(
-            "delivered candidate dispatch is missing its terminal receipt",
-            "candidate_estimate_outbox_terminal_receipt_check",
-          );
-        }
-
         const orderScope = await transaction.$queryRaw<
           Array<{ order_id: string }>
         >`
@@ -503,7 +489,6 @@ export class CandidateEstimateService {
             result.outcome.failureClass,
             result.outcome.code,
           );
-          await this.markDispatchDelivered(transaction, dispatchRow);
           return {
             status: "failed",
             jobId: result.jobId,
@@ -567,7 +552,6 @@ export class CandidateEstimateService {
             resultFingerprint,
             existing.id,
           );
-          await this.markDispatchDelivered(transaction, dispatchRow);
           return {
             status: "succeeded",
             candidateResourceEstimateId: existing.id,
@@ -750,7 +734,6 @@ export class CandidateEstimateService {
           resultFingerprint,
           candidate.id,
         );
-        await this.markDispatchDelivered(transaction, dispatchRow);
         return {
           status: "succeeded",
           candidateResourceEstimateId: candidate.id,
@@ -783,7 +766,7 @@ export class CandidateEstimateService {
     attemptDeduplicationKey: string,
   ): Promise<CandidateDispatchOutboxRow | undefined> {
     const rows = await transaction.$queryRaw<CandidateDispatchOutboxRow[]>`
-      SELECT id, message_type, aggregate_id, payload, status
+      SELECT id, message_type, aggregate_id, payload
       FROM outbox_messages
       WHERE deduplication_key = ${attemptDeduplicationKey}
          OR (
@@ -885,19 +868,5 @@ export class CandidateEstimateService {
         ${candidateResourceEstimateId}::uuid
       )
     `;
-  }
-
-  private async markDispatchDelivered(
-    transaction: Prisma.TransactionClient,
-    dispatch: { id: string; status: OutboxStatus },
-  ): Promise<void> {
-    if (dispatch.status === OutboxStatus.DELIVERED) return;
-    await transaction.outboxMessage.update({
-      where: { id: dispatch.id },
-      data: {
-        status: OutboxStatus.DELIVERED,
-        deliveredAt: new Date(),
-      },
-    });
   }
 }

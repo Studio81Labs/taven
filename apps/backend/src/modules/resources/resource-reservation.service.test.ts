@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ResourceValidationError } from "./resource-errors";
 import { ResourceReservationService } from "./resource-reservation.service";
@@ -10,6 +12,34 @@ const paymentId = "00000000-0000-4000-8000-000000000005";
 const expiresAt = new Date("2026-08-30T12:15:00.000Z");
 
 describe("ResourceReservationService", () => {
+  it("keeps reacquisition key validation and fencing ahead of the order lock", () => {
+    const migration = readFileSync(
+      resolve(
+        process.cwd(),
+        "prisma/migrations/20260830223000_resource_reservation_execution/migration.sql",
+      ),
+      "utf8",
+    );
+    const reacquire = migration.slice(
+      migration.indexOf(
+        "CREATE FUNCTION taven_reacquire_phase_reservation_for_capture(",
+      ),
+    );
+    const validation = reacquire.indexOf(
+      "IF target_reservation_key IS NULL OR btrim(target_reservation_key) = ''",
+    );
+    const reservationFence = reacquire.indexOf(
+      "PERFORM pg_advisory_xact_lock(hashtextextended(target_reservation_key, 0));",
+    );
+    const orderLock = reacquire.indexOf(
+      "PERFORM taven_lock_automatic_order_session(target_order_id);",
+    );
+
+    expect(validation).toBeGreaterThanOrEqual(0);
+    expect(reservationFence).toBeGreaterThan(validation);
+    expect(orderLock).toBeGreaterThan(reservationFence);
+  });
+
   it("executes a single database-owned atomic reservation claim", async () => {
     const queryRaw = vi.fn().mockResolvedValue([
       {

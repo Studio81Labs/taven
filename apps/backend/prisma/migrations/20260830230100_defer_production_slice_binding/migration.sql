@@ -174,10 +174,26 @@ BEGIN
               AND slice_result."machine_profile_id" = NEW."machine_profile_id"
               AND slice_result."machine_calibration_id" = NEW."machine_calibration_id"
               AND EXISTS (
+                  -- The reservation's candidate is the accepted plate plan.
+                  -- Geometry alone is insufficient: a G-code artifact for a
+                  -- different capacity or greater resource requirement can
+                  -- share every machine input while arranging a different
+                  -- number of parts on each plate.
                   SELECT 1
-                  FROM "slice_results" occupancy
-                  WHERE occupancy."id" = NEW."occupancy_slice_result_id"
-                    AND occupancy."model_geometry_id" = slice_result."model_geometry_id"
+                  FROM "phase_resource_plan_jobs" plan_job
+                  JOIN "candidate_resource_estimates" candidate
+                    ON candidate."id" = plan_job."candidate_resource_estimate_id"
+                   AND candidate."node_id" = plan_job."node_id"
+                  WHERE plan_job."id" = NEW."phase_resource_plan_job_id"
+                    AND plan_job."node_id" = NEW."node_id"
+                    AND plan_job."phase_resource_plan_id" = NEW."phase_resource_plan_id"
+                    AND candidate."slice_result_id" = NEW."occupancy_slice_result_id"
+                    AND candidate."model_geometry_id" = slice_result."model_geometry_id"
+                    AND candidate."parts_per_plate" = slice_result."parts_per_plate"
+                    AND slice_result."estimated_print_seconds" <= candidate."required_machine_seconds"
+                    AND slice_result."estimated_print_seconds" <= NEW."required_machine_seconds"
+                    AND slice_result."estimated_material_milligrams" <= candidate."required_material_milligrams"
+                    AND slice_result."estimated_material_milligrams" <= NEW."required_material_milligrams"
               )
               AND slice_result."artifact_object_key" ~
                   ('^gcode/' || NEW."job_id"::text || '/toolpaths\.(gcode\.3mf|bgcode|gcode)$')

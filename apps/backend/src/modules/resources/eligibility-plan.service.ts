@@ -66,6 +66,8 @@ type PhaseRow = {
   observed_at: Date;
 };
 
+type PlanningRow = { planning_now: Date };
+
 type PhaseScopeRow = { order_id: string };
 
 export type CreateEligibilityPlanInput = {
@@ -260,6 +262,15 @@ export class EligibilityPlanService {
               "order phase has no required fulfilment slots",
             );
           }
+          const planningRows = await transaction.$queryRaw<PlanningRow[]>`
+            SELECT clock_timestamp() AS planning_now
+          `;
+          const planningNow = planningRows[0]?.planning_now;
+          if (!planningNow) {
+            throw new ResourceConflictError(
+              "resource planning clock was unavailable",
+            );
+          }
           const candidates = await transaction.$queryRaw<CandidateRow[]>`
             SELECT candidate.id, candidate.estimate_key, candidate.node_id,
                    candidate.machine_id, candidate.machine_profile_id,
@@ -314,7 +325,7 @@ export class EligibilityPlanService {
               ON candidate_interval.candidate_resource_estimate_id = candidate.id
              AND candidate_interval.node_id = candidate.node_id
             WHERE candidate.node_id = ${input.nodeId}::uuid
-              AND candidate.expires_at > ${phase.observed_at}
+              AND candidate.expires_at > ${planningNow}
               AND (
                     source.retention_hold <> 'NONE'
                     OR source.source_delete_after > (
@@ -399,7 +410,7 @@ export class EligibilityPlanService {
               startsAt: row.starts_at,
               endsAt: row.ends_at,
             })),
-            now: phase.observed_at,
+            now: planningNow,
           });
           if (!selected) {
             throw new ResourceConflictError(
@@ -407,22 +418,31 @@ export class EligibilityPlanService {
               "complete_phase_resource_plan_required",
             );
           }
+          const actualPlanningRows = await transaction.$queryRaw<PlanningRow[]>`
+            SELECT clock_timestamp() AS planning_now
+          `;
+          const actualPlanningNow = actualPlanningRows[0]?.planning_now;
+          if (!actualPlanningNow) {
+            throw new ResourceConflictError(
+              "resource planning clock was unavailable",
+            );
+          }
           const candidateExpiry = selected.candidates.reduce(
             (earliest, candidate) =>
               candidate.expiresAt < earliest ? candidate.expiresAt : earliest,
             new Date(
-              phase.observed_at.getTime() + ELIGIBILITY_TTL_MILLISECONDS,
+              actualPlanningNow.getTime() + ELIGIBILITY_TTL_MILLISECONDS,
             ),
           );
           const expiresAt = new Date(
             Math.min(
               candidateExpiry.getTime(),
-              phase.observed_at.getTime() + ELIGIBILITY_TTL_MILLISECONDS,
+              actualPlanningNow.getTime() + ELIGIBILITY_TTL_MILLISECONDS,
             ),
           );
           if (
-            expiresAt.getTime() <
-            phase.observed_at.getTime() + MINIMUM_RESERVABLE_MILLISECONDS
+            expiresAt.getTime() <=
+            actualPlanningNow.getTime() + MINIMUM_RESERVABLE_MILLISECONDS
           ) {
             throw new ResourceConflictError(
               "complete plan does not remain valid for the payment reservation TTL",
@@ -454,7 +474,7 @@ export class EligibilityPlanService {
               eligibleCandidateEstimateIds:
                 selectedCandidateIds as Prisma.InputJsonArray,
               snapshotHash,
-              calculatedAt: phase.observed_at,
+              calculatedAt: actualPlanningNow,
               expiresAt,
             },
           });

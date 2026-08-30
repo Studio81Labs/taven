@@ -352,6 +352,10 @@ async function createProductionSlice(
     slicerEngine?: string;
     slicerVersion?: string;
     printConfigRevisionId?: string;
+    partsPerPlate?: number;
+    artifactObjectKey?: string;
+    estimatedPrintSeconds?: number;
+    estimatedMaterialMilligrams?: number;
   } = {},
 ): Promise<void> {
   await client.query(
@@ -364,11 +368,12 @@ async function createProductionSlice(
       options.printConfigRevisionId ?? foundation.printConfigRevisionId,
       foundation.machineProfileId,
       foundation.machineCalibrationId,
-      1,
-      `slices/${fixtures.id(`${name}:artifact-key`)}`,
+      options.partsPerPlate ?? 1,
+      options.artifactObjectKey ??
+        `slices/${fixtures.id(`${name}:artifact-key`)}`,
       "8".repeat(64),
-      60,
-      60,
+      options.estimatedPrintSeconds ?? 60,
+      options.estimatedMaterialMilligrams ?? 60,
       options.slicerEngine ?? "orca",
       options.slicerVersion ?? "test",
     ],
@@ -2675,6 +2680,64 @@ describe("persistence foundations", () => {
         ).resolves.toBeDefined();
       },
     );
+  });
+
+  it("rejects Job G-code that exceeds its reserved candidate plate plan", async () => {
+    for (const { name, options } of [
+      { name: "plate-capacity", options: { partsPerPlate: 2 } },
+      { name: "machine-seconds", options: { estimatedPrintSeconds: 61 } },
+      {
+        name: "material-milligrams",
+        options: { estimatedMaterialMilligrams: 61 },
+      },
+    ]) {
+      await inRollbackTransaction(
+        `production-slice-binding-${name}`,
+        async (client, fixtures) => {
+          const fixtureName = name;
+          const { foundation, production } =
+            await createCompleteSingleReservationGraph(
+              client,
+              fixtures,
+              fixtureName,
+              {
+                startsAt: testTimes.capacityStart,
+                endsAt: testTimes.capacityEnd,
+              },
+            );
+          await client.query(
+            'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
+            [foundation.phaseReservationSetId, "RESERVED"],
+          );
+          await activateReservationGraph(client, fixtures, foundation, [
+            production,
+          ]);
+          await createProductionSlice(
+            client,
+            fixtures,
+            foundation,
+            fixtureName,
+            {
+              ...options,
+              artifactObjectKey: `gcode/${production.jobId}/toolpaths.gcode.3mf`,
+            },
+          );
+
+          await expect(
+            client.query(
+              'UPDATE "production_reservations" SET "slice_result_id" = $2 WHERE "id" = $1',
+              [
+                production.productionReservationId,
+                fixtures.id(`${fixtureName}:slice`),
+              ],
+            ),
+          ).rejects.toMatchObject({
+            code: "23514",
+            constraint: "production_reservation_production_slice_binding_check",
+          });
+        },
+      );
+    }
   });
 
   it("binds a Job-scoped gcode.3mf production artifact after acceptance", async () => {

@@ -256,7 +256,7 @@ describe("candidate estimate terminal receipts", () => {
       {
         outcome: "FAILED",
         candidate_resource_estimate_id: null,
-        status: "DELIVERED",
+        status: "PENDING",
       },
     ]);
     await expect(
@@ -301,7 +301,7 @@ describe("candidate estimate terminal receipts", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       outcome: "SUCCEEDED",
-      status: "DELIVERED",
+      status: "PENDING",
     });
     expect(rows[0]?.candidate_resource_estimate_id).toBe(
       first.candidateResourceEstimateId,
@@ -325,5 +325,32 @@ describe("candidate estimate terminal receipts", () => {
         },
       ],
     });
+  });
+
+  it("allows dispatch delivery without a receipt, then records the terminal result", async () => {
+    const fixture = await createFixture("delivered-before-result");
+    await pool.query(
+      `UPDATE outbox_messages
+       SET status = 'DELIVERED', delivered_at = clock_timestamp()
+       WHERE id = $1`,
+      [fixture.dispatchId],
+    );
+    expect((await terminalRows(fixture.dispatchId)).rows).toEqual([]);
+
+    await expect(
+      candidates.ingest(ingestInput(fixture.failure)),
+    ).resolves.toEqual({
+      status: "failed",
+      jobId: fixture.job.jobId,
+      failureClass: "retryable_infrastructure",
+      code: "ENGINE_TIMEOUT",
+    });
+    expect((await terminalRows(fixture.dispatchId)).rows).toEqual([
+      {
+        outcome: "FAILED",
+        candidate_resource_estimate_id: null,
+        status: "DELIVERED",
+      },
+    ]);
   });
 });

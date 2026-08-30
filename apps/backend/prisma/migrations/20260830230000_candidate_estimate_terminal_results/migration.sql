@@ -3,8 +3,7 @@
 -- from a later conflicting successful delivery.
 CREATE TYPE "candidate_estimate_terminal_outcome" AS ENUM (
     'SUCCEEDED',
-    'FAILED',
-    'LEGACY_UNVERIFIABLE'
+    'FAILED'
 );
 
 CREATE TABLE "candidate_estimate_terminal_results" (
@@ -41,11 +40,6 @@ CREATE TABLE "candidate_estimate_terminal_results" (
              AND btrim("failure_class") <> ''
              AND "failure_code" IS NOT NULL
              AND btrim("failure_code") <> '')
-            OR
-            ("outcome" = 'LEGACY_UNVERIFIABLE'
-             AND "candidate_resource_estimate_id" IS NULL
-             AND "failure_class" IS NULL
-             AND "failure_code" IS NULL)
         )
 );
 
@@ -91,67 +85,3 @@ FOR EACH ROW EXECUTE FUNCTION taven_validate_candidate_estimate_terminal_result(
 CREATE TRIGGER "candidate_estimate_terminal_results_immutable"
 BEFORE UPDATE OR DELETE ON "candidate_estimate_terminal_results"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_row_payload('');
-
--- Existing delivered candidate messages predate a persisted terminal result.
--- They cannot safely be replayed because neither a result fingerprint nor a
--- failure payload can be reconstructed. Preserve them as explicit, fail-closed
--- terminal receipts before enabling the delivery/receipt invariant.
-INSERT INTO "candidate_estimate_terminal_results" (
-    "outbox_message_id", "result_fingerprint_sha256", "outcome"
-)
-SELECT
-    message."id",
-    lpad(replace(message."id"::text, '-', ''), 64, '0'),
-    'LEGACY_UNVERIFIABLE'::"candidate_estimate_terminal_outcome"
-FROM "outbox_messages" message
-WHERE message."message_type" = 'slicing.candidate-estimate.requested'
-  AND message."status" = 'DELIVERED';
-
-CREATE FUNCTION taven_require_candidate_estimate_terminal_receipt()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    dispatch_status "outbox_status";
-    dispatch_type text;
-BEGIN
-    IF TG_TABLE_NAME = 'outbox_messages' THEN
-        IF NEW."message_type" <> 'slicing.candidate-estimate.requested'
-           OR NEW."status" <> 'DELIVERED' THEN
-            RETURN NULL;
-        END IF;
-
-        IF NOT EXISTS (
-            SELECT 1
-            FROM "candidate_estimate_terminal_results" receipt
-            WHERE receipt."outbox_message_id" = NEW."id"
-        ) THEN
-            RAISE EXCEPTION 'delivered candidate-estimate dispatch requires an immutable terminal receipt'
-                USING ERRCODE = '23514', CONSTRAINT = 'candidate_estimate_outbox_terminal_receipt_check';
-        END IF;
-        RETURN NULL;
-    END IF;
-
-    SELECT message."status", message."message_type"
-    INTO dispatch_status, dispatch_type
-    FROM "outbox_messages" message
-    WHERE message."id" = NEW."outbox_message_id";
-
-    IF dispatch_type <> 'slicing.candidate-estimate.requested'
-       OR dispatch_status <> 'DELIVERED' THEN
-        RAISE EXCEPTION 'candidate terminal receipt requires a delivered candidate-estimate dispatch'
-            USING ERRCODE = '23514', CONSTRAINT = 'candidate_estimate_terminal_receipt_delivery_check';
-    END IF;
-    RETURN NULL;
-END;
-$$;
-
-CREATE CONSTRAINT TRIGGER "candidate_estimate_outbox_terminal_receipt"
-AFTER INSERT OR UPDATE OF "status" ON "outbox_messages"
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION taven_require_candidate_estimate_terminal_receipt();
-
-CREATE CONSTRAINT TRIGGER "candidate_estimate_terminal_receipt_delivered"
-AFTER INSERT ON "candidate_estimate_terminal_results"
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION taven_require_candidate_estimate_terminal_receipt();

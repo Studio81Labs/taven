@@ -660,6 +660,18 @@ BEGIN
             USING ERRCODE = '23503', CONSTRAINT = 'phase_reservation_sets_phase_resource_plan_id_node_id_fkey';
     END IF;
 
+    IF target_reservation_key IS NULL OR btrim(target_reservation_key) = ''
+       OR octet_length(target_reservation_key) > 255 THEN
+        RAISE EXCEPTION 'reservation key must be a non-empty value up to 255 bytes'
+            USING ERRCODE = '22023', CONSTRAINT = 'phase_reservation_set_reservation_key_input_check';
+    END IF;
+
+    -- Keep reacquisition's lock order identical to a direct reservation:
+    -- serialize the reservation identity before taking the order-session lock.
+    -- Otherwise a concurrent direct reservation can hold this fence while this
+    -- path holds the order lock and waits for the fence.
+    PERFORM pg_advisory_xact_lock(hashtextextended(target_reservation_key, 0));
+
     PERFORM taven_lock_automatic_order_session(target_order_id);
 
     SELECT * INTO target_payment

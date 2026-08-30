@@ -195,7 +195,6 @@ enum OutboxStatus {
 enum CandidateEstimateTerminalOutcome {
   SUCCEEDED
   FAILED
-  LEGACY_UNVERIFIABLE
 
   @@map("candidate_estimate_terminal_outcome")
 }
