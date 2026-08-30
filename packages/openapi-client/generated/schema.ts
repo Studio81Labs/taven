@@ -446,7 +446,7 @@ export interface components {
             };
             amountMinor: number;
             /** @enum {string} */
-            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "EXPRESS" | "PAYMENT_FEE";
+            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "EXPRESS";
             quoteItemOrdinal?: number;
         };
         QuoteAttachmentDto: {

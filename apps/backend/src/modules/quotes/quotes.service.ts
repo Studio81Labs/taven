@@ -67,7 +67,6 @@ const ORDER_COMPONENTS = new Set<PriceComponentKind>([
   PriceComponentKind.ORDER_MIN_PRINT,
   PriceComponentKind.ORDER_SMALL_SURCHARGE,
   PriceComponentKind.EXPRESS,
-  PriceComponentKind.PAYMENT_FEE,
 ]);
 
 type Transaction = Prisma.TransactionClient;
@@ -91,7 +90,11 @@ export class QuotesService {
   ): Promise<QuoteRequestCreatedDto> {
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const request = validateCreateRequest(input);
-    const fingerprint = fingerprintOf(request);
+    const clientSubjectHash = anonymousQuoteClientSubject(
+      this.capabilityKey(),
+      clientAddress,
+    );
+    const fingerprint = fingerprintOf({ request, clientSubjectHash });
     const requestToken = capabilityToken(
       this.capabilityKey(),
       "quote-request",
@@ -104,7 +107,7 @@ export class QuotesService {
       commandKey,
       fingerprint,
       async (transaction) => {
-        await this.reserveAnonymousQuote(transaction, clientAddress);
+        await this.reserveAnonymousQuote(transaction, clientSubjectHash);
         const observedAt = await databaseNow(transaction);
         const requestId = randomUUID();
         const sessionId = randomUUID();
@@ -555,6 +558,7 @@ export class QuotesService {
     const token = bearerCapability(authorization);
     const expected = validateExpectedOffer(input);
     const commandKey = requireIdempotencyKey(idempotencyKey);
+    await this.offerForToken(quoteId, token);
     const result = await this.idempotent<ExpiringResult<AcceptedOfferDto>>(
       "quote-offer.accept",
       commandKey,
@@ -727,6 +731,7 @@ export class QuotesService {
     const expected = validateExpectedOffer(input);
     const reason = optionalText(input.reason, "reason", 2_000);
     const commandKey = requireIdempotencyKey(idempotencyKey);
+    await this.offerForToken(quoteId, token);
     const result = await this.idempotent<ExpiringResult<QuoteRequestStatusDto>>(
       "quote-offer.reject",
       commandKey,
@@ -915,17 +920,12 @@ export class QuotesService {
 
   private async reserveAnonymousQuote(
     transaction: Transaction,
-    clientAddress: string,
+    subjectHash: string,
   ): Promise<void> {
     const observedAt = await databaseNow(transaction);
     const windowExpiresAt = new Date(
       observedAt.getTime() + ANONYMOUS_QUOTE_WINDOW_MILLISECONDS,
     );
-    const subjectHash = createHmac("sha256", this.capabilityKey())
-      .update(
-        `anonymous-quote-request\0${normalizeClientAddress(clientAddress)}`,
-      )
-      .digest("hex");
     const global = await lockAnonymousQuoteLimit(
       transaction,
       ANONYMOUS_QUOTE_GLOBAL_SUBJECT,
@@ -1464,6 +1464,11 @@ function validateOffer(input: IssueOfferDto) {
       throw new BadRequestException("component kind is invalid");
     }
     const kind = component.kind as PriceComponentKind;
+    if (kind === PriceComponentKind.PAYMENT_FEE) {
+      throw new BadRequestException(
+        "PAYMENT_FEE components are not supported for individual offers",
+      );
+    }
     const amountMinor = money(
       component.amountMinor,
       "component amountMinor",
@@ -1662,6 +1667,15 @@ function assertOfferCapability(
   ) {
     throw new UnauthorizedException("Offer capability is invalid");
   }
+}
+
+function anonymousQuoteClientSubject(
+  capabilityKey: string,
+  clientAddress: string,
+): string {
+  return createHmac("sha256", capabilityKey)
+    .update(`anonymous-quote-request\0${normalizeClientAddress(clientAddress)}`)
+    .digest("hex");
 }
 
 function contactFrom(

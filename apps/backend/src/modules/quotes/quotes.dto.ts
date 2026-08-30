@@ -159,7 +159,6 @@ export class OfferPriceComponentDto {
       "ORDER_MIN_PRINT",
       "ORDER_SMALL_SURCHARGE",
       "EXPRESS",
-      "PAYMENT_FEE",
     ],
   })
   kind!:
@@ -168,8 +167,7 @@ export class OfferPriceComponentDto {
     | "ITEM_POSTPROCESSING"
     | "ORDER_MIN_PRINT"
     | "ORDER_SMALL_SURCHARGE"
-    | "EXPRESS"
-    | "PAYMENT_FEE";
+    | "EXPRESS";
 
   @ApiProperty({ type: Number, minimum: 0 })
   amountMinor!: number;

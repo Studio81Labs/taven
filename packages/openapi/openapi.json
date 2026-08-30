@@ -444,8 +444,7 @@
               "ITEM_POSTPROCESSING",
               "ORDER_MIN_PRINT",
               "ORDER_SMALL_SURCHARGE",
-              "EXPRESS",
-              "PAYMENT_FEE"
+              "EXPRESS"
             ],
             "type": "string"
           },

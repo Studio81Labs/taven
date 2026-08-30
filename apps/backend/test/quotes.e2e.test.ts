@@ -5,6 +5,7 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { QuotesService } from "../src/modules/quotes/quotes.service";
 
 const operatorToken = "test-operator-token-with-at-least-32-characters";
 process.env.TAVEN_OPERATOR_API_TOKEN = operatorToken;
@@ -23,6 +24,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let app: INestApplication;
   let baseUrl: URL;
   let prisma: PrismaService;
+  let quotes: QuotesService;
   let priceListId: string;
 
   beforeAll(async () => {
@@ -33,6 +35,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     await app.listen(0, "127.0.0.1");
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
+    quotes = app.get(QuotesService);
     const priceList = await prisma.priceList.findFirstOrThrow({
       where: { currency: "CZK" },
       orderBy: { createdAt: "asc" },
@@ -173,6 +176,14 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(accepted.body.status).toBe("DRAFT");
     const acceptReplay = await acceptOffer(issued.body, acceptKey);
     expect(acceptReplay.body).toEqual(accepted.body);
+    const unauthorizedReplay = await acceptOffer(
+      {
+        ...issued.body,
+        offerToken: randomBytes(32).toString("base64url"),
+      },
+      acceptKey,
+    );
+    expect(unauthorizedReplay.response.status).toBe(401);
 
     const persisted = await prisma.quote.findUniqueOrThrow({
       where: { id: issued.body.quoteId },
@@ -292,6 +303,24 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toMatchObject({ status: "EXPIRED" });
   });
 
+  it("rejects unsupported payment-fee components before persistence", async () => {
+    const created = await createRequest(
+      key("fee-create"),
+      requestInput("fee-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.body.requestId}/review`,
+      key("fee-review"),
+    );
+    const response = await issueOffer(
+      created.body.requestId,
+      key("fee-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      [...defaultComponents(), { kind: "PAYMENT_FEE", amountMinor: 0 }],
+    );
+    expect(response.response.status).toBe(400);
+  });
+
   it("limits anonymous submissions atomically and ignores spoofed forwarding headers", async () => {
     const subjectHash = createHmac(
       "sha256",
@@ -333,6 +362,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ]);
   });
 
+  it("does not replay a request capability to a different client", async () => {
+    const createKey = key("client-bound-create");
+    const body = requestInput("client-bound-create");
+    await expect(
+      quotes.createRequest(body, "198.51.100.10", createKey),
+    ).resolves.toMatchObject({ status: "NEW" });
+    await expect(
+      quotes.createRequest(body, "198.51.100.11", createKey),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
   function requestInput(scope: string) {
     return {
       description: `A detailed individual quote request for ${scope}`,
@@ -370,6 +410,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
     requestId: string,
     idempotencyKey: string,
     expiresAt: Date,
+    components: Array<{
+      kind: string;
+      amountMinor: number;
+      quoteItemOrdinal?: number;
+    }> = defaultComponents(),
   ) {
     return apiJson<{
       quoteId: string;
@@ -398,25 +443,29 @@ describe("QuoteRequest and tokenized individual offers", () => {
             serviceDescription: "Rebuild the damaged mounting bracket",
           },
         ],
-        components: [
-          {
-            kind: "ITEM_PRODUCTION",
-            quoteItemOrdinal: 0,
-            amountMinor: 80_000,
-          },
-          {
-            kind: "ITEM_QUANTITY",
-            quoteItemOrdinal: 0,
-            amountMinor: 20_000,
-          },
-          {
-            kind: "ITEM_POSTPROCESSING",
-            quoteItemOrdinal: 0,
-            amountMinor: 10_000,
-          },
-        ],
+        components,
       }),
     });
+  }
+
+  function defaultComponents() {
+    return [
+      {
+        kind: "ITEM_PRODUCTION",
+        quoteItemOrdinal: 0,
+        amountMinor: 80_000,
+      },
+      {
+        kind: "ITEM_QUANTITY",
+        quoteItemOrdinal: 0,
+        amountMinor: 20_000,
+      },
+      {
+        kind: "ITEM_POSTPROCESSING",
+        quoteItemOrdinal: 0,
+        amountMinor: 10_000,
+      },
+    ];
   }
 
   async function acceptOffer(
