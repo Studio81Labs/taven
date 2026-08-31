@@ -4,6 +4,7 @@ export default defineNuxtConfig({
   css: ["@taven/ui-web/tokens.css"],
   build: { transpile: ["@taven/ui-web", "@taven/openapi-client"] },
   runtimeConfig: {
+    apiBaseUrl: "http://localhost:3001",
     public: {
       apiBaseUrl: "http://localhost:3001",
     },

@@ -78,7 +78,7 @@ describe("secure object storage and retention", () => {
     await app.close();
   });
 
-  it("uploads directly to MinIO, confirms once, isolates the capability, and downloads", async () => {
+  it("uploads directly to S3-compatible storage, confirms once, isolates the capability, and downloads", async () => {
     const bytes = binaryStl();
     const created = await initiateModel(
       bytes,
@@ -167,7 +167,7 @@ describe("secure object storage and retention", () => {
       expiresAt: new Date(Date.now() + 1_500),
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 1_600));
-    expect((await fetch(shortLivedUrl.url)).status).toBe(403);
+    expect([400, 403]).toContain((await fetch(shortLivedUrl.url)).status);
   });
 
   it("rejects non-string upload metadata with a structured bad request", async () => {

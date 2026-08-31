@@ -18,6 +18,7 @@ import { UploadService } from "./upload.service";
 
 const config: ObjectStorageConfig = {
   endpoint: "http://127.0.0.1:9010/",
+  publicEndpoint: "http://127.0.0.1:9010/",
   region: "us-east-1",
   bucket: "taven",
   accessKeyId: "test-key",

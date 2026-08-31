@@ -1,8 +1,41 @@
 name: taven-dev
 
+x-backend-environment: &backend-environment
+  DATABASE_URL: postgresql://${POSTGRES_USER:-taven}:${POSTGRES_PASSWORD:-taven}@postgres:5432/${POSTGRES_DB:-taven}
+  TAVEN_REDIS_URL: redis://redis:6379
+  TAVEN_S3_REGION: ${TAVEN_S3_REGION:-us-east-1}
+  TAVEN_S3_BUCKET: ${TAVEN_S3_BUCKET:-taven}
+  TAVEN_S3_ACCESS_KEY_ID: ${TAVEN_S3_ACCESS_KEY_ID:-taven}
+  TAVEN_S3_SECRET_ACCESS_KEY: ${TAVEN_S3_SECRET_ACCESS_KEY:-taven-local-only}
+  TAVEN_S3_FORCE_PATH_STYLE: "true"
+  TAVEN_S3_SIGNED_URL_TTL_SECONDS: "900"
+  TAVEN_UPLOAD_CLIENT_HASH_KEY: ${TAVEN_UPLOAD_CLIENT_HASH_KEY:-local-only-upload-client-hash-key-32}
+  TAVEN_QUOTE_CAPABILITY_KEY: ${TAVEN_QUOTE_CAPABILITY_KEY:-local-only-quote-capability-key-32}
+  TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS: "[]"
+  TAVEN_OPERATOR_API_TOKEN: ${TAVEN_OPERATOR_API_TOKEN:-local-only-operator-api-token-32}
+
+x-backend-build: &backend-build
+  context: ../..
+  dockerfile: apps/backend/Dockerfile
+
+x-storage-contract: &storage-contract
+  build:
+    <<: *backend-build
+    target: test
+  init: true
+  restart: "no"
+  command:
+    [
+      "/bin/sh",
+      "-c",
+      "pnpm -C apps/backend exec prisma migrate reset --force && pnpm -C apps/backend exec vitest run test/storage.e2e.test.ts",
+    ]
+  depends_on:
+    contract-databases:
+      condition: service_completed_successfully
+
 services:
   postgres:
-    container_name: taven-postgres
     # ported from Studio81Labs/nexcue@314cec8972589780072e641591b16eca9805d7dd
     # Postgres 18 stores versioned data below /var/lib/postgresql. Mounting the
     # parent follows the upstream layout and keeps upgrades inside one volume.
@@ -27,7 +60,6 @@ services:
       retries: 10
 
   redis:
-    container_name: taven-redis
     image: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
     restart: unless-stopped
     ports:
@@ -42,7 +74,6 @@ services:
       retries: 10
 
   minio:
-    container_name: taven-minio
     image: minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     ports:
@@ -51,6 +82,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${TAVEN_S3_ACCESS_KEY_ID:-taven}
       MINIO_ROOT_PASSWORD: ${TAVEN_S3_SECRET_ACCESS_KEY:-taven-local-only}
+      MINIO_API_CORS_ALLOW_ORIGIN: ${TAVEN_CORS_ORIGINS:-http://localhost:3000,http://localhost:3002}
     command: server /data --console-address ":9001"
     volumes:
       - miniodata:/data
@@ -77,7 +109,197 @@ services:
       '
     restart: "no"
 
+  migrate:
+    profiles: ["app"]
+    image: taven/backend-migration:local
+    build:
+      <<: *backend-build
+      target: migration
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-taven}:${POSTGRES_PASSWORD:-taven}@postgres:5432/${POSTGRES_DB:-taven}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  contract-databases:
+    profiles: ["contract", "garage"]
+    image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
+    environment:
+      PGUSER: ${POSTGRES_USER:-taven}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-taven}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: >-
+      /bin/sh -ec '
+        psql -h postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '\''taven_contract_minio'\''" | grep -q 1 || createdb -h postgres taven_contract_minio;
+        psql -h postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '\''taven_contract_garage'\''" | grep -q 1 || createdb -h postgres taven_contract_garage;
+      '
+    restart: "no"
+
+  backend:
+    profiles: ["app"]
+    image: taven/backend:local
+    build:
+      <<: *backend-build
+      target: runtime
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TAVEN_BACKEND_PORT:-3001}:3001"
+    environment:
+      <<: *backend-environment
+      PORT: "3001"
+      CORS_ORIGINS: ${TAVEN_CORS_ORIGINS:-http://localhost:3000,http://localhost:3002}
+      TAVEN_S3_ENDPOINT: http://minio:9000
+      TAVEN_S3_PUBLIC_ENDPOINT: ${TAVEN_S3_PUBLIC_ENDPOINT:-http://localhost:9010}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  web:
+    profiles: ["app"]
+    image: taven/web:local
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+      target: runtime
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TAVEN_WEB_PORT:-3000}:3000"
+    environment:
+      NUXT_API_BASE_URL: http://backend:3001
+      NUXT_PUBLIC_API_BASE_URL: ${NUXT_PUBLIC_API_BASE_URL:-http://localhost:3001}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  admin:
+    profiles: ["app"]
+    image: taven/admin:local
+    build:
+      context: ../..
+      dockerfile: apps/admin/Dockerfile
+      target: runtime
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:3001}
+        VITE_APP_ENV: ${VITE_APP_ENV:-local}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TAVEN_ADMIN_PORT:-3002}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  slicer-worker:
+    profiles: ["worker"]
+    image: taven/slicer-worker:local
+    build:
+      context: ../..
+      dockerfile: apps/slicer-worker/Dockerfile
+      target: runtime
+    init: true
+    restart: "no"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  storage-contract-minio:
+    <<: *storage-contract
+    profiles: ["contract"]
+    image: taven/backend-test:local
+    environment:
+      <<: *backend-environment
+      DATABASE_URL: postgresql://${POSTGRES_USER:-taven}:${POSTGRES_PASSWORD:-taven}@postgres:5432/taven_contract_minio
+      TAVEN_S3_ENDPOINT: http://minio:9000
+      TAVEN_S3_PUBLIC_ENDPOINT: http://minio:9000
+    depends_on:
+      contract-databases:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+
+  garage:
+    profiles: ["garage"]
+    image: dxflrs/garage:v2.3.0@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690
+    restart: unless-stopped
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    ports:
+      - "127.0.0.1:${TAVEN_GARAGE_PORT:-3900}:3900"
+    environment:
+      GARAGE_DEFAULT_ACCESS_KEY: ${TAVEN_GARAGE_ACCESS_KEY_ID:-GK00000000000000000000000000000000}
+      GARAGE_DEFAULT_SECRET_KEY: ${TAVEN_GARAGE_SECRET_ACCESS_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      GARAGE_DEFAULT_BUCKET: ${TAVEN_GARAGE_BUCKET:-taven-garage}
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garagedata:/var/lib/garage
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  storage-contract-garage:
+    <<: *storage-contract
+    profiles: ["garage"]
+    image: taven/backend-test:local
+    environment:
+      <<: *backend-environment
+      DATABASE_URL: postgresql://${POSTGRES_USER:-taven}:${POSTGRES_PASSWORD:-taven}@postgres:5432/taven_contract_garage
+      TAVEN_S3_ENDPOINT: http://garage:3900
+      TAVEN_S3_PUBLIC_ENDPOINT: http://garage:3900
+      TAVEN_S3_REGION: garage
+      TAVEN_S3_BUCKET: ${TAVEN_GARAGE_BUCKET:-taven-garage}
+      TAVEN_S3_ACCESS_KEY_ID: ${TAVEN_GARAGE_ACCESS_KEY_ID:-GK00000000000000000000000000000000}
+      TAVEN_S3_SECRET_ACCESS_KEY: ${TAVEN_GARAGE_SECRET_ACCESS_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+    depends_on:
+      contract-databases:
+        condition: service_completed_successfully
+      garage:
+        condition: service_healthy
+
 volumes:
   pgdata:
   redisdata:
   miniodata:
+  garagedata:

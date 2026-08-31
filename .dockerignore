@@ -1,0 +1,16 @@
+.git
+.github
+.husky
+.codex
+.superset
+node_modules
+**/node_modules
+**/.nuxt
+**/.output
+**/dist
+**/coverage
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+.DS_Store

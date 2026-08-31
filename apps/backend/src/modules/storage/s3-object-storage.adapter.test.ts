@@ -9,7 +9,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MinioObjectStorageAdapter } from "./minio-object-storage.adapter";
+import { S3ObjectStorageAdapter } from "./s3-object-storage.adapter";
 import { ObjectStorageDeadlineError } from "./object-storage.port";
 import type { ObjectStorageConfig } from "./storage.config";
 
@@ -17,6 +17,7 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({ getSignedUrl: vi.fn() }));
 
 const config: ObjectStorageConfig = {
   endpoint: "http://127.0.0.1:9010/",
+  publicEndpoint: "http://127.0.0.1:9010/",
   region: "us-east-1",
   bucket: "taven",
   accessKeyId: "test-key",
@@ -28,7 +29,7 @@ const config: ObjectStorageConfig = {
 const objectKey = "quarantine/123e4567-e89b-42d3-a456-426614174000";
 const hash = "a".repeat(64);
 
-describe("MinioObjectStorageAdapter", () => {
+describe("S3ObjectStorageAdapter", () => {
   const client = new S3Client({ region: "us-east-1" });
   let send: ReturnType<typeof vi.spyOn>;
 
@@ -39,7 +40,7 @@ describe("MinioObjectStorageAdapter", () => {
   });
 
   it("binds size and SHA-256 checksum into a signed upload", async () => {
-    const storage = new MinioObjectStorageAdapter(config, client);
+    const storage = new S3ObjectStorageAdapter(config, client);
     const expiresAt = new Date(Date.now() + 60_000);
     const result = await storage.createUploadUrl({
       objectKey,
@@ -62,7 +63,10 @@ describe("MinioObjectStorageAdapter", () => {
     expect(vi.mocked(getSignedUrl)).toHaveBeenCalledWith(
       client,
       expect.any(PutObjectCommand),
-      expect.objectContaining({ expiresIn: expect.any(Number) }),
+      expect.objectContaining({
+        expiresIn: expect.any(Number),
+        unhoistableHeaders: new Set(["x-amz-checksum-sha256"]),
+      }),
     );
     expect(
       (vi.mocked(getSignedUrl).mock.calls[0]?.[1] as PutObjectCommand).input,
@@ -79,8 +83,29 @@ describe("MinioObjectStorageAdapter", () => {
     ).toBeLessThanOrEqual(expiresAt.getTime());
   });
 
+  it("signs browser URLs against the public endpoint client", async () => {
+    const signingClient = new S3Client({ region: "us-east-1" });
+    const storage = new S3ObjectStorageAdapter(
+      { ...config, publicEndpoint: "http://localhost:9010/" },
+      client,
+      signingClient,
+    );
+
+    await storage.createDownloadUrl({
+      objectKey,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    expect(vi.mocked(getSignedUrl)).toHaveBeenLastCalledWith(
+      signingClient,
+      expect.any(GetObjectCommand),
+      expect.any(Object),
+    );
+    signingClient.destroy();
+  });
+
   it("bounds signed downloads by an absolute deadline", async () => {
-    const storage = new MinioObjectStorageAdapter(config, client);
+    const storage = new S3ObjectStorageAdapter(config, client);
     const expiresAt = new Date(Date.now() + 60_000);
     const result = await storage.createDownloadUrl({ objectKey, expiresAt });
 
@@ -101,7 +126,7 @@ describe("MinioObjectStorageAdapter", () => {
   });
 
   it("rejects a deadline with no complete signing second remaining", async () => {
-    const storage = new MinioObjectStorageAdapter(config, client);
+    const storage = new S3ObjectStorageAdapter(config, client);
     await expect(
       storage.createDownloadUrl({
         objectKey,
@@ -117,7 +142,7 @@ describe("MinioObjectStorageAdapter", () => {
       ContentLength: 12,
       ChecksumSHA256: Buffer.from(hash, "hex").toString("base64"),
     });
-    const storage = new MinioObjectStorageAdapter(config, client);
+    const storage = new S3ObjectStorageAdapter(config, client);
 
     await expect(storage.headObject(objectKey)).resolves.toEqual({
       contentType: "model/stl",
@@ -133,7 +158,7 @@ describe("MinioObjectStorageAdapter", () => {
   it("uses isolated keys for copying and fails a partial delete", async () => {
     send.mockResolvedValueOnce({});
     send.mockResolvedValueOnce({ Errors: [{ Key: objectKey }] });
-    const storage = new MinioObjectStorageAdapter(config, client);
+    const storage = new S3ObjectStorageAdapter(config, client);
     const destination = "models/123e4567-e89b-42d3-a456-426614174000/source";
 
     await storage.copyObject(objectKey, destination);
@@ -144,13 +169,22 @@ describe("MinioObjectStorageAdapter", () => {
     expect(send).toHaveBeenLastCalledWith(expect.any(DeleteObjectsCommand));
   });
 
+  it("treats per-key NoSuchKey delete results as idempotent success", async () => {
+    send.mockResolvedValueOnce({
+      Errors: [{ Key: objectKey, Code: "NoSuchKey" }],
+    });
+    const storage = new S3ObjectStorageAdapter(config, client);
+
+    await expect(storage.deleteObjects([objectKey])).resolves.toBeUndefined();
+  });
+
   it("lists a bounded generated namespace with modification timestamps", async () => {
     const lastModified = new Date("2026-08-01T00:00:00.000Z");
     send.mockResolvedValueOnce({
       Contents: [{ Key: objectKey, LastModified: lastModified }],
       IsTruncated: true,
     });
-    const storage = new MinioObjectStorageAdapter(config, client);
+    const storage = new S3ObjectStorageAdapter(config, client);
 
     await expect(
       storage.listObjects({ prefix: "quarantine/", limit: 25 }),
@@ -173,7 +207,7 @@ describe("MinioObjectStorageAdapter", () => {
         yield new Uint8Array([3]);
       })(),
     });
-    const storage = new MinioObjectStorageAdapter(config, client);
+    const storage = new S3ObjectStorageAdapter(config, client);
 
     await expect(storage.readObjectRange(objectKey, 2, 3)).resolves.toEqual(
       new Uint8Array([1, 2, 3]),

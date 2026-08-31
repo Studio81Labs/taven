@@ -1,5 +1,6 @@
 export interface ObjectStorageConfig {
   endpoint: string;
+  publicEndpoint: string;
   region: string;
   bucket: string;
   accessKeyId: string;
@@ -44,27 +45,37 @@ function parseTtlSeconds(value: string | undefined): number {
   return seconds;
 }
 
+function parseEndpoint(value: string, name: string): string {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw new Error(`${name} must be an absolute HTTP(S) URL`);
+  }
+  if (
+    (endpoint.protocol !== "http:" && endpoint.protocol !== "https:") ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.pathname !== "/" ||
+    endpoint.search ||
+    endpoint.hash
+  ) {
+    throw new Error(`${name} must be a bare HTTP(S) endpoint URL`);
+  }
+  return endpoint.toString();
+}
+
 export function readObjectStorageConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): ObjectStorageConfig {
-  const endpoint = required(env, "TAVEN_S3_ENDPOINT");
-  let parsedEndpoint: URL;
-  try {
-    parsedEndpoint = new URL(endpoint);
-  } catch {
-    throw new Error("TAVEN_S3_ENDPOINT must be an absolute HTTP(S) URL");
-  }
-  if (
-    (parsedEndpoint.protocol !== "http:" &&
-      parsedEndpoint.protocol !== "https:") ||
-    parsedEndpoint.username ||
-    parsedEndpoint.password ||
-    parsedEndpoint.pathname !== "/" ||
-    parsedEndpoint.search ||
-    parsedEndpoint.hash
-  ) {
-    throw new Error("TAVEN_S3_ENDPOINT must be a bare HTTP(S) endpoint URL");
-  }
+  const endpoint = parseEndpoint(
+    required(env, "TAVEN_S3_ENDPOINT"),
+    "TAVEN_S3_ENDPOINT",
+  );
+  const publicEndpoint = parseEndpoint(
+    env.TAVEN_S3_PUBLIC_ENDPOINT?.trim() || endpoint,
+    "TAVEN_S3_PUBLIC_ENDPOINT",
+  );
 
   const bucket = required(env, "TAVEN_S3_BUCKET");
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) {
@@ -79,7 +90,8 @@ export function readObjectStorageConfig(
   }
 
   return {
-    endpoint: parsedEndpoint.toString(),
+    endpoint,
+    publicEndpoint,
     region: required(env, "TAVEN_S3_REGION"),
     bucket,
     accessKeyId: required(env, "TAVEN_S3_ACCESS_KEY_ID"),

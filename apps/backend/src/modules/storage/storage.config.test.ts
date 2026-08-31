@@ -15,6 +15,7 @@ describe("readObjectStorageConfig", () => {
   it("reads an explicit local MinIO configuration", () => {
     expect(readObjectStorageConfig(environment)).toEqual({
       endpoint: "http://127.0.0.1:9010/",
+      publicEndpoint: "http://127.0.0.1:9010/",
       region: "us-east-1",
       bucket: "taven",
       accessKeyId: "test-key",
@@ -23,6 +24,22 @@ describe("readObjectStorageConfig", () => {
       signedUrlTtlSeconds: 900,
       uploadClientHashKey: "test-only-upload-client-hash-key-32",
     });
+  });
+
+  it("allows browser-facing signed URLs to use a separate endpoint", () => {
+    expect(
+      readObjectStorageConfig({
+        ...environment,
+        TAVEN_S3_PUBLIC_ENDPOINT: "http://localhost:9010",
+      }).publicEndpoint,
+    ).toBe("http://localhost:9010/");
+
+    expect(() =>
+      readObjectStorageConfig({
+        ...environment,
+        TAVEN_S3_PUBLIC_ENDPOINT: "minio:9000",
+      }),
+    ).toThrow("TAVEN_S3_PUBLIC_ENDPOINT must be a bare HTTP(S) endpoint URL");
   });
 
   it("rejects malformed endpoints and TTLs", () => {

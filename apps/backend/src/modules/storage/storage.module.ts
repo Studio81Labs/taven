@@ -1,6 +1,6 @@
 import { Module } from "@nestjs/common";
 import { PrismaModule } from "../../prisma/prisma.module";
-import { MinioObjectStorageAdapter } from "./minio-object-storage.adapter";
+import { S3ObjectStorageAdapter } from "./s3-object-storage.adapter";
 import { OBJECT_STORAGE } from "./object-storage.port";
 import { RetentionService } from "./retention.service";
 import {
@@ -23,7 +23,7 @@ import { UploadService } from "./upload.service";
       provide: OBJECT_STORAGE,
       inject: [OBJECT_STORAGE_CONFIG],
       useFactory: (config: ObjectStorageConfig) =>
-        new MinioObjectStorageAdapter(config),
+        new S3ObjectStorageAdapter(config),
     },
     UploadService,
     RetentionService,
