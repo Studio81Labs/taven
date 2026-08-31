@@ -52,6 +52,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - run: pnpm slicer-worker:profiles:check
       - run: pnpm slicer-worker:orca:build
       - run: pnpm slicer-worker:orca:test
