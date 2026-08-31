@@ -58,10 +58,47 @@ pnpm infra:logs
 pnpm infra:down
 ```
 
+To build and run the complete containerized stack instead, use:
+
+```bash
+pnpm stack:up
+```
+
+This builds the same independently runnable backend, web, and admin images used
+by the integration stack, applies Prisma migrations once, and waits until every
+long-running service is healthy. The public app is available at
+`http://localhost:3000`, the API at `http://localhost:3001`, the admin app at
+`http://localhost:3002`, and MinIO at `http://localhost:9010`. All published
+ports bind to loopback and every credential in the Compose file is local-only.
+
+Follow logs or stop the stack with `pnpm stack:logs` and `pnpm stack:down`.
+`pnpm stack:reset` also deletes the local PostgreSQL, Redis, MinIO, and Garage
+volumes; use it only when intentionally testing a clean-volume startup.
+
+The slicer fixture worker is deliberately excluded from `stack:up`. Start it
+explicitly with `pnpm stack:worker`. Run the same object-storage integration
+contract against the default MinIO or the pinned Garage compatibility profile
+with:
+
+```bash
+pnpm stack:storage:test:minio
+pnpm stack:storage:test:garage
+```
+
+Garage is exposed only while its compatibility profile is running, at
+`http://localhost:3900`. Each contract command resets only its dedicated
+`taven_contract_minio` or `taven_contract_garage` test database; it does not
+reset the development `taven` database. These local commands do not require
+Cloudflare, Coolify, Comgate, Resend, production secrets, or VPS access.
+Production database backups are configured through Coolify and sent to
+Cloudflare R2; this repository does not run a SQL dump container or backup
+scheduler.
+
 ## Validation
 
 ```bash
 pnpm format:check
+pnpm stack:config:check
 pnpm lint
 pnpm typecheck
 pnpm test

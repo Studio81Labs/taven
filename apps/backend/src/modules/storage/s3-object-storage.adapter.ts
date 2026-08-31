@@ -70,13 +70,15 @@ function signingWindow(expiresAt: Date): {
   };
 }
 
-/** S3-compatible adapter configured for the local MinIO implementation. */
-export class MinioObjectStorageAdapter implements ObjectStorage {
+/** Provider-neutral adapter for the supported S3-compatible implementations. */
+export class S3ObjectStorageAdapter implements ObjectStorage {
   private readonly client: S3Client;
+  private readonly signingClient: S3Client;
 
   constructor(
     private readonly config: ObjectStorageConfig,
     client?: S3Client,
+    signingClient?: S3Client,
   ) {
     this.client =
       client ??
@@ -89,6 +91,19 @@ export class MinioObjectStorageAdapter implements ObjectStorage {
           secretAccessKey: config.secretAccessKey,
         },
       });
+    this.signingClient =
+      signingClient ??
+      (config.publicEndpoint === config.endpoint
+        ? this.client
+        : new S3Client({
+            region: config.region,
+            endpoint: config.publicEndpoint,
+            forcePathStyle: config.forcePathStyle,
+            credentials: {
+              accessKeyId: config.accessKeyId,
+              secretAccessKey: config.secretAccessKey,
+            },
+          }));
   }
 
   async createUploadUrl(
@@ -110,9 +125,10 @@ export class MinioObjectStorageAdapter implements ObjectStorage {
       ChecksumAlgorithm: "SHA256",
       ChecksumSHA256: checksum,
     });
-    const url = await getSignedUrl(this.client, command, {
+    const url = await getSignedUrl(this.signingClient, command, {
       expiresIn,
       signingDate,
+      unhoistableHeaders: new Set(["x-amz-checksum-sha256"]),
     });
 
     return {
@@ -135,7 +151,7 @@ export class MinioObjectStorageAdapter implements ObjectStorage {
       input.expiresAt,
     );
     const url = await getSignedUrl(
-      this.client,
+      this.signingClient,
       new GetObjectCommand({
         Bucket: this.config.bucket,
         Key: input.objectKey,
@@ -272,9 +288,19 @@ export class MinioObjectStorageAdapter implements ObjectStorage {
           Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
         }),
       );
-      if (result.Errors && result.Errors.length > 0) {
+      const failures = (result.Errors ?? []).filter(
+        (error) => error.Code !== "NoSuchKey",
+      );
+      if (failures.length > 0) {
         throw new Error(
-          `object storage failed to delete ${result.Errors.map((error) => error.Key ?? "unknown").join(", ")}`,
+          `object storage failed to delete ${failures
+            .map(
+              (error) =>
+                `${error.Key ?? "unknown"} (${error.Code ?? "unknown"}${
+                  error.Message ? `: ${error.Message}` : ""
+                })`,
+            )
+            .join(", ")}`,
         );
       }
     }
