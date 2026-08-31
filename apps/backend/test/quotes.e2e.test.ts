@@ -1141,6 +1141,20 @@ describe("QuoteRequest and tokenized individual offers", () => {
       expect(persisted.acceptedAt!.getTime()).toBeLessThan(
         new Date(issued.body.expiresAt).getTime(),
       );
+      await expect(
+        prisma.quoteRequest.update({
+          where: { id: created.requestId },
+          data: {
+            acceptedAt: new Date(persisted.acceptedAt!.getTime() - 1_000),
+          },
+        }),
+      ).rejects.toBeDefined();
+      await expect(
+        prisma.quoteRequest.findUniqueOrThrow({
+          where: { id: created.requestId },
+          select: { acceptedAt: true },
+        }),
+      ).resolves.toEqual({ acceptedAt: persisted.acceptedAt });
     } finally {
       await prisma.$executeRawUnsafe(`
         DROP TRIGGER IF EXISTS taven_test_delay_deadline_order_insert ON orders
