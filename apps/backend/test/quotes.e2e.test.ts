@@ -86,6 +86,36 @@ describe("QuoteRequest and tokenized individual offers", () => {
     });
   });
 
+  it("canonicalizes distinct Unicode keys with locale-independent ordering", async () => {
+    const idempotencyKey = key("unicode-key-order");
+    const clientAddress = "198.51.100.43";
+    const input = requestInput("unicode-key-order");
+    const first = await quotes.createRequest(
+      {
+        ...input,
+        measurements: {
+          é: "composed",
+          é: "decomposed",
+        },
+      },
+      clientAddress,
+      idempotencyKey,
+    );
+
+    const replay = await quotes.createRequest(
+      {
+        ...input,
+        measurements: {
+          é: "decomposed",
+          é: "composed",
+        },
+      },
+      clientAddress,
+      idempotencyKey,
+    );
+    expect(replay).toEqual(first);
+  });
+
   it("starts a new append-only idempotency generation after expiry", async () => {
     const idempotencyKey = key("expired-generation");
     const clientAddress = "198.51.100.42";
@@ -1213,7 +1243,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     return {
       description: `A detailed individual quote request for ${scope}`,
       purpose: "Replace a broken household part",
-      measurements: { widthMm: 42, heightMm: 18 },
+      measurements: { widthMm: 42, heightMm: 18 } as Record<string, unknown>,
       requestedDate: "2026-10-01",
       contact: {
         name: `Test Customer ${scope}`,

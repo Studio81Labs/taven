@@ -43,6 +43,7 @@ import {
 } from "./quotes.dto";
 import { QuotesService } from "./quotes.service";
 
+const TRIMMED_IDEMPOTENCY_KEY_PATTERN = "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$";
 const IDEMPOTENCY_HEADER = {
   name: "Idempotency-Key",
   required: true,
@@ -50,7 +51,7 @@ const IDEMPOTENCY_HEADER = {
   schema: {
     type: "string",
     minLength: 8,
-    maxLength: 255,
+    pattern: TRIMMED_IDEMPOTENCY_KEY_PATTERN,
   },
 };
 

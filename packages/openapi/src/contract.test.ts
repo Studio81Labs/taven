@@ -120,7 +120,7 @@ describe("OpenAPI artifact", () => {
           schema: {
             type: "string",
             minLength: 8,
-            maxLength: 255,
+            pattern: "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
           },
         }),
       ]),
@@ -129,7 +129,7 @@ describe("OpenAPI artifact", () => {
       expect(header.schema).toEqual({
         type: "string",
         minLength: 8,
-        maxLength: 255,
+        pattern: "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
       });
     }
   });
