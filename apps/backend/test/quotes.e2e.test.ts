@@ -1,9 +1,13 @@
 import "reflect-metadata";
-import type { INestApplication } from "@nestjs/common";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
+import {
+  configureHttpBodyParsers,
+  HTTP_BODY_LIMIT_BYTES,
+} from "../src/http-body.config";
 import type { IssueOfferDto } from "../src/modules/quotes/quotes.dto";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
@@ -25,7 +29,7 @@ process.env.TAVEN_S3_FORCE_PATH_STYLE = "true";
 process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY = uploadClientHashKey;
 
 describe("QuoteRequest and tokenized individual offers", () => {
-  let app: INestApplication;
+  let app: NestExpressApplication;
   let baseUrl: URL;
   let prisma: PrismaService;
   let quotes: QuotesService;
@@ -36,7 +40,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
-    app = moduleRef.createNestApplication();
+    app = moduleRef.createNestApplication<NestExpressApplication>({
+      bodyParser: false,
+    });
+    configureHttpBodyParsers(app);
     await app.listen(0, "127.0.0.1");
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
@@ -915,7 +922,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         })),
       });
     });
-    const items: IssueOfferDto["items"] = references.map(
+    const items: Array<Record<string, unknown>> = references.map(
       ({ modelGeometryId, printConfigRevisionId }) => ({
         kind: "MODEL",
         sourceModelFileId,
@@ -944,41 +951,78 @@ describe("QuoteRequest and tokenized individual offers", () => {
         },
       ],
     );
-    const issued = await quotes.issueOffer(
-      created.requestId,
+    const shipmentPlans = [
       {
-        summary: "Many-item reference batching offer",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
-        promisedDate: "2026-10-01",
-        priceListId,
+        category: "STANDARD",
+        plannedVolumeCubicMm: itemCount,
+        plannedWeightMilligrams: itemCount,
+        shippingAmountMinor: 0,
+        packagingAmountMinor: 0,
+        handlingAmountMinor: 0,
+        packingUnits: references.map(({ ordinal }) => ({
+          quoteItemOrdinal: ordinal,
+          quantityOrdinal: 1,
+        })),
+      },
+    ];
+    const variablePayloadBytes = Buffer.byteLength(
+      JSON.stringify({ components, items, shipmentPlans }),
+    );
+    expect(variablePayloadBytes).toBeGreaterThan(100 * 1024);
+    expect(variablePayloadBytes).toBeLessThan(HTTP_BODY_LIMIT_BYTES);
+    const issued = await issueOffer(
+      created.requestId,
+      key("batched-reference-lookups-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      components,
+      items,
+      priceListId,
+      {
         contractTotalMinor: itemCount,
         depositMinor: 1,
-        termsSnapshot: { revisionAcceptedByOffer: true },
-        inputSnapshot: { operatorEstimate: "manual-v0" },
-        deliveryDestination: defaultDeliveryDestination(),
-        shipmentPlans: [
-          {
-            category: "STANDARD",
-            plannedVolumeCubicMm: itemCount,
-            plannedWeightMilligrams: itemCount,
-            shippingAmountMinor: 0,
-            packagingAmountMinor: 0,
-            handlingAmountMinor: 0,
-            packingUnits: references.map(({ ordinal }) => ({
-              quoteItemOrdinal: ordinal,
-              quantityOrdinal: 1,
-            })),
-          },
-        ],
-        paymentPolicy: defaultPaymentPolicy(),
-        items,
-        components,
+        shipmentPlans,
       },
-      key("batched-reference-lookups-issue"),
     );
+    expect(issued.response.status).toBe(201);
     await expect(
-      prisma.quoteItem.count({ where: { quoteId: issued.quoteId } }),
+      prisma.quoteItem.count({ where: { quoteId: issued.body.quoteId } }),
     ).resolves.toBe(itemCount);
+  });
+
+  it("rejects a non-canonical price-list terms revision", async () => {
+    const selectedPriceList = await prisma.priceList.create({
+      data: {
+        revision: `quote-e2e-spaced-terms-${randomUUID()}`,
+        termsRevision: "  terms-spaced-v1  ",
+        currency: "CZK",
+        parameters: {
+          balance_payment_days: 7,
+          balance_timeout_earned_component_kinds: ["ITEM_PRODUCTION"],
+        },
+      },
+    });
+    const created = await quotes.createRequest(
+      requestInput("spaced-terms"),
+      "198.51.100.49",
+      key("spaced-terms-create"),
+    );
+    await quotes.beginReview(created.requestId, key("spaced-terms-review"));
+
+    const issued = await issueOffer(
+      created.requestId,
+      key("spaced-terms-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      defaultItems(),
+      selectedPriceList.id,
+    );
+    expect(issued.response.status).toBe(400);
+    expect(issued.body).toMatchObject({
+      message: "priceListId has a non-canonical terms revision",
+    });
+    await expect(
+      prisma.quote.count({ where: { quoteRequestId: created.requestId } }),
+    ).resolves.toBe(0);
   });
 
   it("rejects a current offer idempotently and prevents later acceptance", async () => {

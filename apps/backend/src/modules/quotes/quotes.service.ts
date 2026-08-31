@@ -418,6 +418,16 @@ export class QuotesService {
           where: { id: offer.priceListId },
         });
         if (!priceList) throw new BadRequestException("priceListId is invalid");
+        const termsRevision = requiredText(
+          priceList.termsRevision,
+          "priceList.termsRevision",
+          100,
+        );
+        if (termsRevision !== priceList.termsRevision) {
+          throw new BadRequestException(
+            "priceListId has a non-canonical terms revision",
+          );
+        }
         if (priceList.currency !== "CZK") {
           throw new BadRequestException("Individual v0 offers must use CZK");
         }
@@ -499,7 +509,7 @@ export class QuotesService {
             capabilityKeyId: offerCapabilityKey.id,
             version: 1,
             summary: offer.summary,
-            termsRevision: priceList.termsRevision,
+            termsRevision,
             termsSnapshot: jsonInput(offer.termsSnapshot)!,
             promisedDate: offer.promisedDate ?? null,
             issuanceCommandKey: commandKey,
@@ -667,7 +677,7 @@ export class QuotesService {
               requestId,
               quoteId,
               version: 1,
-              termsRevision: priceList.termsRevision,
+              termsRevision,
               priceSnapshotId: snapshotId,
               operatorAuthenticated: true,
             })!,
@@ -701,7 +711,7 @@ export class QuotesService {
         return {
           quoteId,
           version: 1,
-          termsRevision: priceList.termsRevision,
+          termsRevision,
           offerToken,
           expiresAt: offer.expiresAt.toISOString(),
         } satisfies OfferIssuedDto;
