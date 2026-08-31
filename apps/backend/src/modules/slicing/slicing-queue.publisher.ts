@@ -111,15 +111,8 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
       await this.assertDurableDispatch(job);
       const result = slicingResultForJobSchema(job).parse(queued.returnvalue);
       const resultFingerprintSha256 = slicingResultFingerprint(result);
-      if (
-        result.kind === "candidate_estimate" &&
-        result.outcome.status === "failed"
-      ) {
-        await this.candidateEstimates.ingest({
-          result,
-          capacityWindows: [],
-          expiresAt: new Date(Date.now() + 1_000),
-        });
+      if (result.kind === "candidate_estimate") {
+        await this.candidateEstimates.ingest({ result });
       }
       await this.recordResultReceipt(
         result.jobId,
@@ -217,7 +210,6 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
               machineProfileId: input.machineProfile.revisionId,
               machineCalibrationId: input.machineCalibration.revisionId,
               arrangementRevisionId: input.arrangementRevision.revisionId,
-              packageQuantity: input.quantity,
               partsPerPlate: input.partsPerPlate,
               modelGeometry: {
                 sourceModelFileId: input.geometry.sourceModelFileId,
@@ -228,10 +220,22 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
                 },
               },
             },
+            phaseResourcePlanJob: {
+              candidateResourceEstimate: {
+                quantity: input.quantity,
+                partsPerPlate: input.partsPerPlate,
+                arrangementRevisionId: input.arrangementRevision.revisionId,
+                arrangementRevision: {
+                  contentSha256: input.arrangementRevision.contentSha256,
+                },
+              },
+            },
             printConfigRevision: {
               revision: { digest: input.printConfig.contentSha256 },
             },
             machineProfile: {
+              slicerEngine: input.machineProfile.slicerEngine,
+              slicerVersion: input.machineProfile.slicerVersion,
               revision: { digest: input.machineProfile.contentSha256 },
             },
             machineCalibration: {

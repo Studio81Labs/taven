@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { SlicingWorkerError } from "./failures.js";
 import { sha256 } from "./object-store.js";
@@ -31,6 +32,7 @@ type ParsedBody = InspectedBody & { triangles: Triangle[] };
 export type ModelInspection = {
   unitHint: "millimeter" | "inch" | "meter" | "unknown";
   bodies: InspectedBody[];
+  boundingBox: InspectedBody["boundingBox"];
   objectCount: number;
   hasPaintAssignments: boolean;
   materialAssignmentCount: number;
@@ -43,6 +45,8 @@ const MAX_ZIP_ENTRIES = 256;
 const MAX_XML_BYTES = 16 * 1024 * 1024;
 const MAX_ARCHIVE_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_TRIANGLES = 1_000_000;
+const MAX_COMPONENT_EDGES = 4_096;
+const MAX_COMPONENT_DEPTH = 64;
 const ZIP_EOCD = 0x06054b50;
 const ZIP_CENTRAL_FILE = 0x02014b50;
 const ZIP_LOCAL_FILE = 0x04034b50;
@@ -284,6 +288,7 @@ function parseStl(bytes: Uint8Array): ParsedModel {
         extruders: [],
       }),
     ],
+    boundingBox: boundingBox(triangles),
     objectCount: 1,
     hasPaintAssignments: false,
     materialAssignmentCount: 0,
@@ -398,9 +403,48 @@ function zipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
   return entries;
 }
 
-function inspectRelationships(entries: Map<string, Uint8Array>): void {
+function relationshipSource(name: string): string | null {
+  if (name === "_rels/.rels") return "";
+  const match = /^(.*)\/_rels\/([^/]+)\.rels$/u.exec(name);
+  return match ? `${match[1]!}/${match[2]!}` : null;
+}
+
+function relationshipTarget(sourcePart: string, target: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target);
+  } catch {
+    invalid("3MF relationship target is unsafe");
+  }
+  if (
+    !decoded! ||
+    decoded!.includes("\\") ||
+    /[?#]/u.test(decoded!) ||
+    /^[a-z][a-z0-9+.-]*:/iu.test(decoded!)
+  ) {
+    invalid("3MF relationship target is unsafe");
+  }
+  const relative = decoded!.startsWith("/") ? decoded!.slice(1) : decoded!;
+  const parts = relative.split("/");
+  if (parts.some((part) => part === "" || part === "." || part === "..")) {
+    invalid("3MF relationship target is unsafe");
+  }
+  const base = decoded!.startsWith("/")
+    ? ""
+    : sourcePart.includes("/")
+      ? path.posix.dirname(sourcePart)
+      : "";
+  return safeArchivePath(path.posix.join(base, relative));
+}
+
+function inspectRelationships(
+  entries: Map<string, Uint8Array>,
+): Map<string, Set<string>> {
+  const modelRelationships = new Map<string, Set<string>>();
   for (const [name, bytes] of entries) {
     if (!name.endsWith(".rels")) continue;
+    const sourcePart = relationshipSource(name);
+    if (sourcePart === null) invalid("3MF relationship part is misplaced");
     const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     for (const match of source.matchAll(/<Relationship\b([^>]*)\/?\s*>/giu)) {
       const values = attributes(match[1]!);
@@ -409,65 +453,152 @@ function inspectRelationships(entries: Map<string, Uint8Array>): void {
       }
       const target = values.get("target");
       if (!target) invalid("3MF relationship has no target");
-      const decodedTarget = decodeURIComponent(target);
-      const packageTarget = decodedTarget.startsWith("/")
-        ? decodedTarget.slice(1)
-        : decodedTarget;
-      if (
-        !packageTarget ||
-        packageTarget.includes("\\") ||
-        packageTarget.split("/").some((part) => part === ".." || part === "")
-      ) {
-        invalid("3MF relationship target is unsafe");
+      const packageTarget = relationshipTarget(sourcePart!, target);
+      if (!entries.has(packageTarget)) {
+        invalid("3MF relationship references a missing package part");
+      }
+      if (values.get("type")?.toLowerCase().endsWith("/3dmodel")) {
+        const targets = modelRelationships.get(sourcePart!) ?? new Set();
+        targets.add(packageTarget);
+        modelRelationships.set(sourcePart!, targets);
       }
     }
   }
+  return modelRelationships;
 }
 
-function parseThreeMf(bytes: Uint8Array): ParsedModel {
-  const entries = zipEntries(bytes);
-  inspectRelationships(entries);
-  const modelBytes = entries.get("3D/3dmodel.model");
-  if (!modelBytes) invalid("3MF archive has no canonical model part");
-  const source = new TextDecoder("utf-8", { fatal: true }).decode(modelBytes);
-  if (/<!DOCTYPE|<!ENTITY/iu.test(source)) {
-    invalid("3MF XML declarations are unsupported");
+type Transform = readonly [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
+
+type MeshDefinition = {
+  triangles: Triangle[];
+  paint: boolean;
+  materials: Set<string>;
+  extruders: Set<string>;
+};
+
+type ComponentDefinition = {
+  objectId: string;
+  partPath: string;
+  transform: Transform;
+};
+
+type ObjectDefinition = {
+  mesh: MeshDefinition | null;
+  components: ComponentDefinition[];
+};
+
+type ModelPart = {
+  path: string;
+  unitHint: ModelInspection["unitHint"];
+  objects: Map<string, ObjectDefinition>;
+};
+
+const IDENTITY_TRANSFORM: Transform = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+
+function localAttribute(
+  values: ReadonlyMap<string, string>,
+  name: string,
+): string | undefined {
+  const matches = [...values].filter(
+    ([key]) => key === name || key.endsWith(`:${name}`),
+  );
+  if (matches.length > 1) invalid(`3MF contains ambiguous ${name} attributes`);
+  return matches[0]?.[1];
+}
+
+function transformValue(value: string | undefined): Transform {
+  if (value === undefined) return IDENTITY_TRANSFORM;
+  const parts = value.trim().split(/\s+/u);
+  if (parts.length !== 12) invalid("3MF transform must contain 12 numbers");
+  const result = parts.map((part) => finiteNumber(part, "transform value"));
+  const determinant =
+    result[0]! * (result[4]! * result[8]! - result[5]! * result[7]!) -
+    result[1]! * (result[3]! * result[8]! - result[5]! * result[6]!) +
+    result[2]! * (result[3]! * result[7]! - result[4]! * result[6]!);
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) {
+    invalid("3MF transform is singular");
   }
-  const modelTag = /<model\b([^>]*)>/iu.exec(source);
-  if (!modelTag) invalid("3MF model element is missing");
-  const declaredUnit = attributes(modelTag[1]!).get("unit")?.toLowerCase();
-  const unitHint =
-    declaredUnit === "millimeter" ||
-    declaredUnit === "inch" ||
-    declaredUnit === "meter"
-      ? declaredUnit
-      : "unknown";
-  const parsedBodies: ParsedBody[] = [];
-  const objectPattern = /<object\b([^>]*)>([\s\S]*?)<\/object>/giu;
-  for (const objectMatch of source.matchAll(objectPattern)) {
-    const objectAttributes = attributes(objectMatch[1]!);
-    const objectId = objectAttributes.get("id");
-    if (!objectId || !/^[0-9]{1,9}$/u.test(objectId)) {
-      invalid("3MF object identifier is invalid");
-    }
-    const mesh = /<mesh\b[^>]*>([\s\S]*?)<\/mesh>/iu.exec(objectMatch[2]!);
-    if (!mesh) continue;
-    const vertices = [...mesh[1]!.matchAll(/<vertex\b([^>]*)\/?\s*>/giu)].map(
-      (match): Point => {
-        const values = attributes(match[1]!);
-        return [
-          finiteNumber(values.get("x"), "3MF x coordinate"),
-          finiteNumber(values.get("y"), "3MF y coordinate"),
-          finiteNumber(values.get("z"), "3MF z coordinate"),
-        ];
-      },
-    );
-    const materials = new Set<string>();
-    const extruders = new Set<string>();
-    let paint = false;
-    const triangles = [
-      ...mesh[1]!.matchAll(/<triangle\b([^>]*)\/?\s*>/giu),
-    ].map((match): Triangle => {
+  return result as unknown as Transform;
+}
+
+function transformedTriangles(
+  triangles: readonly Triangle[],
+  transform: Transform,
+): Triangle[] {
+  const determinant =
+    transform[0] * (transform[4] * transform[8] - transform[5] * transform[7]) -
+    transform[1] * (transform[3] * transform[8] - transform[5] * transform[6]) +
+    transform[2] * (transform[3] * transform[7] - transform[4] * transform[6]);
+  return triangles.map((triangle) => {
+    const points = triangle.map((point): Point => {
+      const transformed: Point = [
+        point[0] * transform[0] +
+          point[1] * transform[3] +
+          point[2] * transform[6] +
+          transform[9],
+        point[0] * transform[1] +
+          point[1] * transform[4] +
+          point[2] * transform[7] +
+          transform[10],
+        point[0] * transform[2] +
+          point[1] * transform[5] +
+          point[2] * transform[8] +
+          transform[11],
+      ];
+      if (
+        transformed.some(
+          (coordinate) =>
+            !Number.isFinite(coordinate) ||
+            Math.abs(coordinate) > 1_000_000_000,
+        )
+      ) {
+        invalid("3MF transform produces an invalid coordinate");
+      }
+      return transformed;
+    });
+    return determinant < 0
+      ? [points[0]!, points[2]!, points[1]!]
+      : [points[0]!, points[1]!, points[2]!];
+  });
+}
+
+function parseMesh(
+  source: string,
+  objectAttributes: ReadonlyMap<string, string>,
+  partPath: string,
+): MeshDefinition {
+  const vertices = [...source.matchAll(/<vertex\b([^>]*)\/?\s*>/giu)].map(
+    (match): Point => {
+      const values = attributes(match[1]!);
+      return [
+        finiteNumber(values.get("x"), "3MF x coordinate"),
+        finiteNumber(values.get("y"), "3MF y coordinate"),
+        finiteNumber(values.get("z"), "3MF z coordinate"),
+      ];
+    },
+  );
+  const materials = new Set<string>();
+  const extruders = new Set<string>();
+  let paint = false;
+  const partIdentity = createHash("sha256")
+    .update(partPath)
+    .digest("hex")
+    .slice(0, 12);
+  const triangles = [...source.matchAll(/<triangle\b([^>]*)\/?\s*>/giu)].map(
+    (match): Triangle => {
       const values = attributes(match[1]!);
       const indices = ["v1", "v2", "v3"].map((name) => {
         const value = values.get(name);
@@ -483,15 +614,15 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
       const fallbackPropertyIndex =
         values.get("pindex") ?? objectAttributes.get("pindex");
       if (pid) {
-        const indices =
+        const assigned =
           propertyIndices.length > 0
             ? propertyIndices
             : fallbackPropertyIndex
               ? [fallbackPropertyIndex]
               : [null];
-        for (const propertyIndex of indices) {
+        for (const propertyIndex of assigned) {
           materials.add(
-            `material-${pid}${propertyIndex ? `-${propertyIndex}` : ""}`,
+            `material-${partIdentity}-${pid}${propertyIndex ? `-${propertyIndex}` : ""}`,
           );
         }
       }
@@ -510,29 +641,249 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
         invalid("3MF triangle references a missing vertex");
       }
       return [selected[0]!, selected[1]!, selected[2]!];
-    });
-    const padded = objectId.padStart(4, "0");
-    if (parsedBodies.some((item) => item.bodyId === `body-${padded}`)) {
-      invalid("3MF contains duplicate object identifiers");
-    }
-    parsedBodies.push(
-      body(`body-${padded}`, triangles, {
-        paint,
-        materials,
-        extruders,
-      }),
-    );
+    },
+  );
+  if (triangles.length < 1) invalid("Model body contains no triangles");
+  return { triangles, paint, materials, extruders };
+}
+
+function referencedPart(
+  values: ReadonlyMap<string, string>,
+  currentPart: string,
+  rootPart: string,
+  allowedRootTargets: ReadonlySet<string>,
+): string {
+  const reference = localAttribute(values, "path");
+  if (reference === undefined) return currentPart;
+  if (currentPart !== rootPart || !reference.startsWith("/")) {
+    invalid("3MF production path is not permitted in this model part");
   }
-  parsedBodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
-  if (parsedBodies.length < 1)
-    invalid("3MF contains no independently selectable mesh bodies");
-  if (parsedBodies.length > 256) {
+  const target = relationshipTarget(rootPart, reference);
+  if (!allowedRootTargets.has(target)) {
+    invalid("3MF production path has no matching model relationship");
+  }
+  return target;
+}
+
+function parseModelPart(
+  partPath: string,
+  bytes: Uint8Array,
+  rootPart: string,
+  allowedRootTargets: ReadonlySet<string>,
+): ModelPart {
+  const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  if (/<!DOCTYPE|<!ENTITY/iu.test(source)) {
+    invalid("3MF XML declarations are unsupported");
+  }
+  const modelTag = /<model\b([^>]*)>/iu.exec(source);
+  if (!modelTag) invalid("3MF model element is missing");
+  const declaredUnit = attributes(modelTag[1]!).get("unit")?.toLowerCase();
+  const unitHint =
+    declaredUnit === "millimeter" ||
+    declaredUnit === "inch" ||
+    declaredUnit === "meter"
+      ? declaredUnit
+      : "unknown";
+  const objects = new Map<string, ObjectDefinition>();
+  const objectPattern = /<object\b([^>]*)>([\s\S]*?)<\/object>/giu;
+  for (const objectMatch of source.matchAll(objectPattern)) {
+    const objectAttributes = attributes(objectMatch[1]!);
+    const objectId = objectAttributes.get("id");
+    if (!objectId || !/^[0-9]{1,9}$/u.test(objectId)) {
+      invalid("3MF object identifier is invalid");
+    }
+    if (objects.has(objectId))
+      invalid("3MF contains duplicate object identifiers");
+    const mesh = /<mesh\b[^>]*>([\s\S]*?)<\/mesh>/iu.exec(objectMatch[2]!);
+    const componentsMatch =
+      /<components\b[^>]*>([\s\S]*?)<\/components>/iu.exec(objectMatch[2]!);
+    if ((mesh === null) === (componentsMatch === null)) {
+      invalid("3MF object must contain exactly one mesh or component graph");
+    }
+    const components = componentsMatch
+      ? [...componentsMatch[1]!.matchAll(/<component\b([^>]*)\/?\s*>/giu)].map(
+          (match): ComponentDefinition => {
+            const values = attributes(match[1]!);
+            const referencedObjectId = values.get("objectid");
+            if (
+              !referencedObjectId ||
+              !/^[0-9]{1,9}$/u.test(referencedObjectId)
+            ) {
+              invalid("3MF component object identifier is invalid");
+            }
+            return {
+              objectId: referencedObjectId,
+              partPath: referencedPart(
+                values,
+                partPath,
+                rootPart,
+                allowedRootTargets,
+              ),
+              transform: transformValue(values.get("transform")),
+            };
+          },
+        )
+      : [];
+    if (componentsMatch && components.length < 1) {
+      invalid("3MF component graph is empty");
+    }
+    objects.set(objectId, {
+      mesh: mesh ? parseMesh(mesh[1]!, objectAttributes, partPath) : null,
+      components,
+    });
+  }
+  return { path: partPath, unitHint, objects };
+}
+
+function parseThreeMf(bytes: Uint8Array): ParsedModel {
+  const entries = zipEntries(bytes);
+  const relationships = inspectRelationships(entries);
+  const packageRoots = [...(relationships.get("") ?? [])];
+  const rootPart =
+    packageRoots.length === 1
+      ? packageRoots[0]!
+      : packageRoots.length === 0 && entries.has("3D/3dmodel.model")
+        ? "3D/3dmodel.model"
+        : invalid("3MF archive must identify exactly one root model part");
+  const rootBytes = entries.get(rootPart);
+  if (!rootBytes) invalid("3MF archive root model part is missing");
+  const allowedRootTargets = relationships.get(rootPart) ?? new Set<string>();
+  const parts = new Map<string, ModelPart>();
+  const loadPart = (partPath: string): ModelPart => {
+    const existing = parts.get(partPath);
+    if (existing) return existing;
+    const partBytes = entries.get(partPath);
+    if (!partBytes || !partPath.toLowerCase().endsWith(".model")) {
+      invalid("3MF component references a missing model part");
+    }
+    const parsed = parseModelPart(
+      partPath,
+      partBytes,
+      rootPart,
+      allowedRootTargets,
+    );
+    parts.set(partPath, parsed);
+    return parsed;
+  };
+  const root = loadPart(rootPart);
+  const rootSource = new TextDecoder("utf-8", { fatal: true }).decode(
+    rootBytes,
+  );
+  const build = /<build\b[^>]*>([\s\S]*?)<\/build>/iu.exec(rootSource);
+  if (!build) invalid("3MF root model contains no build items");
+  const buildItems = [...build[1]!.matchAll(/<item\b([^>]*)\/?\s*>/giu)].filter(
+    (item) => {
+      const printable = attributes(item[1]!).get("printable");
+      if (printable !== undefined && printable !== "0" && printable !== "1") {
+        invalid("3MF build item printable flag is invalid");
+      }
+      return printable !== "0";
+    },
+  );
+  if (buildItems.length < 1) invalid("3MF root model contains no build items");
+  if (buildItems.length > 256) {
     throw new SlicingWorkerError(
       "deterministic_invalid",
       "RESOURCE_LIMIT_EXCEEDED",
       "3MF exceeds the selectable body limit",
     );
   }
+  let expandedTriangles = 0;
+  let traversedEdges = 0;
+  const resolveObject = (
+    partPath: string,
+    objectId: string,
+    stack: ReadonlySet<string>,
+    depth: number,
+  ): MeshDefinition => {
+    if (depth > MAX_COMPONENT_DEPTH) {
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "RESOURCE_LIMIT_EXCEEDED",
+        "3MF component graph exceeds the depth limit",
+      );
+    }
+    const identity = `${partPath}\0${objectId}`;
+    if (stack.has(identity)) invalid("3MF component graph contains a cycle");
+    const part = loadPart(partPath);
+    if (part.unitHint !== root.unitHint) {
+      invalid("3MF component model parts use inconsistent units");
+    }
+    const definition = part.objects.get(objectId);
+    if (!definition) invalid("3MF build references a missing object");
+    if (definition.mesh) {
+      expandedTriangles += definition.mesh.triangles.length;
+      if (expandedTriangles > MAX_TRIANGLES) {
+        throw new SlicingWorkerError(
+          "deterministic_invalid",
+          "RESOURCE_LIMIT_EXCEEDED",
+          "3MF exceeds the expanded triangle limit",
+        );
+      }
+      return {
+        triangles: definition.mesh.triangles,
+        paint: definition.mesh.paint,
+        materials: new Set(definition.mesh.materials),
+        extruders: new Set(definition.mesh.extruders),
+      };
+    }
+    const nextStack = new Set(stack).add(identity);
+    const combined: MeshDefinition = {
+      triangles: [],
+      paint: false,
+      materials: new Set(),
+      extruders: new Set(),
+    };
+    for (const component of definition.components) {
+      traversedEdges += 1;
+      if (traversedEdges > MAX_COMPONENT_EDGES) {
+        throw new SlicingWorkerError(
+          "deterministic_invalid",
+          "RESOURCE_LIMIT_EXCEEDED",
+          "3MF component graph exceeds the expansion limit",
+        );
+      }
+      const child = resolveObject(
+        component.partPath,
+        component.objectId,
+        nextStack,
+        depth + 1,
+      );
+      combined.triangles.push(
+        ...transformedTriangles(child.triangles, component.transform),
+      );
+      combined.paint ||= child.paint;
+      child.materials.forEach((value) => combined.materials.add(value));
+      child.extruders.forEach((value) => combined.extruders.add(value));
+    }
+    return combined;
+  };
+  const parsedBodies = buildItems.map((item, index) => {
+    const values = attributes(item[1]!);
+    const objectId = values.get("objectid");
+    if (!objectId || !/^[0-9]{1,9}$/u.test(objectId)) {
+      invalid("3MF build item object identifier is invalid");
+    }
+    const itemPart = referencedPart(
+      values,
+      rootPart,
+      rootPart,
+      allowedRootTargets,
+    );
+    const realized = resolveObject(itemPart, objectId, new Set(), 1);
+    return body(
+      `body-${String(index + 1).padStart(4, "0")}`,
+      transformedTriangles(
+        realized.triangles,
+        transformValue(values.get("transform")),
+      ),
+      {
+        paint: realized.paint,
+        materials: realized.materials,
+        extruders: realized.extruders,
+      },
+    );
+  });
   const materialIds = new Set(
     parsedBodies.flatMap((item) => item.materialAssignmentIds),
   );
@@ -540,8 +891,9 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
     parsedBodies.flatMap((item) => item.extruderAssignmentIds),
   );
   return {
-    unitHint,
+    unitHint: root.unitHint,
     bodies: parsedBodies,
+    boundingBox: boundingBox(parsedBodies.flatMap((item) => item.triangles)),
     objectCount: parsedBodies.length,
     hasPaintAssignments: parsedBodies.some((item) => item.hasPaintAssignments),
     materialAssignmentCount: materialIds.size,
@@ -667,6 +1019,7 @@ export function canonicalizeModel(
     inspection: {
       unitHint: "millimeter",
       bodies: scaledBodies.map(({ triangles: _triangles, ...value }) => value),
+      boundingBox: boundingBox(triangles),
       objectCount: scaledBodies.length,
       hasPaintAssignments: scaledBodies.some(
         (item) => item.hasPaintAssignments,
@@ -679,29 +1032,6 @@ export function canonicalizeModel(
       ).size,
     },
   };
-}
-
-export function aggregateBounds(bodies: readonly InspectedBody[]) {
-  return bodies.reduce(
-    (result, item) => ({
-      xMicrometers: String(
-        BigInt(result.xMicrometers) > BigInt(item.boundingBox.xMicrometers)
-          ? BigInt(result.xMicrometers)
-          : BigInt(item.boundingBox.xMicrometers),
-      ),
-      yMicrometers: String(
-        BigInt(result.yMicrometers) > BigInt(item.boundingBox.yMicrometers)
-          ? BigInt(result.yMicrometers)
-          : BigInt(item.boundingBox.yMicrometers),
-      ),
-      zMicrometers: String(
-        BigInt(result.zMicrometers) > BigInt(item.boundingBox.zMicrometers)
-          ? BigInt(result.zMicrometers)
-          : BigInt(item.boundingBox.zMicrometers),
-      ),
-    }),
-    { xMicrometers: "0", yMicrometers: "0", zMicrometers: "0" },
-  );
 }
 
 export function inspectionFingerprint(inspection: ModelInspection): string {

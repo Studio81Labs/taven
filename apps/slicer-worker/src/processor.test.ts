@@ -53,6 +53,17 @@ class MemoryStore implements WorkerObjectStore {
   }
 }
 
+class ConflictingWriteStore extends MemoryStore {
+  conflictKey: string | null = null;
+
+  override async write(key: string, bytes: Uint8Array) {
+    if (key === this.conflictKey && !this.objects.has(key)) {
+      this.objects.set(key, new TextEncoder().encode("different artifact"));
+    }
+    return super.write(key, bytes);
+  }
+}
+
 class FakeEngine implements OrcaEngine {
   readonly calls: OrcaSliceRequest[] = [];
 
@@ -281,5 +292,147 @@ describe("SlicingProcessor", () => {
         key.startsWith("reference-slices/"),
       ),
     ).toBe(false);
+  });
+
+  it("passes the accepted full-and-tail plate plan to production slicing", async () => {
+    const store = new MemoryStore();
+    const engine = new FakeEngine();
+    const geometry = await readFile(
+      path.resolve("../../tools/slicing-fixtures/fixtures/single-pla/cube.stl"),
+    );
+    const geometryHash = sha256(geometry);
+    store.objects.set(`geometries/${ids.geometry}/canonical`, geometry);
+    const revisions = ["machine", "calibration", "config"].map((name) =>
+      new TextEncoder().encode(JSON.stringify({ name })),
+    );
+    const hashes = revisions.map((value) => sha256(value));
+    revisions.forEach((value, index) => {
+      store.objects.set(
+        `slicer-revisions/${hashes[index]!}/settings.json`,
+        value,
+      );
+    });
+    const bodyIds = ["body-0001"];
+    const input = {
+      geometry: {
+        sourceModelFileId: ids.source,
+        sourceContentSha256: "d".repeat(64),
+        modelGeometryId: ids.geometry,
+        canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
+        geometrySha256: geometryHash,
+        bodyIds,
+        selectionSha256: geometrySelectionSha256(bodyIds),
+      },
+      machineId: ids.machine,
+      machineProfile: {
+        revisionId: ids.machineProfile,
+        contentSha256: hashes[0]!,
+        slicerEngine: "orcaslicer",
+        slicerVersion: "2.4.2",
+        productionArtifactFormat: "gcode_3mf" as const,
+      },
+      machineCalibration: {
+        revisionId: ids.calibration,
+        contentSha256: hashes[1]!,
+      },
+      printConfig: {
+        revisionId: ids.printConfig,
+        contentSha256: hashes[2]!,
+      },
+      partsPerPlate: 2,
+      quantity: 5,
+      acceptedJobId: ids.job,
+      productionReservationId: "00000000-0000-4000-8000-000000000011",
+      arrangementRevision: {
+        revisionId: ids.arrangement,
+        contentSha256: "e".repeat(64),
+      },
+    };
+
+    const result = await new SlicingProcessor(store, engine, config).process(
+      envelope("production_slice", input),
+    );
+
+    expect(result.outcome.status).toBe("succeeded");
+    expect(engine.calls.at(-1)).toMatchObject({
+      copies: 5,
+      copiesPerPlate: [2, 2, 1],
+      artifactFormat: "gcode_3mf",
+    });
+
+    const plainResult = await new SlicingProcessor(
+      store,
+      engine,
+      config,
+    ).process(
+      envelope("production_slice", {
+        ...input,
+        machineProfile: {
+          ...input.machineProfile,
+          productionArtifactFormat: "gcode" as const,
+        },
+      }),
+    );
+    expect(plainResult.outcome).toMatchObject({
+      status: "failed",
+      failureClass: "unsupported_input",
+      code: "UNSUPPORTED_FEATURE",
+    });
+    expect(store.objects.has(`gcode/${ids.job}/toolpaths.gcode`)).toBe(false);
+  });
+
+  it("does not accept a different immutable artifact after a write race", async () => {
+    const store = new ConflictingWriteStore();
+    const engine = new FakeEngine();
+    const geometry = await readFile(
+      path.resolve("../../tools/slicing-fixtures/fixtures/single-pla/cube.stl"),
+    );
+    const geometryHash = sha256(geometry);
+    store.objects.set(`geometries/${ids.geometry}/canonical`, geometry);
+    const referenceProfile = new TextEncoder().encode("{}");
+    const printConfig = new TextEncoder().encode('{"name":"config"}');
+    const referenceHash = sha256(referenceProfile);
+    const configHash = sha256(printConfig);
+    store.objects.set(
+      `slicer-revisions/${referenceHash}/settings.json`,
+      referenceProfile,
+    );
+    store.objects.set(
+      `slicer-revisions/${configHash}/settings.json`,
+      printConfig,
+    );
+    store.conflictKey = `reference-slices/${ids.job}/toolpath.gcode`;
+    const bodyIds = ["body-0001"];
+    const input = {
+      geometry: {
+        sourceModelFileId: ids.source,
+        sourceContentSha256: "d".repeat(64),
+        modelGeometryId: ids.geometry,
+        canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
+        geometrySha256: geometryHash,
+        bodyIds,
+        selectionSha256: geometrySelectionSha256(bodyIds),
+      },
+      referenceProfile: {
+        revisionId: ids.machineProfile,
+        contentSha256: referenceHash,
+        slicerEngine: "orcaslicer",
+        slicerVersion: "2.4.2",
+      },
+      printConfig: {
+        revisionId: ids.printConfig,
+        contentSha256: configHash,
+      },
+      partsPerPlate: 1,
+    };
+
+    const result = await new SlicingProcessor(store, engine, config).process(
+      envelope("reference_slice", input),
+    );
+
+    expect(result.outcome.status).toBe("failed");
+    expect(store.objects.get(store.conflictKey!)).toEqual(
+      new TextEncoder().encode("different artifact"),
+    );
   });
 });

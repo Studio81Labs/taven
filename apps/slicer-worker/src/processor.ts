@@ -10,12 +10,11 @@ import {
 } from "@taven/slicer-contracts";
 import { failureOutcome, SlicingWorkerError } from "./failures.js";
 import {
-  aggregateBounds,
   canonicalizeModel,
   inspectModel,
   type ModelInspection,
 } from "./model-inspection.js";
-import type { WorkerObjectStore } from "./object-store.js";
+import { sha256, type WorkerObjectStore } from "./object-store.js";
 import {
   parseOrcaArtifact,
   type OrcaEngine,
@@ -45,7 +44,7 @@ function envelope(job: SlicingJob, engine: WorkerConfig["engine"]) {
 
 function inspectionMetrics(inspection: ModelInspection) {
   return {
-    boundingBox: aggregateBounds(inspection.bodies),
+    boundingBox: inspection.boundingBox,
     objectCount: inspection.objectCount,
     bodyCount: inspection.bodies.length,
     unitHint: inspection.unitHint,
@@ -109,7 +108,7 @@ function sliceMetrics(
     { watertight: true, manifold: true, normals: "consistent" },
   );
   return {
-    boundingBox: aggregateBounds(inspection.bodies),
+    boundingBox: inspection.boundingBox,
     objectCount: 1,
     bodyCount,
     topology,
@@ -287,6 +286,16 @@ export class SlicingProcessor {
       job.input.acceptedJobId,
       job.input.machineProfile.productionArtifactFormat,
     );
+    if (
+      parts.length > 1 &&
+      job.input.machineProfile.productionArtifactFormat !== "gcode_3mf"
+    ) {
+      throw new SlicingWorkerError(
+        "unsupported_input",
+        "UNSUPPORTED_FEATURE",
+        "Multi-plate production requires a G-code 3MF package",
+      );
+    }
     const artifact = await this.reusableArtifact(
       objectKey,
       "application/octet-stream",
@@ -297,6 +306,7 @@ export class SlicingProcessor {
             geometryPath,
             profilePaths: profiles,
             copies: job.input.quantity,
+            copiesPerPlate: parts,
             artifactFormat: job.input.machineProfile.productionArtifactFormat,
             requireMetrics: false,
           })
@@ -429,6 +439,7 @@ export class SlicingProcessor {
     );
     if (cached) return cached;
     const bytes = await produce();
+    const producedSha256 = sha256(bytes);
     try {
       const stored = await this.store.write(objectKey, bytes, contentType);
       return { bytes, sha256: stored.sha256 };
@@ -437,7 +448,7 @@ export class SlicingProcessor {
         objectKey,
         this.config.limits.artifactBytes,
       );
-      if (winner) return winner;
+      if (winner?.sha256 === producedSha256) return winner;
       throw error;
     }
   }

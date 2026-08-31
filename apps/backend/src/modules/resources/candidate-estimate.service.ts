@@ -13,6 +13,7 @@ import {
 
 const CANDIDATE_DISPATCH_TYPE = "slicing.candidate-estimate.requested";
 const CANDIDATE_SCHEMA_VERSION = 2;
+const CANDIDATE_TTL_MILLISECONDS = 30 * 60 * 1_000;
 
 export type CandidateEstimateDispatch = {
   nodeId: string;
@@ -27,8 +28,8 @@ export type CandidateCapacityWindow = {
 
 export type IngestCandidateEstimateInput = {
   result: CandidateEstimateResult;
-  capacityWindows: readonly CandidateCapacityWindow[];
-  expiresAt: Date;
+  capacityWindows?: readonly CandidateCapacityWindow[];
+  expiresAt?: Date;
 };
 
 export type CandidateIngestionResult =
@@ -55,6 +56,11 @@ type ObservedResourceRow = {
   observed_at: Date;
   remaining_milligrams: bigint;
   reserved_milligrams: bigint;
+};
+
+type OccupiedCapacityRow = {
+  starts_at: Date;
+  ends_at: Date;
 };
 
 type CandidateResourceLockInput = {
@@ -160,6 +166,35 @@ function validateCapacityWindows(
       }
     }
   }
+}
+
+function earliestCapacityWindows(
+  plateSeconds: readonly bigint[],
+  startsAt: Date,
+  occupied: readonly OccupiedCapacityRow[],
+): CandidateCapacityWindow[] {
+  let cursor = startsAt.getTime();
+  return plateSeconds.map((seconds) => {
+    const duration = Number(seconds * 1_000n);
+    if (!Number.isSafeInteger(duration)) {
+      throw new ResourceValidationError(
+        "candidate plate duration exceeds the scheduling range",
+      );
+    }
+    for (const reservation of occupied) {
+      const reservedStart = reservation.starts_at.getTime();
+      const reservedEnd = reservation.ends_at.getTime();
+      if (reservedEnd <= cursor) continue;
+      if (reservedStart >= cursor + duration) break;
+      cursor = Math.max(cursor, reservedEnd);
+    }
+    const window = {
+      startsAt: new Date(cursor),
+      endsAt: new Date(cursor + duration),
+    };
+    cursor += duration;
+    return window;
+  });
 }
 
 function isPrismaConflict(error: unknown): boolean {
@@ -394,7 +429,9 @@ export class CandidateEstimateService {
   async ingest(
     input: IngestCandidateEstimateInput,
   ): Promise<CandidateIngestionResult> {
-    assertValidDate(input.expiresAt, "expiresAt");
+    if (input.expiresAt !== undefined) {
+      assertValidDate(input.expiresAt, "expiresAt");
+    }
     let attemptDeduplicationKey: string;
     try {
       const { slicingDispatchAttemptKey } =
@@ -591,7 +628,10 @@ export class CandidateEstimateService {
           machineCalibrationId:
             dispatch.job.input.machineCalibration.revisionId,
         });
-        if (input.expiresAt <= observed.observed_at) {
+        const expiresAt =
+          input.expiresAt ??
+          new Date(observed.observed_at.getTime() + CANDIDATE_TTL_MILLISECONDS);
+        if (expiresAt <= observed.observed_at) {
           throw new ResourceValidationError(
             "candidate estimate must expire after calculation",
           );
@@ -599,8 +639,22 @@ export class CandidateEstimateService {
         const plateSeconds = result.outcome.plates.map(
           ({ estimatedPrintSeconds }) => BigInt(estimatedPrintSeconds),
         );
+        const occupied = input.capacityWindows
+          ? []
+          : await transaction.$queryRaw<OccupiedCapacityRow[]>`
+              SELECT starts_at, ends_at
+              FROM capacity_reservations
+              WHERE node_id = ${dispatch.nodeId}::uuid
+                AND machine_id = ${dispatch.job.input.machineId}::uuid
+                AND status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+                AND ends_at > ${expiresAt}
+              ORDER BY starts_at, ends_at, id
+            `;
+        const capacityWindows =
+          input.capacityWindows ??
+          earliestCapacityWindows(plateSeconds, expiresAt, occupied);
         validateCapacityWindows(
-          input.capacityWindows,
+          capacityWindows,
           plateSeconds,
           observed.observed_at,
         );
@@ -705,7 +759,7 @@ export class CandidateEstimateService {
           printConfigRevisionId: dispatch.job.input.printConfig.revisionId,
           arrangementRevisionId:
             dispatch.job.input.arrangementRevision.revisionId,
-          capacityWindows: input.capacityWindows.map((window, index) => ({
+          capacityWindows: capacityWindows.map((window, index) => ({
             intervalIndex: index,
             startsAt: window.startsAt.toISOString(),
             endsAt: window.endsAt.toISOString(),
@@ -733,11 +787,11 @@ export class CandidateEstimateService {
             requiredMachineSeconds,
             resourceSnapshot,
             calculatedAt: observed.observed_at,
-            expiresAt: input.expiresAt,
+            expiresAt,
           },
         });
         await transaction.candidateCapacityInterval.createMany({
-          data: input.capacityWindows.map((window, intervalIndex) => ({
+          data: capacityWindows.map((window, intervalIndex) => ({
             nodeId: dispatch.nodeId,
             candidateResourceEstimateId: candidate.id,
             intervalIndex,

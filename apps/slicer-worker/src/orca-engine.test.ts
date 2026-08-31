@@ -123,4 +123,92 @@ describe("Orca sidecar protocol", () => {
     await fakeRunner;
     expect(await readdir(root)).toEqual([]);
   });
+
+  it("writes an ordered Orca assembly list for a multi-plate package", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "taven-runner-test-"));
+    const workspace = await mkdtemp(path.join(tmpdir(), "taven-engine-test-"));
+    cleanup.push(root, workspace);
+    const geometryPath = path.join(workspace, "geometry.stl");
+    const profilePath = path.join(workspace, "machine.json");
+    await writeFile(geometryPath, "solid fixture\nendsolid fixture\n");
+    await writeFile(profilePath, "{}\n");
+    const fakeRunner = (async () => {
+      for (;;) {
+        const requestName = (await readdir(root)).find((name) =>
+          name.startsWith("request-"),
+        );
+        if (!requestName) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          continue;
+        }
+        const request = path.join(root, requestName);
+        try {
+          await readFile(path.join(request, "ready"));
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          continue;
+        }
+        const assembly = JSON.parse(
+          await readFile(path.join(request, "assembly.json"), "utf8"),
+        ) as {
+          plates: Array<{
+            plate_name: string;
+            need_arrange: boolean;
+            objects: Array<{
+              path: string;
+              count: number;
+              filaments: number[];
+            }>;
+          }>;
+        };
+        expect(assembly.plates).toEqual(
+          [2, 2, 1].map((count, index) => ({
+            plate_name: `Plate ${index + 1}`,
+            need_arrange: true,
+            objects: [
+              {
+                path: path.join(request, "geometry.stl"),
+                count,
+                filaments: [1],
+              },
+            ],
+          })),
+        );
+        await mkdir(path.join(request, "output"));
+        await writeFile(
+          path.join(request, "output", "fixture.gcode.3mf"),
+          "bounded package",
+        );
+        await writeFile(path.join(request, "complete"), "\n");
+        return;
+      }
+    })();
+    const engine = new OrcaSidecarEngine(
+      {
+        executable: "/opt/orca/AppRun",
+        name: "orcaslicer",
+        version: "2.4.2",
+        imageSha256: "b".repeat(64),
+        timeoutMilliseconds: 1_000,
+        runnerRoot: root,
+        maximumArtifactBytes: 1024,
+        maximumDiagnosticBytes: 1024,
+      },
+      root,
+    );
+
+    await expect(
+      engine.slice({
+        workspace,
+        geometryPath,
+        profilePaths: [profilePath],
+        copies: 5,
+        copiesPerPlate: [2, 2, 1],
+        artifactFormat: "gcode_3mf",
+        requireMetrics: false,
+      }),
+    ).resolves.toMatchObject({ artifactBytes: expect.any(Uint8Array) });
+    await fakeRunner;
+    expect(await readdir(root)).toEqual([]);
+  });
 });

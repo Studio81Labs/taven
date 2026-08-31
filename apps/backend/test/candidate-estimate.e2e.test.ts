@@ -645,6 +645,52 @@ describe("candidate estimate terminal receipts", () => {
     });
   });
 
+  it("derives a future capacity window when queue reconciliation supplies only a success", async () => {
+    const fixture = await createFixture("derived-capacity-window");
+    if (fixture.success.outcome.status !== "succeeded") {
+      throw new Error("candidate success fixture unexpectedly failed");
+    }
+    const successOutcome = fixture.success.outcome;
+
+    const ingested = await candidates.ingest({ result: fixture.success });
+    expect(ingested).toMatchObject({ status: "succeeded", replayed: false });
+    const rows = await pool.query<{
+      calculated_at: Date;
+      expires_at: Date;
+      starts_at: Date;
+      ends_at: Date;
+    }>(
+      `SELECT candidate.calculated_at, candidate.expires_at,
+              candidate_interval.starts_at, candidate_interval.ends_at
+       FROM candidate_resource_estimates candidate
+       JOIN candidate_capacity_intervals candidate_interval
+         ON candidate_interval.candidate_resource_estimate_id = candidate.id
+       WHERE candidate.resource_snapshot ->> 'dispatchJobId' = $1
+       ORDER BY candidate_interval.interval_index`,
+      [fixture.job.jobId],
+    );
+    expect(rows.rows).toHaveLength(successOutcome.plates.length);
+    expect(
+      rows.rows[0]!.expires_at.getTime() -
+        rows.rows[0]!.calculated_at.getTime(),
+    ).toBe(30 * 60 * 1_000);
+    rows.rows.forEach((row, index) => {
+      expect(row.starts_at.getTime()).toBeGreaterThanOrEqual(
+        row.expires_at.getTime(),
+      );
+      expect(row.ends_at.getTime() - row.starts_at.getTime()).toBe(
+        Number(
+          BigInt(successOutcome.plates[index]!.estimatedPrintSeconds) * 1_000n,
+        ),
+      );
+      if (index > 0) {
+        expect(row.starts_at.getTime()).toBeGreaterThanOrEqual(
+          rows.rows[index - 1]!.ends_at.getTime(),
+        );
+      }
+    });
+  });
+
   it("records a new resource snapshot after an equivalent candidate expires", async () => {
     const fixture = await createFixture("expired-candidate-refresh", {
       dispatchableGeometry: true,

@@ -61,13 +61,17 @@ while true; do
     if [ -n "$filaments" ]; then
       set -- "$@" --load-filaments "$filaments"
     fi
-    if [ "$copies" -gt 1 ]; then
+    if [ -f "$request/assembly.json" ]; then
+      set -- "$@" --load-assemble-list "$request/assembly.json"
+    elif [ "$copies" -gt 1 ]; then
       set -- "$@" --arrange 1 --clone-objects "$copies"
     fi
     if [ "$artifact_format" = gcode_3mf ]; then
       set -- "$@" --export-3mf toolpath.gcode.3mf --min-save
     fi
-    set -- "$@" "$request/geometry.stl"
+    if [ ! -f "$request/assembly.json" ]; then
+      set -- "$@" "$request/geometry.stl"
+    fi
 
     diagnostics_fifo="$request/diagnostics.pipe"
     mkfifo "$diagnostics_fifo"

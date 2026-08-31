@@ -19,6 +19,7 @@ export type OrcaSliceRequest = {
   geometryPath: string;
   profilePaths: readonly string[];
   copies: number;
+  copiesPerPlate?: readonly number[];
   artifactFormat: "gcode_3mf" | "bgcode" | "gcode";
   requireMetrics?: boolean;
 };
@@ -118,6 +119,49 @@ function assertSupportedArtifactFormat(
   }
 }
 
+function productionPlatePlan(
+  input: OrcaSliceRequest,
+): readonly number[] | null {
+  const plan = input.copiesPerPlate;
+  if (plan === undefined) return null;
+  if (
+    plan.length < 1 ||
+    plan.some((copies) => !Number.isSafeInteger(copies) || copies < 1) ||
+    plan.reduce((total, copies) => total + copies, 0) !== input.copies
+  ) {
+    throw new SlicingWorkerError(
+      "deterministic_invalid",
+      "INVALID_PROFILE",
+      "Production plate plan does not match the accepted quantity",
+    );
+  }
+  if (plan.length > 36) {
+    throw new SlicingWorkerError(
+      "unsupported_input",
+      "UNSUPPORTED_FEATURE",
+      "Pinned runtime supports at most 36 production plates per Job",
+    );
+  }
+  if (input.artifactFormat !== "gcode_3mf" && plan.length > 1) {
+    throw new SlicingWorkerError(
+      "unsupported_input",
+      "UNSUPPORTED_FEATURE",
+      "Multi-plate production requires a G-code 3MF package",
+    );
+  }
+  return plan;
+}
+
+function assemblyList(geometryPath: string, copiesPerPlate: readonly number[]) {
+  return {
+    plates: copiesPerPlate.map((count, index) => ({
+      plate_name: `Plate ${index + 1}`,
+      need_arrange: true,
+      objects: [{ path: geometryPath, count, filaments: [1] }],
+    })),
+  };
+}
+
 function appendArtifactArguments(
   arguments_: string[],
   format: OrcaSliceRequest["artifactFormat"],
@@ -206,6 +250,7 @@ export class OrcaCliEngine implements OrcaEngine {
 
   async slice(input: OrcaSliceRequest): Promise<OrcaSliceOutput> {
     assertSupportedArtifactFormat(input.artifactFormat);
+    const platePlan = productionPlatePlan(input);
     await mkdir(input.workspace, { recursive: true });
     const runDirectory = await mkdtemp(path.join(input.workspace, "run-"));
     const outputDirectory = path.join(runDirectory, "output");
@@ -236,7 +281,23 @@ export class OrcaCliEngine implements OrcaEngine {
     if (filaments.length > 0) {
       orcaArguments.push("--load-filaments", filaments.join(";"));
     }
-    if (input.copies > 1) {
+    if (platePlan && input.artifactFormat === "gcode_3mf") {
+      const assemblyPath = path.join(runDirectory, "assembly.json");
+      await writeFile(
+        assemblyPath,
+        JSON.stringify(
+          assemblyList(
+            sandboxPath(input.workspace, input.geometryPath),
+            platePlan,
+          ),
+        ),
+        { mode: 0o400 },
+      );
+      orcaArguments.push(
+        "--load-assemble-list",
+        sandboxPath(input.workspace, assemblyPath),
+      );
+    } else if (input.copies > 1) {
       orcaArguments.push(
         "--arrange",
         "1",
@@ -245,7 +306,9 @@ export class OrcaCliEngine implements OrcaEngine {
       );
     }
     appendArtifactArguments(orcaArguments, input.artifactFormat);
-    orcaArguments.push(sandboxPath(input.workspace, input.geometryPath));
+    if (!(platePlan && input.artifactFormat === "gcode_3mf")) {
+      orcaArguments.push(sandboxPath(input.workspace, input.geometryPath));
+    }
     const arguments_ = [
       "--as=8589934592",
       "--cpu=1800",
@@ -421,6 +484,7 @@ export class OrcaSidecarEngine implements OrcaEngine {
 
   async slice(input: OrcaSliceRequest): Promise<OrcaSliceOutput> {
     assertSupportedArtifactFormat(input.artifactFormat);
+    const platePlan = productionPlatePlan(input);
     const profiles = await partitionProfilePaths(input.profilePaths);
     await mkdir(this.runnerRoot, { recursive: true });
     const requestDirectory = await mkdtemp(
@@ -451,6 +515,17 @@ export class OrcaSidecarEngine implements OrcaEngine {
         path.join(requestDirectory, "artifact-format"),
         `${input.artifactFormat}\n`,
       );
+      if (platePlan && input.artifactFormat === "gcode_3mf") {
+        await writeFile(
+          path.join(requestDirectory, "assembly.json"),
+          JSON.stringify(
+            assemblyList(
+              path.join(requestDirectory, "geometry.stl"),
+              platePlan,
+            ),
+          ),
+        );
+      }
       await writeFile(
         path.join(requestDirectory, "timeout-seconds"),
         `${Math.ceil(this.config.timeoutMilliseconds / 1_000)}\n`,

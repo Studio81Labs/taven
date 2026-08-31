@@ -58,7 +58,7 @@ describe("safe model inspection", () => {
         <model unit="millimeter"><resources>
           <object id="2"><mesh>${cubeMesh}</mesh></object>
           <object id="1"><mesh>${cubeMesh}</mesh></object>
-        </resources></model>`,
+        </resources><build><item objectid="1"/><item objectid="2"/></build></model>`,
     });
     const inspection = inspectModel("3mf", source);
     expect(inspection.bodies.map(({ bodyId }) => bodyId)).toEqual([
@@ -82,6 +82,69 @@ describe("safe model inspection", () => {
     ]);
     expect(combined.inspection.bodies).toHaveLength(2);
     expect(combined.sha256).not.toBe(first.sha256);
+  });
+
+  it("reports bounds over the union of positioned selected bodies", () => {
+    const shiftedMesh = cubeMesh
+      .replaceAll('x="0"', 'x="100"')
+      .replaceAll('x="1"', 'x="101"');
+    const source = storedZip({
+      "3D/3dmodel.model": `<model unit="millimeter"><resources>
+        <object id="1"><mesh>${cubeMesh}</mesh></object>
+        <object id="2"><mesh>${shiftedMesh}</mesh></object>
+      </resources><build><item objectid="1"/><item objectid="2"/></build></model>`,
+    });
+
+    expect(inspectModel("3mf", source).boundingBox.xMicrometers).toBe("101000");
+  });
+
+  it("realizes repeated build items and nested component transforms", () => {
+    const source = storedZip({
+      "3D/3dmodel.model": `<model unit="millimeter"><resources>
+        <object id="1"><mesh>${cubeMesh}</mesh></object>
+        <object id="2"><components>
+          <component objectid="1" transform="1 0 0 0 1 0 0 0 1 10 0 0"/>
+        </components></object>
+        <object id="3"><mesh>${cubeMesh.replaceAll('x="1"', 'x="999"')}</mesh></object>
+      </resources><build>
+        <item objectid="2"/>
+        <item objectid="2" transform="1 0 0 0 1 0 0 0 1 90 0 0"/>
+      </build></model>`,
+    });
+
+    const inspection = inspectModel("3mf", source);
+    expect(inspection.bodies.map(({ bodyId }) => bodyId)).toEqual([
+      "body-0001",
+      "body-0002",
+    ]);
+    expect(inspection.bodies.map(({ triangleCount }) => triangleCount)).toEqual(
+      [4, 4],
+    );
+    expect(inspection.bodies[0]?.bodySha256).not.toBe(
+      inspection.bodies[1]?.bodySha256,
+    );
+    expect(inspection.boundingBox.xMicrometers).toBe("91000");
+  });
+
+  it("resolves relationship-authorized production model components", () => {
+    const source = storedZip({
+      "3D/3dmodel.model": `<model unit="millimeter" xmlns:q="urn:production"><resources>
+        <object id="1"><components>
+          <component objectid="7" q:path="/3D/Objects/part.model" transform="1 0 0 0 1 0 0 0 1 25 0 0"/>
+        </components></object>
+      </resources><build><item objectid="1"/></build></model>`,
+      "3D/_rels/3dmodel.model.rels": `<Relationships>
+        <Relationship Target="/3D/Objects/part.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+      </Relationships>`,
+      "3D/Objects/part.model": `<model unit="millimeter"><resources>
+        <object id="7"><mesh>${cubeMesh}</mesh></object>
+      </resources></model>`,
+    });
+
+    const inspection = inspectModel("3mf", source);
+    expect(inspection.bodies).toHaveLength(1);
+    expect(inspection.bodies[0]?.triangleCount).toBe(4);
+    expect(inspection.bodies[0]?.boundingBox.xMicrometers).toBe("1000");
   });
 
   it("preserves painted two-extruder evidence as a blocking-capable inspection", async () => {
@@ -129,7 +192,7 @@ describe("safe model inspection", () => {
       '<triangle v1="0" v2="2" v3="1" pid="7" p1="0" p2="1" p3="0"/>',
     );
     const source = storedZip({
-      "3D/3dmodel.model": `<model unit="millimeter"><resources><object id="1"><mesh>${assignedMesh}</mesh></object></resources></model>`,
+      "3D/3dmodel.model": `<model unit="millimeter"><resources><object id="1"><mesh>${assignedMesh}</mesh></object></resources><build><item objectid="1"/></build></model>`,
     });
 
     expect(inspectModel("3mf", source).materialAssignmentCount).toBe(2);
@@ -151,7 +214,7 @@ describe("safe model inspection", () => {
       "3D/3dmodel.model": `<model unit="millimeter"><resources>
         <object id="1"><mesh>${materialOne}</mesh></object>
         <object id="2"><mesh>${materialTwo}</mesh></object>
-      </resources></model>`,
+      </resources><build><item objectid="1"/><item objectid="2"/></build></model>`,
     });
 
     expect(inspectModel("3mf", source).materialAssignmentCount).toBe(2);

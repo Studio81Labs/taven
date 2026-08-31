@@ -69,6 +69,8 @@ const buildArguments = [
 const commonBuildOptions = [
   "--file",
   "apps/slicer-worker/Orca.Dockerfile",
+  "--target",
+  "runtime",
   "--platform",
   lock.platform,
   "--provenance=false",
