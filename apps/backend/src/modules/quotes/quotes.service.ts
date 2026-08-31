@@ -2108,20 +2108,20 @@ function validateOfferItem(input: ModelOfferItemDto, ordinal: number) {
     input.printConfigRevisionId,
     `items[${ordinal}].printConfigRevisionId`,
   );
-  let primaryReferenceSliceResultId = input.primaryReferenceSliceResultId;
-  if (input.primaryReferenceSliceResultId) {
-    primaryReferenceSliceResultId = normalizedUuid(
-      input.primaryReferenceSliceResultId,
-      `items[${ordinal}].primaryReferenceSliceResultId`,
-    );
-  }
-  let tailReferenceSliceResultId = input.tailReferenceSliceResultId;
-  if (input.tailReferenceSliceResultId) {
-    tailReferenceSliceResultId = normalizedUuid(
-      input.tailReferenceSliceResultId,
-      `items[${ordinal}].tailReferenceSliceResultId`,
-    );
-  }
+  const primaryReferenceSliceResultId =
+    input.primaryReferenceSliceResultId === undefined
+      ? undefined
+      : normalizedUuid(
+          input.primaryReferenceSliceResultId,
+          `items[${ordinal}].primaryReferenceSliceResultId`,
+        );
+  const tailReferenceSliceResultId =
+    input.tailReferenceSliceResultId === undefined
+      ? undefined
+      : normalizedUuid(
+          input.tailReferenceSliceResultId,
+          `items[${ordinal}].tailReferenceSliceResultId`,
+        );
   if (!input.material || !Object.values(Material).includes(input.material)) {
     throw new BadRequestException(`items[${ordinal}].material is invalid`);
   }
@@ -2350,29 +2350,64 @@ async function validateOfferItemReferences(
   items: Array<ReturnType<typeof validateOfferItem>>,
   observedAt: Date,
 ): Promise<void> {
+  const geometryIds = [...new Set(items.map((item) => item.modelGeometryId))];
+  const printConfigIds = [
+    ...new Set(items.map((item) => item.printConfigRevisionId)),
+  ];
+  const sliceIds = [
+    ...new Set(
+      items.flatMap((item) => [
+        ...(item.primaryReferenceSliceResultId
+          ? [item.primaryReferenceSliceResultId]
+          : []),
+        ...(item.tailReferenceSliceResultId
+          ? [item.tailReferenceSliceResultId]
+          : []),
+      ]),
+    ),
+  ];
+  const [geometries, printConfigs, slices] = await Promise.all([
+    Promise.all(
+      batchesOf(geometryIds).map((ids) =>
+        transaction.modelGeometry.findMany({
+          where: { id: { in: ids } },
+          include: { sourceModelFile: true },
+        }),
+      ),
+    ).then((batches) => batches.flat()),
+    Promise.all(
+      batchesOf(printConfigIds).map((ids) =>
+        transaction.printConfigRevision.findMany({
+          where: { id: { in: ids } },
+          select: { id: true },
+        }),
+      ),
+    ).then((batches) => batches.flat()),
+    Promise.all(
+      batchesOf(sliceIds).map((ids) =>
+        transaction.sliceResult.findMany({
+          where: { id: { in: ids } },
+          include: { referenceProfile: true },
+        }),
+      ),
+    ).then((batches) => batches.flat()),
+  ]);
+  const geometryById = new Map(
+    geometries.map((geometry) => [geometry.id, geometry]),
+  );
+  const printConfigIdsFound = new Set(
+    printConfigs.map((printConfig) => printConfig.id),
+  );
+  const sliceById = new Map(slices.map((slice) => [slice.id, slice]));
+
   for (const [ordinal, item] of items.entries()) {
-    const [geometry, printConfig, primarySlice, tailSlice] = await Promise.all([
-      transaction.modelGeometry.findUnique({
-        where: { id: item.modelGeometryId },
-        include: { sourceModelFile: true },
-      }),
-      transaction.printConfigRevision.findUnique({
-        where: { id: item.printConfigRevisionId },
-        select: { id: true },
-      }),
-      item.primaryReferenceSliceResultId
-        ? transaction.sliceResult.findUnique({
-            where: { id: item.primaryReferenceSliceResultId },
-            include: { referenceProfile: true },
-          })
-        : undefined,
-      item.tailReferenceSliceResultId
-        ? transaction.sliceResult.findUnique({
-            where: { id: item.tailReferenceSliceResultId },
-            include: { referenceProfile: true },
-          })
-        : undefined,
-    ]);
+    const geometry = geometryById.get(item.modelGeometryId);
+    const primarySlice = item.primaryReferenceSliceResultId
+      ? sliceById.get(item.primaryReferenceSliceResultId)
+      : undefined;
+    const tailSlice = item.tailReferenceSliceResultId
+      ? sliceById.get(item.tailReferenceSliceResultId)
+      : undefined;
     const source = geometry?.sourceModelFile;
     if (
       !geometry ||
@@ -2382,7 +2417,7 @@ async function validateOfferItemReferences(
       source.deletedAt !== null ||
       (source.retentionHold === RetentionHold.NONE &&
         source.sourceDeleteAfter.getTime() <= observedAt.getTime()) ||
-      !printConfig
+      !printConfigIdsFound.has(item.printConfigRevisionId)
     ) {
       throw invalidOfferItemReferences(ordinal);
     }

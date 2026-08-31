@@ -4,6 +4,7 @@ import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
+import type { IssueOfferDto } from "../src/modules/quotes/quotes.dto";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
@@ -814,6 +815,125 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).resolves.toBe(quantity);
   });
 
+  it("issues a many-item offer with bounded reference lookup batches", async () => {
+    const itemCount = 501;
+    const created = await quotes.createRequest(
+      requestInput("batched-reference-lookups"),
+      "198.51.100.46",
+      key("batched-reference-lookups-create"),
+    );
+    await quotes.beginReview(
+      created.requestId,
+      key("batched-reference-lookups-review"),
+    );
+    const sourceModelFileId = String(defaultOfferItem.sourceModelFileId);
+    const references = Array.from({ length: itemCount }, (_, ordinal) => ({
+      ordinal,
+      modelGeometryId: randomUUID(),
+      printConfigRevisionId: randomUUID(),
+    }));
+    await prisma.$transaction(async (transaction) => {
+      await transaction.revisionIdentity.createMany({
+        data: references.map(({ printConfigRevisionId }) => ({
+          id: printConfigRevisionId,
+          kind: "PRINT_CONFIG",
+          digest: createHash("sha256")
+            .update(`batched-reference-config:${printConfigRevisionId}`)
+            .digest("hex"),
+        })),
+      });
+      await transaction.printConfigRevision.createMany({
+        data: references.map(({ printConfigRevisionId }) => ({
+          id: printConfigRevisionId,
+          quality: "STANDARD",
+          infillPercent: 20,
+          layerHeightMicrometers: 200,
+          settings: {},
+        })),
+      });
+      await transaction.modelGeometry.createMany({
+        data: references.map(({ ordinal, modelGeometryId }) => ({
+          id: modelGeometryId,
+          sourceModelFileId,
+          canonicalObjectKey: `quote-tests/geometries/batched-${modelGeometryId}`,
+          geometryHash: createHash("sha256")
+            .update(`batched-reference-geometry:${ordinal}`)
+            .digest("hex"),
+          canonicalizerRevision: "quote-e2e-v1",
+          volumeCubicMicrometers: 1n,
+          boundsXMicrometers: 1n,
+          boundsYMicrometers: 1n,
+          boundsZMicrometers: 1n,
+          triangleCount: 1,
+        })),
+      });
+    });
+    const items: IssueOfferDto["items"] = references.map(
+      ({ modelGeometryId, printConfigRevisionId }) => ({
+        kind: "MODEL",
+        sourceModelFileId,
+        modelGeometryId,
+        printConfigRevisionId,
+        material: "PLA",
+        quantity: 1,
+      }),
+    );
+    const components: IssueOfferDto["components"] = references.flatMap(
+      ({ ordinal }) => [
+        {
+          kind: "ITEM_PRODUCTION" as const,
+          quoteItemOrdinal: ordinal,
+          amountMinor: 1,
+        },
+        {
+          kind: "ITEM_QUANTITY" as const,
+          quoteItemOrdinal: ordinal,
+          amountMinor: 0,
+        },
+        {
+          kind: "ITEM_POSTPROCESSING" as const,
+          quoteItemOrdinal: ordinal,
+          amountMinor: 0,
+        },
+      ],
+    );
+    const issued = await quotes.issueOffer(
+      created.requestId,
+      {
+        summary: "Many-item reference batching offer",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+        promisedDate: "2026-10-01",
+        priceListId,
+        contractTotalMinor: itemCount,
+        depositMinor: 1,
+        termsSnapshot: { revisionAcceptedByOffer: true },
+        inputSnapshot: { operatorEstimate: "manual-v0" },
+        deliveryDestination: defaultDeliveryDestination(),
+        shipmentPlans: [
+          {
+            category: "STANDARD",
+            plannedVolumeCubicMm: itemCount,
+            plannedWeightMilligrams: itemCount,
+            shippingAmountMinor: 0,
+            packagingAmountMinor: 0,
+            handlingAmountMinor: 0,
+            packingUnits: references.map(({ ordinal }) => ({
+              quoteItemOrdinal: ordinal,
+              quantityOrdinal: 1,
+            })),
+          },
+        ],
+        paymentPolicy: defaultPaymentPolicy(),
+        items,
+        components,
+      },
+      key("batched-reference-lookups-issue"),
+    );
+    await expect(
+      prisma.quoteItem.count({ where: { quoteId: issued.quoteId } }),
+    ).resolves.toBe(itemCount);
+  });
+
   it("rejects a current offer idempotently and prevents later acceptance", async () => {
     const created = await createRequest(
       key("reject-create"),
@@ -1199,6 +1319,18 @@ describe("QuoteRequest and tokenized individual offers", () => {
       printConfigRevisionId: randomUUID(),
       material: "PLA",
     };
+    const emptySlice = await issueOffer(
+      created.requestId,
+      key("empty-slice-id-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      [{ ...defaultOfferItem, primaryReferenceSliceResultId: "" }],
+    );
+    expect(emptySlice.response.status).toBe(400);
+    expect(emptySlice.body).toMatchObject({
+      message: "items[0].primaryReferenceSliceResultId must be a UUID",
+    });
+
     const oversized = await issueOffer(
       created.requestId,
       key("oversized-model-issue"),
