@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
+const OFFER_PACKING_UNIT_MAX = 10_000;
 const JAVASCRIPT_SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 const NON_BLANK_TEXT_PATTERN = "\\S";
 const TRIMMED_MINIMUM_3_PATTERN = "^\\s*\\S[\\s\\S]{1,}\\S\\s*$";
@@ -18,7 +19,11 @@ export class QuoteContactDto {
   @ApiProperty({ type: String, format: "email", maxLength: 320 })
   email!: string;
 
-  @ApiPropertyOptional({ type: String, maxLength: 50 })
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 50,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   phone?: string;
 }
 
@@ -31,7 +36,11 @@ export class CreateQuoteRequestDto {
   })
   description!: string;
 
-  @ApiPropertyOptional({ type: String, maxLength: 2_000 })
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 2_000,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   purpose?: string;
 
   @ApiPropertyOptional({ type: "object", additionalProperties: true })
@@ -159,13 +168,17 @@ export class ModelOfferItemDto {
   @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
   material!: "PLA" | "PETG";
 
-  @ApiPropertyOptional({ type: String, maxLength: 100 })
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   color?: string;
 
   @ApiPropertyOptional({
     type: "integer",
     minimum: 1,
-    maximum: POSTGRES_INTEGER_MAX,
+    maximum: OFFER_PACKING_UNIT_MAX,
   })
   quantity?: number;
 }
@@ -571,7 +584,11 @@ export class AcceptOfferDto {
 }
 
 export class RejectOfferDto extends AcceptOfferDto {
-  @ApiPropertyOptional({ type: String, maxLength: 2_000 })
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 2_000,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   reason?: string;
 }
 

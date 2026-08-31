@@ -63,6 +63,7 @@ const ANONYMOUS_QUOTE_GLOBAL_MAX_ISSUED = 100;
 const ANONYMOUS_QUOTE_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_QUOTE_LIMIT_CLEANUP_BATCH = 100;
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
+const OFFER_PACKING_UNIT_MAX = 10_000;
 const JSON_MAXIMUM_DEPTH = 64;
 const REQUIRED_ITEM_COMPONENTS = new Set<PriceComponentKind>([
   PriceComponentKind.ITEM_PRODUCTION,
@@ -1426,12 +1427,12 @@ export class QuotesService {
       await transaction.$queryRaw`
         SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text
       `;
-      const existing = await transaction.idempotencyRecord.findUnique({
-        where: {
-          namespace_idempotencyKey: { namespace, idempotencyKey },
-        },
+      const observedAt = await databaseNow(transaction);
+      const existing = await transaction.idempotencyRecord.findFirst({
+        where: { namespace, idempotencyKey },
+        orderBy: { generation: "desc" },
       });
-      if (existing) {
+      if (existing && existing.expiresAt.getTime() > observedAt.getTime()) {
         if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
           throw new ConflictException(
             "Idempotency key was already used with different input",
@@ -1451,11 +1452,11 @@ export class QuotesService {
           : (existing.responseBody as T);
       }
 
-      const observedAt = await databaseNow(transaction);
       const record = await transaction.idempotencyRecord.create({
         data: {
           namespace,
           idempotencyKey,
+          generation: (existing?.generation ?? 0) + 1,
           requestFingerprint: primaryFingerprint,
           expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
         },
@@ -2087,7 +2088,7 @@ function validateOfferItem(input: ModelOfferItemDto, ordinal: number) {
   const quantity = positiveInteger(
     input.quantity ?? 1,
     `items[${ordinal}].quantity`,
-    POSTGRES_INTEGER_MAX,
+    OFFER_PACKING_UNIT_MAX,
   );
   const referencePartsPerPlate = input.referencePartsPerPlate;
   if (
@@ -2148,6 +2149,15 @@ function validateOfferShipmentPlans(
 ) {
   if (!Array.isArray(input) || input.length < 1) {
     throw new BadRequestException("shipmentPlans must not be empty");
+  }
+  const expectedPackingUnitCount = items.reduce(
+    (total, item) => total + item.quantity,
+    0,
+  );
+  if (expectedPackingUnitCount > OFFER_PACKING_UNIT_MAX) {
+    throw new BadRequestException(
+      `Offer items may contain at most ${OFFER_PACKING_UNIT_MAX} packing units`,
+    );
   }
   const allocatedPackingUnits = new Set<string>();
   const plans = input.map((plan, planOrdinal) => {

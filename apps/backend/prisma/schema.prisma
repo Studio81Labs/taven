@@ -1210,6 +1210,7 @@ model IdempotencyRecord {
   id                 String            @id @default(uuid()) @db.Uuid
   namespace          String            @db.VarChar(100)
   idempotencyKey     String            @map("idempotency_key") @db.VarChar(255)
+  generation         Int               @default(1)
   requestFingerprint String            @map("request_fingerprint") @db.VarChar(64)
   status             IdempotencyStatus @default(PROCESSING)
   responseStatusCode Int?              @map("response_status_code")
@@ -1218,7 +1219,7 @@ model IdempotencyRecord {
   createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  @@unique([namespace, idempotencyKey])
+  @@unique([namespace, idempotencyKey, generation], map: "idempotency_records_namespace_key_generation_key")
   @@index([expiresAt])
   @@map("idempotency_records")
 }

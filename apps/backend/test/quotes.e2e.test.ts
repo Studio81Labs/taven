@@ -86,6 +86,55 @@ describe("QuoteRequest and tokenized individual offers", () => {
     });
   });
 
+  it("starts a new append-only idempotency generation after expiry", async () => {
+    const idempotencyKey = key("expired-generation");
+    const clientAddress = "198.51.100.42";
+    const first = await quotes.createRequest(
+      requestInput("expired-generation-first"),
+      clientAddress,
+      idempotencyKey,
+    );
+    expect(first.status).toBe("NEW");
+    const firstRecord = await prisma.idempotencyRecord.findFirstOrThrow({
+      where: { namespace: "quote-request.create", idempotencyKey },
+      orderBy: { generation: "desc" },
+    });
+    await prisma.idempotencyRecord.update({
+      where: { id: firstRecord.id },
+      data: {
+        expiresAt: new Date(firstRecord.createdAt.getTime() + 1),
+      },
+    });
+
+    const second = await quotes.createRequest(
+      requestInput("expired-generation-second"),
+      clientAddress,
+      idempotencyKey,
+    );
+    expect(second.status).toBe("NEW");
+    expect(second.requestId).not.toBe(first.requestId);
+    expect(
+      await prisma.idempotencyRecord.findMany({
+        where: { namespace: "quote-request.create", idempotencyKey },
+        orderBy: { generation: "asc" },
+        select: { generation: true, responseBody: true },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        generation: 1,
+        responseBody: expect.objectContaining({
+          requestId: first.requestId,
+        }),
+      }),
+      expect.objectContaining({
+        generation: 2,
+        responseBody: expect.objectContaining({
+          requestId: second.requestId,
+        }),
+      }),
+    ]);
+  });
+
   it("submits idempotently, isolates attachments, issues, previews, and accepts once", async () => {
     const createKey = key("create");
     const requestBody = requestInput("accept");
@@ -96,13 +145,12 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const replay = await createRequest(createKey, requestBody);
     expect(replay.response.status).toBe(201);
     expect(replay.body).toEqual(created.body);
-    const createIdempotency = await prisma.idempotencyRecord.findUniqueOrThrow({
+    const createIdempotency = await prisma.idempotencyRecord.findFirstOrThrow({
       where: {
-        namespace_idempotencyKey: {
-          namespace: "quote-request.create",
-          idempotencyKey: createKey,
-        },
+        namespace: "quote-request.create",
+        idempotencyKey: createKey,
       },
+      orderBy: { generation: "desc" },
     });
     expect(createIdempotency.responseBody).not.toHaveProperty("requestToken");
     expect(JSON.stringify(createIdempotency.responseBody)).not.toContain(
@@ -290,13 +338,12 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(normalizedReplay.response.status).toBe(201);
     expect(normalizedReplay.body).toEqual(issued.body);
-    const issueIdempotency = await prisma.idempotencyRecord.findUniqueOrThrow({
+    const issueIdempotency = await prisma.idempotencyRecord.findFirstOrThrow({
       where: {
-        namespace_idempotencyKey: {
-          namespace: "quote-request.issue-offer",
-          idempotencyKey: issueKey,
-        },
+        namespace: "quote-request.issue-offer",
+        idempotencyKey: issueKey,
       },
+      orderBy: { generation: "desc" },
     });
     expect(issueIdempotency.responseBody).not.toHaveProperty("offerToken");
     expect(JSON.stringify(issueIdempotency.responseBody)).not.toContain(
@@ -977,9 +1024,12 @@ describe("QuoteRequest and tokenized individual offers", () => {
       key("oversized-model-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
       defaultComponents(),
-      [{ ...unavailableReferences, quantity: 2_147_483_648 }],
+      [{ ...unavailableReferences, quantity: 2_147_483_647 }],
     );
     expect(oversized.response.status).toBe(400);
+    expect(oversized.body).toMatchObject({
+      message: "items[0].quantity must be a positive safe integer",
+    });
 
     const response = await issueOffer(
       created.requestId,
