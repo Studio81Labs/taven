@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
-const OFFER_PACKING_UNIT_MAX = 10_000;
+const OFFER_PACKING_UNIT_MAX = 1_000;
 const JAVASCRIPT_SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 const NON_BLANK_TEXT_PATTERN = "\\S";
 const TRIMMED_MINIMUM_3_PATTERN = "^\\s*\\S[\\s\\S]{1,}\\S\\s*$";

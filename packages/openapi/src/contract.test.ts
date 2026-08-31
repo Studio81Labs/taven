@@ -42,7 +42,7 @@ describe("OpenAPI artifact", () => {
     ]);
     expect(schemas.ModelOfferItemDto?.properties?.quantity).toMatchObject({
       type: "integer",
-      maximum: 10_000,
+      maximum: 1_000,
     });
     expect(schemas.CreateQuoteRequestDto?.properties?.purpose).toMatchObject({
       pattern: "\\S",

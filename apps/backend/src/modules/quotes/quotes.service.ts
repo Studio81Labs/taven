@@ -63,7 +63,8 @@ const ANONYMOUS_QUOTE_GLOBAL_MAX_ISSUED = 100;
 const ANONYMOUS_QUOTE_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_QUOTE_LIMIT_CLEANUP_BATCH = 100;
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
-const OFFER_PACKING_UNIT_MAX = 10_000;
+const OFFER_PACKING_UNIT_MAX = 1_000;
+const QUOTE_WRITE_BATCH_SIZE = 500;
 const JSON_MAXIMUM_DEPTH = 64;
 const REQUIRED_ITEM_COMPONENTS = new Set<PriceComponentKind>([
   PriceComponentKind.ITEM_PRODUCTION,
@@ -497,9 +498,9 @@ export class QuotesService {
             createdAt: issuedAt,
           },
         });
-        for (const item of quoteItems) {
-          await transaction.quoteItem.create({
-            data: {
+        const quoteItemRows = quoteItems.map(
+          (item) =>
+            ({
               id: item.id,
               quoteId,
               ordinal: item.ordinal,
@@ -515,8 +516,10 @@ export class QuotesService {
               color: item.color ?? null,
               quantity: item.quantity,
               createdAt: issuedAt,
-            },
-          });
+            }) satisfies Prisma.QuoteItemCreateManyInput,
+        );
+        for (const batch of batchesOf(quoteItemRows)) {
+          await transaction.quoteItem.createMany({ data: batch });
         }
         await transaction.priceSnapshot.create({
           data: {
@@ -555,9 +558,9 @@ export class QuotesService {
             createdAt: issuedAt,
           },
         });
-        for (const plan of quoteShipmentPlans) {
-          await transaction.quoteShipmentPlan.create({
-            data: {
+        const quoteShipmentPlanRows = quoteShipmentPlans.map(
+          (plan) =>
+            ({
               id: plan.id,
               quoteId,
               priceSnapshotId: snapshotId,
@@ -574,10 +577,12 @@ export class QuotesService {
                 details: plan.allocationSnapshot ?? {},
               })!,
               createdAt: issuedAt,
-            },
-          });
+            }) satisfies Prisma.QuoteShipmentPlanCreateManyInput,
+        );
+        for (const batch of batchesOf(quoteShipmentPlanRows)) {
+          await transaction.quoteShipmentPlan.createMany({ data: batch });
         }
-        for (const component of offer.components) {
+        const priceComponents = offer.components.map((component) => {
           const quoteItem =
             component.quoteItemOrdinal === undefined
               ? undefined
@@ -586,23 +591,24 @@ export class QuotesService {
             component.quoteShipmentPlanOrdinal === undefined
               ? undefined
               : quoteShipmentPlans[component.quoteShipmentPlanOrdinal];
-          await transaction.priceSnapshotComponent.create({
-            data: {
-              id: randomUUID(),
-              priceSnapshotId: snapshotId,
-              kind: component.kind,
-              scope: quoteItem
-                ? PriceComponentScope.QUOTE_ITEM
-                : quoteShipmentPlan
-                  ? PriceComponentScope.QUOTE_SHIPMENT_PLAN
-                  : PriceComponentScope.ORDER,
-              quoteItemId: quoteItem?.id ?? null,
-              quoteShipmentPlanId: quoteShipmentPlan?.id ?? null,
-              amountMinor: BigInt(component.amountMinor),
-              allocation: jsonNullable(component.allocation),
-              createdAt: issuedAt,
-            },
-          });
+          return {
+            id: randomUUID(),
+            priceSnapshotId: snapshotId,
+            kind: component.kind,
+            scope: quoteItem
+              ? PriceComponentScope.QUOTE_ITEM
+              : quoteShipmentPlan
+                ? PriceComponentScope.QUOTE_SHIPMENT_PLAN
+                : PriceComponentScope.ORDER,
+            quoteItemId: quoteItem?.id ?? null,
+            quoteShipmentPlanId: quoteShipmentPlan?.id ?? null,
+            amountMinor: BigInt(component.amountMinor),
+            allocation: jsonNullable(component.allocation),
+            createdAt: issuedAt,
+          } satisfies Prisma.PriceSnapshotComponentCreateManyInput;
+        });
+        for (const batch of batchesOf(priceComponents)) {
+          await transaction.priceSnapshotComponent.createMany({ data: batch });
         }
         await transaction.paymentSchedule.createMany({
           data: [
@@ -916,32 +922,39 @@ export class QuotesService {
           number,
           { id: string; quantity: number }
         >();
-        for (const quoteItem of quote.items) {
+        const orderItems = quote.items.map((quoteItem) => {
           const orderItemId = randomUUID();
-          await transaction.orderItem.create({
-            data: {
-              id: orderItemId,
-              orderId,
-              ordinal: quoteItem.ordinal,
-              sourceModelFileId: quoteItem.sourceModelFileId,
-              modelGeometryId: quoteItem.modelGeometryId,
-              printConfigRevisionId: quoteItem.printConfigRevisionId,
-              primaryReferenceSliceResultId:
-                quoteItem.primaryReferenceSliceResultId,
-              tailReferenceSliceResultId: quoteItem.tailReferenceSliceResultId,
-              referencePartsPerPlate: quoteItem.referencePartsPerPlate,
-              material: quoteItem.material,
-              color: quoteItem.color,
-              quantity: quoteItem.quantity,
-              createdAt: observedAt,
-            },
-          });
-          await transaction.individualOrderItemSource.create({
-            data: { orderItemId, quoteItemId: quoteItem.id },
-          });
           orderItemsByQuoteOrdinal.set(quoteItem.ordinal, {
             id: orderItemId,
             quantity: quoteItem.quantity,
+          });
+          return {
+            id: orderItemId,
+            orderId,
+            ordinal: quoteItem.ordinal,
+            sourceModelFileId: quoteItem.sourceModelFileId,
+            modelGeometryId: quoteItem.modelGeometryId,
+            printConfigRevisionId: quoteItem.printConfigRevisionId,
+            primaryReferenceSliceResultId:
+              quoteItem.primaryReferenceSliceResultId,
+            tailReferenceSliceResultId: quoteItem.tailReferenceSliceResultId,
+            referencePartsPerPlate: quoteItem.referencePartsPerPlate,
+            material: quoteItem.material,
+            color: quoteItem.color,
+            quantity: quoteItem.quantity,
+            createdAt: observedAt,
+          } satisfies Prisma.OrderItemCreateManyInput;
+        });
+        for (const batch of batchesOf(orderItems)) {
+          await transaction.orderItem.createMany({ data: batch });
+        }
+        const individualSources = quote.items.map((quoteItem) => ({
+          orderItemId: orderItemsByQuoteOrdinal.get(quoteItem.ordinal)!.id,
+          quoteItemId: quoteItem.id,
+        }));
+        for (const batch of batchesOf(individualSources)) {
+          await transaction.individualOrderItemSource.createMany({
+            data: batch,
           });
         }
         const orderPhaseId = randomUUID();
@@ -958,6 +971,7 @@ export class QuotesService {
           },
         });
         const fulfilmentSlotsByPackingUnit = new Map<string, string>();
+        const fulfilmentSlots: Prisma.FulfilmentSlotCreateManyInput[] = [];
         for (const [quoteItemOrdinal, orderItem] of orderItemsByQuoteOrdinal) {
           for (
             let quantityOrdinal = 1;
@@ -965,24 +979,25 @@ export class QuotesService {
             quantityOrdinal += 1
           ) {
             const slotId = randomUUID();
-            await transaction.fulfilmentSlot.create({
-              data: {
-                id: slotId,
-                orderId,
-                orderPhaseId,
-                orderItemId: orderItem.id,
-                quantityOrdinal,
-                packingUnitKey: `${orderItem.id}:single:${quantityOrdinal}`,
-                settlementAmountMinor: BigInt(0),
-                createdAt: observedAt,
-                updatedAt: observedAt,
-              },
+            fulfilmentSlots.push({
+              id: slotId,
+              orderId,
+              orderPhaseId,
+              orderItemId: orderItem.id,
+              quantityOrdinal,
+              packingUnitKey: `${orderItem.id}:single:${quantityOrdinal}`,
+              settlementAmountMinor: BigInt(0),
+              createdAt: observedAt,
+              updatedAt: observedAt,
             });
             fulfilmentSlotsByPackingUnit.set(
               `${quoteItemOrdinal}:${quantityOrdinal}`,
               slotId,
             );
           }
+        }
+        for (const batch of batchesOf(fulfilmentSlots)) {
+          await transaction.fulfilmentSlot.createMany({ data: batch });
         }
         await transaction.deliveryDestination.create({
           data: {
@@ -1008,30 +1023,30 @@ export class QuotesService {
             createdAt: observedAt,
           },
         });
+        const shipmentPlans: Prisma.ShipmentPlanCreateManyInput[] = [];
+        const shipmentPlanSlots: Prisma.ShipmentPlanFulfilmentSlotCreateManyInput[] =
+          [];
         for (const quoteShipmentPlan of quote.shipmentPlans) {
           const shipmentPlanId = randomUUID();
-          await transaction.shipmentPlan.create({
-            data: {
-              id: shipmentPlanId,
-              orderId,
-              orderPhaseId,
-              priceSnapshotId: quote.priceBinding.priceSnapshot.id,
-              orderPriceBindingId,
-              deliveryDestinationId,
-              quoteShipmentPlanId: quoteShipmentPlan.id,
-              ordinal: quoteShipmentPlan.ordinal,
-              category: quoteShipmentPlan.category,
-              plannedVolumeCubicMm: quoteShipmentPlan.plannedVolumeCubicMm,
-              plannedWeightMilligrams:
-                quoteShipmentPlan.plannedWeightMilligrams,
-              shippingAmountMinor: quoteShipmentPlan.shippingAmountMinor,
-              packagingAmountMinor: quoteShipmentPlan.packagingAmountMinor,
-              handlingAmountMinor: quoteShipmentPlan.handlingAmountMinor,
-              allocationSnapshot: jsonInput(
-                quoteShipmentPlan.allocationSnapshot,
-              )!,
-              createdAt: observedAt,
-            },
+          shipmentPlans.push({
+            id: shipmentPlanId,
+            orderId,
+            orderPhaseId,
+            priceSnapshotId: quote.priceBinding.priceSnapshot.id,
+            orderPriceBindingId,
+            deliveryDestinationId,
+            quoteShipmentPlanId: quoteShipmentPlan.id,
+            ordinal: quoteShipmentPlan.ordinal,
+            category: quoteShipmentPlan.category,
+            plannedVolumeCubicMm: quoteShipmentPlan.plannedVolumeCubicMm,
+            plannedWeightMilligrams: quoteShipmentPlan.plannedWeightMilligrams,
+            shippingAmountMinor: quoteShipmentPlan.shippingAmountMinor,
+            packagingAmountMinor: quoteShipmentPlan.packagingAmountMinor,
+            handlingAmountMinor: quoteShipmentPlan.handlingAmountMinor,
+            allocationSnapshot: jsonInput(
+              quoteShipmentPlan.allocationSnapshot,
+            )!,
+            createdAt: observedAt,
           });
           for (const packingUnit of offerShipmentPlanDto(quoteShipmentPlan)
             .packingUnits) {
@@ -1043,14 +1058,20 @@ export class QuotesService {
                 "Offer shipment allocation is unavailable",
               );
             }
-            await transaction.shipmentPlanFulfilmentSlot.create({
-              data: {
-                shipmentPlanId,
-                orderPriceBindingId,
-                fulfilmentSlotId,
-              },
+            shipmentPlanSlots.push({
+              shipmentPlanId,
+              orderPriceBindingId,
+              fulfilmentSlotId,
             });
           }
+        }
+        for (const batch of batchesOf(shipmentPlans)) {
+          await transaction.shipmentPlan.createMany({ data: batch });
+        }
+        for (const batch of batchesOf(shipmentPlanSlots)) {
+          await transaction.shipmentPlanFulfilmentSlot.createMany({
+            data: batch,
+          });
         }
         await transaction.orderActivePriceBinding.create({
           data: { orderId, orderPriceBindingId },
@@ -2767,6 +2788,18 @@ function canonicalJson(value: unknown): string {
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
     .join(",")}}`;
+}
+
+function batchesOf<T>(values: readonly T[]): T[][] {
+  const batches: T[][] = [];
+  for (
+    let offset = 0;
+    offset < values.length;
+    offset += QUOTE_WRITE_BATCH_SIZE
+  ) {
+    batches.push(values.slice(offset, offset + QUOTE_WRITE_BATCH_SIZE));
+  }
+  return batches;
 }
 
 function addDays(value: Date, days: number): Date {

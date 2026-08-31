@@ -368,6 +368,36 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(issued.response.status).toBe(201);
     expect(issued.body.version).toBe(1);
 
+    const lateReferencePhotoId = randomUUID();
+    const latePhotoUploadedAt = new Date();
+    await prisma.photoAsset.create({
+      data: {
+        id: lateReferencePhotoId,
+        kind: "QUOTE_REFERENCE",
+        scopeKind: "QUOTE_REQUEST",
+        scopeId: created.body.requestId,
+        storageObjectKey: photoOriginalObjectKey(lateReferencePhotoId),
+        contentHash: "e".repeat(64),
+        mediaType: "image/jpeg",
+        sizeBytes: 128,
+        uploadedAt: latePhotoUploadedAt,
+        retentionDays: 90,
+        photoDeleteAfter: new Date(
+          latePhotoUploadedAt.getTime() + 90 * 24 * 60 * 60 * 1_000,
+        ),
+      },
+    });
+    expect(
+      await prisma.photoAsset.findUniqueOrThrow({
+        where: { id: lateReferencePhotoId },
+        select: { photoDeleteAfter: true },
+      }),
+    ).toEqual({
+      photoDeleteAfter: new Date(
+        new Date(issued.body.expiresAt).getTime() + 90 * 24 * 60 * 60 * 1_000,
+      ),
+    });
+
     const normalizedReplay = await issueOffer(
       created.body.requestId,
       issueKey,
@@ -669,6 +699,43 @@ describe("QuoteRequest and tokenized individual offers", () => {
         status: "ACCEPTED",
       }),
     );
+  });
+
+  it("accepts high-volume packing units with batched slot writes", async () => {
+    const quantity = 1_000;
+    const created = await quotes.createRequest(
+      requestInput("batched-acceptance"),
+      "198.51.100.44",
+      key("batched-acceptance-create"),
+    );
+    await quotes.beginReview(
+      created.requestId,
+      key("batched-acceptance-review"),
+    );
+    const issued = await issueOffer(
+      created.requestId,
+      key("batched-acceptance-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      [{ ...defaultOfferItem, quantity }],
+    );
+    expect(issued.response.status).toBe(201);
+
+    const accepted = await acceptOffer(
+      issued.body,
+      key("batched-acceptance-accept"),
+    );
+    expect(accepted.response.status).toBe(200);
+    await expect(
+      prisma.fulfilmentSlot.count({
+        where: { orderId: accepted.body.orderId },
+      }),
+    ).resolves.toBe(quantity);
+    await expect(
+      prisma.shipmentPlanFulfilmentSlot.count({
+        where: { shipmentPlan: { orderId: accepted.body.orderId } },
+      }),
+    ).resolves.toBe(quantity);
   });
 
   it("rejects a current offer idempotently and prevents later acceptance", async () => {
@@ -1367,6 +1434,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       offerToken: string;
       version: number;
       termsRevision: string;
+      expiresAt: string;
     }>(`admin/quote-requests/${requestId}/offers`, {
       method: "POST",
       headers: {
@@ -1444,7 +1512,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
                 typeof item.quantity === "number" &&
                 Number.isSafeInteger(item.quantity) &&
                 item.quantity > 0 &&
-                item.quantity <= 10_000
+                item.quantity <= 1_000
                   ? item.quantity
                   : 1,
             },
