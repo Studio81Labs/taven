@@ -1051,6 +1051,70 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toMatchObject({ status: "EXPIRED" });
   });
 
+  it("accepts against one captured database instant near the deadline", async () => {
+    const created = await quotes.createRequest(
+      requestInput("acceptance-deadline-race"),
+      "198.51.100.47",
+      key("acceptance-deadline-race-create"),
+    );
+    await quotes.beginReview(
+      created.requestId,
+      key("acceptance-deadline-race-review"),
+    );
+    const issued = await issueOffer(
+      created.requestId,
+      key("acceptance-deadline-race-issue"),
+      new Date(Date.now() + 2_000),
+    );
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION taven_test_delay_deadline_order_insert()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM customers
+          WHERE id = NEW.customer_id
+            AND email LIKE 'acceptance-deadline-race-%@example.test'
+        ) THEN
+          PERFORM pg_sleep(3);
+        END IF;
+        RETURN NEW;
+      END;
+      $$
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER taven_test_delay_deadline_order_insert
+      BEFORE INSERT ON orders
+      FOR EACH ROW EXECUTE FUNCTION taven_test_delay_deadline_order_insert()
+    `);
+    try {
+      const accepted = await acceptOffer(
+        issued.body,
+        key("acceptance-deadline-race-accept"),
+      );
+      expect(accepted.response.status).toBe(200);
+      expect(Date.now()).toBeGreaterThanOrEqual(
+        new Date(issued.body.expiresAt).getTime(),
+      );
+      const persisted = await prisma.quoteRequest.findUniqueOrThrow({
+        where: { id: created.requestId },
+        select: { acceptedAt: true, status: true },
+      });
+      expect(persisted.status).toBe("ACCEPTED");
+      expect(persisted.acceptedAt!.getTime()).toBeLessThan(
+        new Date(issued.body.expiresAt).getTime(),
+      );
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        DROP TRIGGER IF EXISTS taven_test_delay_deadline_order_insert ON orders
+      `);
+      await prisma.$executeRawUnsafe(`
+        DROP FUNCTION IF EXISTS taven_test_delay_deadline_order_insert()
+      `);
+    }
+  }, 15_000);
+
   it("persists quoted shipment charges and fees for both planned captures", async () => {
     const created = await createRequest(
       key("fee-create"),
