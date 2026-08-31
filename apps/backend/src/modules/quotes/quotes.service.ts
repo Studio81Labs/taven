@@ -105,6 +105,10 @@ type IdempotencyResponseCodec<T> = Readonly<{
     generation: number,
   ) => T;
 }>;
+type IdempotencyOptions<T> = Readonly<{
+  responseCodec?: IdempotencyResponseCodec<T>;
+  responseStatusCode?: number | ((response: T) => number);
+}>;
 type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
 type StoredQuoteRequestCreatedResponse = Omit<
   QuoteRequestCreatedDto,
@@ -238,29 +242,32 @@ export class QuotesService {
         } satisfies QuoteRequestCreatedDto;
       },
       {
-        toStoredResponse: (response, generation) => ({
-          requestId: response.requestId,
-          publicReference: response.publicReference,
-          status: response.status,
-          slaDueAt: response.slaDueAt,
-          capabilityKeyId: currentCapabilityRequest.capabilityKey.id,
-          capabilityTokenGeneration: generation,
-        }),
-        fromStoredResponse: (stored, storedFingerprint) => {
-          const { capabilityKeyId, capabilityTokenGeneration, ...response } =
-            stored as unknown as StoredQuoteRequestCreatedResponse;
-          return {
-            ...response,
-            requestToken: capabilityToken(
-              this.capabilityKeyForId(capabilityKeyId),
-              "quote-request",
-              commandKey,
-              storedFingerprint,
-              ...(capabilityTokenGeneration === undefined
-                ? []
-                : [String(capabilityTokenGeneration)]),
-            ),
-          };
+        responseStatusCode: HttpStatus.CREATED,
+        responseCodec: {
+          toStoredResponse: (response, generation) => ({
+            requestId: response.requestId,
+            publicReference: response.publicReference,
+            status: response.status,
+            slaDueAt: response.slaDueAt,
+            capabilityKeyId: currentCapabilityRequest.capabilityKey.id,
+            capabilityTokenGeneration: generation,
+          }),
+          fromStoredResponse: (stored, storedFingerprint) => {
+            const { capabilityKeyId, capabilityTokenGeneration, ...response } =
+              stored as unknown as StoredQuoteRequestCreatedResponse;
+            return {
+              ...response,
+              requestToken: capabilityToken(
+                this.capabilityKeyForId(capabilityKeyId),
+                "quote-request",
+                commandKey,
+                storedFingerprint,
+                ...(capabilityTokenGeneration === undefined
+                  ? []
+                  : [String(capabilityTokenGeneration)]),
+              ),
+            };
+          },
         },
       },
     );
@@ -696,25 +703,28 @@ export class QuotesService {
         } satisfies OfferIssuedDto;
       },
       {
-        toStoredResponse: (response) => ({
-          quoteId: response.quoteId,
-          version: response.version,
-          termsRevision: response.termsRevision,
-          expiresAt: response.expiresAt,
-          capabilityKeyId: offerCapabilityKey.id,
-        }),
-        fromStoredResponse: (stored) => {
-          const { capabilityKeyId, ...response } =
-            stored as unknown as StoredOfferIssuedResponse;
-          return {
-            ...response,
-            offerToken: capabilityToken(
-              this.capabilityKeyForId(capabilityKeyId),
-              "quote-offer",
-              response.quoteId,
-              commandKey,
-            ),
-          };
+        responseStatusCode: HttpStatus.CREATED,
+        responseCodec: {
+          toStoredResponse: (response) => ({
+            quoteId: response.quoteId,
+            version: response.version,
+            termsRevision: response.termsRevision,
+            expiresAt: response.expiresAt,
+            capabilityKeyId: offerCapabilityKey.id,
+          }),
+          fromStoredResponse: (stored) => {
+            const { capabilityKeyId, ...response } =
+              stored as unknown as StoredOfferIssuedResponse;
+            return {
+              ...response,
+              offerToken: capabilityToken(
+                this.capabilityKeyForId(capabilityKeyId),
+                "quote-offer",
+                response.quoteId,
+                commandKey,
+              ),
+            };
+          },
         },
       },
     );
@@ -1150,6 +1160,10 @@ export class QuotesService {
           value: { orderId, publicReference, status: "DRAFT" },
         };
       },
+      {
+        responseStatusCode: (response) =>
+          response.kind === "expired" ? HttpStatus.GONE : HttpStatus.OK,
+      },
     );
     if (result.kind === "expired") {
       throw new GoneException("Offer is no longer available");
@@ -1237,6 +1251,10 @@ export class QuotesService {
             status: "REJECTED",
           },
         };
+      },
+      {
+        responseStatusCode: (response) =>
+          response.kind === "expired" ? HttpStatus.GONE : HttpStatus.OK,
       },
     );
     if (result.kind === "expired") {
@@ -1441,7 +1459,7 @@ export class QuotesService {
     idempotencyKey: string,
     requestFingerprint: string | readonly string[],
     operation: (transaction: Transaction, generation: number) => Promise<T>,
-    responseCodec?: IdempotencyResponseCodec<T>,
+    options?: IdempotencyOptions<T>,
   ): Promise<T> {
     const acceptedFingerprints =
       typeof requestFingerprint === "string"
@@ -1473,8 +1491,8 @@ export class QuotesService {
         ) {
           throw new ConflictException("Idempotent command is incomplete");
         }
-        return responseCodec
-          ? responseCodec.fromStoredResponse(
+        return options?.responseCodec
+          ? options.responseCodec.fromStoredResponse(
               existing.responseBody,
               existing.requestFingerprint,
               existing.generation,
@@ -1493,18 +1511,29 @@ export class QuotesService {
       });
       const response = await operation(transaction, record.generation);
       const storedResponse = jsonInput(
-        responseCodec
-          ? responseCodec.toStoredResponse(response, record.generation)
+        options?.responseCodec
+          ? options.responseCodec.toStoredResponse(response, record.generation)
           : response,
       );
       if (storedResponse === undefined) {
         throw new Error("Idempotent response is not JSON serializable");
       }
+      const responseStatusCode =
+        typeof options?.responseStatusCode === "function"
+          ? options.responseStatusCode(response)
+          : (options?.responseStatusCode ?? HttpStatus.OK);
+      if (
+        !Number.isInteger(responseStatusCode) ||
+        responseStatusCode < 100 ||
+        responseStatusCode > 599
+      ) {
+        throw new Error("Idempotent response status code is invalid");
+      }
       await transaction.idempotencyRecord.update({
         where: { id: record.id },
         data: {
           status: IdempotencyStatus.COMPLETED,
-          responseStatusCode: 200,
+          responseStatusCode,
           responseBody: storedResponse,
         },
       });

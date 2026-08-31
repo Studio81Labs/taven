@@ -187,6 +187,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       },
       orderBy: { generation: "desc" },
     });
+    expect(createIdempotency.responseStatusCode).toBe(201);
     expect(createIdempotency.responseBody).not.toHaveProperty("requestToken");
     expect(JSON.stringify(createIdempotency.responseBody)).not.toContain(
       created.body.requestToken,
@@ -413,6 +414,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       },
       orderBy: { generation: "desc" },
     });
+    expect(issueIdempotency.responseStatusCode).toBe(201);
     expect(issueIdempotency.responseBody).not.toHaveProperty("offerToken");
     expect(JSON.stringify(issueIdempotency.responseBody)).not.toContain(
       issued.body.offerToken,
@@ -575,6 +577,15 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const accepted = await acceptOffer(issued.body, acceptKey);
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.status).toBe("DRAFT");
+    await expect(
+      prisma.idempotencyRecord.findFirstOrThrow({
+        where: {
+          namespace: "quote-offer.accept",
+          idempotencyKey: acceptKey,
+        },
+        select: { responseStatusCode: true },
+      }),
+    ).resolves.toEqual({ responseStatusCode: 200 });
     const acceptReplay = await acceptOffer(issued.body, acceptKey);
     expect(acceptReplay.body).toEqual(accepted.body);
     const freshAcceptance = await acceptOffer(
@@ -1013,6 +1024,21 @@ describe("QuoteRequest and tokenized individual offers", () => {
       new Date(Date.now() + 600),
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 700));
+
+    const acceptKey = key("expiry-accept");
+    const acceptance = await acceptOffer(issued.body, acceptKey);
+    expect(acceptance.response.status).toBe(410);
+    await expect(
+      prisma.idempotencyRecord.findFirstOrThrow({
+        where: {
+          namespace: "quote-offer.accept",
+          idempotencyKey: acceptKey,
+        },
+        select: { responseStatusCode: true },
+      }),
+    ).resolves.toEqual({ responseStatusCode: 410 });
+    const replay = await acceptOffer(issued.body, acceptKey);
+    expect(replay.response.status).toBe(410);
 
     const preview = await apiJson(`offers/${issued.body.quoteId}`, {
       headers: bearer(issued.body.offerToken),
