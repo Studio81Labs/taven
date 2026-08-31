@@ -1,7 +1,7 @@
 {
   "case": "single-pla",
   "engine": {
-    "imageDigest": "sha256:c83d2df24dbe8e2af30714e6ac5bbb3e30e21290b5c3fd80628fb947802d11d5",
+    "imageDigest": "sha256:9471b0e2db6a80e480c6a0f12bb9c748da2babb84e59069497204d60fe47e04e",
     "name": "orca-slicer",
     "version": "2.4.2"
   },

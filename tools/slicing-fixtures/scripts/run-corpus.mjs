@@ -156,6 +156,7 @@ function validateExecution(fixtureCase, execution, resultFile, gcodeFiles) {
     if (
       execution.status === 0 ||
       !resultFile ||
+      !Number.isFinite(resultFile.return_code) ||
       resultFile.return_code >= 0 ||
       gcodeFiles.length !== 0
     ) {

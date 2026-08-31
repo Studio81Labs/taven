@@ -15,6 +15,20 @@ const temporaryDirectory = await mkdtemp(
   path.join(os.tmpdir(), "taven-orca-build-"),
 );
 const metadataPath = path.join(temporaryDirectory, "metadata.json");
+const builder = spawnSync("docker", ["buildx", "inspect"], {
+  encoding: "utf8",
+});
+if (builder.status !== 0) {
+  throw new Error(
+    builder.stderr || "Unable to inspect the active Buildx builder",
+  );
+}
+const builderDriver = builder.stdout.match(/^Driver:\s+(\S+)$/m)?.[1];
+if (builderDriver !== "docker-container") {
+  throw new Error(
+    `The reproducibility build requires the pinned docker-container builder used by CI; the active driver is ${builderDriver ?? "unknown"}. Follow tools/slicing-fixtures/README.md to configure it.`,
+  );
+}
 const buildArguments = [
   ["SOURCE_DATE_EPOCH", lock.sourceDateEpoch],
   ["UBUNTU_IMAGE", lock.ubuntu.image],
