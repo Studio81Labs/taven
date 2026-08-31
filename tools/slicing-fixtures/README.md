@@ -1,12 +1,13 @@
 # OrcaSlicer runtime and reproducibility corpus
 
 This directory is the reviewed runtime lock for OrcaSlicer v2.4.2. It keeps
-three identities separate:
+four identities separate:
 
 1. the verified upstream AppImage and source revision in `runtime.lock.json`;
 2. the OCI manifest digest produced by the reviewed Docker build; and
 3. the resolved H2S profile revision and complete closure digest in
-   `profiles/manifest.json`.
+   `profiles/manifest.json`; and
+4. the exact corpus CLI argument bundle digest in `runtime.lock.json`.
 
 The runtime is Linux x86-64, independently built from the Node BullMQ worker,
 non-root, and exposes no port. The AppImage is extracted without FUSE. Ubuntu
@@ -52,8 +53,10 @@ pnpm slicer-worker:orca:test
 The corpus covers a single-material PLA cube, two arranged copies, an
 Orca-recognized painted two-material 3MF, and open invalid geometry. Each case
 runs twice from clean directories. Normalized result metadata, diagnostics,
-plate decisions, estimated time/material, and timestamp-normalized G-code
-hashes must match both runs and the reviewed JSON under `expected/`.
+plate decisions, per-filament material usage, the exact CLI arguments,
+estimated time, and timestamp-normalized G-code hashes must match both runs and
+the reviewed JSON under `expected/`. The invalid fixture also requires Orca's
+specific parser failure code and message before a baseline can be recorded.
 
 ## Deliberate upgrades
 
@@ -63,5 +66,6 @@ closure with `pnpm slicer-worker:profiles:update`, and build both the old and
 new revisions. Run each corpus twice and review the JSON diff before replacing
 the expected files. Finally run `pnpm slicer-worker:orca:digest`, review the
 image contents and package lock, and update the OCI digest in
-`runtime.lock.json`. Never substitute the AppImage digest for the OCI digest or
-use a floating `latest` reference.
+`runtime.lock.json`. If CLI arguments change, review the command diff and update
+the invocation bundle digest in the same lock. Never substitute the AppImage
+digest for the OCI digest or use a floating `latest` reference.

@@ -2,6 +2,7 @@
   "case": "single-pla",
   "engine": {
     "imageDigest": "sha256:bd93c5e4f02ee51509351fa7bf005773a7abd257d768f83a626abf7a319f786f",
+    "invocationBundleSha256": "7f362a10e7a6d51a9f8c607a8a7f4ece93b7b98375462dfb748f5514ff6a218d",
     "name": "orca-slicer",
     "version": "2.4.2"
   },
@@ -34,13 +35,34 @@
     "secondaryFilamentSha256": null,
     "sha256": "25180bbac89a3ad812538e23447b6556c9684b278aec45ca7e015eef21730120"
   },
+  "invocation": {
+    "arguments": [
+      "--debug",
+      "2",
+      "--slice",
+      "0",
+      "--outputdir",
+      "/output",
+      "--datadir",
+      "/tmp/data",
+      "--load-settings",
+      "/opt/taven/profiles/process.json;/opt/taven/profiles/machine.json",
+      "--load-filaments",
+      "/opt/taven/profiles/filament.json",
+      "/input/cube.stl"
+    ],
+    "sha256": "b731c7064279fde99d3c46eb8fda03f91965f420bedf7f0b48b4eb76703c68ed"
+  },
   "outputs": [
     {
       "estimatedSeconds": 1249,
-      "filamentCubicCentimeters": 2.91,
-      "filamentMillimeters": 1209.1,
-      "filamentSlots": [
-        1
+      "filamentUsage": [
+        {
+          "cubicCentimeters": 2.91,
+          "grams": 3.61,
+          "millimeters": 1209.1,
+          "slot": 1
+        }
       ],
       "file": "plate_1.gcode",
       "normalizedSha256": "9b64d0bcdb0f1b63d55cb2cf17397181048639e64c88251896116b0f5c95abf8"
