@@ -11,3 +11,6 @@ docs/product/
 apps/backend/src/generated/
 packages/openapi/openapi.json
 packages/openapi-client/generated/
+tools/slicing-fixtures/expected/
+tools/slicing-fixtures/profiles/source/
+tools/slicing-fixtures/profiles/resolved/

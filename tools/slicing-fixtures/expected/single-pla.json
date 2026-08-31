@@ -1,0 +1,54 @@
+{
+  "case": "single-pla",
+  "engine": {
+    "imageDigest": "sha256:c83d2df24dbe8e2af30714e6ac5bbb3e30e21290b5c3fd80628fb947802d11d5",
+    "name": "orca-slicer",
+    "version": "2.4.2"
+  },
+  "execution": {
+    "exitCode": 0,
+    "result": {
+      "error": "Success.",
+      "layerHeight": 0.20000000298023224,
+      "plateIndex": 0,
+      "returnCode": 0,
+      "slicedPlates": [
+        {
+          "id": 1,
+          "triangleCount": 12,
+          "warning": ""
+        }
+      ],
+      "sparseInfillDensity": 15,
+      "wallLoops": 2
+    },
+    "signal": null,
+    "stderr": [],
+    "stdout": []
+  },
+  "input": {
+    "cloneCount": 1,
+    "expectedInvalidGeometry": false,
+    "file": "cube.stl",
+    "paintedExtruders": [],
+    "secondaryFilamentSha256": null,
+    "sha256": "25180bbac89a3ad812538e23447b6556c9684b278aec45ca7e015eef21730120"
+  },
+  "outputs": [
+    {
+      "estimatedSeconds": 1249,
+      "filamentCubicCentimeters": 2.91,
+      "filamentMillimeters": 1209.1,
+      "filamentSlots": [
+        1
+      ],
+      "file": "plate_1.gcode",
+      "normalizedSha256": "9b64d0bcdb0f1b63d55cb2cf17397181048639e64c88251896116b0f5c95abf8"
+    }
+  ],
+  "profiles": {
+    "bundleSha256": "a02a40c3ca3dcc77c4b6d613faee5b1ac845911482a0b52bdb35428df53c54e0",
+    "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
+  },
+  "schemaVersion": 1
+}

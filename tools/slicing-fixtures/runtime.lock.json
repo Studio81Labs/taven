@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "platform": "linux/amd64",
+  "sourceDateEpoch": 1783347486,
+  "engine": {
+    "name": "orca-slicer",
+    "version": "2.4.2",
+    "sourceRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
+  },
+  "appImage": {
+    "url": "https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.4.2/OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage",
+    "size": 137759224,
+    "sha256": "d12fb8c8eac1aecd2dfb6377acd48f994f8fa439ed5292fa532dd82880f029fd",
+    "squashfsOffset": 944632
+  },
+  "ubuntu": {
+    "image": "ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517",
+    "amd64ManifestDigest": "sha256:1e0a86e57d247923571b75e0aaf48a1449cf8c543d51fb3e07a4a7d7bfa79316",
+    "packageSnapshot": "20260810T000000Z"
+  },
+  "profiles": {
+    "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1",
+    "bundleSha256": "a02a40c3ca3dcc77c4b6d613faee5b1ac845911482a0b52bdb35428df53c54e0"
+  },
+  "image": {
+    "tag": "taven/orca-slicer:2.4.2-fixtures",
+    "ociDigest": "sha256:c83d2df24dbe8e2af30714e6ac5bbb3e30e21290b5c3fd80628fb947802d11d5"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "case": "invalid-geometry",
+  "engine": {
+    "imageDigest": "sha256:c83d2df24dbe8e2af30714e6ac5bbb3e30e21290b5c3fd80628fb947802d11d5",
+    "name": "orca-slicer",
+    "version": "2.4.2"
+  },
+  "execution": {
+    "exitCode": 250,
+    "result": {
+      "error": "The input model file to the slicer can not be parsed.",
+      "layerHeight": 0,
+      "plateIndex": 0,
+      "returnCode": -6,
+      "slicedPlates": [],
+      "sparseInfillDensity": 0,
+      "wallLoops": 0
+    },
+    "signal": null,
+    "stderr": [
+      "/input/open-triangle.stl: Loading of a model file failed."
+    ],
+    "stdout": [
+      "run found error, return -6, exit..."
+    ]
+  },
+  "input": {
+    "cloneCount": 1,
+    "expectedInvalidGeometry": true,
+    "file": "open-triangle.stl",
+    "paintedExtruders": [],
+    "secondaryFilamentSha256": null,
+    "sha256": "1180832af2f62b5dbf6da949b2e3ec06485e9f1a23c9576c10122a8f1b76e03f"
+  },
+  "outputs": [],
+  "profiles": {
+    "bundleSha256": "a02a40c3ca3dcc77c4b6d613faee5b1ac845911482a0b52bdb35428df53c54e0",
+    "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
+  },
+  "schemaVersion": 1
+}

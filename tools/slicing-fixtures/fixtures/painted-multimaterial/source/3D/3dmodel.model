@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:slic3rpe="http://schemas.slic3r.org/3mf/2017/06">
+  <metadata name="Title">Taven painted two-material cube</metadata>
+  <metadata name="BambuStudio:MmPaintingVersion">1</metadata>
+  <metadata name="slic3rpe:MmPaintingVersion">1</metadata>
+  <resources>
+    <object id="1" name="painted-two-material-cube" type="model">
+      <mesh>
+        <vertices>
+          <vertex x="0" y="0" z="0"/>
+          <vertex x="20" y="0" z="0"/>
+          <vertex x="20" y="20" z="0"/>
+          <vertex x="0" y="20" z="0"/>
+          <vertex x="0" y="0" z="20"/>
+          <vertex x="20" y="0" z="20"/>
+          <vertex x="20" y="20" z="20"/>
+          <vertex x="0" y="20" z="20"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="2" v3="1" paint_color="4" slic3rpe:mmu_segmentation="4"/>
+          <triangle v1="0" v2="3" v3="2" paint_color="4" slic3rpe:mmu_segmentation="4"/>
+          <triangle v1="4" v2="5" v3="6" paint_color="4" slic3rpe:mmu_segmentation="4"/>
+          <triangle v1="4" v2="6" v3="7" paint_color="4" slic3rpe:mmu_segmentation="4"/>
+          <triangle v1="0" v2="1" v3="5" paint_color="4" slic3rpe:mmu_segmentation="4"/>
+          <triangle v1="0" v2="5" v3="4" paint_color="4" slic3rpe:mmu_segmentation="4"/>
+          <triangle v1="1" v2="2" v3="6" paint_color="8" slic3rpe:mmu_segmentation="8"/>
+          <triangle v1="1" v2="6" v3="5" paint_color="8" slic3rpe:mmu_segmentation="8"/>
+          <triangle v1="2" v2="3" v3="7" paint_color="8" slic3rpe:mmu_segmentation="8"/>
+          <triangle v1="2" v2="7" v3="6" paint_color="8" slic3rpe:mmu_segmentation="8"/>
+          <triangle v1="3" v2="0" v3="4" paint_color="8" slic3rpe:mmu_segmentation="8"/>
+          <triangle v1="3" v2="4" v3="7" paint_color="8" slic3rpe:mmu_segmentation="8"/>
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+  <build>
+    <item objectid="1" printable="1"/>
+  </build>
+</model>
