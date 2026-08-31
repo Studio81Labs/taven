@@ -47,12 +47,14 @@ const cases = [
     fixture: "cube.stl",
     operation: "slice",
     cloneCount: 1,
+    trianglesPerObject: 12,
   },
   {
     name: "quantity-pla",
     fixture: "cube.stl",
     operation: "slice",
     cloneCount: 2,
+    trianglesPerObject: 12,
   },
   {
     name: "painted-multimaterial",
@@ -152,6 +154,23 @@ function usesExpectedFilaments(output, filamentCount) {
   );
 }
 
+function hasExpectedCloneEvidence(fixtureCase, resultFile) {
+  if (fixtureCase.trianglesPerObject === undefined) {
+    return true;
+  }
+  const slicedPlates = resultFile?.sliced_plates;
+  return (
+    Array.isArray(slicedPlates) &&
+    slicedPlates.length > 0 &&
+    slicedPlates.every(
+      (plate) =>
+        Number.isInteger(plate.triangle_count) && plate.triangle_count > 0,
+    ) &&
+    slicedPlates.reduce((total, plate) => total + plate.triangle_count, 0) ===
+      fixtureCase.trianglesPerObject * fixtureCase.cloneCount
+  );
+}
+
 function validateExecution(fixtureCase, execution, resultFile, outputs) {
   if (execution.error) {
     throw new Error(
@@ -183,6 +202,7 @@ function validateExecution(fixtureCase, execution, resultFile, outputs) {
   if (
     execution.status !== 0 ||
     resultFile?.return_code !== 0 ||
+    !hasExpectedCloneEvidence(fixtureCase, resultFile) ||
     outputs.length === 0 ||
     outputs.some(
       (output) =>
