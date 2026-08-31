@@ -63,10 +63,13 @@ COPY tools/slicing-fixtures/THIRD_PARTY_NOTICES.md /usr/share/doc/taven-orca/THI
 # into the final image so clean builds produce the same OCI manifest.
 RUN rm -rf /var/cache/* /var/log/* /var/lib/apt/lists/* \
     && rm -f /var/lib/dpkg/status-old \
+    && rm -f /var/lib/dbus/machine-id \
+    && ln -s /etc/machine-id /var/lib/dbus/machine-id \
     && find / -xdev -mindepth 1 \
       \( -path /dev -o -path /proc -o -path /sys \
          -o -path /etc/hostname -o -path /etc/hosts -o -path /etc/resolv.conf \) \
-      -prune -o -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+      -prune -o -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + \
+    && touch -h -d "@${SOURCE_DATE_EPOCH}" /
 
 FROM scratch AS runtime
 

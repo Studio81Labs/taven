@@ -139,6 +139,19 @@ function parseGcode(source) {
   };
 }
 
+function usesExpectedFilaments(output, filamentCount) {
+  if (filamentCount === undefined) {
+    return true;
+  }
+  const slots = [...new Set(output.filamentSlots)].sort(
+    (left, right) => left - right,
+  );
+  return (
+    slots.length === filamentCount &&
+    slots.every((slot, index) => slot === index + 1)
+  );
+}
+
 function validateExecution(fixtureCase, execution, resultFile, outputs) {
   if (execution.error) {
     throw new Error(
@@ -178,7 +191,8 @@ function validateExecution(fixtureCase, execution, resultFile, outputs) {
         !Number.isFinite(output.filamentMillimeters) ||
         output.filamentMillimeters <= 0 ||
         !Number.isFinite(output.filamentCubicCentimeters) ||
-        output.filamentCubicCentimeters <= 0,
+        output.filamentCubicCentimeters <= 0 ||
+        !usesExpectedFilaments(output, fixtureCase.filamentCount),
     )
   ) {
     throw new Error(
