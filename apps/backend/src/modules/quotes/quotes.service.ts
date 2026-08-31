@@ -1965,6 +1965,11 @@ function validateContact(input: QuoteContactDto | undefined): QuoteContactDto {
     throw new BadRequestException("contact is required");
   }
   const email = requiredText(input.email, "contact.email", 320).toLowerCase();
+  if (Array.from(email).length > 320) {
+    throw new BadRequestException(
+      "contact.email must contain between 1 and 320 characters",
+    );
+  }
   if (!EMAIL_PATTERN.test(email)) {
     throw new BadRequestException("contact.email is invalid");
   }

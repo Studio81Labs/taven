@@ -85,6 +85,25 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(created.status).toBe("NEW");
   });
 
+  it("rejects email that exceeds its limit after case normalization", async () => {
+    const response = await apiJson("quote-requests", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": key("case-expanded-email"),
+      },
+      body: JSON.stringify({
+        ...requestInput("case-expanded-email"),
+        contact: {
+          ...requestInput("case-expanded-email").contact,
+          email: `İ${"a".repeat(306)}@example.test`,
+        },
+      }),
+    });
+
+    expect(response.response.status).toBe(400);
+  });
+
   it("rejects JSON inputs beyond the canonicalization depth limit", async () => {
     const response = await apiJson("quote-requests", {
       method: "POST",
