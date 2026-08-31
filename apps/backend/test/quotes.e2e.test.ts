@@ -788,6 +788,85 @@ describe("QuoteRequest and tokenized individual offers", () => {
     });
   });
 
+  it("rejects overflowing shipment and capture-fee aggregates as client input", async () => {
+    const shipmentRequest = await quotes.createRequest(
+      requestInput("shipment-overflow"),
+      "198.51.100.40",
+      key("shipment-overflow-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${shipmentRequest.requestId}/review`,
+      key("shipment-overflow-review"),
+    );
+    const shipmentOverflow = await issueOffer(
+      shipmentRequest.requestId,
+      key("shipment-overflow-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      defaultItems(),
+      priceListId,
+      {
+        shipmentPlans: [
+          {
+            ...defaultShipmentPlans()[0]!,
+            shippingAmountMinor: Number.MAX_SAFE_INTEGER,
+            packagingAmountMinor: 1,
+          },
+        ],
+      },
+    );
+    expect(shipmentOverflow.response.status).toBe(400);
+    expect(shipmentOverflow.body).toMatchObject({
+      message:
+        "shipmentPlans[0] charge total must be a non-negative safe integer",
+    });
+
+    const feeRequest = await quotes.createRequest(
+      requestInput("fee-overflow"),
+      "198.51.100.41",
+      key("fee-overflow-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${feeRequest.requestId}/review`,
+      key("fee-overflow-review"),
+    );
+    const feeOverflow = await issueOffer(
+      feeRequest.requestId,
+      key("fee-overflow-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      defaultItems(),
+      priceListId,
+      {
+        paymentPolicy: {
+          deposit: {
+            feeRateBasisPoints: 0,
+            feeFixedMinor: Number.MAX_SAFE_INTEGER,
+            providerConfig: { provider: "overflow-test" },
+          },
+          balance: {
+            feeRateBasisPoints: 0,
+            feeFixedMinor: 1,
+            providerConfig: { provider: "overflow-test" },
+          },
+        },
+      },
+    );
+    expect(feeOverflow.response.status).toBe(400);
+    expect(feeOverflow.body).toMatchObject({
+      message: "payment fee total must be a non-negative safe integer",
+    });
+    expect(
+      await prisma.quote.count({
+        where: {
+          quoteRequestId: {
+            in: [shipmentRequest.requestId, feeRequest.requestId],
+          },
+        },
+      }),
+    ).toBe(0);
+  });
+
   it("rejects unplannable custom-service items before offer persistence", async () => {
     const created = await createRequest(
       key("custom-service-create"),

@@ -1972,21 +1972,23 @@ function validateOffer(input: IssueOfferDto) {
   }
   const shipmentComponents = shipmentPlans.map((plan, ordinal) => ({
     kind: PriceComponentKind.SHIPMENT,
-    amountMinor: safeNumber(
+    amountMinor: safeMoneyAggregate(
       BigInt(plan.shippingAmountMinor) +
         BigInt(plan.packagingAmountMinor) +
         BigInt(plan.handlingAmountMinor),
+      `shipmentPlans[${ordinal}] charge total`,
     ),
     quoteItemOrdinal: undefined,
     quoteShipmentPlanOrdinal: ordinal,
     allocation: undefined,
   }));
-  const paymentFeeMinor = safeNumber(
+  const paymentFeeMinor = safeMoneyAggregate(
     paymentCaptureFeeMinor(depositMinor, paymentPolicy.deposit) +
       paymentCaptureFeeMinor(
         contractTotalMinor - depositMinor,
         paymentPolicy.balance,
       ),
+    "payment fee total",
   );
   const paymentFeeComponents =
     paymentFeeMinor === 0
@@ -2008,13 +2010,11 @@ function validateOffer(input: IssueOfferDto) {
     ...shipmentComponents,
     ...paymentFeeComponents,
   ];
-  const componentTotal = safeNumber(
-    components.reduce(
-      (total, component) => total + BigInt(component.amountMinor),
-      BigInt(0),
-    ),
+  const componentTotal = components.reduce(
+    (total, component) => total + BigInt(component.amountMinor),
+    BigInt(0),
   );
-  if (componentTotal !== contractTotalMinor) {
+  if (componentTotal !== BigInt(contractTotalMinor)) {
     throw new BadRequestException(
       "Price components must sum to contractTotalMinor",
     );
@@ -2284,6 +2284,15 @@ function paymentCaptureFeeMinor(
       BigInt(10_000) +
     BigInt(policy.feeFixedMinor)
   );
+}
+
+function safeMoneyAggregate(value: bigint, name: string): number {
+  if (value < BigInt(0) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new BadRequestException(
+      `${name} must be a non-negative safe integer`,
+    );
+  }
+  return Number(value);
 }
 
 async function validateOfferItemReferences(

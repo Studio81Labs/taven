@@ -205,10 +205,20 @@ export class OfferPriceComponentDto {
 }
 
 export class OfferDeliveryDestinationDto {
-  @ApiProperty({ type: String, minLength: 1, maxLength: 255 })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 255,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   providerEndpointId!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   endpointType!: string;
 
   @ApiProperty({ type: "object", additionalProperties: true })
@@ -227,7 +237,12 @@ export class OfferShipmentPackingUnitDto {
 }
 
 export class OfferShipmentPlanDto {
-  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   category!: string;
 
   @ApiProperty({
