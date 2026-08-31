@@ -386,6 +386,29 @@ CREATE TRIGGER "quote_requests_content_immutable"
 BEFORE UPDATE ON "quote_requests"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_request_content();
 
+ALTER TABLE "quote_sessions"
+    ADD COLUMN "capability_key_id" VARCHAR(64),
+    ADD CONSTRAINT "quote_sessions_capability_key_id_check" CHECK (
+        "capability_key_id" IS NULL
+        OR "capability_key_id" ~ '^[0-9a-f]{64}$'
+    );
+
+CREATE FUNCTION taven_protect_quote_session_capability_key_id()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW."capability_key_id" IS DISTINCT FROM OLD."capability_key_id" THEN
+        RAISE EXCEPTION 'quote session capability key id is immutable'
+            USING ERRCODE = '23514',
+                  CONSTRAINT = 'quote_session_capability_key_id_immutable_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "quote_sessions_capability_key_id_immutable"
+BEFORE UPDATE OF "capability_key_id" ON "quote_sessions"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_session_capability_key_id();
+
 ALTER TABLE "quotes"
     ADD COLUMN "public_token_hash" VARCHAR(64),
     ADD COLUMN "capability_key_id" VARCHAR(64),

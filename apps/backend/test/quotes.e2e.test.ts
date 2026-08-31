@@ -108,6 +108,33 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(JSON.stringify(createIdempotency.responseBody)).not.toContain(
       created.body.requestToken,
     );
+    const capabilityKeyId = createHash("sha256")
+      .update("taven-quote-capability-key\0")
+      .update(quoteCapabilityKey)
+      .digest("hex");
+    expect(createIdempotency.responseBody).toMatchObject({ capabilityKeyId });
+    const persistedRequest = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: created.body.requestId },
+      include: { quoteSession: true },
+    });
+    expect(persistedRequest.quoteSession?.capabilityKeyId).toBe(
+      capabilityKeyId,
+    );
+
+    const rotatedRequestCapabilityKey =
+      "rotated-request-capability-key-with-at-least-32-characters";
+    process.env.TAVEN_QUOTE_CAPABILITY_KEY = rotatedRequestCapabilityKey;
+    process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS = JSON.stringify([
+      quoteCapabilityKey,
+    ]);
+    try {
+      const replayAfterRotation = await createRequest(createKey, requestBody);
+      expect(replayAfterRotation.response.status).toBe(201);
+      expect(replayAfterRotation.body).toEqual(created.body);
+    } finally {
+      process.env.TAVEN_QUOTE_CAPABILITY_KEY = quoteCapabilityKey;
+      process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS = "[]";
+    }
 
     const changedReplay = await createRequest(createKey, {
       ...requestBody,
@@ -275,17 +302,13 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(JSON.stringify(issueIdempotency.responseBody)).not.toContain(
       issued.body.offerToken,
     );
-    const offerCapabilityKeyId = createHash("sha256")
-      .update("taven-quote-capability-key\0")
-      .update(quoteCapabilityKey)
-      .digest("hex");
     expect(issueIdempotency.responseBody).toMatchObject({
-      capabilityKeyId: offerCapabilityKeyId,
+      capabilityKeyId,
     });
     const persistedQuote = await prisma.quote.findUniqueOrThrow({
       where: { id: issued.body.quoteId },
     });
-    expect(persistedQuote.capabilityKeyId).toBe(offerCapabilityKeyId);
+    expect(persistedQuote.capabilityKeyId).toBe(capabilityKeyId);
     const issueOutbox = await prisma.outboxMessage.findUniqueOrThrow({
       where: {
         deduplicationKey: `quote-offer-issued:${issued.body.quoteId}:1`,
@@ -300,7 +323,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       offerTokenDerivation: {
         quoteId: issued.body.quoteId,
         issuanceCommandKey: issueKey,
-        capabilityKeyId: offerCapabilityKeyId,
+        capabilityKeyId,
       },
     });
     expect(

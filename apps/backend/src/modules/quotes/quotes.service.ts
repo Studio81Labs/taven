@@ -92,9 +92,17 @@ type ExpiringResult<T> =
   Readonly<{ kind: "ok"; value: T }> | Readonly<{ kind: "expired" }>;
 type IdempotencyResponseCodec<T> = Readonly<{
   toStoredResponse: (response: T) => unknown;
-  fromStoredResponse: (response: Prisma.JsonValue) => T;
+  fromStoredResponse: (
+    response: Prisma.JsonValue,
+    requestFingerprint: string,
+  ) => T;
 }>;
 type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
+type StoredQuoteRequestCreatedResponse = Omit<
+  QuoteRequestCreatedDto,
+  "requestToken"
+> &
+  Readonly<{ capabilityKeyId: string }>;
 type StoredOfferIssuedResponse = Omit<OfferIssuedDto, "offerToken"> &
   Readonly<{ capabilityKeyId: string }>;
 
@@ -109,32 +117,44 @@ export class QuotesService {
   ): Promise<QuoteRequestCreatedDto> {
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const request = validateCreateRequest(input);
-    const clientSubjectHash = anonymousQuoteClientSubject(
-      this.capabilityKey(),
-      clientAddress,
-    );
-    const fingerprint = fingerprintOf({
-      request: {
-        ...request,
-        requestedDate: request.requestedDate
-          ? dateOnly(request.requestedDate)
-          : undefined,
+    const capabilityRequests = quoteCapabilityKeyRing().all.map(
+      (capabilityKey) => {
+        const clientSubjectHash = anonymousQuoteClientSubject(
+          capabilityKey.key,
+          clientAddress,
+        );
+        return {
+          capabilityKey,
+          clientSubjectHash,
+          fingerprint: fingerprintOf({
+            request: {
+              ...request,
+              requestedDate: request.requestedDate
+                ? dateOnly(request.requestedDate)
+                : undefined,
+            },
+            clientSubjectHash,
+          }),
+        };
       },
-      clientSubjectHash,
-    });
+    );
+    const currentCapabilityRequest = capabilityRequests[0]!;
     const requestToken = capabilityToken(
-      this.capabilityKey(),
+      currentCapabilityRequest.capabilityKey.key,
       "quote-request",
       commandKey,
-      fingerprint,
+      currentCapabilityRequest.fingerprint,
     );
 
     return this.idempotent<QuoteRequestCreatedDto>(
       "quote-request.create",
       commandKey,
-      fingerprint,
+      capabilityRequests.map(({ fingerprint }) => fingerprint),
       async (transaction) => {
-        await this.reserveAnonymousQuote(transaction, clientSubjectHash);
+        await this.reserveAnonymousQuote(
+          transaction,
+          currentCapabilityRequest.clientSubjectHash,
+        );
         const observedAt = await databaseNow(transaction);
         const requestId = randomUUID();
         const sessionId = randomUUID();
@@ -161,6 +181,7 @@ export class QuotesService {
             id: sessionId,
             customerId: customer.id,
             publicTokenHash: hashToken(requestToken),
+            capabilityKeyId: currentCapabilityRequest.capabilityKey.id,
             attribution: jsonNullable(request.attribution),
             expiresAt,
           },
@@ -211,13 +232,20 @@ export class QuotesService {
           publicReference: response.publicReference,
           status: response.status,
           slaDueAt: response.slaDueAt,
+          capabilityKeyId: currentCapabilityRequest.capabilityKey.id,
         }),
-        fromStoredResponse: (stored) => {
-          const response = stored as unknown as Omit<
-            QuoteRequestCreatedDto,
-            "requestToken"
-          >;
-          return { ...response, requestToken };
+        fromStoredResponse: (stored, storedFingerprint) => {
+          const { capabilityKeyId, ...response } =
+            stored as unknown as StoredQuoteRequestCreatedResponse;
+          return {
+            ...response,
+            requestToken: capabilityToken(
+              this.capabilityKeyForId(capabilityKeyId),
+              "quote-request",
+              commandKey,
+              storedFingerprint,
+            ),
+          };
         },
       },
     );
@@ -1081,10 +1109,6 @@ export class QuotesService {
     };
   }
 
-  private capabilityKey(): string {
-    return this.currentCapabilityKey().key;
-  }
-
   private currentCapabilityKey(): QuoteCapabilityKey {
     return quoteCapabilityKeyRing().current;
   }
@@ -1167,10 +1191,18 @@ export class QuotesService {
   private async idempotent<T>(
     namespace: string,
     idempotencyKey: string,
-    requestFingerprint: string,
+    requestFingerprint: string | readonly string[],
     operation: (transaction: Transaction) => Promise<T>,
     responseCodec?: IdempotencyResponseCodec<T>,
   ): Promise<T> {
+    const acceptedFingerprints =
+      typeof requestFingerprint === "string"
+        ? [requestFingerprint]
+        : requestFingerprint;
+    const primaryFingerprint = acceptedFingerprints[0];
+    if (!primaryFingerprint) {
+      throw new Error("At least one idempotency fingerprint is required");
+    }
     return this.prisma.$transaction(async (transaction) => {
       const lockKey = `${namespace}:${idempotencyKey}`;
       await transaction.$queryRaw`
@@ -1182,7 +1214,7 @@ export class QuotesService {
         },
       });
       if (existing) {
-        if (existing.requestFingerprint !== requestFingerprint) {
+        if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
           throw new ConflictException(
             "Idempotency key was already used with different input",
           );
@@ -1194,7 +1226,10 @@ export class QuotesService {
           throw new ConflictException("Idempotent command is incomplete");
         }
         return responseCodec
-          ? responseCodec.fromStoredResponse(existing.responseBody)
+          ? responseCodec.fromStoredResponse(
+              existing.responseBody,
+              existing.requestFingerprint,
+            )
           : (existing.responseBody as T);
       }
 
@@ -1203,7 +1238,7 @@ export class QuotesService {
         data: {
           namespace,
           idempotencyKey,
-          requestFingerprint,
+          requestFingerprint: primaryFingerprint,
           expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
         },
       });
@@ -2085,6 +2120,7 @@ function coreModule(): Promise<CoreModule> {
 
 function quoteCapabilityKeyRing(): {
   current: QuoteCapabilityKey;
+  all: readonly QuoteCapabilityKey[];
   byId: ReadonlyMap<string, string>;
 } {
   const currentKey = process.env.TAVEN_QUOTE_CAPABILITY_KEY;
@@ -2104,6 +2140,7 @@ function quoteCapabilityKeyRing(): {
   });
   return {
     current: keys[0]!,
+    all: keys,
     byId: new Map(keys.map(({ id, key }) => [id, key])),
   };
 }
