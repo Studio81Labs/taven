@@ -42,7 +42,19 @@ describe("OpenAPI artifact", () => {
     ]);
     expect(schemas.ModelOfferItemDto?.properties?.quantity).toMatchObject({
       type: "integer",
-      maximum: 2_147_483_647,
+      maximum: 10_000,
+    });
+    expect(schemas.CreateQuoteRequestDto?.properties?.purpose).toMatchObject({
+      pattern: "\\S",
+    });
+    expect(schemas.QuoteContactDto?.properties?.phone).toMatchObject({
+      pattern: "\\S",
+    });
+    expect(schemas.ModelOfferItemDto?.properties?.color).toMatchObject({
+      pattern: "\\S",
+    });
+    expect(schemas.RejectOfferDto?.properties?.reason).toMatchObject({
+      pattern: "\\S",
     });
     expect(issueOffer.contractTotalMinor).toMatchObject({
       type: "integer",
