@@ -10,9 +10,11 @@ import { PrismaService } from "../src/prisma/prisma.service";
 
 const operatorToken = "test-operator-token-with-at-least-32-characters";
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
-process.env.TAVEN_OPERATOR_API_TOKEN = operatorToken;
-process.env.TAVEN_QUOTE_CAPABILITY_KEY =
+const quoteCapabilityKey =
   "test-quote-capability-key-with-at-least-32-characters";
+process.env.TAVEN_OPERATOR_API_TOKEN = operatorToken;
+process.env.TAVEN_QUOTE_CAPABILITY_KEY = quoteCapabilityKey;
+process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS = "[]";
 process.env.TAVEN_S3_ENDPOINT = "http://127.0.0.1:9010";
 process.env.TAVEN_S3_REGION = "us-east-1";
 process.env.TAVEN_S3_BUCKET = "taven";
@@ -273,6 +275,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(JSON.stringify(issueIdempotency.responseBody)).not.toContain(
       issued.body.offerToken,
     );
+    const offerCapabilityKeyId = createHash("sha256")
+      .update("taven-quote-capability-key\0")
+      .update(quoteCapabilityKey)
+      .digest("hex");
+    expect(issueIdempotency.responseBody).toMatchObject({
+      capabilityKeyId: offerCapabilityKeyId,
+    });
+    const persistedQuote = await prisma.quote.findUniqueOrThrow({
+      where: { id: issued.body.quoteId },
+    });
+    expect(persistedQuote.capabilityKeyId).toBe(offerCapabilityKeyId);
     const issueOutbox = await prisma.outboxMessage.findUniqueOrThrow({
       where: {
         deduplicationKey: `quote-offer-issued:${issued.body.quoteId}:1`,
@@ -287,6 +300,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       offerTokenDerivation: {
         quoteId: issued.body.quoteId,
         issuanceCommandKey: issueKey,
+        capabilityKeyId: offerCapabilityKeyId,
       },
     });
     expect(
@@ -294,6 +308,25 @@ describe("QuoteRequest and tokenized individual offers", () => {
         .update(["quote-offer", issued.body.quoteId, issueKey].join("\0"))
         .digest("base64url"),
     ).toBe(issued.body.offerToken);
+
+    const rotatedCapabilityKey =
+      "rotated-test-quote-capability-key-with-at-least-32-characters";
+    process.env.TAVEN_QUOTE_CAPABILITY_KEY = rotatedCapabilityKey;
+    process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS = JSON.stringify([
+      quoteCapabilityKey,
+    ]);
+    try {
+      const replayAfterRotation = await issueOffer(
+        created.body.requestId,
+        issueKey,
+        offerExpiry,
+      );
+      expect(replayAfterRotation.response.status).toBe(201);
+      expect(replayAfterRotation.body).toEqual(issued.body);
+    } finally {
+      process.env.TAVEN_QUOTE_CAPABILITY_KEY = quoteCapabilityKey;
+      process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS = "[]";
+    }
 
     const wrongOfferToken = await apiJson(`offers/${issued.body.quoteId}`, {
       headers: bearer(randomBytes(32).toString("base64url")),

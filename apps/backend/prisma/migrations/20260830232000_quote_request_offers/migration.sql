@@ -388,6 +388,7 @@ FOR EACH ROW EXECUTE FUNCTION taven_protect_quote_request_content();
 
 ALTER TABLE "quotes"
     ADD COLUMN "public_token_hash" VARCHAR(64),
+    ADD COLUMN "capability_key_id" VARCHAR(64),
     ADD COLUMN "version" INTEGER NOT NULL DEFAULT 1,
     ADD COLUMN "summary" TEXT NOT NULL DEFAULT 'Legacy individual offer',
     ADD COLUMN "terms_revision" VARCHAR(100) NOT NULL DEFAULT 'legacy-terms',
@@ -397,7 +398,13 @@ ALTER TABLE "quotes"
     ADD COLUMN "issuance_result_id" UUID NOT NULL DEFAULT gen_random_uuid(),
     ADD CONSTRAINT "quotes_public_token_hash_key" UNIQUE ("public_token_hash"),
     ADD CONSTRAINT "quotes_offer_shape_check" CHECK (
-        ("public_token_hash" IS NULL OR "public_token_hash" ~ '^[0-9a-f]{64}$')
+        (
+            ("public_token_hash" IS NULL AND "capability_key_id" IS NULL)
+            OR (
+                "public_token_hash" ~ '^[0-9a-f]{64}$'
+                AND "capability_key_id" ~ '^[0-9a-f]{64}$'
+            )
+        )
         AND "version" > 0
         AND "summary" ~ '[^[:space:]]'
         AND "terms_revision" ~ '[^[:space:]]'

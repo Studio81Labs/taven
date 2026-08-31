@@ -1299,6 +1299,7 @@ model Quote {
   quoteRequestId     String    @unique @map("quote_request_id") @db.Uuid
   customerId         String    @map("customer_id") @db.Uuid
   publicTokenHash    String?   @unique @map("public_token_hash") @db.VarChar(64)
+  capabilityKeyId    String?   @map("capability_key_id") @db.VarChar(64)
   version            Int       @default(1)
   summary            String    @default("Legacy individual offer") @db.Text
   termsRevision      String    @default("legacy-terms") @map("terms_revision") @db.VarChar(100)

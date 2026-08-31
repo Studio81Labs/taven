@@ -94,6 +94,9 @@ type IdempotencyResponseCodec<T> = Readonly<{
   toStoredResponse: (response: T) => unknown;
   fromStoredResponse: (response: Prisma.JsonValue) => T;
 }>;
+type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
+type StoredOfferIssuedResponse = Omit<OfferIssuedDto, "offerToken"> &
+  Readonly<{ capabilityKeyId: string }>;
 
 @Injectable()
 export class QuotesService {
@@ -335,6 +338,7 @@ export class QuotesService {
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const offer = validateOffer(input);
     const fingerprint = fingerprintOf({ requestId, ...offer.fingerprint });
+    const offerCapabilityKey = this.currentCapabilityKey();
 
     return this.idempotent<OfferIssuedDto>(
       "quote-request.issue-offer",
@@ -378,7 +382,7 @@ export class QuotesService {
         const quoteId = randomUUID();
         const resultId = randomUUID();
         const offerToken = capabilityToken(
-          this.capabilityKey(),
+          offerCapabilityKey.key,
           "quote-offer",
           quoteId,
           commandKey,
@@ -426,6 +430,7 @@ export class QuotesService {
             quoteRequestId: requestId,
             customerId: request.customerId,
             publicTokenHash: hashToken(offerToken),
+            capabilityKeyId: offerCapabilityKey.id,
             version: 1,
             summary: offer.summary,
             termsRevision: priceList.termsRevision,
@@ -560,6 +565,7 @@ export class QuotesService {
               offerTokenDerivation: {
                 quoteId,
                 issuanceCommandKey: commandKey,
+                capabilityKeyId: offerCapabilityKey.id,
               },
               expiresAt: offer.expiresAt.toISOString(),
             })!,
@@ -582,16 +588,15 @@ export class QuotesService {
           version: response.version,
           termsRevision: response.termsRevision,
           expiresAt: response.expiresAt,
+          capabilityKeyId: offerCapabilityKey.id,
         }),
         fromStoredResponse: (stored) => {
-          const response = stored as unknown as Omit<
-            OfferIssuedDto,
-            "offerToken"
-          >;
+          const { capabilityKeyId, ...response } =
+            stored as unknown as StoredOfferIssuedResponse;
           return {
             ...response,
             offerToken: capabilityToken(
-              this.capabilityKey(),
+              this.capabilityKeyForId(capabilityKeyId),
               "quote-offer",
               response.quoteId,
               commandKey,
@@ -1077,10 +1082,18 @@ export class QuotesService {
   }
 
   private capabilityKey(): string {
-    const key = process.env.TAVEN_QUOTE_CAPABILITY_KEY;
-    if (!key || key.length < 32) {
+    return this.currentCapabilityKey().key;
+  }
+
+  private currentCapabilityKey(): QuoteCapabilityKey {
+    return quoteCapabilityKeyRing().current;
+  }
+
+  private capabilityKeyForId(keyId: string): string {
+    const key = quoteCapabilityKeyRing().byId.get(keyId);
+    if (!key) {
       throw new Error(
-        "TAVEN_QUOTE_CAPABILITY_KEY must contain at least 32 characters",
+        `Quote capability key ${keyId || "<missing>"} is unavailable`,
       );
     }
     return key;
@@ -2068,6 +2081,57 @@ let loadedCore: Promise<CoreModule> | undefined;
 function coreModule(): Promise<CoreModule> {
   loadedCore ??= import("@taven/core");
   return loadedCore;
+}
+
+function quoteCapabilityKeyRing(): {
+  current: QuoteCapabilityKey;
+  byId: ReadonlyMap<string, string>;
+} {
+  const currentKey = process.env.TAVEN_QUOTE_CAPABILITY_KEY;
+  if (!currentKey || currentKey.length < 32) {
+    throw new Error(
+      "TAVEN_QUOTE_CAPABILITY_KEY must contain at least 32 characters",
+    );
+  }
+  const previousKeys = previousQuoteCapabilityKeys();
+  const keys = [currentKey, ...previousKeys].map((key) => {
+    if (key.length < 32) {
+      throw new Error(
+        "Every TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS entry must contain at least 32 characters",
+      );
+    }
+    return { id: quoteCapabilityKeyId(key), key } satisfies QuoteCapabilityKey;
+  });
+  return {
+    current: keys[0]!,
+    byId: new Map(keys.map(({ id, key }) => [id, key])),
+  };
+}
+
+function previousQuoteCapabilityKeys(): string[] {
+  const serialized = process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS;
+  if (!serialized) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new Error(
+      "TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS must be a JSON array of strings",
+    );
+  }
+  if (!Array.isArray(parsed) || parsed.some((key) => typeof key !== "string")) {
+    throw new Error(
+      "TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS must be a JSON array of strings",
+    );
+  }
+  return parsed;
+}
+
+function quoteCapabilityKeyId(key: string): string {
+  return createHash("sha256")
+    .update("taven-quote-capability-key\0")
+    .update(key)
+    .digest("hex");
 }
 
 function capabilityToken(secret: string, ...scope: readonly string[]): string {

@@ -28,6 +28,8 @@
         "properties": {
           "termsRevision": {
             "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "version": {
@@ -89,6 +91,7 @@
           "description": {
             "maxLength": 10000,
             "minLength": 10,
+            "pattern": "^\\s*\\S[\\s\\S]{8,}\\S\\s*$",
             "type": "string"
           },
           "measurements": {
@@ -276,6 +279,7 @@
           "summary": {
             "maxLength": 4000,
             "minLength": 3,
+            "pattern": "^\\s*\\S[\\s\\S]{1,}\\S\\s*$",
             "type": "string"
           },
           "termsSnapshot": {
@@ -686,6 +690,8 @@
           },
           "name": {
             "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "phone": {
@@ -832,6 +838,8 @@
           },
           "termsRevision": {
             "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "version": {

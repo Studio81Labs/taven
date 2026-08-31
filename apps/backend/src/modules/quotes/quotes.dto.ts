@@ -2,9 +2,17 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const JAVASCRIPT_SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
+const NON_BLANK_TEXT_PATTERN = "\\S";
+const TRIMMED_MINIMUM_3_PATTERN = "^\\s*\\S[\\s\\S]{1,}\\S\\s*$";
+const TRIMMED_MINIMUM_10_PATTERN = "^\\s*\\S[\\s\\S]{8,}\\S\\s*$";
 
 export class QuoteContactDto {
-  @ApiProperty({ type: String, maxLength: 200 })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   name!: string;
 
   @ApiProperty({ type: String, format: "email", maxLength: 320 })
@@ -15,7 +23,12 @@ export class QuoteContactDto {
 }
 
 export class CreateQuoteRequestDto {
-  @ApiProperty({ type: String, minLength: 10, maxLength: 10_000 })
+  @ApiProperty({
+    type: String,
+    minLength: 10,
+    maxLength: 10_000,
+    pattern: TRIMMED_MINIMUM_10_PATTERN,
+  })
   description!: string;
 
   @ApiPropertyOptional({ type: String, maxLength: 2_000 })
@@ -192,7 +205,12 @@ export class OfferPriceComponentDto {
 }
 
 export class IssueOfferDto {
-  @ApiProperty({ type: String, minLength: 3, maxLength: 4_000 })
+  @ApiProperty({
+    type: String,
+    minLength: 3,
+    maxLength: 4_000,
+    pattern: TRIMMED_MINIMUM_3_PATTERN,
+  })
   summary!: string;
 
   @ApiProperty({ type: String, format: "date-time" })
@@ -412,7 +430,12 @@ export class AcceptOfferDto {
   })
   version!: number;
 
-  @ApiProperty({ type: String, maxLength: 100 })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   termsRevision!: string;
 }
 
