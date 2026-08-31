@@ -27,7 +27,7 @@ contract terms win. No value in this document is a credential.
 | Transactional email                       | Resend Free, one authenticated `taven.cz` sending domain; provider-neutral outbox adapter                                                                                                                                                                                                                                                                                                              | Resend test key in GitHub `staging` secret `TAVEN_RESEND_API_KEY`; independent production key in `production`; production file `/etc/taven/secrets/resend-api-key`                                                                                                         | USD 0 for 3,000 emails/month and 100/day; Pro is USD 20/month for 50,000 with USD 0.90/1,000 overage when the free quota is intentionally left                                                     | SMTP adapter targeting an owner-operated Postfix relay or another transactional provider; templates and outbox identities stay provider-neutral                                                                                 |
 | DNS, proxy, and edge TLS                  | Cloudflare Free authoritative DNS and proxy for `taven.cz`; Caddy 2 provides strict-TLS origin termination                                                                                                                                                                                                                                                                                             | Scoped Cloudflare DNS token in `CLOUDFLARE_API_TOKEN`; no global API key; Caddy origin material under `/etc/taven/secrets/caddy`                                                                                                                                           | CZK 0 on Free; no paid edge add-on selected                                                                                                                                                        | Export DNS records, change authoritative nameservers, and expose the same Caddy origin through another DNS/CDN provider                                                                                                         |
 | Domain registration                       | Register `taven.cz` with WEDOS, then delegate authoritative DNS to Cloudflare; WHOIS returned no entry on 2026-08-31, but checkout is authoritative                                                                                                                                                                                                                                                    | Registrar login and recovery material live in the owner's password manager, not GitHub or the repository                                                                                                                                                                   | CZK 160/year excluding VAT, CZK 193.60/year including VAT at the reviewed price; about CZK 16.13/month amortized                                                                                   | Any CZ.NIC-accredited registrar; transfer does not change application or Cloudflare configuration                                                                                                                               |
-| Error, resource, and uptime monitoring    | Self-hosted Grafana, Prometheus, Alertmanager, Loki, and Alloy containers; external 15-minute GitHub Actions readiness check for whole-host failure                                                                                                                                                                                                                                                    | Monitoring admin secret `TAVEN_GRAFANA_ADMIN_PASSWORD`; on-host alerts use Resend; the external check calls the non-sensitive readiness endpoint and alerts `@akadlec` through GitHub workflow-failure notifications                                                       | CZK 0 license/incremental host cost; logs/metrics and scheduled CI usage are bounded below and must stay within the GitHub allowance                                                               | Export OpenMetrics/logs to another compatible stack; a second owner-controlled host may replace the GitHub smoke check                                                                                                          |
+| Error, resource, and uptime monitoring    | Self-hosted Grafana, Prometheus, Alertmanager, Loki, and Alloy containers; external Cloudflare Workers Free cron checks public web and API readiness every 5 minutes; Worker KV stores transition/reminder state and a fixed-destination Email Service binding alerts the owner independently of Taven and Resend                                                                                      | Monitoring admin secret `TAVEN_GRAFANA_ADMIN_PASSWORD`; separate scoped GitHub Environment secret `TAVEN_MONITOR_CLOUDFLARE_API_TOKEN` deploys the Worker; the email binding can send only to the verified owner destination and exposes no runtime mail credential        | CZK 0 license/incremental host cost; 288 scheduled checks/day and low transition-state KV usage fit the reviewed Workers Free allowances                                                           | Run the same runtime-neutral check from a second owner-controlled host; export OpenMetrics/logs to another compatible stack                                                                                                     |
 | Slicing engine                            | OrcaSlicer v2.4.2 official x86-64 AppImage, verified by the SHA-256 in ADR 0008, wrapped in a separately pinned OCI image and started only for queued work                                                                                                                                                                                                                                             | No provider credential or Orca account; fixture inputs and expected results live in Git; final image digest is recorded by #25                                                                                                                                             | CZK 0 license; VPS CPU/RAM only while a worker is running                                                                                                                                          | Retain the previous image/profile revision; any replacement engine requires a reviewed fixture comparison and ADR                                                                                                               |
 | Runtime secrets                           | Root-owned `0600` files under `/etc/taven/secrets`, delivered or rotated from protected GitHub Environment secrets                                                                                                                                                                                                                                                                                     | Environment approval and least-privilege deploy credentials; local values only in Git-ignored files copied from `.env.example`                                                                                                                                             | CZK 0                                                                                                                                                                                              | Age-encrypted owner-controlled delivery or a self-hosted secret manager; application containers continue consuming files/environment values                                                                                     |
 
@@ -79,7 +79,10 @@ selected.
       migrated schema.
 - [ ] Give every container CPU/memory limits and health checks. Keep the slicer
       outside the default Compose profile, allow only bounded job input/output
-      mounts, disable its network, and prove it exits after draining work.
+      mounts, and prove it exits after draining work. Keep the BullMQ wrapper on
+      the private network for Redis and object storage, but run each Orca child
+      in a network namespace with no interfaces or outbound access. Prove the
+      isolation without mounting the host Docker socket.
 
 ### PostgreSQL, Redis, object storage, and backups
 
@@ -182,11 +185,21 @@ selected.
       queue age/dead letters, slice errors, payment mismatches/refunds, email
       failures, retention failures, and backup freshness. Exercise every alert
       and link it to the issue #39 runbook.
-- [ ] Run the external GitHub readiness check every 15 minutes with a 10-second
-      connection timeout, 30-second overall timeout, and one retry. A failure
-      fails the workflow and reaches `@akadlec` through GitHub notifications,
-      independent of Taven and Resend. Exercise it by targeting a non-production
-      unavailable origin. A same-host dashboard is not evidence that the host
+- [ ] Deploy the runtime-neutral readiness checker as a Cloudflare Worker Free
+      cron every 5 minutes. Check both the public web route and a non-sensitive
+      API readiness endpoint with a 10-second connection timeout, 30-second
+      overall timeout, and one retry. After two consecutive failures, send the
+      first alert, at most one six-hour reminder, and a recovery message through
+      a fixed verified-destination Cloudflare Email Service binding. Store only
+      monitor state and timestamps in Worker KV. The binding must not send to an
+      arbitrary recipient.
+- [ ] Exercise the Worker against a non-production unavailable origin and prove
+      alert, reminder suppression, and recovery delivery. Monitor the Worker
+      cron itself with a daily expected-heartbeat check from the VPS; absence is
+      locally actionable while the Worker remains the off-host outage signal.
+      Document GitHub scheduled workflows as unsuitable for the sole check
+      because public-repository schedules can be disabled after 60 days without
+      repository activity. A same-host dashboard is not evidence that the host
       is externally reachable.
 
 ### OrcaSlicer
@@ -214,6 +227,9 @@ selected.
 - Cloudflare R2 Standard has no minimum storage duration and DeleteObject is a
   free operation. The live application does not use R2 until fallback; backup
   deletion is bounded by the 35-day encrypted snapshot policy.
+- The external Worker fetches only public health routes. Its KV state contains
+  only outcome, consecutive-failure count, and alert timestamps; no customer,
+  request, model, payment, log, or response-body data is stored at the edge.
 - An object-store migration enters maintenance mode, snapshots the durable
   object references, retention deadlines, and holds, runs deletion
   reconciliation, copies and verifies only still-live referenced objects, then
@@ -252,6 +268,11 @@ selected.
 - [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/),
   [S3 compatibility](https://developers.cloudflare.com/r2/get-started/s3/), and
   [EU jurisdiction](https://developers.cloudflare.com/r2/reference/data-location/)
+- [Cloudflare Workers Free limits](https://developers.cloudflare.com/workers/platform/limits/),
+  [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/),
+  [Email Service](https://developers.cloudflare.com/email-service/), and
+  [restricted email bindings](https://developers.cloudflare.com/email-service/configuration/send-bindings/)
+- [GitHub scheduled-workflow inactivity behavior](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)
 - [Garage v2.3.0 source tag](https://git.deuxfleurs.fr/Deuxfleurs/garage/src/tag/v2.3.0),
   [quick start](https://garagehq.deuxfleurs.fr/documentation/quick-start/), and
   [S3 compatibility](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/)

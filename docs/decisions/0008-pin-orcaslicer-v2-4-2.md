@@ -33,10 +33,14 @@ verifies both size and SHA-256 before extraction, and extracts the AppImage at
 build time instead of requiring FUSE at runtime. The Ubuntu 24.04-compatible
 base image and every installed package are also pinned. The worker runs as a
 non-root user with a fresh per-job data directory, a read-only runtime
-filesystem except for bounded work/output mounts, no Orca account, no Bambu
-network plug-in, and no outbound network access during slicing. If the selected
-CLI path still requires a display, the wrapper supplies a private Xvfb display;
-it must not depend on an interactive desktop.
+filesystem except for bounded work/output mounts, no Orca account, and no Bambu
+network plug-in. The BullMQ wrapper remains connected to the private Compose
+network so it can consume Redis jobs and transfer input/output through the
+configured object store; it exposes no public port. Each Orca subprocess runs
+inside a separate network namespace with no interfaces or outbound access. The
+isolation must be enforced and tested without mounting the host Docker socket.
+If the selected CLI path still requires a display, the wrapper supplies a
+private Xvfb display; it must not depend on an interactive desktop.
 
 Vendor profiles originate from the same source commit, initially from
 `resources/profiles/BBL`. Issue #25 copies only the reviewed profiles required
