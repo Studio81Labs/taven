@@ -97,10 +97,11 @@ type AnonymousQuoteLimitRow = {
 type ExpiringResult<T> =
   Readonly<{ kind: "ok"; value: T }> | Readonly<{ kind: "expired" }>;
 type IdempotencyResponseCodec<T> = Readonly<{
-  toStoredResponse: (response: T) => unknown;
+  toStoredResponse: (response: T, generation: number) => unknown;
   fromStoredResponse: (
     response: Prisma.JsonValue,
     requestFingerprint: string,
+    generation: number,
   ) => T;
 }>;
 type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
@@ -108,7 +109,10 @@ type StoredQuoteRequestCreatedResponse = Omit<
   QuoteRequestCreatedDto,
   "requestToken"
 > &
-  Readonly<{ capabilityKeyId: string }>;
+  Readonly<{
+    capabilityKeyId: string;
+    capabilityTokenGeneration?: number;
+  }>;
 type StoredOfferIssuedResponse = Omit<OfferIssuedDto, "offerToken"> &
   Readonly<{ capabilityKeyId: string }>;
 
@@ -145,23 +149,23 @@ export class QuotesService {
       },
     );
     const currentCapabilityRequest = capabilityRequests[0]!;
-    const requestToken = capabilityToken(
-      currentCapabilityRequest.capabilityKey.key,
-      "quote-request",
-      commandKey,
-      currentCapabilityRequest.fingerprint,
-    );
-
     return this.idempotent<QuoteRequestCreatedDto>(
       "quote-request.create",
       commandKey,
       capabilityRequests.map(({ fingerprint }) => fingerprint),
-      async (transaction) => {
+      async (transaction, generation) => {
         await this.reserveAnonymousQuote(
           transaction,
           currentCapabilityRequest.clientSubjectHash,
         );
         const observedAt = await databaseNow(transaction);
+        const requestToken = capabilityToken(
+          currentCapabilityRequest.capabilityKey.key,
+          "quote-request",
+          commandKey,
+          currentCapabilityRequest.fingerprint,
+          String(generation),
+        );
         const requestId = randomUUID();
         const sessionId = randomUUID();
         const customerId = randomUUID();
@@ -233,15 +237,16 @@ export class QuotesService {
         } satisfies QuoteRequestCreatedDto;
       },
       {
-        toStoredResponse: (response) => ({
+        toStoredResponse: (response, generation) => ({
           requestId: response.requestId,
           publicReference: response.publicReference,
           status: response.status,
           slaDueAt: response.slaDueAt,
           capabilityKeyId: currentCapabilityRequest.capabilityKey.id,
+          capabilityTokenGeneration: generation,
         }),
         fromStoredResponse: (stored, storedFingerprint) => {
-          const { capabilityKeyId, ...response } =
+          const { capabilityKeyId, capabilityTokenGeneration, ...response } =
             stored as unknown as StoredQuoteRequestCreatedResponse;
           return {
             ...response,
@@ -250,6 +255,9 @@ export class QuotesService {
               "quote-request",
               commandKey,
               storedFingerprint,
+              ...(capabilityTokenGeneration === undefined
+                ? []
+                : [String(capabilityTokenGeneration)]),
             ),
           };
         },
@@ -1411,7 +1419,7 @@ export class QuotesService {
     namespace: string,
     idempotencyKey: string,
     requestFingerprint: string | readonly string[],
-    operation: (transaction: Transaction) => Promise<T>,
+    operation: (transaction: Transaction, generation: number) => Promise<T>,
     responseCodec?: IdempotencyResponseCodec<T>,
   ): Promise<T> {
     const acceptedFingerprints =
@@ -1448,6 +1456,7 @@ export class QuotesService {
           ? responseCodec.fromStoredResponse(
               existing.responseBody,
               existing.requestFingerprint,
+              existing.generation,
             )
           : (existing.responseBody as T);
       }
@@ -1461,9 +1470,11 @@ export class QuotesService {
           expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
         },
       });
-      const response = await operation(transaction);
+      const response = await operation(transaction, record.generation);
       const storedResponse = jsonInput(
-        responseCodec ? responseCodec.toStoredResponse(response) : response,
+        responseCodec
+          ? responseCodec.toStoredResponse(response, record.generation)
+          : response,
       );
       if (storedResponse === undefined) {
         throw new Error("Idempotent response is not JSON serializable");

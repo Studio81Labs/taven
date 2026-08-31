@@ -89,8 +89,9 @@ describe("QuoteRequest and tokenized individual offers", () => {
   it("starts a new append-only idempotency generation after expiry", async () => {
     const idempotencyKey = key("expired-generation");
     const clientAddress = "198.51.100.42";
+    const input = requestInput("expired-generation");
     const first = await quotes.createRequest(
-      requestInput("expired-generation-first"),
+      input,
       clientAddress,
       idempotencyKey,
     );
@@ -107,12 +108,13 @@ describe("QuoteRequest and tokenized individual offers", () => {
     });
 
     const second = await quotes.createRequest(
-      requestInput("expired-generation-second"),
+      input,
       clientAddress,
       idempotencyKey,
     );
     expect(second.status).toBe("NEW");
     expect(second.requestId).not.toBe(first.requestId);
+    expect(second.requestToken).not.toBe(first.requestToken);
     expect(
       await prisma.idempotencyRecord.findMany({
         where: { namespace: "quote-request.create", idempotencyKey },
@@ -124,12 +126,14 @@ describe("QuoteRequest and tokenized individual offers", () => {
         generation: 1,
         responseBody: expect.objectContaining({
           requestId: first.requestId,
+          capabilityTokenGeneration: 1,
         }),
       }),
       expect.objectContaining({
         generation: 2,
         responseBody: expect.objectContaining({
           requestId: second.requestId,
+          capabilityTokenGeneration: 2,
         }),
       }),
     ]);
@@ -160,7 +164,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
       .update("taven-quote-capability-key\0")
       .update(quoteCapabilityKey)
       .digest("hex");
-    expect(createIdempotency.responseBody).toMatchObject({ capabilityKeyId });
+    expect(createIdempotency.responseBody).toMatchObject({
+      capabilityKeyId,
+      capabilityTokenGeneration: 1,
+    });
     const persistedRequest = await prisma.quoteRequest.findUniqueOrThrow({
       where: { id: created.body.requestId },
       include: { quoteSession: true },
