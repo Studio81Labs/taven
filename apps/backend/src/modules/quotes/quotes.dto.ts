@@ -204,6 +204,97 @@ export class OfferPriceComponentDto {
   allocation?: Record<string, unknown>;
 }
 
+export class OfferDeliveryDestinationDto {
+  @ApiProperty({ type: String, minLength: 1, maxLength: 255 })
+  providerEndpointId!: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
+  endpointType!: string;
+
+  @ApiProperty({ type: "object", additionalProperties: true })
+  addressSnapshot!: Record<string, unknown>;
+
+  @ApiProperty({ type: "object", additionalProperties: true })
+  capabilitySnapshot!: Record<string, unknown>;
+}
+
+export class OfferShipmentPackingUnitDto {
+  @ApiProperty({ type: "integer", minimum: 0, maximum: POSTGRES_INTEGER_MAX })
+  quoteItemOrdinal!: number;
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: POSTGRES_INTEGER_MAX })
+  quantityOrdinal!: number;
+}
+
+export class OfferShipmentPlanDto {
+  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
+  category!: string;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  plannedVolumeCubicMm!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  plannedWeightMilligrams!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  shippingAmountMinor!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  packagingAmountMinor!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  handlingAmountMinor!: number;
+
+  @ApiProperty({ type: [OfferShipmentPackingUnitDto], minItems: 1 })
+  packingUnits!: OfferShipmentPackingUnitDto[];
+
+  @ApiPropertyOptional({ type: "object", additionalProperties: true })
+  allocationSnapshot?: Record<string, unknown>;
+}
+
+export class OfferPaymentCapturePolicyDto {
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 9_999 })
+  feeRateBasisPoints!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  feeFixedMinor!: number;
+
+  @ApiProperty({ type: "object", additionalProperties: true })
+  providerConfig!: Record<string, unknown>;
+}
+
+export class OfferPaymentPolicyDto {
+  @ApiProperty({ type: OfferPaymentCapturePolicyDto })
+  deposit!: OfferPaymentCapturePolicyDto;
+
+  @ApiProperty({ type: OfferPaymentCapturePolicyDto })
+  balance!: OfferPaymentCapturePolicyDto;
+}
+
 export class IssueOfferDto {
   @ApiProperty({
     type: String,
@@ -241,6 +332,15 @@ export class IssueOfferDto {
 
   @ApiProperty({ type: "object", additionalProperties: true })
   inputSnapshot!: Record<string, unknown>;
+
+  @ApiProperty({ type: OfferDeliveryDestinationDto })
+  deliveryDestination!: OfferDeliveryDestinationDto;
+
+  @ApiProperty({ type: [OfferShipmentPlanDto], minItems: 1 })
+  shipmentPlans!: OfferShipmentPlanDto[];
+
+  @ApiProperty({ type: OfferPaymentPolicyDto })
+  paymentPolicy!: OfferPaymentPolicyDto;
 
   @ApiProperty({ type: [ModelOfferItemDto], minItems: 1 })
   items!: ModelOfferItemDto[];
@@ -323,7 +423,9 @@ export class OfferPreviewPriceComponentDto {
       "ITEM_POSTPROCESSING",
       "ORDER_MIN_PRINT",
       "ORDER_SMALL_SURCHARGE",
+      "SHIPMENT",
       "EXPRESS",
+      "PAYMENT_FEE",
     ],
   })
   kind!:
@@ -332,13 +434,21 @@ export class OfferPreviewPriceComponentDto {
     | "ITEM_POSTPROCESSING"
     | "ORDER_MIN_PRINT"
     | "ORDER_SMALL_SURCHARGE"
-    | "EXPRESS";
+    | "SHIPMENT"
+    | "EXPRESS"
+    | "PAYMENT_FEE";
 
-  @ApiProperty({ type: String, enum: ["ORDER", "QUOTE_ITEM"] })
-  scope!: "ORDER" | "QUOTE_ITEM";
+  @ApiProperty({
+    type: String,
+    enum: ["ORDER", "QUOTE_ITEM", "QUOTE_SHIPMENT_PLAN"],
+  })
+  scope!: "ORDER" | "QUOTE_ITEM" | "QUOTE_SHIPMENT_PLAN";
 
   @ApiProperty({ type: "integer", minimum: 0, nullable: true })
   quoteItemOrdinal!: number | null;
+
+  @ApiProperty({ type: "integer", minimum: 0, nullable: true })
+  shipmentPlanOrdinal!: number | null;
 
   @ApiProperty({
     type: "integer",
@@ -408,6 +518,12 @@ export class OfferPreviewDto {
 
   @ApiProperty({ type: [OfferPreviewItemDto] })
   items!: OfferPreviewItemDto[];
+
+  @ApiProperty({ type: OfferDeliveryDestinationDto })
+  deliveryDestination!: OfferDeliveryDestinationDto;
+
+  @ApiProperty({ type: [OfferShipmentPlanDto] })
+  shipmentPlans!: OfferShipmentPlanDto[];
 
   @ApiProperty({ type: [OfferPreviewPriceComponentDto] })
   components!: OfferPreviewPriceComponentDto[];

@@ -361,6 +361,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
       termsRevision: string;
       contractTotalMinor: number;
       items: Array<Record<string, unknown>>;
+      deliveryDestination: Record<string, unknown>;
+      shipmentPlans: Array<Record<string, unknown>>;
       components: Array<Record<string, unknown>>;
       paymentSchedules: Array<Record<string, unknown>>;
     }>(`offers/${issued.body.quoteId}`, {
@@ -382,11 +384,16 @@ describe("QuoteRequest and tokenized individual offers", () => {
         color: null,
       },
     ]);
+    expect(preview.body.deliveryDestination).toEqual(
+      defaultDeliveryDestination(),
+    );
+    expect(preview.body.shipmentPlans).toEqual(defaultShipmentPlans());
     expect(preview.body.components).toEqual([
       {
         kind: "ITEM_PRODUCTION",
         scope: "QUOTE_ITEM",
         quoteItemOrdinal: 0,
+        shipmentPlanOrdinal: null,
         amountMinor: 80_000,
         allocation: null,
       },
@@ -394,6 +401,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         kind: "ITEM_QUANTITY",
         scope: "QUOTE_ITEM",
         quoteItemOrdinal: 0,
+        shipmentPlanOrdinal: null,
         amountMinor: 20_000,
         allocation: null,
       },
@@ -401,7 +409,16 @@ describe("QuoteRequest and tokenized individual offers", () => {
         kind: "ITEM_POSTPROCESSING",
         scope: "QUOTE_ITEM",
         quoteItemOrdinal: 0,
+        shipmentPlanOrdinal: null,
         amountMinor: 10_000,
+        allocation: null,
+      },
+      {
+        kind: "SHIPMENT",
+        scope: "QUOTE_SHIPMENT_PLAN",
+        quoteItemOrdinal: null,
+        shipmentPlanOrdinal: 0,
+        amountMinor: 0,
         allocation: null,
       },
     ]);
@@ -467,8 +484,20 @@ describe("QuoteRequest and tokenized individual offers", () => {
           include: { priceSnapshot: { include: { paymentSchedules: true } } },
         },
         individualOrderOrigin: {
-          include: { order: { include: { items: true } } },
+          include: {
+            order: {
+              include: {
+                activePriceBinding: true,
+                deliveryDestinations: true,
+                fulfilmentSlots: true,
+                items: true,
+                phases: true,
+                shipmentPlans: true,
+              },
+            },
+          },
         },
+        shipmentPlans: true,
       },
     });
     expect(persisted.quoteRequest.status).toBe("ACCEPTED");
@@ -487,6 +516,25 @@ describe("QuoteRequest and tokenized individual offers", () => {
       printConfigRevisionId: defaultOfferItem.printConfigRevisionId,
       material: defaultOfferItem.material,
     });
+    expect(persisted.shipmentPlans).toHaveLength(1);
+    expect(
+      persisted.individualOrderOrigin?.order.activePriceBinding,
+    ).not.toBeNull();
+    expect(
+      persisted.individualOrderOrigin?.order.deliveryDestinations,
+    ).toHaveLength(1);
+    expect(persisted.individualOrderOrigin?.order.phases).toHaveLength(1);
+    expect(persisted.individualOrderOrigin?.order.fulfilmentSlots).toHaveLength(
+      1,
+    );
+    expect(persisted.individualOrderOrigin?.order.shipmentPlans).toEqual([
+      expect.objectContaining({
+        quoteShipmentPlanId: persisted.shipmentPlans[0]!.id,
+        shippingAmountMinor: BigInt(0),
+        packagingAmountMinor: BigInt(0),
+        handlingAmountMinor: BigInt(0),
+      }),
+    ]);
     expect(
       await prisma.payment.count({
         where: { orderId: accepted.body.orderId },
@@ -630,7 +678,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toMatchObject({ status: "EXPIRED" });
   });
 
-  it("rejects unsupported payment-fee components before persistence", async () => {
+  it("persists quoted shipment charges and fees for both planned captures", async () => {
     const created = await createRequest(
       key("fee-create"),
       requestInput("fee-create"),
@@ -639,13 +687,105 @@ describe("QuoteRequest and tokenized individual offers", () => {
       `admin/quote-requests/${created.body.requestId}/review`,
       key("fee-review"),
     );
-    const response = await issueOffer(
+    const issued = await issueOffer(
       created.body.requestId,
       key("fee-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
-      [...defaultComponents(), { kind: "PAYMENT_FEE", amountMinor: 0 }],
+      defaultComponents(),
+      defaultItems(),
+      priceListId,
+      {
+        contractTotalMinor: 121_415,
+        shipmentPlans: [
+          {
+            ...defaultShipmentPlans()[0]!,
+            shippingAmountMinor: 8_500,
+            packagingAmountMinor: 1_000,
+            handlingAmountMinor: 500,
+          },
+        ],
+        paymentPolicy: {
+          deposit: {
+            feeRateBasisPoints: 100,
+            feeFixedMinor: 100,
+            providerConfig: { provider: "test", capture: "deposit" },
+          },
+          balance: {
+            feeRateBasisPoints: 100,
+            feeFixedMinor: 100,
+            providerConfig: { provider: "test", capture: "balance" },
+          },
+        },
+      },
     );
-    expect(response.response.status).toBe(400);
+    expect(issued.response.status).toBe(201);
+
+    const snapshot = await prisma.priceSnapshot.findFirstOrThrow({
+      where: { quoteBinding: { quoteId: issued.body.quoteId } },
+      include: {
+        components: { orderBy: { amountMinor: "asc" } },
+        paymentSchedules: { orderBy: { sequence: "asc" } },
+        quoteShipmentPlans: true,
+      },
+    });
+    expect(snapshot.quoteShipmentPlans).toEqual([
+      expect.objectContaining({
+        shippingAmountMinor: BigInt(8_500),
+        packagingAmountMinor: BigInt(1_000),
+        handlingAmountMinor: BigInt(500),
+      }),
+    ]);
+    expect(snapshot.components).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "SHIPMENT",
+          scope: "QUOTE_SHIPMENT_PLAN",
+          amountMinor: BigInt(10_000),
+        }),
+        expect.objectContaining({
+          kind: "PAYMENT_FEE",
+          scope: "ORDER",
+          amountMinor: BigInt(1_415),
+        }),
+      ]),
+    );
+    expect(snapshot.paymentSchedules).toEqual([
+      expect.objectContaining({
+        role: "DEPOSIT",
+        grossAmountMinor: BigInt(33_000),
+        feeRateBasisPoints: 100,
+        feeFixedMinor: BigInt(100),
+        providerConfig: { provider: "test", capture: "deposit" },
+      }),
+      expect.objectContaining({
+        role: "BALANCE",
+        grossAmountMinor: BigInt(88_415),
+        feeRateBasisPoints: 100,
+        feeFixedMinor: BigInt(100),
+        providerConfig: { provider: "test", capture: "balance" },
+      }),
+    ]);
+
+    const accepted = await acceptOffer(issued.body, key("fee-accept"));
+    expect(accepted.response.status).toBe(200);
+    expect(
+      await prisma.shipmentPlan.findUniqueOrThrow({
+        where: {
+          quoteShipmentPlanId: snapshot.quoteShipmentPlans[0]!.id,
+        },
+        select: {
+          orderId: true,
+          shippingAmountMinor: true,
+          packagingAmountMinor: true,
+          handlingAmountMinor: true,
+        },
+      }),
+    ).toEqual({
+      orderId: accepted.body.orderId,
+      shippingAmountMinor: BigInt(8_500),
+      packagingAmountMinor: BigInt(1_000),
+      handlingAmountMinor: BigInt(500),
+    });
   });
 
   it("rejects unplannable custom-service items before offer persistence", async () => {
@@ -1048,6 +1188,13 @@ describe("QuoteRequest and tokenized individual offers", () => {
     }> = defaultComponents(),
     items: Array<Record<string, unknown>> = defaultItems(),
     selectedPriceListId = priceListId,
+    options: {
+      contractTotalMinor?: number;
+      depositMinor?: number;
+      deliveryDestination?: ReturnType<typeof defaultDeliveryDestination>;
+      shipmentPlans?: ReturnType<typeof defaultShipmentPlans>;
+      paymentPolicy?: ReturnType<typeof defaultPaymentPolicy>;
+    } = {},
   ) {
     return apiJson<{
       quoteId: string;
@@ -1067,10 +1214,15 @@ describe("QuoteRequest and tokenized individual offers", () => {
           typeof expiresAt === "string" ? expiresAt : expiresAt.toISOString(),
         promisedDate: "2026-10-01",
         priceListId: selectedPriceListId,
-        contractTotalMinor: 110_000,
-        depositMinor: 33_000,
+        contractTotalMinor: options.contractTotalMinor ?? 110_000,
+        depositMinor: options.depositMinor ?? 33_000,
         termsSnapshot: { revisionAcceptedByOffer: true },
         inputSnapshot: { operatorEstimate: "manual-v0" },
+        deliveryDestination:
+          options.deliveryDestination ?? defaultDeliveryDestination(),
+        shipmentPlans:
+          options.shipmentPlans ?? defaultShipmentPlansForItems(items),
+        paymentPolicy: options.paymentPolicy ?? defaultPaymentPolicy(),
         items,
         components,
       }),
@@ -1095,6 +1247,75 @@ describe("QuoteRequest and tokenized individual offers", () => {
         amountMinor: 10_000,
       },
     ];
+  }
+
+  function defaultDeliveryDestination() {
+    return {
+      providerEndpointId: "test-delivery-endpoint",
+      endpointType: "DELIVERY",
+      addressSnapshot: { country: "CZ", postalCode: "11000" },
+      capabilitySnapshot: { carrier: "test", service: "standard" },
+    };
+  }
+
+  function defaultShipmentPlans() {
+    return defaultShipmentPlansForItems(defaultItems());
+  }
+
+  function defaultShipmentPlansForItems(items: Array<Record<string, unknown>>) {
+    return [
+      {
+        category: "STANDARD",
+        plannedVolumeCubicMm: 1_000,
+        plannedWeightMilligrams: 1_000,
+        shippingAmountMinor: 0,
+        packagingAmountMinor: 0,
+        handlingAmountMinor: 0,
+        packingUnits: items.flatMap((item, quoteItemOrdinal) =>
+          Array.from(
+            {
+              length:
+                typeof item.quantity === "number" &&
+                Number.isSafeInteger(item.quantity) &&
+                item.quantity > 0 &&
+                item.quantity <= 10_000
+                  ? item.quantity
+                  : 1,
+            },
+            (_, quantityIndex) => ({
+              quoteItemOrdinal,
+              quantityOrdinal: quantityIndex + 1,
+            }),
+          ),
+        ),
+      },
+    ];
+  }
+
+  function defaultPaymentPolicy(): {
+    deposit: {
+      feeRateBasisPoints: number;
+      feeFixedMinor: number;
+      providerConfig: Record<string, unknown>;
+    };
+    balance: {
+      feeRateBasisPoints: number;
+      feeFixedMinor: number;
+      providerConfig: Record<string, unknown>;
+    };
+  } {
+    return {
+      deposit: {
+        feeRateBasisPoints: 0,
+        feeFixedMinor: 0,
+        providerConfig: { mode: "provider-neutral" },
+      },
+      balance: {
+        feeRateBasisPoints: 0,
+        feeFixedMinor: 0,
+        providerConfig: { mode: "provider-neutral" },
+      },
+    };
   }
 
   function defaultItems(): Array<Record<string, unknown>> {

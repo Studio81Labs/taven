@@ -38,10 +38,13 @@ import type {
   CreateQuoteRequestDto,
   IssueOfferDto,
   ModelOfferItemDto,
+  OfferDeliveryDestinationDto,
   OfferIssuedDto,
+  OfferPaymentCapturePolicyDto,
   OfferPaymentScheduleDto,
   OfferPreviewDto,
   OfferPreviewPriceComponentDto,
+  OfferShipmentPlanDto,
   QuoteContactDto,
   QuoteRequestCreatedDto,
   QuoteRequestDetailDto,
@@ -78,7 +81,9 @@ const OFFER_COMPONENT_ORDER = [
   PriceComponentKind.ITEM_POSTPROCESSING,
   PriceComponentKind.ORDER_MIN_PRINT,
   PriceComponentKind.ORDER_SMALL_SURCHARGE,
+  PriceComponentKind.SHIPMENT,
   PriceComponentKind.EXPRESS,
+  PriceComponentKind.PAYMENT_FEE,
 ] as const;
 
 type Transaction = Prisma.TransactionClient;
@@ -421,12 +426,24 @@ export class QuotesService {
           id: randomUUID(),
           ordinal,
         }));
+        const quoteDeliveryDestination = {
+          ...offer.deliveryDestination,
+          id: randomUUID(),
+        };
+        const quoteShipmentPlans = offer.shipmentPlans.map((plan, ordinal) => ({
+          ...plan,
+          id: randomUUID(),
+          ordinal,
+        }));
         const snapshotId = randomUUID();
         const snapshotHash = fingerprintOf({
           quoteId,
           priceListId: priceList.id,
           pricingRevision: priceList.revision,
           inputSnapshot: offer.inputSnapshot,
+          deliveryDestination: offer.deliveryDestination,
+          shipmentPlans: offer.shipmentPlans,
+          paymentPolicy: offer.paymentPolicy,
           items: offer.fingerprint.items,
           components: offer.fingerprint.components,
           contractTotalMinor: offer.contractTotalMinor,
@@ -503,6 +520,9 @@ export class QuotesService {
               ...offer.inputSnapshot,
               quoteRequestId: requestId,
               quoteVersion: 1,
+              deliveryDestination: offer.deliveryDestination,
+              shipmentPlans: offer.shipmentPlans,
+              paymentPolicy: offer.paymentPolicy,
             })!,
             snapshotHash,
             createdAt: issuedAt,
@@ -511,11 +531,52 @@ export class QuotesService {
         await transaction.quotePriceBinding.create({
           data: { quoteId, priceSnapshotId: snapshotId },
         });
+        await transaction.quoteDeliveryDestination.create({
+          data: {
+            id: quoteDeliveryDestination.id,
+            quoteId,
+            providerEndpointId: quoteDeliveryDestination.providerEndpointId,
+            endpointType: quoteDeliveryDestination.endpointType,
+            addressSnapshot: jsonInput(
+              quoteDeliveryDestination.addressSnapshot,
+            )!,
+            capabilitySnapshot: jsonInput(
+              quoteDeliveryDestination.capabilitySnapshot,
+            )!,
+            createdAt: issuedAt,
+          },
+        });
+        for (const plan of quoteShipmentPlans) {
+          await transaction.quoteShipmentPlan.create({
+            data: {
+              id: plan.id,
+              quoteId,
+              priceSnapshotId: snapshotId,
+              quoteDeliveryDestinationId: quoteDeliveryDestination.id,
+              ordinal: plan.ordinal,
+              category: plan.category,
+              plannedVolumeCubicMm: BigInt(plan.plannedVolumeCubicMm),
+              plannedWeightMilligrams: BigInt(plan.plannedWeightMilligrams),
+              shippingAmountMinor: BigInt(plan.shippingAmountMinor),
+              packagingAmountMinor: BigInt(plan.packagingAmountMinor),
+              handlingAmountMinor: BigInt(plan.handlingAmountMinor),
+              allocationSnapshot: jsonInput({
+                packingUnits: plan.packingUnits,
+                details: plan.allocationSnapshot ?? {},
+              })!,
+              createdAt: issuedAt,
+            },
+          });
+        }
         for (const component of offer.components) {
           const quoteItem =
             component.quoteItemOrdinal === undefined
               ? undefined
               : quoteItems[component.quoteItemOrdinal];
+          const quoteShipmentPlan =
+            component.quoteShipmentPlanOrdinal === undefined
+              ? undefined
+              : quoteShipmentPlans[component.quoteShipmentPlanOrdinal];
           await transaction.priceSnapshotComponent.create({
             data: {
               id: randomUUID(),
@@ -523,8 +584,11 @@ export class QuotesService {
               kind: component.kind,
               scope: quoteItem
                 ? PriceComponentScope.QUOTE_ITEM
-                : PriceComponentScope.ORDER,
+                : quoteShipmentPlan
+                  ? PriceComponentScope.QUOTE_SHIPMENT_PLAN
+                  : PriceComponentScope.ORDER,
               quoteItemId: quoteItem?.id ?? null,
+              quoteShipmentPlanId: quoteShipmentPlan?.id ?? null,
               amountMinor: BigInt(component.amountMinor),
               allocation: jsonNullable(component.allocation),
               createdAt: issuedAt,
@@ -539,9 +603,12 @@ export class QuotesService {
               sequence: 0,
               role: PaymentRole.DEPOSIT,
               grossAmountMinor: BigInt(offer.depositMinor),
-              feeRateBasisPoints: 0,
-              feeFixedMinor: BigInt(0),
-              providerConfig: jsonInput({ mode: "provider-neutral" })!,
+              feeRateBasisPoints:
+                offer.paymentPolicy.deposit.feeRateBasisPoints,
+              feeFixedMinor: BigInt(offer.paymentPolicy.deposit.feeFixedMinor),
+              providerConfig: jsonInput(
+                offer.paymentPolicy.deposit.providerConfig,
+              )!,
               createdAt: issuedAt,
             },
             {
@@ -552,9 +619,12 @@ export class QuotesService {
               grossAmountMinor: BigInt(
                 offer.contractTotalMinor - offer.depositMinor,
               ),
-              feeRateBasisPoints: 0,
-              feeFixedMinor: BigInt(0),
-              providerConfig: jsonInput({ mode: "provider-neutral" })!,
+              feeRateBasisPoints:
+                offer.paymentPolicy.balance.feeRateBasisPoints,
+              feeFixedMinor: BigInt(offer.paymentPolicy.balance.feeFixedMinor),
+              providerConfig: jsonInput(
+                offer.paymentPolicy.balance.providerConfig,
+              )!,
               createdAt: issuedAt,
             },
           ],
@@ -655,22 +725,31 @@ export class QuotesService {
     const itemOrdinals = new Map(
       quote.items.map((item) => [item.id, item.ordinal]),
     );
+    const shipmentPlanOrdinals = new Map(
+      quote.shipmentPlans.map((plan) => [plan.id, plan.ordinal]),
+    );
     const components = snapshot.components
       .map((component) => {
         if (
           !ITEM_COMPONENTS.has(component.kind) &&
-          !ORDER_COMPONENTS.has(component.kind)
+          !ORDER_COMPONENTS.has(component.kind) &&
+          component.kind !== PriceComponentKind.SHIPMENT &&
+          component.kind !== PriceComponentKind.PAYMENT_FEE
         ) {
           throw new ConflictException("Offer price component kind is invalid");
         }
         if (
           component.scope !== PriceComponentScope.ORDER &&
-          component.scope !== PriceComponentScope.QUOTE_ITEM
+          component.scope !== PriceComponentScope.QUOTE_ITEM &&
+          component.scope !== PriceComponentScope.QUOTE_SHIPMENT_PLAN
         ) {
           throw new ConflictException("Offer price component scope is invalid");
         }
         const quoteItemOrdinal = component.quoteItemId
           ? itemOrdinals.get(component.quoteItemId)
+          : undefined;
+        const shipmentPlanOrdinal = component.quoteShipmentPlanId
+          ? shipmentPlanOrdinals.get(component.quoteShipmentPlanId)
           : undefined;
         if (
           component.scope === PriceComponentScope.QUOTE_ITEM &&
@@ -680,10 +759,19 @@ export class QuotesService {
             "Offer price component item is unavailable",
           );
         }
+        if (
+          component.scope === PriceComponentScope.QUOTE_SHIPMENT_PLAN &&
+          shipmentPlanOrdinal === undefined
+        ) {
+          throw new ConflictException(
+            "Offer price component shipment plan is unavailable",
+          );
+        }
         return {
           kind: component.kind as OfferPreviewPriceComponentDto["kind"],
-          scope: component.scope,
+          scope: component.scope as OfferPreviewPriceComponentDto["scope"],
           quoteItemOrdinal: quoteItemOrdinal ?? null,
+          shipmentPlanOrdinal: shipmentPlanOrdinal ?? null,
           amountMinor: safeNumber(component.amountMinor),
           allocation: nullableJsonObject(component.allocation),
         };
@@ -692,6 +780,8 @@ export class QuotesService {
         (left, right) =>
           (left.quoteItemOrdinal ?? Number.MAX_SAFE_INTEGER) -
             (right.quoteItemOrdinal ?? Number.MAX_SAFE_INTEGER) ||
+          (left.shipmentPlanOrdinal ?? Number.MAX_SAFE_INTEGER) -
+            (right.shipmentPlanOrdinal ?? Number.MAX_SAFE_INTEGER) ||
           OFFER_COMPONENT_ORDER.indexOf(left.kind) -
             OFFER_COMPONENT_ORDER.indexOf(right.kind),
       );
@@ -716,6 +806,10 @@ export class QuotesService {
         color: item.color,
         quantity: item.quantity,
       })),
+      deliveryDestination: offerDeliveryDestinationDto(
+        quote.deliveryDestination,
+      ),
+      shipmentPlans: quote.shipmentPlans.map(offerShipmentPlanDto),
       components,
       paymentSchedules: snapshot.paymentSchedules.map((schedule) => {
         if (
@@ -773,6 +867,9 @@ export class QuotesService {
         if (!quote.priceBinding?.priceSnapshot.sealedAt) {
           throw new ConflictException("Offer price is not sealed");
         }
+        if (!quote.deliveryDestination || quote.shipmentPlans.length < 1) {
+          throw new ConflictException("Offer shipment topology is unavailable");
+        }
 
         const orderId = randomUUID();
         const resultId = randomUUID();
@@ -806,6 +903,10 @@ export class QuotesService {
         await transaction.individualOrderOrigin.create({
           data: { orderId, quoteId },
         });
+        const orderItemsByQuoteOrdinal = new Map<
+          number,
+          { id: string; quantity: number }
+        >();
         for (const quoteItem of quote.items) {
           const orderItemId = randomUUID();
           await transaction.orderItem.create({
@@ -829,7 +930,122 @@ export class QuotesService {
           await transaction.individualOrderItemSource.create({
             data: { orderItemId, quoteItemId: quoteItem.id },
           });
+          orderItemsByQuoteOrdinal.set(quoteItem.ordinal, {
+            id: orderItemId,
+            quantity: quoteItem.quantity,
+          });
         }
+        const orderPhaseId = randomUUID();
+        const deliveryDestinationId = randomUUID();
+        const orderPriceBindingId = randomUUID();
+        await transaction.orderPhase.create({
+          data: {
+            id: orderPhaseId,
+            orderId,
+            kind: "SINGLE",
+            status: "QUOTED",
+            createdAt: observedAt,
+            updatedAt: observedAt,
+          },
+        });
+        const fulfilmentSlotsByPackingUnit = new Map<string, string>();
+        for (const [quoteItemOrdinal, orderItem] of orderItemsByQuoteOrdinal) {
+          for (
+            let quantityOrdinal = 1;
+            quantityOrdinal <= orderItem.quantity;
+            quantityOrdinal += 1
+          ) {
+            const slotId = randomUUID();
+            await transaction.fulfilmentSlot.create({
+              data: {
+                id: slotId,
+                orderId,
+                orderPhaseId,
+                orderItemId: orderItem.id,
+                quantityOrdinal,
+                packingUnitKey: `${orderItem.id}:single:${quantityOrdinal}`,
+                settlementAmountMinor: BigInt(0),
+                createdAt: observedAt,
+                updatedAt: observedAt,
+              },
+            });
+            fulfilmentSlotsByPackingUnit.set(
+              `${quoteItemOrdinal}:${quantityOrdinal}`,
+              slotId,
+            );
+          }
+        }
+        await transaction.deliveryDestination.create({
+          data: {
+            id: deliveryDestinationId,
+            orderId,
+            providerEndpointId: quote.deliveryDestination.providerEndpointId,
+            endpointType: quote.deliveryDestination.endpointType,
+            addressSnapshot: jsonInput(
+              quote.deliveryDestination.addressSnapshot,
+            )!,
+            capabilitySnapshot: jsonInput(
+              quote.deliveryDestination.capabilitySnapshot,
+            )!,
+            createdAt: observedAt,
+          },
+        });
+        await transaction.orderPriceBinding.create({
+          data: {
+            id: orderPriceBindingId,
+            orderId,
+            priceSnapshotId: quote.priceBinding.priceSnapshot.id,
+            deliveryDestinationId,
+            createdAt: observedAt,
+          },
+        });
+        for (const quoteShipmentPlan of quote.shipmentPlans) {
+          const shipmentPlanId = randomUUID();
+          await transaction.shipmentPlan.create({
+            data: {
+              id: shipmentPlanId,
+              orderId,
+              orderPhaseId,
+              priceSnapshotId: quote.priceBinding.priceSnapshot.id,
+              orderPriceBindingId,
+              deliveryDestinationId,
+              quoteShipmentPlanId: quoteShipmentPlan.id,
+              ordinal: quoteShipmentPlan.ordinal,
+              category: quoteShipmentPlan.category,
+              plannedVolumeCubicMm: quoteShipmentPlan.plannedVolumeCubicMm,
+              plannedWeightMilligrams:
+                quoteShipmentPlan.plannedWeightMilligrams,
+              shippingAmountMinor: quoteShipmentPlan.shippingAmountMinor,
+              packagingAmountMinor: quoteShipmentPlan.packagingAmountMinor,
+              handlingAmountMinor: quoteShipmentPlan.handlingAmountMinor,
+              allocationSnapshot: jsonInput(
+                quoteShipmentPlan.allocationSnapshot,
+              )!,
+              createdAt: observedAt,
+            },
+          });
+          for (const packingUnit of offerShipmentPlanDto(quoteShipmentPlan)
+            .packingUnits) {
+            const fulfilmentSlotId = fulfilmentSlotsByPackingUnit.get(
+              `${packingUnit.quoteItemOrdinal}:${packingUnit.quantityOrdinal}`,
+            );
+            if (!fulfilmentSlotId) {
+              throw new ConflictException(
+                "Offer shipment allocation is unavailable",
+              );
+            }
+            await transaction.shipmentPlanFulfilmentSlot.create({
+              data: {
+                shipmentPlanId,
+                orderPriceBindingId,
+                fulfilmentSlotId,
+              },
+            });
+          }
+        }
+        await transaction.orderActivePriceBinding.create({
+          data: { orderId, orderPriceBindingId },
+        });
         const sourceModelFileIds = [
           ...new Set(
             quote.items.flatMap((item) =>
@@ -1036,6 +1252,8 @@ export class QuotesService {
       include: {
         quoteRequest: true,
         items: { orderBy: { ordinal: "asc" } },
+        deliveryDestination: true,
+        shipmentPlans: { orderBy: { ordinal: "asc" } },
         priceBinding: {
           include: {
             priceSnapshot: {
@@ -1332,6 +1550,8 @@ async function lockedOffer(transaction: Transaction, quoteId: string) {
     include: {
       quoteRequest: true,
       items: { orderBy: { ordinal: "asc" } },
+      deliveryDestination: true,
+      shipmentPlans: { orderBy: { ordinal: "asc" } },
       priceBinding: { include: { priceSnapshot: true } },
     },
   });
@@ -1684,11 +1904,16 @@ function validateOffer(input: IssueOfferDto) {
     throw new BadRequestException("items must contain at least one item");
   }
   const items = input.items.map(validateOfferItem);
+  const deliveryDestination = validateOfferDeliveryDestination(
+    input.deliveryDestination,
+  );
+  const shipmentPlans = validateOfferShipmentPlans(input.shipmentPlans, items);
+  const paymentPolicy = validateOfferPaymentPolicy(input.paymentPolicy);
   if (!Array.isArray(input.components) || input.components.length < 1) {
     throw new BadRequestException("components must not be empty");
   }
   const componentKeys = new Set<string>();
-  const components = input.components.map((component) => {
+  const suppliedComponents = input.components.map((component) => {
     if (!component || typeof component !== "object") {
       throw new BadRequestException("components contain an invalid value");
     }
@@ -1745,9 +1970,49 @@ function validateOffer(input: IssueOfferDto) {
       }
     }
   }
-  const componentTotal = components.reduce(
-    (total, component) => total + component.amountMinor,
-    0,
+  const shipmentComponents = shipmentPlans.map((plan, ordinal) => ({
+    kind: PriceComponentKind.SHIPMENT,
+    amountMinor: safeNumber(
+      BigInt(plan.shippingAmountMinor) +
+        BigInt(plan.packagingAmountMinor) +
+        BigInt(plan.handlingAmountMinor),
+    ),
+    quoteItemOrdinal: undefined,
+    quoteShipmentPlanOrdinal: ordinal,
+    allocation: undefined,
+  }));
+  const paymentFeeMinor = safeNumber(
+    paymentCaptureFeeMinor(depositMinor, paymentPolicy.deposit) +
+      paymentCaptureFeeMinor(
+        contractTotalMinor - depositMinor,
+        paymentPolicy.balance,
+      ),
+  );
+  const paymentFeeComponents =
+    paymentFeeMinor === 0
+      ? []
+      : [
+          {
+            kind: PriceComponentKind.PAYMENT_FEE,
+            amountMinor: paymentFeeMinor,
+            quoteItemOrdinal: undefined,
+            quoteShipmentPlanOrdinal: undefined,
+            allocation: undefined,
+          },
+        ];
+  const components = [
+    ...suppliedComponents.map((component) => ({
+      ...component,
+      quoteShipmentPlanOrdinal: undefined,
+    })),
+    ...shipmentComponents,
+    ...paymentFeeComponents,
+  ];
+  const componentTotal = safeNumber(
+    components.reduce(
+      (total, component) => total + BigInt(component.amountMinor),
+      BigInt(0),
+    ),
   );
   if (componentTotal !== contractTotalMinor) {
     throw new BadRequestException(
@@ -1768,6 +2033,9 @@ function validateOffer(input: IssueOfferDto) {
     depositMinor,
     termsSnapshot,
     inputSnapshot,
+    deliveryDestination,
+    shipmentPlans,
+    paymentPolicy,
     items,
     components,
     fingerprint: {
@@ -1779,6 +2047,9 @@ function validateOffer(input: IssueOfferDto) {
       depositMinor,
       termsSnapshot,
       inputSnapshot,
+      deliveryDestination,
+      shipmentPlans,
+      paymentPolicy,
       items: items.map(serializableItem),
       components,
     },
@@ -1841,6 +2112,178 @@ function validateOfferItem(input: ModelOfferItemDto, ordinal: number) {
     color: optionalText(input.color, `items[${ordinal}].color`, 100),
     quantity,
   };
+}
+
+function validateOfferDeliveryDestination(
+  input: OfferDeliveryDestinationDto | undefined,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new BadRequestException("deliveryDestination is required");
+  }
+  return {
+    providerEndpointId: requiredText(
+      input.providerEndpointId,
+      "deliveryDestination.providerEndpointId",
+      255,
+    ),
+    endpointType: requiredText(
+      input.endpointType,
+      "deliveryDestination.endpointType",
+      100,
+    ),
+    addressSnapshot: requiredObject(
+      input.addressSnapshot,
+      "deliveryDestination.addressSnapshot",
+    ),
+    capabilitySnapshot: requiredObject(
+      input.capabilitySnapshot,
+      "deliveryDestination.capabilitySnapshot",
+    ),
+  };
+}
+
+function validateOfferShipmentPlans(
+  input: OfferShipmentPlanDto[] | undefined,
+  items: Array<ReturnType<typeof validateOfferItem>>,
+) {
+  if (!Array.isArray(input) || input.length < 1) {
+    throw new BadRequestException("shipmentPlans must not be empty");
+  }
+  const allocatedPackingUnits = new Set<string>();
+  const plans = input.map((plan, planOrdinal) => {
+    if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+      throw new BadRequestException(`shipmentPlans[${planOrdinal}] is invalid`);
+    }
+    if (!Array.isArray(plan.packingUnits) || plan.packingUnits.length < 1) {
+      throw new BadRequestException(
+        `shipmentPlans[${planOrdinal}].packingUnits must not be empty`,
+      );
+    }
+    const packingUnits = plan.packingUnits.map((unit, unitOrdinal) => {
+      if (!unit || typeof unit !== "object" || Array.isArray(unit)) {
+        throw new BadRequestException(
+          `shipmentPlans[${planOrdinal}].packingUnits[${unitOrdinal}] is invalid`,
+        );
+      }
+      const quoteItemOrdinal = nonNegativeInteger(
+        unit.quoteItemOrdinal,
+        `shipmentPlans[${planOrdinal}].packingUnits[${unitOrdinal}].quoteItemOrdinal`,
+        items.length - 1,
+      );
+      const quantityOrdinal = positiveInteger(
+        unit.quantityOrdinal,
+        `shipmentPlans[${planOrdinal}].packingUnits[${unitOrdinal}].quantityOrdinal`,
+        items[quoteItemOrdinal]!.quantity,
+      );
+      const key = `${quoteItemOrdinal}:${quantityOrdinal}`;
+      if (allocatedPackingUnits.has(key)) {
+        throw new BadRequestException(
+          `Packing unit ${key} appears in more than one shipment plan`,
+        );
+      }
+      allocatedPackingUnits.add(key);
+      return { quoteItemOrdinal, quantityOrdinal };
+    });
+    return {
+      category: requiredText(
+        plan.category,
+        `shipmentPlans[${planOrdinal}].category`,
+        100,
+      ),
+      plannedVolumeCubicMm: nonNegativeInteger(
+        plan.plannedVolumeCubicMm,
+        `shipmentPlans[${planOrdinal}].plannedVolumeCubicMm`,
+      ),
+      plannedWeightMilligrams: nonNegativeInteger(
+        plan.plannedWeightMilligrams,
+        `shipmentPlans[${planOrdinal}].plannedWeightMilligrams`,
+      ),
+      shippingAmountMinor: money(
+        plan.shippingAmountMinor,
+        `shipmentPlans[${planOrdinal}].shippingAmountMinor`,
+        true,
+      ),
+      packagingAmountMinor: money(
+        plan.packagingAmountMinor,
+        `shipmentPlans[${planOrdinal}].packagingAmountMinor`,
+        true,
+      ),
+      handlingAmountMinor: money(
+        plan.handlingAmountMinor,
+        `shipmentPlans[${planOrdinal}].handlingAmountMinor`,
+        true,
+      ),
+      packingUnits,
+      allocationSnapshot: optionalObject(
+        plan.allocationSnapshot,
+        `shipmentPlans[${planOrdinal}].allocationSnapshot`,
+      ),
+    };
+  });
+  for (const [itemOrdinal, item] of items.entries()) {
+    for (
+      let quantityOrdinal = 1;
+      quantityOrdinal <= item.quantity;
+      quantityOrdinal += 1
+    ) {
+      const key = `${itemOrdinal}:${quantityOrdinal}`;
+      if (!allocatedPackingUnits.has(key)) {
+        throw new BadRequestException(
+          `Packing unit ${key} is missing from shipmentPlans`,
+        );
+      }
+    }
+  }
+  return plans;
+}
+
+function validateOfferPaymentPolicy(
+  input: IssueOfferDto["paymentPolicy"] | undefined,
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new BadRequestException("paymentPolicy is required");
+  }
+  return {
+    deposit: validateOfferPaymentCapturePolicy(input.deposit, "deposit"),
+    balance: validateOfferPaymentCapturePolicy(input.balance, "balance"),
+  };
+}
+
+function validateOfferPaymentCapturePolicy(
+  input: OfferPaymentCapturePolicyDto | undefined,
+  role: "deposit" | "balance",
+) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new BadRequestException(`paymentPolicy.${role} is required`);
+  }
+  return {
+    feeRateBasisPoints: nonNegativeInteger(
+      input.feeRateBasisPoints,
+      `paymentPolicy.${role}.feeRateBasisPoints`,
+      9_999,
+    ),
+    feeFixedMinor: money(
+      input.feeFixedMinor,
+      `paymentPolicy.${role}.feeFixedMinor`,
+      true,
+    ),
+    providerConfig: requiredObject(
+      input.providerConfig,
+      `paymentPolicy.${role}.providerConfig`,
+    ),
+  };
+}
+
+function paymentCaptureFeeMinor(
+  grossAmountMinor: number,
+  policy: ReturnType<typeof validateOfferPaymentCapturePolicy>,
+): bigint {
+  return (
+    (BigInt(grossAmountMinor) * BigInt(policy.feeRateBasisPoints) +
+      BigInt(9_999)) /
+      BigInt(10_000) +
+    BigInt(policy.feeFixedMinor)
+  );
 }
 
 async function validateOfferItemReferences(
@@ -2024,6 +2467,73 @@ function contactFrom(
     name: customer?.displayName ?? "Customer",
     email: customer?.email ?? "unknown@example.invalid",
     ...(phone ? { phone } : {}),
+  };
+}
+
+function offerDeliveryDestinationDto(
+  destination:
+    | {
+        providerEndpointId: string;
+        endpointType: string;
+        addressSnapshot: Prisma.JsonValue;
+        capabilitySnapshot: Prisma.JsonValue;
+      }
+    | null
+    | undefined,
+): OfferDeliveryDestinationDto {
+  if (!destination) {
+    throw new ConflictException("Offer delivery destination is unavailable");
+  }
+  return {
+    providerEndpointId: destination.providerEndpointId,
+    endpointType: destination.endpointType,
+    addressSnapshot: jsonObject(destination.addressSnapshot),
+    capabilitySnapshot: jsonObject(destination.capabilitySnapshot),
+  };
+}
+
+function offerShipmentPlanDto(plan: {
+  category: string;
+  plannedVolumeCubicMm: bigint;
+  plannedWeightMilligrams: bigint;
+  shippingAmountMinor: bigint;
+  packagingAmountMinor: bigint;
+  handlingAmountMinor: bigint;
+  allocationSnapshot: Prisma.JsonValue;
+}): OfferShipmentPlanDto {
+  const allocation = jsonObject(plan.allocationSnapshot);
+  if (!Array.isArray(allocation.packingUnits)) {
+    throw new ConflictException("Offer shipment allocation is unavailable");
+  }
+  const packingUnits = allocation.packingUnits.map((unit) => {
+    if (
+      !unit ||
+      typeof unit !== "object" ||
+      Array.isArray(unit) ||
+      !Number.isInteger((unit as Record<string, unknown>).quoteItemOrdinal) ||
+      !Number.isInteger((unit as Record<string, unknown>).quantityOrdinal)
+    ) {
+      throw new ConflictException("Offer shipment allocation is invalid");
+    }
+    return {
+      quoteItemOrdinal: (unit as Record<string, number>).quoteItemOrdinal!,
+      quantityOrdinal: (unit as Record<string, number>).quantityOrdinal!,
+    };
+  });
+  const details = nullableJsonObject(
+    allocation.details as Prisma.JsonValue | undefined,
+  );
+  return {
+    category: plan.category,
+    plannedVolumeCubicMm: safeNumber(plan.plannedVolumeCubicMm),
+    plannedWeightMilligrams: safeNumber(plan.plannedWeightMilligrams),
+    shippingAmountMinor: safeNumber(plan.shippingAmountMinor),
+    packagingAmountMinor: safeNumber(plan.packagingAmountMinor),
+    handlingAmountMinor: safeNumber(plan.handlingAmountMinor),
+    packingUnits,
+    ...(details && Object.keys(details).length > 0
+      ? { allocationSnapshot: details }
+      : {}),
   };
 }
 
@@ -2410,6 +2920,23 @@ function positiveInteger(
     (value as number) > maximum
   ) {
     throw new BadRequestException(`${name} must be a positive safe integer`);
+  }
+  return value as number;
+}
+
+function nonNegativeInteger(
+  value: unknown,
+  name: string,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < 0 ||
+    (value as number) > maximum
+  ) {
+    throw new BadRequestException(
+      `${name} must be a non-negative safe integer`,
+    );
   }
   return value as number;
 }

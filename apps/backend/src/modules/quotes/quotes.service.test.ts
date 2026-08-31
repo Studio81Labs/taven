@@ -89,6 +89,26 @@ describe("quote capability expiry clock", () => {
           expiresAt: future,
           quoteRequest: { status: "QUOTED" },
           items: [],
+          deliveryDestination: {
+            providerEndpointId: "test-endpoint",
+            endpointType: "DELIVERY",
+            addressSnapshot: { country: "CZ" },
+            capabilitySnapshot: { carrier: "test" },
+          },
+          shipmentPlans: [
+            {
+              category: "STANDARD",
+              plannedVolumeCubicMm: 1n,
+              plannedWeightMilligrams: 1n,
+              shippingAmountMinor: 0n,
+              packagingAmountMinor: 0n,
+              handlingAmountMinor: 0n,
+              allocationSnapshot: {
+                packingUnits: [],
+                details: {},
+              },
+            },
+          ],
           priceBinding: {
             priceSnapshot: {
               currency: "CZK",

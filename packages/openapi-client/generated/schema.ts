@@ -396,6 +396,7 @@ export interface components {
         IssueOfferDto: {
             components: components["schemas"]["OfferPriceComponentDto"][];
             contractTotalMinor: number;
+            deliveryDestination: components["schemas"]["OfferDeliveryDestinationDto"];
             depositMinor: number;
             /** Format: date-time */
             expiresAt: string;
@@ -403,10 +404,12 @@ export interface components {
                 [key: string]: unknown;
             };
             items: components["schemas"]["ModelOfferItemDto"][];
+            paymentPolicy: components["schemas"]["OfferPaymentPolicyDto"];
             /** Format: uuid */
             priceListId: string;
             /** Format: date */
             promisedDate?: string;
+            shipmentPlans: components["schemas"]["OfferShipmentPlanDto"][];
             summary: string;
             termsSnapshot: {
                 [key: string]: unknown;
@@ -431,6 +434,16 @@ export interface components {
             /** Format: uuid */
             tailReferenceSliceResultId?: string;
         };
+        OfferDeliveryDestinationDto: {
+            addressSnapshot: {
+                [key: string]: unknown;
+            };
+            capabilitySnapshot: {
+                [key: string]: unknown;
+            };
+            endpointType: string;
+            providerEndpointId: string;
+        };
         OfferIssuedDto: {
             /** Format: date-time */
             expiresAt: string;
@@ -439,6 +452,17 @@ export interface components {
             quoteId: string;
             termsRevision: string;
             version: number;
+        };
+        OfferPaymentCapturePolicyDto: {
+            feeFixedMinor: number;
+            feeRateBasisPoints: number;
+            providerConfig: {
+                [key: string]: unknown;
+            };
+        };
+        OfferPaymentPolicyDto: {
+            balance: components["schemas"]["OfferPaymentCapturePolicyDto"];
+            deposit: components["schemas"]["OfferPaymentCapturePolicyDto"];
         };
         OfferPaymentScheduleDto: {
             feeFixedMinor: number;
@@ -452,6 +476,7 @@ export interface components {
             components: components["schemas"]["OfferPreviewPriceComponentDto"][];
             contractTotalMinor: number;
             currency: string;
+            deliveryDestination: components["schemas"]["OfferDeliveryDestinationDto"];
             /** Format: date-time */
             expiresAt: string;
             items: components["schemas"]["OfferPreviewItemDto"][];
@@ -460,6 +485,7 @@ export interface components {
             promisedDate?: string | null;
             /** Format: uuid */
             quoteId: string;
+            shipmentPlans: components["schemas"]["OfferShipmentPlanDto"][];
             summary: string;
             termsRevision: string;
             termsSnapshot: {
@@ -493,10 +519,11 @@ export interface components {
             } | null;
             amountMinor: number;
             /** @enum {string} */
-            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "EXPRESS";
+            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "SHIPMENT" | "EXPRESS" | "PAYMENT_FEE";
             quoteItemOrdinal: number | null;
             /** @enum {string} */
-            scope: "ORDER" | "QUOTE_ITEM";
+            scope: "ORDER" | "QUOTE_ITEM" | "QUOTE_SHIPMENT_PLAN";
+            shipmentPlanOrdinal: number | null;
         };
         OfferPriceComponentDto: {
             allocation?: {
@@ -506,6 +533,22 @@ export interface components {
             /** @enum {string} */
             kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "EXPRESS";
             quoteItemOrdinal?: number;
+        };
+        OfferShipmentPackingUnitDto: {
+            quantityOrdinal: number;
+            quoteItemOrdinal: number;
+        };
+        OfferShipmentPlanDto: {
+            allocationSnapshot?: {
+                [key: string]: unknown;
+            };
+            category: string;
+            handlingAmountMinor: number;
+            packagingAmountMinor: number;
+            packingUnits: components["schemas"]["OfferShipmentPackingUnitDto"][];
+            plannedVolumeCubicMm: number;
+            plannedWeightMilligrams: number;
+            shippingAmountMinor: number;
         };
         QuoteAttachmentDto: {
             /** Format: date-time */

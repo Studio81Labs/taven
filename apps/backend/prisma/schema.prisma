@@ -243,6 +243,7 @@ enum PriceComponentKind {
 enum PriceComponentScope {
   ORDER
   QUOTE_ITEM
+  QUOTE_SHIPMENT_PLAN
   ORDER_ITEM
   SHIPMENT_PLAN
 
@@ -1318,6 +1319,8 @@ model Quote {
   priceBinding                  QuotePriceBinding?
   individualOrderOrigin         IndividualOrderOrigin?
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
+  deliveryDestination           QuoteDeliveryDestination?
+  shipmentPlans                 QuoteShipmentPlan[]
   auditEvents                   AuditEvent[]
 
   @@unique([id, customerId], map: "quotes_id_customer_key")
@@ -1356,6 +1359,48 @@ model QuoteItem {
   @@map("quote_items")
 }
 
+model QuoteDeliveryDestination {
+  id                 String   @id @default(uuid()) @db.Uuid
+  quoteId            String   @unique @map("quote_id") @db.Uuid
+  providerEndpointId String   @map("provider_endpoint_id") @db.VarChar(255)
+  endpointType       String   @map("endpoint_type") @db.VarChar(100)
+  addressSnapshot    Json     @map("address_snapshot") @db.JsonB
+  capabilitySnapshot Json     @map("capability_snapshot") @db.JsonB
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quote         Quote               @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  shipmentPlans QuoteShipmentPlan[]
+
+  @@unique([id, quoteId])
+  @@map("quote_delivery_destinations")
+}
+
+model QuoteShipmentPlan {
+  id                         String   @id @default(uuid()) @db.Uuid
+  quoteId                    String   @map("quote_id") @db.Uuid
+  priceSnapshotId            String   @map("price_snapshot_id") @db.Uuid
+  quoteDeliveryDestinationId String   @map("quote_delivery_destination_id") @db.Uuid
+  ordinal                    Int
+  category                   String   @db.VarChar(100)
+  plannedVolumeCubicMm       BigInt   @map("planned_volume_cubic_mm")
+  plannedWeightMilligrams    BigInt   @map("planned_weight_milligrams")
+  shippingAmountMinor        BigInt   @map("shipping_amount_minor")
+  packagingAmountMinor       BigInt   @map("packaging_amount_minor")
+  handlingAmountMinor        BigInt   @map("handling_amount_minor")
+  allocationSnapshot         Json     @map("allocation_snapshot") @db.JsonB
+  createdAt                  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quote               Quote                    @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  priceSnapshot       PriceSnapshot            @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+  deliveryDestination QuoteDeliveryDestination @relation(fields: [quoteDeliveryDestinationId, quoteId], references: [id, quoteId], onDelete: Restrict, map: "quote_shipment_plans_destination_scope_fkey")
+  priceComponent      PriceSnapshotComponent?
+  shipmentPlan        ShipmentPlan?
+
+  @@unique([quoteId, ordinal])
+  @@unique([id, priceSnapshotId])
+  @@map("quote_shipment_plans")
+}
+
 model PriceSnapshot {
   id                 String    @id @default(uuid()) @db.Uuid
   priceListId        String    @map("price_list_id") @db.Uuid
@@ -1372,6 +1417,7 @@ model PriceSnapshot {
   orderBinding                  OrderPriceBinding?
   components                    PriceSnapshotComponent[]
   paymentSchedules              PaymentSchedule[]
+  quoteShipmentPlans            QuoteShipmentPlan[]
   shipmentPlans                 ShipmentPlan[]
   payments                      Payment[]
   orderSettlements              OrderSettlement[]
@@ -1397,25 +1443,29 @@ model PriceList {
 }
 
 model PriceSnapshotComponent {
-  id              String              @id @default(uuid()) @db.Uuid
-  priceSnapshotId String              @map("price_snapshot_id") @db.Uuid
-  kind            PriceComponentKind
-  scope           PriceComponentScope
-  quoteItemId     String?             @map("quote_item_id") @db.Uuid
-  orderItemId     String?             @map("order_item_id") @db.Uuid
-  shipmentPlanId  String?             @map("shipment_plan_id") @db.Uuid
-  amountMinor     BigInt              @map("amount_minor")
-  allocation      Json?               @db.JsonB
-  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                  String              @id @default(uuid()) @db.Uuid
+  priceSnapshotId     String              @map("price_snapshot_id") @db.Uuid
+  kind                PriceComponentKind
+  scope               PriceComponentScope
+  quoteItemId         String?             @map("quote_item_id") @db.Uuid
+  quoteShipmentPlanId String?             @unique @map("quote_shipment_plan_id") @db.Uuid
+  orderItemId         String?             @map("order_item_id") @db.Uuid
+  shipmentPlanId      String?             @map("shipment_plan_id") @db.Uuid
+  amountMinor         BigInt              @map("amount_minor")
+  allocation          Json?               @db.JsonB
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
 
   priceSnapshot         PriceSnapshot                        @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
   quoteItem             QuoteItem?                           @relation(fields: [quoteItemId], references: [id], onDelete: Restrict)
+  quoteShipmentPlan     QuoteShipmentPlan?                   @relation(fields: [quoteShipmentPlanId, priceSnapshotId], references: [id, priceSnapshotId], onDelete: Restrict, map: "price_snapshot_components_quote_shipment_plan_snapshot_fkey")
   orderItem             OrderItem?                           @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
   shipmentPlan          ShipmentPlan?                        @relation(fields: [shipmentPlanId, priceSnapshotId], references: [id, priceSnapshotId], onDelete: Restrict, map: "price_snapshot_components_shipment_plan_snapshot_fkey")
   fulfilmentAllocations PriceComponentFulfilmentAllocation[]
 
+  @@unique([quoteShipmentPlanId, priceSnapshotId], map: "price_snapshot_components_quote_shipment_plan_snapshot_key")
   @@index([priceSnapshotId, kind])
   @@index([quoteItemId])
+  @@index([quoteShipmentPlanId])
   @@index([orderItemId])
   @@index([shipmentPlanId])
   @@map("price_snapshot_components")
@@ -1677,6 +1727,7 @@ model ShipmentPlan {
   priceSnapshotId         String   @map("price_snapshot_id") @db.Uuid
   orderPriceBindingId     String   @map("order_price_binding_id") @db.Uuid
   deliveryDestinationId   String   @map("delivery_destination_id") @db.Uuid
+  quoteShipmentPlanId     String?  @unique @map("quote_shipment_plan_id") @db.Uuid
   ordinal                 Int
   category                String   @db.VarChar(100)
   plannedVolumeCubicMm    BigInt   @map("planned_volume_cubic_mm")
@@ -1692,6 +1743,7 @@ model ShipmentPlan {
   orderPhase                OrderPhase                   @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
   priceSnapshot             PriceSnapshot                @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
   deliveryDestination       DeliveryDestination          @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  quoteShipmentPlan         QuoteShipmentPlan?           @relation(fields: [quoteShipmentPlanId, priceSnapshotId], references: [id, priceSnapshotId], onDelete: Restrict, map: "shipment_plans_quote_shipment_plan_snapshot_fkey")
   priceComponents           PriceSnapshotComponent[]
   fulfilmentSlotAllocations ShipmentPlanFulfilmentSlot[]
   shipments                 Shipment[]
@@ -1703,6 +1755,7 @@ model ShipmentPlan {
   @@unique([id, orderId, orderPhaseId])
   @@unique([id, orderId, orderPhaseId, deliveryDestinationId])
   @@unique([id, priceSnapshotId])
+  @@unique([quoteShipmentPlanId, priceSnapshotId], map: "shipment_plans_quote_shipment_plan_snapshot_key")
   @@index([orderId])
   @@map("shipment_plans")
 }

@@ -533,6 +533,35 @@ describe("secure object storage and retention", () => {
         depositMinor: 33_000,
         termsSnapshot: {},
         inputSnapshot: {},
+        deliveryDestination: {
+          providerEndpointId: "storage-race-endpoint",
+          endpointType: "DELIVERY",
+          addressSnapshot: { country: "CZ" },
+          capabilitySnapshot: { carrier: "test" },
+        },
+        shipmentPlans: [
+          {
+            category: "STANDARD",
+            plannedVolumeCubicMm: 1,
+            plannedWeightMilligrams: 1,
+            shippingAmountMinor: 0,
+            packagingAmountMinor: 0,
+            handlingAmountMinor: 0,
+            packingUnits: [{ quoteItemOrdinal: 0, quantityOrdinal: 1 }],
+          },
+        ],
+        paymentPolicy: {
+          deposit: {
+            feeRateBasisPoints: 0,
+            feeFixedMinor: 0,
+            providerConfig: { mode: "provider-neutral" },
+          },
+          balance: {
+            feeRateBasisPoints: 0,
+            feeFixedMinor: 0,
+            providerConfig: { mode: "provider-neutral" },
+          },
+        },
         items: [
           {
             kind: "MODEL",
