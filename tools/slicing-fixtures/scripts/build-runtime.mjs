@@ -29,6 +29,27 @@ if (builderDriver !== "docker-container") {
     `The reproducibility build requires the pinned docker-container builder used by CI; the active driver is ${builderDriver ?? "unknown"}. Follow tools/slicing-fixtures/README.md to configure it.`,
   );
 }
+const ubuntuIndexInspect = spawnSync(
+  "docker",
+  ["buildx", "imagetools", "inspect", "--raw", lock.ubuntu.image],
+  { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
+);
+if (ubuntuIndexInspect.status !== 0) {
+  throw new Error(
+    ubuntuIndexInspect.stderr || "Unable to inspect the locked Ubuntu image",
+  );
+}
+const ubuntuIndex = JSON.parse(ubuntuIndexInspect.stdout);
+const ubuntuAmd64Manifest = ubuntuIndex.manifests?.find(
+  (manifest) =>
+    manifest.platform?.os === "linux" &&
+    manifest.platform?.architecture === "amd64",
+);
+if (ubuntuAmd64Manifest?.digest !== lock.ubuntu.amd64ManifestDigest) {
+  throw new Error(
+    `Ubuntu amd64 manifest drift: expected ${lock.ubuntu.amd64ManifestDigest}, resolved ${ubuntuAmd64Manifest?.digest ?? "none"}`,
+  );
+}
 const buildArguments = [
   ["SOURCE_DATE_EPOCH", lock.sourceDateEpoch],
   ["UBUNTU_IMAGE", lock.ubuntu.image],

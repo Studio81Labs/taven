@@ -139,7 +139,7 @@ function parseGcode(source) {
   };
 }
 
-function validateExecution(fixtureCase, execution, resultFile, gcodeFiles) {
+function validateExecution(fixtureCase, execution, resultFile, outputs) {
   if (execution.error) {
     throw new Error(
       `Could not execute ${fixtureCase.name}: ${execution.error.message}`,
@@ -158,7 +158,7 @@ function validateExecution(fixtureCase, execution, resultFile, gcodeFiles) {
       !resultFile ||
       !Number.isFinite(resultFile.return_code) ||
       resultFile.return_code >= 0 ||
-      gcodeFiles.length !== 0
+      outputs.length !== 0
     ) {
       throw new Error(
         `Invalid fixture ${fixtureCase.name} did not produce the expected failure`,
@@ -170,7 +170,16 @@ function validateExecution(fixtureCase, execution, resultFile, gcodeFiles) {
   if (
     execution.status !== 0 ||
     resultFile?.return_code !== 0 ||
-    gcodeFiles.length === 0
+    outputs.length === 0 ||
+    outputs.some(
+      (output) =>
+        !Number.isFinite(output.estimatedSeconds) ||
+        output.estimatedSeconds <= 0 ||
+        !Number.isFinite(output.filamentMillimeters) ||
+        output.filamentMillimeters <= 0 ||
+        !Number.isFinite(output.filamentCubicCentimeters) ||
+        output.filamentCubicCentimeters <= 0,
+    )
   ) {
     throw new Error(
       `Fixture ${fixtureCase.name} did not produce a successful slice`,
@@ -297,7 +306,16 @@ async function runCase(runRoot, fixtureCase) {
       )
     : null;
   const gcodeFiles = files.filter((file) => file.endsWith(".gcode")).sort();
-  validateExecution(fixtureCase, execution, resultFile, gcodeFiles);
+  const outputs = await Promise.all(
+    gcodeFiles.map(async (file) => {
+      const source = await readFile(path.join(outputDirectory, file), "utf8");
+      if (source.trim().length === 0) {
+        throw new Error(`Fixture ${fixtureCase.name} produced empty ${file}`);
+      }
+      return { file, ...parseGcode(source) };
+    }),
+  );
+  validateExecution(fixtureCase, execution, resultFile, outputs);
   const inputContents = await readFile(input);
   const paintedSource =
     fixtureCase.name === "painted-multimaterial"
@@ -345,12 +363,7 @@ async function runCase(runRoot, fixtureCase) {
       stderr: normalizeDiagnostics(execution.stderr ?? ""),
       result: normalizedResult(resultFile),
     },
-    outputs: await Promise.all(
-      gcodeFiles.map(async (file) => ({
-        file,
-        ...parseGcode(await readFile(path.join(outputDirectory, file), "utf8")),
-      })),
-    ),
+    outputs,
   };
 }
 
