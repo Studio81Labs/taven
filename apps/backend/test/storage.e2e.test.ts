@@ -7,6 +7,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { crc32, deflateRawSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
+import { QuotesService } from "../src/modules/quotes/quotes.service";
 import {
   OBJECT_STORAGE,
   type ObjectStorage,
@@ -33,12 +34,15 @@ const s3Config = {
 const uploadClientHashKey =
   process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??
   "test-only-upload-client-hash-key-32";
+process.env.TAVEN_QUOTE_CAPABILITY_KEY =
+  "test-quote-capability-key-with-at-least-32-characters";
 
 describe("secure object storage and retention", () => {
   let app: INestApplication;
   let baseUrl: URL;
   let prisma: PrismaService;
   let objects: ObjectStorage;
+  let quotes: QuotesService;
   let retention: RetentionService;
   let s3: S3Client;
   const cleanupKeys = new Set<string>();
@@ -53,6 +57,7 @@ describe("secure object storage and retention", () => {
     prisma = app.get(PrismaService);
     await prisma.anonymousUploadLimit.deleteMany();
     objects = app.get<ObjectStorage>(OBJECT_STORAGE);
+    quotes = app.get(QuotesService);
     retention = app.get(RetentionService);
     s3 = new S3Client({
       endpoint: s3Config.endpoint,
@@ -417,6 +422,195 @@ describe("secure object storage and retention", () => {
       storageObjectKey: photoOriginalObjectKey(initiated.body.assetId),
       mediaType: "image/png",
     });
+  });
+
+  it("rejects quote-reference confirmation after the request becomes terminal", async () => {
+    const bytes = png();
+    const created = await quotes.createRequest(
+      {
+        description: "Reference photo confirmation race regression",
+        contact: {
+          name: "Storage Test",
+          email: `${randomUUID()}@example.test`,
+        },
+      },
+      "198.51.100.24",
+      `storage-terminal-create-${randomUUID()}`,
+    );
+    const scopeId = created.requestId;
+    const initiated = await apiJson<{
+      uploadId: string;
+      assetId: string;
+      accessToken: string;
+      uploadUrl: string;
+      requiredHeaders: Record<string, string>;
+    }>("storage/uploads/photos", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...bearer(created.requestToken),
+      },
+      body: JSON.stringify({
+        kind: "QUOTE_REFERENCE",
+        scopeKind: "QUOTE_REQUEST",
+        scopeId,
+        originalFilename: "late-reference.png",
+        contentType: "image/png",
+        sizeBytes: bytes.byteLength,
+        sha256: sha256(bytes),
+      }),
+    });
+    expect(initiated.response.status).toBe(201);
+    cleanupKeys.add(quarantineObjectKey(initiated.body.uploadId));
+    cleanupKeys.add(photoOriginalObjectKey(initiated.body.assetId));
+    await putSigned(initiated.body, bytes);
+    await quotes.beginReview(
+      scopeId,
+      `storage-terminal-review-${randomUUID()}`,
+    );
+    const priceList = await prisma.priceList.findFirstOrThrow({
+      where: { currency: "CZK" },
+      orderBy: { createdAt: "asc" },
+    });
+    const modelFileId = randomUUID();
+    const modelGeometryId = randomUUID();
+    const printConfigRevisionId = randomUUID();
+    await prisma.$transaction(async (transaction) => {
+      await transaction.modelFile.create({
+        data: {
+          id: modelFileId,
+          format: "STL",
+          originalFilename: "manually-rebuilt-reference.stl",
+          storageObjectKey: `storage-tests/models/${modelFileId}`,
+          contentHash: createHash("sha256").update(modelFileId).digest("hex"),
+          sizeBytes: 1n,
+          uploadedAt: new Date(),
+          sourceDeleteAfter: new Date(Date.now() + 60 * 60 * 1_000),
+        },
+      });
+      await transaction.modelGeometry.create({
+        data: {
+          id: modelGeometryId,
+          sourceModelFileId: modelFileId,
+          canonicalObjectKey: `storage-tests/geometries/${modelGeometryId}`,
+          geometryHash: createHash("sha256")
+            .update(modelGeometryId)
+            .digest("hex"),
+          canonicalizerRevision: "storage-e2e-v1",
+          volumeCubicMicrometers: 1n,
+          boundsXMicrometers: 1n,
+          boundsYMicrometers: 1n,
+          boundsZMicrometers: 1n,
+          triangleCount: 1,
+        },
+      });
+      await transaction.revisionIdentity.create({
+        data: {
+          id: printConfigRevisionId,
+          kind: "PRINT_CONFIG",
+          digest: createHash("sha256")
+            .update(printConfigRevisionId)
+            .digest("hex"),
+        },
+      });
+      await transaction.printConfigRevision.create({
+        data: {
+          id: printConfigRevisionId,
+          quality: "STANDARD",
+          infillPercent: 20,
+          layerHeightMicrometers: 200,
+          settings: {},
+        },
+      });
+    });
+    const issued = await quotes.issueOffer(
+      scopeId,
+      {
+        summary: "Storage confirmation race offer",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+        priceListId: priceList.id,
+        contractTotalMinor: 110_000,
+        depositMinor: 33_000,
+        termsSnapshot: {},
+        inputSnapshot: {},
+        deliveryDestination: {
+          providerEndpointId: "storage-race-endpoint",
+          endpointType: "DELIVERY",
+          addressSnapshot: { country: "CZ" },
+          capabilitySnapshot: { carrier: "test" },
+        },
+        shipmentPlans: [
+          {
+            category: "STANDARD",
+            plannedVolumeCubicMm: 1,
+            plannedWeightMilligrams: 1,
+            shippingAmountMinor: 0,
+            packagingAmountMinor: 0,
+            handlingAmountMinor: 0,
+            packingUnits: [{ quoteItemOrdinal: 0, quantityOrdinal: 1 }],
+          },
+        ],
+        paymentPolicy: {
+          deposit: {
+            feeRateBasisPoints: 0,
+            feeFixedMinor: 0,
+            providerConfig: { mode: "provider-neutral" },
+          },
+          balance: {
+            feeRateBasisPoints: 0,
+            feeFixedMinor: 0,
+            providerConfig: { mode: "provider-neutral" },
+          },
+        },
+        items: [
+          {
+            kind: "MODEL",
+            sourceModelFileId: modelFileId,
+            modelGeometryId,
+            printConfigRevisionId,
+            material: "PLA",
+          },
+        ],
+        components: [
+          {
+            kind: "ITEM_PRODUCTION",
+            quoteItemOrdinal: 0,
+            amountMinor: 80_000,
+          },
+          {
+            kind: "ITEM_QUANTITY",
+            quoteItemOrdinal: 0,
+            amountMinor: 20_000,
+          },
+          {
+            kind: "ITEM_POSTPROCESSING",
+            quoteItemOrdinal: 0,
+            amountMinor: 10_000,
+          },
+        ],
+      },
+      `storage-terminal-issue-${randomUUID()}`,
+    );
+    await quotes.rejectOffer(
+      issued.quoteId,
+      { version: issued.version, termsRevision: issued.termsRevision },
+      `Bearer ${issued.offerToken}`,
+      `storage-terminal-reject-${randomUUID()}`,
+    );
+
+    const confirmed = await apiJson(
+      `storage/uploads/${initiated.body.uploadId}/confirm`,
+      {
+        method: "POST",
+        headers: bearer(initiated.body.accessToken),
+      },
+    );
+    expect(confirmed.response.status).toBe(410);
+    expect(
+      await prisma.photoAsset.findUnique({
+        where: { id: initiated.body.assetId },
+      }),
+    ).toBeNull();
   });
 
   it("links an account and reads history without extending source retention", async () => {

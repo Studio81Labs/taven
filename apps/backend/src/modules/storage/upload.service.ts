@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Inject,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
 import {
@@ -82,7 +83,7 @@ const ANONYMOUS_UPLOAD_GLOBAL_MAX_BYTES = 10 * 1024 * 1024 * 1024;
 const ANONYMOUS_UPLOAD_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_UPLOAD_LIMIT_CLEANUP_BATCH = 100;
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type UploadIntentRecord = Awaited<
   ReturnType<PrismaService["uploadIntent"]["findUnique"]>
@@ -116,11 +117,16 @@ export class UploadService {
     const expiresAt = this.intentExpiry();
     const quarantineKey = quarantineObjectKey(uploadId);
     const finalKey = modelSourceObjectKey(assetId);
+    const subjectHash = anonymousUploadSubject(
+      this.storageConfig.uploadClientHashKey,
+      "anonymous-model-upload",
+      normalizeClientAddress(clientAddress),
+    );
 
     await this.prisma.$transaction(async (transaction) => {
       await this.reserveAnonymousUpload(
         transaction,
-        clientAddress,
+        subjectHash,
         metadata.sizeBytes,
       );
       await transaction.uploadIntent.create({
@@ -171,26 +177,52 @@ export class UploadService {
           customer_id: string | null;
           session_customer_id: string | null;
           public_token_hash: string;
-          status: string;
+          session_status: string;
+          request_status: string;
+          offer_expires_at: Date | null;
           expires_at: Date;
+          observed_at: Date;
         }>
       >`
         SELECT request.customer_id, session.customer_id AS session_customer_id,
-               session.public_token_hash, session.status::text, session.expires_at
+               session.public_token_hash,
+               session.status::text AS session_status,
+               request.status::text AS request_status,
+               quote.expires_at AS offer_expires_at,
+               session.expires_at,
+               clock_timestamp() AS observed_at
         FROM quote_requests request
         JOIN quote_sessions session ON session.id = request.quote_session_id
+        LEFT JOIN quotes quote ON quote.quote_request_id = request.id
         WHERE request.id = ${metadata.scopeId}::uuid
         FOR SHARE OF request, session
       `;
       const scope = rows[0];
+      const requestAcceptsPhotos =
+        scope?.request_status === "NEW" ||
+        scope?.request_status === "IN_REVIEW" ||
+        (scope?.request_status === "QUOTED" &&
+          scope.offer_expires_at !== null &&
+          scope.offer_expires_at.getTime() > scope.observed_at.getTime());
       if (
         !scope ||
-        scope.status !== "OPEN" ||
-        scope.expires_at.getTime() <= Date.now() ||
+        scope.session_status !== "OPEN" ||
+        !requestAcceptsPhotos ||
+        scope.expires_at.getTime() <= scope.observed_at.getTime() ||
         !matchesTokenHash(scopeToken, scope.public_token_hash)
       ) {
         throw new UnauthorizedException("Quote-session capability is invalid");
       }
+      const subjectHash = anonymousUploadSubject(
+        this.storageConfig.uploadClientHashKey,
+        "quote-photo-upload",
+        scope.public_token_hash,
+      );
+      await this.reserveAnonymousUpload(
+        transaction,
+        subjectHash,
+        metadata.sizeBytes,
+      );
       await transaction.uploadIntent.create({
         data: {
           id: uploadId,
@@ -226,7 +258,7 @@ export class UploadService {
     uploadId: string,
     authorization?: string,
   ): Promise<ConfirmedUploadResponseDto> {
-    assertUuid(uploadId, "uploadId");
+    uploadId = normalizedUuid(uploadId, "uploadId");
     const token = bearerToken(authorization);
     let intent = await this.prisma.uploadIntent.findUnique({
       where: { id: uploadId },
@@ -307,6 +339,68 @@ export class UploadService {
         throw new GoneException("Upload intent expired");
       }
 
+      let photoMetadata:
+        | {
+            kind: PhotoAssetKind;
+            scopeKind: PhotoScopeKind;
+            scopeId: string;
+          }
+        | undefined;
+      if (current.assetKind === UploadAssetKind.PHOTO_ASSET) {
+        if (
+          !current.photoKind ||
+          !current.photoScopeKind ||
+          !current.photoScopeId
+        ) {
+          throw new ConflictException("Photo upload intent is incomplete");
+        }
+        photoMetadata = {
+          kind: current.photoKind,
+          scopeKind: current.photoScopeKind,
+          scopeId: current.photoScopeId,
+        };
+        if (
+          photoMetadata.kind === PhotoAssetKind.QUOTE_REFERENCE &&
+          photoMetadata.scopeKind === PhotoScopeKind.QUOTE_REQUEST
+        ) {
+          const scopeRows = await transaction.$queryRaw<
+            Array<{
+              session_status: string;
+              request_status: string;
+              offer_expires_at: Date | null;
+              session_expires_at: Date;
+              observed_at: Date;
+            }>
+          >`
+            SELECT session.status::text AS session_status,
+                   request.status::text AS request_status,
+                   quote.expires_at AS offer_expires_at,
+                   session.expires_at AS session_expires_at,
+                   clock_timestamp() AS observed_at
+            FROM quote_requests request
+            JOIN quote_sessions session ON session.id = request.quote_session_id
+            LEFT JOIN quotes quote ON quote.quote_request_id = request.id
+            WHERE request.id = ${photoMetadata.scopeId}::uuid
+            FOR UPDATE OF request
+          `;
+          const scope = scopeRows[0];
+          const requestAcceptsPhotos =
+            scope?.request_status === "NEW" ||
+            scope?.request_status === "IN_REVIEW" ||
+            (scope?.request_status === "QUOTED" &&
+              scope.offer_expires_at !== null &&
+              scope.offer_expires_at.getTime() > scope.observed_at.getTime());
+          if (
+            !scope ||
+            scope.session_status !== "OPEN" ||
+            !requestAcceptsPhotos ||
+            scope.session_expires_at.getTime() <= scope.observed_at.getTime()
+          ) {
+            throw new GoneException("Quote request no longer accepts photos");
+          }
+        }
+      }
+
       // Keep the row lock through promotion. Cleanup claims the same row, so
       // it cannot delete the final key and then lose to an in-flight copy.
       await this.objects.copyObject(
@@ -343,19 +437,16 @@ export class UploadService {
         });
       }
 
-      if (
-        !current.photoKind ||
-        !current.photoScopeKind ||
-        !current.photoScopeId
-      ) {
+      if (!photoMetadata) {
         throw new ConflictException("Photo upload intent is incomplete");
       }
+
       await transaction.photoAsset.create({
         data: {
           id: current.intendedAssetId,
-          kind: current.photoKind,
-          scopeKind: current.photoScopeKind,
-          scopeId: current.photoScopeId,
+          kind: photoMetadata.kind,
+          scopeKind: photoMetadata.scopeKind,
+          scopeId: photoMetadata.scopeId,
           storageObjectKey: current.finalObjectKey,
           contentHash: current.expectedContentHash,
           mediaType: current.expectedContentType,
@@ -385,7 +476,7 @@ export class UploadService {
     modelFileId: string,
     authorization?: string,
   ): Promise<SignedDownloadResponseDto> {
-    assertUuid(modelFileId, "modelFileId");
+    modelFileId = normalizedUuid(modelFileId, "modelFileId");
     await this.authorizedModelIntent(modelFileId, authorization);
     const model = await this.prisma.modelFile.findUnique({
       where: { id: modelFileId },
@@ -404,7 +495,7 @@ export class UploadService {
     photoAssetId: string,
     authorization?: string,
   ): Promise<SignedDownloadResponseDto> {
-    assertUuid(photoAssetId, "photoAssetId");
+    photoAssetId = normalizedUuid(photoAssetId, "photoAssetId");
     await this.authorizedPhotoIntent(photoAssetId, authorization);
     const photo = await this.prisma.photoAsset.findUnique({
       where: { id: photoAssetId },
@@ -419,11 +510,37 @@ export class UploadService {
     return this.signDownload(photo.storageObjectKey, expiresAt);
   }
 
+  async createOperatorQuotePhotoDownload(
+    quoteRequestId: string,
+    photoAssetId: string,
+  ): Promise<SignedDownloadResponseDto> {
+    quoteRequestId = normalizedUuid(quoteRequestId, "requestId");
+    photoAssetId = normalizedUuid(photoAssetId, "photoAssetId");
+    const photo = await this.prisma.photoAsset.findFirst({
+      where: {
+        id: photoAssetId,
+        kind: PhotoAssetKind.QUOTE_REFERENCE,
+        scopeKind: PhotoScopeKind.QUOTE_REQUEST,
+        scopeId: quoteRequestId,
+      },
+    });
+    if (!photo) {
+      throw new NotFoundException("Quote attachment was not found");
+    }
+    const expiresAt = availableDownloadDeadline(
+      photo.deletedAt,
+      photo.retentionHold,
+      photo.photoDeleteAfter,
+      this.storageConfig.signedUrlTtlSeconds,
+    );
+    return this.signDownload(photo.storageObjectKey, expiresAt);
+  }
+
   async getReorderEligibility(
     modelFileId: string,
     authorization?: string,
   ): Promise<ReorderEligibilityResponseDto> {
-    assertUuid(modelFileId, "modelFileId");
+    modelFileId = normalizedUuid(modelFileId, "modelFileId");
     await this.authorizedModelIntent(modelFileId, authorization);
     const model = await this.prisma.modelFile.findUnique({
       where: { id: modelFileId },
@@ -500,7 +617,7 @@ export class UploadService {
 
   private async reserveAnonymousUpload(
     transaction: Prisma.TransactionClient,
-    clientAddress: string,
+    subjectHash: string,
     sizeBytes: number,
   ): Promise<void> {
     const observedRows = await transaction.$queryRaw<Array<{ now: Date }>>`
@@ -511,15 +628,6 @@ export class UploadService {
     const windowExpiresAt = new Date(
       observedAt.getTime() + ANONYMOUS_UPLOAD_WINDOW_MILLISECONDS,
     );
-    const subjectHash = createHmac(
-      "sha256",
-      this.storageConfig.uploadClientHashKey,
-    )
-      .update(
-        `anonymous-model-upload\0${normalizeClientAddress(clientAddress)}`,
-      )
-      .digest("hex");
-
     const global = await this.lockAnonymousUploadLimit(
       transaction,
       ANONYMOUS_UPLOAD_GLOBAL_SUBJECT,
@@ -1089,6 +1197,16 @@ function normalizeClientAddress(value: string): string {
     : normalized || "unknown";
 }
 
+function anonymousUploadSubject(
+  hashKey: string,
+  namespace: string,
+  identity: string,
+): string {
+  return createHmac("sha256", hashKey)
+    .update(`${namespace}\0${identity}`)
+    .digest("hex");
+}
+
 function bearerToken(authorization?: string): string {
   const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization ?? "");
   if (!match?.[1])
@@ -1112,10 +1230,11 @@ function matchesTokenHash(token: string, expectedHash: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function assertUuid(value: string, name: string): void {
+function normalizedUuid(value: string, name: string): string {
   if (!UUID_PATTERN.test(value)) {
-    throw new BadRequestException(`${name} must be a lowercase UUID`);
+    throw new BadRequestException(`${name} must be a UUID`);
   }
+  return value.toLowerCase();
 }
 
 function addRetention(uploadedAt: Date): Date {

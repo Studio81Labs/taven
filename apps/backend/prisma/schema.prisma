@@ -243,6 +243,7 @@ enum PriceComponentKind {
 enum PriceComponentScope {
   ORDER
   QUOTE_ITEM
+  QUOTE_SHIPMENT_PLAN
   ORDER_ITEM
   SHIPMENT_PLAN
 
@@ -597,6 +598,18 @@ model AnonymousUploadLimit {
 
   @@index([windowExpiresAt])
   @@map("anonymous_upload_limits")
+}
+
+model AnonymousQuoteLimit {
+  subjectHash     String   @id @map("subject_hash") @db.VarChar(64)
+  windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+  windowExpiresAt DateTime @map("window_expires_at") @db.Timestamptz(3)
+  issuedCount     Int      @default(0) @map("issued_count")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([windowExpiresAt])
+  @@map("anonymous_quote_limits")
 }
 
 model ObjectStorageSweepCursor {
@@ -1197,6 +1210,7 @@ model IdempotencyRecord {
   id                 String            @id @default(uuid()) @db.Uuid
   namespace          String            @db.VarChar(100)
   idempotencyKey     String            @map("idempotency_key") @db.VarChar(255)
+  generation         Int               @default(1)
   requestFingerprint String            @map("request_fingerprint") @db.VarChar(64)
   status             IdempotencyStatus @default(PROCESSING)
   responseStatusCode Int?              @map("response_status_code")
@@ -1205,7 +1219,7 @@ model IdempotencyRecord {
   createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  @@unique([namespace, idempotencyKey])
+  @@unique([namespace, idempotencyKey, generation], map: "idempotency_records_namespace_key_generation_key")
   @@index([expiresAt])
   @@map("idempotency_records")
 }
@@ -1233,6 +1247,7 @@ model QuoteSession {
   id              String             @id @default(uuid()) @db.Uuid
   customerId      String?            @map("customer_id") @db.Uuid
   publicTokenHash String             @unique @map("public_token_hash") @db.VarChar(64)
+  capabilityKeyId String?            @map("capability_key_id") @db.VarChar(64)
   status          QuoteSessionStatus @default(OPEN)
   attribution     Json?              @db.JsonB
   expiresAt       DateTime           @map("expires_at") @db.Timestamptz(3)
@@ -1249,29 +1264,55 @@ model QuoteSession {
 }
 
 model QuoteRequest {
-  id             String             @id @default(uuid()) @db.Uuid
-  quoteSessionId String?            @unique @map("quote_session_id") @db.Uuid
-  customerId     String?            @map("customer_id") @db.Uuid
-  status         QuoteRequestStatus @default(NEW)
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                     String             @id @default(uuid()) @db.Uuid
+  quoteSessionId         String?            @unique @map("quote_session_id") @db.Uuid
+  customerId             String?            @map("customer_id") @db.Uuid
+  publicReference        String             @unique @default(uuid()) @map("public_reference") @db.VarChar(50)
+  status                 QuoteRequestStatus @default(NEW)
+  description            String             @default("Legacy quote request") @db.Text
+  purpose                String?            @db.Text
+  measurements           Json?              @db.JsonB
+  requestedDate          DateTime?          @map("requested_date") @db.Date
+  contactSnapshot        Json?              @map("contact_snapshot") @db.JsonB
+  attribution            Json?              @db.JsonB
+  slaDueAt               DateTime           @default(now()) @map("sla_due_at") @db.Timestamptz(3)
+  slaRespondedAt         DateTime?          @map("sla_responded_at") @db.Timestamptz(3)
+  currentStateCommandKey String             @default("legacy-import") @map("current_state_command_key") @db.VarChar(255)
+  currentStateResultId   String             @default(uuid()) @map("current_state_result_id") @db.Uuid
+  acceptedAt             DateTime?          @map("accepted_at") @db.Timestamptz(3)
+  rejectedAt             DateTime?          @map("rejected_at") @db.Timestamptz(3)
+  expiredAt              DateTime?          @map("expired_at") @db.Timestamptz(3)
+  rejectionReason        String?            @map("rejection_reason") @db.Text
+  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   quoteSession                  QuoteSession?                     @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
   customer                      Customer?                         @relation(fields: [customerId], references: [id], onDelete: Restrict)
   quote                         Quote?
+  auditEvents                   AuditEvent[]
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
 
   @@index([customerId, status])
+  @@index([status, slaDueAt])
   @@map("quote_requests")
 }
 
 model Quote {
-  id             String   @id @default(uuid()) @db.Uuid
-  quoteRequestId String   @unique @map("quote_request_id") @db.Uuid
-  customerId     String   @map("customer_id") @db.Uuid
-  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
-  issuedAt       DateTime @default(now()) @map("issued_at") @db.Timestamptz(3)
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                 String    @id @default(uuid()) @db.Uuid
+  quoteRequestId     String    @unique @map("quote_request_id") @db.Uuid
+  customerId         String    @map("customer_id") @db.Uuid
+  publicTokenHash    String?   @unique @map("public_token_hash") @db.VarChar(64)
+  capabilityKeyId    String?   @map("capability_key_id") @db.VarChar(64)
+  version            Int       @default(1)
+  summary            String    @default("Legacy individual offer") @db.Text
+  termsRevision      String    @default("legacy-terms") @map("terms_revision") @db.VarChar(100)
+  termsSnapshot      Json      @default("{}") @map("terms_snapshot") @db.JsonB
+  promisedDate       DateTime? @map("promised_date") @db.Date
+  issuanceCommandKey String    @default("legacy-import") @map("issuance_command_key") @db.VarChar(255)
+  issuanceResultId   String    @default(uuid()) @map("issuance_result_id") @db.Uuid
+  expiresAt          DateTime  @map("expires_at") @db.Timestamptz(3)
+  issuedAt           DateTime  @default(now()) @map("issued_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   quoteRequest                  QuoteRequest                      @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
   customer                      Customer                          @relation(fields: [customerId], references: [id], onDelete: Restrict)
@@ -1279,6 +1320,8 @@ model Quote {
   priceBinding                  QuotePriceBinding?
   individualOrderOrigin         IndividualOrderOrigin?
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
+  deliveryDestination           QuoteDeliveryDestination?
+  shipmentPlans                 QuoteShipmentPlan[]
   auditEvents                   AuditEvent[]
 
   @@unique([id, customerId], map: "quotes_id_customer_key")
@@ -1317,6 +1360,48 @@ model QuoteItem {
   @@map("quote_items")
 }
 
+model QuoteDeliveryDestination {
+  id                 String   @id @default(uuid()) @db.Uuid
+  quoteId            String   @unique @map("quote_id") @db.Uuid
+  providerEndpointId String   @map("provider_endpoint_id") @db.VarChar(255)
+  endpointType       String   @map("endpoint_type") @db.VarChar(100)
+  addressSnapshot    Json     @map("address_snapshot") @db.JsonB
+  capabilitySnapshot Json     @map("capability_snapshot") @db.JsonB
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quote         Quote               @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  shipmentPlans QuoteShipmentPlan[]
+
+  @@unique([id, quoteId])
+  @@map("quote_delivery_destinations")
+}
+
+model QuoteShipmentPlan {
+  id                         String   @id @default(uuid()) @db.Uuid
+  quoteId                    String   @map("quote_id") @db.Uuid
+  priceSnapshotId            String   @map("price_snapshot_id") @db.Uuid
+  quoteDeliveryDestinationId String   @map("quote_delivery_destination_id") @db.Uuid
+  ordinal                    Int
+  category                   String   @db.VarChar(100)
+  plannedVolumeCubicMm       BigInt   @map("planned_volume_cubic_mm")
+  plannedWeightMilligrams    BigInt   @map("planned_weight_milligrams")
+  shippingAmountMinor        BigInt   @map("shipping_amount_minor")
+  packagingAmountMinor       BigInt   @map("packaging_amount_minor")
+  handlingAmountMinor        BigInt   @map("handling_amount_minor")
+  allocationSnapshot         Json     @map("allocation_snapshot") @db.JsonB
+  createdAt                  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quote               Quote                    @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  priceSnapshot       PriceSnapshot            @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
+  deliveryDestination QuoteDeliveryDestination @relation(fields: [quoteDeliveryDestinationId, quoteId], references: [id, quoteId], onDelete: Restrict, map: "quote_shipment_plans_destination_scope_fkey")
+  priceComponent      PriceSnapshotComponent?
+  shipmentPlan        ShipmentPlan?
+
+  @@unique([quoteId, ordinal])
+  @@unique([id, priceSnapshotId])
+  @@map("quote_shipment_plans")
+}
+
 model PriceSnapshot {
   id                 String    @id @default(uuid()) @db.Uuid
   priceListId        String    @map("price_list_id") @db.Uuid
@@ -1333,6 +1418,7 @@ model PriceSnapshot {
   orderBinding                  OrderPriceBinding?
   components                    PriceSnapshotComponent[]
   paymentSchedules              PaymentSchedule[]
+  quoteShipmentPlans            QuoteShipmentPlan[]
   shipmentPlans                 ShipmentPlan[]
   payments                      Payment[]
   orderSettlements              OrderSettlement[]
@@ -1358,25 +1444,29 @@ model PriceList {
 }
 
 model PriceSnapshotComponent {
-  id              String              @id @default(uuid()) @db.Uuid
-  priceSnapshotId String              @map("price_snapshot_id") @db.Uuid
-  kind            PriceComponentKind
-  scope           PriceComponentScope
-  quoteItemId     String?             @map("quote_item_id") @db.Uuid
-  orderItemId     String?             @map("order_item_id") @db.Uuid
-  shipmentPlanId  String?             @map("shipment_plan_id") @db.Uuid
-  amountMinor     BigInt              @map("amount_minor")
-  allocation      Json?               @db.JsonB
-  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                  String              @id @default(uuid()) @db.Uuid
+  priceSnapshotId     String              @map("price_snapshot_id") @db.Uuid
+  kind                PriceComponentKind
+  scope               PriceComponentScope
+  quoteItemId         String?             @map("quote_item_id") @db.Uuid
+  quoteShipmentPlanId String?             @unique @map("quote_shipment_plan_id") @db.Uuid
+  orderItemId         String?             @map("order_item_id") @db.Uuid
+  shipmentPlanId      String?             @map("shipment_plan_id") @db.Uuid
+  amountMinor         BigInt              @map("amount_minor")
+  allocation          Json?               @db.JsonB
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
 
   priceSnapshot         PriceSnapshot                        @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
   quoteItem             QuoteItem?                           @relation(fields: [quoteItemId], references: [id], onDelete: Restrict)
+  quoteShipmentPlan     QuoteShipmentPlan?                   @relation(fields: [quoteShipmentPlanId, priceSnapshotId], references: [id, priceSnapshotId], onDelete: Restrict, map: "price_snapshot_components_quote_shipment_plan_snapshot_fkey")
   orderItem             OrderItem?                           @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
   shipmentPlan          ShipmentPlan?                        @relation(fields: [shipmentPlanId, priceSnapshotId], references: [id, priceSnapshotId], onDelete: Restrict, map: "price_snapshot_components_shipment_plan_snapshot_fkey")
   fulfilmentAllocations PriceComponentFulfilmentAllocation[]
 
+  @@unique([quoteShipmentPlanId, priceSnapshotId], map: "price_snapshot_components_quote_shipment_plan_snapshot_key")
   @@index([priceSnapshotId, kind])
   @@index([quoteItemId])
+  @@index([quoteShipmentPlanId])
   @@index([orderItemId])
   @@index([shipmentPlanId])
   @@map("price_snapshot_components")
@@ -1638,6 +1728,7 @@ model ShipmentPlan {
   priceSnapshotId         String   @map("price_snapshot_id") @db.Uuid
   orderPriceBindingId     String   @map("order_price_binding_id") @db.Uuid
   deliveryDestinationId   String   @map("delivery_destination_id") @db.Uuid
+  quoteShipmentPlanId     String?  @unique @map("quote_shipment_plan_id") @db.Uuid
   ordinal                 Int
   category                String   @db.VarChar(100)
   plannedVolumeCubicMm    BigInt   @map("planned_volume_cubic_mm")
@@ -1653,6 +1744,7 @@ model ShipmentPlan {
   orderPhase                OrderPhase                   @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
   priceSnapshot             PriceSnapshot                @relation(fields: [priceSnapshotId], references: [id], onDelete: Restrict)
   deliveryDestination       DeliveryDestination          @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  quoteShipmentPlan         QuoteShipmentPlan?           @relation(fields: [quoteShipmentPlanId, priceSnapshotId], references: [id, priceSnapshotId], onDelete: Restrict, map: "shipment_plans_quote_shipment_plan_snapshot_fkey")
   priceComponents           PriceSnapshotComponent[]
   fulfilmentSlotAllocations ShipmentPlanFulfilmentSlot[]
   shipments                 Shipment[]
@@ -1664,6 +1756,7 @@ model ShipmentPlan {
   @@unique([id, orderId, orderPhaseId])
   @@unique([id, orderId, orderPhaseId, deliveryDestinationId])
   @@unique([id, priceSnapshotId])
+  @@unique([quoteShipmentPlanId, priceSnapshotId], map: "shipment_plans_quote_shipment_plan_snapshot_key")
   @@index([orderId])
   @@map("shipment_plans")
 }
@@ -2057,6 +2150,7 @@ model PaymentProviderEvent {
 
 model AuditEvent {
   id                  String         @id @default(uuid()) @db.Uuid
+  quoteRequestId      String?        @map("quote_request_id") @db.Uuid
   quoteId             String?        @map("quote_id") @db.Uuid
   orderId             String?        @map("order_id") @db.Uuid
   paymentId           String?        @map("payment_id") @db.Uuid
@@ -2069,11 +2163,13 @@ model AuditEvent {
   payload             Json           @db.JsonB
   createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
+  quoteRequest      QuoteRequest?      @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
   quote             Quote?             @relation(fields: [quoteId], references: [id], onDelete: Restrict)
   order             Order?             @relation(fields: [orderId], references: [id], onDelete: Restrict)
   payment           Payment?           @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   refundTransaction RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
 
+  @@index([quoteRequestId, createdAt])
   @@index([quoteId, createdAt])
   @@index([orderId, createdAt])
   @@index([paymentId, createdAt])
