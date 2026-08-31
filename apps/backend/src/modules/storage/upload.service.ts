@@ -83,7 +83,7 @@ const ANONYMOUS_UPLOAD_GLOBAL_MAX_BYTES = 10 * 1024 * 1024 * 1024;
 const ANONYMOUS_UPLOAD_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_UPLOAD_LIMIT_CLEANUP_BATCH = 100;
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type UploadIntentRecord = Awaited<
   ReturnType<PrismaService["uploadIntent"]["findUnique"]>
@@ -258,7 +258,7 @@ export class UploadService {
     uploadId: string,
     authorization?: string,
   ): Promise<ConfirmedUploadResponseDto> {
-    assertUuid(uploadId, "uploadId");
+    uploadId = normalizedUuid(uploadId, "uploadId");
     const token = bearerToken(authorization);
     let intent = await this.prisma.uploadIntent.findUnique({
       where: { id: uploadId },
@@ -476,7 +476,7 @@ export class UploadService {
     modelFileId: string,
     authorization?: string,
   ): Promise<SignedDownloadResponseDto> {
-    assertUuid(modelFileId, "modelFileId");
+    modelFileId = normalizedUuid(modelFileId, "modelFileId");
     await this.authorizedModelIntent(modelFileId, authorization);
     const model = await this.prisma.modelFile.findUnique({
       where: { id: modelFileId },
@@ -495,7 +495,7 @@ export class UploadService {
     photoAssetId: string,
     authorization?: string,
   ): Promise<SignedDownloadResponseDto> {
-    assertUuid(photoAssetId, "photoAssetId");
+    photoAssetId = normalizedUuid(photoAssetId, "photoAssetId");
     await this.authorizedPhotoIntent(photoAssetId, authorization);
     const photo = await this.prisma.photoAsset.findUnique({
       where: { id: photoAssetId },
@@ -514,8 +514,8 @@ export class UploadService {
     quoteRequestId: string,
     photoAssetId: string,
   ): Promise<SignedDownloadResponseDto> {
-    assertUuid(quoteRequestId, "requestId");
-    assertUuid(photoAssetId, "photoAssetId");
+    quoteRequestId = normalizedUuid(quoteRequestId, "requestId");
+    photoAssetId = normalizedUuid(photoAssetId, "photoAssetId");
     const photo = await this.prisma.photoAsset.findFirst({
       where: {
         id: photoAssetId,
@@ -540,7 +540,7 @@ export class UploadService {
     modelFileId: string,
     authorization?: string,
   ): Promise<ReorderEligibilityResponseDto> {
-    assertUuid(modelFileId, "modelFileId");
+    modelFileId = normalizedUuid(modelFileId, "modelFileId");
     await this.authorizedModelIntent(modelFileId, authorization);
     const model = await this.prisma.modelFile.findUnique({
       where: { id: modelFileId },
@@ -1230,10 +1230,11 @@ function matchesTokenHash(token: string, expectedHash: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function assertUuid(value: string, name: string): void {
+function normalizedUuid(value: string, name: string): string {
   if (!UUID_PATTERN.test(value)) {
-    throw new BadRequestException(`${name} must be a lowercase UUID`);
+    throw new BadRequestException(`${name} must be a UUID`);
   }
+  return value.toLowerCase();
 }
 
 function addRetention(uploadedAt: Date): Date {

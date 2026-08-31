@@ -338,7 +338,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       downloadUrl: string;
       expiresAt: string;
     }>(
-      `admin/quote-requests/${created.body.requestId}/attachments/${referencePhotoId}/download`,
+      `admin/quote-requests/${created.body.requestId.toUpperCase()}/attachments/${referencePhotoId.toUpperCase()}/download`,
       { method: "POST", headers: bearer(operatorToken) },
     );
     expect(operatorAttachment.response.status).toBe(200);
@@ -699,6 +699,82 @@ describe("QuoteRequest and tokenized individual offers", () => {
         status: "ACCEPTED",
       }),
     );
+  });
+
+  it("accepts and canonicalizes uppercase UUIDs allowed by the API contract", async () => {
+    const created = await quotes.createRequest(
+      requestInput("uppercase-uuid"),
+      "198.51.100.45",
+      key("uppercase-uuid-create"),
+    );
+    const uppercaseRequestId = created.requestId.toUpperCase();
+    const request = await apiJson<{ requestId: string }>(
+      `quote-requests/${uppercaseRequestId}`,
+      { headers: bearer(created.requestToken) },
+    );
+    expect(request.response.status).toBe(200);
+    expect(request.body.requestId).toBe(created.requestId);
+
+    const reviewed = await operatorCommand(
+      `admin/quote-requests/${uppercaseRequestId}/review`,
+      key("uppercase-uuid-review"),
+    );
+    expect(reviewed.response.status).toBe(200);
+
+    const issueKey = key("uppercase-uuid-issue");
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1_000);
+    const uppercaseItem = {
+      ...defaultOfferItem,
+      sourceModelFileId: String(
+        defaultOfferItem.sourceModelFileId,
+      ).toUpperCase(),
+      modelGeometryId: String(defaultOfferItem.modelGeometryId).toUpperCase(),
+      printConfigRevisionId: String(
+        defaultOfferItem.printConfigRevisionId,
+      ).toUpperCase(),
+    };
+    const issued = await issueOffer(
+      uppercaseRequestId,
+      issueKey,
+      expiresAt,
+      defaultComponents(),
+      [uppercaseItem],
+      priceListId.toUpperCase(),
+    );
+    expect(issued.response.status).toBe(201);
+
+    const canonicalReplay = await issueOffer(
+      created.requestId,
+      issueKey,
+      expiresAt,
+    );
+    expect(canonicalReplay.response.status).toBe(201);
+    expect(canonicalReplay.body).toEqual(issued.body);
+
+    const preview = await apiJson<{ quoteId: string }>(
+      `offers/${issued.body.quoteId.toUpperCase()}`,
+      { headers: bearer(issued.body.offerToken) },
+    );
+    expect(preview.response.status).toBe(200);
+    expect(preview.body.quoteId).toBe(issued.body.quoteId);
+
+    const accepted = await apiJson<{ status: string }>(
+      `offers/${issued.body.quoteId.toUpperCase()}/accept`,
+      {
+        method: "POST",
+        headers: {
+          ...bearer(issued.body.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": key("uppercase-uuid-accept"),
+        },
+        body: JSON.stringify({
+          version: issued.body.version,
+          termsRevision: issued.body.termsRevision,
+        }),
+      },
+    );
+    expect(accepted.response.status).toBe(200);
+    expect(accepted.body.status).toBe("DRAFT");
   });
 
   it("accepts high-volume packing units with batched slot writes", async () => {

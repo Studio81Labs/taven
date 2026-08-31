@@ -53,7 +53,7 @@ import type {
 } from "./quotes.dto";
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REQUEST_SESSION_DAYS = 30;
 const IDEMPOTENCY_DAYS = 7;
@@ -270,7 +270,7 @@ export class QuotesService {
     requestId: string,
     authorization?: string,
   ): Promise<QuoteRequestDetailDto> {
-    assertUuid(requestId, "requestId");
+    requestId = normalizedUuid(requestId, "requestId");
     const token = bearerCapability(authorization);
     const observedAt = await databaseNow(this.prisma);
     const request = await this.prisma.quoteRequest.findUnique({
@@ -312,7 +312,7 @@ export class QuotesService {
   }
 
   async getOperatorRequest(requestId: string): Promise<QuoteRequestDetailDto> {
-    assertUuid(requestId, "requestId");
+    requestId = normalizedUuid(requestId, "requestId");
     const observedAt = await databaseNow(this.prisma);
     const request = await this.prisma.quoteRequest.findUnique({
       where: { id: requestId },
@@ -326,7 +326,7 @@ export class QuotesService {
     requestId: string,
     idempotencyKey: string | undefined,
   ): Promise<QuoteRequestStatusDto> {
-    assertUuid(requestId, "requestId");
+    requestId = normalizedUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
     return this.idempotent<QuoteRequestStatusDto>(
       "quote-request.review",
@@ -377,7 +377,7 @@ export class QuotesService {
     input: IssueOfferDto,
     idempotencyKey: string | undefined,
   ): Promise<OfferIssuedDto> {
-    assertUuid(requestId, "requestId");
+    requestId = normalizedUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const offer = validateOffer(input);
     const fingerprint = fingerprintOf({ requestId, ...offer.fingerprint });
@@ -724,7 +724,7 @@ export class QuotesService {
     quoteId: string,
     authorization?: string,
   ): Promise<OfferPreviewDto> {
-    assertUuid(quoteId, "quoteId");
+    quoteId = normalizedUuid(quoteId, "quoteId");
     const token = bearerCapability(authorization);
     const observedAt = await databaseNow(this.prisma);
     const quote = await this.offerForToken(quoteId, token);
@@ -852,7 +852,7 @@ export class QuotesService {
     authorization: string | undefined,
     idempotencyKey: string | undefined,
   ): Promise<AcceptedOfferDto> {
-    assertUuid(quoteId, "quoteId");
+    quoteId = normalizedUuid(quoteId, "quoteId");
     const token = bearerCapability(authorization);
     const expected = validateExpectedOffer(input);
     const commandKey = requireIdempotencyKey(idempotencyKey);
@@ -1163,7 +1163,7 @@ export class QuotesService {
     authorization: string | undefined,
     idempotencyKey: string | undefined,
   ): Promise<QuoteRequestStatusDto> {
-    assertUuid(quoteId, "quoteId");
+    quoteId = normalizedUuid(quoteId, "quoteId");
     const token = bearerCapability(authorization);
     const expected = validateExpectedOffer(input);
     const reason = optionalText(input.reason, "reason", 2_000);
@@ -1249,7 +1249,7 @@ export class QuotesService {
     requestId: string,
     idempotencyKey: string | undefined,
   ): Promise<QuoteRequestStatusDto> {
-    assertUuid(requestId, "requestId");
+    requestId = normalizedUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
     return this.idempotent(
       "quote-request.expire",
@@ -1918,7 +1918,7 @@ function validateOffer(input: IssueOfferDto) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new BadRequestException("Offer input is required");
   }
-  assertUuid(input.priceListId, "priceListId");
+  const priceListId = normalizedUuid(input.priceListId, "priceListId");
   const contractTotalMinor = money(
     input.contractTotalMinor,
     "contractTotalMinor",
@@ -2061,7 +2061,7 @@ function validateOffer(input: IssueOfferDto) {
     summary,
     expiresAt,
     promisedDate,
-    priceListId: input.priceListId,
+    priceListId,
     contractTotalMinor,
     depositMinor,
     termsSnapshot,
@@ -2075,7 +2075,7 @@ function validateOffer(input: IssueOfferDto) {
       summary,
       expiresAt: expiresAt.toISOString(),
       promisedDate: dateOnly(promisedDate),
-      priceListId: input.priceListId,
+      priceListId,
       contractTotalMinor,
       depositMinor,
       termsSnapshot,
@@ -2096,20 +2096,28 @@ function validateOfferItem(input: ModelOfferItemDto, ordinal: number) {
   if (input.kind !== "MODEL") {
     throw new BadRequestException(`items[${ordinal}].kind is invalid`);
   }
-  assertUuid(input.sourceModelFileId, `items[${ordinal}].sourceModelFileId`);
-  assertUuid(input.modelGeometryId, `items[${ordinal}].modelGeometryId`);
-  assertUuid(
+  const sourceModelFileId = normalizedUuid(
+    input.sourceModelFileId,
+    `items[${ordinal}].sourceModelFileId`,
+  );
+  const modelGeometryId = normalizedUuid(
+    input.modelGeometryId,
+    `items[${ordinal}].modelGeometryId`,
+  );
+  const printConfigRevisionId = normalizedUuid(
     input.printConfigRevisionId,
     `items[${ordinal}].printConfigRevisionId`,
   );
+  let primaryReferenceSliceResultId = input.primaryReferenceSliceResultId;
   if (input.primaryReferenceSliceResultId) {
-    assertUuid(
+    primaryReferenceSliceResultId = normalizedUuid(
       input.primaryReferenceSliceResultId,
       `items[${ordinal}].primaryReferenceSliceResultId`,
     );
   }
+  let tailReferenceSliceResultId = input.tailReferenceSliceResultId;
   if (input.tailReferenceSliceResultId) {
-    assertUuid(
+    tailReferenceSliceResultId = normalizedUuid(
       input.tailReferenceSliceResultId,
       `items[${ordinal}].tailReferenceSliceResultId`,
     );
@@ -2135,11 +2143,11 @@ function validateOfferItem(input: ModelOfferItemDto, ordinal: number) {
   }
   return {
     kind: "MODEL" as const,
-    sourceModelFileId: input.sourceModelFileId,
-    modelGeometryId: input.modelGeometryId,
-    printConfigRevisionId: input.printConfigRevisionId,
-    primaryReferenceSliceResultId: input.primaryReferenceSliceResultId,
-    tailReferenceSliceResultId: input.tailReferenceSliceResultId,
+    sourceModelFileId,
+    modelGeometryId,
+    printConfigRevisionId,
+    primaryReferenceSliceResultId,
+    tailReferenceSliceResultId,
     referencePartsPerPlate,
     material: input.material as Material,
     color: optionalText(input.color, `items[${ordinal}].color`, 100),
@@ -3014,10 +3022,11 @@ function money(value: unknown, name: string, allowZero = false): number {
   return value as number;
 }
 
-function assertUuid(value: unknown, name: string): asserts value is string {
+function normalizedUuid(value: unknown, name: string): string {
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
-    throw new BadRequestException(`${name} must be a lowercase UUID`);
+    throw new BadRequestException(`${name} must be a UUID`);
   }
+  return value.toLowerCase();
 }
 
 function safeNumber(value: bigint): number {
