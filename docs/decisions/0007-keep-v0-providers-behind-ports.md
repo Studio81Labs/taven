@@ -67,7 +67,11 @@ The email port accepts a template identity, recipients, locale, correlation
 identity, and already-rendered safe variables. It returns a provider message
 reference and normalized delivery result. No model, photo, token value, or
 provider SDK object enters the outbox contract. An SMTP adapter is the fallback
-for an owner-operated relay or a different commercial relay.
+for an owner-operated relay or a different commercial relay. Provider quota is
+a dispatch concern: the business transaction always commits its deduplicated
+outbox row first, and the dispatcher defers a due row when Resend capacity is
+unavailable. Quota exhaustion must not reject the business transition or erase
+the notification obligation.
 
 ## Consequences
 

@@ -69,18 +69,27 @@ existing host-process `pnpm dev` flow remains available for fast iteration.
 Running the containerized local stack must not require production credentials,
 Cloudflare, Comgate, Resend, GitHub Actions, or access to the production VPS.
 
-Production secrets are root-owned files under `/etc/taven/secrets`, mode
-`0600`, mounted only into the container that consumes them. GitHub Environment
-secrets are the delivery source for deploy credentials and secret rotations.
-The repository contains names and procedures only, never values. Developers
-use ignored local environment files or local-only Compose defaults.
+Production secrets are separate files under per-service directories in
+`/etc/taven/secrets`. Directories are owned by `root:<service-group>` with mode
+`0750`; files are owned by `root:<service-group>` with mode `0440`, bind-mounted
+read-only only into that service, and the non-root container UID receives only
+its mapped supplemental GID. A shared credential is delivered as separate
+per-service file copies so one container group does not gain access to another
+service directory. Issue #39 adds `*_FILE` configuration support and verifies
+effective-UID reads plus cross-service denial. GitHub Environment secrets are
+the delivery source for deploy credentials and rotations. The repository
+contains names and procedures only, never values. Developers use ignored local
+environment files or local-only Compose defaults.
 
 The VPS is one failure domain. Nightly encrypted PostgreSQL and object-storage
 backups therefore leave the host for a Cloudflare R2 bucket restricted to the
-EU jurisdiction. Redis is not a system of record: AOF improves local restart
-recovery, while durable PostgreSQL state and outbox records are authoritative
-for queue reconstruction. The backup, restore, retention, and deletion rules
-are specified in the v0 provider matrix and must be rehearsed in issue #39.
+EU jurisdiction. Restic never traverses writable Garage metadata and blocks:
+storage mutations are quiesced while one atomic read-only filesystem snapshot
+is created over both paths, then Garage restarts before the snapshot is copied
+off-host. Redis is not a system of record: AOF improves local restart recovery,
+while durable PostgreSQL state and outbox records are authoritative for queue
+reconstruction. The backup, restore, retention, and deletion rules are specified
+in the v0 provider matrix and must be rehearsed in issue #39.
 
 ## Consequences
 
