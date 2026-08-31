@@ -1,23 +1,72 @@
 #!/bin/sh
 set -eu
 
-runner_root=${TAVEN_ORCA_RUNNER_ROOT:-/var/run/taven-orca}
+runner_root=$(readlink -f "${TAVEN_ORCA_RUNNER_ROOT:-/var/run/taven-orca}")
 maximum_artifact_bytes=${TAVEN_SLICER_MAX_ARTIFACT_BYTES:-536870912}
 maximum_diagnostic_bytes=${TAVEN_SLICER_MAX_DIAGNOSTIC_BYTES:-1048576}
 
 fail_request() {
   request_directory=$1
   failure_code=$2
+  rm -f "$request_directory/processing"
   printf '%s\n' "$failure_code" > "$request_directory/failure-code.tmp"
   mv "$request_directory/failure-code.tmp" "$request_directory/failure-code"
   touch "$request_directory/failed"
+}
+
+request_expired() {
+  request_directory=$1
+  lease=$(cat "$request_directory/lease-expires-at" 2>/dev/null || true)
+  case "$lease" in
+    ''|*[!0-9]*)
+      if [ -f "$request_directory/lease-expires-at" ]; then
+        return 0
+      fi
+      find "$request_directory" -maxdepth 0 -mmin +1 -print -quit | grep -q .
+      return
+      ;;
+  esac
+  now=$(date +%s)
+  [ "$now" -ge "$lease" ]
 }
 
 while true; do
   processed=false
   for request in "$runner_root"/request-*; do
     [ -d "$request" ] || continue
-    [ -f "$request/ready" ] || continue
+
+    if [ -f "$request/cancel" ]; then
+      rm -rf "$request"
+      processed=true
+      continue
+    fi
+    if [ -f "$request/processing" ]; then
+      # The loop is synchronous, so a processing marker observed here can only
+      # have survived a runner restart. The old container already killed Orca.
+      rm -f "$request/processing"
+      fail_request "$request" ENGINE_UNAVAILABLE
+      processed=true
+      continue
+    fi
+    if [ -f "$request/complete" ] || [ -f "$request/failed" ]; then
+      if request_expired "$request"; then
+        rm -rf "$request"
+        processed=true
+      fi
+      continue
+    fi
+    if [ ! -f "$request/ready" ]; then
+      if request_expired "$request"; then
+        rm -rf "$request"
+        processed=true
+      fi
+      continue
+    fi
+    if request_expired "$request"; then
+      rm -rf "$request"
+      processed=true
+      continue
+    fi
     mv "$request/ready" "$request/processing" 2>/dev/null || continue
     processed=true
     if [ -f "$request/cancel" ]; then
@@ -45,8 +94,8 @@ while true; do
       *) fail_request "$request" ENGINE_UNAVAILABLE; continue ;;
     esac
 
-    settings=$(find "$request/profiles/settings" -type f -name '*.json' -print | LC_ALL=C sort | paste -sd ';' -)
-    filaments=$(find "$request/profiles/filaments" -type f -name '*.json' -print | LC_ALL=C sort | paste -sd ';' -)
+    settings=$(find "$request/profiles/settings" -type f -name '*.json' -printf '/work/profiles/settings/%f\n' | LC_ALL=C sort | paste -sd ';' -)
+    filaments=$(find "$request/profiles/filaments" -type f -name '*.json' -printf '/work/profiles/filaments/%f\n' | LC_ALL=C sort | paste -sd ';' -)
     if [ -z "$settings" ] || [ ! -f "$request/geometry.stl" ]; then
       fail_request "$request" INVALID_PROFILE
       continue
@@ -55,14 +104,14 @@ while true; do
     set -- \
       --debug 2 \
       --slice 0 \
-      --outputdir "$request/output" \
-      --datadir "$request/tmp/data" \
+      --outputdir /work/output \
+      --datadir /tmp/data \
       --load-settings "$settings"
     if [ -n "$filaments" ]; then
       set -- "$@" --load-filaments "$filaments"
     fi
     if [ -f "$request/assembly.json" ]; then
-      set -- "$@" --load-assemble-list "$request/assembly.json"
+      set -- "$@" --load-assemble-list /work/assembly.json
     elif [ "$copies" -gt 1 ]; then
       set -- "$@" --arrange 1 --clone-objects "$copies"
     fi
@@ -70,7 +119,7 @@ while true; do
       set -- "$@" --export-3mf toolpath.gcode.3mf --min-save
     fi
     if [ ! -f "$request/assembly.json" ]; then
-      set -- "$@" "$request/geometry.stl"
+      set -- "$@" /work/geometry.stl
     fi
 
     diagnostics_fifo="$request/diagnostics.pipe"
@@ -84,6 +133,35 @@ while true; do
          --nproc=256 \
          --fsize="$maximum_artifact_bytes" \
          -- /usr/bin/timeout --signal=KILL "$timeout_seconds" \
+         /usr/bin/bwrap \
+         --unshare-pid \
+         --unshare-ipc \
+         --unshare-uts \
+         --unshare-cgroup-try \
+         --die-with-parent \
+         --new-session \
+         --ro-bind / / \
+         --ro-bind "$request" /work \
+         --bind "$request/output" /work/output \
+         --tmpfs "$runner_root" \
+         --bind "$request/tmp" /tmp \
+         --proc /proc \
+         --dev /dev \
+         --chdir /tmp \
+         --clearenv \
+         --setenv HOME /tmp/home \
+         --setenv XDG_CACHE_HOME /tmp/cache \
+         --setenv XDG_CONFIG_HOME /tmp/config \
+         --setenv XDG_DATA_HOME /tmp/data \
+         --setenv LC_ALL C \
+         /usr/bin/setpriv \
+         --reuid=10001 \
+         --regid=10001 \
+         --clear-groups \
+         --bounding-set=-all \
+         --inh-caps=-all \
+         --ambient-caps=-all \
+         --no-new-privs \
          /opt/orca/AppRun "$@" \
          >"$diagnostics_fifo" 2>&1; then
       engine_status=0
@@ -102,6 +180,7 @@ while true; do
     if [ "$engine_status" -eq 0 ] && \
        [ "$artifact_count" -eq 1 ] && \
        [ "$diagnostic_bytes" -lt "$maximum_diagnostic_bytes" ]; then
+      rm -f "$request/processing"
       touch "$request/complete"
     else
       rm -rf "$request/output"
@@ -120,6 +199,9 @@ while true; do
       fail_request "$request" "$failure_code"
     fi
   done
+  if [ "${TAVEN_ORCA_RUNNER_ONCE:-false}" = true ]; then
+    break
+  fi
   if [ "$processed" = false ]; then
     sleep 0.1
   fi

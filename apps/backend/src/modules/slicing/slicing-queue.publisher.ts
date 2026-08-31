@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { Inject, Injectable, type OnModuleDestroy } from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
-import type { Queue } from "bullmq";
+import type { Job, Queue } from "bullmq";
 import type { SlicingJob } from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
 import { PrismaService } from "../../prisma/prisma.service";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
+import { SlicingResultIngestionService } from "./slicing-result-ingestion.service";
 import { SLICING_QUEUE } from "./slicing.tokens";
 
 const CLAIM_LEASE_MILLISECONDS = 5 * 60 * 1_000;
@@ -17,6 +18,18 @@ type ClaimedDispatch = {
   attempts: number;
   payload: Prisma.JsonValue;
 };
+
+type QuarantinedQueueJob = Pick<
+  Job,
+  | "id"
+  | "name"
+  | "data"
+  | "returnvalue"
+  | "progress"
+  | "opts"
+  | "attemptsMade"
+  | "failedReason"
+>;
 
 function queueJobId(job: SlicingJob): string {
   return `dispatch-${createHash("sha256")
@@ -36,6 +49,39 @@ function safeLastError(error: unknown): string {
     .slice(0, MAX_LAST_ERROR_LENGTH);
 }
 
+class InvalidSlicingQueueEntryError extends Error {}
+
+function jsonEvidence(value: unknown): Prisma.InputJsonValue | null {
+  const serialized = JSON.stringify(value);
+  return serialized === undefined
+    ? null
+    : (JSON.parse(serialized) as Prisma.InputJsonValue);
+}
+
+function queueEvidence(queued: QuarantinedQueueJob) {
+  return {
+    jobData: jsonEvidence(queued.data),
+    terminalReturnValue: jsonEvidence(queued.returnvalue),
+    progress: jsonEvidence(queued.progress),
+    failedReason: queued.failedReason ?? null,
+    attemptsMade: queued.attemptsMade,
+    configuredAttempts: queued.opts.attempts ?? null,
+  };
+}
+
+function queueEvidenceFingerprint(
+  queued: QuarantinedQueueJob,
+  evidence: ReturnType<typeof queueEvidence>,
+): string {
+  return createHash("sha256")
+    .update(String(queued.id ?? "missing"))
+    .update("\0")
+    .update(queued.name)
+    .update("\0")
+    .update(JSON.stringify(evidence))
+    .digest("hex");
+}
+
 @Injectable()
 export class SlicingQueuePublisher implements OnModuleDestroy {
   constructor(
@@ -43,6 +89,8 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
     @Inject(SLICING_QUEUE) private readonly queue: Queue,
     @Inject(CandidateEstimateService)
     private readonly candidateEstimates: CandidateEstimateService,
+    @Inject(SlicingResultIngestionService)
+    private readonly results: SlicingResultIngestionService,
   ) {}
 
   async publishPending(limit: number): Promise<number> {
@@ -95,7 +143,7 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
       throw new Error("slicing result limit must be 1 through 100");
     }
     const queuedJobs = await this.queue.getJobs(
-      ["completed"],
+      ["completed", "failed"],
       0,
       limit - 1,
       true,
@@ -107,19 +155,50 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
         slicingResultFingerprint,
         slicingResultForJobSchema,
       } = await import("@taven/slicer-contracts");
-      const job = SlicingJobSchema.parse(queued.data);
-      await this.assertDurableDispatch(job);
-      const result = slicingResultForJobSchema(job).parse(queued.returnvalue);
+      const parsedJob = SlicingJobSchema.safeParse(queued.data);
+      if (!parsedJob.success) {
+        await this.deadLetterQueueEntry(
+          queued,
+          new InvalidSlicingQueueEntryError(
+            "queue job payload violates the slicing contract",
+          ),
+        );
+        await queued.remove();
+        reconciled += 1;
+        continue;
+      }
+      const job = parsedJob.data;
+      let dispatchId: string;
+      try {
+        dispatchId = await this.assertDurableDispatch(job);
+      } catch (error) {
+        if (!(error instanceof InvalidSlicingQueueEntryError)) throw error;
+        await this.deadLetterQueueEntry(queued, error);
+        await queued.remove();
+        reconciled += 1;
+        continue;
+      }
+      let result;
+      try {
+        result = slicingResultForJobSchema(job).parse(
+          queued.returnvalue ?? this.exhaustedRetryableResult(queued),
+        );
+      } catch (error) {
+        await this.deadLetter(queued, dispatchId, job, error);
+        await queued.remove();
+        reconciled += 1;
+        continue;
+      }
       const resultFingerprintSha256 = slicingResultFingerprint(result);
       if (result.kind === "candidate_estimate") {
         await this.candidateEstimates.ingest({ result });
       }
-      await this.recordResultReceipt(
-        result.jobId,
-        result.kind,
+      await this.results.ingest({
+        dispatchId,
+        job,
+        result,
         resultFingerprintSha256,
-        result as unknown as Prisma.InputJsonObject,
-      );
+      });
       await queued.remove();
       reconciled += 1;
     }
@@ -253,7 +332,147 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
     }
   }
 
-  private async assertDurableDispatch(job: SlicingJob): Promise<void> {
+  private exhaustedRetryableResult(queued: {
+    attemptsMade: number;
+    opts: { attempts?: number };
+    progress: unknown;
+  }): unknown {
+    const attempts = queued.opts.attempts ?? 1;
+    if (queued.attemptsMade < attempts) {
+      throw new Error("retryable slicing job has not exhausted its attempts");
+    }
+    const progress = queued.progress as {
+      type?: unknown;
+      queueAttempt?: unknown;
+      result?: unknown;
+    };
+    if (
+      progress?.type !== "retryable-slicing-result" ||
+      progress.queueAttempt !== queued.attemptsMade
+    ) {
+      throw new Error(
+        "failed slicing job has no current validated retryable result envelope",
+      );
+    }
+    return progress.result;
+  }
+
+  private async deadLetter(
+    queued: QuarantinedQueueJob,
+    dispatchId: string,
+    job: SlicingJob,
+    error: unknown,
+  ): Promise<void> {
+    const evidence = queueEvidence(queued);
+    const terminalEvidenceFingerprintSha256 = queueEvidenceFingerprint(
+      queued,
+      evidence,
+    );
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`
+        SELECT pg_advisory_xact_lock(hashtextextended(${dispatchId}, 0))::text
+      `;
+      const messageType = `slicing.${job.kind}.dead-lettered`;
+      const existing = await transaction.outboxMessage.findFirst({
+        where: {
+          aggregateType: "SlicingDispatchDeadLetter",
+          aggregateId: dispatchId,
+          messageType,
+        },
+        select: { id: true },
+      });
+      if (existing) return;
+      await transaction.outboxMessage.create({
+        data: {
+          deduplicationKey: `slicer-dead-letter:v1:${dispatchId}`,
+          aggregateType: "SlicingDispatchDeadLetter",
+          aggregateId: dispatchId,
+          messageType,
+          schemaVersion: job.contractVersion,
+          payload: {
+            dispatchId,
+            jobId: job.jobId,
+            queueJobId: queued.id ?? null,
+            attemptsMade: queued.attemptsMade,
+            configuredAttempts: queued.opts.attempts ?? null,
+            terminalEvidenceFingerprintSha256,
+            failure: safeLastError(error),
+            workerFailure: safeLastError(
+              queued.failedReason
+                ? new Error(queued.failedReason)
+                : new Error("queue job returned no validated terminal result"),
+            ),
+            jobData: evidence.jobData,
+            terminalReturnValue: evidence.terminalReturnValue,
+            progress: evidence.progress,
+          },
+        },
+      });
+    });
+  }
+
+  private async deadLetterQueueEntry(
+    queued: QuarantinedQueueJob,
+    error: unknown,
+  ): Promise<void> {
+    const evidence = queueEvidence(queued);
+    const fingerprintSha256 = queueEvidenceFingerprint(queued, evidence);
+    const uuidHex = [...fingerprintSha256.slice(0, 32)];
+    uuidHex[12] = "5";
+    uuidHex[16] = ((Number.parseInt(uuidHex[16]!, 16) & 0x3) | 0x8).toString(
+      16,
+    );
+    const aggregateId = [
+      uuidHex.slice(0, 8).join(""),
+      uuidHex.slice(8, 12).join(""),
+      uuidHex.slice(12, 16).join(""),
+      uuidHex.slice(16, 20).join(""),
+      uuidHex.slice(20, 32).join(""),
+    ].join("-");
+
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`
+        SELECT pg_advisory_xact_lock(hashtextextended(${aggregateId}, 0))::text
+      `;
+      const messageType = "slicing.queue-entry.dead-lettered";
+      const existing = await transaction.outboxMessage.findFirst({
+        where: {
+          aggregateType: "SlicingQueueDeadLetter",
+          aggregateId,
+          messageType,
+        },
+        select: { id: true },
+      });
+      if (existing) return;
+      await transaction.outboxMessage.create({
+        data: {
+          deduplicationKey: `slicer-queue-dead-letter:v1:${fingerprintSha256}`,
+          aggregateType: "SlicingQueueDeadLetter",
+          aggregateId,
+          messageType,
+          schemaVersion: 1,
+          payload: {
+            queueJobId: queued.id ?? null,
+            queueJobName: queued.name,
+            queueEntryFingerprintSha256: fingerprintSha256,
+            attemptsMade: queued.attemptsMade,
+            configuredAttempts: queued.opts.attempts ?? null,
+            failure: safeLastError(error),
+            workerFailure: safeLastError(
+              queued.failedReason
+                ? new Error(queued.failedReason)
+                : new Error("queue job has no validated durable dispatch"),
+            ),
+            jobData: evidence.jobData,
+            terminalReturnValue: evidence.terminalReturnValue,
+            progress: evidence.progress,
+          },
+        },
+      });
+    });
+  }
+
+  private async assertDurableDispatch(job: SlicingJob): Promise<string> {
     const { SlicingJobSchema, slicingDispatchAttemptKey } =
       await import("@taven/slicer-contracts");
     const dispatch = await this.prisma.outboxMessage.findUnique({
@@ -272,53 +491,21 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
       dispatch.messageType !== expectedMessageType ||
       dispatch.schemaVersion !== job.contractVersion
     ) {
-      throw new Error("completed slicing job has no matching durable dispatch");
+      throw new InvalidSlicingQueueEntryError(
+        "completed slicing job has no matching durable dispatch",
+      );
     }
     const payload = dispatch.payload as Record<string, unknown>;
-    const persistedJob = SlicingJobSchema.parse(payload.job);
-    if (JSON.stringify(persistedJob) !== JSON.stringify(job)) {
-      throw new Error(
+    const persistedJob = SlicingJobSchema.safeParse(payload.job);
+    if (
+      !persistedJob.success ||
+      JSON.stringify(persistedJob.data) !== JSON.stringify(job)
+    ) {
+      throw new InvalidSlicingQueueEntryError(
         "completed slicing job differs from its durable dispatch",
       );
     }
-  }
-
-  private async recordResultReceipt(
-    jobId: string,
-    kind: SlicingJob["kind"],
-    resultFingerprintSha256: string,
-    result: Prisma.InputJsonObject,
-  ): Promise<void> {
-    await this.prisma.$transaction(async (transaction) => {
-      await transaction.$queryRaw`
-        SELECT pg_advisory_xact_lock(hashtextextended(${jobId}, 0))::text
-      `;
-      const messageType = `slicing.${kind}.result-received`;
-      const existing = await transaction.outboxMessage.findFirst({
-        where: {
-          aggregateType: "SlicingResult",
-          aggregateId: jobId,
-          messageType,
-        },
-      });
-      if (existing) {
-        const payload = existing.payload as Record<string, unknown>;
-        if (payload.resultFingerprintSha256 !== resultFingerprintSha256) {
-          throw new Error("slicing job already has a different result receipt");
-        }
-        return;
-      }
-      await transaction.outboxMessage.create({
-        data: {
-          deduplicationKey: `slicer-result:v2:${resultFingerprintSha256}`,
-          aggregateType: "SlicingResult",
-          aggregateId: jobId,
-          messageType,
-          schemaVersion: 2,
-          payload: { resultFingerprintSha256, result },
-        },
-      });
-    });
+    return dispatch.id;
   }
 }
 

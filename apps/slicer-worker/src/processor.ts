@@ -5,10 +5,15 @@ import {
   SlicingJobSchema,
   slicingResultForJobSchema,
   productionArtifactObjectKey,
+  referenceArtifactObjectKey,
   type SlicingJob,
   type SlicingResult,
 } from "@taven/slicer-contracts";
-import { failureOutcome, SlicingWorkerError } from "./failures.js";
+import {
+  failureOutcome,
+  RetryableSlicingResultError,
+  SlicingWorkerError,
+} from "./failures.js";
 import {
   canonicalizeModel,
   inspectModel,
@@ -136,10 +141,17 @@ export class SlicingProcessor {
       const result = await this.processJob(job, workspace);
       return slicingResultForJobSchema(job).parse(result);
     } catch (error) {
-      return slicingResultForJobSchema(job).parse({
+      const result = slicingResultForJobSchema(job).parse({
         ...envelope(job, this.config.engine),
         outcome: failureOutcome(error),
       });
+      if (
+        result.outcome.status === "failed" &&
+        result.outcome.failureClass === "retryable_infrastructure"
+      ) {
+        throw new RetryableSlicingResultError(result);
+      }
+      return result;
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -172,7 +184,7 @@ export class SlicingProcessor {
         job.input.referenceProfile,
         job.input.printConfig,
       ]);
-      const objectKey = `reference-slices/${job.jobId}/toolpath.gcode`;
+      const objectKey = referenceArtifactObjectKey(job.inputFingerprintSha256);
       const artifact = await this.reusableArtifact(
         objectKey,
         "text/x.gcode",
@@ -311,6 +323,7 @@ export class SlicingProcessor {
             requireMetrics: false,
           })
         ).artifactBytes,
+      job.inputFingerprintSha256,
     );
     const totals = sumPlates(plates);
     return {
@@ -432,24 +445,58 @@ export class SlicingProcessor {
     objectKey: string,
     contentType: string,
     produce: () => Promise<Uint8Array>,
+    immutableInputFingerprintSha256?: string,
   ): Promise<{ bytes: Uint8Array; sha256: string }> {
     const cached = await this.store.read(
       objectKey,
       this.config.limits.artifactBytes,
     );
-    if (cached) return cached;
+    if (cached) {
+      this.assertReusableIdentity(cached, immutableInputFingerprintSha256);
+      return cached;
+    }
     const bytes = await produce();
     const producedSha256 = sha256(bytes);
     try {
-      const stored = await this.store.write(objectKey, bytes, contentType);
+      const stored = await this.store.write(
+        objectKey,
+        bytes,
+        contentType,
+        immutableInputFingerprintSha256,
+      );
       return { bytes, sha256: stored.sha256 };
     } catch (error) {
       const winner = await this.store.read(
         objectKey,
         this.config.limits.artifactBytes,
       );
-      if (winner?.sha256 === producedSha256) return winner;
+      if (winner?.sha256 === producedSha256) {
+        this.assertReusableIdentity(winner, immutableInputFingerprintSha256);
+        return winner;
+      }
       throw error;
+    }
+  }
+
+  private assertReusableIdentity(
+    stored: {
+      sha256: string;
+      immutableInputFingerprintSha256?: string;
+      metadataContentSha256?: string;
+    },
+    immutableInputFingerprintSha256?: string,
+  ): void {
+    if (
+      immutableInputFingerprintSha256 !== undefined &&
+      (stored.immutableInputFingerprintSha256 !==
+        immutableInputFingerprintSha256 ||
+        stored.metadataContentSha256 !== stored.sha256)
+    ) {
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "INVALID_MODEL",
+        "Cached production artifact does not match its immutable slicing input",
+      );
     }
   }
 

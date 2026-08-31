@@ -34,6 +34,10 @@ x-storage-contract: &storage-contract
     contract-databases:
       condition: service_completed_successfully
 
+configs:
+  taven-orca-runner:
+    file: ../../apps/slicer-worker/orca-runner.sh
+
 services:
   postgres:
     # ported from Studio81Labs/nexcue@314cec8972589780072e641591b16eca9805d7dd
@@ -263,12 +267,12 @@ services:
 
   slicer-volume-init:
     profiles: ["worker"]
-    image: taven/orca-runner:local
+    image: taven/orca-slicer:2.4.2-fixtures
     platform: linux/amd64
     build:
       context: ../..
       dockerfile: apps/slicer-worker/Orca.Dockerfile
-      target: runner
+      target: runtime
       platforms: ["linux/amd64"]
     user: "0:0"
     network_mode: none
@@ -284,19 +288,22 @@ services:
 
   orca-runner:
     profiles: ["worker"]
-    image: taven/orca-runner:local
+    image: taven/orca-slicer:2.4.2-fixtures
     platform: linux/amd64
     build:
       context: ../..
       dockerfile: apps/slicer-worker/Orca.Dockerfile
-      target: runner
+      target: runtime
       platforms: ["linux/amd64"]
     init: true
+    user: "0:0"
     network_mode: none
     read_only: true
     cap_drop: ["ALL"]
-    security_opt: ["no-new-privileges:true"]
+    cap_add: ["SYS_ADMIN", "SETUID", "SETGID", "SETPCAP"]
+    security_opt: ["no-new-privileges:true", "seccomp=unconfined"]
     pids_limit: 320
+    entrypoint: ["/bin/sh", "/usr/local/bin/taven-orca-runner"]
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001,mode=0700
       - /work:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=0700
@@ -306,10 +313,14 @@ services:
       TAVEN_SLICER_MAX_DIAGNOSTIC_BYTES: "1048576"
     volumes:
       - slicerexchange:/var/run/taven-orca
+    configs:
+      - source: taven-orca-runner
+        target: /usr/local/bin/taven-orca-runner
+        mode: 0444
     depends_on:
       slicer-volume-init:
         condition: service_completed_successfully
-    restart: "no"
+    restart: unless-stopped
 
   slicing-dispatcher:
     profiles: ["worker"]

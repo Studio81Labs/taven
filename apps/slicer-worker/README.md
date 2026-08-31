@@ -6,10 +6,10 @@ and 3MF sources, writes selected canonical geometries, reuses machine-occupancy
 metric caches, and invokes the pinned OrcaSlicer runtime. The legacy v1 queue
 retains its fixture drain handler only.
 
-The worker is intentionally absent from `pnpm dev`. Start it explicitly with
-`pnpm slicer-worker:dev` when Redis and S3-compatible object storage are
-running. Host-only execution additionally requires OrcaSlicer, `prlimit`, and
-`bubblewrap`. The production runtime is selected in
+The worker is intentionally absent from `pnpm dev`. Start the Compose worker
+profile explicitly with `pnpm stack:worker` when local slicing is required.
+The worker requires its isolated Orca sidecar and does not execute an Orca
+binary directly on the host. The production runtime is selected in
 [ADR 0008](../../docs/decisions/0008-pin-orcaslicer-v2-4-2.md):
 OrcaSlicer v2.4.2 from a verified upstream AppImage, wrapped in an independently
 built OCI image with a resolved profile-bundle hash. The independently built
@@ -21,11 +21,15 @@ verify them explicitly with `pnpm slicer-worker:orca:build` and
 `pnpm stack:worker` builds the backend outbox dispatcher, separate Node worker,
 and exact-Orca containers without a Docker socket. The Node consumer is the
 only process with private Redis and S3 access. It passes checksummed geometry
-and profile bytes through a private volume to the non-root Orca sidecar, which
-has `network_mode: none`, a read-only root, no capabilities, no credentials,
-and per-process `prlimit` and deadline enforcement. Both sides delete every job
-workspace after its terminal result. The one-shot volume initializer has only
-`CHOWN`; it exits before either app starts. All worker services remain opt-in.
+and profile bytes through a private volume to the isolated Orca sidecar, which
+has `network_mode: none`, a read-only root, no credentials, and per-process
+`prlimit` and deadline enforcement. Its minimal root broker owns only the mount
+namespace capabilities needed to create a fresh sandbox; every Orca child runs
+as UID 10001 with no capabilities, a cleared environment, and only its own
+read-only inputs plus writable output and temporary directories. Both sides
+reclaim every job workspace after its terminal result or lease expiry. The
+one-shot volume initializer has only `CHOWN`; it exits before either app starts.
+All worker services remain opt-in.
 
 Profile and configuration revisions are provider-neutral immutable S3 objects
 at `slicer-revisions/<content-sha256>/settings.json`. Their bytes must hash to

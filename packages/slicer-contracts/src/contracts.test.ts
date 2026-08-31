@@ -23,6 +23,7 @@ import {
   geometrySelectionSha256,
   machineOccupancyCacheIdentitySha256,
   productionArtifactObjectKey,
+  referenceArtifactObjectKey,
   slicingDispatchAttemptKey,
   slicingInputFingerprint,
   slicingJobEffectFingerprint,
@@ -769,7 +770,9 @@ describe("versioned slicing results", () => {
       metrics: { ...sliceMetrics, plateCount: 1 },
       findings: [],
       artifact: {
-        objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+        objectKey: referenceArtifactObjectKey(
+          referenceJob.inputFingerprintSha256,
+        ),
         sha256: hash("4"),
       },
     });
@@ -977,7 +980,9 @@ describe("versioned slicing results", () => {
           metrics: { ...sliceMetrics, plateCount: 1 },
           findings: duplicateFindings,
           artifact: {
-            objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+            objectKey: referenceArtifactObjectKey(
+              referenceJob.inputFingerprintSha256,
+            ),
             sha256: hash("4"),
           },
         }),
@@ -1043,7 +1048,9 @@ describe("versioned slicing results", () => {
       status: "succeeded" as const,
       metrics: { ...sliceMetrics, plateCount: 1 as const },
       artifact: {
-        objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+        objectKey: referenceArtifactObjectKey(
+          referenceJob.inputFingerprintSha256,
+        ),
         sha256: hash("4"),
       },
     };
@@ -1072,7 +1079,9 @@ describe("versioned slicing results", () => {
         metrics: { ...sliceMetrics, plateCount: 1 },
         findings: [],
         artifact: {
-          objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+          objectKey: referenceArtifactObjectKey(
+            referenceJob.inputFingerprintSha256,
+          ),
           sha256: hash("4"),
         },
       }),
@@ -1493,7 +1502,7 @@ describe("versioned slicing results", () => {
       metrics: { ...sliceMetrics, plateCount: 1 },
       findings: [],
       artifact: {
-        objectKey: `reference-slices/${ids.geometryB}/toolpath.gcode`,
+        objectKey: `reference-slices/${hash("f")}/toolpath.gcode`,
         sha256: hash("4"),
       },
     });
@@ -1646,7 +1655,7 @@ describe("versioned slicing results", () => {
       metrics: { ...sliceMetrics, plateCount: 1 },
       findings: [],
       artifact: {
-        objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+        objectKey: referenceArtifactObjectKey(jobA.inputFingerprintSha256),
         sha256: hash("4"),
       },
     });

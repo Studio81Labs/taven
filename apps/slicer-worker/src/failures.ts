@@ -1,4 +1,4 @@
-import type { SlicingFailure } from "@taven/slicer-contracts";
+import type { SlicingFailure, SlicingResult } from "@taven/slicer-contracts";
 
 type FailureClass = SlicingFailure["failureClass"];
 type FailureCode = SlicingFailure["code"];
@@ -12,6 +12,18 @@ export class SlicingWorkerError extends Error {
   ) {
     super(safeMessage(message));
     this.name = "SlicingWorkerError";
+  }
+}
+
+/**
+ * Carries the validated, safe failure envelope while rejecting the BullMQ job.
+ * The queue adapter stores the envelope as progress before rethrowing so the
+ * backend can durably ingest it only after BullMQ exhausts its retries.
+ */
+export class RetryableSlicingResultError extends Error {
+  constructor(readonly result: SlicingResult) {
+    super("Retryable slicing infrastructure failure");
+    this.name = "RetryableSlicingResultError";
   }
 }
 

@@ -319,9 +319,50 @@ export class OrcaCliEngine implements OrcaEngine {
       "--unshare-all",
       "--die-with-parent",
       "--new-session",
+      "--tmpfs",
+      "/",
+      "--dir",
+      "/opt",
       "--ro-bind",
-      "/",
-      "/",
+      "/opt/orca",
+      "/opt/orca",
+      "--dir",
+      "/usr",
+      "--ro-bind",
+      "/usr",
+      "/usr",
+      "--dir",
+      "/lib",
+      "--ro-bind-try",
+      "/lib",
+      "/lib",
+      "--dir",
+      "/lib64",
+      "--ro-bind-try",
+      "/lib64",
+      "/lib64",
+      "--dir",
+      "/etc",
+      "--dir",
+      "/etc/fonts",
+      "--ro-bind-try",
+      "/etc/fonts",
+      "/etc/fonts",
+      "--dir",
+      "/etc/ssl",
+      "--ro-bind-try",
+      "/etc/ssl/certs",
+      "/etc/ssl/certs",
+      "--symlink",
+      "usr/bin",
+      "/bin",
+      "--symlink",
+      "usr/sbin",
+      "/sbin",
+      "--dir",
+      "/work",
+      "--dir",
+      "/tmp",
       "--bind",
       input.workspace,
       "/work",
@@ -492,6 +533,13 @@ export class OrcaSidecarEngine implements OrcaEngine {
     );
     let runnerOwnsCleanup = false;
     try {
+      await writeFile(
+        path.join(requestDirectory, "lease-expires-at"),
+        `${Math.ceil(
+          (Date.now() + this.config.timeoutMilliseconds + 60_000) / 1_000,
+        )}\n`,
+        { mode: 0o400 },
+      );
       const profileDirectory = path.join(requestDirectory, "profiles");
       const settingsDirectory = path.join(profileDirectory, "settings");
       const filamentsDirectory = path.join(profileDirectory, "filaments");
@@ -518,12 +566,7 @@ export class OrcaSidecarEngine implements OrcaEngine {
       if (platePlan && input.artifactFormat === "gcode_3mf") {
         await writeFile(
           path.join(requestDirectory, "assembly.json"),
-          JSON.stringify(
-            assemblyList(
-              path.join(requestDirectory, "geometry.stl"),
-              platePlan,
-            ),
-          ),
+          JSON.stringify(assemblyList("/work/geometry.stl", platePlan)),
         );
       }
       await writeFile(

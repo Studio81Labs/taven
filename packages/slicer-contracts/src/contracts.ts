@@ -144,6 +144,12 @@ export function productionArtifactObjectKey(
   return `gcode/${UuidSchema.parse(acceptedJobId)}/toolpaths.${PRODUCTION_ARTIFACT_SUFFIX[ProductionArtifactFormatSchema.parse(format)]}`;
 }
 
+export function referenceArtifactObjectKey(
+  inputFingerprintSha256: string,
+): string {
+  return `reference-slices/${Sha256Schema.parse(inputFingerprintSha256)}/toolpath.gcode`;
+}
+
 const SafeIdentifierSchema = z
   .string()
   .min(1)
@@ -1315,12 +1321,12 @@ const ReferenceSliceResultBase = z
     if (
       value.outcome.status === "succeeded" &&
       value.outcome.artifact.objectKey !==
-        `reference-slices/${value.jobId}/toolpath.gcode`
+        referenceArtifactObjectKey(value.inputFingerprintSha256)
     ) {
       context.addIssue({
         code: "custom",
         path: ["outcome", "artifact", "objectKey"],
-        message: "must be the deterministic artifact key for jobId",
+        message: "must be the deterministic artifact key for immutable input",
       });
     }
   });

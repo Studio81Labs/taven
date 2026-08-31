@@ -7,6 +7,7 @@ import {
   type SlicingQueueConfig,
 } from "./slicing.config";
 import { SlicingQueuePublisher } from "./slicing-queue.publisher";
+import { SlicingResultIngestionService } from "./slicing-result-ingestion.service";
 import { SLICING_QUEUE, SLICING_QUEUE_CONFIG } from "./slicing.tokens";
 
 @Module({
@@ -24,6 +25,7 @@ import { SLICING_QUEUE, SLICING_QUEUE_CONFIG } from "./slicing.tokens";
         return new Queue(SLICING_QUEUE_NAME, { connection: config.connection });
       },
     },
+    SlicingResultIngestionService,
     SlicingQueuePublisher,
   ],
   exports: [SlicingQueuePublisher],

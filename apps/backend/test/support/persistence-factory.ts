@@ -465,7 +465,7 @@ export class PersistenceFactory {
         [
           itemGeometryId,
           modelFileId,
-          `canonical/${this.scope}/${name}/${index}`,
+          `geometries/${itemGeometryId}/canonical`,
           this.hash(`${name}:geometry:${index}`),
           "test-canonicalizer",
           1,

@@ -81,6 +81,13 @@ describe("Orca sidecar protocol", () => {
           "2\n",
         );
         expect(
+          Number(
+            (
+              await readFile(path.join(request, "lease-expires-at"), "utf8")
+            ).trim(),
+          ),
+        ).toBeGreaterThan(Math.floor(Date.now() / 1_000));
+        expect(
           await readdir(path.join(request, "profiles", "settings")),
         ).toEqual(["0.json"]);
         expect(
@@ -167,7 +174,7 @@ describe("Orca sidecar protocol", () => {
             need_arrange: true,
             objects: [
               {
-                path: path.join(request, "geometry.stl"),
+                path: "/work/geometry.stl",
                 count,
                 filaments: [1],
               },

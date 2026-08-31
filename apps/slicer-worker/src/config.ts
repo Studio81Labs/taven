@@ -14,7 +14,7 @@ export type WorkerConfig = {
     version: string;
     imageSha256: string;
     timeoutMilliseconds: number;
-    runnerRoot: string | null;
+    runnerRoot: string;
   };
   limits: {
     sourceBytes: number;
@@ -95,7 +95,7 @@ export function readWorkerConfig(
         15 * 60 * 1_000,
         "TAVEN_ORCA_TIMEOUT_MILLISECONDS",
       ),
-      runnerRoot: env.TAVEN_ORCA_RUNNER_ROOT?.trim() || null,
+      runnerRoot: required(env, "TAVEN_ORCA_RUNNER_ROOT"),
     },
     limits: {
       sourceBytes: positiveInteger(

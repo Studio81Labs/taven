@@ -14,6 +14,8 @@ const SAFE_KEY =
 export type StoredBytes = {
   bytes: Uint8Array;
   sha256: string;
+  immutableInputFingerprintSha256?: string;
+  metadataContentSha256?: string;
 };
 
 export interface WorkerObjectStore {
@@ -26,6 +28,7 @@ export interface WorkerObjectStore {
     objectKey: string,
     bytes: Uint8Array,
     contentType: string,
+    immutableInputFingerprintSha256?: string,
   ): Promise<{ sha256: string; cacheHit: boolean }>;
   delete(objectKey: string): Promise<void>;
 }
@@ -121,7 +124,21 @@ export class S3WorkerObjectStore implements WorkerObjectStore {
           "Stored object checksum does not match its immutable identity",
         );
       }
-      return { bytes, sha256: digest };
+      return {
+        bytes,
+        sha256: digest,
+        ...(response.Metadata?.["taven-input-fingerprint-sha256"]
+          ? {
+              immutableInputFingerprintSha256:
+                response.Metadata["taven-input-fingerprint-sha256"],
+            }
+          : {}),
+        ...(response.Metadata?.["taven-content-sha256"]
+          ? {
+              metadataContentSha256: response.Metadata["taven-content-sha256"],
+            }
+          : {}),
+      };
     } catch (error) {
       if (isNotFound(error)) return null;
       if (error instanceof SlicingWorkerError) throw error;
@@ -138,17 +155,24 @@ export class S3WorkerObjectStore implements WorkerObjectStore {
     objectKey: string,
     bytes: Uint8Array,
     contentType: string,
+    immutableInputFingerprintSha256?: string,
   ): Promise<{ sha256: string; cacheHit: boolean }> {
     assertKey(objectKey);
     const digest = sha256(bytes);
     try {
       const existing = await this.read(objectKey, bytes.byteLength);
       if (existing) {
-        if (existing.sha256 !== digest) {
+        if (
+          existing.sha256 !== digest ||
+          (immutableInputFingerprintSha256 !== undefined &&
+            (existing.immutableInputFingerprintSha256 !==
+              immutableInputFingerprintSha256 ||
+              existing.metadataContentSha256 !== digest))
+        ) {
           throw new SlicingWorkerError(
             "deterministic_invalid",
             "INVALID_MODEL",
-            "Immutable object key already contains different bytes",
+            "Immutable object key already contains different bytes or identity",
           );
         }
         return { sha256: digest, cacheHit: true };
@@ -160,6 +184,15 @@ export class S3WorkerObjectStore implements WorkerObjectStore {
           Body: bytes,
           ContentLength: bytes.byteLength,
           ContentType: contentType,
+          ...(immutableInputFingerprintSha256 === undefined
+            ? {}
+            : {
+                Metadata: {
+                  "taven-input-fingerprint-sha256":
+                    immutableInputFingerprintSha256,
+                  "taven-content-sha256": digest,
+                },
+              }),
           ChecksumAlgorithm: "SHA256",
           ChecksumSHA256: Buffer.from(digest, "hex").toString("base64"),
           IfNoneMatch: "*",
@@ -170,7 +203,13 @@ export class S3WorkerObjectStore implements WorkerObjectStore {
       if (error instanceof SlicingWorkerError) throw error;
       if (isPreconditionFailed(error)) {
         const winner = await this.read(objectKey, bytes.byteLength);
-        if (winner?.sha256 === digest) {
+        if (
+          winner?.sha256 === digest &&
+          (immutableInputFingerprintSha256 === undefined ||
+            (winner.immutableInputFingerprintSha256 ===
+              immutableInputFingerprintSha256 &&
+              winner.metadataContentSha256 === digest))
+        ) {
           return { sha256: digest, cacheHit: true };
         }
       }

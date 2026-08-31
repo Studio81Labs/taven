@@ -3,12 +3,14 @@ import path from "node:path";
 import {
   geometrySelectionSha256,
   machineOccupancyCacheIdentitySha256,
+  referenceArtifactObjectKey,
   slicingInputFingerprint,
   type SlicingJob,
   type SlicingJobKind,
 } from "@taven/slicer-contracts";
 import { describe, expect, it } from "vitest";
 import type { WorkerConfig } from "./config.js";
+import { RetryableSlicingResultError, SlicingWorkerError } from "./failures.js";
 import { sha256, type WorkerObjectStore } from "./object-store.js";
 import type { OrcaEngine, OrcaSliceRequest } from "./orca-engine.js";
 import { SlicingProcessor } from "./processor.js";
@@ -28,39 +30,91 @@ const ids = {
 
 class MemoryStore implements WorkerObjectStore {
   readonly objects = new Map<string, Uint8Array>();
+  readonly metadata = new Map<
+    string,
+    {
+      immutableInputFingerprintSha256: string;
+      metadataContentSha256: string;
+    }
+  >();
   readonly writes: string[] = [];
 
   async read(key: string, maximum: number, expected?: string) {
     const bytes = this.objects.get(key);
     if (!bytes) return null;
-    if (bytes.byteLength > maximum) throw new Error("too large");
+    if (bytes.byteLength > maximum)
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "RESOURCE_LIMIT_EXCEEDED",
+        "too large",
+      );
     const digest = sha256(bytes);
-    if (expected && expected !== digest) throw new Error("checksum mismatch");
-    return { bytes, sha256: digest };
+    if (expected && expected !== digest)
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "INVALID_MODEL",
+        "checksum mismatch",
+      );
+    return { bytes, sha256: digest, ...this.metadata.get(key) };
   }
 
-  async write(key: string, bytes: Uint8Array) {
+  async write(
+    key: string,
+    bytes: Uint8Array,
+    _contentType?: string,
+    immutableInputFingerprintSha256?: string,
+  ) {
     const existing = this.objects.get(key);
-    if (existing && sha256(existing) !== sha256(bytes))
-      throw new Error("conflict");
+    const digest = sha256(bytes);
+    const existingMetadata = this.metadata.get(key);
+    if (
+      existing &&
+      (sha256(existing) !== digest ||
+        (immutableInputFingerprintSha256 !== undefined &&
+          (existingMetadata?.immutableInputFingerprintSha256 !==
+            immutableInputFingerprintSha256 ||
+            existingMetadata.metadataContentSha256 !== digest)))
+    )
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "INVALID_MODEL",
+        "conflict",
+      );
     this.objects.set(key, new Uint8Array(bytes));
+    if (immutableInputFingerprintSha256 !== undefined) {
+      this.metadata.set(key, {
+        immutableInputFingerprintSha256,
+        metadataContentSha256: digest,
+      });
+    }
     this.writes.push(key);
-    return { sha256: sha256(bytes), cacheHit: existing !== undefined };
+    return { sha256: digest, cacheHit: existing !== undefined };
   }
 
   async delete(key: string) {
     this.objects.delete(key);
+    this.metadata.delete(key);
   }
 }
 
 class ConflictingWriteStore extends MemoryStore {
   conflictKey: string | null = null;
 
-  override async write(key: string, bytes: Uint8Array) {
+  override async write(
+    key: string,
+    bytes: Uint8Array,
+    contentType?: string,
+    immutableInputFingerprintSha256?: string,
+  ) {
     if (key === this.conflictKey && !this.objects.has(key)) {
       this.objects.set(key, new TextEncoder().encode("different artifact"));
     }
-    return super.write(key, bytes);
+    return super.write(
+      key,
+      bytes,
+      contentType,
+      immutableInputFingerprintSha256,
+    );
   }
 }
 
@@ -86,7 +140,7 @@ const config: Pick<WorkerConfig, "engine" | "limits"> = {
     version: "2.4.2",
     imageSha256: "a".repeat(64),
     timeoutMilliseconds: 1_000,
-    runnerRoot: null,
+    runnerRoot: "/unused",
   },
   limits: {
     sourceBytes: 10 * 1024 * 1024,
@@ -110,6 +164,46 @@ function envelope<K extends SlicingJobKind>(kind: K, input: unknown) {
 }
 
 describe("SlicingProcessor", () => {
+  it("rejects with a validated envelope for retryable infrastructure failures", async () => {
+    const store = new MemoryStore();
+    store.read = async () => {
+      throw new SlicingWorkerError(
+        "retryable_infrastructure",
+        "OBJECT_STORE_UNAVAILABLE",
+        "temporary object storage failure",
+        5_000,
+      );
+    };
+    const input = {
+      source: {
+        modelFileId: ids.source,
+        format: "stl",
+        objectKey: `models/${ids.source}/source`,
+        contentSha256: "a".repeat(64),
+      },
+      operation: { mode: "inspect_source" },
+      inspectionRevision: "inspection-v1",
+      inspectionConfigSha256: "b".repeat(64),
+      canonicalizerRevision: "canonicalizer-v1",
+      canonicalizerConfigSha256: "c".repeat(64),
+    };
+
+    await expect(
+      new SlicingProcessor(store, new FakeEngine(), config).process(
+        envelope("model_inspection", input),
+      ),
+    ).rejects.toMatchObject({
+      name: "RetryableSlicingResultError",
+      result: {
+        outcome: {
+          status: "failed",
+          failureClass: "retryable_infrastructure",
+          code: "OBJECT_STORE_UNAVAILABLE",
+        },
+      },
+    } satisfies Partial<RetryableSlicingResultError>);
+  });
+
   it("returns inspection metadata and no canonical artifact during discovery", async () => {
     const store = new MemoryStore();
     const engine = new FakeEngine();
@@ -148,7 +242,7 @@ describe("SlicingProcessor", () => {
     expect(engine.calls).toHaveLength(0);
   });
 
-  it("reuses a persisted reference artifact without regenerating timestamped G-code", async () => {
+  it("reuses a persisted reference artifact across dispatch jobs without regenerating timestamped G-code", async () => {
     const store = new MemoryStore();
     const engine = new FakeEngine();
     const geometry = await readFile(
@@ -196,15 +290,21 @@ describe("SlicingProcessor", () => {
       partsPerPlate: 1,
     }) as SlicingJob;
     const processor = new SlicingProcessor(store, engine, config);
+    const replayJob = {
+      ...job,
+      jobId: ids.shipment,
+      correlationId: ids.shipment,
+      idempotencyKey: `slicer:v2:reference_slice:${ids.shipment}:${job.inputFingerprintSha256}`,
+    } as SlicingJob;
 
     const first = await processor.process(job);
-    const second = await processor.process(job);
+    const second = await processor.process(replayJob);
 
-    expect(first).toEqual(second);
     expect(first.outcome.status).toBe("succeeded");
+    expect(second.outcome).toEqual(first.outcome);
     expect(engine.calls).toHaveLength(1);
     expect(store.writes).toEqual([
-      `reference-slices/${ids.job}/toolpath.gcode`,
+      referenceArtifactObjectKey(job.inputFingerprintSha256),
     ]);
   });
 
@@ -349,8 +449,9 @@ describe("SlicingProcessor", () => {
       },
     };
 
+    const job = envelope("production_slice", input);
     const result = await new SlicingProcessor(store, engine, config).process(
-      envelope("production_slice", input),
+      job,
     );
 
     expect(result.outcome.status).toBe("succeeded");
@@ -358,6 +459,27 @@ describe("SlicingProcessor", () => {
       copies: 5,
       copiesPerPlate: [2, 2, 1],
       artifactFormat: "gcode_3mf",
+    });
+    const productionKey = `gcode/${ids.job}/toolpaths.gcode.3mf`;
+    expect(store.metadata.get(productionKey)).toEqual({
+      immutableInputFingerprintSha256: job.inputFingerprintSha256,
+      metadataContentSha256: sha256(store.objects.get(productionKey)!),
+    });
+    const callsAfterFirstRun = engine.calls.length;
+    await expect(
+      new SlicingProcessor(store, engine, config).process(job),
+    ).resolves.toMatchObject({ outcome: { status: "succeeded" } });
+    expect(engine.calls).toHaveLength(callsAfterFirstRun + 2);
+
+    store.metadata.delete(productionKey);
+    await expect(
+      new SlicingProcessor(store, engine, config).process(job),
+    ).resolves.toMatchObject({
+      outcome: {
+        status: "failed",
+        failureClass: "deterministic_invalid",
+        code: "INVALID_MODEL",
+      },
     });
 
     const plainResult = await new SlicingProcessor(
@@ -401,7 +523,6 @@ describe("SlicingProcessor", () => {
       `slicer-revisions/${configHash}/settings.json`,
       printConfig,
     );
-    store.conflictKey = `reference-slices/${ids.job}/toolpath.gcode`;
     const bodyIds = ["body-0001"];
     const input = {
       geometry: {
@@ -425,6 +546,9 @@ describe("SlicingProcessor", () => {
       },
       partsPerPlate: 1,
     };
+    store.conflictKey = referenceArtifactObjectKey(
+      slicingInputFingerprint("reference_slice", input),
+    );
 
     const result = await new SlicingProcessor(store, engine, config).process(
       envelope("reference_slice", input),

@@ -173,7 +173,7 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
           ),
           findings: [],
           artifact: {
-            objectKey: `reference-slices/${job.jobId}/toolpath.gcode`,
+            objectKey: `reference-slices/${job.inputFingerprintSha256}/toolpath.gcode`,
             sha256: artifactSha256,
           },
         },

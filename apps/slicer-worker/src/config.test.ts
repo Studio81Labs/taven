@@ -15,6 +15,7 @@ describe("worker configuration", () => {
       TAVEN_S3_ACCESS_KEY_ID: "worker",
       TAVEN_S3_SECRET_ACCESS_KEY: "secret-value",
       TAVEN_S3_FORCE_PATH_STYLE: "false",
+      TAVEN_ORCA_RUNNER_ROOT: "/var/run/taven-orca",
     });
     expect(config.redisUrl).toContain("rediss:");
     expect(config.storage.endpoint).toBe("https://storage.internal/");

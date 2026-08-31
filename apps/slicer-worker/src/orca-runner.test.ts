@@ -1,0 +1,80 @@
+import { execFile } from "node:child_process";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, it } from "vitest";
+
+const execute = promisify(execFile);
+const cleanup: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    cleanup
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
+});
+
+async function exists(candidate: string): Promise<boolean> {
+  try {
+    await access(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe("Orca runner lifecycle", () => {
+  it("recovers restart markers and reaps cancelled or expired requests", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "taven-runner-lifecycle-"));
+    cleanup.push(root);
+    const future = Math.ceil(Date.now() / 1_000) + 120;
+    const past = Math.floor(Date.now() / 1_000) - 1;
+
+    const processing = path.join(root, "request-processing");
+    await mkdir(processing);
+    await writeFile(path.join(processing, "processing"), "\n");
+    await writeFile(path.join(processing, "lease-expires-at"), `${future}\n`);
+
+    const cancelled = path.join(root, "request-cancelled");
+    await mkdir(cancelled);
+    await writeFile(path.join(cancelled, "cancel"), "\n");
+
+    const expired = path.join(root, "request-expired");
+    await mkdir(expired);
+    await writeFile(path.join(expired, "complete"), "\n");
+    await writeFile(path.join(expired, "lease-expires-at"), `${past}\n`);
+
+    const preparing = path.join(root, "request-preparing");
+    await mkdir(preparing);
+    await writeFile(path.join(preparing, "lease-expires-at"), `${future}\n`);
+
+    await execute("/bin/sh", [path.resolve("orca-runner.sh")], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        TAVEN_ORCA_RUNNER_ROOT: root,
+        TAVEN_ORCA_RUNNER_ONCE: "true",
+      },
+    });
+
+    await expect(
+      readFile(path.join(processing, "failure-code"), "utf8"),
+    ).resolves.toBe("ENGINE_UNAVAILABLE\n");
+    await expect(exists(path.join(processing, "processing"))).resolves.toBe(
+      false,
+    );
+    await expect(exists(path.join(processing, "failed"))).resolves.toBe(true);
+    await expect(exists(cancelled)).resolves.toBe(false);
+    await expect(exists(expired)).resolves.toBe(false);
+    await expect(exists(preparing)).resolves.toBe(true);
+  });
+});

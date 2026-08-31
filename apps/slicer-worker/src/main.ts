@@ -3,8 +3,9 @@ import { Worker } from "bullmq";
 import { readWorkerConfig } from "./config.js";
 import { runLegacyV1FixtureSlicingJob } from "./legacy-v1-fixture-handler.js";
 import { S3WorkerObjectStore } from "./object-store.js";
-import { OrcaCliEngine, OrcaSidecarEngine } from "./orca-engine.js";
+import { OrcaSidecarEngine } from "./orca-engine.js";
 import { SlicingProcessor } from "./processor.js";
+import { processWithRetryableProgress } from "./retry-progress.js";
 import {
   closeSlicingWorkers,
   createSlicingWorkers,
@@ -18,20 +19,28 @@ const engineConfig = {
   maximumArtifactBytes: config.limits.artifactBytes,
   maximumDiagnosticBytes: config.limits.diagnosticBytes,
 };
-const engine = config.engine.runnerRoot
-  ? new OrcaSidecarEngine(engineConfig, config.engine.runnerRoot)
-  : new OrcaCliEngine(engineConfig);
+const engine = new OrcaSidecarEngine(engineConfig, config.engine.runnerRoot);
 const processor = new SlicingProcessor(store, engine, config);
 const connection = redisConnection(config.redisUrl);
 
 const workers = createSlicingWorkers(
   (queueName, process) =>
-    new Worker(queueName, async (job) => process(job.data), {
-      connection,
-      concurrency: 1,
-      lockDuration: config.engine.timeoutMilliseconds + 60_000,
-      maxStalledCount: 1,
-    }),
+    new Worker(
+      queueName,
+      async (job) =>
+        processWithRetryableProgress(
+          job.data,
+          job.attemptsMade + 1,
+          (progress) => job.updateProgress(progress),
+          process,
+        ),
+      {
+        connection,
+        concurrency: 1,
+        lockDuration: config.engine.timeoutMilliseconds + 60_000,
+        maxStalledCount: 1,
+      },
+    ),
   runLegacyV1FixtureSlicingJob,
   (input) => processor.process(input),
 );
