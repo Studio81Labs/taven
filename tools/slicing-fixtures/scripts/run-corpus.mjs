@@ -139,6 +139,44 @@ function parseGcode(source) {
   };
 }
 
+function validateExecution(fixtureCase, execution, resultFile, gcodeFiles) {
+  if (execution.error) {
+    throw new Error(
+      `Could not execute ${fixtureCase.name}: ${execution.error.message}`,
+      { cause: execution.error },
+    );
+  }
+  if (execution.status === null || execution.signal !== null) {
+    throw new Error(
+      `OrcaSlicer did not exit normally for ${fixtureCase.name} (status ${execution.status}, signal ${execution.signal ?? "none"})`,
+    );
+  }
+
+  if (fixtureCase.invalid) {
+    if (
+      execution.status === 0 ||
+      !resultFile ||
+      resultFile.return_code >= 0 ||
+      gcodeFiles.length !== 0
+    ) {
+      throw new Error(
+        `Invalid fixture ${fixtureCase.name} did not produce the expected failure`,
+      );
+    }
+    return;
+  }
+
+  if (
+    execution.status !== 0 ||
+    resultFile?.return_code !== 0 ||
+    gcodeFiles.length === 0
+  ) {
+    throw new Error(
+      `Fixture ${fixtureCase.name} did not produce a successful slice`,
+    );
+  }
+}
+
 async function prepareInput(directory, fixtureCase) {
   const destination = path.join(directory, fixtureCase.fixture);
   if (fixtureCase.name === "painted-multimaterial") {
@@ -258,6 +296,7 @@ async function runCase(runRoot, fixtureCase) {
       )
     : null;
   const gcodeFiles = files.filter((file) => file.endsWith(".gcode")).sort();
+  validateExecution(fixtureCase, execution, resultFile, gcodeFiles);
   const inputContents = await readFile(input);
   const paintedSource =
     fixtureCase.name === "painted-multimaterial"
