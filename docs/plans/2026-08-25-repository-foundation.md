@@ -213,11 +213,15 @@ prevents a root configuration change from running zero relevant workflows.
 
 The slicer workflow should build the pinned container, run the fixture corpus,
 and prove that identical input plus profile version yields identical metadata.
-It should not publish an image until a registry and release policy are chosen.
+Pull-request validation does not publish it. Issue #25 records the verified image
+digest, and issue #39 exports the selected release as a checksummed OCI archive
+for direct transfer rather than requiring a registry.
 
-Do not add deploy workflows yet. Hosting, payment provider, production object
-storage, secrets, environments, and release targets are still open decisions;
-empty or speculative deploy pipelines create false confidence.
+The foundation deliberately did not add deploy workflows. ADRs 0006–0008 now
+resolve hosting, providers, secrets, environments, and release targets; issue
+#39 must add the complete deploy workflow together with the real Dockerfiles,
+local integration Compose profile, rollback, monitoring, and restore controls.
+An empty deployment scaffold still creates false confidence.
 
 ### Phase 5 — architecture and operational documentation
 
@@ -249,12 +253,18 @@ feature work:
    Nuxt, because public landing and static legal/content pages need strong SEO.
 2. Confirm Prisma for persistence versus TypeORM. Recommendation: Prisma, used
    by Nexcue and TableTap and suitable for Taven's explicit relational model.
-3. Select the v0 payment provider and its test environment. Keep the backend
-   port provider-neutral.
-4. Select the production S3-compatible provider and retention capabilities.
-   Use a local S3 emulator regardless of the production choice.
-5. Pin the first OrcaSlicer image/version and define how its binaries and vendor
-   profiles are sourced and verified.
+3. Resolved by [ADR 0007](../decisions/0007-keep-v0-providers-behind-ports.md):
+   Comgate Start is the gated first payment adapter and the backend port remains
+   provider-neutral.
+4. Resolved by [ADR 0006](../decisions/0006-run-v0-on-an-owner-operated-vps.md)
+   and [ADR 0007](../decisions/0007-keep-v0-providers-behind-ports.md):
+   self-hosted Garage v2.3.0 is the live S3-compatible store and Cloudflare R2
+   EU is the off-host backup and fallback. Local development continues to use
+   MinIO for the fast dependency stack, while issue #39 adds a pinned Garage
+   profile and runs the same storage contract against both.
+5. Resolved by [ADR 0008](../decisions/0008-pin-orcaslicer-v2-4-2.md): pin the
+   verified OrcaSlicer v2.4.2 AppImage and record the separately built OCI image
+   and resolved profile-bundle digests in issue #25.
 6. Confirm the working product name after the clearance steps in the product
    specification. Package scopes can remain `@taven/*` while the name is a
    working name, but public domains and production resources should wait.
