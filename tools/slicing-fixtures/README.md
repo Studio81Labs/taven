@@ -20,11 +20,12 @@ isolation to each production subprocess without mounting the Docker socket.
 
 ## Commands
 
-The locked OCI digest is produced with the workflow's `docker-container`
-builder: Buildx v0.36.1 and
+The locked OCI digest is produced by an explicit OCI-layout export with the
+workflow's `docker-container` builder: Buildx v0.36.1 and
 `moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8`.
-Docker's built-in driver serializes a different manifest and is rejected. For
-local reproduction, create a dedicated builder once and select it through
+The host Docker Engine's `--load` serialization is used only to execute the
+corpus and is not the locked identity. Docker's built-in driver is rejected.
+For local reproduction, create a dedicated builder once and select it through
 Buildx's standard environment variable:
 
 ```bash

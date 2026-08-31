@@ -1,7 +1,7 @@
 {
   "case": "painted-multimaterial",
   "engine": {
-    "imageDigest": "sha256:9eb5d0b97bf98c766642602f638a18d88406d24c49dc8099a1ce9ba771d4dab4",
+    "imageDigest": "sha256:d572b9bc1d5ed4dec07ca5136a0ed10affecae8cc2f101d6037b2f8cf4eb0a51",
     "name": "orca-slicer",
     "version": "2.4.2"
   },

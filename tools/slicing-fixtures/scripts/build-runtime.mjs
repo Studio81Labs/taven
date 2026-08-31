@@ -1,4 +1,5 @@
 import { mkdtemp, readFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -14,7 +15,11 @@ const lock = JSON.parse(
 const temporaryDirectory = await mkdtemp(
   path.join(os.tmpdir(), "taven-orca-build-"),
 );
+process.on("exit", () => {
+  rmSync(temporaryDirectory, { recursive: true, force: true });
+});
 const metadataPath = path.join(temporaryDirectory, "metadata.json");
+const ociArchivePath = path.join(temporaryDirectory, "runtime.oci.tar");
 const builder = spawnSync("docker", ["buildx", "inspect"], {
   encoding: "utf8",
 });
@@ -60,21 +65,48 @@ const buildArguments = [
   ["ORCA_SQUASHFS_OFFSET", lock.appImage.squashfsOffset],
 ].flatMap(([name, value]) => ["--build-arg", `${name}=${value}`]);
 
-const build = spawnSync(
+const commonBuildOptions = [
+  "--file",
+  "apps/slicer-worker/Orca.Dockerfile",
+  "--platform",
+  lock.platform,
+  "--provenance=false",
+  "--sbom=false",
+  ...buildArguments,
+];
+const canonicalBuild = spawnSync(
   "docker",
   [
     "buildx",
     "build",
-    "--file",
-    "apps/slicer-worker/Orca.Dockerfile",
-    "--platform",
-    lock.platform,
-    "--provenance=false",
-    "--sbom=false",
+    ...commonBuildOptions,
     ...(noCache ? ["--no-cache"] : []),
-    ...buildArguments,
     "--metadata-file",
     metadataPath,
+    "--tag",
+    lock.image.tag,
+    "--output",
+    `type=oci,dest=${ociArchivePath},compression=gzip,compression-level=6,force-compression=true,rewrite-timestamp=true`,
+    ".",
+  ],
+  { cwd: repositoryRoot, encoding: "utf8", stdio: "inherit" },
+);
+if (canonicalBuild.status !== 0) {
+  process.exit(canonicalBuild.status ?? 1);
+}
+
+const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+const digest = metadata["containerimage.digest"];
+if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? "")) {
+  throw new Error("BuildKit did not return an OCI image digest");
+}
+
+const loadBuild = spawnSync(
+  "docker",
+  [
+    "buildx",
+    "build",
+    ...commonBuildOptions,
     "--tag",
     lock.image.tag,
     "--load",
@@ -82,14 +114,8 @@ const build = spawnSync(
   ],
   { cwd: repositoryRoot, encoding: "utf8", stdio: "inherit" },
 );
-if (build.status !== 0) {
-  process.exit(build.status ?? 1);
-}
-
-const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
-const digest = metadata["containerimage.digest"];
-if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? "")) {
-  throw new Error("BuildKit did not return an OCI image digest");
+if (loadBuild.status !== 0) {
+  process.exit(loadBuild.status ?? 1);
 }
 
 const inspect = spawnSync(
