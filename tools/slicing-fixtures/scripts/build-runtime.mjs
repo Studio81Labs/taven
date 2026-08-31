@@ -8,6 +8,7 @@ import { fixtureRoot } from "./profile-lib.mjs";
 
 const printDigest = process.argv.includes("--print-digest");
 const noCache = process.argv.includes("--no-cache");
+const canonicalHost = process.platform === "linux" && process.arch === "x64";
 const repositoryRoot = path.resolve(fixtureRoot, "..", "..");
 const lock = JSON.parse(
   await readFile(path.join(fixtureRoot, "runtime.lock.json"), "utf8"),
@@ -153,11 +154,16 @@ if (failures.length > 0) {
   throw new Error(`Invalid Orca runtime: ${failures.join("; ")}`);
 }
 
-if (!printDigest && digest !== lock.image.ociDigest) {
+if (!printDigest && canonicalHost && digest !== lock.image.ociDigest) {
   throw new Error(
     `OCI digest drift: expected ${lock.image.ociDigest}, built ${digest}. Review the image diff and update runtime.lock.json deliberately.`,
   );
 }
+if (!canonicalHost && digest !== lock.image.ociDigest) {
+  console.warn(
+    `Built emulated ${lock.platform} runtime at ${digest}; canonical digest verification is limited to a native Linux/x64 host and expects ${lock.image.ociDigest}.`,
+  );
+}
 console.log(
-  `${printDigest ? "Built" : "Verified"} ${lock.image.tag} at ${digest}.`,
+  `${printDigest || !canonicalHost ? "Built" : "Verified"} ${lock.image.tag} at ${digest}.`,
 );

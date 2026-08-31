@@ -24,6 +24,6 @@
   },
   "image": {
     "tag": "taven/orca-slicer:2.4.2-fixtures",
-    "ociDigest": "sha256:d572b9bc1d5ed4dec07ca5136a0ed10affecae8cc2f101d6037b2f8cf4eb0a51"
+    "ociDigest": "sha256:bd93c5e4f02ee51509351fa7bf005773a7abd257d768f83a626abf7a319f786f"
   }
 }

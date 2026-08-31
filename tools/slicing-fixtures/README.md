@@ -25,8 +25,14 @@ workflow's `docker-container` builder: Buildx v0.36.1 and
 `moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8`.
 The host Docker Engine's `--load` serialization is used only to execute the
 corpus and is not the locked identity. Docker's built-in driver is rejected.
-For local reproduction, create a dedicated builder once and select it through
-Buildx's standard environment variable:
+The canonical byte-for-byte digest is verified on a native Linux x86-64 host,
+matching the runtime's supported platform. Other developer hosts may build the
+target through emulation and run the complete corpus, but package maintainer
+output under QEMU is not treated as canonical; the command reports that local
+digest without comparing it to the deployment lock.
+
+For local builds, create a dedicated builder once and select it through Buildx's
+standard environment variable:
 
 ```bash
 docker buildx create --name taven-orca-repro --driver docker-container \
