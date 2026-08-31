@@ -33,6 +33,11 @@ if (manifest.bundleSha256 !== lock.profiles.bundleSha256) {
     "Runtime lock profile digest does not match the resolved bundle",
   );
 }
+if (manifest.upstream.revision !== lock.profiles.upstreamRevision) {
+  throw new Error(
+    "Runtime lock profile revision does not match the resolved bundle",
+  );
+}
 
 const profileDirectory = path.join(fixtureRoot, "profiles", "resolved");
 const fixtureDirectory = path.join(fixtureRoot, "fixtures");
@@ -185,7 +190,8 @@ async function runCase(runRoot, fixtureCase) {
     secondaryFilamentDigest = digest(secondaryContents);
   }
 
-  const filamentPath = "/profiles/filament.json";
+  const runtimeProfileDirectory = "/opt/taven/profiles";
+  const filamentPath = `${runtimeProfileDirectory}/filament.json`;
   const command = [
     "--debug",
     "2",
@@ -196,7 +202,7 @@ async function runCase(runRoot, fixtureCase) {
     "--datadir",
     "/tmp/data",
     "--load-settings",
-    "/profiles/process.json;/profiles/machine.json",
+    `${runtimeProfileDirectory}/process.json;${runtimeProfileDirectory}/machine.json`,
     "--load-filaments",
     fixtureCase.filamentCount === 2
       ? `${filamentPath};/input/filament-secondary.json`
@@ -239,8 +245,6 @@ async function runCase(runRoot, fixtureCase) {
       `type=bind,src=${inputDirectory},dst=/input,readonly`,
       "--mount",
       `type=bind,src=${outputDirectory},dst=/output`,
-      "--mount",
-      `type=bind,src=${profileDirectory},dst=/profiles,readonly`,
       lock.image.tag,
       ...command,
     ],
