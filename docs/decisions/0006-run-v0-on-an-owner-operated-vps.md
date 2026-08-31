@@ -46,15 +46,18 @@ configuration, not assumptions embedded in application code. Only after issue
 #38 completes the required name-clearance gate is the domain registered
 separately with WEDOS and delegated to Cloudflare.
 
-GitHub Actions verifies the selected revision and then invokes an authenticated,
-deploy-only Coolify webhook. Coolify builds and deploys the repository Compose
-project on the VPS. Issue #39 serializes production deployments, proves the
-completed Coolify deployment corresponds to the workflow's commit, and records
-that commit plus every resulting image digest in a release manifest. The
-previous successful revision and digest set remain available for rollback.
-Database rollback is forward-fix unless a rehearsed compatible restore is
-explicitly chosen. These workflows are implemented only with the real
-deployment in issue #39.
+Coolify automatic Git deployment is disabled. GitHub Actions serializes the
+production workflow, verifies the selected revision, sets the Coolify
+application's `git_commit_sha` to that exact workflow SHA through the API, and
+reads the pin back before invoking a separate deploy-only webhook. A failed or
+mismatched pin stops before deployment, so a later branch head cannot bypass
+the checks. Coolify then builds and deploys the pinned repository Compose
+revision on the VPS. Issue #39 confirms the completed deployment record carries
+the same commit and records that commit plus every resulting image digest in a
+release manifest. The previous successful revision and digest set remain
+available for rollback. Database rollback is forward-fix unless a rehearsed
+compatible restore is explicitly chosen. These workflows are implemented only
+with the real deployment in issue #39.
 
 PostgreSQL 18, Redis 8, Garage v2.3.0, Caddy 2, and the monitoring stack are
 always available within the owner-operated host. Production pins each image by
