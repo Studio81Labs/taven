@@ -95,6 +95,10 @@ type AnonymousQuoteLimitRow = {
   window_expires_at: Date;
   issued_count: number;
 };
+type QuoteAcceptanceRow = {
+  evaluated_at: Date;
+  accepted_at: Date | null;
+};
 type ExpiringResult<T> =
   Readonly<{ kind: "ok"; value: T }> | Readonly<{ kind: "expired" }>;
 type IdempotencyResponseCodec<T> = Readonly<{
@@ -875,14 +879,6 @@ export class QuotesService {
         const quote = await lockedOffer(transaction, quoteId);
         assertOfferCapability(quote, token);
         assertExpectedOffer(quote, expected);
-        const observedAt = await databaseNow(transaction);
-        if (
-          quote.quoteRequest.status === QuoteRequestStatus.QUOTED &&
-          quote.expiresAt.getTime() <= observedAt.getTime()
-        ) {
-          await expireLockedOffer(transaction, quote, observedAt);
-          return { kind: "expired" };
-        }
         if (quote.quoteRequest.status === QuoteRequestStatus.ACCEPTED) {
           throw new ConflictException("Offer was already accepted");
         }
@@ -899,6 +895,17 @@ export class QuotesService {
         const orderId = randomUUID();
         const resultId = randomUUID();
         const publicReference = `I-${orderId.replaceAll("-", "").slice(0, 12).toUpperCase()}`;
+        const acceptance = await acceptLockedQuoteRequest(
+          transaction,
+          quote.quoteRequestId,
+          commandKey,
+          resultId,
+        );
+        if (!acceptance.accepted_at) {
+          await expireLockedOffer(transaction, quote, acceptance.evaluated_at);
+          return { kind: "expired" };
+        }
+        const observedAt = acceptance.accepted_at;
         await applyAcceptanceTransition(quote, {
           commandKey,
           orderId,
@@ -912,16 +919,6 @@ export class QuotesService {
             customerId: quote.customerId,
             publicReference,
             createdAt: observedAt,
-            updatedAt: observedAt,
-          },
-        });
-        await transaction.quoteRequest.update({
-          where: { id: quote.quoteRequestId },
-          data: {
-            status: QuoteRequestStatus.ACCEPTED,
-            acceptedAt: observedAt,
-            currentStateCommandKey: commandKey,
-            currentStateResultId: resultId,
             updatedAt: observedAt,
           },
         });
@@ -1617,6 +1614,42 @@ async function lockedOffer(transaction: Transaction, quoteId: string) {
       priceBinding: { include: { priceSnapshot: true } },
     },
   });
+}
+
+async function acceptLockedQuoteRequest(
+  transaction: Transaction,
+  requestId: string,
+  commandKey: string,
+  resultId: string,
+): Promise<QuoteAcceptanceRow> {
+  const rows = await transaction.$queryRaw<QuoteAcceptanceRow[]>`
+    WITH evaluation AS MATERIALIZED (
+      SELECT statement_timestamp() AS evaluated_at
+    ), accepted AS (
+      UPDATE quote_requests request
+      SET status = 'ACCEPTED',
+          accepted_at = evaluation.evaluated_at,
+          current_state_command_key = ${commandKey},
+          current_state_result_id = ${resultId}::uuid,
+          updated_at = evaluation.evaluated_at
+      FROM evaluation
+      WHERE request.id = ${requestId}::uuid
+        AND request.status = 'QUOTED'
+        AND EXISTS (
+          SELECT 1
+          FROM quotes quote
+          WHERE quote.quote_request_id = request.id
+            AND quote.expires_at > evaluation.evaluated_at
+        )
+      RETURNING request.accepted_at
+    )
+    SELECT evaluation.evaluated_at, accepted.accepted_at
+    FROM evaluation
+    LEFT JOIN accepted ON true
+  `;
+  const acceptance = rows[0];
+  if (!acceptance) throw new Error("Quote acceptance clock is unavailable");
+  return acceptance;
 }
 
 async function expireLockedOffer(
@@ -2986,7 +3019,8 @@ function requiredText(
     throw new BadRequestException(`${name} must be a string`);
   }
   const normalized = value.trim();
-  if (normalized.length < minimum || normalized.length > maximum) {
+  const characterCount = Array.from(normalized).length;
+  if (characterCount < minimum || characterCount > maximum) {
     throw new BadRequestException(
       `${name} must contain between ${minimum} and ${maximum} characters`,
     );

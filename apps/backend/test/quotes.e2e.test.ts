@@ -68,6 +68,23 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(response.response.status).toBe(400);
   });
 
+  it("counts astral Unicode text as contract characters", async () => {
+    const created = await quotes.createRequest(
+      {
+        ...requestInput("astral-unicode"),
+        description: "😀".repeat(6_000),
+        purpose: "😀".repeat(1_500),
+        contact: {
+          ...requestInput("astral-unicode").contact,
+          name: "😀".repeat(150),
+        },
+      },
+      "198.51.100.48",
+      key("astral-unicode-create"),
+    );
+    expect(created.status).toBe("NEW");
+  });
+
   it("rejects JSON inputs beyond the canonicalization depth limit", async () => {
     const response = await apiJson("quote-requests", {
       method: "POST",
@@ -1024,6 +1041,25 @@ describe("QuoteRequest and tokenized individual offers", () => {
       new Date(Date.now() + 600),
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 700));
+
+    let backdatedUpdateCompleted = false;
+    await expect(
+      prisma.$transaction(async (transaction) => {
+        await transaction.quoteRequest.update({
+          where: { id: created.body.requestId },
+          data: {
+            status: "ACCEPTED",
+            acceptedAt: new Date(new Date(issued.body.expiresAt).getTime() - 1),
+            currentStateCommandKey: key("backdated-acceptance"),
+            currentStateResultId: randomUUID(),
+            updatedAt: new Date(),
+          },
+        });
+        backdatedUpdateCompleted = true;
+        throw new Error("backdated acceptance unexpectedly succeeded");
+      }),
+    ).rejects.toBeDefined();
+    expect(backdatedUpdateCompleted).toBe(false);
 
     const acceptKey = key("expiry-accept");
     const acceptance = await acceptOffer(issued.body, acceptKey);
