@@ -1,0 +1,86 @@
+{
+  "case": "painted-multimaterial",
+  "engine": {
+    "imageDigest": "sha256:bd93c5e4f02ee51509351fa7bf005773a7abd257d768f83a626abf7a319f786f",
+    "invocationBundleSha256": "7f362a10e7a6d51a9f8c607a8a7f4ece93b7b98375462dfb748f5514ff6a218d",
+    "name": "orca-slicer",
+    "version": "2.4.2"
+  },
+  "execution": {
+    "exitCode": 0,
+    "result": {
+      "error": "Success.",
+      "layerHeight": 0.20000000298023224,
+      "plateIndex": 0,
+      "returnCode": 0,
+      "slicedPlates": [
+        {
+          "id": 1,
+          "triangleCount": 12,
+          "warning": ""
+        }
+      ],
+      "sparseInfillDensity": 15,
+      "wallLoops": 2
+    },
+    "signal": null,
+    "stderr": [],
+    "stdout": []
+  },
+  "input": {
+    "cloneCount": 1,
+    "expectedInvalidGeometry": false,
+    "file": "painted-multimaterial.3mf",
+    "paintedExtruders": [
+      1,
+      2
+    ],
+    "secondaryFilamentSha256": "428c6460dc386b250c815bd0de71d8dc9e1626e91fc8775a1eb2cb79e84ed8a8",
+    "sha256": "df3dcce01a465f7b7e4fabed9c21e5e7a3a6f01307ca23d7b316a9c80f1ac419"
+  },
+  "invocation": {
+    "arguments": [
+      "--debug",
+      "2",
+      "--slice",
+      "0",
+      "--outputdir",
+      "/output",
+      "--datadir",
+      "/tmp/data",
+      "--load-settings",
+      "/opt/taven/profiles/process.json;/opt/taven/profiles/machine.json",
+      "--load-filaments",
+      "/opt/taven/profiles/filament.json;/input/filament-secondary.json",
+      "--allow-multicolor-oneplate",
+      "/input/painted-multimaterial.3mf"
+    ],
+    "sha256": "13bde2c46f8a8135f64f4f98e7754777b2acd1ad9afc1338404e70ecb3e26506"
+  },
+  "outputs": [
+    {
+      "estimatedSeconds": 9510,
+      "filamentUsage": [
+        {
+          "cubicCentimeters": 11.38,
+          "grams": 14.11,
+          "millimeters": 4729.26,
+          "slot": 1
+        },
+        {
+          "cubicCentimeters": 11.58,
+          "grams": 14.36,
+          "millimeters": 4815.12,
+          "slot": 2
+        }
+      ],
+      "file": "plate_1.gcode",
+      "normalizedSha256": "0b29d8cef810bd831c16299a088ede82991cf150618bd6132bebe5d839f4600b"
+    }
+  ],
+  "profiles": {
+    "bundleSha256": "a02a40c3ca3dcc77c4b6d613faee5b1ac845911482a0b52bdb35428df53c54e0",
+    "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
+  },
+  "schemaVersion": 1
+}
