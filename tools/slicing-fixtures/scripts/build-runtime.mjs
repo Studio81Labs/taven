@@ -15,6 +15,15 @@ const temporaryDirectory = await mkdtemp(
   path.join(os.tmpdir(), "taven-orca-build-"),
 );
 const metadataPath = path.join(temporaryDirectory, "metadata.json");
+const buildArguments = [
+  ["SOURCE_DATE_EPOCH", lock.sourceDateEpoch],
+  ["UBUNTU_IMAGE", lock.ubuntu.image],
+  ["UBUNTU_SNAPSHOT", lock.ubuntu.packageSnapshot],
+  ["ORCA_APPIMAGE_URL", lock.appImage.url],
+  ["ORCA_APPIMAGE_SHA256", lock.appImage.sha256],
+  ["ORCA_APPIMAGE_SIZE", lock.appImage.size],
+  ["ORCA_SQUASHFS_OFFSET", lock.appImage.squashfsOffset],
+].flatMap(([name, value]) => ["--build-arg", `${name}=${value}`]);
 
 const build = spawnSync(
   "docker",
@@ -28,8 +37,7 @@ const build = spawnSync(
     "--provenance=false",
     "--sbom=false",
     ...(noCache ? ["--no-cache"] : []),
-    "--build-arg",
-    `SOURCE_DATE_EPOCH=${lock.sourceDateEpoch}`,
+    ...buildArguments,
     "--metadata-file",
     metadataPath,
     "--tag",
@@ -73,6 +81,12 @@ if (
   lock.engine.sourceRevision
 ) {
   failures.push("source revision label does not match the runtime lock");
+}
+if (
+  image.Config.Labels?.["org.opencontainers.image.version"] !==
+  lock.engine.version
+) {
+  failures.push("engine version label does not match the runtime lock");
 }
 if (failures.length > 0) {
   throw new Error(`Invalid Orca runtime: ${failures.join("; ")}`);

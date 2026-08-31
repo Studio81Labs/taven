@@ -7,6 +7,7 @@ on:
       - "apps/slicer-worker/**"
       - "packages/slicer-contracts/**"
       - "tools/slicing-fixtures/**"
+      - ".dockerignore"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -53,6 +54,9 @@ jobs:
         with:
           node-version-file: .nvmrc
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          version: v0.36.1
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - run: pnpm slicer-worker:profiles:check
       - run: pnpm slicer-worker:orca:build
       - run: pnpm slicer-worker:orca:test

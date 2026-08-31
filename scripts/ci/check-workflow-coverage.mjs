@@ -27,6 +27,7 @@ const pathFilteredWorkflows = {
     "apps/slicer-worker/**",
     "packages/slicer-contracts/**",
     "tools/slicing-fixtures/**",
+    ".dockerignore",
   ],
   "packages-ci.yml": ["packages/**"],
   "openapi-check.yml": [
