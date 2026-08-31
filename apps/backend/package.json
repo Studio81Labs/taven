@@ -15,6 +15,8 @@
     "resource-reservation-expiry-worker:dev": "tsx src/resource-reservation-expiry-worker.ts",
     "start:retention-worker": "node dist/retention-worker.js",
     "retention-worker:dev": "tsx src/retention-worker.ts",
+    "start:slicing-dispatch-worker": "node dist/slicing-dispatch-worker.js",
+    "slicing-dispatch-worker:dev": "tsx src/slicing-dispatch-worker.ts",
     "lint": "eslint .",
     "typecheck": "pnpm db:generate && tsc -p tsconfig.json --noEmit",
     "pretest": "pnpm --filter @taven/core build",
@@ -27,6 +29,7 @@
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
+    "preopenapi:export": "pnpm --filter @taven/slicer-contracts... build",
     "openapi:export": "tsx scripts/export-openapi.ts"
   },
   "dependencies": {

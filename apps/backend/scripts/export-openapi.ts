@@ -18,6 +18,7 @@ function sortObject(value: unknown): unknown {
 
 async function exportContract(): Promise<void> {
   process.env.TAVEN_OPENAPI_EXPORT = "true";
+  process.env.TAVEN_REDIS_URL ??= "redis://127.0.0.1:6379";
   process.env.TAVEN_S3_ENDPOINT ??= "http://127.0.0.1:9010";
   process.env.TAVEN_S3_REGION ??= "us-east-1";
   process.env.TAVEN_S3_BUCKET ??= "taven-contract";

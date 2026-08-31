@@ -35,7 +35,7 @@ FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production
 WORKDIR /opt/taven/slicer-worker
 
-COPY --from=build --chown=node:node /opt/taven/slicer-worker ./
+COPY --from=build --chown=10001:10001 /opt/taven/slicer-worker ./
 
-USER node
+USER 10001:10001
 CMD ["node", "dist/main.js"]

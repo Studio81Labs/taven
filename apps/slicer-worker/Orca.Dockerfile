@@ -93,3 +93,10 @@ LABEL org.opencontainers.image.title="Taven OrcaSlicer runtime" \
 USER 10001:10001
 ENTRYPOINT ["/opt/orca/AppRun"]
 CMD ["--help"]
+
+FROM runtime AS runner
+
+COPY --chmod=0555 apps/slicer-worker/orca-runner.sh /usr/local/bin/taven-orca-runner
+
+ENTRYPOINT ["/usr/local/bin/taven-orca-runner"]
+CMD []

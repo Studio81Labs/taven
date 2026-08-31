@@ -1,36 +1,57 @@
 import "dotenv/config";
 import { Worker } from "bullmq";
+import { readWorkerConfig } from "./config.js";
+import { runLegacyV1FixtureSlicingJob } from "./legacy-v1-fixture-handler.js";
+import { S3WorkerObjectStore } from "./object-store.js";
+import { OrcaCliEngine, OrcaSidecarEngine } from "./orca-engine.js";
+import { SlicingProcessor } from "./processor.js";
 import {
-  closeFixtureWorkers,
-  createFixtureWorkers,
+  closeSlicingWorkers,
+  createSlicingWorkers,
+  redisConnection,
 } from "./fixture-runtime.js";
 
-const connection = {
-  host: process.env.REDIS_HOST ?? "127.0.0.1",
-  port: Number(process.env.REDIS_PORT ?? 6379),
+const config = readWorkerConfig();
+const store = new S3WorkerObjectStore(config.storage);
+const engineConfig = {
+  ...config.engine,
+  maximumArtifactBytes: config.limits.artifactBytes,
+  maximumDiagnosticBytes: config.limits.diagnosticBytes,
 };
+const engine = config.engine.runnerRoot
+  ? new OrcaSidecarEngine(engineConfig, config.engine.runnerRoot)
+  : new OrcaCliEngine(engineConfig);
+const processor = new SlicingProcessor(store, engine, config);
+const connection = redisConnection(config.redisUrl);
 
-const workers = createFixtureWorkers(
-  (queueName, processor) =>
-    new Worker(queueName, async (job) => processor(job.data), { connection }),
+const workers = createSlicingWorkers(
+  (queueName, process) =>
+    new Worker(queueName, async (job) => process(job.data), {
+      connection,
+      concurrency: 1,
+      lockDuration: config.engine.timeoutMilliseconds + 60_000,
+      maxStalledCount: 1,
+    }),
+  runLegacyV1FixtureSlicingJob,
+  (input) => processor.process(input),
 );
 
 for (const worker of workers) {
   worker.on("completed", (job) => {
     console.info(
-      `fixture slicing job ${job.id ?? "unknown"} completed on ${worker.name}`,
+      `slicing job ${job.id ?? "unknown"} completed on ${worker.name}`,
     );
   });
   worker.on("failed", (job, error) => {
     console.error(
-      `fixture slicing job ${job?.id ?? "unknown"} failed on ${worker.name}`,
+      `slicing job ${job?.id ?? "unknown"} failed on ${worker.name}`,
       error,
     );
   });
 }
 
 async function shutdown(): Promise<void> {
-  await closeFixtureWorkers(workers);
+  await closeSlicingWorkers(workers);
   process.exit(0);
 }
 

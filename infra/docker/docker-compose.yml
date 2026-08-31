@@ -94,7 +94,7 @@ services:
 
   minio-init:
     image: minio/mc:latest@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
-    profiles: ["init"]
+    profiles: ["init", "app", "worker"]
     depends_on:
       minio:
         condition: service_healthy
@@ -110,7 +110,7 @@ services:
     restart: "no"
 
   migrate:
-    profiles: ["app"]
+    profiles: ["app", "worker"]
     image: taven/backend-migration:local
     build:
       <<: *backend-build
@@ -236,10 +236,99 @@ services:
       target: runtime
     init: true
     restart: "no"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 320
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001,mode=0700
+    volumes:
+      - slicerexchange:/var/run/taven-orca
     environment:
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
+      TAVEN_REDIS_URL: redis://redis:6379
+      TAVEN_S3_ENDPOINT: http://minio:9000
+      TAVEN_S3_REGION: ${TAVEN_S3_REGION:-us-east-1}
+      TAVEN_S3_BUCKET: ${TAVEN_S3_BUCKET:-taven}
+      TAVEN_S3_ACCESS_KEY_ID: ${TAVEN_S3_ACCESS_KEY_ID:-taven}
+      TAVEN_S3_SECRET_ACCESS_KEY: ${TAVEN_S3_SECRET_ACCESS_KEY:-taven-local-only}
+      TAVEN_S3_FORCE_PATH_STYLE: "true"
+      TAVEN_ORCA_RUNNER_ROOT: /var/run/taven-orca
     depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      orca-runner:
+        condition: service_started
+
+  slicer-volume-init:
+    profiles: ["worker"]
+    image: taven/orca-runner:local
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: apps/slicer-worker/Orca.Dockerfile
+      target: runner
+      platforms: ["linux/amd64"]
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN"]
+    security_opt: ["no-new-privileges:true"]
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["chown 10001:10001 /var/run/taven-orca"]
+    volumes:
+      - slicerexchange:/var/run/taven-orca
+    restart: "no"
+
+  orca-runner:
+    profiles: ["worker"]
+    image: taven/orca-runner:local
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: apps/slicer-worker/Orca.Dockerfile
+      target: runner
+      platforms: ["linux/amd64"]
+    init: true
+    network_mode: none
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 320
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001,mode=0700
+      - /work:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=0700
+    environment:
+      TAVEN_ORCA_RUNNER_ROOT: /var/run/taven-orca
+      TAVEN_SLICER_MAX_ARTIFACT_BYTES: "536870912"
+      TAVEN_SLICER_MAX_DIAGNOSTIC_BYTES: "1048576"
+    volumes:
+      - slicerexchange:/var/run/taven-orca
+    depends_on:
+      slicer-volume-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  slicing-dispatcher:
+    profiles: ["worker"]
+    image: taven/backend:local
+    build:
+      <<: *backend-build
+      target: runtime
+    init: true
+    restart: unless-stopped
+    command: ["node", "dist/slicing-dispatch-worker.js"]
+    environment:
+      <<: *backend-environment
+      TAVEN_S3_ENDPOINT: http://minio:9000
+      TAVEN_S3_PUBLIC_ENDPOINT: http://minio:9000
+      TAVEN_SLICING_DISPATCH_POLL_MILLISECONDS: "1000"
+      TAVEN_SLICING_DISPATCH_CLAIM_LIMIT: "25"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -303,3 +392,4 @@ volumes:
   redisdata:
   miniodata:
   garagedata:
+  slicerexchange:

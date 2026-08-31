@@ -151,6 +151,9 @@ importers:
 
   apps/slicer-worker:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1121.0
+        version: 3.1121.0
       '@taven/slicer-contracts':
         specifier: workspace:*
         version: link:../../packages/slicer-contracts
