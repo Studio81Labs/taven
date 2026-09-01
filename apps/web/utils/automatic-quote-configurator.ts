@@ -63,7 +63,7 @@ export function groupsFromAssignments(
   }
   return [...groups.entries()]
     .sort(([left], [right]) => left - right)
-    .map(([, groupedBodyIds], ordinal) => ({
+    .map(([ordinal, groupedBodyIds]) => ({
       ordinal,
       bodyIds: groupedBodyIds,
     }));

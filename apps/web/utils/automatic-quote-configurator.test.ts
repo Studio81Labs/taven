@@ -78,6 +78,15 @@ describe("body grouping", () => {
     expect(canAddBodyGroup(3, 3)).toBe(false);
     expect(canAddBodyGroup(1, 1)).toBe(false);
   });
+
+  it("preserves the remaining group identity when an earlier group is excluded", () => {
+    expect(
+      groupsFromAssignments(["red-body", "blue-body"], {
+        "red-body": -1,
+        "blue-body": 1,
+      }),
+    ).toEqual([{ bodyIds: ["blue-body"], ordinal: 1 }]);
+  });
 });
 
 describe("exact configuration eligibility", () => {

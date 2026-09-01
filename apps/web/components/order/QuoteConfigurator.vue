@@ -119,7 +119,10 @@ watch(
 function initializeDrafts(): void {
   const sourceGroups = initialBodyGroups(bodyIds.value, props.quote.items);
   assignments.value = initialBodyAssignments(bodyIds.value, sourceGroups);
-  groupCount.value = Math.max(1, sourceGroups.length);
+  groupCount.value = Math.max(
+    1,
+    ...sourceGroups.map((group) => group.ordinal + 1),
+  );
   const firstOption = props.quote.configurationOptions[0];
   if (!firstOption) return;
   const nextDrafts: Record<number, ItemDraft> = {};
@@ -262,13 +265,15 @@ async function saveConfiguration(): Promise<void> {
     return;
   }
   saving.value = true;
+  let replaced = false;
   try {
     const configuration = commands.filter((command) => command !== undefined);
-    if (!(await props.onReplaceConfiguration(configuration))) return;
+    replaced = await props.onReplaceConfiguration(configuration);
+    if (!replaced) return;
     await props.onPrepare();
   } finally {
     saving.value = false;
-    initializeDrafts();
+    if (replaced) initializeDrafts();
   }
 }
 
@@ -351,7 +356,7 @@ function infillLabel(value: string): string {
   );
 }
 
-function colorLabel(value: string | null): string {
+function colorLabel(value: string | null | undefined): string {
   return value ?? "Bez určení barvy";
 }
 
@@ -578,6 +583,33 @@ function quantityPrice(choice: {
         </p>
       </div>
     </template>
+
+    <section
+      v-if="!quote.configurationEditable && quote.items.length > 0"
+      class="configurator-section"
+      aria-labelledby="saved-configuration-title"
+    >
+      <p class="eyebrow">VÝROBNÍ KONFIGURACE</p>
+      <h3 id="saved-configuration-title">Co závazná kalkulace obsahuje.</h3>
+      <article
+        v-for="item in quote.items"
+        :key="item.id"
+        class="item-configuration"
+      >
+        <div class="configurator-section-heading">
+          <div>
+            <p class="eyebrow">POLOŽKA {{ item.ordinal + 1 }}</p>
+            <strong>{{ item.quantity }} ks</strong>
+          </div>
+          <span class="mono">{{ item.bodyIds.join(", ") }}</span>
+        </div>
+        <p>
+          {{ item.material }} · {{ colorLabel(item.color) }} ·
+          {{ qualityLabel(item.quality) }} ·
+          {{ infillLabel(item.infillPreset) }}
+        </p>
+      </article>
+    </section>
 
     <div
       v-if="
