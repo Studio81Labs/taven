@@ -1798,6 +1798,7 @@ export class AutomaticQuotesService {
         WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
           AND profile.material = ${item.material}::material
           AND profile.state = 'ACTIVE'
+          AND profile.production_artifact_format <> 'bgcode'
           AND taven_geometry_fits_machine_capability(
             ${item.targetModelGeometryId}::uuid,
             machine.machine_capability_id

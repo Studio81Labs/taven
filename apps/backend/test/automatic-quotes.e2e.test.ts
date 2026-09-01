@@ -168,6 +168,46 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const compatibleProfile = await prisma.machineProfile.findUniqueOrThrow({
       where: { id: foundation.machineProfileId },
     });
+    const replaceCompatibleProfileFormat = async (
+      activeProfileId: string,
+      productionArtifactFormat: "BGCODE" | "GCODE_3MF",
+    ): Promise<string> => {
+      const replacementId = randomUUID();
+      const observedAt = new Date();
+      await prisma.$transaction(async (transaction) => {
+        await transaction.machineProfile.update({
+          where: { id: activeProfileId },
+          data: { state: "RETIRED", retiredAt: observedAt },
+        });
+        await transaction.revisionIdentity.create({
+          data: {
+            id: replacementId,
+            kind: "MACHINE_PROFILE",
+            digest: sha(
+              `${scope}:machine-profile:${replacementId}:${productionArtifactFormat}`,
+            ),
+          },
+        });
+        await transaction.machineProfile.create({
+          data: {
+            id: replacementId,
+            machineCapabilityId: compatibleProfile.machineCapabilityId,
+            referenceProfileId: compatibleProfile.referenceProfileId,
+            material: compatibleProfile.material,
+            quality: compatibleProfile.quality,
+            nozzleDiameterMicrometers:
+              compatibleProfile.nozzleDiameterMicrometers,
+            slicerEngine: compatibleProfile.slicerEngine,
+            slicerVersion: compatibleProfile.slicerVersion,
+            productionArtifactFormat,
+            settings: compatibleProfile.settings as Prisma.InputJsonValue,
+            state: "ACTIVE",
+            activatedAt: observedAt,
+          },
+        });
+      });
+      return replacementId;
+    };
     const incompatibleNozzle =
       compatibleMachine.installedNozzleMicrometers + 200;
     await prisma.$transaction(async (transaction) => {
@@ -1084,6 +1124,27 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         )
       ).response.status,
     ).toBe(200);
+    const bgcodeProfileId = await replaceCompatibleProfileFormat(
+      compatibleProfile.id,
+      "BGCODE",
+    );
+    const unsupportedArtifactGate = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          sessionToken,
+          key("unsupported-artifact-gate"),
+        ),
+      },
+    );
+    expect(unsupportedArtifactGate.response.status).toBe(200);
+    expect(unsupportedArtifactGate.body.checkoutReady).toBe(false);
+    expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
+      0,
+    );
+    expect(await prisma.orderItem.count({ where: { orderId } })).toBe(0);
+    await replaceCompatibleProfileFormat(bgcodeProfileId, "GCODE_3MF");
     const expressCapacity = await api(
       `automatic-quote-sessions/${sessionId}/express`,
       {
