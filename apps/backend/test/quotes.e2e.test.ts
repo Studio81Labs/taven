@@ -17,16 +17,16 @@ const operatorToken = "test-operator-token-with-at-least-32-characters";
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 const quoteCapabilityKey =
   "test-quote-capability-key-with-at-least-32-characters";
-process.env.TAVEN_OPERATOR_API_TOKEN = operatorToken;
-process.env.TAVEN_QUOTE_CAPABILITY_KEY = quoteCapabilityKey;
-process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS = "[]";
-process.env.TAVEN_S3_ENDPOINT = "http://127.0.0.1:9010";
-process.env.TAVEN_S3_REGION = "us-east-1";
-process.env.TAVEN_S3_BUCKET = "taven";
-process.env.TAVEN_S3_ACCESS_KEY_ID = "taven";
-process.env.TAVEN_S3_SECRET_ACCESS_KEY = "taven-local-only";
-process.env.TAVEN_S3_FORCE_PATH_STYLE = "true";
-process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY = uploadClientHashKey;
+process.env.TAVEN_OPERATOR_API_TOKEN ??= operatorToken;
+process.env.TAVEN_QUOTE_CAPABILITY_KEY ??= quoteCapabilityKey;
+process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS ??= "[]";
+process.env.TAVEN_S3_ENDPOINT ??= "http://127.0.0.1:9010";
+process.env.TAVEN_S3_REGION ??= "us-east-1";
+process.env.TAVEN_S3_BUCKET ??= "taven";
+process.env.TAVEN_S3_ACCESS_KEY_ID ??= "taven";
+process.env.TAVEN_S3_SECRET_ACCESS_KEY ??= "taven-local-only";
+process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
+process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??= uploadClientHashKey;
 
 describe("QuoteRequest and tokenized individual offers", () => {
   let app: NestExpressApplication;
