@@ -142,6 +142,38 @@ describe("safe model inspection", () => {
   });
 
   it.each([
+    ["inch", "25400", 25_400_000],
+    ["meter", "1000000", 1_000_000_000],
+  ] as const)(
+    "reports and canonicalizes declared 3MF %s units in micrometers",
+    (unit, expectedExtent, scaleFactorPpm) => {
+      const source = storedZip({
+        "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="${unit}">
+          <resources><object id="1"><mesh>${cubeMesh}</mesh></object></resources>
+          <build><item objectid="1"/></build>
+        </model>`,
+      });
+
+      const inspection = inspectModel("3mf", source);
+      expect(inspection.boundingBox).toEqual({
+        xMicrometers: expectedExtent,
+        yMicrometers: expectedExtent,
+        zMicrometers: expectedExtent,
+      });
+      const canonical = canonicalizeModel(
+        "3mf",
+        source,
+        ["body-0001"],
+        scaleFactorPpm,
+      );
+      expect(canonical.inspection.boundingBox).toEqual(inspection.boundingBox);
+      expect(canonical.inspection.bodies[0]?.volumeCubicMicrometers).toBe(
+        inspection.bodies[0]?.volumeCubicMicrometers,
+      );
+    },
+  );
+
+  it.each([
     [
       "vertices outside facets",
       `solid invalid

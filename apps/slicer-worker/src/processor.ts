@@ -54,13 +54,15 @@ function inspectionMetrics(inspection: ModelInspection) {
     bodyCount: inspection.bodies.length,
     unitHint: inspection.unitHint,
     scaleAssessment:
-      inspection.unitHint === "unknown" ? "confirmation_required" : "trusted",
-    suggestedScaleFactorPpm:
       inspection.unitHint === "unknown"
+        ? "confirmation_required"
+        : inspection.unitHint === "millimeter"
+          ? "trusted"
+          : "converted",
+    suggestedScaleFactorPpm:
+      inspection.unitHint === "unknown" || inspection.unitHint === "millimeter"
         ? null
-        : { millimeter: 1_000_000, inch: 25_400_000, meter: 1_000_000_000 }[
-            inspection.unitHint
-          ],
+        : { inch: 25_400_000, meter: 1_000_000_000 }[inspection.unitHint],
     thinWallFeatureCount: 0,
     hasPaintAssignments: inspection.hasPaintAssignments,
     materialAssignmentCount: inspection.materialAssignmentCount,

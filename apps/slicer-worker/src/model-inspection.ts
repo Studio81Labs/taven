@@ -113,7 +113,10 @@ function parseXml(
   }
 }
 
-function boundingBox(triangles: readonly Triangle[]) {
+function boundingBox(
+  triangles: readonly Triangle[],
+  micrometersPerUnit = 1_000,
+) {
   const coordinates = triangles.flatMap((triangle) => triangle);
   const minimum: [number, number, number] = [Infinity, Infinity, Infinity];
   const maximum: [number, number, number] = [-Infinity, -Infinity, -Infinity];
@@ -125,13 +128,13 @@ function boundingBox(triangles: readonly Triangle[]) {
   }
   return {
     xMicrometers: String(
-      Math.max(0, Math.round((maximum[0] - minimum[0]) * 1_000)),
+      Math.max(0, Math.round((maximum[0] - minimum[0]) * micrometersPerUnit)),
     ),
     yMicrometers: String(
-      Math.max(0, Math.round((maximum[1] - minimum[1]) * 1_000)),
+      Math.max(0, Math.round((maximum[1] - minimum[1]) * micrometersPerUnit)),
     ),
     zMicrometers: String(
-      Math.max(0, Math.round((maximum[2] - minimum[2]) * 1_000)),
+      Math.max(0, Math.round((maximum[2] - minimum[2]) * micrometersPerUnit)),
     ),
   };
 }
@@ -177,7 +180,10 @@ function topology(triangles: readonly Triangle[]) {
   } as const;
 }
 
-function volume(triangles: readonly Triangle[]): string {
+function volume(
+  triangles: readonly Triangle[],
+  micrometersPerUnit = 1_000,
+): string {
   let signedSixTimesVolume = 0;
   for (const [a, b, c] of triangles) {
     signedSixTimesVolume +=
@@ -186,7 +192,7 @@ function volume(triangles: readonly Triangle[]): string {
       a[2] * (b[0] * c[1] - b[1] * c[0]);
   }
   const roundedCubicMicrometers = Math.round(
-    (Math.abs(signedSixTimesVolume) / 6) * 1_000_000_000,
+    (Math.abs(signedSixTimesVolume) / 6) * micrometersPerUnit ** 3,
   );
   if (!Number.isFinite(roundedCubicMicrometers)) {
     throw new SlicingWorkerError(
@@ -214,6 +220,7 @@ function body(
     materials: Iterable<string>;
     extruders: Iterable<string>;
   },
+  micrometersPerUnit = 1_000,
 ): ParsedBody {
   if (triangles.length < 1) invalid("Model body contains no triangles");
   if (triangles.length > MAX_TRIANGLES) {
@@ -227,8 +234,8 @@ function body(
     JSON.stringify(triangles.map((triangle) => triangle.flat())),
     "utf8",
   );
-  const dimensions = boundingBox(triangles);
-  const bodyVolume = volume(triangles);
+  const dimensions = boundingBox(triangles, micrometersPerUnit);
+  const bodyVolume = volume(triangles, micrometersPerUnit);
   if (
     bodyVolume === "0" ||
     dimensions.xMicrometers === "0" ||
@@ -1350,6 +1357,12 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
   const root = loadPart(rootPart);
   const buildItems = root.buildItems.filter(({ printable }) => printable);
   if (buildItems.length < 1) invalid("3MF root model contains no build items");
+  const micrometersPerUnit = {
+    millimeter: 1_000,
+    inch: 25_400,
+    meter: 1_000_000,
+    unknown: 1_000,
+  }[root.unitHint];
   let expandedTriangles = 0;
   let traversedEdges = 0;
   const resolveObject = (
@@ -1432,6 +1445,7 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
         materials: realized.materials,
         extruders: realized.extruders,
       },
+      micrometersPerUnit,
     );
   });
   const materialIds = new Set(
@@ -1443,7 +1457,10 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
   return {
     unitHint: root.unitHint,
     bodies: parsedBodies,
-    boundingBox: boundingBox(parsedBodies.flatMap((item) => item.triangles)),
+    boundingBox: boundingBox(
+      parsedBodies.flatMap((item) => item.triangles),
+      micrometersPerUnit,
+    ),
     objectCount: parsedBodies.length,
     hasPaintAssignments: parsedBodies.some((item) => item.hasPaintAssignments),
     materialAssignmentCount: materialIds.size,

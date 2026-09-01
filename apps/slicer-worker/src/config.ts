@@ -25,6 +25,7 @@ export type WorkerConfig = {
 
 const DEFAULT_ORCA_IMAGE_SHA256 =
   "bd93c5e4f02ee51509351fa7bf005773a7abd257d768f83a626abf7a319f786f";
+const MAXIMUM_ORCA_TIMEOUT_MILLISECONDS = 30 * 60 * 1_000;
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]?.trim();
@@ -41,6 +42,27 @@ function positiveInteger(
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function boundedPositiveInteger(
+  value: string | undefined,
+  fallback: number,
+  maximum: number,
+  name: string,
+): number {
+  const parsed = positiveInteger(value, fallback, name);
+  if (parsed > maximum) {
+    throw new Error(`${name} must not exceed ${maximum}`);
+  }
+  return parsed;
+}
+
+function sha256(value: string | undefined, fallback: string, name: string) {
+  const parsed = value?.trim() || fallback;
+  if (!/^[a-f0-9]{64}$/u.test(parsed)) {
+    throw new Error(`${name} must be a lowercase SHA-256 digest`);
   }
   return parsed;
 }
@@ -88,11 +110,15 @@ export function readWorkerConfig(
       executable: env.TAVEN_ORCA_EXECUTABLE?.trim() || "/opt/orca/AppRun",
       name: "orcaslicer",
       version: env.TAVEN_ORCA_VERSION?.trim() || "2.4.2",
-      imageSha256:
-        env.TAVEN_ORCA_IMAGE_SHA256?.trim() || DEFAULT_ORCA_IMAGE_SHA256,
-      timeoutMilliseconds: positiveInteger(
+      imageSha256: sha256(
+        env.TAVEN_ORCA_IMAGE_SHA256,
+        DEFAULT_ORCA_IMAGE_SHA256,
+        "TAVEN_ORCA_IMAGE_SHA256",
+      ),
+      timeoutMilliseconds: boundedPositiveInteger(
         env.TAVEN_ORCA_TIMEOUT_MILLISECONDS,
         15 * 60 * 1_000,
+        MAXIMUM_ORCA_TIMEOUT_MILLISECONDS,
         "TAVEN_ORCA_TIMEOUT_MILLISECONDS",
       ),
       runnerRoot: required(env, "TAVEN_ORCA_RUNNER_ROOT"),

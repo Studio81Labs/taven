@@ -3,6 +3,15 @@ import { readWorkerConfig } from "./config.js";
 import { redisConnection } from "./fixture-runtime.js";
 
 describe("worker configuration", () => {
+  const requiredEnvironment = {
+    TAVEN_S3_ENDPOINT: "https://storage.internal/",
+    TAVEN_S3_REGION: "auto",
+    TAVEN_S3_BUCKET: "taven",
+    TAVEN_S3_ACCESS_KEY_ID: "worker",
+    TAVEN_S3_SECRET_ACCESS_KEY: "secret-value",
+    TAVEN_ORCA_RUNNER_ROOT: "/var/run/taven-orca",
+  };
+
   it("uses provider-neutral Redis and S3 inputs", () => {
     const redisUrl = new URL("rediss://redis.internal:6380/");
     redisUrl.username = "worker";
@@ -43,5 +52,26 @@ describe("worker configuration", () => {
         TAVEN_S3_SECRET_ACCESS_KEY: "secret-value",
       }),
     ).toThrow("bare HTTP or HTTPS URL");
+  });
+
+  it("rejects runtime values that the sidecar cannot honor", () => {
+    expect(() =>
+      readWorkerConfig({
+        ...requiredEnvironment,
+        TAVEN_ORCA_TIMEOUT_MILLISECONDS: "1800001",
+      }),
+    ).toThrow("must not exceed 1800000");
+    expect(() =>
+      readWorkerConfig({
+        ...requiredEnvironment,
+        TAVEN_ORCA_IMAGE_SHA256: "not-a-digest",
+      }),
+    ).toThrow("must be a lowercase SHA-256 digest");
+    expect(() =>
+      readWorkerConfig({
+        ...requiredEnvironment,
+        TAVEN_ORCA_IMAGE_SHA256: "A".repeat(64),
+      }),
+    ).toThrow("must be a lowercase SHA-256 digest");
   });
 });
