@@ -624,6 +624,14 @@ export class OrcaSidecarEngine implements OrcaEngine {
     );
     let runnerOwnsCleanup = false;
     try {
+      await mkdir(path.join(requestDirectory, "output"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      await mkdir(path.join(requestDirectory, "tmp", "data"), {
+        recursive: true,
+        mode: 0o700,
+      });
       await writeFile(
         path.join(requestDirectory, "lease-expires-at"),
         `${Math.ceil(

@@ -100,7 +100,18 @@ while true; do
       fail_request "$request" INVALID_PROFILE
       continue
     fi
-    mkdir -p "$request/output" "$request/tmp/data"
+    request_directories_owned=true
+    for writable_directory in "$request/output" "$request/tmp" "$request/tmp/data"; do
+      if [ ! -d "$writable_directory" ] || \
+         [ "$(stat -c '%u:%g' "$writable_directory" 2>/dev/null || true)" != "10001:10001" ]; then
+        request_directories_owned=false
+        break
+      fi
+    done
+    if [ "$request_directories_owned" = false ]; then
+      fail_request "$request" ENGINE_UNAVAILABLE
+      continue
+    fi
     set -- \
       --debug 2 \
       --slice 0 \
