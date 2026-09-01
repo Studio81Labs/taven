@@ -329,7 +329,7 @@ describe("3MF geometry", () => {
     ).resolves.toMatchObject({ objectCount: 1 });
   });
 
-  it("ignores paint-like attributes from unrelated namespaces", async () => {
+  it("ignores paint-like elements and attributes from unrelated namespaces", async () => {
     const vendorMetadata = tetrahedron3mf
       .replace(
         '<model unit="centimeter"',
@@ -338,6 +338,10 @@ describe("3MF geometry", () => {
       .replace(
         '<triangle v1="0" v2="2" v3="1"/>',
         '<triangle v1="0" v2="2" v3="1" vendor:paint_color="#ff0000" vendor:mmu_segmentation="4"/>',
+      )
+      .replace(
+        "</triangles>",
+        '<vendor:triangle paint_color="#00ff00"/></triangles>',
       );
 
     await expect(

@@ -18,6 +18,10 @@ const MAX_LOCAL_SHELL_PAIR_CHECKS = 1_000_000;
 const TRIANGLE_BVH_LEAF_SIZE = 8;
 const PACKAGE_RELATIONSHIPS_NAMESPACE =
   "http://schemas.openxmlformats.org/package/2006/relationships";
+const CORE_3MF_NAMESPACE =
+  "http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
+const MATERIAL_3MF_NAMESPACE =
+  "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
 const SLIC3R_3MF_NAMESPACE = "http://schemas.slic3r.org/3mf/2017/06";
 
 type Point = readonly [number, number, number];
@@ -1396,6 +1400,12 @@ function xmlAttributeValue(value: string): string {
     .replaceAll("<", "&lt;");
 }
 
+function structuralElementName(tag: SaxesTagNS): string {
+  return tag.uri === CORE_3MF_NAMESPACE || tag.uri === MATERIAL_3MF_NAMESPACE
+    ? tag.local
+    : "ignored";
+}
+
 async function structuralModelXml(xml: string): Promise<string> {
   const { SaxesParser } = await import("saxes");
   const structural: string[] = [];
@@ -1418,10 +1428,10 @@ async function structuralModelXml(xml: string): Promise<string> {
         return ` ${name}="${xmlAttributeValue(candidate.value)}"`;
       })
       .join("");
-    structural.push(`<${tag.name}${attributes}>`);
+    structural.push(`<${structuralElementName(tag)}${attributes}>`);
   });
   parser.on("closetag", (tag) => {
-    structural.push(`</${tag.name}>`);
+    structural.push(`</${structuralElementName(tag)}>`);
   });
   try {
     parser.write(xml).close();
