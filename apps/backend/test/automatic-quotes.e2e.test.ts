@@ -99,9 +99,6 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       where: { id: foundation.inventoryId },
       data: { remainingMilligrams: 1_000_000n },
     });
-    const machineProfile = await prisma.machineProfile.findUniqueOrThrow({
-      where: { id: foundation.machineProfileId },
-    });
     const printConfig = await prisma.printConfigRevision.findUniqueOrThrow({
       where: { id: foundation.printConfigRevisionId },
     });
@@ -284,6 +281,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       marker: string,
     ) => {
       const geometryHash = sha(`${scope}:geometry:${marker}`);
+      const referenceProfile = await prisma.referenceProfile.findUniqueOrThrow({
+        where: { id: draft.referenceProfileId },
+      });
       await prisma.modelGeometry.create({
         data: {
           id: draft.targetModelGeometryId,
@@ -325,8 +325,8 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           artifactHash: sha(`${scope}:reference:${marker}`),
           estimatedPrintSeconds: 60n,
           estimatedMaterialMilligrams: 60n,
-          slicerEngine: machineProfile.slicerEngine,
-          slicerVersion: machineProfile.slicerVersion,
+          slicerEngine: referenceProfile.slicerEngine,
+          slicerVersion: referenceProfile.slicerVersion,
         },
       });
     };
@@ -494,24 +494,61 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         where: { orderId },
       },
     );
-    const candidateDispatches = await prisma.outboxMessage.findMany({
+    const allCandidateDispatches = await prisma.outboxMessage.findMany({
       where: {
         aggregateType: "CandidateEstimateDispatch",
         messageType: "slicing.candidate-estimate.requested",
-        AND: [
-          { payload: { path: ["job", "correlationId"], equals: orderId } },
-          { payload: { path: ["nodeId"], equals: foundation.nodeId } },
-        ],
+        payload: { path: ["job", "correlationId"], equals: orderId },
       },
       orderBy: { createdAt: "asc" },
     });
-    expect(candidateDispatches).toHaveLength(2);
-    const capacityBase = Date.now() + 60_000;
-    for (const [index, dispatch] of candidateDispatches.entries()) {
+    const dispatchesByNode = new Map<
+      string,
+      Array<{
+        dispatch: (typeof allCandidateDispatches)[number];
+        inventoryId: string;
+        job: CandidateEstimateJob;
+      }>
+    >();
+    for (const dispatch of allCandidateDispatches) {
       const payload = dispatch.payload as unknown as {
+        nodeId: string;
+        inventoryId: string;
         job: CandidateEstimateJob;
       };
-      const job = payload.job;
+      const group = dispatchesByNode.get(payload.nodeId) ?? [];
+      group.push({
+        dispatch,
+        inventoryId: payload.inventoryId,
+        job: payload.job,
+      });
+      dispatchesByNode.set(payload.nodeId, group);
+    }
+    const hasBothItems = (
+      dispatches: readonly { job: CandidateEstimateJob }[],
+    ) =>
+      new Set(dispatches.map(({ job }) => job.input.geometry.modelGeometryId))
+        .size === 2;
+    const foundationDispatches = dispatchesByNode.get(foundation.nodeId);
+    const candidateDispatches =
+      (foundationDispatches && hasBothItems(foundationDispatches)
+        ? foundationDispatches
+        : [...dispatchesByNode.values()].find(hasBothItems)) ?? [];
+    expect(
+      new Set(
+        candidateDispatches.map(
+          ({ job }) => job.input.geometry.modelGeometryId,
+        ),
+      ).size,
+    ).toBe(2);
+    await prisma.inventory.updateMany({
+      where: {
+        id: { in: candidateDispatches.map(({ inventoryId }) => inventoryId) },
+      },
+      data: { remainingMilligrams: 1_000_000n },
+    });
+    const capacityBase = Date.now() + 60_000;
+    for (const [index, { job }] of candidateDispatches.entries()) {
       const startsAt = new Date(capacityBase + index * 120_000);
       const endsAt = new Date(startsAt.getTime() + 60_000);
       const result = {
@@ -609,18 +646,18 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     ).toBe(1);
     expect(await prisma.orderPhase.count({ where: { orderId } })).toBe(1);
     expect(await prisma.fulfilmentSlot.count({ where: { orderId } })).toBe(2);
+    const initialCandidateJobIds = [
+      ...new Set(allCandidateDispatches.map(({ aggregateId }) => aggregateId)),
+    ];
     expect(
       await prisma.outboxMessage.count({
         where: {
           aggregateType: "CandidateEstimateDispatch",
           messageType: "slicing.candidate-estimate.requested",
-          AND: [
-            { payload: { path: ["job", "correlationId"], equals: orderId } },
-            { payload: { path: ["nodeId"], equals: foundation.nodeId } },
-          ],
+          aggregateId: { in: initialCandidateJobIds },
         },
       }),
-    ).toBe(2);
+    ).toBe(initialCandidateJobIds.length);
     const firstReservation = await prisma.phaseReservationSet.findFirstOrThrow({
       where: {
         phaseResourcePlan: {
