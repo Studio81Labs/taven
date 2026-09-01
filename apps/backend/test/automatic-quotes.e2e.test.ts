@@ -2669,6 +2669,62 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       }),
     ).toBe(2);
 
+    const ownReservedInventoryIds = [
+      ...new Set(
+        (
+          await prisma.inventoryReservation.findMany({
+            where: {
+              status: "RESERVED",
+              productionReservation: {
+                phaseReservationSet: {
+                  status: "RESERVED",
+                  phaseResourcePlan: {
+                    jobs: {
+                      some: {
+                        candidateResourceEstimate: {
+                          shipmentPlan: {
+                            orderPriceBindingId:
+                              firstBinding.orderPriceBindingId,
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            select: { inventoryId: true },
+          })
+        ).map(({ inventoryId }) => inventoryId),
+      ),
+    ];
+    const ownReservedInventories = await prisma.inventory.findMany({
+      where: { id: { in: ownReservedInventoryIds } },
+      select: { id: true, reservedMilligrams: true },
+    });
+    expect(ownReservedInventories.length).toBeGreaterThan(0);
+    expect(
+      ownReservedInventories.every(
+        ({ reservedMilligrams }) => reservedMilligrams > 0n,
+      ),
+    ).toBe(true);
+    for (const inventory of ownReservedInventories) {
+      await prisma.inventory.update({
+        where: { id: inventory.id },
+        data: { remainingMilligrams: inventory.reservedMilligrams },
+      });
+    }
+    const ownReservationRead = await api(
+      `automatic-quote-sessions/${sessionId}`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+    expect(ownReservationRead.response.status).toBe(200);
+    expect(ownReservationRead.body).toMatchObject({
+      phase: "CHECKOUT_READY",
+      checkoutReady: true,
+      handoff: null,
+    });
+
     const replay = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
       headers: capabilityHeaders(sessionToken, key("finalize-replay")),

@@ -46,6 +46,7 @@ const IDEMPOTENCY_HEADER = {
     pattern: TRIMMED_IDEMPOTENCY_KEY_PATTERN,
   },
 };
+const SESSION_ID_PARAM = { name: "sessionId", type: String, format: "uuid" };
 
 @ApiTags("automatic quotes")
 @Controller("automatic-quote-sessions")
@@ -76,7 +77,7 @@ export class AutomaticQuotesController {
   @Get(":sessionId")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Resume or poll one direct quote" })
-  @ApiParam({ name: "sessionId", type: String, format: "uuid" })
+  @ApiParam(SESSION_ID_PARAM)
   @ApiOkResponse({ type: AutomaticQuoteSessionDto })
   @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
   get(
@@ -89,6 +90,7 @@ export class AutomaticQuotesController {
   @Post(":sessionId/model-files")
   @HttpCode(200)
   @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOperation({ summary: "Attach a confirmed model and request inspection" })
   @ApiBody({ type: AttachAutomaticQuoteModelFileDto })
@@ -115,6 +117,7 @@ export class AutomaticQuotesController {
   @ApiBearerAuth()
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOperation({ summary: "Configure one selected body group" })
+  @ApiParam(SESSION_ID_PARAM)
   @ApiParam({ name: "ordinal", type: "integer" })
   @ApiBody({ type: ConfigureAutomaticQuoteItemDto })
   @ApiOkResponse({ type: AutomaticQuoteSessionDto })
@@ -140,6 +143,7 @@ export class AutomaticQuotesController {
   @Post(":sessionId/risk-decisions")
   @HttpCode(200)
   @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOperation({
     summary: "Acknowledge or decline one current preflight risk",
@@ -162,6 +166,7 @@ export class AutomaticQuotesController {
 
   @Put(":sessionId/delivery-destination")
   @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOperation({ summary: "Select a provider-verified order destination" })
   @ApiBody({ type: SelectAutomaticQuoteDestinationDto })
@@ -182,6 +187,7 @@ export class AutomaticQuotesController {
 
   @Put(":sessionId/express")
   @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOperation({ summary: "Set the whole-order express preference" })
   @ApiBody({ type: SetAutomaticQuoteExpressDto })
@@ -203,6 +209,7 @@ export class AutomaticQuotesController {
   @Post(":sessionId/prepare")
   @HttpCode(200)
   @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOperation({
     summary: "Advance slicing, binding price, and eligibility preparation",

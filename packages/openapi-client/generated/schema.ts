@@ -1181,7 +1181,9 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                sessionId: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -1207,7 +1209,9 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                sessionId: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -1235,6 +1239,7 @@ export interface operations {
             };
             path: {
                 ordinal: number;
+                sessionId: string;
             };
             cookie?: never;
         };
@@ -1268,7 +1273,9 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                sessionId: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -1308,7 +1315,9 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                sessionId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -1330,7 +1339,9 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                sessionId: string;
+            };
             cookie?: never;
         };
         requestBody: {

@@ -2157,6 +2157,15 @@
               "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
               "type": "string"
             }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -2206,6 +2215,15 @@
               "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
               "type": "string"
             }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -2251,6 +2269,15 @@
             "required": true,
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
             }
           },
           {
@@ -2315,6 +2342,15 @@
               "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
               "type": "string"
             }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -2370,6 +2406,15 @@
               "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
               "type": "string"
             }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2407,6 +2452,15 @@
             "schema": {
               "minLength": 8,
               "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
               "type": "string"
             }
           }

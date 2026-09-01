@@ -3538,7 +3538,10 @@ export class AutomaticQuotesService {
     return { items, allReferenceSliced };
   }
 
-  private async roughQuote(orderId: string): Promise<{
+  private async roughQuote(
+    orderId: string,
+    candidateAdmissionSatisfied = false,
+  ): Promise<{
     quote: AutomaticQuoteSessionDto["roughEstimate"];
     express: { eligible: boolean; reasons: readonly string[] };
     reasons: readonly string[];
@@ -3595,14 +3598,16 @@ export class AutomaticQuotesService {
       materialAndColorAvailable: true,
       withinBuildLimits: true,
     });
-    const candidateResourcesAvailable = await this.candidateResourcesAvailable(
-      this.prisma,
-      draft.items,
-      pricing.items,
-      provisionalPlan.prepared.kind === "binding_quote"
-        ? provisionalPlan.prepared.shipmentPlan
-        : undefined,
-    );
+    const candidateResourcesAvailable = candidateAdmissionSatisfied
+      ? true
+      : await this.candidateResourcesAvailable(
+          this.prisma,
+          draft.items,
+          pricing.items,
+          provisionalPlan.prepared.kind === "binding_quote"
+            ? provisionalPlan.prepared.shipmentPlan
+            : undefined,
+        );
     const candidateGate = candidateResourcesAvailable ?? true;
     const result = candidateGate
       ? provisionalPlan.prepared
@@ -3825,24 +3830,6 @@ export class AutomaticQuotesService {
           finding.severity === "WARNING" && finding.decision !== "ACKNOWLEDGED",
       ),
     );
-    const rough = itemDtos.length > 0 ? await this.roughQuote(order.id) : null;
-    const permanentRoughReasons = new Set([
-      "UNSUPPORTED_FORMAT",
-      "BLOCKING_PREFLIGHT_FINDING",
-      "AUTOMATIC_QUANTITY_LIMIT_EXCEEDED",
-      "AUTOMATIC_AMOUNT_LIMIT_EXCEEDED",
-      "BUILD_LIMIT_EXCEEDED",
-      "SHIPMENT_INELIGIBLE",
-      "EXPRESS_INELIGIBLE",
-    ]);
-    for (const reason of rough?.reasons ?? []) {
-      if (
-        permanentRoughReasons.has(reason) &&
-        !handoffReasons.includes(reason)
-      ) {
-        handoffReasons.push(reason);
-      }
-    }
     const candidateActive = order.activePriceBinding?.orderPriceBinding;
     const active =
       candidateActive && bindingMatchesAutomaticDraft(candidateActive, draft)
@@ -3870,6 +3857,28 @@ export class AutomaticQuotesService {
         reservation.status === "RESERVED" &&
         reservation.expiresAt.getTime() > Date.now(),
     );
+    const hasLiveReservation = Boolean(currentPlan && currentReservation);
+    const rough =
+      itemDtos.length > 0
+        ? await this.roughQuote(order.id, hasLiveReservation)
+        : null;
+    const permanentRoughReasons = new Set([
+      "UNSUPPORTED_FORMAT",
+      "BLOCKING_PREFLIGHT_FINDING",
+      "AUTOMATIC_QUANTITY_LIMIT_EXCEEDED",
+      "AUTOMATIC_AMOUNT_LIMIT_EXCEEDED",
+      "BUILD_LIMIT_EXCEEDED",
+      "SHIPMENT_INELIGIBLE",
+      "EXPRESS_INELIGIBLE",
+    ]);
+    for (const reason of rough?.reasons ?? []) {
+      if (
+        permanentRoughReasons.has(reason) &&
+        !handoffReasons.includes(reason)
+      ) {
+        handoffReasons.push(reason);
+      }
+    }
     const checkoutReady =
       !expired &&
       order.status === OrderStatus.QUOTED &&
