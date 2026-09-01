@@ -1210,6 +1210,7 @@ model CandidateEstimateTerminalResult {
   candidateResourceEstimateId String?                          @unique(map: "candidate_terminal_results_candidate_key") @map("candidate_resource_estimate_id") @db.Uuid
   failureClass                String?                          @map("failure_class") @db.VarChar(64)
   failureCode                 String?                          @map("failure_code") @db.VarChar(64)
+  retryAfterMilliseconds      Int?                             @map("retry_after_milliseconds")
   createdAt                   DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
 
   outboxMessage             OutboxMessage              @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)

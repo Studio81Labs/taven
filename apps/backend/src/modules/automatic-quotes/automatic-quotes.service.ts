@@ -88,6 +88,8 @@ type AutomaticCandidateDispatchState = {
   attempt: number;
   outcome: "SUCCEEDED" | "FAILED" | null;
   failureClass: string | null;
+  retryAfterMilliseconds: number | null;
+  receiptCreatedAt: Date | null;
   expiresAt: Date | null;
   deadLettered: boolean;
 };
@@ -1218,6 +1220,7 @@ export class AutomaticQuotesService {
     const candidateResourcesAvailable = await this.candidateResourcesAvailable(
       transaction,
       draft.items,
+      transient.items,
     );
     const gateResult = await prepareAutomaticQuote({
       priceList,
@@ -1457,11 +1460,30 @@ export class AutomaticQuotesService {
       material: Material;
       color: string | null;
     }>,
+    pricingItems: readonly AutomaticQuotePricingItem[],
   ): Promise<boolean> {
-    let commonNodeIds: Set<string> | undefined;
-    for (const item of items) {
-      const rows = await transaction.$queryRaw<Array<{ nodeId: string }>>`
-        SELECT DISTINCT node.id AS "nodeId"
+    if (items.length !== pricingItems.length || items.length === 0) {
+      return false;
+    }
+    const resourceOptions: Array<{
+      requiredMaterialMilligrams: bigint;
+      byNode: Map<string, Array<{ inventoryId: string; available: bigint }>>;
+    }> = [];
+    for (const [index, item] of items.entries()) {
+      const pricingItem = pricingItems[index];
+      if (!pricingItem) return false;
+      const rows = await transaction.$queryRaw<
+        Array<{
+          nodeId: string;
+          inventoryId: string;
+          availableMilligrams: bigint;
+        }>
+      >`
+        SELECT DISTINCT
+          node.id AS "nodeId",
+          inventory.id AS "inventoryId",
+          inventory.remaining_milligrams - inventory.reserved_milligrams
+            AS "availableMilligrams"
         FROM machine_profiles profile
         JOIN print_config_revisions config
           ON config.id = ${item.printConfigRevisionId}::uuid
@@ -1482,7 +1504,7 @@ export class AutomaticQuotesService {
           ON inventory.node_id = machine.node_id
          AND inventory.machine_id = machine.id
          AND inventory.status = 'AVAILABLE'
-         AND inventory.remaining_milligrams > 0
+         AND inventory.remaining_milligrams > inventory.reserved_milligrams
          AND inventory.material = ${item.material}::material
          AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
         WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
@@ -1493,13 +1515,39 @@ export class AutomaticQuotesService {
             machine.machine_capability_id
           )
       `;
-      const eligibleNodeIds = new Set(rows.map(({ nodeId }) => nodeId));
-      commonNodeIds = commonNodeIds
-        ? new Set([...commonNodeIds].filter((id) => eligibleNodeIds.has(id)))
-        : eligibleNodeIds;
-      if (commonNodeIds.size === 0) return false;
+      const byNode = new Map<
+        string,
+        Array<{ inventoryId: string; available: bigint }>
+      >();
+      for (const row of rows) {
+        const options = byNode.get(row.nodeId) ?? [];
+        if (
+          !options.some(({ inventoryId }) => inventoryId === row.inventoryId)
+        ) {
+          options.push({
+            inventoryId: row.inventoryId,
+            available: row.availableMilligrams,
+          });
+        }
+        byNode.set(row.nodeId, options);
+      }
+      if (byNode.size === 0) return false;
+      resourceOptions.push({
+        requiredMaterialMilligrams: totalEstimatedMaterial(pricingItem),
+        byNode,
+      });
     }
-    return Boolean(commonNodeIds?.size);
+    const commonNodeIds = [...resourceOptions[0]!.byNode.keys()].filter(
+      (nodeId) => resourceOptions.every(({ byNode }) => byNode.has(nodeId)),
+    );
+    return commonNodeIds.some((nodeId) =>
+      hasUsableInventoryAssignment(
+        resourceOptions.map(({ requiredMaterialMilligrams, byNode }) => ({
+          requiredMaterialMilligrams,
+          options: byNode.get(nodeId) ?? [],
+        })),
+      ),
+    );
   }
 
   private async persistBinding(
@@ -2087,6 +2135,9 @@ export class AutomaticQuotesService {
                 nodeId: machine.nodeId,
                 inventoryId: inventory.id,
                 job,
+                ...(dispatchIdentity.availableAt
+                  ? { availableAt: dispatchIdentity.availableAt }
+                  : {}),
               });
             }
           }
@@ -2098,7 +2149,11 @@ export class AutomaticQuotesService {
   private async nextAutomaticCandidateDispatch(
     initialJobId: string,
     observedAt: Date,
-  ): Promise<{ jobId: string; attempt: number } | null> {
+  ): Promise<{
+    jobId: string;
+    attempt: number;
+    availableAt?: Date;
+  } | null> {
     let jobId = initialJobId;
     for (let generation = 0; generation < 100; generation += 1) {
       const states = await this.prisma.$queryRaw<
@@ -2108,6 +2163,8 @@ export class AutomaticQuotesService {
           (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
           terminal.outcome::text AS outcome,
           terminal.failure_class AS "failureClass",
+          terminal.retry_after_milliseconds AS "retryAfterMilliseconds",
+          terminal.created_at AS "receiptCreatedAt",
           candidate.expires_at AS "expiresAt",
           EXISTS (
             SELECT 1
@@ -2131,15 +2188,105 @@ export class AutomaticQuotesService {
       if (!latest) return { jobId, attempt: 1 };
       if (latest.deadLettered || latest.outcome === null) return null;
       if (latest.outcome === "FAILED") {
-        return latest.failureClass === "retryable_infrastructure" &&
-          latest.attempt < 100
-          ? { jobId, attempt: latest.attempt + 1 }
-          : null;
+        if (
+          latest.failureClass !== "retryable_infrastructure" ||
+          latest.attempt >= MAX_SLICING_JOB_ATTEMPTS
+        ) {
+          return null;
+        }
+        return {
+          jobId,
+          attempt: latest.attempt + 1,
+          ...(latest.receiptCreatedAt && latest.retryAfterMilliseconds
+            ? {
+                availableAt: new Date(
+                  latest.receiptCreatedAt.getTime() +
+                    latest.retryAfterMilliseconds,
+                ),
+              }
+            : {}),
+        };
       }
       if (!latest.expiresAt || latest.expiresAt > observedAt) return null;
       jobId = deterministicUuid(`automatic-candidate-successor:${jobId}`);
     }
     return null;
+  }
+
+  private async candidateEstimationRequiresHandoff(
+    orderId: string,
+  ): Promise<boolean> {
+    const rows = await this.prisma.$queryRaw<Array<{ allTerminal: boolean }>>`
+      WITH ranked_dispatches AS (
+        SELECT
+          shipment_plan.id AS shipment_plan_id,
+          dispatch.payload #>> '{job,input,geometry,modelGeometryId}'
+            AS model_geometry_id,
+          dispatch.payload #>> '{job,inputFingerprintSha256}'
+            AS input_fingerprint,
+          dispatch.payload #>> '{inventoryId}' AS inventory_id,
+          (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
+          terminal.outcome::text AS outcome,
+          terminal.failure_class,
+          EXISTS (
+            SELECT 1
+            FROM outbox_messages dead_letter
+            WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+              AND dead_letter.aggregate_id = dispatch.id
+              AND dead_letter.message_type = 'slicing.candidate_estimate.dead-lettered'
+          ) AS dead_lettered,
+          row_number() OVER (
+            PARTITION BY
+              shipment_plan.id,
+              dispatch.payload #>> '{job,input,geometry,modelGeometryId}',
+              dispatch.payload #>> '{job,inputFingerprintSha256}',
+              dispatch.payload #>> '{inventoryId}'
+            ORDER BY
+              dispatch.created_at DESC,
+              (dispatch.payload #>> '{job,attempt}')::integer DESC,
+              dispatch.id DESC
+          ) AS dispatch_rank
+        FROM order_active_price_bindings active_binding
+        JOIN order_price_bindings binding
+          ON binding.id = active_binding.order_price_binding_id
+         AND binding.invalidated_at IS NULL
+        JOIN shipment_plans shipment_plan
+          ON shipment_plan.order_price_binding_id = binding.id
+        JOIN outbox_messages dispatch
+          ON dispatch.aggregate_type = 'CandidateEstimateDispatch'
+         AND dispatch.message_type = 'slicing.candidate-estimate.requested'
+         AND dispatch.payload #>> '{job,input,shipmentPlanId}' =
+             shipment_plan.id::text
+        LEFT JOIN candidate_estimate_terminal_results terminal
+          ON terminal.outbox_message_id = dispatch.id
+        WHERE active_binding.order_id = ${orderId}::uuid
+      ), grouped_dispatches AS (
+        SELECT
+          shipment_plan_id,
+          model_geometry_id,
+          bool_and(
+            dead_lettered
+            OR COALESCE(
+              (
+                outcome = 'FAILED'
+                AND (
+                  failure_class <> 'retryable_infrastructure'
+                  OR attempt >= ${MAX_SLICING_JOB_ATTEMPTS}
+                )
+              ),
+              false
+            )
+          ) AS all_terminal
+        FROM ranked_dispatches
+        WHERE dispatch_rank = 1
+        GROUP BY shipment_plan_id, model_geometry_id
+      )
+      SELECT all_terminal AS "allTerminal"
+      FROM grouped_dispatches
+      WHERE all_terminal
+      LIMIT 1
+    `;
+    return rows[0]?.allTerminal === true;
   }
 
   private async finalizeAutomaticQuote(input: {
@@ -2387,6 +2534,7 @@ export class AutomaticQuotesService {
     const candidateResourcesAvailable = await this.candidateResourcesAvailable(
       this.prisma,
       draft.items,
+      pricing.items,
     );
     const result = (
       await prepareAutomaticQuote({
@@ -2559,6 +2707,9 @@ export class AutomaticQuotesService {
     if (await this.preprocessingRequiresHandoff(order.id, draft.items)) {
       handoffReasons.push("PREPROCESSING_FAILED");
     }
+    if (await this.candidateEstimationRequiresHandoff(order.id)) {
+      handoffReasons.push("CANDIDATE_ESTIMATION_FAILED");
+    }
     if (modelFiles.some((file) => file.inspectionStatus === "UNSUPPORTED")) {
       handoffReasons.push("UNSUPPORTED_FORMAT");
     }
@@ -2727,6 +2878,59 @@ function referenceOccupancies(
   if (quantity <= partsPerPlate) return [quantity];
   const remainder = quantity % partsPerPlate;
   return remainder === 0 ? [partsPerPlate] : [partsPerPlate, remainder];
+}
+
+function totalEstimatedMaterial(item: AutomaticQuotePricingItem): bigint {
+  const fullPlateCount = Math.floor(
+    item.quantity / item.referencePartsPerPlate,
+  );
+  const remainder = item.quantity % item.referencePartsPerPlate;
+  return (
+    item.primary.estimatedMaterialMilligrams *
+      BigInt(Math.max(1, fullPlateCount)) +
+    (remainder > 0 && item.quantity > item.referencePartsPerPlate
+      ? (item.tail?.estimatedMaterialMilligrams ?? 0n)
+      : 0n)
+  );
+}
+
+function hasUsableInventoryAssignment(
+  items: ReadonlyArray<{
+    requiredMaterialMilligrams: bigint;
+    options: ReadonlyArray<{ inventoryId: string; available: bigint }>;
+  }>,
+): boolean {
+  const ordered = [...items].sort(
+    (left, right) =>
+      left.options.length - right.options.length ||
+      (left.requiredMaterialMilligrams > right.requiredMaterialMilligrams
+        ? -1
+        : left.requiredMaterialMilligrams < right.requiredMaterialMilligrams
+          ? 1
+          : 0),
+  );
+  const remaining = new Map<string, bigint>();
+  for (const item of ordered) {
+    for (const option of item.options) {
+      remaining.set(option.inventoryId, option.available);
+    }
+  }
+  const assign = (index: number): boolean => {
+    const item = ordered[index];
+    if (!item) return true;
+    for (const option of item.options) {
+      const available = remaining.get(option.inventoryId) ?? 0n;
+      if (available < item.requiredMaterialMilligrams) continue;
+      remaining.set(
+        option.inventoryId,
+        available - item.requiredMaterialMilligrams,
+      );
+      if (assign(index + 1)) return true;
+      remaining.set(option.inventoryId, available);
+    }
+    return false;
+  };
+  return assign(0);
 }
 
 function inspectionInput(

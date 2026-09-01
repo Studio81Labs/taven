@@ -999,7 +999,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         color: quoteColor,
         status: "AVAILABLE",
       },
-      data: { remainingMilligrams: 0n },
+      data: { remainingMilligrams: 100n },
     });
     const splitResourceGate = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
@@ -1204,6 +1204,13 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       attempt: 2,
       inputFingerprintSha256: retryCandidate.job.inputFingerprintSha256,
     });
+    const retryReceipt =
+      await prisma.candidateEstimateTerminalResult.findUniqueOrThrow({
+        where: { outboxMessageId: retryCandidate.dispatch.id },
+      });
+    expect(retryDispatches[1]!.availableAt.getTime()).toBeGreaterThanOrEqual(
+      retryReceipt.createdAt.getTime() + 1_000,
+    );
     const refreshableStartsAt = new Date(Date.now() + 2_000);
     const refreshable = await candidates.ingest({
       result: successfulCandidateResult(retryJob, "1"),
@@ -1473,6 +1480,60 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         where: { id: firstBinding.orderPriceBindingId },
       }),
     ).resolves.toMatchObject({ invalidatedAt: expect.any(Date) });
+
+    const replacementShipmentPlanIds = (
+      await prisma.shipmentPlan.findMany({
+        where: { orderPriceBindingId: replacement.orderPriceBindingId },
+        select: { id: true },
+      })
+    ).map(({ id }) => id);
+    const replacementShipmentPlanIdSet = new Set(replacementShipmentPlanIds);
+    const replacementDispatches = (
+      await prisma.outboxMessage.findMany({
+        where: {
+          aggregateType: "CandidateEstimateDispatch",
+          messageType: "slicing.candidate-estimate.requested",
+          payload: { path: ["job", "correlationId"], equals: orderId },
+        },
+      })
+    ).filter(({ payload }) =>
+      replacementShipmentPlanIdSet.has(
+        candidateJob(payload).input.shipmentPlanId,
+      ),
+    );
+    const terminalTarget = replacementDispatches[0];
+    if (!terminalTarget) {
+      throw new Error("expected replacement candidate dispatches");
+    }
+    const terminalTargetJob = candidateJob(terminalTarget.payload);
+    const terminalGroup = replacementDispatches.filter(({ payload }) => {
+      const job = candidateJob(payload);
+      return (
+        job.input.shipmentPlanId === terminalTargetJob.input.shipmentPlanId &&
+        job.input.geometry.modelGeometryId ===
+          terminalTargetJob.input.geometry.modelGeometryId
+      );
+    });
+    expect(terminalGroup.length).toBeGreaterThan(0);
+    await prisma.outboxMessage.createMany({
+      data: terminalGroup.map((dispatch) => ({
+        deduplicationKey: `${scope}:candidate-dead-letter:${dispatch.id}`,
+        aggregateType: "SlicingDispatchDeadLetter",
+        aggregateId: dispatch.id,
+        messageType: "slicing.candidate_estimate.dead-lettered",
+        schemaVersion: 2,
+        payload: { dispatchId: dispatch.id },
+      })),
+    });
+    const candidateHandoff = await api(
+      `automatic-quote-sessions/${sessionId}`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+    expect(candidateHandoff.response.status).toBe(200);
+    expect(candidateHandoff.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(candidateHandoff.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["CANDIDATE_ESTIMATION_FAILED"]),
+    });
 
     const warningDraft = await draftItem(0);
     await prisma.preflightFinding.createMany({
