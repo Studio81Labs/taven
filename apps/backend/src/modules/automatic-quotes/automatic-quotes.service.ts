@@ -1691,12 +1691,7 @@ export class AutomaticQuotesService {
     let warningCount = 0;
     for (const item of items) {
       if (item.fitSensitive) return false;
-      const findings = await transaction.preflightFinding.findMany({
-        where: {
-          modelFileId: item.sourceModelFileId,
-          modelGeometryId: item.targetModelGeometryId,
-        },
-      });
+      const findings = await this.currentRiskFindings(transaction, item);
       if (
         findings.some(
           (finding) => finding.severity === PreflightSeverity.BLOCKING,
@@ -1732,6 +1727,57 @@ export class AutomaticQuotesService {
       }
     }
     return true;
+  }
+
+  private async currentRiskFindings(
+    transaction: Transaction | PrismaService,
+    item: {
+      id: string;
+      orderId: string;
+      sourceModelFileId: string;
+      bodyIds: string[];
+      selectionSha256: string;
+      targetModelGeometryId: string;
+      printConfigRevisionId: string;
+      referenceProfileId: string;
+      quantity: number;
+      referencePartsPerPlate: number | null;
+    },
+  ) {
+    const inspectionRevisions = [INSPECTION_REVISION];
+    if (item.referencePartsPerPlate !== null) {
+      const geometry = await transaction.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      if (geometry) {
+        const referenceJobs = await Promise.all(
+          referenceOccupancies(item.quantity, item.referencePartsPerPlate).map(
+            (partsPerPlate) =>
+              this.referenceSliceJob(
+                transaction,
+                item,
+                geometry,
+                partsPerPlate,
+                item.orderId,
+                1,
+              ),
+          ),
+        );
+        inspectionRevisions.push(
+          ...referenceJobs.map(
+            ({ inputFingerprintSha256 }) => inputFingerprintSha256,
+          ),
+        );
+      }
+    }
+    return transaction.preflightFinding.findMany({
+      where: {
+        modelFileId: item.sourceModelFileId,
+        modelGeometryId: item.targetModelGeometryId,
+        inspectionRevision: { in: inspectionRevisions },
+      },
+      orderBy: [{ severity: "desc" }, { code: "asc" }],
+    });
   }
 
   private async ensureOrderItems(
@@ -3735,13 +3781,7 @@ export class AutomaticQuotesService {
                 referenceOccupancies(item.quantity, occupancy.partsPerPlate),
               )
             : [];
-        const findings = await this.prisma.preflightFinding.findMany({
-          where: {
-            modelFileId: item.sourceModelFileId,
-            modelGeometryId: item.targetModelGeometryId,
-          },
-          orderBy: [{ severity: "desc" }, { code: "asc" }],
-        });
+        const findings = await this.currentRiskFindings(this.prisma, item);
         const decisions = new Map(
           item.riskDecisions
             .filter(

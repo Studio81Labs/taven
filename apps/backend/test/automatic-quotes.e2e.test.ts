@@ -2214,11 +2214,46 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     ).resolves.toBe(true);
 
     const riskDraft = await draftItem(0);
+    const staleReferenceFinding = await prisma.preflightFinding.create({
+      data: {
+        modelFileId: riskDraft.sourceModelFileId,
+        modelGeometryId: riskDraft.targetModelGeometryId,
+        inspectionRevision: sha(`${scope}:stale-reference-input`),
+        code: "STALE_REFERENCE_BLOCKING",
+        severity: "BLOCKING",
+        message: "stale reference configuration is blocking",
+        evidence: { phase: "reference_slice" },
+      },
+    });
+    const staleReferenceRead = await api(
+      `automatic-quote-sessions/${sessionId}`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+    expect(staleReferenceRead.response.status).toBe(200);
+    expect(
+      (
+        staleReferenceRead.body.items as Array<{
+          findings: Array<{ id: string }>;
+        }>
+      ).flatMap(({ findings }) => findings.map(({ id }) => id)),
+    ).not.toContain(staleReferenceFinding.id);
+    expect(
+      (
+        staleReferenceRead.body.handoff as {
+          reasons?: string[];
+        } | null
+      )?.reasons ?? [],
+    ).not.toContain("BLOCKING_PREFLIGHT_FINDING");
+    const currentReferenceRevision = (
+      referenceAttemptOne.payload as {
+        job: { inputFingerprintSha256: string };
+      }
+    ).job.inputFingerprintSha256;
     const riskFinding = await prisma.preflightFinding.create({
       data: {
         modelFileId: riskDraft.sourceModelFileId,
         modelGeometryId: riskDraft.targetModelGeometryId,
-        inspectionRevision: sha(`${scope}:binding-risk-revision`),
+        inspectionRevision: currentReferenceRevision,
         code: "AUTOMATIC_BINDING_WARNING",
         severity: "WARNING",
         message: "binding risk warning",
@@ -2239,6 +2274,19 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     );
     expect(acknowledgedRisk.response.status).toBe(200);
+    expect(acknowledgedRisk.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ordinal: 0,
+          findings: expect.arrayContaining([
+            expect.objectContaining({
+              id: riskFinding.id,
+              decision: "ACKNOWLEDGED",
+            }),
+          ]),
+        }),
+      ]),
+    );
     const acknowledgedRevision = number(
       acknowledgedRisk.body.configurationRevision,
     );
@@ -2973,7 +3021,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       data: Array.from({ length: 4 }, (_, index) => ({
         modelFileId: warningDraft.sourceModelFileId,
         modelGeometryId: warningDraft.targetModelGeometryId,
-        inspectionRevision: sha(`${scope}:warning-revision`),
+        inspectionRevision: "inspection-v1",
         code: `AUTOMATIC_WARNING_${index + 1}`,
         severity: "WARNING" as const,
         message: `warning ${index + 1}`,
