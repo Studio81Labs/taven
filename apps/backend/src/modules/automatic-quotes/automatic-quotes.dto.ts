@@ -44,6 +44,16 @@ export class ConfigureAutomaticQuoteItemDto {
   fitSensitive?: boolean;
 }
 
+export class ConfigureAutomaticQuoteDraftItemDto extends ConfigureAutomaticQuoteItemDto {
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 999 })
+  ordinal!: number;
+}
+
+export class ReplaceAutomaticQuoteConfigurationDto {
+  @ApiProperty({ type: [ConfigureAutomaticQuoteDraftItemDto], minItems: 1 })
+  items!: ConfigureAutomaticQuoteDraftItemDto[];
+}
+
 export class AutomaticQuoteRiskDecisionDto {
   @ApiProperty({ type: "integer", minimum: 0 })
   itemOrdinal!: number;
@@ -125,6 +135,9 @@ export class AutomaticQuoteItemDto {
   @ApiProperty({ type: [String] })
   bodyIds!: string[];
 
+  @ApiProperty({ type: String, format: "uuid" })
+  printConfigRevisionId!: string;
+
   @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
   material!: "PLA" | "PETG";
 
@@ -133,6 +146,9 @@ export class AutomaticQuoteItemDto {
 
   @ApiProperty({ type: String })
   infillPreset!: string;
+
+  @ApiProperty({ type: String, enum: ["DRAFT", "STANDARD", "FINE"] })
+  quality!: "DRAFT" | "STANDARD" | "FINE";
 
   @ApiProperty({ type: "integer", minimum: 1 })
   quantity!: number;
@@ -148,6 +164,54 @@ export class AutomaticQuoteItemDto {
 
   @ApiProperty({ type: [AutomaticQuoteFindingDto] })
   findings!: AutomaticQuoteFindingDto[];
+}
+
+export class AutomaticQuoteConfigurationOptionDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  printConfigRevisionId!: string;
+
+  @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
+  material!: "PLA" | "PETG";
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  color!: string | null;
+
+  @ApiProperty({ type: String, enum: ["DRAFT", "STANDARD", "FINE"] })
+  quality!: "DRAFT" | "STANDARD" | "FINE";
+
+  @ApiProperty({ type: String, enum: ["DECORATIVE", "STANDARD", "STRONG"] })
+  infillPreset!: "DECORATIVE" | "STANDARD" | "STRONG";
+}
+
+export class AutomaticQuoteDeliveryOptionDto {
+  @ApiProperty({ type: String })
+  providerEndpointId!: string;
+
+  @ApiProperty({ type: String })
+  endpointType!: string;
+
+  @ApiProperty({ type: String })
+  label!: string;
+}
+
+export class AutomaticQuoteQuantityComparisonDto {
+  @ApiProperty({ type: "integer", minimum: 0 })
+  itemOrdinal!: number;
+
+  @ApiProperty({ type: "integer", enum: [1, 5, 20] })
+  quantity!: 1 | 5 | 20;
+
+  @ApiProperty({ type: String, minLength: 3, maxLength: 3 })
+  currency!: string;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: MAX_SAFE_INTEGER,
+    description:
+      "Rough whole-order total with only this item's quantity changed",
+  })
+  orderTotalMinor!: number;
 }
 
 export class AutomaticQuotePriceComponentDto {
@@ -252,11 +316,23 @@ export class AutomaticQuoteSessionDto {
   @ApiProperty({ type: "integer", minimum: 1 })
   configurationRevision!: number;
 
+  @ApiProperty({ type: Boolean })
+  configurationEditable!: boolean;
+
   @ApiProperty({ type: [AutomaticQuoteModelFileDto] })
   modelFiles!: AutomaticQuoteModelFileDto[];
 
   @ApiProperty({ type: [AutomaticQuoteItemDto] })
   items!: AutomaticQuoteItemDto[];
+
+  @ApiProperty({ type: [AutomaticQuoteConfigurationOptionDto] })
+  configurationOptions!: AutomaticQuoteConfigurationOptionDto[];
+
+  @ApiProperty({ type: [AutomaticQuoteDeliveryOptionDto] })
+  deliveryOptions!: AutomaticQuoteDeliveryOptionDto[];
+
+  @ApiProperty({ type: [AutomaticQuoteQuantityComparisonDto] })
+  quantityComparisons!: AutomaticQuoteQuantityComparisonDto[];
 
   @ApiPropertyOptional({ type: AutomaticQuotePriceDto, nullable: true })
   roughEstimate!: AutomaticQuotePriceDto | null;

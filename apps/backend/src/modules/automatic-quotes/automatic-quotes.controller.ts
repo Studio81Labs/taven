@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
@@ -30,6 +31,7 @@ import {
   AutomaticQuoteSessionDto,
   ConfigureAutomaticQuoteItemDto,
   CreateAutomaticQuoteSessionDto,
+  ReplaceAutomaticQuoteConfigurationDto,
   SelectAutomaticQuoteDestinationDto,
   SetAutomaticQuoteExpressDto,
 } from "./automatic-quotes.dto";
@@ -135,6 +137,52 @@ export class AutomaticQuotesController {
       sessionId,
       ordinal,
       body,
+      authorization,
+      idempotencyKey,
+    );
+  }
+
+  @Put(":sessionId/configuration")
+  @ApiBearerAuth()
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({ summary: "Atomically replace all selected body groups" })
+  @ApiParam(SESSION_ID_PARAM)
+  @ApiBody({ type: ReplaceAutomaticQuoteConfigurationDto })
+  @ApiOkResponse({ type: AutomaticQuoteSessionDto })
+  @ApiConflictResponse({
+    description: "Inspection is pending or configuration is frozen",
+  })
+  replaceConfiguration(
+    @Param("sessionId") sessionId: string,
+    @Body() body: ReplaceAutomaticQuoteConfigurationDto,
+    @Headers("authorization") authorization?: string,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<AutomaticQuoteSessionDto> {
+    return this.automaticQuotes.replaceConfiguration(
+      sessionId,
+      body,
+      authorization,
+      idempotencyKey,
+    );
+  }
+
+  @Delete(":sessionId/items/:ordinal/configuration")
+  @ApiBearerAuth()
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({ summary: "Remove one selected body group" })
+  @ApiParam(SESSION_ID_PARAM)
+  @ApiParam({ name: "ordinal", type: "integer" })
+  @ApiOkResponse({ type: AutomaticQuoteSessionDto })
+  @ApiConflictResponse({ description: "Configuration is frozen" })
+  removeConfiguration(
+    @Param("sessionId") sessionId: string,
+    @Param("ordinal") ordinal: string,
+    @Headers("authorization") authorization?: string,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<AutomaticQuoteSessionDto> {
+    return this.automaticQuotes.removeItem(
+      sessionId,
+      ordinal,
       authorization,
       idempotencyKey,
     );

@@ -11,7 +11,16 @@ export type ResolvedDeliveryCapability = Readonly<{
   supportedCategoryIds: readonly string[];
 }>;
 
+export type DeliveryCapabilityOption = Readonly<{
+  providerEndpointId: string;
+  endpointType: string;
+  label: string;
+  supportedCategoryIds: readonly string[];
+}>;
+
 export interface DeliveryCapabilityPort {
+  list(): Promise<readonly DeliveryCapabilityOption[]>;
+
   resolve(input: {
     providerEndpointId: string;
     endpointType: string;
@@ -57,6 +66,15 @@ const DEFAULT_ENDPOINTS: readonly ConfiguredEndpoint[] = [
  */
 @Injectable()
 export class ConfiguredDeliveryCapabilityAdapter implements DeliveryCapabilityPort {
+  async list(): Promise<readonly DeliveryCapabilityOption[]> {
+    return configuredEndpoints().map((endpoint) => ({
+      providerEndpointId: endpoint.providerEndpointId,
+      endpointType: endpoint.endpointType,
+      label: publicLabel(endpoint),
+      supportedCategoryIds: endpoint.supportedCategoryIds,
+    }));
+  }
+
   async resolve(input: {
     providerEndpointId: string;
     endpointType: string;
@@ -83,6 +101,13 @@ export class ConfiguredDeliveryCapabilityAdapter implements DeliveryCapabilityPo
       supportedCategoryIds: endpoint.supportedCategoryIds,
     };
   }
+}
+
+function publicLabel(endpoint: ConfiguredEndpoint): string {
+  const label = endpoint.addressSnapshot.label;
+  return typeof label === "string" && label.trim()
+    ? label.trim()
+    : endpoint.providerEndpointId;
 }
 
 function configuredEndpoints(): readonly ConfiguredEndpoint[] {

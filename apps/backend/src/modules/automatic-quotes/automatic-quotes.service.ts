@@ -60,6 +60,7 @@ import type {
   AutomaticQuoteRiskDecisionDto,
   ConfigureAutomaticQuoteItemDto,
   CreateAutomaticQuoteSessionDto,
+  ReplaceAutomaticQuoteConfigurationDto,
   SelectAutomaticQuoteDestinationDto,
 } from "./automatic-quotes.dto";
 import {
@@ -165,6 +166,10 @@ type AutomaticQuoteCandidateDraftItem = {
   referencePartsPerPlate: number | null;
   referenceProbeLowerBound: number;
   referenceProbeUpperBound: number;
+};
+type ProposedAutomaticQuoteDraftItem = AutomaticQuoteCandidateDraftItem & {
+  fitSensitive: boolean;
+  configurationFingerprint: string;
 };
 type ReferenceOccupancyResolution =
   | { kind: "resolved"; partsPerPlate: number }
@@ -361,6 +366,15 @@ export class AutomaticQuotesService {
           },
         });
         if (existing) return;
+        if (
+          (await transaction.orderItem.count({
+            where: { orderId: origin.orderId },
+          })) > 0
+        ) {
+          throw new ConflictException(
+            "Model files cannot be attached after quote preparation starts",
+          );
+        }
 
         const inspectionJobId = deterministicUuid(
           `automatic-inspection:${modelFileId}:${INSPECTION_REVISION}:${INSPECTION_CONFIG_SHA256}`,
@@ -459,17 +473,20 @@ export class AutomaticQuotesService {
             "Print configuration does not match the named infill preset",
           );
         }
-        const referenceProfile = await transaction.referenceProfile.findFirst({
-          where: {
-            state: RevisionState.ACTIVE,
-            material: configuration.material,
-            quality: printConfig.quality,
-          },
-          orderBy: [{ activatedAt: "desc" }, { id: "asc" }],
-        });
-        if (!referenceProfile) {
+        const selectedOption = (
+          await this.configurationCapabilities(transaction)
+        ).find(
+          (option) =>
+            option.printConfigRevisionId ===
+              configuration.printConfigRevisionId &&
+            option.material === configuration.material &&
+            option.color === configuration.color &&
+            option.quality === printConfig.quality &&
+            option.infillPreset === configuration.infillPreset,
+        );
+        if (!selectedOption) {
           throw new BadRequestException(
-            "No active reference profile supports this configuration",
+            "Selected automatic quote configuration is unavailable",
           );
         }
         const { geometrySelectionSha256 } =
@@ -480,13 +497,67 @@ export class AutomaticQuotesService {
         );
         const configurationFingerprint = fingerprintOf({
           ...configuration,
-          referenceProfileId: referenceProfile.id,
+          referenceProfileId: selectedOption.referenceProfileId,
           selectionSha256,
           targetModelGeometryId,
         });
         const current = await transaction.automaticQuoteItemDraft.findUnique({
           where: { orderId_ordinal: { orderId: origin.orderId, ordinal } },
         });
+        const priceList = await transaction.priceList.findUnique({
+          where: {
+            currency_revision: {
+              currency: "CZK",
+              revision: AUTOMATIC_PRICE_LIST_REVISION,
+            },
+          },
+        });
+        if (!priceList) {
+          throw new ConflictException("Automatic quote pricing is unavailable");
+        }
+        const proposedItem = {
+          id:
+            current?.id ??
+            deterministicUuid(`automatic-draft:${origin.orderId}:${ordinal}`),
+          ordinal,
+          sourceModelFileId: configuration.modelFileId,
+          bodyIds: configuration.bodyIds,
+          selectionSha256,
+          targetModelGeometryId,
+          printConfigRevisionId: configuration.printConfigRevisionId,
+          referenceProfileId: selectedOption.referenceProfileId,
+          material: configuration.material,
+          color: configuration.color,
+          infillPreset: configuration.infillPreset,
+          quantity: configuration.quantity,
+          referencePartsPerPlate: null,
+          referenceProbeLowerBound: 0,
+          referenceProbeUpperBound: configuration.quantity + 1,
+        } satisfies AutomaticQuoteCandidateDraftItem;
+        const proposedItems: AutomaticQuoteCandidateDraftItem[] = [
+          ...(await transaction.automaticQuoteItemDraft.findMany({
+            where: { orderId: origin.orderId, ordinal: { not: ordinal } },
+          })),
+          proposedItem,
+        ].sort((left, right) => left.ordinal - right.ordinal);
+        const proposedPricing = await this.pricingItemsFromDraft(
+          transaction,
+          origin.orderId,
+          proposedItems,
+          parseAutomaticQuotePricingParameters(priceList.parameters),
+        );
+        if (
+          !proposedPricing ||
+          !(await this.draftInventoryAvailable(
+            transaction,
+            proposedItems,
+            proposedPricing.items,
+          ))
+        ) {
+          throw new BadRequestException(
+            "Selected automatic quote configuration lacks sufficient inventory",
+          );
+        }
         if (current?.configurationFingerprint === configurationFingerprint) {
           return;
         }
@@ -500,7 +571,7 @@ export class AutomaticQuotesService {
             selectionSha256,
             targetModelGeometryId,
             printConfigRevisionId: configuration.printConfigRevisionId,
-            referenceProfileId: referenceProfile.id,
+            referenceProfileId: selectedOption.referenceProfileId,
             material: configuration.material,
             color: configuration.color,
             infillPreset: configuration.infillPreset,
@@ -517,7 +588,7 @@ export class AutomaticQuotesService {
             selectionSha256,
             targetModelGeometryId,
             printConfigRevisionId: configuration.printConfigRevisionId,
-            referenceProfileId: referenceProfile.id,
+            referenceProfileId: selectedOption.referenceProfileId,
             material: configuration.material,
             color: configuration.color,
             infillPreset: configuration.infillPreset,
@@ -528,6 +599,294 @@ export class AutomaticQuotesService {
             referenceProbeUpperBound: configuration.quantity + 1,
             configurationFingerprint,
           },
+        });
+        await transaction.automaticQuoteDraft.update({
+          where: { orderId: origin.orderId },
+          data: { configurationRevision: { increment: 1 } },
+        });
+      },
+    );
+    return this.getSession(sessionId, authorization);
+  }
+
+  async replaceConfiguration(
+    sessionId: string,
+    input: ReplaceAutomaticQuoteConfigurationDto,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    if (
+      !Array.isArray(input?.items) ||
+      input.items.length === 0 ||
+      input.items.length > 256
+    ) {
+      throw new BadRequestException("items must contain 1 through 256 groups");
+    }
+    const configurations = await Promise.all(
+      input.items.map(async (item) => ({
+        ordinal: nonnegativeInteger(item?.ordinal, "ordinal", 999),
+        configuration: await this.validateConfiguration(item),
+      })),
+    );
+    if (
+      new Set(configurations.map(({ ordinal }) => ordinal)).size !==
+      configurations.length
+    ) {
+      throw new BadRequestException("item ordinals must be unique");
+    }
+    const selectedBodies = configurations.flatMap(({ configuration }) =>
+      configuration.bodyIds.map(
+        (bodyId) => `${configuration.modelFileId}\0${bodyId}`,
+      ),
+    );
+    if (new Set(selectedBodies).size !== selectedBodies.length) {
+      throw new BadRequestException(
+        "selected bodies cannot appear in more than one item",
+      );
+    }
+    configurations.sort((left, right) => left.ordinal - right.ordinal);
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const fingerprint = fingerprintOf({ sessionId, configurations });
+    const { geometrySelectionSha256 } = await import("@taven/slicer-contracts");
+
+    await this.idempotentEffect(
+      "automatic-quote.replace-configuration",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const session = await lockedSession(transaction, sessionId);
+        assertOpenSession(session, sessionCapability);
+        const origin = await transaction.automaticOrderOrigin.findUnique({
+          where: { quoteSessionId: sessionId },
+        });
+        if (!origin) throw new ConflictException("Automatic order is missing");
+        if (
+          (await transaction.orderItem.count({
+            where: { orderId: origin.orderId },
+          })) > 0
+        ) {
+          throw new ConflictException(
+            "Configuration is frozen after quote preparation starts",
+          );
+        }
+        const currentItems = await transaction.automaticQuoteItemDraft.findMany(
+          {
+            where: { orderId: origin.orderId },
+          },
+        );
+        const currentByOrdinal = new Map(
+          currentItems.map((item) => [item.ordinal, item]),
+        );
+        const capabilities = await this.configurationCapabilities(transaction);
+        const proposedItems: ProposedAutomaticQuoteDraftItem[] = [];
+        for (const { ordinal, configuration } of configurations) {
+          const attached = await transaction.automaticQuoteModelFile.findUnique(
+            {
+              where: {
+                orderId_modelFileId: {
+                  orderId: origin.orderId,
+                  modelFileId: configuration.modelFileId,
+                },
+              },
+            },
+          );
+          if (!attached) {
+            throw new BadRequestException("Model file is not attached");
+          }
+          const inspection = await terminalResultForJob(
+            transaction,
+            attached.inspectionJobId,
+            "model_inspection",
+          );
+          const discoveredBodyIds = successfulInspectionBodies(inspection);
+          if (
+            discoveredBodyIds.length === 0 ||
+            configuration.bodyIds.some(
+              (bodyId) => !discoveredBodyIds.includes(bodyId),
+            )
+          ) {
+            throw new ConflictException(
+              "Selected bodies are not available in the completed inspection",
+            );
+          }
+          const printConfig = await transaction.printConfigRevision.findUnique({
+            where: { id: configuration.printConfigRevisionId },
+          });
+          if (
+            !printConfig ||
+            printConfig.infillPercent !==
+              INFILL_PERCENT[configuration.infillPreset]
+          ) {
+            throw new BadRequestException(
+              "Print configuration does not match the named infill preset",
+            );
+          }
+          const selectedOption = capabilities.find(
+            (option) =>
+              option.printConfigRevisionId ===
+                configuration.printConfigRevisionId &&
+              option.material === configuration.material &&
+              option.color === configuration.color &&
+              option.quality === printConfig.quality &&
+              option.infillPreset === configuration.infillPreset,
+          );
+          if (!selectedOption) {
+            throw new BadRequestException(
+              "Selected automatic quote configuration is unavailable",
+            );
+          }
+          const selectionSha256 = geometrySelectionSha256(
+            configuration.bodyIds,
+          );
+          const targetModelGeometryId = deterministicUuid(
+            `automatic-geometry:${configuration.modelFileId}:${selectionSha256}`,
+          );
+          const configurationFingerprint = fingerprintOf({
+            ...configuration,
+            referenceProfileId: selectedOption.referenceProfileId,
+            selectionSha256,
+            targetModelGeometryId,
+          });
+          proposedItems.push({
+            id:
+              currentByOrdinal.get(ordinal)?.id ??
+              deterministicUuid(`automatic-draft:${origin.orderId}:${ordinal}`),
+            ordinal,
+            sourceModelFileId: configuration.modelFileId,
+            bodyIds: configuration.bodyIds,
+            selectionSha256,
+            targetModelGeometryId,
+            printConfigRevisionId: configuration.printConfigRevisionId,
+            referenceProfileId: selectedOption.referenceProfileId,
+            material: configuration.material,
+            color: configuration.color,
+            infillPreset: configuration.infillPreset,
+            quantity: configuration.quantity,
+            fitSensitive: configuration.fitSensitive,
+            referencePartsPerPlate: null,
+            referenceProbeLowerBound: 0,
+            referenceProbeUpperBound: configuration.quantity + 1,
+            configurationFingerprint,
+          });
+        }
+        const priceList = await transaction.priceList.findUnique({
+          where: {
+            currency_revision: {
+              currency: "CZK",
+              revision: AUTOMATIC_PRICE_LIST_REVISION,
+            },
+          },
+        });
+        if (!priceList) {
+          throw new ConflictException("Automatic quote pricing is unavailable");
+        }
+        const proposedPricing = await this.pricingItemsFromDraft(
+          transaction,
+          origin.orderId,
+          proposedItems,
+          parseAutomaticQuotePricingParameters(priceList.parameters),
+        );
+        if (
+          !proposedPricing ||
+          !(await this.draftInventoryAvailable(
+            transaction,
+            proposedItems,
+            proposedPricing.items,
+          ))
+        ) {
+          throw new BadRequestException(
+            "Selected automatic quote configuration lacks sufficient inventory",
+          );
+        }
+        const unchanged =
+          currentItems.length === proposedItems.length &&
+          proposedItems.every(
+            (item) =>
+              currentByOrdinal.get(item.ordinal)?.configurationFingerprint ===
+              item.configurationFingerprint,
+          );
+        if (unchanged) return;
+
+        await transaction.automaticQuoteRiskDecisionRecord.deleteMany({
+          where: { orderId: origin.orderId },
+        });
+        await transaction.automaticQuoteItemDraft.deleteMany({
+          where: { orderId: origin.orderId },
+        });
+        await transaction.automaticQuoteItemDraft.createMany({
+          data: proposedItems.map((item) => ({
+            id: item.id,
+            orderId: origin.orderId,
+            ordinal: item.ordinal,
+            sourceModelFileId: item.sourceModelFileId,
+            bodyIds: item.bodyIds,
+            selectionSha256: item.selectionSha256,
+            targetModelGeometryId: item.targetModelGeometryId,
+            printConfigRevisionId: item.printConfigRevisionId,
+            referenceProfileId: item.referenceProfileId,
+            material: item.material,
+            color: item.color,
+            infillPreset: item.infillPreset,
+            quantity: item.quantity,
+            fitSensitive: item.fitSensitive,
+            referencePartsPerPlate: item.referencePartsPerPlate,
+            referenceProbeLowerBound: item.referenceProbeLowerBound,
+            referenceProbeUpperBound: item.referenceProbeUpperBound,
+            configurationFingerprint: item.configurationFingerprint,
+          })),
+        });
+        await transaction.automaticQuoteDraft.update({
+          where: { orderId: origin.orderId },
+          data: { configurationRevision: { increment: 1 } },
+        });
+      },
+    );
+    return this.getSession(sessionId, authorization);
+  }
+
+  async removeItem(
+    sessionId: string,
+    ordinalValue: string,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const ordinal = nonnegativeInteger(ordinalValue, "ordinal", 999);
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const fingerprint = fingerprintOf({ sessionId, ordinal });
+
+    await this.idempotentEffect(
+      "automatic-quote.remove-item",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const session = await lockedSession(transaction, sessionId);
+        assertOpenSession(session, sessionCapability);
+        const origin = await transaction.automaticOrderOrigin.findUnique({
+          where: { quoteSessionId: sessionId },
+        });
+        if (!origin) throw new ConflictException("Automatic order is missing");
+        if (
+          (await transaction.orderItem.count({
+            where: { orderId: origin.orderId },
+          })) > 0
+        ) {
+          throw new ConflictException(
+            "Configuration is frozen after quote preparation starts",
+          );
+        }
+        const current = await transaction.automaticQuoteItemDraft.findUnique({
+          where: { orderId_ordinal: { orderId: origin.orderId, ordinal } },
+        });
+        if (!current) return;
+        await transaction.automaticQuoteRiskDecisionRecord.deleteMany({
+          where: { automaticQuoteItemId: current.id },
+        });
+        await transaction.automaticQuoteItemDraft.delete({
+          where: { id: current.id },
         });
         await transaction.automaticQuoteDraft.update({
           where: { orderId: origin.orderId },
@@ -1980,6 +2339,116 @@ export class AutomaticQuotesService {
       });
     }
     return demands;
+  }
+
+  private async draftInventoryAvailable(
+    transaction: Transaction | PrismaService,
+    items: readonly AutomaticQuoteCandidateDraftItem[],
+    pricingItems: readonly AutomaticQuotePricingItem[],
+  ): Promise<boolean> {
+    if (items.length !== pricingItems.length || items.length === 0) {
+      return false;
+    }
+    const resourcesByItemId = new Map<
+      string,
+      Map<string, Array<{ inventoryId: string; available: bigint }>>
+    >();
+    const demands: Array<{
+      itemId: string;
+      requiredMaterialMilligrams: bigint;
+    }> = [];
+    for (const [index, item] of items.entries()) {
+      const pricingItem = pricingItems[index];
+      if (!pricingItem) return false;
+      const rows = await transaction.$queryRaw<
+        Array<{
+          nodeId: string;
+          inventoryId: string;
+          availableMilligrams: bigint;
+          buildVolumeXMicrometers: bigint;
+          buildVolumeYMicrometers: bigint;
+          buildVolumeZMicrometers: bigint;
+        }>
+      >`
+        SELECT DISTINCT
+          node.id AS "nodeId",
+          inventory.id AS "inventoryId",
+          inventory.remaining_milligrams - inventory.reserved_milligrams
+            AS "availableMilligrams",
+          capability.build_volume_x_micrometers
+            AS "buildVolumeXMicrometers",
+          capability.build_volume_y_micrometers
+            AS "buildVolumeYMicrometers",
+          capability.build_volume_z_micrometers
+            AS "buildVolumeZMicrometers"
+        FROM machine_profiles profile
+        JOIN machine_capabilities capability
+          ON capability.id = profile.machine_capability_id
+        JOIN print_config_revisions config
+          ON config.id = ${item.printConfigRevisionId}::uuid
+         AND config.quality = profile.quality
+        JOIN machines machine
+          ON machine.machine_capability_id = profile.machine_capability_id
+         AND machine.status = 'ACTIVE'
+         AND machine.installed_nozzle_micrometers =
+             profile.nozzle_diameter_micrometers
+        JOIN nodes node
+          ON node.id = machine.node_id
+         AND node.active
+        JOIN machine_calibrations calibration
+          ON calibration.node_id = machine.node_id
+         AND calibration.machine_id = machine.id
+         AND calibration.state = 'ACTIVE'
+        JOIN inventories inventory
+          ON inventory.node_id = machine.node_id
+         AND inventory.machine_id = machine.id
+         AND inventory.status = 'AVAILABLE'
+         AND inventory.remaining_milligrams > inventory.reserved_milligrams
+         AND inventory.material = ${item.material}::material
+         AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
+        WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
+          AND profile.material = ${item.material}::material
+          AND profile.state = 'ACTIVE'
+          AND profile.production_artifact_format <> 'bgcode'
+      `;
+      const byNode = new Map<
+        string,
+        Array<{ inventoryId: string; available: bigint }>
+      >();
+      for (const row of rows.filter((candidate) =>
+        geometryFitsCapability(pricingItem, candidate),
+      )) {
+        const options = byNode.get(row.nodeId) ?? [];
+        if (
+          !options.some(({ inventoryId }) => inventoryId === row.inventoryId)
+        ) {
+          options.push({
+            inventoryId: row.inventoryId,
+            available: row.availableMilligrams,
+          });
+        }
+        byNode.set(row.nodeId, options);
+      }
+      if (byNode.size === 0) return false;
+      resourcesByItemId.set(pricingItem.id, byNode);
+      demands.push({
+        itemId: pricingItem.id,
+        requiredMaterialMilligrams: totalEstimatedMaterial(pricingItem),
+      });
+    }
+    const commonNodeIds = [
+      ...(resourcesByItemId.get(demands[0]!.itemId)?.keys() ?? []),
+    ].filter((nodeId) =>
+      demands.every(({ itemId }) => resourcesByItemId.get(itemId)?.has(nodeId)),
+    );
+    return commonNodeIds.some((nodeId) =>
+      hasUsableInventoryAssignment(
+        demands.map(({ itemId, requiredMaterialMilligrams }) => ({
+          requiredMaterialMilligrams,
+          options: resourcesByItemId.get(itemId)?.get(nodeId) ?? [],
+        })),
+      ),
+    );
   }
 
   private async candidateResourcesAvailable(
@@ -3589,6 +4058,7 @@ export class AutomaticQuotesService {
     candidateAdmissionSatisfied = false,
   ): Promise<{
     quote: AutomaticQuoteSessionDto["roughEstimate"];
+    deliveryOptions: AutomaticQuoteSessionDto["deliveryOptions"];
     express: { eligible: boolean; reasons: readonly string[] };
     reasons: readonly string[];
   } | null> {
@@ -3617,6 +4087,13 @@ export class AutomaticQuotesService {
       parseAutomaticQuotePricingParameters(priceList.parameters),
     );
     if (!pricing) return null;
+    const deliveryOptions = await this.deliveryOptions({
+      orderId,
+      configurationRevision: draft.configurationRevision,
+      expressRequested: draft.expressRequested,
+      items: pricing.items,
+      priceList,
+    });
     const itemOrdinals = new Map(
       pricing.items.map((item, index) => [
         item.id,
@@ -3666,6 +4143,7 @@ export class AutomaticQuotesService {
         ).prepared;
     return {
       quote: provisionalPriceDto(result.price, itemOrdinals),
+      deliveryOptions,
       express: result.expressEligibility,
       reasons: pricing.allReferenceSliced ? result.reasons : [],
     };
@@ -3687,7 +4165,10 @@ export class AutomaticQuotesService {
                       orderBy: { createdAt: "asc" },
                     },
                     items: {
-                      include: { riskDecisions: true },
+                      include: {
+                        printConfigRevision: true,
+                        riskDecisions: true,
+                      },
                       orderBy: { ordinal: "asc" },
                     },
                   },
@@ -3758,6 +4239,10 @@ export class AutomaticQuotesService {
         };
       }),
     );
+    const configurationCapabilities = await this.configurationCapabilities();
+    const configurationOptions = configurationCapabilities.map(
+      ({ referenceProfileId: _referenceProfileId, ...option }) => option,
+    );
     const itemDtos = await Promise.all(
       draft.items.map(async (item) => {
         const geometry = await this.prisma.modelGeometry.findUnique({
@@ -3799,9 +4284,11 @@ export class AutomaticQuotesService {
           ordinal: item.ordinal,
           modelFileId: item.sourceModelFileId,
           bodyIds: item.bodyIds,
+          printConfigRevisionId: item.printConfigRevisionId,
           material: item.material,
           color: item.color,
           infillPreset: item.infillPreset,
+          quality: item.printConfigRevision.quality,
           quantity: item.quantity,
           fitSensitive: item.fitSensitive,
           status: !geometry
@@ -3834,6 +4321,14 @@ export class AutomaticQuotesService {
     }
     if (modelFiles.some((file) => file.inspectionStatus === "FAILED")) {
       handoffReasons.push("INSPECTION_FAILED");
+    }
+    if (
+      modelFiles.length > 0 &&
+      modelFiles.every((file) => file.inspectionStatus === "SUCCEEDED") &&
+      itemDtos.length === 0 &&
+      configurationOptions.length === 0
+    ) {
+      handoffReasons.push("NO_CONFIGURATION_AVAILABLE");
     }
     if (
       itemDtos.some((item) =>
@@ -3902,13 +4397,14 @@ export class AutomaticQuotesService {
       itemDtos.length > 0
         ? await this.roughQuote(order.id, hasLiveReservation)
         : null;
+    const deliveryOptions =
+      rough?.deliveryOptions ?? (await this.deliveryOptions());
     const permanentRoughReasons = new Set([
       "UNSUPPORTED_FORMAT",
       "BLOCKING_PREFLIGHT_FINDING",
       "AUTOMATIC_QUANTITY_LIMIT_EXCEEDED",
       "AUTOMATIC_AMOUNT_LIMIT_EXCEEDED",
       "BUILD_LIMIT_EXCEEDED",
-      "SHIPMENT_INELIGIBLE",
       "EXPRESS_INELIGIBLE",
     ]);
     for (const reason of rough?.reasons ?? []) {
@@ -3923,6 +4419,14 @@ export class AutomaticQuotesService {
       !expired &&
       order.status === OrderStatus.QUOTED &&
       Boolean(active && currentPlan && currentReservation);
+    if (
+      readyItems &&
+      !checkoutReady &&
+      deliveryOptions.length === 0 &&
+      !handoffReasons.includes("SHIPMENT_INELIGIBLE")
+    ) {
+      handoffReasons.push("SHIPMENT_INELIGIBLE");
+    }
     const expressCandidatePending =
       draft.expressRequested &&
       !expired &&
@@ -3937,6 +4441,10 @@ export class AutomaticQuotesService {
             "BINDING",
           )
         : null;
+    const shipmentIneligible =
+      rough?.reasons.includes("SHIPMENT_INELIGIBLE") ?? false;
+    const quantityComparisons =
+      itemDtos.length > 0 ? await this.quantityComparisons(order.id) : [];
     const phase = expired
       ? "EXPIRED"
       : handoffReasons.length > 0
@@ -3950,7 +4458,7 @@ export class AutomaticQuotesService {
               ? "REFERENCE_SLICES_PENDING"
               : acknowledgementIncomplete
                 ? "ACTION_REQUIRED"
-                : !draft.selectedDeliveryDestinationId
+                : !draft.selectedDeliveryDestinationId || shipmentIneligible
                   ? "DESTINATION_REQUIRED"
                   : checkoutReady
                     ? "CHECKOUT_READY"
@@ -3961,8 +4469,12 @@ export class AutomaticQuotesService {
       publicReference: order.publicReference,
       phase,
       configurationRevision: draft.configurationRevision,
+      configurationEditable: !expired && order.items.length === 0,
       modelFiles,
       items: itemDtos,
+      configurationOptions,
+      deliveryOptions: [...deliveryOptions],
+      quantityComparisons,
       roughEstimate: rough?.quote ?? null,
       bindingQuote,
       express: {
@@ -4000,6 +4512,320 @@ export class AutomaticQuotesService {
       expiresAt: session.expiresAt.toISOString(),
     };
   }
+
+  // This catalog seeds the selector before the customer has supplied bodies and
+  // quantity. configureItem applies the authoritative whole-draft inventory
+  // gate before persisting the selection or allowing slicing to be enqueued.
+  private async configurationCapabilities(
+    client: Transaction | PrismaService = this.prisma,
+  ) {
+    const rows = await client.$queryRaw<
+      Array<{
+        referenceProfileId: string;
+        referenceActivatedAt: Date | null;
+        printConfigRevisionId: string;
+        material: "PLA" | "PETG";
+        color: string | null;
+        quality: "DRAFT" | "STANDARD" | "FINE";
+        infillPercent: number;
+      }>
+    >`
+      SELECT DISTINCT
+        reference.id AS "referenceProfileId",
+        reference.activated_at AS "referenceActivatedAt",
+        config.id AS "printConfigRevisionId",
+        profile.material::text AS material,
+        inventory.color,
+        config.quality::text AS quality,
+        config.infill_percent AS "infillPercent"
+      FROM reference_profiles reference
+      JOIN machine_profiles profile
+        ON profile.reference_profile_id = reference.id
+       AND profile.material = reference.material
+       AND profile.quality = reference.quality
+       AND profile.state = 'ACTIVE'
+       AND profile.production_artifact_format <> 'bgcode'
+      JOIN print_config_revisions config
+        ON config.quality = profile.quality
+       AND config.infill_percent IN (10, 20, 40)
+       AND NOT config.supports_enabled
+       AND NOT config.brim_enabled
+      JOIN machines machine
+        ON machine.machine_capability_id = profile.machine_capability_id
+       AND machine.status = 'ACTIVE'
+       AND machine.installed_nozzle_micrometers =
+           profile.nozzle_diameter_micrometers
+      JOIN nodes node
+        ON node.id = machine.node_id
+       AND node.active
+      JOIN machine_calibrations calibration
+        ON calibration.node_id = machine.node_id
+       AND calibration.machine_id = machine.id
+       AND calibration.state = 'ACTIVE'
+      JOIN inventories inventory
+        ON inventory.node_id = machine.node_id
+       AND inventory.machine_id = machine.id
+       AND inventory.status = 'AVAILABLE'
+       AND inventory.remaining_milligrams > inventory.reserved_milligrams
+       AND inventory.material = profile.material
+      WHERE reference.state = 'ACTIVE'
+      ORDER BY
+        profile.material::text,
+        inventory.color NULLS FIRST,
+        config.quality::text,
+        config.infill_percent,
+        config.id,
+        reference.activated_at DESC NULLS LAST,
+        reference.id
+    `;
+    const options = new Map<string, (typeof rows)[number]>();
+    const addOption = (row: (typeof rows)[number]) => {
+      const key = JSON.stringify([
+        row.printConfigRevisionId,
+        row.material,
+        row.color,
+        row.quality,
+        row.infillPercent,
+      ]);
+      if (!options.has(key)) options.set(key, row);
+    };
+    for (const row of rows) {
+      addOption(row);
+      if (row.color !== null) addOption({ ...row, color: null });
+    }
+    return [...options.values()].map((row) => ({
+      referenceProfileId: row.referenceProfileId,
+      printConfigRevisionId: row.printConfigRevisionId,
+      material: row.material,
+      color: row.color,
+      quality: row.quality,
+      infillPreset: infillPreset(row.infillPercent),
+    }));
+  }
+
+  private async deliveryOptions(input?: {
+    orderId: string;
+    configurationRevision: number;
+    expressRequested: boolean;
+    items: readonly AutomaticQuotePricingItem[];
+    priceList: {
+      id: string;
+      revision: string;
+      termsRevision: string;
+      currency: string;
+      parameters: Prisma.JsonValue;
+    };
+  }) {
+    const [options, priceList] = await Promise.all([
+      this.deliveryCapabilities.list(),
+      input
+        ? Promise.resolve(input.priceList)
+        : this.prisma.priceList.findUnique({
+            where: {
+              currency_revision: {
+                currency: "CZK",
+                revision: AUTOMATIC_PRICE_LIST_REVISION,
+              },
+            },
+          }),
+    ]);
+    if (!priceList) return [];
+    const pricedCategories = new Set(
+      parseAutomaticQuotePricingParameters(
+        priceList.parameters,
+      ).shipmentCategories.map(({ id }) => id),
+    );
+    const pricedOptions = options.filter((option) =>
+      option.supportedCategoryIds.some((id) => pricedCategories.has(id)),
+    );
+    const viableOptions = input
+      ? (
+          await Promise.all(
+            pricedOptions.map(async (option) => {
+              const identity = fingerprintOf({
+                endpointType: option.endpointType,
+                providerEndpointId: option.providerEndpointId,
+              });
+              const prepared = await prepareAutomaticQuote({
+                priceList,
+                items: input.items,
+                expressRequested: input.expressRequested,
+                materialAndColorAvailable: true,
+                withinBuildLimits: true,
+                riskAcknowledgementsComplete: true,
+                hasBlockingPreflightFinding: false,
+                deliveryDestination: {
+                  id: deterministicUuid(
+                    `automatic-delivery-option:${input.orderId}:${identity}`,
+                  ),
+                  capabilitySnapshot: {
+                    supportedCategoryIds: [...option.supportedCategoryIds],
+                  },
+                },
+                shipmentPlanIdForOrdinal: (ordinal) =>
+                  deterministicUuid(
+                    `automatic-delivery-option-plan:${input.orderId}:${input.configurationRevision}:${identity}:${ordinal}`,
+                  ),
+              });
+              return prepared.prepared.kind !== "binding_quote" &&
+                prepared.prepared.reasons.includes("SHIPMENT_INELIGIBLE")
+                ? null
+                : option;
+            }),
+          )
+        ).filter((option) => option !== null)
+      : pricedOptions;
+    return viableOptions.map(
+      ({ supportedCategoryIds: _supportedCategoryIds, ...option }) => option,
+    );
+  }
+
+  private async quantityComparisons(
+    orderId: string,
+  ): Promise<AutomaticQuoteSessionDto["quantityComparisons"]> {
+    const [draft, priceList] = await Promise.all([
+      this.prisma.automaticQuoteDraft.findUnique({
+        where: { orderId },
+        include: {
+          modelFiles: true,
+          selectedDeliveryDestination: true,
+          items: { orderBy: { ordinal: "asc" } },
+        },
+      }),
+      this.prisma.priceList.findUnique({
+        where: {
+          currency_revision: {
+            currency: "CZK",
+            revision: AUTOMATIC_PRICE_LIST_REVISION,
+          },
+        },
+      }),
+    ]);
+    if (!draft || !priceList || draft.items.length === 0) return [];
+    const parameters = parseAutomaticQuotePricingParameters(
+      priceList.parameters,
+    );
+    const baseline = await this.pricingItemsFromDraft(
+      this.prisma,
+      orderId,
+      draft.items,
+      parameters,
+    );
+    if (!baseline) return [];
+    const geometries = await this.prisma.modelGeometry.findMany({
+      where: {
+        id: {
+          in: draft.items.map(
+            ({ targetModelGeometryId }) => targetModelGeometryId,
+          ),
+        },
+      },
+    });
+    const geometryById = new Map(
+      geometries.map((geometry) => [geometry.id, geometry]),
+    );
+    const missingGeometryModelFileIds = new Set(
+      draft.items
+        .filter((item) => !geometryById.has(item.targetModelGeometryId))
+        .map(({ sourceModelFileId }) => sourceModelFileId),
+    );
+    const inspectionByModelFileId = new Map(
+      await Promise.all(
+        draft.modelFiles
+          .filter(({ modelFileId }) =>
+            missingGeometryModelFileIds.has(modelFileId),
+          )
+          .map(
+            async (attached) =>
+              [
+                attached.modelFileId,
+                await terminalResultForJob(
+                  this.prisma,
+                  attached.inspectionJobId,
+                  "model_inspection",
+                ),
+              ] as const,
+          ),
+      ),
+    );
+    const comparisons: AutomaticQuoteSessionDto["quantityComparisons"] = [];
+    for (const [activeIndex, activeItem] of draft.items.entries()) {
+      const bounds =
+        geometryById.get(activeItem.targetModelGeometryId) ??
+        inspectionMeshEstimate(
+          inspectionByModelFileId.get(activeItem.sourceModelFileId),
+          activeItem.bodyIds,
+        );
+      if (!bounds) continue;
+      for (const quantity of [1, 5, 20] as const) {
+        let comparisonItem = baseline.items[activeIndex]!;
+        if (quantity !== activeItem.quantity) {
+          const referencePartsPerPlate =
+            activeItem.referencePartsPerPlate ?? quantity;
+          const metrics = roughSliceMetrics(
+            { ...activeItem, quantity, referencePartsPerPlate },
+            bounds.volumeCubicMicrometers,
+            parameters,
+          );
+          comparisonItem = {
+            id: comparisonItem.id,
+            referenceProfileId: activeItem.referenceProfileId,
+            material: activeItem.material,
+            quantity,
+            referencePartsPerPlate,
+            primary: metrics.primary,
+            tail: metrics.tail,
+            boundsXMicrometers: bounds.boundsXMicrometers,
+            boundsYMicrometers: bounds.boundsYMicrometers,
+            boundsZMicrometers: bounds.boundsZMicrometers,
+            fulfilmentSlots: Array.from({ length: quantity }, (_, index) => ({
+              packingUnitKey: `${comparisonItem.id}:single:${index + 1}`,
+            })),
+          };
+        }
+        const comparisonItems = [...baseline.items];
+        comparisonItems[activeIndex] = comparisonItem;
+        const prepared = await prepareAutomaticQuote({
+          priceList,
+          items: comparisonItems,
+          expressRequested: draft.expressRequested,
+          materialAndColorAvailable: true,
+          withinBuildLimits: true,
+          riskAcknowledgementsComplete: true,
+          hasBlockingPreflightFinding: false,
+          ...(draft.selectedDeliveryDestination
+            ? {
+                deliveryDestination: draft.selectedDeliveryDestination,
+                shipmentPlanIdForOrdinal: (ordinal: number) =>
+                  deterministicUuid(
+                    `automatic-quantity-comparison:${orderId}:${draft.configurationRevision}:${activeItem.ordinal}:${quantity}:${ordinal}`,
+                  ),
+              }
+            : {}),
+        });
+        comparisons.push({
+          itemOrdinal: activeItem.ordinal,
+          quantity,
+          currency: priceList.currency,
+          orderTotalMinor: safeNumber(
+            prepared.prepared.price.kind === "binding"
+              ? prepared.prepared.price.contractTotal.minorUnits
+              : prepared.prepared.price.breakdown.subtotal.minorUnits,
+          ),
+        });
+      }
+    }
+    return comparisons;
+  }
+}
+
+function infillPreset(
+  infillPercent: number,
+): "DECORATIVE" | "STANDARD" | "STRONG" {
+  if (infillPercent === INFILL_PERCENT.DECORATIVE) return "DECORATIVE";
+  if (infillPercent === INFILL_PERCENT.STANDARD) return "STANDARD";
+  if (infillPercent === INFILL_PERCENT.STRONG) return "STRONG";
+  throw new Error(`Unsupported named infill percent: ${infillPercent}`);
 }
 
 function referenceOccupancies(
@@ -4338,32 +5164,24 @@ function inspectionMeshEstimate(
   ) {
     return null;
   }
+  // Source inspection exposes body dimensions but not their relative origins.
+  // A single body's bounds are exact; for a multi-body subset, use the whole
+  // source bounds so rough pricing and pre-canonicalization machine admission
+  // cannot underestimate a spaced assembly. Canonical geometry replaces this
+  // conservative estimate once the selection has been materialized.
+  const selectedBounds =
+    bodies.length === 1
+      ? bodies[0]!.boundingBox
+      : positiveBoundingBox(asRecord(outcome.metrics)?.boundingBox);
+  if (!selectedBounds) return null;
   return {
     volumeCubicMicrometers: bodies.reduce(
       (total, body) => total + body.volume,
       0n,
     ),
-    boundsXMicrometers: bodies.reduce(
-      (maximum, body) =>
-        body.boundingBox.xMicrometers > maximum
-          ? body.boundingBox.xMicrometers
-          : maximum,
-      0n,
-    ),
-    boundsYMicrometers: bodies.reduce(
-      (maximum, body) =>
-        body.boundingBox.yMicrometers > maximum
-          ? body.boundingBox.yMicrometers
-          : maximum,
-      0n,
-    ),
-    boundsZMicrometers: bodies.reduce(
-      (maximum, body) =>
-        body.boundingBox.zMicrometers > maximum
-          ? body.boundingBox.zMicrometers
-          : maximum,
-      0n,
-    ),
+    boundsXMicrometers: selectedBounds.xMicrometers,
+    boundsYMicrometers: selectedBounds.yMicrometers,
+    boundsZMicrometers: selectedBounds.zMicrometers,
   };
 }
 

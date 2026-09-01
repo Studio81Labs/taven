@@ -61,6 +61,67 @@
         ],
         "type": "object"
       },
+      "AutomaticQuoteConfigurationOptionDto": {
+        "properties": {
+          "color": {
+            "nullable": true,
+            "type": "string"
+          },
+          "infillPreset": {
+            "enum": [
+              "DECORATIVE",
+              "STANDARD",
+              "STRONG"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "printConfigRevisionId",
+          "material",
+          "quality",
+          "infillPreset"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteDeliveryOptionDto": {
+        "properties": {
+          "endpointType": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "providerEndpointId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerEndpointId",
+          "endpointType",
+          "label"
+        ],
+        "type": "object"
+      },
       "AutomaticQuoteExpressDto": {
         "properties": {
           "eligible": {
@@ -193,6 +254,18 @@
             "minimum": 0,
             "type": "integer"
           },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          },
           "quantity": {
             "minimum": 1,
             "type": "integer"
@@ -211,8 +284,10 @@
           "ordinal",
           "modelFileId",
           "bodyIds",
+          "printConfigRevisionId",
           "material",
           "infillPreset",
+          "quality",
           "quantity",
           "fitSensitive",
           "status",
@@ -340,6 +415,40 @@
         ],
         "type": "object"
       },
+      "AutomaticQuoteQuantityComparisonDto": {
+        "properties": {
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "itemOrdinal": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "orderTotalMinor": {
+            "description": "Rough whole-order total with only this item's quantity changed",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity": {
+            "enum": [
+              1,
+              5,
+              20
+            ],
+            "type": "integer"
+          }
+        },
+        "required": [
+          "itemOrdinal",
+          "quantity",
+          "currency",
+          "orderTotalMinor"
+        ],
+        "type": "object"
+      },
       "AutomaticQuoteRiskDecisionDto": {
         "properties": {
           "acknowledgementKey": {
@@ -383,9 +492,24 @@
           "checkoutReady": {
             "type": "boolean"
           },
+          "configurationEditable": {
+            "type": "boolean"
+          },
+          "configurationOptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteConfigurationOptionDto"
+            },
+            "type": "array"
+          },
           "configurationRevision": {
             "minimum": 1,
             "type": "integer"
+          },
+          "deliveryOptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteDeliveryOptionDto"
+            },
+            "type": "array"
           },
           "expiresAt": {
             "format": "date-time",
@@ -435,6 +559,12 @@
           },
           "publicReference": {
             "type": "string"
+          },
+          "quantityComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteQuantityComparisonDto"
+            },
+            "type": "array"
           },
           "roughEstimate": {
             "allOf": [
@@ -460,8 +590,12 @@
           "publicReference",
           "phase",
           "configurationRevision",
+          "configurationEditable",
           "modelFiles",
           "items",
+          "configurationOptions",
+          "deliveryOptions",
+          "quantityComparisons",
           "express",
           "checkoutReady",
           "expiresAt",
@@ -483,9 +617,24 @@
           "checkoutReady": {
             "type": "boolean"
           },
+          "configurationEditable": {
+            "type": "boolean"
+          },
+          "configurationOptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteConfigurationOptionDto"
+            },
+            "type": "array"
+          },
           "configurationRevision": {
             "minimum": 1,
             "type": "integer"
+          },
+          "deliveryOptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteDeliveryOptionDto"
+            },
+            "type": "array"
           },
           "expiresAt": {
             "format": "date-time",
@@ -536,6 +685,12 @@
           "publicReference": {
             "type": "string"
           },
+          "quantityComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteQuantityComparisonDto"
+            },
+            "type": "array"
+          },
           "roughEstimate": {
             "allOf": [
               {
@@ -556,11 +711,78 @@
           "publicReference",
           "phase",
           "configurationRevision",
+          "configurationEditable",
           "modelFiles",
           "items",
+          "configurationOptions",
+          "deliveryOptions",
+          "quantityComparisons",
           "express",
           "checkoutReady",
           "expiresAt"
+        ],
+        "type": "object"
+      },
+      "ConfigureAutomaticQuoteDraftItemDto": {
+        "properties": {
+          "bodyIds": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "color": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "fitSensitive": {
+            "default": false,
+            "type": "boolean"
+          },
+          "infillPreset": {
+            "enum": [
+              "DECORATIVE",
+              "STANDARD",
+              "STRONG"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "ordinal": {
+            "maximum": 999,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "modelFileId",
+          "bodyIds",
+          "printConfigRevisionId",
+          "material",
+          "infillPreset",
+          "quantity",
+          "ordinal"
         ],
         "type": "object"
       },
@@ -1651,6 +1873,21 @@
         ],
         "type": "object"
       },
+      "ReplaceAutomaticQuoteConfigurationDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigureAutomaticQuoteDraftItemDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "SelectAutomaticQuoteDestinationDto": {
         "properties": {
           "endpointType": {
@@ -2143,6 +2380,67 @@
         ]
       }
     },
+    "/automatic-quote-sessions/{sessionId}/configuration": {
+      "put": {
+        "operationId": "AutomaticQuotesController_replaceConfiguration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceAutomaticQuoteConfigurationDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Inspection is pending or configuration is frozen"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Atomically replace all selected body groups",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
     "/automatic-quote-sessions/{sessionId}/delivery-destination": {
       "put": {
         "operationId": "AutomaticQuotesController_selectDestination",
@@ -2260,6 +2558,63 @@
       }
     },
     "/automatic-quote-sessions/{sessionId}/items/{ordinal}/configuration": {
+      "delete": {
+        "operationId": "AutomaticQuotesController_removeConfiguration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ordinal",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Configuration is frozen"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Remove one selected body group",
+        "tags": [
+          "automatic quotes"
+        ]
+      },
       "put": {
         "operationId": "AutomaticQuotesController_configure",
         "parameters": [

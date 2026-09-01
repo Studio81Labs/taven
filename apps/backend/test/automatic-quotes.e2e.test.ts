@@ -354,7 +354,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const sql = await pool.connect();
     const factory = new PersistenceFactory(sql, `${scope}:happy`);
     const quoteColor = `red-${scope.slice(-12)}`;
+    const sharedNodeColor = `green-${scope.slice(-12)}`;
     const splitNodeColor = `blue-${scope.slice(-12)}`;
+    const undersizedMachineColor = `small-${scope.slice(-12)}`;
     await sql.query("BEGIN");
     const foundation = await factory
       .createFoundation(
@@ -391,6 +393,8 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const invalidCalibrationId = randomUUID();
     const invalidCapabilityId = randomUUID();
     const invalidProfileId = randomUUID();
+    const undersizedMachineId = randomUUID();
+    const undersizedCalibrationId = randomUUID();
     const splitNodeId = randomUUID();
     const splitMachineId = randomUUID();
     const splitCalibrationId = randomUUID();
@@ -446,12 +450,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           capabilityKey: `invalid-${scope}`,
           manufacturer: compatibleMachine.machineCapability.manufacturer,
           model: `${compatibleMachine.machineCapability.model}-invalid`,
-          buildVolumeXMicrometers:
-            compatibleMachine.machineCapability.buildVolumeXMicrometers,
-          buildVolumeYMicrometers:
-            compatibleMachine.machineCapability.buildVolumeYMicrometers,
-          buildVolumeZMicrometers:
-            compatibleMachine.machineCapability.buildVolumeZMicrometers,
+          buildVolumeXMicrometers: 10_000n,
+          buildVolumeYMicrometers: 10_000n,
+          buildVolumeZMicrometers: 10_000n,
           supportedNozzleMicrometers: [
             compatibleProfile.nozzleDiameterMicrometers,
             incompatibleNozzle,
@@ -495,6 +496,18 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           installedNozzleMicrometers: incompatibleNozzle,
         },
       });
+      await transaction.machine.create({
+        data: {
+          id: undersizedMachineId,
+          nodeId: compatibleMachine.nodeId,
+          machineCapabilityId: invalidCapabilityId,
+          code: `undersized-${scope.slice(-12)}`,
+          displayName: "Undersized compatible machine",
+          status: "ACTIVE",
+          installedNozzleMicrometers:
+            compatibleMachine.installedNozzleMicrometers,
+        },
+      });
       await transaction.revisionIdentity.create({
         data: {
           id: invalidCalibrationId,
@@ -518,6 +531,27 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           activatedAt: new Date(),
         },
       });
+      await transaction.revisionIdentity.create({
+        data: {
+          id: undersizedCalibrationId,
+          kind: "MACHINE_CALIBRATION",
+          digest: sha(`${scope}:undersized-calibration`),
+        },
+      });
+      await transaction.machineCalibration.create({
+        data: {
+          id: undersizedCalibrationId,
+          nodeId: compatibleMachine.nodeId,
+          machineId: undersizedMachineId,
+          flowRatioPartsPerMillion: calibration.flowRatioPartsPerMillion,
+          xyCompensationMicrometers: calibration.xyCompensationMicrometers,
+          elephantFootCompensationMicrometers:
+            calibration.elephantFootCompensationMicrometers,
+          settings: calibration.settings as Prisma.InputJsonValue,
+          state: "ACTIVE",
+          activatedAt: new Date(),
+        },
+      });
       const inventory = compatibleMachine.inventories[0];
       if (!inventory) throw new Error("expected available inventory");
       await transaction.inventory.create({
@@ -528,6 +562,38 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           material: inventory.material,
           vendor: inventory.vendor,
           color: inventory.color,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1_000_000n,
+          status: "AVAILABLE",
+        },
+      });
+      await transaction.inventory.create({
+        data: {
+          nodeId: compatibleMachine.nodeId,
+          machineId: compatibleMachine.id,
+          sku: `${inventory.sku}-shared-node`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: sharedNodeColor,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1_000_000n,
+          status: "AVAILABLE",
+        },
+      });
+      await transaction.inventory.create({
+        data: {
+          nodeId: compatibleMachine.nodeId,
+          machineId: undersizedMachineId,
+          sku: `${inventory.sku}-undersized`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: undersizedMachineColor,
           lotCode: inventory.lotCode,
           priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
           priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
@@ -594,6 +660,22 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           status: "AVAILABLE",
         },
       });
+      await transaction.inventory.create({
+        data: {
+          nodeId: splitNodeId,
+          machineId: splitMachineId,
+          sku: `${inventory.sku}-shared-split-node`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: sharedNodeColor,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1_000_000n,
+          status: "AVAILABLE",
+        },
+      });
     });
     const printConfig = await prisma.printConfigRevision.findUniqueOrThrow({
       where: { id: foundation.printConfigRevisionId },
@@ -633,12 +715,98 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     });
 
+    const createConfirmedModelUpload = async (label: string) => {
+      const id = randomUUID();
+      const file = await prisma.modelFile.create({
+        data: {
+          id,
+          format: "STL",
+          originalFilename: `${label}.stl`,
+          storageObjectKey: `models/${id}/source`,
+          contentHash: sha(`${scope}:${label}`),
+          sizeBytes: 1n,
+          uploadedAt: new Date(),
+          sourceDeleteAfter: new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000),
+        },
+      });
+      const token = randomBytes(32).toString("base64url");
+      await prisma.uploadIntent.create({
+        data: {
+          assetKind: "MODEL_FILE",
+          capabilityTokenHash: sha(token),
+          originalFilename: `${label}.stl`,
+          modelFormat: "STL",
+          intendedAssetId: file.id,
+          expectedContentType: "model/stl",
+          expectedSizeBytes: 1n,
+          expectedContentHash: file.contentHash,
+          quarantineObjectKey: `${scope}/quarantine/${label}.stl`,
+          finalObjectKey: `${scope}/models/${label}.stl`,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+          status: "CONFIRMED",
+          confirmedModelFileId: file.id,
+          confirmedAt: new Date(),
+        },
+      });
+      return { file, token };
+    };
+
     const created = await api("automatic-quote-sessions", {
       method: "POST",
       headers: jsonHeaders(key("create")),
       body: JSON.stringify({ attribution: { campaign: "e2e" } }),
     });
     expect(created.response.status).toBe(201);
+    expect(created.body.configurationOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          color: quoteColor,
+          infillPreset: "STANDARD",
+          material: "PLA",
+          printConfigRevisionId: foundation.printConfigRevisionId,
+          quality: printConfig.quality,
+        }),
+        expect.objectContaining({
+          color: null,
+          infillPreset: "STANDARD",
+          material: "PLA",
+          printConfigRevisionId: foundation.printConfigRevisionId,
+          quality: printConfig.quality,
+        }),
+      ]),
+    );
+    expect(
+      (
+        created.body.configurationOptions as Array<{
+          color: string | null;
+          infillPreset: string;
+          material: string;
+          printConfigRevisionId: string;
+        }>
+      ).filter(
+        (option) =>
+          option.color === null &&
+          option.infillPreset === "STANDARD" &&
+          option.material === "PLA" &&
+          option.printConfigRevisionId === foundation.printConfigRevisionId,
+      ),
+    ).toHaveLength(1);
+    expect(created.body.configurationEditable).toBe(true);
+    expect(created.body.deliveryOptions).toEqual(
+      expect.arrayContaining([
+        {
+          endpointType: "pickup_point",
+          label: "Test pickup",
+          providerEndpointId: "test-pickup",
+        },
+      ]),
+    );
+    expect(created.body.deliveryOptions).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ providerEndpointId: "test-incompatible" }),
+      ]),
+    );
+    expect(created.body.quantityComparisons).toEqual([]);
     const sessionId = string(created.body.sessionId);
     const sessionToken = string(created.body.sessionToken);
     const orderId = string(created.body.orderId);
@@ -727,6 +895,13 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           result: {
             outcome: {
               status: "succeeded",
+              metrics: {
+                boundingBox: {
+                  xMicrometers: "20000",
+                  yMicrometers: "20000",
+                  zMicrometers: "20000",
+                },
+              },
               bodies: [
                 inspectedBody("body-a"),
                 inspectedBody("body-b"),
@@ -738,13 +913,79 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     });
 
+    const additionalUpload = await createConfirmedModelUpload("additional");
+    const attachAdditional = () =>
+      api(`automatic-quote-sessions/${sessionId}/model-files`, {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("attach-additional")),
+        body: JSON.stringify({
+          modelFileId: additionalUpload.file.id,
+          uploadToken: additionalUpload.token,
+        }),
+      });
+    const additionalAttached = await attachAdditional();
+    expect(additionalAttached.response.status).toBe(200);
+    expect(additionalAttached.body.phase).toBe("INSPECTION_PENDING");
+    expect(additionalAttached.body.modelFiles).toHaveLength(2);
+    expect((await attachAdditional()).response.status).toBe(200);
+    expect(
+      await prisma.automaticQuoteModelFile.count({ where: { orderId } }),
+    ).toBe(2);
+
+    const additionalAutomaticFile =
+      await prisma.automaticQuoteModelFile.findUniqueOrThrow({
+        where: {
+          orderId_modelFileId: {
+            orderId,
+            modelFileId: additionalUpload.file.id,
+          },
+        },
+      });
+    const additionalInspectionDispatch =
+      await prisma.outboxMessage.findFirstOrThrow({
+        where: {
+          aggregateId: additionalAutomaticFile.inspectionJobId,
+          messageType: "slicing.model-inspection.requested",
+        },
+      });
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `${scope}:additional-inspection-result`,
+        aggregateType: "SlicingDispatchResult",
+        aggregateId: additionalInspectionDispatch.id,
+        messageType: "slicing.model_inspection.result-received",
+        schemaVersion: 2,
+        payload: {
+          result: {
+            outcome: {
+              status: "succeeded",
+              metrics: {
+                boundingBox: {
+                  xMicrometers: "10000",
+                  yMicrometers: "10000",
+                  zMicrometers: "10000",
+                },
+              },
+              bodies: [inspectedBody("additional-body")],
+            },
+          },
+        },
+      },
+    });
+    const additionalReady = await api(`automatic-quote-sessions/${sessionId}`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(additionalReady.response.status).toBe(200);
+    expect(additionalReady.body.phase).toBe("CONFIGURATION_REQUIRED");
+    expect(additionalReady.body.configurationEditable).toBe(true);
+
     const configure = async (
       ordinal: number,
       bodyId: string,
       quantity: number,
       command: string,
       fitSensitive = false,
-      color = quoteColor,
+      color: string | null = quoteColor,
     ) =>
       api(
         `automatic-quote-sessions/${sessionId}/items/${ordinal}/configuration`,
@@ -764,6 +1005,31 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           }),
         },
       );
+    const replaceConfiguration = (
+      items: Array<{
+        ordinal: number;
+        bodyId: string;
+        color: string;
+      }>,
+      command: string,
+    ) =>
+      api(`automatic-quote-sessions/${sessionId}/configuration`, {
+        method: "PUT",
+        headers: capabilityHeaders(sessionToken, key(command)),
+        body: JSON.stringify({
+          items: items.map(({ ordinal, bodyId, color }) => ({
+            ordinal,
+            modelFileId: modelFile.id,
+            bodyIds: [bodyId],
+            printConfigRevisionId: foundation.printConfigRevisionId,
+            material: "PLA",
+            color,
+            infillPreset: "STANDARD",
+            quantity: 1,
+            fitSensitive: false,
+          })),
+        }),
+      });
     const draftItem = (ordinal: number) =>
       prisma.automaticQuoteItemDraft.findFirstOrThrow({
         where: {
@@ -834,14 +1100,226 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       return { cacheKey, referenceProfile };
     };
 
+    const unavailableConfiguration = await configure(
+      0,
+      "body-a",
+      1,
+      "configure-unavailable",
+      false,
+      "not-in-stock",
+    );
+    expect(unavailableConfiguration.response.status).toBe(400);
+
+    const noColorPreference = await configure(
+      0,
+      "body-a",
+      1,
+      "configure-no-color-preference",
+      false,
+      null,
+    );
+    expect(noColorPreference.response.status).toBe(200);
+    expect(noColorPreference.body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ color: null })]),
+    );
+    expect(
+      (
+        await api(
+          `automatic-quote-sessions/${sessionId}/items/0/configuration`,
+          {
+            method: "DELETE",
+            headers: capabilityHeaders(
+              sessionToken,
+              key("remove-no-color-preference"),
+            ),
+          },
+        )
+      ).response.status,
+    ).toBe(200);
+
+    const undersizedMachineConfiguration = await configure(
+      0,
+      "body-a",
+      1,
+      "configure-oversized-geometry",
+      false,
+      undersizedMachineColor,
+    );
+    expect(undersizedMachineConfiguration.response.status).toBe(400);
+    expect(
+      await prisma.automaticQuoteItemDraft.count({ where: { orderId } }),
+    ).toBe(0);
+    const undersizedMachineReplacement = await replaceConfiguration(
+      [
+        {
+          ordinal: 0,
+          bodyId: "body-a",
+          color: undersizedMachineColor,
+        },
+      ],
+      "replace-oversized-geometry",
+    );
+    expect(undersizedMachineReplacement.response.status).toBe(400);
+    expect(
+      await prisma.automaticQuoteItemDraft.count({ where: { orderId } }),
+    ).toBe(0);
+
+    await prisma.inventory.update({
+      where: { id: foundation.inventoryId },
+      data: { remainingMilligrams: 1n },
+    });
+    const insufficientInventory = await configure(
+      0,
+      "body-a",
+      1,
+      "configure-insufficient-inventory",
+    );
+    expect(insufficientInventory.response.status).toBe(400);
+    expect(insufficientInventory.body.message).toBe(
+      "Selected automatic quote configuration lacks sufficient inventory",
+    );
+    expect(
+      await prisma.automaticQuoteItemDraft.count({ where: { orderId } }),
+    ).toBe(0);
+    await prisma.inventory.update({
+      where: { id: foundation.inventoryId },
+      data: { remainingMilligrams: 3_000n },
+    });
+    expect(
+      (await configure(0, "body-a", 1, "configure-inventory-plan-first"))
+        .response.status,
+    ).toBe(200);
+    const oversubscribedInventoryPlan = await configure(
+      1,
+      "body-b",
+      1,
+      "configure-inventory-plan-second",
+    );
+    expect(oversubscribedInventoryPlan.response.status).toBe(400);
+    expect(
+      await prisma.automaticQuoteItemDraft.count({ where: { orderId } }),
+    ).toBe(1);
+    expect(
+      (
+        await api(
+          `automatic-quote-sessions/${sessionId}/items/0/configuration`,
+          {
+            method: "DELETE",
+            headers: capabilityHeaders(
+              sessionToken,
+              key("remove-inventory-plan"),
+            ),
+          },
+        )
+      ).response.status,
+    ).toBe(200);
+    await prisma.inventory.update({
+      where: { id: foundation.inventoryId },
+      data: { remainingMilligrams: 1_000_000n },
+    });
+    await prisma.inventory.updateMany({
+      where: {
+        color: { in: [quoteColor, sharedNodeColor] },
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 3_000n },
+    });
+
+    const initialTwoColorDraft = await replaceConfiguration(
+      [
+        { ordinal: 0, bodyId: "body-a", color: quoteColor },
+        { ordinal: 1, bodyId: "body-b", color: sharedNodeColor },
+      ],
+      "replace-two-color-draft",
+    );
+    expect(initialTwoColorDraft.response.status).toBe(200);
+    const swappedTwoColorDraft = await replaceConfiguration(
+      [
+        { ordinal: 0, bodyId: "body-a", color: sharedNodeColor },
+        { ordinal: 1, bodyId: "body-b", color: quoteColor },
+      ],
+      "replace-swapped-two-color-draft",
+    );
+    expect(swappedTwoColorDraft.response.status).toBe(200);
+    expect(swappedTwoColorDraft.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ordinal: 0, color: sharedNodeColor }),
+        expect.objectContaining({ ordinal: 1, color: quoteColor }),
+      ]),
+    );
+    const clearedSwappedDraft = await Promise.all(
+      [0, 1].map((ordinal) =>
+        api(
+          `automatic-quote-sessions/${sessionId}/items/${ordinal}/configuration`,
+          {
+            method: "DELETE",
+            headers: capabilityHeaders(
+              sessionToken,
+              key(`remove-swapped-${ordinal}`),
+            ),
+          },
+        ),
+      ),
+    );
+    expect(
+      clearedSwappedDraft.every(({ response }) => response.status === 200),
+    ).toBe(true);
+    await prisma.inventory.updateMany({
+      where: {
+        color: { in: [quoteColor, sharedNodeColor] },
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 1_000_000n },
+    });
+
+    const removableConfiguration = await configure(
+      9,
+      "body-c",
+      1,
+      "configure-removable",
+    );
+    expect(removableConfiguration.response.status).toBe(200);
+    const removedConfiguration = await api(
+      `automatic-quote-sessions/${sessionId}/items/9/configuration`,
+      {
+        method: "DELETE",
+        headers: capabilityHeaders(sessionToken, key("remove-removable")),
+      },
+    );
+    expect(removedConfiguration.response.status).toBe(200);
+    expect(removedConfiguration.body.items).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ ordinal: 9 })]),
+    );
+
     const immediateRough = await configure(0, "body-a", 1, "configure-stale");
     expect(immediateRough.response.status).toBe(200);
+    expect(immediateRough.body.configurationEditable).toBe(true);
     expect(immediateRough.body.phase).toBe("REFERENCE_SLICES_PENDING");
     expect(immediateRough.body.roughEstimate).toMatchObject({
       kind: "ROUGH_ESTIMATE",
       currency: "CZK",
     });
     expect(immediateRough.body.bindingQuote).toBeNull();
+    expect(immediateRough.body.quantityComparisons).toEqual(
+      expect.arrayContaining(
+        [1, 5, 20].map((quantity) =>
+          expect.objectContaining({
+            currency: "CZK",
+            itemOrdinal: 0,
+            orderTotalMinor: expect.any(Number),
+            quantity,
+          }),
+        ),
+      ),
+    );
+    expect(immediateRough.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          printConfigRevisionId: foundation.printConfigRevisionId,
+          quality: printConfig.quality,
+        }),
+      ]),
+    );
     const staleDraft = await draftItem(0);
     for (const command of ["stale-dispatch", "stale-dispatch-replay"]) {
       expect(
@@ -1241,6 +1719,54 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       }),
     ).toBe(referenceDispatches.length + 1);
 
+    const deliveryEndpointsBeforeHandoff =
+      process.env.TAVEN_DELIVERY_ENDPOINTS_JSON;
+    process.env.TAVEN_DELIVERY_ENDPOINTS_JSON = JSON.stringify([
+      {
+        providerEndpointId: "test-unpriced-only",
+        endpointType: "pickup_point",
+        addressSnapshot: {
+          country: "CZ",
+          city: "Ostrava",
+          label: "Test unpriced endpoint",
+        },
+        supportedCategoryIds: ["not-a-priced-category"],
+        provider: "test",
+      },
+    ]);
+    try {
+      const noDeliveryEndpoint = await api(
+        `automatic-quote-sessions/${sessionId}`,
+        { headers: { authorization: `Bearer ${sessionToken}` } },
+      );
+      expect(noDeliveryEndpoint.response.status).toBe(200);
+      expect(noDeliveryEndpoint.body).toMatchObject({
+        phase: "HANDOFF_REQUIRED",
+        deliveryOptions: [],
+        handoff: {
+          reasons: expect.arrayContaining(["SHIPMENT_INELIGIBLE"]),
+        },
+      });
+    } finally {
+      if (deliveryEndpointsBeforeHandoff === undefined) {
+        delete process.env.TAVEN_DELIVERY_ENDPOINTS_JSON;
+      } else {
+        process.env.TAVEN_DELIVERY_ENDPOINTS_JSON =
+          deliveryEndpointsBeforeHandoff;
+      }
+    }
+    const recoveredDeliveryOptions = await api(
+      `automatic-quote-sessions/${sessionId}`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+    expect(recoveredDeliveryOptions.body).toMatchObject({
+      phase: "DESTINATION_REQUIRED",
+      handoff: null,
+      deliveryOptions: expect.arrayContaining([
+        expect.objectContaining({ providerEndpointId: "test-pickup" }),
+      ]),
+    });
+
     const expressPending = await api(
       `automatic-quote-sessions/${sessionId}/express`,
       {
@@ -1302,9 +1828,8 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(incompatible.response.status).toBe(200);
     expect(incompatible.body.checkoutReady).toBe(false);
     expect(incompatible.body.bindingQuote).toBeNull();
-    expect(incompatible.body.handoff).toMatchObject({
-      reasons: expect.arrayContaining(["SHIPMENT_INELIGIBLE"]),
-    });
+    expect(incompatible.body.phase).toBe("DESTINATION_REQUIRED");
+    expect(incompatible.body.handoff).toBeNull();
     expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
       0,
     );
@@ -1402,7 +1927,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         color: quoteColor,
         status: "AVAILABLE",
       },
-      data: { remainingMilligrams: 100n },
+      data: { remainingMilligrams: 1n },
     });
     const splitResourceGate = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
@@ -1428,18 +1953,44 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       data: { remainingMilligrams: 1_000_000n },
     });
 
+    const splitNodeConfiguration = await configure(
+      1,
+      "body-c",
+      1,
+      "configure-split-node",
+      false,
+      splitNodeColor,
+    );
+    expect(splitNodeConfiguration.response.status).toBe(400);
+    const splitNodeReplacement = await replaceConfiguration(
+      [
+        { ordinal: 0, bodyId: "body-b", color: quoteColor },
+        { ordinal: 1, bodyId: "body-c", color: splitNodeColor },
+      ],
+      "replace-split-node",
+    );
+    expect(splitNodeReplacement.response.status).toBe(400);
+    await expect(draftItem(1)).resolves.toMatchObject({ color: quoteColor });
     expect(
       (
         await configure(
           1,
           "body-c",
           1,
-          "configure-split-node",
+          "configure-shared-node-drift",
           false,
-          splitNodeColor,
+          sharedNodeColor,
         )
       ).response.status,
     ).toBe(200);
+    await prisma.inventory.updateMany({
+      where: {
+        machineId: compatibleMachine.id,
+        color: sharedNodeColor,
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 1n },
+    });
     const splitNodeGate = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
       {
@@ -1455,6 +2006,14 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
       0,
     );
+    await prisma.inventory.updateMany({
+      where: {
+        machineId: compatibleMachine.id,
+        color: sharedNodeColor,
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 1_000_000n },
+    });
     expect(
       (
         await configure(
@@ -1868,6 +2427,28 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(recoveryStaged.response.status).toBe(200);
     expect(recoveryStaged.body.checkoutReady).toBe(false);
     expect(recoveryStaged.body.phase).toBe("ELIGIBILITY_PENDING");
+    expect(recoveryStaged.body.configurationEditable).toBe(false);
+    const lateUpload = await createConfirmedModelUpload("late-model");
+    const lateAttachment = await api(
+      `automatic-quote-sessions/${recoverySessionId}/model-files`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("attach-after-freeze"),
+        ),
+        body: JSON.stringify({
+          modelFileId: lateUpload.file.id,
+          uploadToken: lateUpload.token,
+        }),
+      },
+    );
+    expect(lateAttachment.response.status).toBe(409);
+    expect(
+      await prisma.automaticQuoteModelFile.count({
+        where: { orderId: recoveryOrderId },
+      }),
+    ).toBe(1);
     const recoveryTopology = {
       itemIds: (
         await prisma.orderItem.findMany({
@@ -2694,6 +3275,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       kind: "BINDING",
       currency: "CZK",
     });
+    expect(refreshedReady.body.configurationEditable).toBe(false);
     const binding = refreshedReady.body.bindingQuote as {
       totalMinor: number;
       components: Array<{ kind: string; amountMinor: number }>;

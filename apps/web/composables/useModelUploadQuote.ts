@@ -17,6 +17,7 @@ import {
   loadQuoteSession,
   saveQuoteSession,
 } from "../utils/quote-session-storage";
+import { canRecoverWithStandardProduction } from "../utils/automatic-quote-configurator";
 import { UploadFailure, uploadFile } from "../utils/upload-file";
 
 type QuoteSession = components["schemas"]["AutomaticQuoteSessionDto"];
@@ -24,6 +25,11 @@ type CreatedQuoteSession =
   components["schemas"]["AutomaticQuoteSessionCreatedDto"];
 type ConfirmedUpload = components["schemas"]["ConfirmedUploadResponseDto"];
 type UploadIntent = components["schemas"]["UploadIntentResponseDto"];
+type ReplaceConfiguration =
+  components["schemas"]["ReplaceAutomaticQuoteConfigurationDto"];
+type RiskDecision = components["schemas"]["AutomaticQuoteRiskDecisionDto"];
+type DeliveryDestination =
+  components["schemas"]["SelectAutomaticQuoteDestinationDto"];
 
 const backgroundQuotePhases: ReadonlySet<QuoteSession["phase"]> = new Set([
   "INSPECTION_PENDING",
@@ -33,6 +39,40 @@ const backgroundQuotePhases: ReadonlySet<QuoteSession["phase"]> = new Set([
 
 export function isBackgroundQuotePhase(phase: QuoteSession["phase"]): boolean {
   return backgroundQuotePhases.has(phase);
+}
+
+export function requiresPreparationAdvance(
+  phase: QuoteSession["phase"],
+): boolean {
+  return (
+    phase === "REFERENCE_SLICES_PENDING" || phase === "ELIGIBILITY_PENDING"
+  );
+}
+
+export function isTerminalQuoteHandoff(
+  quote: Pick<QuoteSession, "express" | "handoff" | "phase">,
+): boolean {
+  return (
+    quote.phase === "HANDOFF_REQUIRED" &&
+    !canRecoverWithStandardProduction(quote)
+  );
+}
+
+export function resolveUploadSession(
+  activeSessionId: string | undefined,
+  activeSessionToken: string | undefined,
+  createdSession:
+    Pick<CreatedQuoteSession, "sessionId" | "sessionToken"> | undefined,
+): { sessionId: string; sessionToken: string } | undefined {
+  if (activeSessionId && activeSessionToken) {
+    return { sessionId: activeSessionId, sessionToken: activeSessionToken };
+  }
+  return createdSession
+    ? {
+        sessionId: createdSession.sessionId,
+        sessionToken: createdSession.sessionToken,
+      }
+    : undefined;
 }
 
 export type UploadWorkflowPhase =
@@ -84,6 +124,40 @@ export function createUploadTransferCheckpoint() {
   };
 }
 
+export function createQuoteCommandKeys(
+  createKey: (scope: string) => string = idempotencyKey,
+) {
+  const keys = new Map<string, string>();
+  const identity = (scope: string, input: unknown) =>
+    `${scope}:${JSON.stringify(input)}`;
+
+  return {
+    complete: (scope: string, input: unknown) => {
+      keys.delete(identity(scope, input));
+    },
+    get: (scope: string, input: unknown) => {
+      const command = identity(scope, input);
+      const existing = keys.get(command);
+      if (existing) return existing;
+      const created = createKey(scope);
+      keys.set(command, created);
+      return created;
+    },
+    reset: () => keys.clear(),
+  };
+}
+
+export function createLatestResponseGuard() {
+  let revision = 0;
+  return {
+    begin: () => (revision += 1),
+    isCurrent: (candidate: number) => candidate === revision,
+    reset: () => {
+      revision += 1;
+    },
+  };
+}
+
 export function isTerminalUploadConfirmationStatus(status: number): boolean {
   return status === 401 || status === 409 || status === 410;
 }
@@ -122,6 +196,9 @@ export function useModelUploadQuote() {
   const errorMessage = ref<string>();
   const handoffMessage = ref<string>();
   const uploadProgress = ref(0);
+  const commandPending = ref(false);
+  const commandError = ref<string>();
+  const addingModel = ref(false);
   const quote = shallowRef<QuoteSession>();
   const sessionToken = ref<string>();
   const restoredFilename = ref<string>();
@@ -129,11 +206,14 @@ export function useModelUploadQuote() {
   let uploadController: AbortController | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let pollController: AbortController | undefined;
+  let commandController: AbortController | undefined;
   let disposed = false;
   let uploadIntent: UploadIntent | undefined;
   let confirmedUpload: ConfirmedUpload | undefined;
   let createdSession: CreatedQuoteSession | undefined;
   const commandKeys = createUploadCommandKeys();
+  const quoteCommandKeys = createQuoteCommandKeys();
+  const responseGuard = createLatestResponseGuard();
   const transferCheckpoint = createUploadTransferCheckpoint();
 
   const filename = computed(
@@ -181,6 +261,9 @@ export function useModelUploadQuote() {
     selectionRevision += 1;
     uploadController?.abort();
     uploadController = undefined;
+    commandController?.abort();
+    commandController = undefined;
+    responseGuard.reset();
     stopPolling();
     phase.value = "idle";
     selectedFile.value = undefined;
@@ -189,6 +272,9 @@ export function useModelUploadQuote() {
     geometry.value = undefined;
     previewMessage.value = undefined;
     errorMessage.value = undefined;
+    commandError.value = undefined;
+    commandPending.value = false;
+    addingModel.value = false;
     handoffMessage.value = undefined;
     uploadProgress.value = 0;
     quote.value = undefined;
@@ -199,14 +285,14 @@ export function useModelUploadQuote() {
     createdSession = undefined;
     transferCheckpoint.reset();
     commandKeys.reset();
+    quoteCommandKeys.reset();
     if (clearStoredSession && import.meta.client) {
       const storage = getSessionStorage(window);
       if (storage) clearQuoteSession(storage);
     }
   }
 
-  async function selectFile(file: File): Promise<void> {
-    resetState();
+  async function inspectSelectedFile(file: File): Promise<void> {
     const revision = selectionRevision;
     phase.value = "preparing";
 
@@ -258,6 +344,40 @@ export function useModelUploadQuote() {
     }
   }
 
+  function selectFile(file: File): Promise<void> {
+    resetState();
+    return inspectSelectedFile(file);
+  }
+
+  function selectAdditionalFile(file: File): Promise<void> {
+    if (
+      !quote.value?.configurationEditable ||
+      !quote.value.sessionId ||
+      !sessionToken.value
+    ) {
+      return Promise.resolve();
+    }
+    selectionRevision += 1;
+    uploadController?.abort();
+    uploadController = undefined;
+    commandController?.abort();
+    commandController = undefined;
+    commandPending.value = false;
+    responseGuard.reset();
+    stopPolling();
+    discardUploadCheckpoint();
+    selectedFile.value = undefined;
+    metadata.value = undefined;
+    sha256.value = undefined;
+    geometry.value = undefined;
+    previewMessage.value = undefined;
+    errorMessage.value = undefined;
+    commandError.value = undefined;
+    handoffMessage.value = undefined;
+    addingModel.value = true;
+    return inspectSelectedFile(file);
+  }
+
   function applyQuote(nextQuote: QuoteSession): boolean {
     quote.value = nextQuote;
     if (nextQuote.phase === "EXPIRED") {
@@ -270,13 +390,32 @@ export function useModelUploadQuote() {
       return true;
     }
     if (nextQuote.phase === "HANDOFF_REQUIRED") {
+      if (!isTerminalQuoteHandoff(nextQuote)) {
+        phase.value = "complete";
+        handoffMessage.value = undefined;
+        stopPolling();
+        return true;
+      }
       phase.value = "handoff";
       const reasons = nextQuote.handoff?.reasons ?? [];
       handoffMessage.value = reasons.includes("UNSUPPORTED_FORMAT")
         ? "Tento formát přímá kalkulace neumí. Exportujte model jako STL nebo nebarvený 3MF."
         : reasons.includes("INSPECTION_FAILED")
           ? "Soubor se po nahrání nepodařilo přečíst. Ověřte ho v modelovacím programu a exportujte jej znovu."
-          : "Kontrola našla problém, který nelze bezpečně vyřešit automaticky. Upravte model podle kontroly nebo vyberte jiný soubor.";
+          : reasons.includes("FIT_SENSITIVE")
+            ? "Lícovaný díl vyžaduje zkušební kus nebo individuální nabídku. Předáme bezpečný kontext této kalkulace k ručnímu posouzení."
+            : reasons.includes("RISK_DECLINED")
+              ? "Riziko jste nepřijali. Přímá kalkulace se zastavila; bezpečný kontext je připravený pro navazující individuální poptávku."
+              : reasons.some((reason) =>
+                    [
+                      "AUTOMATIC_QUANTITY_LIMIT_EXCEEDED",
+                      "BUILD_LIMIT_EXCEEDED",
+                      "NO_CONFIGURATION_AVAILABLE",
+                      "SHIPMENT_INELIGIBLE",
+                    ].includes(reason),
+                  )
+                ? "Aktuální kapacita nebo doprava nestačí pro bezpečnou automatickou cenu. Zakázku je potřeba posoudit individuálně."
+                : "Kontrola našla problém, který nelze bezpečně vyřešit automaticky. Upravte model podle kontroly nebo vyberte jiný soubor.";
       stopPolling();
       return true;
     }
@@ -297,6 +436,7 @@ export function useModelUploadQuote() {
     const id = quote.value?.sessionId;
     const token = sessionToken.value;
     if (!id || !token) return;
+    const responseRevision = responseGuard.begin();
     const controller = new AbortController();
     pollController = controller;
     try {
@@ -305,7 +445,12 @@ export function useModelUploadQuote() {
         headers: { Authorization: `Bearer ${token}` },
         signal: controller.signal,
       });
-      if (disposed || controller.signal.aborted) return;
+      if (
+        disposed ||
+        controller.signal.aborted ||
+        !responseGuard.isCurrent(responseRevision)
+      )
+        return;
       if (!result.response.ok || !result.data) {
         if (result.response.status === 401) {
           errorMessage.value = requestMessage(401, "session");
@@ -321,7 +466,11 @@ export function useModelUploadQuote() {
         return;
       }
       if (!applyQuote(result.data)) {
-        scheduleQuoteRefresh(1_500);
+        if (requiresPreparationAdvance(result.data.phase)) {
+          if (!(await prepareQuote())) scheduleQuoteRefresh(3_000);
+        } else {
+          scheduleQuoteRefresh(1_500);
+        }
       }
     } catch {
       if (!disposed && !controller.signal.aborted) {
@@ -330,6 +479,156 @@ export function useModelUploadQuote() {
     } finally {
       if (pollController === controller) pollController = undefined;
     }
+  }
+
+  async function runQuoteCommand(
+    scope: string,
+    input: unknown,
+    operation: (
+      signal: AbortSignal,
+      key: string,
+    ) => Promise<{ data?: QuoteSession; response: Response }>,
+  ): Promise<boolean> {
+    if (!quote.value?.sessionId || !sessionToken.value || disposed)
+      return false;
+
+    stopPolling();
+    commandController?.abort();
+    const controller = new AbortController();
+    commandController = controller;
+    const responseRevision = responseGuard.begin();
+    const key = quoteCommandKeys.get(scope, input);
+    commandPending.value = true;
+    commandError.value = undefined;
+    try {
+      const result = await operation(controller.signal, key);
+      if (
+        disposed ||
+        controller.signal.aborted ||
+        !responseGuard.isCurrent(responseRevision)
+      )
+        return false;
+      if (!result.response.ok || !result.data) {
+        commandError.value = quoteCommandMessage(result.response.status);
+        if (result.response.status === 410) {
+          phase.value = "expired";
+          if (import.meta.client) {
+            const storage = getSessionStorage(window);
+            if (storage) clearQuoteSession(storage);
+          }
+        }
+        return false;
+      }
+      quoteCommandKeys.complete(scope, input);
+      if (!applyQuote(result.data)) scheduleQuoteRefresh(1_500);
+      return true;
+    } catch {
+      if (!disposed && !controller.signal.aborted) {
+        commandError.value =
+          "Změnu se nepodařilo uložit. Zkontrolujte připojení a zkuste to znovu.";
+      }
+      return false;
+    } finally {
+      if (commandController === controller) {
+        commandController = undefined;
+        commandPending.value = false;
+      }
+    }
+  }
+
+  function replaceConfiguration(
+    items: ReplaceConfiguration["items"],
+  ): Promise<boolean> {
+    const input = { items };
+    return runQuoteCommand("replace-configuration", input, (signal, key) =>
+      $api.PUT("/automatic-quote-sessions/{sessionId}/configuration", {
+        body: input,
+        headers: { Authorization: `Bearer ${sessionToken.value}` },
+        params: {
+          header: { "Idempotency-Key": key },
+          path: { sessionId: quote.value!.sessionId },
+        },
+        signal,
+      }),
+    );
+  }
+
+  function decideRisk(decision: RiskDecision): Promise<boolean> {
+    return runQuoteCommand("risk-decision", decision, (signal, key) =>
+      $api.POST("/automatic-quote-sessions/{sessionId}/risk-decisions", {
+        body: decision,
+        headers: { Authorization: `Bearer ${sessionToken.value}` },
+        params: {
+          header: { "Idempotency-Key": key },
+          path: { sessionId: quote.value!.sessionId },
+        },
+        signal,
+      }),
+    );
+  }
+
+  function removeItem(ordinal: number): Promise<boolean> {
+    const input = { ordinal };
+    return runQuoteCommand("remove-item", input, (signal, key) =>
+      $api.DELETE(
+        "/automatic-quote-sessions/{sessionId}/items/{ordinal}/configuration",
+        {
+          headers: { Authorization: `Bearer ${sessionToken.value}` },
+          params: {
+            header: { "Idempotency-Key": key },
+            path: { ordinal, sessionId: quote.value!.sessionId },
+          },
+          signal,
+        },
+      ),
+    );
+  }
+
+  function selectDestination(
+    destination: DeliveryDestination,
+  ): Promise<boolean> {
+    return runQuoteCommand("delivery-destination", destination, (signal, key) =>
+      $api.PUT("/automatic-quote-sessions/{sessionId}/delivery-destination", {
+        body: destination,
+        headers: { Authorization: `Bearer ${sessionToken.value}` },
+        params: {
+          header: { "Idempotency-Key": key },
+          path: { sessionId: quote.value!.sessionId },
+        },
+        signal,
+      }),
+    );
+  }
+
+  function setExpress(requested: boolean): Promise<boolean> {
+    const input = { requested };
+    return runQuoteCommand("express", input, (signal, key) =>
+      $api.PUT("/automatic-quote-sessions/{sessionId}/express", {
+        body: input,
+        headers: { Authorization: `Bearer ${sessionToken.value}` },
+        params: {
+          header: { "Idempotency-Key": key },
+          path: { sessionId: quote.value!.sessionId },
+        },
+        signal,
+      }),
+    );
+  }
+
+  function prepareQuote(): Promise<boolean> {
+    const input = {
+      configurationRevision: quote.value?.configurationRevision,
+    };
+    return runQuoteCommand("prepare", input, (signal, key) =>
+      $api.POST("/automatic-quote-sessions/{sessionId}/prepare", {
+        headers: { Authorization: `Bearer ${sessionToken.value}` },
+        params: {
+          header: { "Idempotency-Key": key },
+          path: { sessionId: quote.value!.sessionId },
+        },
+        signal,
+      }),
+    );
   }
 
   async function startUpload(): Promise<void> {
@@ -400,7 +699,12 @@ export function useModelUploadQuote() {
         confirmedUpload = confirmation.data;
       }
 
-      if (!createdSession) {
+      let attachmentSession = resolveUploadSession(
+        quote.value?.sessionId,
+        sessionToken.value,
+        createdSession,
+      );
+      if (!attachmentSession) {
         const created = await $api.POST("/automatic-quote-sessions", {
           body: { attribution: { channel: "web-upload" } },
           params: {
@@ -412,6 +716,14 @@ export function useModelUploadQuote() {
           throw new Error(requestMessage(created.response.status, "session"));
         }
         createdSession = created.data;
+        attachmentSession = resolveUploadSession(
+          undefined,
+          undefined,
+          createdSession,
+        );
+      }
+      if (!attachmentSession) {
+        throw new Error(requestMessage(500, "session"));
       }
 
       const attached = await $api.POST(
@@ -422,11 +734,11 @@ export function useModelUploadQuote() {
             uploadToken: uploadIntent.accessToken,
           },
           headers: {
-            Authorization: `Bearer ${createdSession.sessionToken}`,
+            Authorization: `Bearer ${attachmentSession.sessionToken}`,
           },
           params: {
             header: { "Idempotency-Key": commandKeys.attachModel() },
-            path: { sessionId: createdSession.sessionId },
+            path: { sessionId: attachmentSession.sessionId },
           },
           signal,
         },
@@ -438,10 +750,11 @@ export function useModelUploadQuote() {
         throw new Error(requestMessage(attached.response.status, "attach"));
       }
 
-      sessionToken.value = createdSession.sessionToken;
+      sessionToken.value = attachmentSession.sessionToken;
       restoredFilename.value = file.name;
       selectedFile.value = undefined;
       sha256.value = undefined;
+      addingModel.value = false;
       if (import.meta.client) {
         const storage = getSessionStorage(window);
         if (storage) {
@@ -450,7 +763,7 @@ export function useModelUploadQuote() {
             filename: file.name,
             publicReference: attached.data.publicReference,
             sessionId: attached.data.sessionId,
-            sessionToken: createdSession.sessionToken,
+            sessionToken: attachmentSession.sessionToken,
           });
         }
       }
@@ -490,8 +803,33 @@ export function useModelUploadQuote() {
       phase.value = "ready";
       void startUpload();
     } else {
-      resetState();
+      if (addingModel.value) cancelAdditionalModel();
+      else resetState();
     }
+  }
+
+  function cancelAdditionalModel(): void {
+    if (!addingModel.value) return;
+    selectionRevision += 1;
+    uploadController?.abort();
+    uploadController = undefined;
+    responseGuard.reset();
+    stopPolling();
+    discardUploadCheckpoint();
+    selectedFile.value = undefined;
+    metadata.value = undefined;
+    sha256.value = undefined;
+    geometry.value = undefined;
+    previewMessage.value = undefined;
+    errorMessage.value = undefined;
+    handoffMessage.value = undefined;
+    addingModel.value = false;
+    const currentQuote = quote.value;
+    if (!currentQuote) {
+      resetState();
+      return;
+    }
+    if (!applyQuote(currentQuote)) scheduleQuoteRefresh(0);
   }
 
   async function restoreSession(): Promise<void> {
@@ -506,7 +844,11 @@ export function useModelUploadQuote() {
     quote.value = {
       bindingQuote: null,
       checkoutReady: false,
+      configurationEditable: false,
+      configurationOptions: [],
       configurationRevision: 0,
+      deliveryOptions: [],
+      quantityComparisons: [],
       expiresAt: stored.expiresAt,
       express: { eligible: false, reasons: [], requested: false },
       handoff: null,
@@ -529,12 +871,18 @@ export function useModelUploadQuote() {
   onBeforeUnmount(() => {
     disposed = true;
     uploadController?.abort();
+    commandController?.abort();
     stopPolling();
   });
 
   return {
+    addingModel,
     canUpload,
+    cancelAdditionalModel,
     cancelUpload,
+    commandError,
+    commandPending,
+    decideRisk,
     errorMessage,
     filename,
     geometry,
@@ -542,11 +890,33 @@ export function useModelUploadQuote() {
     metadata,
     phase,
     previewMessage,
+    prepareQuote,
     quote,
+    replaceConfiguration,
+    removeItem,
     resetState,
     retry,
+    selectDestination,
+    selectAdditionalFile,
     selectFile,
+    setExpress,
     startUpload,
     uploadProgress,
   };
+}
+
+function quoteCommandMessage(status: number): string {
+  if (status === 409) {
+    return "Konfigurace se mezitím změnila. Zkontrolujte aktuální volby a zkuste to znovu.";
+  }
+  if (status === 410) {
+    return "Platnost kalkulace vypršela. Nahrajte model znovu.";
+  }
+  if (status === 401) {
+    return "Přístup ke kalkulaci už není platný. Nahrajte model znovu.";
+  }
+  if (status === 422) {
+    return "Vybraná kombinace už není dostupná. Zvolte jinou možnost.";
+  }
+  return "Změnu se nepodařilo uložit. Zkuste to znovu.";
 }

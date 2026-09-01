@@ -14,8 +14,13 @@ useHead({
 });
 
 const {
+  addingModel,
   canUpload,
+  cancelAdditionalModel,
   cancelUpload,
+  commandError,
+  commandPending,
+  decideRisk,
   errorMessage,
   filename,
   geometry,
@@ -23,15 +28,37 @@ const {
   metadata,
   phase,
   previewMessage,
+  prepareQuote,
   quote,
+  replaceConfiguration,
   resetState,
   retry,
+  selectAdditionalFile,
+  selectDestination,
   selectFile,
+  setExpress,
   startUpload,
   uploadProgress,
 } = useModelUploadQuote();
 const fileInput = ref<HTMLInputElement>();
+const additionalFileInput = ref<HTMLInputElement>();
 const isDragging = ref(false);
+const showConfigurator = computed(
+  () =>
+    Boolean(quote.value) &&
+    (phase.value === "complete" ||
+      (phase.value === "inspecting" && quote.value!.items.length > 0)),
+);
+const activeProcessStep = computed(() => {
+  if (!quote.value) return 1;
+  if (quote.value.phase === "CHECKOUT_READY") return 4;
+  if (
+    quote.value.phase === "DESTINATION_REQUIRED" ||
+    quote.value.phase === "ELIGIBILITY_PENDING"
+  )
+    return 3;
+  return 2;
+});
 
 const pipeline = computed(() => {
   const quotePhase = quote.value?.phase;
@@ -85,41 +112,6 @@ const progressCopy = computed(() => {
   };
 });
 
-const completedCopy = computed(() => {
-  if (
-    quote.value?.phase === "CHECKOUT_READY" &&
-    quote.value.bindingQuote?.totalMinor != null
-  ) {
-    return {
-      code: "ZÁVAZNÁ CENA PŘIPRAVENA",
-      detail:
-        "API potvrdilo závaznou cenu. K platbě se pokračuje až v navazujícím kroku.",
-      title: "Kalkulace je dokončená.",
-    };
-  }
-  if (quote.value?.phase === "ACTION_REQUIRED") {
-    return {
-      code: "ČEKÁ NA ROZHODNUTÍ",
-      detail:
-        "Geometrie je zkontrolovaná. Před pokračováním je potřeba vyřešit nález v konfiguraci.",
-      title: "Kalkulace potřebuje vaše rozhodnutí.",
-    };
-  }
-  if (quote.value?.phase === "DESTINATION_REQUIRED") {
-    return {
-      code: "GEOMETRIE PŘIPRAVENA",
-      detail: "Pro závaznou cenu ještě zbývá vybrat způsob a místo doručení.",
-      title: "Model je připravený k doplnění dopravy.",
-    };
-  }
-  return {
-    code: "OK / KONTROLA DOKONČENA",
-    detail:
-      "Server potvrdil čitelnou geometrii. Tento krok můžete po obnovení stránky bezpečně navázat stejnou referencí.",
-    title: "Model je připravený ke konfiguraci.",
-  };
-});
-
 const previewDescription = computed(() => {
   if (!geometry.value) return "Náhled modelu není k dispozici.";
   const dimensions = geometry.value.dimensions;
@@ -145,6 +137,13 @@ function onFileChange(event: Event): void {
   input.value = "";
 }
 
+function onAdditionalFileChange(event: Event): void {
+  const input = event.currentTarget as HTMLInputElement;
+  const file = input.files?.item(0);
+  if (file) void selectAdditionalFile(file);
+  input.value = "";
+}
+
 function onDrop(event: DragEvent): void {
   isDragging.value = false;
   selectFromList(event.dataTransfer?.files ?? null);
@@ -153,6 +152,10 @@ function onDrop(event: DragEvent): void {
 function chooseAnotherFile(): void {
   resetState();
   nextTick(() => fileInput.value?.click());
+}
+
+function chooseAdditionalFile(): void {
+  additionalFileInput.value?.click();
 }
 
 function inspectionLabel(status: string | undefined): string {
@@ -174,20 +177,39 @@ function inspectionLabel(status: string | undefined): string {
       </NuxtLink>
       <nav aria-label="Průběh objednávky" class="process-nav">
         <ol>
-          <li aria-current="step"><span>01</span> SOUBOR</li>
-          <li><span>02</span> KONFIGURACE</li>
-          <li><span>03</span> DOPRAVA</li>
-          <li><span>04</span> PLATBA</li>
+          <li :aria-current="activeProcessStep === 1 ? 'step' : undefined">
+            <span>01</span> SOUBOR
+          </li>
+          <li :aria-current="activeProcessStep === 2 ? 'step' : undefined">
+            <span>02</span> KONFIGURACE
+          </li>
+          <li :aria-current="activeProcessStep === 3 ? 'step' : undefined">
+            <span>03</span> DOPRAVA
+          </li>
+          <li :aria-current="activeProcessStep === 4 ? 'step' : undefined">
+            <span>04</span> PLATBA
+          </li>
           <li><span>05</span> VÝROBA</li>
         </ol>
       </nav>
     </header>
 
     <main class="order-layout">
-      <section class="order-workspace" aria-labelledby="upload-title">
-        <div class="section-heading">
-          <p class="eyebrow">01 / SOUBOR</p>
-          <h1 id="upload-title">Nahrajte model pro tisk.</h1>
+      <section
+        class="order-workspace"
+        :aria-labelledby="
+          showConfigurator ? 'configurator-title' : 'upload-title'
+        "
+      >
+        <div v-if="!showConfigurator" class="section-heading">
+          <p class="eyebrow">
+            {{ addingModel ? "DALŠÍ SOUBOR" : "01 / SOUBOR" }}
+          </p>
+          <h1 id="upload-title">
+            {{
+              addingModel ? "Přidejte další model." : "Nahrajte model pro tisk."
+            }}
+          </h1>
           <p>
             Přijímáme STL a jednovrstvý, nebarvený 3MF. Rozměry ověříme v
             prohlížeči a po nahrání model zkontrolujeme na serveru.
@@ -220,7 +242,9 @@ function inspectionLabel(status: string | undefined): string {
         <div v-else class="model-card">
           <header v-if="filename" class="file-heading">
             <div>
-              <p class="eyebrow">VYBRANÝ SOUBOR</p>
+              <p class="eyebrow">
+                {{ addingModel ? "PŘIDÁVANÝ SOUBOR" : "VYBRANÝ SOUBOR" }}
+              </p>
               <h2>{{ filename }}</h2>
             </div>
             <p v-if="metadata" class="file-meta mono">
@@ -316,20 +340,26 @@ function inspectionLabel(status: string | undefined): string {
                 :disabled="!canUpload"
                 @click="startUpload"
               >
-                Nahrát a zkontrolovat
+                {{
+                  addingModel
+                    ? "Nahrát a přidat model"
+                    : "Nahrát a zkontrolovat"
+                }}
               </button>
               <button
                 class="secondary-button"
                 type="button"
-                @click="chooseAnotherFile"
+                @click="
+                  addingModel ? cancelAdditionalModel() : chooseAnotherFile()
+                "
               >
-                Vybrat jiný soubor
+                {{ addingModel ? "Zpět ke kalkulaci" : "Vybrat jiný soubor" }}
               </button>
             </div>
           </template>
 
           <div
-            v-if="phase === 'inspecting'"
+            v-if="phase === 'inspecting' && !showConfigurator"
             class="working-state"
             aria-live="polite"
           >
@@ -343,23 +373,36 @@ function inspectionLabel(status: string | undefined): string {
             </div>
           </div>
 
+          <OrderQuoteConfigurator
+            v-if="showConfigurator && quote"
+            :command-error="commandError"
+            :on-decide-risk="decideRisk"
+            :on-prepare="prepareQuote"
+            :on-replace-configuration="replaceConfiguration"
+            :on-select-destination="selectDestination"
+            :on-set-express="setExpress"
+            :pending="commandPending"
+            :quote="quote"
+          />
+
           <div
-            v-if="phase === 'complete'"
-            class="result-state success-state"
-            aria-live="polite"
+            v-if="showConfigurator && quote?.configurationEditable"
+            class="card-actions"
           >
-            <p class="state-code mono">{{ completedCopy.code }}</p>
-            <h2>{{ completedCopy.title }}</h2>
-            <p>{{ completedCopy.detail }}</p>
-            <p v-if="quote?.publicReference" class="reference mono">
-              Reference {{ quote.publicReference }}
-            </p>
+            <input
+              ref="additionalFileInput"
+              accept=".stl,.3mf,model/stl,model/3mf"
+              class="visually-hidden"
+              type="file"
+              @change="onAdditionalFileChange"
+            />
             <button
               class="secondary-button"
               type="button"
-              @click="resetState()"
+              :disabled="commandPending"
+              @click="chooseAdditionalFile"
             >
-              Nahrát další model
+              + Přidat další model
             </button>
           </div>
 
@@ -375,9 +418,13 @@ function inspectionLabel(status: string | undefined): string {
               <button
                 class="primary-button"
                 type="button"
-                @click="chooseAnotherFile"
+                @click="
+                  addingModel ? cancelAdditionalModel() : chooseAnotherFile()
+                "
               >
-                Vybrat opravený soubor
+                {{
+                  addingModel ? "Zpět ke kalkulaci" : "Začít novou kalkulaci"
+                }}
               </button>
             </div>
           </div>
@@ -423,9 +470,11 @@ function inspectionLabel(status: string | undefined): string {
               <button
                 class="secondary-button"
                 type="button"
-                @click="chooseAnotherFile"
+                @click="
+                  addingModel ? cancelAdditionalModel() : chooseAnotherFile()
+                "
               >
-                Vybrat jiný soubor
+                {{ addingModel ? "Zpět ke kalkulaci" : "Vybrat jiný soubor" }}
               </button>
             </div>
           </div>
