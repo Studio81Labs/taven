@@ -33,6 +33,67 @@ const ids = {
   shipment: "00000000-0000-4000-8000-000000000010",
 };
 
+const core3mfNamespace =
+  "http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
+
+function storedZip(entries: Readonly<Record<string, string>>): Uint8Array {
+  const local: Buffer[] = [];
+  const central: Buffer[] = [];
+  let offset = 0;
+  for (const [name, value] of Object.entries(entries)) {
+    const nameBytes = Buffer.from(name);
+    const contents = Buffer.from(value);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt32LE(contents.byteLength, 18);
+    localHeader.writeUInt32LE(contents.byteLength, 22);
+    localHeader.writeUInt16LE(nameBytes.byteLength, 26);
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt32LE(contents.byteLength, 20);
+    centralHeader.writeUInt32LE(contents.byteLength, 24);
+    centralHeader.writeUInt16LE(nameBytes.byteLength, 28);
+    centralHeader.writeUInt32LE(offset, 42);
+    local.push(localHeader, nameBytes, contents);
+    central.push(centralHeader, nameBytes);
+    offset +=
+      localHeader.byteLength + nameBytes.byteLength + contents.byteLength;
+  }
+  const centralBytes = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(Object.keys(entries).length, 8);
+  end.writeUInt16LE(Object.keys(entries).length, 10);
+  end.writeUInt32LE(centralBytes.byteLength, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...local, centralBytes, end]);
+}
+
+function repeatedBody3mf(count: number): Uint8Array {
+  const items = Array.from(
+    { length: count },
+    () => '<item objectid="1"/>',
+  ).join("");
+  return storedZip({
+    "3D/3dmodel.model": `<model xmlns="${core3mfNamespace}" unit="millimeter">
+      <resources><object id="1"><mesh>
+        <vertices>
+          <vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/>
+          <vertex x="0" y="1" z="0"/><vertex x="0" y="0" z="1"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="2" v3="1"/><triangle v1="0" v2="1" v3="3"/>
+          <triangle v1="1" v2="2" v3="3"/><triangle v1="2" v2="0" v3="3"/>
+        </triangles>
+      </mesh></object></resources>
+      <build>${items}</build>
+    </model>`,
+  });
+}
+
 class MemoryStore implements WorkerObjectStore {
   readonly objects = new Map<string, Uint8Array>();
   readonly metadata = new Map<
@@ -283,6 +344,74 @@ describe("SlicingProcessor", () => {
     );
     expect(store.writes).toEqual([]);
     expect(engine.calls).toHaveLength(0);
+  });
+
+  it("rejects oversized inspection results before artifact upload", async () => {
+    const store = new MemoryStore();
+    const processor = new SlicingProcessor(store, new FakeEngine(), config);
+    const source = repeatedBody3mf(256);
+    const sourceHash = sha256(source);
+    const sourceKey = `models/${ids.source}/source`;
+    const canonicalKey = `geometries/${ids.geometry}/canonical`;
+    store.objects.set(sourceKey, source);
+    const sourceInput = {
+      source: {
+        modelFileId: ids.source,
+        format: "3mf" as const,
+        objectKey: sourceKey,
+        contentSha256: sourceHash,
+      },
+      operation: { mode: "inspect_source" as const },
+      inspectionRevision: "inspection-v1",
+      inspectionConfigSha256: "b".repeat(64),
+      canonicalizerRevision: "canonicalizer-v1",
+      canonicalizerConfigSha256: "c".repeat(64),
+    };
+    const discoveryResult = await processor.process(
+      envelope("model_inspection", sourceInput),
+    );
+    expect(discoveryResult.outcome).toMatchObject({
+      status: "failed",
+      failureClass: "deterministic_invalid",
+      code: "RESOURCE_LIMIT_EXCEEDED",
+      retryable: false,
+    });
+    const bodyIds = Array.from(
+      { length: 256 },
+      (_, index) => `body-${String(index + 1).padStart(4, "0")}`,
+    );
+    const input = {
+      ...sourceInput,
+      operation: {
+        mode: "canonicalize_selection" as const,
+        sourceInspectionFingerprintSha256: slicingInputFingerprint(
+          "model_inspection",
+          sourceInput,
+        ),
+        bodyIds,
+        selectionSha256: geometrySelectionSha256(bodyIds),
+        confirmedUnitConversion: {
+          sourceUnit: "millimeter" as const,
+          targetUnit: "millimeter" as const,
+          scaleFactorPpm: 1_000_000,
+        },
+        targetGeometry: {
+          modelGeometryId: ids.geometry,
+          canonicalObjectKey: canonicalKey,
+        },
+      },
+    };
+
+    const result = await processor.process(envelope("model_inspection", input));
+
+    expect(result.outcome).toMatchObject({
+      status: "failed",
+      failureClass: "deterministic_invalid",
+      code: "RESOURCE_LIMIT_EXCEEDED",
+      retryable: false,
+    });
+    expect(store.writes).toEqual([]);
+    expect(store.objects.has(canonicalKey)).toBe(false);
   });
 
   it("blocks automatic quoting for open mesh topology", async () => {

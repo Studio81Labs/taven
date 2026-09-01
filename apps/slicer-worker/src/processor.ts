@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  SLICING_MESSAGE_MAX_BYTES,
   SlicingJobSchema,
   slicingResultForJobSchema,
   productionArtifactObjectKey,
@@ -45,6 +46,17 @@ function envelope(job: SlicingJob, engine: WorkerConfig["engine"]) {
       imageSha256: engine.imageSha256,
     },
   } as const;
+}
+
+function assertResultEnvelopeSize(result: unknown): void {
+  const bytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
+  if (bytes > SLICING_MESSAGE_MAX_BYTES) {
+    throw new SlicingWorkerError(
+      "deterministic_invalid",
+      "RESOURCE_LIMIT_EXCEEDED",
+      "Inspection result exceeds the slicing message size limit",
+    );
+  }
 }
 
 function inspectionMetrics(inspection: ModelInspection) {
@@ -458,7 +470,7 @@ export class SlicingProcessor {
     }
     if (job.input.operation.mode === "inspect_source") {
       const inspection = inspectModel(job.input.source.format, source.bytes);
-      return {
+      const result = {
         ...envelope(job, this.config.engine),
         outcome: {
           status: "succeeded",
@@ -468,6 +480,8 @@ export class SlicingProcessor {
           findings: inspectionFindings(inspection),
         },
       };
+      assertResultEnvelopeSize(result);
+      return result;
     }
     const operation = job.input.operation;
     const canonical = canonicalizeModel(
@@ -476,17 +490,12 @@ export class SlicingProcessor {
       operation.bodyIds,
       operation.confirmedUnitConversion.scaleFactorPpm,
     );
-    await this.store.write(
-      operation.targetGeometry.canonicalObjectKey,
-      canonical.bytes,
-      "model/stl",
-    );
     const bodies = canonical.inspection.bodies.map((item, index) => ({
       ...item,
       bodyId: operation.bodyIds[index]!,
     }));
     const resultInspection = { ...canonical.inspection, bodies };
-    return {
+    const result = {
       ...envelope(job, this.config.engine),
       outcome: {
         status: "succeeded",
@@ -502,6 +511,13 @@ export class SlicingProcessor {
         findings: inspectionFindings(resultInspection),
       },
     };
+    assertResultEnvelopeSize(result);
+    await this.store.write(
+      operation.targetGeometry.canonicalObjectKey,
+      canonical.bytes,
+      "model/stl",
+    );
+    return result;
   }
 
   private async profiles(
