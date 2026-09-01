@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { inflateRawSync } from "node:zlib";
+import { SaxesParser, type SaxesAttributeNS, type SaxesTagNS } from "saxes";
 import { SlicingWorkerError } from "./failures.js";
 import { sha256 } from "./object-store.js";
 
@@ -47,9 +48,17 @@ const MAX_ARCHIVE_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_TRIANGLES = 1_000_000;
 const MAX_COMPONENT_EDGES = 4_096;
 const MAX_COMPONENT_DEPTH = 64;
+const MAX_MODEL_OBJECTS = 4_096;
 const ZIP_EOCD = 0x06054b50;
 const ZIP_CENTRAL_FILE = 0x02014b50;
 const ZIP_LOCAL_FILE = 0x04034b50;
+const CORE_3MF_NAMESPACE =
+  "http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
+const PRODUCTION_3MF_NAMESPACE =
+  "http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
+const PACKAGE_RELATIONSHIPS_NAMESPACE =
+  "http://schemas.openxmlformats.org/package/2006/relationships";
+const SLIC3R_3MF_NAMESPACE = "http://schemas.slic3r.org/3mf/2017/06";
 
 function invalid(message: string): never {
   throw new SlicingWorkerError(
@@ -68,36 +77,37 @@ function finiteNumber(value: string | undefined, label: string): number {
   return parsed;
 }
 
-function xmlValue(value: string): string {
-  return value.replace(
-    /&(?:amp|quot|apos|lt|gt|#\d+|#x[0-9a-f]+);/giu,
-    (entity) => {
-      if (entity === "&amp;") return "&";
-      if (entity === "&quot;") return '"';
-      if (entity === "&apos;") return "'";
-      if (entity === "&lt;") return "<";
-      if (entity === "&gt;") return ">";
-      const hexadecimal = /^&#x([0-9a-f]+);$/iu.exec(entity)?.[1];
-      const decimal = /^&#(\d+);$/u.exec(entity)?.[1];
-      const codePoint = Number.parseInt(
-        hexadecimal ?? decimal ?? "0",
-        hexadecimal ? 16 : 10,
-      );
-      if (!Number.isSafeInteger(codePoint) || codePoint < 32) {
-        invalid("Model XML contains an invalid entity");
-      }
-      return String.fromCodePoint(codePoint);
-    },
-  );
+function attribute(
+  tag: SaxesTagNS,
+  local: string,
+  uri = "",
+): string | undefined {
+  return Object.values(tag.attributes).find(
+    (candidate: SaxesAttributeNS) =>
+      candidate.local === local && candidate.uri === uri,
+  )?.value;
 }
 
-function attributes(source: string): Map<string, string> {
-  const values = new Map<string, string>();
-  const pattern = /([A-Za-z_][\w.:-]*)\s*=\s*(["'])(.*?)\2/gsu;
-  for (const match of source.matchAll(pattern)) {
-    values.set(match[1]!.toLowerCase(), xmlValue(match[3]!));
+function parseXml(
+  bytes: Uint8Array,
+  configure: (parser: SaxesParser<{ xmlns: true }>) => void,
+): void {
+  let source: string;
+  try {
+    source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    invalid("3MF XML is not valid UTF-8");
   }
-  return values;
+  const parser = new SaxesParser({ xmlns: true, position: false });
+  parser.on("doctype", () => invalid("3MF XML declarations are unsupported"));
+  parser.on("error", () => invalid("3MF XML is not well formed"));
+  configure(parser);
+  try {
+    parser.write(source!).close();
+  } catch (error) {
+    if (error instanceof SlicingWorkerError) throw error;
+    invalid("3MF XML is not well formed");
+  }
 }
 
 function boundingBox(triangles: readonly Triangle[]) {
@@ -445,24 +455,47 @@ function inspectRelationships(
     if (!name.endsWith(".rels")) continue;
     const sourcePart = relationshipSource(name);
     if (sourcePart === null) invalid("3MF relationship part is misplaced");
-    const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    for (const match of source.matchAll(/<Relationship\b([^>]*)\/?\s*>/giu)) {
-      const values = attributes(match[1]!);
-      if (values.get("targetmode")?.toLowerCase() === "external") {
-        invalid("3MF archive contains an external relationship");
-      }
-      const target = values.get("target");
-      if (!target) invalid("3MF relationship has no target");
-      const packageTarget = relationshipTarget(sourcePart!, target);
-      if (!entries.has(packageTarget)) {
-        invalid("3MF relationship references a missing package part");
-      }
-      if (values.get("type")?.toLowerCase().endsWith("/3dmodel")) {
-        const targets = modelRelationships.get(sourcePart!) ?? new Set();
-        targets.add(packageTarget);
-        modelRelationships.set(sourcePart!, targets);
-      }
-    }
+    const stack: Array<{ uri: string; local: string }> = [];
+    let sawRoot = false;
+    parseXml(bytes, (parser) => {
+      parser.on("opentag", (tag) => {
+        const parent = stack.at(-1);
+        if (stack.length === 0) {
+          if (
+            tag.uri !== PACKAGE_RELATIONSHIPS_NAMESPACE ||
+            tag.local !== "Relationships"
+          ) {
+            invalid("3MF relationship root element is invalid");
+          }
+          sawRoot = true;
+        } else if (
+          parent?.uri === PACKAGE_RELATIONSHIPS_NAMESPACE &&
+          parent.local === "Relationships" &&
+          tag.uri === PACKAGE_RELATIONSHIPS_NAMESPACE &&
+          tag.local === "Relationship"
+        ) {
+          if (attribute(tag, "TargetMode")?.toLowerCase() === "external") {
+            invalid("3MF archive contains an external relationship");
+          }
+          const target = attribute(tag, "Target");
+          if (!target) invalid("3MF relationship has no target");
+          const packageTarget = relationshipTarget(sourcePart!, target);
+          if (!entries.has(packageTarget)) {
+            invalid("3MF relationship references a missing package part");
+          }
+          if (attribute(tag, "Type")?.toLowerCase().endsWith("/3dmodel")) {
+            const targets = modelRelationships.get(sourcePart!) ?? new Set();
+            targets.add(packageTarget);
+            modelRelationships.set(sourcePart!, targets);
+          }
+        }
+        stack.push({ uri: tag.uri, local: tag.local });
+      });
+      parser.on("closetag", () => {
+        stack.pop();
+      });
+    });
+    if (!sawRoot) invalid("3MF relationship root element is missing");
   }
   return modelRelationships;
 }
@@ -500,24 +533,21 @@ type ObjectDefinition = {
   components: ComponentDefinition[];
 };
 
+type BuildItemDefinition = {
+  objectId: string;
+  partPath: string;
+  transform: Transform;
+  printable: boolean;
+};
+
 type ModelPart = {
   path: string;
   unitHint: ModelInspection["unitHint"];
   objects: Map<string, ObjectDefinition>;
+  buildItems: BuildItemDefinition[];
 };
 
 const IDENTITY_TRANSFORM: Transform = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
-
-function localAttribute(
-  values: ReadonlyMap<string, string>,
-  name: string,
-): string | undefined {
-  const matches = [...values].filter(
-    ([key]) => key === name || key.endsWith(`:${name}`),
-  );
-  if (matches.length > 1) invalid(`3MF contains ambiguous ${name} attributes`);
-  return matches[0]?.[1];
-}
 
 function transformValue(value: string | undefined): Transform {
   if (value === undefined) return IDENTITY_TRANSFORM;
@@ -575,85 +605,13 @@ function transformedTriangles(
   });
 }
 
-function parseMesh(
-  source: string,
-  objectAttributes: ReadonlyMap<string, string>,
-  partPath: string,
-): MeshDefinition {
-  const vertices = [...source.matchAll(/<vertex\b([^>]*)\/?\s*>/giu)].map(
-    (match): Point => {
-      const values = attributes(match[1]!);
-      return [
-        finiteNumber(values.get("x"), "3MF x coordinate"),
-        finiteNumber(values.get("y"), "3MF y coordinate"),
-        finiteNumber(values.get("z"), "3MF z coordinate"),
-      ];
-    },
-  );
-  const materials = new Set<string>();
-  const extruders = new Set<string>();
-  let paint = false;
-  const partIdentity = createHash("sha256")
-    .update(partPath)
-    .digest("hex")
-    .slice(0, 12);
-  const triangles = [...source.matchAll(/<triangle\b([^>]*)\/?\s*>/giu)].map(
-    (match): Triangle => {
-      const values = attributes(match[1]!);
-      const indices = ["v1", "v2", "v3"].map((name) => {
-        const value = values.get(name);
-        if (!value || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-          invalid("3MF triangle index is invalid");
-        }
-        return Number(value);
-      });
-      const pid = values.get("pid") ?? objectAttributes.get("pid");
-      const propertyIndices = ["p1", "p2", "p3"]
-        .map((name) => values.get(name))
-        .filter((value): value is string => value !== undefined);
-      const fallbackPropertyIndex =
-        values.get("pindex") ?? objectAttributes.get("pindex");
-      if (pid) {
-        const assigned =
-          propertyIndices.length > 0
-            ? propertyIndices
-            : fallbackPropertyIndex
-              ? [fallbackPropertyIndex]
-              : [null];
-        for (const propertyIndex of assigned) {
-          materials.add(
-            `material-${partIdentity}-${pid}${propertyIndex ? `-${propertyIndex}` : ""}`,
-          );
-        }
-      }
-      const paintValue =
-        values.get("paint_color") ?? values.get("slic3rpe:mmu_segmentation");
-      if (paintValue !== undefined) {
-        paint = true;
-        for (const segment of paintValue.split(/[\s,]+/u)) {
-          if (!/^\d+$/u.test(segment)) continue;
-          const assignment = Number(segment) >> 2;
-          if (assignment > 0) extruders.add(`extruder-${assignment}`);
-        }
-      }
-      const selected = indices.map((index) => vertices[index]);
-      if (selected.some((point) => point === undefined)) {
-        invalid("3MF triangle references a missing vertex");
-      }
-      return [selected[0]!, selected[1]!, selected[2]!];
-    },
-  );
-  if (triangles.length < 1) invalid("Model body contains no triangles");
-  return { triangles, paint, materials, extruders };
-}
-
 function referencedPart(
-  values: ReadonlyMap<string, string>,
+  tag: SaxesTagNS,
   currentPart: string,
   rootPart: string,
   allowedRootTargets: ReadonlySet<string>,
 ): string {
-  const reference = localAttribute(values, "path");
+  const reference = attribute(tag, "path", PRODUCTION_3MF_NAMESPACE);
   if (reference === undefined) return currentPart;
   if (currentPart !== rootPart || !reference.startsWith("/")) {
     invalid("3MF production path is not permitted in this model part");
@@ -671,68 +629,297 @@ function parseModelPart(
   rootPart: string,
   allowedRootTargets: ReadonlySet<string>,
 ): ModelPart {
-  const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  if (/<!DOCTYPE|<!ENTITY/iu.test(source)) {
-    invalid("3MF XML declarations are unsupported");
-  }
-  const modelTag = /<model\b([^>]*)>/iu.exec(source);
-  if (!modelTag) invalid("3MF model element is missing");
-  const declaredUnit = attributes(modelTag[1]!).get("unit")?.toLowerCase();
-  const unitHint =
-    declaredUnit === "millimeter" ||
-    declaredUnit === "inch" ||
-    declaredUnit === "meter"
-      ? declaredUnit
-      : "unknown";
+  let unitHint: ModelInspection["unitHint"] = "unknown";
   const objects = new Map<string, ObjectDefinition>();
-  const objectPattern = /<object\b([^>]*)>([\s\S]*?)<\/object>/giu;
-  for (const objectMatch of source.matchAll(objectPattern)) {
-    const objectAttributes = attributes(objectMatch[1]!);
-    const objectId = objectAttributes.get("id");
-    if (!objectId || !/^[0-9]{1,9}$/u.test(objectId)) {
-      invalid("3MF object identifier is invalid");
-    }
-    if (objects.has(objectId))
-      invalid("3MF contains duplicate object identifiers");
-    const mesh = /<mesh\b[^>]*>([\s\S]*?)<\/mesh>/iu.exec(objectMatch[2]!);
-    const componentsMatch =
-      /<components\b[^>]*>([\s\S]*?)<\/components>/iu.exec(objectMatch[2]!);
-    if ((mesh === null) === (componentsMatch === null)) {
-      invalid("3MF object must contain exactly one mesh or component graph");
-    }
-    const components = componentsMatch
-      ? [...componentsMatch[1]!.matchAll(/<component\b([^>]*)\/?\s*>/giu)].map(
-          (match): ComponentDefinition => {
-            const values = attributes(match[1]!);
-            const referencedObjectId = values.get("objectid");
-            if (
-              !referencedObjectId ||
-              !/^[0-9]{1,9}$/u.test(referencedObjectId)
-            ) {
-              invalid("3MF component object identifier is invalid");
+  const buildItems: BuildItemDefinition[] = [];
+  const stack: Array<{ uri: string; local: string }> = [];
+  const partIdentity = createHash("sha256")
+    .update(partPath)
+    .digest("hex")
+    .slice(0, 12);
+  let sawModel = false;
+  let sourceTriangleCount = 0;
+  let sourceComponentCount = 0;
+  let currentObject:
+    | {
+        id: string;
+        pid: string | undefined;
+        pindex: string | undefined;
+        kind: "mesh" | "components" | null;
+        mesh: (MeshDefinition & { vertices: Point[] }) | null;
+        components: ComponentDefinition[];
+      }
+    | undefined;
+
+  const parentIs = (uri: string, local: string): boolean => {
+    const parent = stack.at(-1);
+    return parent?.uri === uri && parent.local === local;
+  };
+  const positiveIndex = (value: string | undefined, label: string): string => {
+    if (!value || !/^[0-9]{1,9}$/u.test(value)) invalid(label);
+    return value;
+  };
+
+  parseXml(bytes, (parser) => {
+    parser.on("opentag", (tag) => {
+      if (stack.length === 0) {
+        if (tag.uri !== CORE_3MF_NAMESPACE || tag.local !== "model") {
+          invalid("3MF model element is missing");
+        }
+        sawModel = true;
+        const declaredUnit = attribute(tag, "unit")?.toLowerCase();
+        unitHint =
+          declaredUnit === "millimeter" ||
+          declaredUnit === "inch" ||
+          declaredUnit === "meter"
+            ? declaredUnit
+            : "unknown";
+      } else if (tag.uri === CORE_3MF_NAMESPACE) {
+        switch (tag.local) {
+          case "object": {
+            if (!parentIs(CORE_3MF_NAMESPACE, "resources") || currentObject) {
+              invalid("3MF object is outside model resources");
             }
-            return {
-              objectId: referencedObjectId,
+            const objectId = positiveIndex(
+              attribute(tag, "id"),
+              "3MF object identifier is invalid",
+            );
+            if (objects.has(objectId)) {
+              invalid("3MF contains duplicate object identifiers");
+            }
+            if (objects.size >= MAX_MODEL_OBJECTS) {
+              throw new SlicingWorkerError(
+                "deterministic_invalid",
+                "RESOURCE_LIMIT_EXCEEDED",
+                "3MF exceeds the model object limit",
+              );
+            }
+            currentObject = {
+              id: objectId,
+              pid: attribute(tag, "pid"),
+              pindex: attribute(tag, "pindex"),
+              kind: null,
+              mesh: null,
+              components: [],
+            };
+            break;
+          }
+          case "mesh":
+            if (!parentIs(CORE_3MF_NAMESPACE, "object") || !currentObject) {
+              invalid("3MF mesh is outside an object");
+            }
+            if (currentObject.kind !== null) {
+              invalid(
+                "3MF object must contain exactly one mesh or component graph",
+              );
+            }
+            currentObject.kind = "mesh";
+            currentObject.mesh = {
+              vertices: [],
+              triangles: [],
+              paint: false,
+              materials: new Set(),
+              extruders: new Set(),
+            };
+            break;
+          case "components":
+            if (!parentIs(CORE_3MF_NAMESPACE, "object") || !currentObject) {
+              invalid("3MF components are outside an object");
+            }
+            if (currentObject.kind !== null) {
+              invalid(
+                "3MF object must contain exactly one mesh or component graph",
+              );
+            }
+            currentObject.kind = "components";
+            break;
+          case "vertex": {
+            if (
+              !parentIs(CORE_3MF_NAMESPACE, "vertices") ||
+              !currentObject?.mesh
+            ) {
+              invalid("3MF vertex is outside a mesh vertex list");
+            }
+            if (currentObject.mesh.vertices.length >= MAX_TRIANGLES * 3) {
+              throw new SlicingWorkerError(
+                "deterministic_invalid",
+                "RESOURCE_LIMIT_EXCEEDED",
+                "3MF exceeds the vertex limit",
+              );
+            }
+            currentObject.mesh.vertices.push([
+              finiteNumber(attribute(tag, "x"), "3MF x coordinate"),
+              finiteNumber(attribute(tag, "y"), "3MF y coordinate"),
+              finiteNumber(attribute(tag, "z"), "3MF z coordinate"),
+            ]);
+            break;
+          }
+          case "triangle": {
+            if (
+              !parentIs(CORE_3MF_NAMESPACE, "triangles") ||
+              !currentObject?.mesh
+            ) {
+              invalid("3MF triangle is outside a mesh triangle list");
+            }
+            sourceTriangleCount += 1;
+            if (sourceTriangleCount > MAX_TRIANGLES) {
+              throw new SlicingWorkerError(
+                "deterministic_invalid",
+                "RESOURCE_LIMIT_EXCEEDED",
+                "3MF exceeds the source triangle limit",
+              );
+            }
+            const indices = ["v1", "v2", "v3"].map((name) =>
+              Number(
+                positiveIndex(
+                  attribute(tag, name),
+                  "3MF triangle index is invalid",
+                ),
+              ),
+            );
+            const selected = indices.map(
+              (index) => currentObject!.mesh!.vertices[index],
+            );
+            if (selected.some((point) => point === undefined)) {
+              invalid("3MF triangle references a missing vertex");
+            }
+            currentObject.mesh.triangles.push([
+              selected[0]!,
+              selected[1]!,
+              selected[2]!,
+            ]);
+            const pid = attribute(tag, "pid") ?? currentObject.pid;
+            const propertyIndices = ["p1", "p2", "p3"]
+              .map((name) => attribute(tag, name))
+              .filter((value): value is string => value !== undefined);
+            const fallbackPropertyIndex =
+              attribute(tag, "pindex") ?? currentObject.pindex;
+            if (pid) {
+              const assigned =
+                propertyIndices.length > 0
+                  ? propertyIndices
+                  : fallbackPropertyIndex
+                    ? [fallbackPropertyIndex]
+                    : [null];
+              for (const propertyIndex of assigned) {
+                currentObject.mesh.materials.add(
+                  `material-${partIdentity}-${pid}${propertyIndex ? `-${propertyIndex}` : ""}`,
+                );
+              }
+            }
+            const paintValue =
+              attribute(tag, "paint_color") ??
+              attribute(tag, "mmu_segmentation", SLIC3R_3MF_NAMESPACE);
+            if (paintValue !== undefined) {
+              currentObject.mesh.paint = true;
+              for (const segment of paintValue.split(/[\s,]+/u)) {
+                if (!/^\d+$/u.test(segment)) continue;
+                const assignment = Number(segment) >> 2;
+                if (assignment > 0) {
+                  currentObject.mesh.extruders.add(`extruder-${assignment}`);
+                }
+              }
+            }
+            break;
+          }
+          case "component": {
+            if (
+              !parentIs(CORE_3MF_NAMESPACE, "components") ||
+              currentObject?.kind !== "components"
+            ) {
+              invalid("3MF component is outside a component graph");
+            }
+            sourceComponentCount += 1;
+            if (sourceComponentCount > MAX_COMPONENT_EDGES) {
+              throw new SlicingWorkerError(
+                "deterministic_invalid",
+                "RESOURCE_LIMIT_EXCEEDED",
+                "3MF component graph exceeds the source edge limit",
+              );
+            }
+            currentObject.components.push({
+              objectId: positiveIndex(
+                attribute(tag, "objectid"),
+                "3MF component object identifier is invalid",
+              ),
               partPath: referencedPart(
-                values,
+                tag,
                 partPath,
                 rootPart,
                 allowedRootTargets,
               ),
-              transform: transformValue(values.get("transform")),
-            };
-          },
-        )
-      : [];
-    if (componentsMatch && components.length < 1) {
-      invalid("3MF component graph is empty");
-    }
-    objects.set(objectId, {
-      mesh: mesh ? parseMesh(mesh[1]!, objectAttributes, partPath) : null,
-      components,
+              transform: transformValue(attribute(tag, "transform")),
+            });
+            break;
+          }
+          case "item": {
+            if (!parentIs(CORE_3MF_NAMESPACE, "build")) {
+              invalid("3MF build item is outside the build section");
+            }
+            const printable = attribute(tag, "printable");
+            if (
+              printable !== undefined &&
+              printable !== "0" &&
+              printable !== "1"
+            ) {
+              invalid("3MF build item printable flag is invalid");
+            }
+            if (buildItems.length >= 256) {
+              throw new SlicingWorkerError(
+                "deterministic_invalid",
+                "RESOURCE_LIMIT_EXCEEDED",
+                "3MF exceeds the selectable body limit",
+              );
+            }
+            buildItems.push({
+              objectId: positiveIndex(
+                attribute(tag, "objectid"),
+                "3MF build item object identifier is invalid",
+              ),
+              partPath: referencedPart(
+                tag,
+                partPath,
+                rootPart,
+                allowedRootTargets,
+              ),
+              transform: transformValue(attribute(tag, "transform")),
+              printable: printable !== "0",
+            });
+            break;
+          }
+        }
+      }
+      stack.push({ uri: tag.uri, local: tag.local });
     });
-  }
-  return { path: partPath, unitHint, objects };
+    parser.on("closetag", (tag) => {
+      if (tag.uri === CORE_3MF_NAMESPACE && tag.local === "object") {
+        if (!currentObject || currentObject.kind === null) {
+          invalid(
+            "3MF object must contain exactly one mesh or component graph",
+          );
+        }
+        if (currentObject.kind === "mesh") {
+          if (!currentObject.mesh || currentObject.mesh.triangles.length < 1) {
+            invalid("Model body contains no triangles");
+          }
+          const { vertices: _vertices, ...mesh } = currentObject.mesh;
+          objects.set(currentObject.id, { mesh, components: [] });
+        } else {
+          if (currentObject.components.length < 1) {
+            invalid("3MF component graph is empty");
+          }
+          objects.set(currentObject.id, {
+            mesh: null,
+            components: currentObject.components,
+          });
+        }
+        currentObject = undefined;
+      }
+      stack.pop();
+    });
+  });
+  if (!sawModel) invalid("3MF model element is missing");
+  return { path: partPath, unitHint, objects, buildItems };
 }
 
 function parseThreeMf(bytes: Uint8Array): ParsedModel {
@@ -766,28 +953,8 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
     return parsed;
   };
   const root = loadPart(rootPart);
-  const rootSource = new TextDecoder("utf-8", { fatal: true }).decode(
-    rootBytes,
-  );
-  const build = /<build\b[^>]*>([\s\S]*?)<\/build>/iu.exec(rootSource);
-  if (!build) invalid("3MF root model contains no build items");
-  const buildItems = [...build[1]!.matchAll(/<item\b([^>]*)\/?\s*>/giu)].filter(
-    (item) => {
-      const printable = attributes(item[1]!).get("printable");
-      if (printable !== undefined && printable !== "0" && printable !== "1") {
-        invalid("3MF build item printable flag is invalid");
-      }
-      return printable !== "0";
-    },
-  );
+  const buildItems = root.buildItems.filter(({ printable }) => printable);
   if (buildItems.length < 1) invalid("3MF root model contains no build items");
-  if (buildItems.length > 256) {
-    throw new SlicingWorkerError(
-      "deterministic_invalid",
-      "RESOURCE_LIMIT_EXCEEDED",
-      "3MF exceeds the selectable body limit",
-    );
-  }
   let expandedTriangles = 0;
   let traversedEdges = 0;
   const resolveObject = (
@@ -859,24 +1026,10 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
     return combined;
   };
   const parsedBodies = buildItems.map((item, index) => {
-    const values = attributes(item[1]!);
-    const objectId = values.get("objectid");
-    if (!objectId || !/^[0-9]{1,9}$/u.test(objectId)) {
-      invalid("3MF build item object identifier is invalid");
-    }
-    const itemPart = referencedPart(
-      values,
-      rootPart,
-      rootPart,
-      allowedRootTargets,
-    );
-    const realized = resolveObject(itemPart, objectId, new Set(), 1);
+    const realized = resolveObject(item.partPath, item.objectId, new Set(), 1);
     return body(
       `body-${String(index + 1).padStart(4, "0")}`,
-      transformedTriangles(
-        realized.triangles,
-        transformValue(values.get("transform")),
-      ),
+      transformedTriangles(realized.triangles, item.transform),
       {
         paint: realized.paint,
         materials: realized.materials,

@@ -168,6 +168,26 @@ function validateCapacityWindows(
   }
 }
 
+function validateCapacityAvailability(
+  windows: readonly CandidateCapacityWindow[],
+  occupied: readonly OccupiedCapacityRow[],
+): void {
+  if (
+    windows.some((window) =>
+      occupied.some((reservation) =>
+        windowsOverlap(window, {
+          startsAt: reservation.starts_at,
+          endsAt: reservation.ends_at,
+        }),
+      ),
+    )
+  ) {
+    throw new ResourceValidationError(
+      "candidate capacity windows overlap existing machine demand",
+    );
+  }
+}
+
 function earliestCapacityWindows(
   plateSeconds: readonly bigint[],
   startsAt: Date,
@@ -524,14 +544,15 @@ export class CandidateEstimateService {
           };
         }
         const orderScope = await transaction.$queryRaw<
-          Array<{ order_id: string }>
+          Array<{ order_id: string; order_phase_id: string }>
         >`
-          SELECT order_id
+          SELECT order_id, order_phase_id
           FROM shipment_plans
           WHERE id = ${dispatch.job.input.shipmentPlanId}::uuid
         `;
         const orderId = orderScope[0]?.order_id;
-        if (!orderId) {
+        const orderPhaseId = orderScope[0]?.order_phase_id;
+        if (!orderId || !orderPhaseId) {
           throw new ResourceNotFoundError(
             "candidate dispatch shipment plan was not found",
           );
@@ -639,17 +660,31 @@ export class CandidateEstimateService {
         const plateSeconds = result.outcome.plates.map(
           ({ estimatedPrintSeconds }) => BigInt(estimatedPrintSeconds),
         );
-        const occupied = input.capacityWindows
-          ? []
-          : await transaction.$queryRaw<OccupiedCapacityRow[]>`
-              SELECT starts_at, ends_at
-              FROM capacity_reservations
-              WHERE node_id = ${dispatch.nodeId}::uuid
-                AND machine_id = ${dispatch.job.input.machineId}::uuid
-                AND status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
-                AND ends_at > ${expiresAt}
-              ORDER BY starts_at, ends_at, id
-            `;
+        const occupied = await transaction.$queryRaw<OccupiedCapacityRow[]>`
+          SELECT occupied.starts_at, occupied.ends_at
+          FROM (
+            SELECT reservation.starts_at, reservation.ends_at
+            FROM capacity_reservations reservation
+            WHERE reservation.node_id = ${dispatch.nodeId}::uuid
+              AND reservation.machine_id = ${dispatch.job.input.machineId}::uuid
+              AND reservation.status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+              AND reservation.ends_at > ${observed.observed_at}
+            UNION ALL
+            SELECT candidate_interval.starts_at, candidate_interval.ends_at
+            FROM candidate_capacity_intervals candidate_interval
+            JOIN candidate_resource_estimates candidate
+              ON candidate.id = candidate_interval.candidate_resource_estimate_id
+             AND candidate.node_id = candidate_interval.node_id
+            JOIN shipment_plans candidate_plan
+              ON candidate_plan.id = candidate.shipment_plan_id
+            WHERE candidate.node_id = ${dispatch.nodeId}::uuid
+              AND candidate.machine_id = ${dispatch.job.input.machineId}::uuid
+              AND candidate_plan.order_phase_id = ${orderPhaseId}::uuid
+              AND candidate.expires_at > ${observed.observed_at}
+              AND candidate_interval.ends_at > ${observed.observed_at}
+          ) occupied
+          ORDER BY occupied.starts_at, occupied.ends_at
+        `;
         const capacityWindows =
           input.capacityWindows ??
           earliestCapacityWindows(plateSeconds, expiresAt, occupied);
@@ -658,6 +693,9 @@ export class CandidateEstimateService {
           plateSeconds,
           observed.observed_at,
         );
+        if (input.capacityWindows) {
+          validateCapacityAvailability(capacityWindows, occupied);
+        }
         const requiredMaterialMilligrams = result.outcome.plates.reduce(
           (total, plate) => total + BigInt(plate.estimatedMaterialMilligrams),
           0n,

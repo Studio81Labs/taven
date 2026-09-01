@@ -87,10 +87,45 @@ function paintedFinding(inspection: ModelInspection) {
     : [];
 }
 
+type PreflightMetrics = Pick<
+  OrcaSliceOutput,
+  "thinWallFeatureCount" | "supportVolumeRatioPpm"
+>;
+
+function referenceFindings(metrics: PreflightMetrics) {
+  return [
+    ...(metrics.thinWallFeatureCount > 0
+      ? [
+          {
+            code: "THIN_WALLS",
+            severity: "warning" as const,
+            phase: "reference_slice" as const,
+            message:
+              "The reference slice contains thin-wall toolpaths that may need review",
+            acknowledgementKey: "thin-walls",
+          },
+        ]
+      : []),
+    ...(metrics.supportVolumeRatioPpm > 0
+      ? [
+          {
+            code: "SUPPORT_MATERIAL",
+            severity: "warning" as const,
+            phase: "reference_slice" as const,
+            message:
+              "The reference slice requires support material that affects finishing",
+            acknowledgementKey: "support-material",
+          },
+        ]
+      : []),
+  ];
+}
+
 function sliceMetrics(
   inspection: ModelInspection,
   seconds: bigint,
   material: bigint,
+  preflight: PreflightMetrics,
   plateCount: number,
   bodyCount = inspection.bodies.length,
 ) {
@@ -117,8 +152,8 @@ function sliceMetrics(
     objectCount: 1,
     bodyCount,
     topology,
-    thinWallFeatureCount: 0,
-    supportVolumeRatioPpm: 0,
+    thinWallFeatureCount: preflight.thinWallFeatureCount,
+    supportVolumeRatioPpm: preflight.supportVolumeRatioPpm,
     hasPaintAssignments: inspection.hasPaintAssignments,
     materialAssignmentCount: inspection.materialAssignmentCount,
     estimatedPrintSeconds: seconds.toString(),
@@ -211,10 +246,11 @@ export class SlicingProcessor {
             inspected,
             metrics.estimatedPrintSeconds,
             metrics.estimatedMaterialMilligrams,
+            metrics,
             1,
             job.input.geometry.bodyIds.length,
           ),
-          findings: [],
+          findings: referenceFindings(metrics),
           artifact: {
             objectKey,
             sha256: artifact.sha256,
@@ -254,6 +290,9 @@ export class SlicingProcessor {
         };
       });
       const totals = sumPlates(plates);
+      const preflight = aggregatePreflight(parts, (partsOnPlate) =>
+        byParts.get(partsOnPlate)!,
+      );
       return {
         ...envelope(job, this.config.engine),
         outcome: {
@@ -262,11 +301,18 @@ export class SlicingProcessor {
             inspected,
             totals.seconds,
             totals.material,
+            preflight,
             plates.length,
             job.input.geometry.bodyIds.length,
           ),
           plates,
-          occupancySlices,
+          occupancySlices: occupancySlices.map((slice) => ({
+            partsPerPlate: slice.partsPerPlate,
+            cacheIdentitySha256: slice.cacheIdentitySha256,
+            estimatedPrintSeconds: slice.estimatedPrintSeconds,
+            estimatedMaterialMilligrams: slice.estimatedMaterialMilligrams,
+            artifact: slice.artifact,
+          })),
         },
       };
     }
@@ -326,6 +372,9 @@ export class SlicingProcessor {
       job.inputFingerprintSha256,
     );
     const totals = sumPlates(plates);
+    const preflight = aggregatePreflight(parts, (partsOnPlate) =>
+      occupancy.get(partsOnPlate)!,
+    );
     return {
       ...envelope(job, this.config.engine),
       outcome: {
@@ -334,6 +383,7 @@ export class SlicingProcessor {
           inspected,
           totals.seconds,
           totals.material,
+          preflight,
           plates.length,
           job.input.geometry.bodyIds.length,
         ),
@@ -516,19 +566,29 @@ export class SlicingProcessor {
           partsPerPlate: number;
           estimatedPrintSeconds: string;
           estimatedMaterialMilligrams: string;
+          thinWallFeatureCount: number;
+          supportVolumeRatioPpm: number;
         };
         if (
-          value.schemaVersion === 1 &&
+          value.schemaVersion === 2 &&
           value.cacheIdentitySha256 === target.cacheIdentitySha256 &&
           value.partsPerPlate === target.partsPerPlate &&
           /^[1-9]\d*$/u.test(value.estimatedPrintSeconds) &&
-          /^[1-9]\d*$/u.test(value.estimatedMaterialMilligrams)
+          /^[1-9]\d*$/u.test(value.estimatedMaterialMilligrams) &&
+          Number.isSafeInteger(value.thinWallFeatureCount) &&
+          value.thinWallFeatureCount >= 0 &&
+          value.thinWallFeatureCount <= 1_000_000 &&
+          Number.isSafeInteger(value.supportVolumeRatioPpm) &&
+          value.supportVolumeRatioPpm >= 0 &&
+          value.supportVolumeRatioPpm <= 1_000_000
         ) {
           return {
             partsPerPlate: target.partsPerPlate,
             cacheIdentitySha256: target.cacheIdentitySha256,
             estimatedPrintSeconds: value.estimatedPrintSeconds,
             estimatedMaterialMilligrams: value.estimatedMaterialMilligrams,
+            thinWallFeatureCount: value.thinWallFeatureCount,
+            supportVolumeRatioPpm: value.supportVolumeRatioPpm,
             artifact: {
               objectKey: target.analysisObjectKey,
               sha256: cached.sha256,
@@ -553,12 +613,14 @@ export class SlicingProcessor {
     });
     const payload = new TextEncoder().encode(
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         cacheIdentitySha256: target.cacheIdentitySha256,
         partsPerPlate: target.partsPerPlate,
         estimatedPrintSeconds: sliced.estimatedPrintSeconds.toString(),
         estimatedMaterialMilligrams:
           sliced.estimatedMaterialMilligrams.toString(),
+        thinWallFeatureCount: sliced.thinWallFeatureCount,
+        supportVolumeRatioPpm: sliced.supportVolumeRatioPpm,
       }),
     );
     const stored = await this.store.write(
@@ -572,6 +634,8 @@ export class SlicingProcessor {
       estimatedPrintSeconds: sliced.estimatedPrintSeconds.toString(),
       estimatedMaterialMilligrams:
         sliced.estimatedMaterialMilligrams.toString(),
+      thinWallFeatureCount: sliced.thinWallFeatureCount,
+      supportVolumeRatioPpm: sliced.supportVolumeRatioPpm,
       artifact: { objectKey: target.analysisObjectKey, sha256: stored.sha256 },
     };
   }
@@ -598,4 +662,38 @@ function sumPlates(
     }),
     { seconds: 0n, material: 0n },
   );
+}
+
+function aggregatePreflight<
+  T extends PreflightMetrics & {
+    estimatedMaterialMilligrams: string | bigint;
+  },
+>(
+  plateParts: readonly number[],
+  metricsForParts: (partsPerPlate: number) => T,
+): PreflightMetrics {
+  let material = 0n;
+  let weightedSupport = 0n;
+  let thinWallFeatureCount = 0;
+  for (const partsPerPlate of plateParts) {
+    const metrics = metricsForParts(partsPerPlate);
+    const plateMaterial = BigInt(metrics.estimatedMaterialMilligrams);
+    material += plateMaterial;
+    weightedSupport += plateMaterial * BigInt(metrics.supportVolumeRatioPpm);
+    thinWallFeatureCount += metrics.thinWallFeatureCount;
+  }
+  if (thinWallFeatureCount > 1_000_000) {
+    throw new SlicingWorkerError(
+      "deterministic_invalid",
+      "RESOURCE_LIMIT_EXCEEDED",
+      "Slicer preflight feature count exceeds the supported limit",
+    );
+  }
+  return {
+    thinWallFeatureCount,
+    supportVolumeRatioPpm:
+      material === 0n
+        ? 0
+        : Number((weightedSupport + material / 2n) / material),
+  };
 }

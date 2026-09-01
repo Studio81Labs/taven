@@ -3,6 +3,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { canonicalizeModel, inspectModel } from "./model-inspection.js";
 
+const coreNamespace =
+  "http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
+const productionNamespace =
+  "http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
+const relationshipsNamespace =
+  "http://schemas.openxmlformats.org/package/2006/relationships";
+
 function storedZip(entries: Readonly<Record<string, string>>): Uint8Array {
   const local: Buffer[] = [];
   const central: Buffer[] = [];
@@ -55,7 +62,7 @@ describe("safe model inspection", () => {
   it("discovers and canonicalizes independently selected 3MF bodies", () => {
     const source = storedZip({
       "3D/3dmodel.model": `<?xml version="1.0"?>
-        <model unit="millimeter"><resources>
+        <model xmlns="${coreNamespace}" unit="millimeter"><resources>
           <object id="2"><mesh>${cubeMesh}</mesh></object>
           <object id="1"><mesh>${cubeMesh}</mesh></object>
         </resources><build><item objectid="1"/><item objectid="2"/></build></model>`,
@@ -84,12 +91,60 @@ describe("safe model inspection", () => {
     expect(combined.sha256).not.toBe(first.sha256);
   });
 
+  it("parses XML structure without treating comments, CDATA, or foreign elements as geometry", () => {
+    const meshWithMarkup = cubeMesh.replace(
+      "</triangles>",
+      `<!-- <triangle v1="0" v2="1" v3="2"/> -->
+       <![CDATA[<triangle v1="0" v2="1" v3="2"/>]]>
+       <extension:triangle v1="0" v2="1" v3="2"/>
+       </triangles>`,
+    );
+    const source = storedZip({
+      "_rels/.rels": `<Relationships xmlns="${relationshipsNamespace}">
+        <!-- <Relationship Target="../credential" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/> -->
+        <Relationship Target="/3D/3dmodel.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+      </Relationships>`,
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" xmlns:extension="urn:foreign" unit="millimeter">
+        <resources>
+          <!-- <object id="9"><mesh>${cubeMesh}</mesh></object> -->
+          <object id="1" name="x > y"><mesh>${meshWithMarkup}</mesh></object>
+          <extension:object id="8"><extension:mesh/></extension:object>
+        </resources>
+        <build>
+          <!-- <item objectid="9"/> -->
+          <item objectid="1"/>
+          <![CDATA[<item objectid="9"/>]]>
+          <extension:item objectid="8"/>
+        </build>
+      </model>`,
+    });
+
+    const inspection = inspectModel("3mf", source);
+    expect(inspection.bodies).toHaveLength(1);
+    expect(inspection.bodies[0]?.triangleCount).toBe(4);
+  });
+
+  it("accepts namespace-prefixed core 3MF elements", () => {
+    const prefixedMesh = cubeMesh.replace(
+      /<(\/?)((?:vertices|vertex|triangles|triangle)\b)/gu,
+      "<$1c:$2",
+    );
+    const source = storedZip({
+      "3D/3dmodel.model": `<c:model xmlns:c="${coreNamespace}" unit="millimeter">
+        <c:resources><c:object id="1"><c:mesh>${prefixedMesh}</c:mesh></c:object></c:resources>
+        <c:build><c:item objectid="1"/></c:build>
+      </c:model>`,
+    });
+
+    expect(inspectModel("3mf", source).bodies[0]?.triangleCount).toBe(4);
+  });
+
   it("reports bounds over the union of positioned selected bodies", () => {
     const shiftedMesh = cubeMesh
       .replaceAll('x="0"', 'x="100"')
       .replaceAll('x="1"', 'x="101"');
     const source = storedZip({
-      "3D/3dmodel.model": `<model unit="millimeter"><resources>
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
         <object id="1"><mesh>${cubeMesh}</mesh></object>
         <object id="2"><mesh>${shiftedMesh}</mesh></object>
       </resources><build><item objectid="1"/><item objectid="2"/></build></model>`,
@@ -100,7 +155,7 @@ describe("safe model inspection", () => {
 
   it("realizes repeated build items and nested component transforms", () => {
     const source = storedZip({
-      "3D/3dmodel.model": `<model unit="millimeter"><resources>
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
         <object id="1"><mesh>${cubeMesh}</mesh></object>
         <object id="2"><components>
           <component objectid="1" transform="1 0 0 0 1 0 0 0 1 10 0 0"/>
@@ -128,15 +183,15 @@ describe("safe model inspection", () => {
 
   it("resolves relationship-authorized production model components", () => {
     const source = storedZip({
-      "3D/3dmodel.model": `<model unit="millimeter" xmlns:q="urn:production"><resources>
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter" xmlns:p="${productionNamespace}"><resources>
         <object id="1"><components>
-          <component objectid="7" q:path="/3D/Objects/part.model" transform="1 0 0 0 1 0 0 0 1 25 0 0"/>
+          <component objectid="7" p:path="/3D/Objects/part.model" transform="1 0 0 0 1 0 0 0 1 25 0 0"/>
         </components></object>
       </resources><build><item objectid="1"/></build></model>`,
-      "3D/_rels/3dmodel.model.rels": `<Relationships>
+      "3D/_rels/3dmodel.model.rels": `<Relationships xmlns="${relationshipsNamespace}">
         <Relationship Target="/3D/Objects/part.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
       </Relationships>`,
-      "3D/Objects/part.model": `<model unit="millimeter"><resources>
+      "3D/Objects/part.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
         <object id="7"><mesh>${cubeMesh}</mesh></object>
       </resources></model>`,
     });
@@ -192,7 +247,7 @@ describe("safe model inspection", () => {
       '<triangle v1="0" v2="2" v3="1" pid="7" p1="0" p2="1" p3="0"/>',
     );
     const source = storedZip({
-      "3D/3dmodel.model": `<model unit="millimeter"><resources><object id="1"><mesh>${assignedMesh}</mesh></object></resources><build><item objectid="1"/></build></model>`,
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources><object id="1"><mesh>${assignedMesh}</mesh></object></resources><build><item objectid="1"/></build></model>`,
     });
 
     expect(inspectModel("3mf", source).materialAssignmentCount).toBe(2);
@@ -211,7 +266,7 @@ describe("safe model inspection", () => {
       '<triangle v1="0" v2="2" v3="1" pid="7" pindex="1"/>',
     );
     const source = storedZip({
-      "3D/3dmodel.model": `<model unit="millimeter"><resources>
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
         <object id="1"><mesh>${materialOne}</mesh></object>
         <object id="2"><mesh>${materialTwo}</mesh></object>
       </resources><build><item objectid="1"/><item objectid="2"/></build></model>`,
@@ -225,8 +280,8 @@ describe("safe model inspection", () => {
 
   it("rejects traversal before reading 3MF relationships", () => {
     const source = storedZip({
-      "3D/3dmodel.model": `<model unit="millimeter"><resources><object id="1"><mesh>${cubeMesh}</mesh></object></resources></model>`,
-      "_rels/.rels": `<Relationships><Relationship Target="../credential"/></Relationships>`,
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources><object id="1"><mesh>${cubeMesh}</mesh></object></resources></model>`,
+      "_rels/.rels": `<Relationships xmlns="${relationshipsNamespace}"><Relationship Target="../credential"/></Relationships>`,
     });
     expect(() => inspectModel("3mf", source)).toThrow("unsafe");
   });

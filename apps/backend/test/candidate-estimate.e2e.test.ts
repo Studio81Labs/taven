@@ -9,6 +9,7 @@ import { CandidateEstimateService } from "../src/modules/resources/candidate-est
 import {
   ResourceConflictError,
   ResourceNotFoundError,
+  ResourceValidationError,
 } from "../src/modules/resources/resource-errors";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { PersistenceFactory, testTimes } from "./support/persistence-factory";
@@ -689,6 +690,91 @@ describe("candidate estimate terminal receipts", () => {
         );
       }
     });
+  });
+
+  it("coordinates live candidate windows for the same order phase and machine", async () => {
+    const fixture = await createFixture("coordinated-candidate-windows", {
+      dispatchableGeometry: true,
+    });
+    if (fixture.success.outcome.status !== "succeeded") {
+      throw new Error("candidate success fixture unexpectedly failed");
+    }
+    const first = await candidates.ingest({ result: fixture.success });
+    if (first.status !== "succeeded") {
+      throw new Error("first candidate ingestion unexpectedly failed");
+    }
+
+    const siblingJob = redispatch(fixture.job);
+    await candidates.dispatch({
+      nodeId: fixture.nodeId,
+      inventoryId: fixture.inventoryId,
+      job: siblingJob,
+    });
+    const sibling = await candidates.ingest({
+      result: resultFor(siblingJob, fixture.success.outcome),
+    });
+    if (sibling.status !== "succeeded") {
+      throw new Error("sibling candidate ingestion unexpectedly failed");
+    }
+
+    const rows = await pool.query<{
+      candidate_resource_estimate_id: string;
+      starts_at: Date;
+      ends_at: Date;
+    }>(
+      `SELECT candidate_interval.candidate_resource_estimate_id,
+              candidate_interval.starts_at,
+              candidate_interval.ends_at
+       FROM candidate_capacity_intervals candidate_interval
+       WHERE candidate_interval.candidate_resource_estimate_id = ANY($1::uuid[])
+       ORDER BY candidate_interval.starts_at, candidate_interval.interval_index`,
+      [
+        [
+          first.candidateResourceEstimateId,
+          sibling.candidateResourceEstimateId,
+        ],
+      ],
+    );
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows[1]!.starts_at.getTime()).toBeGreaterThanOrEqual(
+      rows.rows[0]!.ends_at.getTime(),
+    );
+  });
+
+  it("rejects caller-supplied windows that overlap live same-phase demand", async () => {
+    const fixture = await createFixture("overlapping-candidate-window", {
+      dispatchableGeometry: true,
+    });
+    if (fixture.success.outcome.status !== "succeeded") {
+      throw new Error("candidate success fixture unexpectedly failed");
+    }
+    const first = await candidates.ingest({ result: fixture.success });
+    if (first.status !== "succeeded") {
+      throw new Error("first candidate ingestion unexpectedly failed");
+    }
+    const existing = await pool.query<{ starts_at: Date; ends_at: Date }>(
+      `SELECT starts_at, ends_at
+       FROM candidate_capacity_intervals
+       WHERE candidate_resource_estimate_id = $1
+       ORDER BY interval_index`,
+      [first.candidateResourceEstimateId],
+    );
+    const siblingJob = redispatch(fixture.job);
+    await candidates.dispatch({
+      nodeId: fixture.nodeId,
+      inventoryId: fixture.inventoryId,
+      job: siblingJob,
+    });
+
+    await expect(
+      candidates.ingest({
+        result: resultFor(siblingJob, fixture.success.outcome),
+        capacityWindows: existing.rows.map((window) => ({
+          startsAt: window.starts_at,
+          endsAt: window.ends_at,
+        })),
+      }),
+    ).rejects.toBeInstanceOf(ResourceValidationError);
   });
 
   it("records a new resource snapshot after an equivalent candidate expires", async () => {

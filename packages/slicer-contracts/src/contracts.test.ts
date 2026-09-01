@@ -12,6 +12,7 @@ import {
   ModelInspectionResultSchema,
   PreflightFindingSchema,
   ProductionArtifactFormatSchema,
+  ProductionSliceJobSchema,
   ProductionSliceResultSchema,
   ReferenceSliceJobSchema,
   ReferenceSliceResultSchema,
@@ -362,6 +363,57 @@ describe("versioned slicing jobs", () => {
     expect(SlicingJobSchema.parse(sourceInspectionJob)).toEqual(
       sourceInspectionJob,
     );
+  });
+
+  it("rejects jobs that exceed the pinned runtime plate limit", () => {
+    expect(
+      CandidateEstimateJobSchema.parse(
+        envelope("candidate_estimate", {
+          ...candidateInput,
+          quantity: 72,
+          occupancySliceTargets: candidateInput.occupancySliceTargets.slice(
+            0,
+            1,
+          ),
+        }),
+      ).input.quantity,
+    ).toBe(72);
+    expect(() =>
+      CandidateEstimateJobSchema.parse(
+        envelope("candidate_estimate", {
+          ...candidateInput,
+          quantity: 74,
+          occupancySliceTargets: candidateInput.occupancySliceTargets.slice(
+            0,
+            1,
+          ),
+        }),
+      ),
+    ).toThrow(/36 result plates/u);
+    expect(
+      ProductionSliceJobSchema.parse(
+        envelope(
+          "production_slice",
+          {
+            ...productionInput,
+            quantity: 72,
+          },
+          { jobId: ids.acceptedJob },
+        ),
+      ).input.quantity,
+    ).toBe(72);
+    expect(() =>
+      ProductionSliceJobSchema.parse(
+        envelope(
+          "production_slice",
+          {
+            ...productionInput,
+            quantity: 74,
+          },
+          { jobId: ids.acceptedJob },
+        ),
+      ),
+    ).toThrow(/36 result plates/u);
   });
 
   it("rejects unknown versions and unknown fields at every level", () => {
