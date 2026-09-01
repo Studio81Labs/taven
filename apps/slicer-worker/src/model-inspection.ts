@@ -49,6 +49,7 @@ const MAX_TRIANGLES = 1_000_000;
 const MAX_COMPONENT_EDGES = 4_096;
 const MAX_COMPONENT_DEPTH = 64;
 const MAX_MODEL_OBJECTS = 4_096;
+const MAX_SIGNED_INT64 = 9_223_372_036_854_775_807n;
 const ZIP_EOCD = 0x06054b50;
 const ZIP_CENTRAL_FILE = 0x02014b50;
 const ZIP_LOCAL_FILE = 0x04034b50;
@@ -184,12 +185,25 @@ function volume(triangles: readonly Triangle[]): string {
       a[1] * (b[0] * c[2] - b[2] * c[0]) +
       a[2] * (b[0] * c[1] - b[1] * c[0]);
   }
-  return String(
-    Math.max(
-      0,
-      Math.round((Math.abs(signedSixTimesVolume) / 6) * 1_000_000_000),
-    ),
+  const roundedCubicMicrometers = Math.round(
+    (Math.abs(signedSixTimesVolume) / 6) * 1_000_000_000,
   );
+  if (!Number.isFinite(roundedCubicMicrometers)) {
+    throw new SlicingWorkerError(
+      "deterministic_invalid",
+      "RESOURCE_LIMIT_EXCEEDED",
+      "Model body volume exceeds the supported limit",
+    );
+  }
+  const cubicMicrometers = BigInt(roundedCubicMicrometers);
+  if (cubicMicrometers > MAX_SIGNED_INT64) {
+    throw new SlicingWorkerError(
+      "deterministic_invalid",
+      "RESOURCE_LIMIT_EXCEEDED",
+      "Model body volume exceeds the supported limit",
+    );
+  }
+  return cubicMicrometers.toString();
 }
 
 function body(

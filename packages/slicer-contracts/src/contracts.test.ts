@@ -727,6 +727,47 @@ describe("versioned slicing jobs", () => {
     },
   );
 
+  it.each([
+    {
+      format: "gcode_3mf" as const,
+      quantity: 5,
+      capacity: 2,
+      accepted: true,
+    },
+    { format: "gcode" as const, quantity: 2, capacity: 2, accepted: true },
+    { format: "gcode" as const, quantity: 3, capacity: 2, accepted: false },
+    { format: "bgcode" as const, quantity: 1, capacity: 2, accepted: false },
+  ])(
+    "validates $format for a quantity $quantity production plan",
+    ({ format, quantity, capacity, accepted }) => {
+      const base = {
+        ...machineInput,
+        machineProfile: machineSlicerProfile(ids.profile, hash("d"), format),
+        partsPerPlate: capacity,
+        quantity,
+        shipmentPlanId: ids.shipment,
+      };
+      const occupancies =
+        quantity <= capacity
+          ? [quantity]
+          : quantity % capacity === 0
+            ? [capacity]
+            : [capacity, quantity % capacity];
+      const input = {
+        ...base,
+        occupancySliceTargets: occupancies.map((partsPerPlate) =>
+          occupancySliceTarget(base, partsPerPlate),
+        ),
+      };
+
+      expect(
+        CandidateEstimateJobSchema.safeParse(
+          envelope("candidate_estimate", input),
+        ).success,
+      ).toBe(accepted);
+    },
+  );
+
   it("rejects missing or misordered tail occupancy targets", () => {
     for (const occupancySliceTargets of [
       [candidateOccupancySliceTargets[0]!],

@@ -360,7 +360,7 @@ describe("SlicingProcessor", () => {
         contentSha256: revisionHashes[0]!,
         slicerEngine: "orcaslicer",
         slicerVersion: "2.4.2",
-        productionArtifactFormat: "gcode" as const,
+        productionArtifactFormat: "gcode_3mf" as const,
       },
       machineCalibration: {
         revisionId: ids.calibration,

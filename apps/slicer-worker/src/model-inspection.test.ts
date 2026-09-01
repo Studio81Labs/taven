@@ -118,6 +118,29 @@ describe("safe model inspection", () => {
     );
   });
 
+  it("rejects body volumes that cannot fit the persistence contract", () => {
+    const oversizedCube = cubeMesh
+      .replaceAll('x="1"', 'x="4000"')
+      .replaceAll('y="1"', 'y="4000"')
+      .replaceAll('z="1"', 'z="4000"');
+    const source = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter">
+        <resources><object id="1"><mesh>${oversizedCube}</mesh></object></resources>
+        <build><item objectid="1"/></build>
+      </model>`,
+    });
+
+    try {
+      inspectModel("3mf", source);
+      expect.fail("oversized model inspection should fail");
+    } catch (error) {
+      expect(error).toMatchObject({
+        failureClass: "deterministic_invalid",
+        code: "RESOURCE_LIMIT_EXCEEDED",
+      });
+    }
+  });
+
   it.each([
     [
       "vertices outside facets",

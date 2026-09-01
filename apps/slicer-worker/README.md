@@ -26,7 +26,9 @@ has `network_mode: none`, a read-only root, no credentials, and per-process
 `prlimit` and deadline enforcement. Its minimal root broker owns only the mount
 namespace capabilities needed to create a fresh sandbox; every Orca child runs
 as UID 10001 with no capabilities, a cleared environment, and only its own
-read-only inputs plus writable output and temporary directories. Both sides
+read-only inputs plus writable output and temporary directories. The shared
+exchange is a 1 GiB Compose-managed tmpfs, bounding aggregate scratch, output,
+and request data even if Orca creates many individually small files. Both sides
 reclaim every job workspace after its terminal result or lease expiry. The
 one-shot volume initializer has only `CHOWN`; it exits before either app starts.
 All worker services remain opt-in.

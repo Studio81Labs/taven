@@ -404,3 +404,8 @@ volumes:
   miniodata:
   garagedata:
   slicerexchange:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=1073741824,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev

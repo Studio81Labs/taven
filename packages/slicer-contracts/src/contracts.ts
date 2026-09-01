@@ -556,6 +556,33 @@ function requireRepresentablePlateCount(
   }
 }
 
+function requireExecutableCandidateArtifactPlan(
+  value: {
+    quantity: number;
+    partsPerPlate: number;
+    machineProfile: { productionArtifactFormat: ProductionArtifactFormat };
+  },
+  context: z.RefinementCtx,
+): void {
+  const format = value.machineProfile.productionArtifactFormat;
+  if (format === "bgcode") {
+    context.addIssue({
+      code: "custom",
+      path: ["machineProfile", "productionArtifactFormat"],
+      message: "is not supported by the pinned production runtime",
+    });
+  } else if (
+    format === "gcode" &&
+    Math.ceil(value.quantity / value.partsPerPlate) > 1
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["machineProfile", "productionArtifactFormat"],
+      message: "must be gcode_3mf for a multi-plate production plan",
+    });
+  }
+}
+
 const CandidateEstimateInputSchema = z
   .strictObject({
     ...MachineSliceInputShape,
@@ -575,6 +602,7 @@ const CandidateEstimateInputSchema = z
   })
   .superRefine((value, context) => {
     requireRepresentablePlateCount(value, context);
+    requireExecutableCandidateArtifactPlan(value, context);
     const expectedOccupancies = candidateOccupancies(
       value.quantity,
       value.partsPerPlate,
