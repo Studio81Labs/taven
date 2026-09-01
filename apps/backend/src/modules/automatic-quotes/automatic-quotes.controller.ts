@@ -20,6 +20,7 @@ import {
   ApiOperation,
   ApiParam,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import {
@@ -57,6 +58,9 @@ export class AutomaticQuotesController {
   @ApiBody({ type: CreateAutomaticQuoteSessionDto })
   @ApiCreatedResponse({ type: AutomaticQuoteSessionCreatedDto })
   @ApiConflictResponse({ description: "Idempotency input changed" })
+  @ApiTooManyRequestsResponse({
+    description: "Anonymous quote-submission limit is exhausted",
+  })
   create(
     @Body() body: CreateAutomaticQuoteSessionDto,
     @Ip() clientAddress: string,

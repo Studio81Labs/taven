@@ -8,9 +8,17 @@ import type {
 } from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { AppModule } from "../src/app.module";
 import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
@@ -21,6 +29,9 @@ import { PersistenceFactory } from "./support/persistence-factory";
 
 const quoteCapabilityKey =
   "test-automatic-quote-capability-key-at-least-32-characters";
+const localAutomaticQuoteSubjectHash = createHmac("sha256", quoteCapabilityKey)
+  .update("anonymous-automatic-quote\0" + "127.0.0.1")
+  .digest("hex");
 process.env.TAVEN_QUOTE_CAPABILITY_KEY ??= quoteCapabilityKey;
 process.env.TAVEN_DELIVERY_ENDPOINTS_JSON ??= JSON.stringify([
   {
@@ -101,6 +112,12 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     await pool?.end();
   }, 30_000);
 
+  afterEach(async () => {
+    await prisma.anonymousQuoteLimit.deleteMany({
+      where: { subjectHash: localAutomaticQuoteSubjectHash },
+    });
+  });
+
   it("binds create-session idempotency replay to the initiating client", async () => {
     const idempotencyKey = key("client-bound-create");
     const body = { attribution: { campaign: "client-bound" } };
@@ -119,6 +136,94 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     await expect(
       automaticQuotes.createSession(body, "198.51.100.11", idempotencyKey),
     ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("limits anonymous session creation atomically before persisting quote work", async () => {
+    const subjectHash = localAutomaticQuoteSubjectHash;
+    const now = new Date();
+    await prisma.anonymousQuoteLimit.upsert({
+      where: { subjectHash },
+      create: {
+        subjectHash,
+        windowStartedAt: now,
+        windowExpiresAt: new Date(now.getTime() + 15 * 60 * 1_000),
+        issuedCount: 4,
+      },
+      update: {
+        windowStartedAt: now,
+        windowExpiresAt: new Date(now.getTime() + 15 * 60 * 1_000),
+        issuedCount: 4,
+      },
+    });
+    const attempts = ["first", "second"].map((attempt) => ({
+      idempotencyKey: key(`limited-create-${attempt}`),
+      forwardedFor: attempt === "first" ? "203.0.113.44" : "198.51.100.22",
+    }));
+    const results = await Promise.all(
+      attempts.map(({ idempotencyKey, forwardedFor }) =>
+        api("automatic-quote-sessions", {
+          method: "POST",
+          headers: {
+            ...jsonHeaders(idempotencyKey),
+            "x-forwarded-for": forwardedFor,
+          },
+          body: "{}",
+        }),
+      ),
+    );
+    expect(results.map(({ response }) => response.status).sort()).toEqual([
+      201, 429,
+    ]);
+    expect(
+      await prisma.anonymousQuoteLimit.findUniqueOrThrow({
+        where: { subjectHash },
+        select: { issuedCount: true },
+      }),
+    ).toEqual({ issuedCount: 5 });
+
+    const successfulIndex = results.findIndex(
+      ({ response }) => response.status === 201,
+    );
+    const successful = results[successfulIndex];
+    const successfulAttempt = attempts[successfulIndex];
+    if (!successful || !successfulAttempt) {
+      throw new Error("expected one successful automatic quote session");
+    }
+    const rejectedAttempt = attempts.find(
+      (_, index) => results[index]?.response.status === 429,
+    );
+    if (!rejectedAttempt) {
+      throw new Error("expected one rejected automatic quote session");
+    }
+    await expect(
+      prisma.automaticOrderOrigin.findUniqueOrThrow({
+        where: { quoteSessionId: string(successful.body.sessionId) },
+        include: { order: { include: { automaticQuoteDraft: true } } },
+      }),
+    ).resolves.toMatchObject({
+      order: { automaticQuoteDraft: expect.any(Object) },
+    });
+    expect(
+      await prisma.idempotencyRecord.findFirst({
+        where: {
+          namespace: "automatic-quote.create",
+          idempotencyKey: rejectedAttempt.idempotencyKey,
+        },
+      }),
+    ).toBeNull();
+    const replayed = await api("automatic-quote-sessions", {
+      method: "POST",
+      headers: jsonHeaders(successfulAttempt.idempotencyKey),
+      body: "{}",
+    });
+    expect(replayed.response.status).toBe(201);
+    expect(replayed.body.sessionId).toBe(successful.body.sessionId);
+    expect(
+      await prisma.anonymousQuoteLimit.findUniqueOrThrow({
+        where: { subjectHash },
+        select: { issuedCount: true },
+      }),
+    ).toEqual({ issuedCount: 5 });
   });
 
   it("resumes a quote through binding, complete reservation, and endpoint replacement", async () => {
@@ -1144,7 +1249,10 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       0,
     );
     expect(await prisma.orderItem.count({ where: { orderId } })).toBe(0);
-    await replaceCompatibleProfileFormat(bgcodeProfileId, "GCODE_3MF");
+    const gcodeProfileId = await replaceCompatibleProfileFormat(
+      bgcodeProfileId,
+      "GCODE_3MF",
+    );
     const expressCapacity = await api(
       `automatic-quote-sessions/${sessionId}/express`,
       {
@@ -1435,6 +1543,79 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         },
       });
     }
+    type AutomaticQuoteDispatchHarness = {
+      dispatchAutomaticCandidates(
+        orderId: string,
+        bindingId: string,
+      ): Promise<void>;
+    };
+    const dispatchHarness =
+      automaticQuotes as unknown as AutomaticQuoteDispatchHarness;
+    const originalDispatch =
+      dispatchHarness.dispatchAutomaticCandidates.bind(dispatchHarness);
+    let gapBgcodeProfileId: string | undefined;
+    const dispatchGap = vi
+      .spyOn(dispatchHarness, "dispatchAutomaticCandidates")
+      .mockImplementationOnce(async (candidateOrderId, bindingId) => {
+        gapBgcodeProfileId = await replaceCompatibleProfileFormat(
+          gcodeProfileId,
+          "BGCODE",
+        );
+        await originalDispatch(candidateOrderId, bindingId);
+      });
+    const missingResourceHandoff = await api(
+      `automatic-quote-sessions/${recoverySessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("capacity-recovery-missing-resource"),
+        ),
+      },
+    );
+    dispatchGap.mockRestore();
+    expect(missingResourceHandoff.response.status).toBe(200);
+    expect(missingResourceHandoff.body).toMatchObject({
+      phase: "HANDOFF_REQUIRED",
+      checkoutReady: false,
+      handoff: {
+        reasons: expect.arrayContaining(["CANDIDATE_ESTIMATION_FAILED"]),
+      },
+    });
+    const missingResourceBinding =
+      await prisma.orderActivePriceBinding.findUniqueOrThrow({
+        where: { orderId: recoveryOrderId },
+      });
+    expect(
+      await prisma.outboxMessage.count({
+        where: {
+          aggregateType: "CandidateEstimateDispatch",
+          messageType: "slicing.candidate-estimate.requested",
+          payload: {
+            path: ["job", "correlationId"],
+            equals: recoveryOrderId,
+          },
+        },
+      }),
+    ).toBe(0);
+    await expect(
+      prisma.outboxMessage.findFirstOrThrow({
+        where: {
+          aggregateType: "AutomaticQuoteEligibilityDisposition",
+          aggregateId: missingResourceBinding.orderPriceBindingId,
+          messageType: "automatic_quote.candidate-estimation.unusable",
+          payload: {
+            path: ["reason"],
+            equals: "NO_DISPATCHABLE_CANDIDATE_RESOURCES",
+          },
+        },
+      }),
+    ).resolves.toBeTruthy();
+    if (!gapBgcodeProfileId) {
+      throw new Error("expected dispatch-gap profile replacement");
+    }
+    await replaceCompatibleProfileFormat(gapBgcodeProfileId, "GCODE_3MF");
+
     const recoveryStaged = await api(
       `automatic-quote-sessions/${recoverySessionId}/prepare`,
       {
@@ -1447,6 +1628,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     );
     expect(recoveryStaged.response.status).toBe(200);
     expect(recoveryStaged.body.checkoutReady).toBe(false);
+    expect(recoveryStaged.body.phase).toBe("ELIGIBILITY_PENDING");
     const recoveryTopology = {
       itemIds: (
         await prisma.orderItem.findMany({

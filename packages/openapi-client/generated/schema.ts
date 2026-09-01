@@ -1138,6 +1138,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Anonymous quote-submission limit is exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     AutomaticQuotesController_get: {

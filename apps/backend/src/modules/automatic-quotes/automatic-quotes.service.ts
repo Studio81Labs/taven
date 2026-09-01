@@ -44,6 +44,7 @@ import {
 import { ResourceReservationService } from "../resources/resource-reservation.service";
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
+import { reserveAnonymousQuote } from "../quotes/anonymous-quote-limit";
 import {
   parseAutomaticQuotePricingParameters,
   prepareAutomaticQuote,
@@ -130,6 +131,7 @@ type AutomaticCandidateFrontier = {
   hash: string;
   quiescent: boolean;
   allFailedRequirement: boolean;
+  missingOptionRequirement: boolean;
   successNodeIds: string[];
 };
 type PreprocessingDispatchState = {
@@ -180,16 +182,17 @@ export class AutomaticQuotesService {
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const attribution = optionalJsonObject(input?.attribution, "attribution");
     const capabilityRequests = quoteCapabilityKeyRing().all.map(
-      (capabilityKey) => ({
-        capabilityKey,
-        fingerprint: fingerprintOf({
-          attribution,
-          clientSubjectHash: automaticQuoteClientSubject(
-            capabilityKey.key,
-            clientAddress,
-          ),
-        }),
-      }),
+      (capabilityKey) => {
+        const clientSubjectHash = automaticQuoteClientSubject(
+          capabilityKey.key,
+          clientAddress,
+        );
+        return {
+          capabilityKey,
+          clientSubjectHash,
+          fingerprint: fingerprintOf({ attribution, clientSubjectHash }),
+        };
+      },
     );
     const currentCapabilityRequest = capabilityRequests[0]!;
 
@@ -227,6 +230,11 @@ export class AutomaticQuotesService {
           ),
         };
       }
+
+      await reserveAnonymousQuote(
+        transaction,
+        currentCapabilityRequest.clientSubjectHash,
+      );
 
       const observedAt = await databaseNow(transaction);
       const sessionId = randomUUID();
@@ -2132,6 +2140,15 @@ export class AutomaticQuotesService {
       bindingId,
       observedAt,
     );
+    if (evaluationFrontier.missingOptionRequirement) {
+      await this.recordCandidateEstimationHandoff({
+        orderId,
+        bindingId,
+        evaluationFrontierHash: evaluationFrontier.hash,
+        reason: "NO_DISPATCHABLE_CANDIDATE_RESOURCES",
+      });
+      return;
+    }
     const definitiveNoPlanNodeIds = new Set<string>();
     for (const nodeId of evaluationFrontier.successNodeIds) {
       try {
@@ -2287,6 +2304,7 @@ export class AutomaticQuotesService {
         orderId,
         bindingId,
         evaluationFrontierHash: evaluationFrontier.hash,
+        reason: "NO_COMPLETE_RESOURCE_PLAN",
         definitiveNoPlanNodeIds,
       });
     }
@@ -2862,6 +2880,9 @@ export class AutomaticQuotesService {
         const options = optionsFor(group);
         return options.length > 0 && options.every(permanentlyFailed);
       }),
+      missingOptionRequirement: groups.some(
+        (group) => optionsFor(group).length === 0,
+      ),
       successNodeIds,
     };
   }
@@ -2891,7 +2912,8 @@ export class AutomaticQuotesService {
     orderId: string;
     bindingId: string;
     evaluationFrontierHash: string;
-    definitiveNoPlanNodeIds: ReadonlySet<string>;
+    reason: "NO_DISPATCHABLE_CANDIDATE_RESOURCES" | "NO_COMPLETE_RESOURCE_PLAN";
+    definitiveNoPlanNodeIds?: ReadonlySet<string>;
   }): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`
@@ -2912,9 +2934,6 @@ export class AutomaticQuotesService {
         active.orderPriceBinding.invalidatedAt ||
         !draft ||
         !bindingMatchesAutomaticDraft(active.orderPriceBinding, draft) ||
-        automaticBindingExpressRequested(
-          active.orderPriceBinding.priceSnapshot.inputSnapshot,
-        ) ||
         (await this.hasLiveCandidatePlan(
           transaction,
           input.bindingId,
@@ -2928,16 +2947,27 @@ export class AutomaticQuotesService {
         input.bindingId,
         observedAt,
       );
-      if (
-        frontier.hash !== input.evaluationFrontierHash ||
-        !frontier.quiescent ||
-        frontier.successNodeIds.length === 0 ||
-        frontier.successNodeIds.length !== input.definitiveNoPlanNodeIds.size ||
-        frontier.successNodeIds.some(
-          (nodeId) => !input.definitiveNoPlanNodeIds.has(nodeId),
-        )
-      ) {
+      if (frontier.hash !== input.evaluationFrontierHash) {
         return;
+      }
+      if (input.reason === "NO_DISPATCHABLE_CANDIDATE_RESOURCES") {
+        if (!frontier.missingOptionRequirement) return;
+      } else {
+        const definitiveNoPlanNodeIds = input.definitiveNoPlanNodeIds;
+        if (
+          automaticBindingExpressRequested(
+            active.orderPriceBinding.priceSnapshot.inputSnapshot,
+          ) ||
+          !frontier.quiescent ||
+          frontier.successNodeIds.length === 0 ||
+          !definitiveNoPlanNodeIds ||
+          frontier.successNodeIds.length !== definitiveNoPlanNodeIds.size ||
+          frontier.successNodeIds.some(
+            (nodeId) => !definitiveNoPlanNodeIds.has(nodeId),
+          )
+        ) {
+          return;
+        }
       }
       const deduplicationKey = candidateUnusableDispositionKey(
         input.bindingId,
@@ -2956,7 +2986,7 @@ export class AutomaticQuotesService {
             bindingId: input.bindingId,
             frontierSha256: frontier.hash,
             nodeIds: frontier.successNodeIds,
-            reason: "NO_COMPLETE_RESOURCE_PLAN",
+            reason: input.reason,
             observedAt: observedAt.toISOString(),
           }),
           status: OutboxStatus.DELIVERED,
@@ -3002,9 +3032,6 @@ export class AutomaticQuotesService {
       observedAt,
     );
     if (frontier.allFailedRequirement) return true;
-    if (!frontier.quiescent || frontier.successNodeIds.length === 0) {
-      return false;
-    }
     const marker = await this.prisma.outboxMessage.findUnique({
       where: {
         deduplicationKey: candidateUnusableDispositionKey(

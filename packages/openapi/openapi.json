@@ -2097,6 +2097,9 @@
           },
           "409": {
             "description": "Idempotency input changed"
+          },
+          "429": {
+            "description": "Anonymous quote-submission limit is exhausted"
           }
         },
         "summary": "Start a resumable direct quote",
