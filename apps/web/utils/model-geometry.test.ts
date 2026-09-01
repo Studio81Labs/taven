@@ -148,17 +148,33 @@ endsolid part`).buffer;
     expect(geometry.volumeMm3).toBeCloseTo(2 / 6, 6);
   });
 
-  it("preserves signed subtraction for a nested cavity shell", async () => {
+  it.each([false, true])(
+    "subtracts a nested cavity shell regardless of winding (reversed=%s)",
+    async (reversed) => {
+      const geometry = await parseModelGeometry(
+        "STL",
+        binaryStl([
+          ...scaledTetrahedron(4, [0, 0, 0]),
+          ...scaledTetrahedron(1, [0.5, 0.5, 0.5], reversed),
+        ]),
+      );
+
+      expect(geometry.dimensions).toEqual({ width: 4, depth: 4, height: 4 });
+      expect(geometry.volumeMm3).toBeCloseTo(63 / 6, 6);
+    },
+  );
+
+  it("does not merge a solid merely because its bounds are nested", async () => {
     const geometry = await parseModelGeometry(
       "STL",
       binaryStl([
         ...scaledTetrahedron(4, [0, 0, 0]),
-        ...scaledTetrahedron(1, [0.5, 0.5, 0.5], true),
+        ...scaledTetrahedron(0.5, [3, 3, 3], true),
       ]),
     );
 
     expect(geometry.dimensions).toEqual({ width: 4, depth: 4, height: 4 });
-    expect(geometry.volumeMm3).toBeCloseTo(63 / 6, 6);
+    expect(geometry.volumeMm3).toBeCloseTo(64.125 / 6, 6);
   });
 });
 
@@ -214,14 +230,16 @@ describe("3MF geometry", () => {
       tetrahedron3mf,
     )?.[0];
     expect(object).toBeDefined();
-    const disabledObject = object!.replace(
-      'id="1"',
-      'id="2" pid="8" pindex="0" name="Pomocné těleso"',
-    );
+    const disabledObject = object!
+      .replace('id="1"', 'id="2" pid="8" pindex="0" name="Pomocné těleso"')
+      .replace(
+        '<triangle v1="0" v2="2" v3="1"/>',
+        '<triangle v1="0" v2="2" v3="1" slic3r:mmu_segmentation="4"/>',
+      );
     const model = tetrahedron3mf
       .replace(
         '<model unit="centimeter"',
-        `<model unit="centimeter" xmlns:m="${materialNamespace}"`,
+        `<model unit="centimeter" xmlns:m="${materialNamespace}" xmlns:slic3r="http://schemas.slic3r.org/3mf/2017/06"`,
       )
       .replace(
         "</resources>",
@@ -240,6 +258,17 @@ describe("3MF geometry", () => {
         volumeMm3: expect.closeTo(1_000 / 6, 5),
       }),
     );
+  });
+
+  it("blocks explicit paint markers on printable geometry", async () => {
+    const painted = tetrahedron3mf.replace(
+      '<triangle v1="0" v2="2" v3="1"/>',
+      '<triangle v1="0" v2="2" v3="1" paint_color="4"/>',
+    );
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(painted)),
+    ).rejects.toMatchObject({ code: "PAINTED_OR_MULTIMATERIAL_3MF" });
   });
 
   it("allows one uniformly assigned base material", async () => {

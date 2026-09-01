@@ -10,6 +10,8 @@ const MAX_3MF_VERTICES = 300_000;
 const MAX_3MF_COMPONENTS = 20_000;
 const MAX_3MF_COMPONENT_DEPTH = 64;
 const MAX_3MF_EXPANDED_OBJECTS = 25_000;
+const MAX_STL_CONTAINMENT_TRIANGLE_CHECKS = 4 * MAX_LOCAL_TRIANGLES;
+const MAX_STL_SHELL_PAIR_CHECKS = 1_000_000;
 
 type Point = readonly [number, number, number];
 type TrianglePoints = readonly [Point, Point, Point];
@@ -82,7 +84,10 @@ class GeometryAccumulator {
   triangleCount = 0;
   volumeMm3 = 0;
 
-  addBody(triangles: readonly TrianglePoints[]): void {
+  addBody(
+    triangles: readonly TrianglePoints[],
+    explicitVolumeMm3?: number,
+  ): void {
     let signedVolume = 0;
     for (const [a, b, c] of triangles) {
       if (this.triangleCount >= MAX_LOCAL_TRIANGLES) {
@@ -107,7 +112,7 @@ class GeometryAccumulator {
         this.previewTriangles.push(...a, ...b, ...c);
       }
     }
-    this.volumeMm3 += Math.abs(signedVolume);
+    this.volumeMm3 += explicitVolumeMm3 ?? Math.abs(signedVolume);
   }
 
   finish(): Pick<
@@ -199,60 +204,124 @@ function triangleBodyBounds(triangles: readonly TrianglePoints[]): {
   return { maximum, minimum };
 }
 
-function independentStlBodies(
+function strictlyContainsBounds(
+  outer: ReturnType<typeof triangleBodyBounds>,
+  inner: ReturnType<typeof triangleBodyBounds>,
+): boolean {
+  return outer.minimum.every(
+    (minimum, axis) =>
+      minimum < inner.minimum[axis]! &&
+      outer.maximum[axis]! > inner.maximum[axis]!,
+  );
+}
+
+function pointInsideShell(
+  point: Point,
   triangles: readonly TrianglePoints[],
-): TrianglePoints[][] {
-  const shells = connectedTriangleBodies(triangles);
-  const bounds = shells.map(triangleBodyBounds);
-  const parents = shells.map((_, shellIndex) => {
-    const inner = bounds[shellIndex]!;
-    let parent: number | undefined;
-    let parentVolume = Infinity;
-    bounds.forEach((outer, candidateIndex) => {
-      if (
-        candidateIndex === shellIndex ||
-        outer.minimum.some(
-          (value, axis) =>
-            value >= inner.minimum[axis]! ||
-            outer.maximum[axis]! <= inner.maximum[axis]!,
-        )
-      ) {
-        return;
-      }
-      const volume = outer.maximum.reduce(
-        (product, maximum, axis) => product * (maximum - outer.minimum[axis]!),
-        1,
+  triangleChecks: { count: number },
+): boolean {
+  let solidAngle = 0;
+  let compensation = 0;
+  for (const triangle of triangles) {
+    triangleChecks.count += 1;
+    if (triangleChecks.count > MAX_STL_CONTAINMENT_TRIANGLE_CHECKS) {
+      throw new ModelGeometryError(
+        "PREVIEW_LIMIT_EXCEEDED",
+        "Model je příliš složitý pro bezpečné rozpoznání vnořených těles.",
       );
-      if (volume < parentVolume) {
-        parent = candidateIndex;
-        parentVolume = volume;
+    }
+    const [a, b, c] = triangle.map(
+      (vertex) =>
+        [
+          vertex[0] - point[0],
+          vertex[1] - point[1],
+          vertex[2] - point[2],
+        ] as Point,
+    );
+    const aLength = Math.hypot(...a!);
+    const bLength = Math.hypot(...b!);
+    const cLength = Math.hypot(...c!);
+    if (aLength === 0 || bLength === 0 || cLength === 0) {
+      throw new ModelGeometryError(
+        "INVALID_GEOMETRY",
+        "Model obsahuje dotýkající se nebo protínající se tělesa.",
+      );
+    }
+    const numerator =
+      a![0] * (b![1] * c![2] - b![2] * c![1]) -
+      a![1] * (b![0] * c![2] - b![2] * c![0]) +
+      a![2] * (b![0] * c![1] - b![1] * c![0]);
+    const denominator =
+      aLength * bLength * cLength +
+      (a![0] * b![0] + a![1] * b![1] + a![2] * b![2]) * cLength +
+      (b![0] * c![0] + b![1] * c![1] + b![2] * c![2]) * aLength +
+      (c![0] * a![0] + c![1] * a![1] + c![2] * a![2]) * bLength;
+    const angle = 2 * Math.atan2(numerator, denominator);
+    const corrected = angle - compensation;
+    const next = solidAngle + corrected;
+    compensation = next - solidAngle - corrected;
+    solidAngle = next;
+  }
+  const winding = Math.abs(solidAngle) / (4 * Math.PI);
+  if (winding <= 1e-6) return false;
+  if (Math.abs(winding - 1) <= 1e-6) return true;
+  throw new ModelGeometryError(
+    "INVALID_GEOMETRY",
+    "Model obsahuje dotýkající se nebo protínající se tělesa.",
+  );
+}
+
+function signedShellVolume(triangles: readonly TrianglePoints[]): number {
+  return triangles.reduce(
+    (volume, [a, b, c]) =>
+      volume +
+      (a[0] * (b[1] * c[2] - b[2] * c[1]) -
+        a[1] * (b[0] * c[2] - b[2] * c[0]) +
+        a[2] * (b[0] * c[1] - b[1] * c[0])) /
+        6,
+    0,
+  );
+}
+
+function nestedStlVolume(shells: readonly TrianglePoints[][]): number {
+  if ((shells.length * (shells.length - 1)) / 2 > MAX_STL_SHELL_PAIR_CHECKS) {
+    throw new ModelGeometryError(
+      "PREVIEW_LIMIT_EXCEEDED",
+      "Model obsahuje příliš mnoho oddělených těles pro bezpečný náhled.",
+    );
+  }
+  const bounds = shells.map(triangleBodyBounds);
+  const triangleChecks = { count: 0 };
+  let volumeMm3 = 0;
+  shells.forEach((inner, innerIndex) => {
+    let depth = 0;
+    shells.forEach((outer, outerIndex) => {
+      if (
+        outerIndex !== innerIndex &&
+        strictlyContainsBounds(bounds[outerIndex]!, bounds[innerIndex]!) &&
+        pointInsideShell(inner[0]![0], outer, triangleChecks)
+      ) {
+        depth += 1;
       }
     });
-    return parent;
+    const shellVolume = Math.abs(signedShellVolume(inner));
+    volumeMm3 += depth % 2 === 0 ? shellVolume : -shellVolume;
   });
-  const root = (shellIndex: number): number => {
-    while (parents[shellIndex] !== undefined) {
-      shellIndex = parents[shellIndex]!;
-    }
-    return shellIndex;
-  };
-  const bodies = new Map<number, TrianglePoints[]>();
-  shells.forEach((shell, shellIndex) => {
-    const bodyRoot = root(shellIndex);
-    const body = bodies.get(bodyRoot) ?? [];
-    body.push(...shell);
-    bodies.set(bodyRoot, body);
-  });
-  return [...bodies.values()];
+  if (volumeMm3 < 0) {
+    throw new ModelGeometryError(
+      "INVALID_GEOMETRY",
+      "Model obsahuje neplatně vnořená tělesa.",
+    );
+  }
+  return volumeMm3;
 }
 
 function addStlBodies(
   geometry: GeometryAccumulator,
   triangles: readonly TrianglePoints[],
 ): void {
-  for (const body of independentStlBodies(triangles)) {
-    geometry.addBody(body);
-  }
+  const shells = connectedTriangleBodies(triangles);
+  geometry.addBody(triangles, nestedStlVolume(shells));
 }
 
 function finitePoint(x: number, y: number, z: number): Point {
@@ -555,13 +624,6 @@ function previewPropertyResources(
 }
 
 function assertSingleMaterial3mf(xml: string): void {
-  if (/\s(?:[\w.-]+:)?(?:paint_color|mmu_segmentation)\s*=/iu.test(xml)) {
-    throw new ModelGeometryError(
-      "PAINTED_OR_MULTIMATERIAL_3MF",
-      "Barevný nebo vícemateriálový 3MF přímá kalkulace nepodporuje. Exportujte model bez barev a materiálových vlastností.",
-    );
-  }
-
   const resources = previewPropertyResources(xml);
   const cache = new Map<
     string,
@@ -633,6 +695,7 @@ function assertSingleMaterial3mf(xml: string): void {
       assignmentIds: Set<string>;
       components: string[];
       hasAppearance: boolean;
+      hasPaint: boolean;
     }
   >();
   for (const { attributes: objectAttributes, body } of xmlElements(
@@ -645,7 +708,11 @@ function assertSingleMaterial3mf(xml: string): void {
     const objectPindex = attribute(objectAttributes, "pindex");
     const assignmentIds = new Set<string>();
     let hasAppearance = false;
+    let hasPaint = false;
     for (const triangleAttributes of xmlTagAttributes(body, "triangle")) {
+      hasPaint ||=
+        attribute(triangleAttributes, "paint_color") !== undefined ||
+        attribute(triangleAttributes, "mmu_segmentation") !== undefined;
       const trianglePid = attribute(triangleAttributes, "pid");
       const resourceId = trianglePid ?? objectPid;
       const explicitIndices = ["p1", "p2", "p3"]
@@ -670,6 +737,7 @@ function assertSingleMaterial3mf(xml: string): void {
         .map((component) => attribute(component, "objectid"))
         .filter((value): value is string => Boolean(value)),
       hasAppearance,
+      hasPaint,
     });
   }
 
@@ -688,6 +756,7 @@ function assertSingleMaterial3mf(xml: string): void {
       : [...objects.keys()].filter((id) => !referenced.has(id));
   const assignmentIds = new Set<string>();
   let hasAppearance = false;
+  let hasPaint = false;
   const visited = new Set<string>();
   const visit = (objectId: string): void => {
     if (visited.has(objectId)) return;
@@ -696,10 +765,11 @@ function assertSingleMaterial3mf(xml: string): void {
     if (!object) return;
     object.assignmentIds.forEach((value) => assignmentIds.add(value));
     hasAppearance ||= object.hasAppearance;
+    hasPaint ||= object.hasPaint;
     object.components.forEach(visit);
   };
   roots.forEach(visit);
-  if (hasAppearance || assignmentIds.size > 1) {
+  if (hasAppearance || hasPaint || assignmentIds.size > 1) {
     throw new ModelGeometryError(
       "PAINTED_OR_MULTIMATERIAL_3MF",
       "Barevný nebo vícemateriálový 3MF přímá kalkulace nepodporuje. Exportujte model bez barev a materiálových vlastností.",
