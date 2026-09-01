@@ -536,7 +536,6 @@ export class AutomaticQuotesService {
         255,
       ),
       endpointType: requiredText(input?.endpointType, "endpointType", 100),
-      address: requiredJsonObject(input?.address, "address"),
     });
     const fingerprint = fingerprintOf({ sessionId, resolved });
     await this.idempotentEffect(
@@ -1317,10 +1316,7 @@ export class AutomaticQuotesService {
       const findings = await transaction.preflightFinding.findMany({
         where: {
           modelFileId: item.sourceModelFileId,
-          OR: [
-            { modelGeometryId: null },
-            { modelGeometryId: item.targetModelGeometryId },
-          ],
+          modelGeometryId: item.targetModelGeometryId,
         },
       });
       if (
@@ -2505,10 +2501,7 @@ export class AutomaticQuotesService {
         const findings = await this.prisma.preflightFinding.findMany({
           where: {
             modelFileId: item.sourceModelFileId,
-            OR: [
-              { modelGeometryId: null },
-              { modelGeometryId: item.targetModelGeometryId },
-            ],
+            modelGeometryId: item.targetModelGeometryId,
           },
           orderBy: [{ severity: "desc" }, { code: "asc" }],
         });
@@ -3470,12 +3463,6 @@ function nonnegativeInteger(
     throw new BadRequestException(`${name} is invalid`);
   }
   return number;
-}
-
-function requiredJsonObject(value: unknown, name: string): JsonRecord {
-  const object = optionalJsonObject(value, name);
-  if (!object) throw new BadRequestException(`${name} is required`);
-  return object;
 }
 
 function optionalJsonObject(value: unknown, name: string): JsonRecord | null {

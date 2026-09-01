@@ -896,9 +896,6 @@ export interface components {
             sourceAvailable: boolean;
         };
         SelectAutomaticQuoteDestinationDto: {
-            address: {
-                [key: string]: unknown;
-            };
             endpointType: string;
             providerEndpointId: string;
         };

@@ -15,13 +15,13 @@ export interface DeliveryCapabilityPort {
   resolve(input: {
     providerEndpointId: string;
     endpointType: string;
-    address: Record<string, unknown>;
   }): Promise<ResolvedDeliveryCapability>;
 }
 
 type ConfiguredEndpoint = Readonly<{
   providerEndpointId: string;
   endpointType: string;
+  addressSnapshot: Prisma.InputJsonObject;
   supportedCategoryIds: readonly string[];
   provider?: string;
 }>;
@@ -30,12 +30,22 @@ const DEFAULT_ENDPOINTS: readonly ConfiguredEndpoint[] = [
   {
     providerEndpointId: "local-zbox",
     endpointType: "pickup_point",
+    addressSnapshot: {
+      country: "CZ",
+      city: "Praha",
+      label: "Local development Z-BOX",
+    },
     supportedCategoryIds: ["zbox"],
     provider: "local-development",
   },
   {
     providerEndpointId: "local-pickup",
     endpointType: "pickup_point",
+    addressSnapshot: {
+      country: "CZ",
+      city: "Praha",
+      label: "Local development pickup point",
+    },
     supportedCategoryIds: ["pickup", "oversize"],
     provider: "local-development",
   },
@@ -50,7 +60,6 @@ export class ConfiguredDeliveryCapabilityAdapter implements DeliveryCapabilityPo
   async resolve(input: {
     providerEndpointId: string;
     endpointType: string;
-    address: Record<string, unknown>;
   }): Promise<ResolvedDeliveryCapability> {
     const endpoints = configuredEndpoints();
     const endpoint = endpoints.find(
@@ -66,7 +75,7 @@ export class ConfiguredDeliveryCapabilityAdapter implements DeliveryCapabilityPo
     return {
       providerEndpointId: endpoint.providerEndpointId,
       endpointType: endpoint.endpointType,
-      addressSnapshot: jsonObject(input.address, "address"),
+      addressSnapshot: endpoint.addressSnapshot,
       capabilitySnapshot: {
         provider: endpoint.provider ?? "configured",
         supportedCategoryIds: [...endpoint.supportedCategoryIds],
@@ -102,6 +111,11 @@ function configuredEndpoints(): readonly ConfiguredEndpoint[] {
     const record = value as Record<string, unknown>;
     const providerEndpointId = nonBlank(record.providerEndpointId, index);
     const endpointType = nonBlank(record.endpointType, index);
+    const addressSnapshot = configuredJsonObject(
+      record.addressSnapshot,
+      index,
+      "addressSnapshot",
+    );
     const supportedCategoryIds = record.supportedCategoryIds;
     if (
       !Array.isArray(supportedCategoryIds) ||
@@ -117,6 +131,7 @@ function configuredEndpoints(): readonly ConfiguredEndpoint[] {
     return {
       providerEndpointId,
       endpointType,
+      addressSnapshot,
       supportedCategoryIds: [...new Set(supportedCategoryIds)].sort(),
       ...(typeof record.provider === "string" && record.provider.trim()
         ? { provider: record.provider.trim() }
@@ -132,16 +147,17 @@ function nonBlank(value: unknown, index: number): string {
   return value.trim();
 }
 
-function jsonObject(
-  value: Record<string, unknown>,
+function configuredJsonObject(
+  value: unknown,
+  index: number,
   name: string,
 ): Prisma.InputJsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new BadRequestException(`${name} must be an object`);
+    throw new Error(`Delivery endpoint ${index} ${name} must be an object`);
   }
   const serialized = JSON.stringify(value);
   if (serialized.length > 16_384) {
-    throw new BadRequestException(`${name} is too large`);
+    throw new Error(`Delivery endpoint ${index} ${name} is too large`);
   }
   return JSON.parse(serialized) as Prisma.InputJsonObject;
 }

@@ -67,9 +67,6 @@ export class SelectAutomaticQuoteDestinationDto {
 
   @ApiProperty({ type: String, maxLength: 100 })
   endpointType!: string;
-
-  @ApiProperty({ type: "object", additionalProperties: true })
-  address!: Record<string, unknown>;
 }
 
 export class SetAutomaticQuoteExpressDto {

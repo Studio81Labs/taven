@@ -1658,10 +1658,6 @@
       },
       "SelectAutomaticQuoteDestinationDto": {
         "properties": {
-          "address": {
-            "additionalProperties": true,
-            "type": "object"
-          },
           "endpointType": {
             "maxLength": 100,
             "type": "string"
@@ -1673,8 +1669,7 @@
         },
         "required": [
           "providerEndpointId",
-          "endpointType",
-          "address"
+          "endpointType"
         ],
         "type": "object"
       },

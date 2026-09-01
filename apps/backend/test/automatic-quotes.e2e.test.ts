@@ -24,18 +24,25 @@ process.env.TAVEN_DELIVERY_ENDPOINTS_JSON ??= JSON.stringify([
   {
     providerEndpointId: "test-pickup",
     endpointType: "pickup_point",
+    addressSnapshot: { country: "CZ", city: "Prague", label: "Test pickup" },
     supportedCategoryIds: ["pickup", "oversize"],
     provider: "test",
   },
   {
     providerEndpointId: "test-zbox",
     endpointType: "pickup_point",
+    addressSnapshot: { country: "CZ", city: "Brno", label: "Test Z-BOX" },
     supportedCategoryIds: ["zbox"],
     provider: "test",
   },
   {
     providerEndpointId: "test-incompatible",
     endpointType: "pickup_point",
+    addressSnapshot: {
+      country: "CZ",
+      city: "Ostrava",
+      label: "Test incompatible endpoint",
+    },
     supportedCategoryIds: ["not-a-priced-category"],
     provider: "test",
   },
@@ -753,6 +760,38 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         slicerVersion: currentZeroReference.referenceProfile.slicerVersion,
       },
     });
+    const unselectedSourceFinding = await prisma.preflightFinding.create({
+      data: {
+        modelFileId: currentZeroDraft.sourceModelFileId,
+        modelGeometryId: null,
+        inspectionRevision: sha(`${scope}:source-only-revision`),
+        code: "UNSELECTED_BODY_INVALID_TOPOLOGY",
+        severity: "BLOCKING",
+        message: "An unselected source body is invalid",
+        evidence: { bodyId: "unselected-body" },
+      },
+    });
+    const selectedGeometryState = await api(
+      `automatic-quote-sessions/${sessionId}`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+    expect(selectedGeometryState.response.status).toBe(200);
+    expect(
+      (selectedGeometryState.body.items as Array<{ findings: unknown[] }>).some(
+        ({ findings }) =>
+          findings.some(
+            (finding) =>
+              (finding as { id?: string }).id === unselectedSourceFinding.id,
+          ),
+      ),
+    ).toBe(false);
+    expect(
+      (
+        selectedGeometryState.body.handoff as {
+          reasons?: string[];
+        } | null
+      )?.reasons ?? [],
+    ).not.toContain("BLOCKING_PREFLIGHT_FINDING");
 
     const fitHandoff = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
@@ -834,7 +873,6 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         body: JSON.stringify({
           providerEndpointId: "test-incompatible",
           endpointType: "pickup_point",
-          address: { country: "CZ", city: "Prague" },
         }),
       },
     );
@@ -871,11 +909,26 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         body: JSON.stringify({
           providerEndpointId: "test-pickup",
           endpointType: "pickup_point",
-          address: { country: "CZ", city: "Prague" },
+          address: { country: "XX", city: "Client-forged address" },
         }),
       },
     );
     expect(destination.response.status).toBe(200);
+    await expect(
+      prisma.deliveryDestination.findFirstOrThrow({
+        where: { orderId, providerEndpointId: "test-pickup" },
+      }),
+    ).resolves.toMatchObject({
+      addressSnapshot: {
+        country: "CZ",
+        city: "Prague",
+        label: "Test pickup",
+      },
+      capabilitySnapshot: {
+        provider: "test",
+        supportedCategoryIds: ["oversize", "pickup"],
+      },
+    });
 
     await prisma.inventory.updateMany({
       where: {
@@ -1281,7 +1334,6 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         body: JSON.stringify({
           providerEndpointId: "test-zbox",
           endpointType: "pickup_point",
-          address: { country: "CZ", city: "Brno" },
         }),
       },
     );
