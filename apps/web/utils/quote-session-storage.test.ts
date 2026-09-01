@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clearQuoteSession,
+  getSessionStorage,
   loadQuoteSession,
   saveQuoteSession,
   type StoredQuoteSession,
@@ -67,5 +68,15 @@ describe("quote session storage", () => {
     expect(loadQuoteSession(storage)).toBeUndefined();
     expect(saveQuoteSession(storage, session)).toBe(false);
     expect(clearQuoteSession(storage)).toBe(false);
+  });
+
+  it("keeps the active flow usable when the session storage getter throws", () => {
+    const host = Object.defineProperty({}, "sessionStorage", {
+      get() {
+        throw new DOMException("storage disabled", "SecurityError");
+      },
+    }) as { readonly sessionStorage: MemoryStorage };
+
+    expect(getSessionStorage(host)).toBeUndefined();
   });
 });

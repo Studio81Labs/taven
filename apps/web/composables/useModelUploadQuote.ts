@@ -13,6 +13,7 @@ import {
 } from "../utils/model-geometry";
 import {
   clearQuoteSession,
+  getSessionStorage,
   loadQuoteSession,
   saveQuoteSession,
 } from "../utils/quote-session-storage";
@@ -181,7 +182,8 @@ export function useModelUploadQuote() {
     createdSession = undefined;
     commandKeys.reset();
     if (clearStoredSession && import.meta.client) {
-      clearQuoteSession(sessionStorage);
+      const storage = getSessionStorage(window);
+      if (storage) clearQuoteSession(storage);
     }
   }
 
@@ -243,7 +245,10 @@ export function useModelUploadQuote() {
     if (nextQuote.phase === "EXPIRED") {
       phase.value = "expired";
       stopPolling();
-      if (import.meta.client) clearQuoteSession(sessionStorage);
+      if (import.meta.client) {
+        const storage = getSessionStorage(window);
+        if (storage) clearQuoteSession(storage);
+      }
       return true;
     }
     if (nextQuote.phase === "HANDOFF_REQUIRED") {
@@ -288,7 +293,10 @@ export function useModelUploadQuote() {
           errorMessage.value = requestMessage(401, "session");
           phase.value = "error";
           stopPolling();
-          if (import.meta.client) clearQuoteSession(sessionStorage);
+          if (import.meta.client) {
+            const storage = getSessionStorage(window);
+            if (storage) clearQuoteSession(storage);
+          }
         } else {
           scheduleQuoteRefresh(3_000);
         }
@@ -414,13 +422,16 @@ export function useModelUploadQuote() {
       selectedFile.value = undefined;
       sha256.value = undefined;
       if (import.meta.client) {
-        saveQuoteSession(sessionStorage, {
-          expiresAt: attached.data.expiresAt,
-          filename: file.name,
-          publicReference: attached.data.publicReference,
-          sessionId: attached.data.sessionId,
-          sessionToken: createdSession.sessionToken,
-        });
+        const storage = getSessionStorage(window);
+        if (storage) {
+          saveQuoteSession(storage, {
+            expiresAt: attached.data.expiresAt,
+            filename: file.name,
+            publicReference: attached.data.publicReference,
+            sessionId: attached.data.sessionId,
+            sessionToken: createdSession.sessionToken,
+          });
+        }
       }
       if (!applyQuote(attached.data)) {
         void refreshQuote();
@@ -464,7 +475,9 @@ export function useModelUploadQuote() {
 
   async function restoreSession(): Promise<void> {
     if (!import.meta.client) return;
-    const stored = loadQuoteSession(sessionStorage);
+    const storage = getSessionStorage(window);
+    if (!storage) return;
+    const stored = loadQuoteSession(storage);
     if (!stored) return;
 
     restoredFilename.value = stored.filename;

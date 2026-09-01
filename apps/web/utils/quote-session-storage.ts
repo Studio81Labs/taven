@@ -8,10 +8,20 @@ export interface StoredQuoteSession {
   sessionToken: string;
 }
 
-interface StorageLike {
+export interface StorageLike {
   getItem(key: string): string | null;
   removeItem(key: string): void;
   setItem(key: string, value: string): void;
+}
+
+export function getSessionStorage(host: {
+  readonly sessionStorage: StorageLike;
+}): StorageLike | undefined {
+  try {
+    return host.sessionStorage;
+  } catch {
+    return undefined;
+  }
 }
 
 function isStoredQuoteSession(value: unknown): value is StoredQuoteSession {

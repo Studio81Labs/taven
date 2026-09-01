@@ -209,6 +209,39 @@ describe("3MF geometry", () => {
     ).resolves.toMatchObject({ objectCount: 1 });
   });
 
+  it("excludes non-printable build items from preview eligibility and geometry", async () => {
+    const object = /<object id="1"[\s\S]*?<\/object>/u.exec(
+      tetrahedron3mf,
+    )?.[0];
+    expect(object).toBeDefined();
+    const disabledObject = object!.replace(
+      'id="1"',
+      'id="2" pid="8" pindex="0" name="Pomocné těleso"',
+    );
+    const model = tetrahedron3mf
+      .replace(
+        '<model unit="centimeter"',
+        `<model unit="centimeter" xmlns:m="${materialNamespace}"`,
+      )
+      .replace(
+        "</resources>",
+        `<m:colorgroup id="8"><m:color color="#ff0000"/></m:colorgroup>${disabledObject}</resources>`,
+      )
+      .replace(
+        "</build>",
+        '<item objectid="2" printable="0" transform="1 0 0 0 1 0 0 0 1 20 0 0"/></build>',
+      );
+
+    await expect(parseModelGeometry("3MF", threeMf(model))).resolves.toEqual(
+      expect.objectContaining({
+        bodyNames: ["Díl"],
+        dimensions: { width: 10, depth: 10, height: 10 },
+        objectCount: 1,
+        volumeMm3: expect.closeTo(1_000 / 6, 5),
+      }),
+    );
+  });
+
   it("allows one uniformly assigned base material", async () => {
     const singleMaterial = tetrahedron3mf
       .replace(

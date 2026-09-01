@@ -483,6 +483,17 @@ function indexList(value: string | undefined): string[] {
   return value?.trim().split(/\s+/u).filter(Boolean) ?? [];
 }
 
+function isPrintableBuildItem(attributes: string): boolean {
+  const printable = attribute(attributes, "printable");
+  if (printable !== undefined && printable !== "0" && printable !== "1") {
+    throw new ModelGeometryError(
+      "INVALID_GEOMETRY",
+      "3MF obsahuje neplatný příznak tisknutelnosti objektu.",
+    );
+  }
+  return printable !== "0";
+}
+
 function previewPropertyResources(
   xml: string,
 ): Map<string, PreviewPropertyResource> {
@@ -663,14 +674,16 @@ function assertSingleMaterial3mf(xml: string): void {
   }
 
   const build = xmlElements(xml, "build")[0]?.body ?? "";
-  const buildRoots = xmlTagAttributes(build, "item")
+  const buildItemAttributes = xmlTagAttributes(build, "item");
+  const buildRoots = buildItemAttributes
+    .filter(isPrintableBuildItem)
     .map((item) => attribute(item, "objectid"))
     .filter((value): value is string => Boolean(value));
   const referenced = new Set(
     [...objects.values()].flatMap((object) => object.components),
   );
   const roots =
-    buildRoots.length > 0
+    buildItemAttributes.length > 0
       ? buildRoots
       : [...objects.keys()].filter((id) => !referenced.has(id));
   const assignmentIds = new Set<string>();
@@ -812,14 +825,17 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
       xml,
     )?.[1] ?? "";
   const itemPattern = /<(?:[\w.-]+:)?item\b([^>]*)\/?\s*>/giu;
+  let buildItemCount = 0;
   for (const itemMatch of buildBody.matchAll(itemPattern)) {
-    if (buildItems.length >= MAX_3MF_OBJECTS) {
+    buildItemCount += 1;
+    if (buildItemCount > MAX_3MF_OBJECTS) {
       throw new ModelGeometryError(
         "PREVIEW_LIMIT_EXCEEDED",
         "3MF obsahuje příliš mnoho sestavených objektů pro místní náhled.",
       );
     }
     const attrs = itemMatch[1] ?? "";
+    if (!isPrintableBuildItem(attrs)) continue;
     const objectId = attribute(attrs, "objectid");
     if (objectId) {
       buildItems.push({
@@ -835,7 +851,7 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
     ),
   );
   const roots =
-    buildItems.length > 0
+    buildItemCount > 0
       ? buildItems
       : [...objects.values()]
           .filter((object) => !referenced.has(object.id))
