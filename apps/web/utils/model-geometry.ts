@@ -1272,6 +1272,7 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
     objectId: string,
     transforms: readonly Transform[],
     path: ReadonlySet<string>,
+    realizedTriangles: TrianglePoints[],
   ): void => {
     expandedObjectCount += 1;
     if (expandedObjectCount > MAX_3MF_EXPANDED_OBJECTS) {
@@ -1308,21 +1309,27 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
       applyTransforms(object.vertices[b]!, transforms),
       applyTransforms(object.vertices[c]!, transforms),
     ]);
-    geometry.addBody(
-      triangles,
-      nestedShellVolume(connectedTriangleBodies(triangles), shellBudget),
-    );
+    realizedTriangles.push(...triangles);
     for (const component of object.components) {
       expand(
         component.objectId,
         [component.transform, ...transforms],
         nextPath,
+        realizedTriangles,
       );
     }
   };
 
   for (const root of roots) {
-    expand(root.objectId, [root.transform], new Set());
+    const realizedTriangles: TrianglePoints[] = [];
+    expand(root.objectId, [root.transform], new Set(), realizedTriangles);
+    geometry.addBody(
+      realizedTriangles,
+      nestedShellVolume(
+        connectedTriangleBodies(realizedTriangles),
+        shellBudget,
+      ),
+    );
   }
 
   return {

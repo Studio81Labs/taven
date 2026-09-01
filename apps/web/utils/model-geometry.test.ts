@@ -82,6 +82,18 @@ function scaledTetrahedron(
   });
 }
 
+function threeMfMesh(triangles: readonly Triangle[]): string {
+  const vertices = triangles.flatMap((triangle) => triangle);
+  return `<mesh><vertices>${vertices
+    .map(([x, y, z]) => `<vertex x="${x}" y="${y}" z="${z}"/>`)
+    .join("")}</vertices><triangles>${triangles
+    .map(
+      (_, triangleIndex) =>
+        `<triangle v1="${triangleIndex * 3}" v2="${triangleIndex * 3 + 1}" v3="${triangleIndex * 3 + 2}"/>`,
+    )
+    .join("")}</triangles></mesh>`;
+}
+
 function threeMf(model: string): ArrayBuffer {
   return threeMfArchive({
     "3D/3dmodel.model": new TextEncoder().encode(model),
@@ -322,6 +334,20 @@ describe("3MF geometry", () => {
     expect(geometry.objectCount).toBe(1);
     expect(geometry.dimensions).toEqual({ width: 30, depth: 10, height: 10 });
     expect(geometry.volumeMm3).toBeCloseTo(2_000 / 6, 5);
+  });
+
+  it("subtracts a cavity assembled from separate component meshes", async () => {
+    const componentCavity = `<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" unit="millimeter"><resources>
+      <object id="1" name="Outer">${threeMfMesh(scaledTetrahedron(4, [0, 0, 0]))}</object>
+      <object id="2" name="Cavity">${threeMfMesh(scaledTetrahedron(1, [0.5, 0.5, 0.5], true))}</object>
+      <object id="3"><components><component objectid="1"/><component objectid="2"/></components></object>
+    </resources><build><item objectid="3"/></build></model>`;
+
+    const geometry = await parseModelGeometry("3MF", threeMf(componentCavity));
+
+    expect(geometry.objectCount).toBe(1);
+    expect(geometry.triangleCount).toBe(8);
+    expect(geometry.volumeMm3).toBeCloseTo(63 / 6, 6);
   });
 
   it("rejects singular build transforms", async () => {
