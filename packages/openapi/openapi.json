@@ -2419,6 +2419,63 @@
       }
     },
     "/automatic-quote-sessions/{sessionId}/items/{ordinal}/configuration": {
+      "delete": {
+        "operationId": "AutomaticQuotesController_removeConfiguration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ordinal",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Configuration is frozen"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Remove one selected body group",
+        "tags": [
+          "automatic quotes"
+        ]
+      },
       "put": {
         "operationId": "AutomaticQuotesController_configure",
         "parameters": [

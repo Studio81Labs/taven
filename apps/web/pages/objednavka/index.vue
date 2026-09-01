@@ -29,6 +29,7 @@ const {
   previewMessage,
   prepareQuote,
   quote,
+  removeItem,
   resetState,
   retry,
   selectDestination,
@@ -350,6 +351,7 @@ function inspectionLabel(status: string | undefined): string {
             :on-configure-item="configureItem"
             :on-decide-risk="decideRisk"
             :on-prepare="prepareQuote"
+            :on-remove-item="removeItem"
             :on-select-destination="selectDestination"
             :on-set-express="setExpress"
             :pending="commandPending"

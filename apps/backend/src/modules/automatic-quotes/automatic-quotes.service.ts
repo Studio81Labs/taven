@@ -541,6 +541,57 @@ export class AutomaticQuotesService {
     return this.getSession(sessionId, authorization);
   }
 
+  async removeItem(
+    sessionId: string,
+    ordinalValue: string,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const ordinal = nonnegativeInteger(ordinalValue, "ordinal", 999);
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const fingerprint = fingerprintOf({ sessionId, ordinal });
+
+    await this.idempotentEffect(
+      "automatic-quote.remove-item",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const session = await lockedSession(transaction, sessionId);
+        assertOpenSession(session, sessionCapability);
+        const origin = await transaction.automaticOrderOrigin.findUnique({
+          where: { quoteSessionId: sessionId },
+        });
+        if (!origin) throw new ConflictException("Automatic order is missing");
+        if (
+          (await transaction.orderItem.count({
+            where: { orderId: origin.orderId },
+          })) > 0
+        ) {
+          throw new ConflictException(
+            "Configuration is frozen after quote preparation starts",
+          );
+        }
+        const current = await transaction.automaticQuoteItemDraft.findUnique({
+          where: { orderId_ordinal: { orderId: origin.orderId, ordinal } },
+        });
+        if (!current) return;
+        await transaction.automaticQuoteRiskDecisionRecord.deleteMany({
+          where: { automaticQuoteItemId: current.id },
+        });
+        await transaction.automaticQuoteItemDraft.delete({
+          where: { id: current.id },
+        });
+        await transaction.automaticQuoteDraft.update({
+          where: { orderId: origin.orderId },
+          data: { configurationRevision: { increment: 1 } },
+        });
+      },
+    );
+    return this.getSession(sessionId, authorization);
+  }
+
   async decideRisk(
     sessionId: string,
     input: AutomaticQuoteRiskDecisionDto,

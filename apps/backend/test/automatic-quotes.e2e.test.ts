@@ -871,6 +871,25 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     );
     expect(unavailableConfiguration.response.status).toBe(400);
 
+    const removableConfiguration = await configure(
+      9,
+      "body-c",
+      1,
+      "configure-removable",
+    );
+    expect(removableConfiguration.response.status).toBe(200);
+    const removedConfiguration = await api(
+      `automatic-quote-sessions/${sessionId}/items/9/configuration`,
+      {
+        method: "DELETE",
+        headers: capabilityHeaders(sessionToken, key("remove-removable")),
+      },
+    );
+    expect(removedConfiguration.response.status).toBe(200);
+    expect(removedConfiguration.body.items).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ ordinal: 9 })]),
+    );
+
     const immediateRough = await configure(0, "body-a", 1, "configure-stale");
     expect(immediateRough.response.status).toBe(200);
     expect(immediateRough.body.configurationEditable).toBe(true);

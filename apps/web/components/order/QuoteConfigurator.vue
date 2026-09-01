@@ -30,6 +30,7 @@ const props = defineProps<{
   ) => Promise<boolean>;
   onDecideRisk: (decision: RiskDecision) => Promise<boolean>;
   onPrepare: () => Promise<boolean>;
+  onRemoveItem: (ordinal: number) => Promise<boolean>;
   onSelectDestination: (destination: DeliveryDestination) => Promise<boolean>;
   onSetExpress: (requested: boolean) => Promise<boolean>;
 }>();
@@ -233,13 +234,13 @@ function setQuantity(ordinal: number, quantity: number): void {
 async function saveConfiguration(): Promise<void> {
   localError.value = undefined;
   const modelFileId = modelFile.value?.modelFileId;
-  if (!modelFileId || groups.value.length === 0) return;
-  if (Object.keys(assignments.value).length !== bodyIds.value.length) {
-    localError.value = "Každé těleso musí být přiřazené právě k jedné položce.";
-    return;
-  }
+  if (!modelFileId) return;
   if (groups.value.length === 0) {
     localError.value = "Vyberte alespoň jedno těleso, které chcete vytisknout.";
+    return;
+  }
+  if (Object.keys(assignments.value).length !== bodyIds.value.length) {
+    localError.value = "Každé těleso musí být přiřazené právě k jedné položce.";
     return;
   }
   const commands = groups.value.map((group) => {
@@ -263,6 +264,23 @@ async function saveConfiguration(): Promise<void> {
   }
   saving.value = true;
   try {
+    const groupingChanged =
+      groups.value.length !== props.quote.items.length ||
+      groups.value.some((group) => {
+        const current = props.quote.items.find(
+          (item) => item.ordinal === group.ordinal,
+        );
+        return (
+          !current ||
+          current.bodyIds.length !== group.bodyIds.length ||
+          current.bodyIds.some((bodyId) => !group.bodyIds.includes(bodyId))
+        );
+      });
+    if (groupingChanged) {
+      for (const item of props.quote.items) {
+        if (!(await props.onRemoveItem(item.ordinal))) return;
+      }
+    }
     for (const [ordinal, command] of commands.entries()) {
       if (!command || !(await props.onConfigureItem(ordinal, command))) return;
     }
@@ -414,7 +432,6 @@ function quantityPrice(choice: {
             <label>
               <span class="visually-hidden">Položka pro {{ bodyId }}</span>
               <select
-                :disabled="configuredBodyIds.has(bodyId)"
                 :value="assignments[bodyId]"
                 @change="assignBody(bodyId, $event)"
               >

@@ -490,6 +490,23 @@ export function useModelUploadQuote() {
     );
   }
 
+  function removeItem(ordinal: number): Promise<boolean> {
+    const input = { ordinal };
+    return runQuoteCommand("remove-item", input, (signal, key) =>
+      $api.DELETE(
+        "/automatic-quote-sessions/{sessionId}/items/{ordinal}/configuration",
+        {
+          headers: { Authorization: `Bearer ${sessionToken.value}` },
+          params: {
+            header: { "Idempotency-Key": key },
+            path: { ordinal, sessionId: quote.value!.sessionId },
+          },
+          signal,
+        },
+      ),
+    );
+  }
+
   function selectDestination(
     destination: DeliveryDestination,
   ): Promise<boolean> {
@@ -758,6 +775,7 @@ export function useModelUploadQuote() {
     previewMessage,
     prepareQuote,
     quote,
+    removeItem,
     resetState,
     retry,
     selectDestination,

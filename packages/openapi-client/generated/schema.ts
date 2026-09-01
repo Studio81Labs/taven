@@ -185,7 +185,8 @@ export interface paths {
         /** Configure one selected body group */
         put: operations["AutomaticQuotesController_configure"];
         post?: never;
-        delete?: never;
+        /** Remove one selected body group */
+        delete: operations["AutomaticQuotesController_removeConfiguration"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1294,6 +1295,38 @@ export interface operations {
                 };
             };
             /** @description Inspection is pending or configuration is frozen */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AutomaticQuotesController_removeConfiguration: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                ordinal: number;
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
+                };
+            };
+            /** @description Configuration is frozen */
             409: {
                 headers: {
                     [name: string]: unknown;

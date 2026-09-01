@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
@@ -135,6 +136,28 @@ export class AutomaticQuotesController {
       sessionId,
       ordinal,
       body,
+      authorization,
+      idempotencyKey,
+    );
+  }
+
+  @Delete(":sessionId/items/:ordinal/configuration")
+  @ApiBearerAuth()
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({ summary: "Remove one selected body group" })
+  @ApiParam(SESSION_ID_PARAM)
+  @ApiParam({ name: "ordinal", type: "integer" })
+  @ApiOkResponse({ type: AutomaticQuoteSessionDto })
+  @ApiConflictResponse({ description: "Configuration is frozen" })
+  removeConfiguration(
+    @Param("sessionId") sessionId: string,
+    @Param("ordinal") ordinal: string,
+    @Headers("authorization") authorization?: string,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<AutomaticQuoteSessionDto> {
+    return this.automaticQuotes.removeItem(
+      sessionId,
+      ordinal,
       authorization,
       idempotencyKey,
     );
