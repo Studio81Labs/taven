@@ -715,6 +715,42 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     });
 
+    const createConfirmedModelUpload = async (label: string) => {
+      const id = randomUUID();
+      const file = await prisma.modelFile.create({
+        data: {
+          id,
+          format: "STL",
+          originalFilename: `${label}.stl`,
+          storageObjectKey: `models/${id}/source`,
+          contentHash: sha(`${scope}:${label}`),
+          sizeBytes: 1n,
+          uploadedAt: new Date(),
+          sourceDeleteAfter: new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000),
+        },
+      });
+      const token = randomBytes(32).toString("base64url");
+      await prisma.uploadIntent.create({
+        data: {
+          assetKind: "MODEL_FILE",
+          capabilityTokenHash: sha(token),
+          originalFilename: `${label}.stl`,
+          modelFormat: "STL",
+          intendedAssetId: file.id,
+          expectedContentType: "model/stl",
+          expectedSizeBytes: 1n,
+          expectedContentHash: file.contentHash,
+          quarantineObjectKey: `${scope}/quarantine/${label}.stl`,
+          finalObjectKey: `${scope}/models/${label}.stl`,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+          status: "CONFIRMED",
+          confirmedModelFileId: file.id,
+          confirmedAt: new Date(),
+        },
+      });
+      return { file, token };
+    };
+
     const created = await api("automatic-quote-sessions", {
       method: "POST",
       headers: jsonHeaders(key("create")),
@@ -876,6 +912,72 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         },
       },
     });
+
+    const additionalUpload = await createConfirmedModelUpload("additional");
+    const attachAdditional = () =>
+      api(`automatic-quote-sessions/${sessionId}/model-files`, {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("attach-additional")),
+        body: JSON.stringify({
+          modelFileId: additionalUpload.file.id,
+          uploadToken: additionalUpload.token,
+        }),
+      });
+    const additionalAttached = await attachAdditional();
+    expect(additionalAttached.response.status).toBe(200);
+    expect(additionalAttached.body.phase).toBe("INSPECTION_PENDING");
+    expect(additionalAttached.body.modelFiles).toHaveLength(2);
+    expect((await attachAdditional()).response.status).toBe(200);
+    expect(
+      await prisma.automaticQuoteModelFile.count({ where: { orderId } }),
+    ).toBe(2);
+
+    const additionalAutomaticFile =
+      await prisma.automaticQuoteModelFile.findUniqueOrThrow({
+        where: {
+          orderId_modelFileId: {
+            orderId,
+            modelFileId: additionalUpload.file.id,
+          },
+        },
+      });
+    const additionalInspectionDispatch =
+      await prisma.outboxMessage.findFirstOrThrow({
+        where: {
+          aggregateId: additionalAutomaticFile.inspectionJobId,
+          messageType: "slicing.model-inspection.requested",
+        },
+      });
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `${scope}:additional-inspection-result`,
+        aggregateType: "SlicingDispatchResult",
+        aggregateId: additionalInspectionDispatch.id,
+        messageType: "slicing.model_inspection.result-received",
+        schemaVersion: 2,
+        payload: {
+          result: {
+            outcome: {
+              status: "succeeded",
+              metrics: {
+                boundingBox: {
+                  xMicrometers: "10000",
+                  yMicrometers: "10000",
+                  zMicrometers: "10000",
+                },
+              },
+              bodies: [inspectedBody("additional-body")],
+            },
+          },
+        },
+      },
+    });
+    const additionalReady = await api(`automatic-quote-sessions/${sessionId}`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(additionalReady.response.status).toBe(200);
+    expect(additionalReady.body.phase).toBe("CONFIGURATION_REQUIRED");
+    expect(additionalReady.body.configurationEditable).toBe(true);
 
     const configure = async (
       ordinal: number,
@@ -2325,6 +2427,28 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(recoveryStaged.response.status).toBe(200);
     expect(recoveryStaged.body.checkoutReady).toBe(false);
     expect(recoveryStaged.body.phase).toBe("ELIGIBILITY_PENDING");
+    expect(recoveryStaged.body.configurationEditable).toBe(false);
+    const lateUpload = await createConfirmedModelUpload("late-model");
+    const lateAttachment = await api(
+      `automatic-quote-sessions/${recoverySessionId}/model-files`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("attach-after-freeze"),
+        ),
+        body: JSON.stringify({
+          modelFileId: lateUpload.file.id,
+          uploadToken: lateUpload.token,
+        }),
+      },
+    );
+    expect(lateAttachment.response.status).toBe(409);
+    expect(
+      await prisma.automaticQuoteModelFile.count({
+        where: { orderId: recoveryOrderId },
+      }),
+    ).toBe(1);
     const recoveryTopology = {
       itemIds: (
         await prisma.orderItem.findMany({
@@ -3151,6 +3275,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       kind: "BINDING",
       currency: "CZK",
     });
+    expect(refreshedReady.body.configurationEditable).toBe(false);
     const binding = refreshedReady.body.bindingQuote as {
       totalMinor: number;
       components: Array<{ kind: string; amountMinor: number }>;

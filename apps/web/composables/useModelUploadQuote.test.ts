@@ -9,6 +9,7 @@ import {
   isTerminalAttachmentStatus,
   isTerminalUploadConfirmationStatus,
   requiresPreparationAdvance,
+  resolveUploadSession,
 } from "./useModelUploadQuote";
 
 describe("automatic quote polling", () => {
@@ -101,6 +102,30 @@ describe("automatic quote handoff", () => {
 });
 
 describe("upload command idempotency", () => {
+  it("attaches another model to the active restored session", () => {
+    expect(
+      resolveUploadSession("active-session", "active-token", {
+        sessionId: "created-session",
+        sessionToken: "created-token",
+      }),
+    ).toEqual({
+      sessionId: "active-session",
+      sessionToken: "active-token",
+    });
+  });
+
+  it("uses the newly created session for the first attachment", () => {
+    expect(
+      resolveUploadSession(undefined, undefined, {
+        sessionId: "created-session",
+        sessionToken: "created-token",
+      }),
+    ).toEqual({
+      sessionId: "created-session",
+      sessionToken: "created-token",
+    });
+  });
+
   it("reuses command keys across retries until a new file is selected", () => {
     let sequence = 0;
     const keys = createUploadCommandKeys(

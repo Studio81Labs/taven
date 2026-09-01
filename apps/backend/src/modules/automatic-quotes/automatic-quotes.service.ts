@@ -366,6 +366,15 @@ export class AutomaticQuotesService {
           },
         });
         if (existing) return;
+        if (
+          (await transaction.orderItem.count({
+            where: { orderId: origin.orderId },
+          })) > 0
+        ) {
+          throw new ConflictException(
+            "Model files cannot be attached after quote preparation starts",
+          );
+        }
 
         const inspectionJobId = deterministicUuid(
           `automatic-inspection:${modelFileId}:${INSPECTION_REVISION}:${INSPECTION_CONFIG_SHA256}`,

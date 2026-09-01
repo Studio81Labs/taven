@@ -14,7 +14,9 @@ useHead({
 });
 
 const {
+  addingModel,
   canUpload,
+  cancelAdditionalModel,
   cancelUpload,
   commandError,
   commandPending,
@@ -31,6 +33,7 @@ const {
   replaceConfiguration,
   resetState,
   retry,
+  selectAdditionalFile,
   selectDestination,
   selectFile,
   setExpress,
@@ -38,6 +41,7 @@ const {
   uploadProgress,
 } = useModelUploadQuote();
 const fileInput = ref<HTMLInputElement>();
+const additionalFileInput = ref<HTMLInputElement>();
 const isDragging = ref(false);
 const showConfigurator = computed(
   () =>
@@ -133,6 +137,13 @@ function onFileChange(event: Event): void {
   input.value = "";
 }
 
+function onAdditionalFileChange(event: Event): void {
+  const input = event.currentTarget as HTMLInputElement;
+  const file = input.files?.item(0);
+  if (file) void selectAdditionalFile(file);
+  input.value = "";
+}
+
 function onDrop(event: DragEvent): void {
   isDragging.value = false;
   selectFromList(event.dataTransfer?.files ?? null);
@@ -141,6 +152,10 @@ function onDrop(event: DragEvent): void {
 function chooseAnotherFile(): void {
   resetState();
   nextTick(() => fileInput.value?.click());
+}
+
+function chooseAdditionalFile(): void {
+  additionalFileInput.value?.click();
 }
 
 function inspectionLabel(status: string | undefined): string {
@@ -187,8 +202,14 @@ function inspectionLabel(status: string | undefined): string {
         "
       >
         <div v-if="!showConfigurator" class="section-heading">
-          <p class="eyebrow">01 / SOUBOR</p>
-          <h1 id="upload-title">Nahrajte model pro tisk.</h1>
+          <p class="eyebrow">
+            {{ addingModel ? "DALŠÍ SOUBOR" : "01 / SOUBOR" }}
+          </p>
+          <h1 id="upload-title">
+            {{
+              addingModel ? "Přidejte další model." : "Nahrajte model pro tisk."
+            }}
+          </h1>
           <p>
             Přijímáme STL a jednovrstvý, nebarvený 3MF. Rozměry ověříme v
             prohlížeči a po nahrání model zkontrolujeme na serveru.
@@ -221,7 +242,9 @@ function inspectionLabel(status: string | undefined): string {
         <div v-else class="model-card">
           <header v-if="filename" class="file-heading">
             <div>
-              <p class="eyebrow">VYBRANÝ SOUBOR</p>
+              <p class="eyebrow">
+                {{ addingModel ? "PŘIDÁVANÝ SOUBOR" : "VYBRANÝ SOUBOR" }}
+              </p>
               <h2>{{ filename }}</h2>
             </div>
             <p v-if="metadata" class="file-meta mono">
@@ -317,14 +340,20 @@ function inspectionLabel(status: string | undefined): string {
                 :disabled="!canUpload"
                 @click="startUpload"
               >
-                Nahrát a zkontrolovat
+                {{
+                  addingModel
+                    ? "Nahrát a přidat model"
+                    : "Nahrát a zkontrolovat"
+                }}
               </button>
               <button
                 class="secondary-button"
                 type="button"
-                @click="chooseAnotherFile"
+                @click="
+                  addingModel ? cancelAdditionalModel() : chooseAnotherFile()
+                "
               >
-                Vybrat jiný soubor
+                {{ addingModel ? "Zpět ke kalkulaci" : "Vybrat jiný soubor" }}
               </button>
             </div>
           </template>
@@ -357,6 +386,27 @@ function inspectionLabel(status: string | undefined): string {
           />
 
           <div
+            v-if="showConfigurator && quote?.configurationEditable"
+            class="card-actions"
+          >
+            <input
+              ref="additionalFileInput"
+              accept=".stl,.3mf,model/stl,model/3mf"
+              class="visually-hidden"
+              type="file"
+              @change="onAdditionalFileChange"
+            />
+            <button
+              class="secondary-button"
+              type="button"
+              :disabled="commandPending"
+              @click="chooseAdditionalFile"
+            >
+              + Přidat další model
+            </button>
+          </div>
+
+          <div
             v-if="phase === 'handoff'"
             class="result-state handoff-state"
             role="alert"
@@ -368,9 +418,13 @@ function inspectionLabel(status: string | undefined): string {
               <button
                 class="primary-button"
                 type="button"
-                @click="chooseAnotherFile"
+                @click="
+                  addingModel ? cancelAdditionalModel() : chooseAnotherFile()
+                "
               >
-                Začít novou kalkulaci
+                {{
+                  addingModel ? "Zpět ke kalkulaci" : "Začít novou kalkulaci"
+                }}
               </button>
             </div>
           </div>
@@ -416,9 +470,11 @@ function inspectionLabel(status: string | undefined): string {
               <button
                 class="secondary-button"
                 type="button"
-                @click="chooseAnotherFile"
+                @click="
+                  addingModel ? cancelAdditionalModel() : chooseAnotherFile()
+                "
               >
-                Vybrat jiný soubor
+                {{ addingModel ? "Zpět ke kalkulaci" : "Vybrat jiný soubor" }}
               </button>
             </div>
           </div>
