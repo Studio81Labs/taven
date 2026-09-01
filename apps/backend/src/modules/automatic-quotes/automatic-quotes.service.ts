@@ -1458,45 +1458,48 @@ export class AutomaticQuotesService {
       color: string | null;
     }>,
   ): Promise<boolean> {
+    let commonNodeIds: Set<string> | undefined;
     for (const item of items) {
-      const rows = await transaction.$queryRaw<Array<{ eligible: boolean }>>`
-        SELECT EXISTS (
-          SELECT 1
-          FROM machine_profiles profile
-          JOIN print_config_revisions config
-            ON config.id = ${item.printConfigRevisionId}::uuid
-           AND config.quality = profile.quality
-          JOIN machines machine
-            ON machine.machine_capability_id = profile.machine_capability_id
-           AND machine.status = 'ACTIVE'
-           AND machine.installed_nozzle_micrometers =
-               profile.nozzle_diameter_micrometers
-          JOIN nodes node
-            ON node.id = machine.node_id
-           AND node.active
-          JOIN machine_calibrations calibration
-            ON calibration.node_id = machine.node_id
-           AND calibration.machine_id = machine.id
-           AND calibration.state = 'ACTIVE'
-          JOIN inventories inventory
-            ON inventory.node_id = machine.node_id
-           AND inventory.machine_id = machine.id
-           AND inventory.status = 'AVAILABLE'
-           AND inventory.remaining_milligrams > 0
-           AND inventory.material = ${item.material}::material
-           AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
-          WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
-            AND profile.material = ${item.material}::material
-            AND profile.state = 'ACTIVE'
-            AND taven_geometry_fits_machine_capability(
-              ${item.targetModelGeometryId}::uuid,
-              machine.machine_capability_id
-            )
-        ) AS eligible
+      const rows = await transaction.$queryRaw<Array<{ nodeId: string }>>`
+        SELECT DISTINCT node.id AS "nodeId"
+        FROM machine_profiles profile
+        JOIN print_config_revisions config
+          ON config.id = ${item.printConfigRevisionId}::uuid
+         AND config.quality = profile.quality
+        JOIN machines machine
+          ON machine.machine_capability_id = profile.machine_capability_id
+         AND machine.status = 'ACTIVE'
+         AND machine.installed_nozzle_micrometers =
+             profile.nozzle_diameter_micrometers
+        JOIN nodes node
+          ON node.id = machine.node_id
+         AND node.active
+        JOIN machine_calibrations calibration
+          ON calibration.node_id = machine.node_id
+         AND calibration.machine_id = machine.id
+         AND calibration.state = 'ACTIVE'
+        JOIN inventories inventory
+          ON inventory.node_id = machine.node_id
+         AND inventory.machine_id = machine.id
+         AND inventory.status = 'AVAILABLE'
+         AND inventory.remaining_milligrams > 0
+         AND inventory.material = ${item.material}::material
+         AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
+        WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
+          AND profile.material = ${item.material}::material
+          AND profile.state = 'ACTIVE'
+          AND taven_geometry_fits_machine_capability(
+            ${item.targetModelGeometryId}::uuid,
+            machine.machine_capability_id
+          )
       `;
-      if (rows[0]?.eligible !== true) return false;
+      const eligibleNodeIds = new Set(rows.map(({ nodeId }) => nodeId));
+      commonNodeIds = commonNodeIds
+        ? new Set([...commonNodeIds].filter((id) => eligibleNodeIds.has(id)))
+        : eligibleNodeIds;
+      if (commonNodeIds.size === 0) return false;
     }
-    return true;
+    return Boolean(commonNodeIds?.size);
   }
 
   private async persistBinding(
@@ -2477,15 +2480,24 @@ export class AutomaticQuotesService {
             discoveredBodyIds: [],
           };
         }
-        const result = await terminalResultForJob(
-          this.prisma,
-          attached.inspectionJobId,
-          "model_inspection",
-        );
+        const [result, dispatch] = await Promise.all([
+          terminalResultForJob(
+            this.prisma,
+            attached.inspectionJobId,
+            "model_inspection",
+          ),
+          this.latestPreprocessingDispatch(
+            this.prisma,
+            attached.inspectionJobId,
+            "slicing.model-inspection.requested",
+          ),
+        ]);
         return {
           modelFileId: attached.modelFileId,
           format: attached.modelFile.format,
-          inspectionStatus: terminalStatus(result),
+          inspectionStatus: dispatch?.deadLettered
+            ? ("FAILED" as const)
+            : terminalStatus(result),
           discoveredBodyIds: successfulInspectionBodies(result),
         };
       }),

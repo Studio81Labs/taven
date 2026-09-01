@@ -119,6 +119,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const sql = await pool.connect();
     const factory = new PersistenceFactory(sql, `${scope}:happy`);
     const quoteColor = `red-${scope.slice(-12)}`;
+    const splitNodeColor = `blue-${scope.slice(-12)}`;
     await sql.query("BEGIN");
     const foundation = await factory
       .createFoundation(
@@ -155,6 +156,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const invalidCalibrationId = randomUUID();
     const invalidCapabilityId = randomUUID();
     const invalidProfileId = randomUUID();
+    const splitNodeId = randomUUID();
+    const splitMachineId = randomUUID();
+    const splitCalibrationId = randomUUID();
     const compatibleProfile = await prisma.machineProfile.findUniqueOrThrow({
       where: { id: foundation.machineProfileId },
     });
@@ -248,6 +252,64 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           material: inventory.material,
           vendor: inventory.vendor,
           color: inventory.color,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1_000_000n,
+          status: "AVAILABLE",
+        },
+      });
+      await transaction.node.create({
+        data: {
+          id: splitNodeId,
+          code: `split-${scope.slice(-12)}`,
+          name: "Split eligibility node",
+          timeZone: "Europe/Prague",
+          active: true,
+        },
+      });
+      await transaction.machine.create({
+        data: {
+          id: splitMachineId,
+          nodeId: splitNodeId,
+          machineCapabilityId: compatibleMachine.machineCapabilityId,
+          code: `split-${scope.slice(-12)}`,
+          displayName: "Split eligibility machine",
+          status: "ACTIVE",
+          installedNozzleMicrometers:
+            compatibleMachine.installedNozzleMicrometers,
+        },
+      });
+      await transaction.revisionIdentity.create({
+        data: {
+          id: splitCalibrationId,
+          kind: "MACHINE_CALIBRATION",
+          digest: sha(`${scope}:split-calibration`),
+        },
+      });
+      await transaction.machineCalibration.create({
+        data: {
+          id: splitCalibrationId,
+          nodeId: splitNodeId,
+          machineId: splitMachineId,
+          flowRatioPartsPerMillion: calibration.flowRatioPartsPerMillion,
+          xyCompensationMicrometers: calibration.xyCompensationMicrometers,
+          elephantFootCompensationMicrometers:
+            calibration.elephantFootCompensationMicrometers,
+          settings: calibration.settings as Prisma.InputJsonValue,
+          state: "ACTIVE",
+          activatedAt: new Date(),
+        },
+      });
+      await transaction.inventory.create({
+        data: {
+          nodeId: splitNodeId,
+          machineId: splitMachineId,
+          sku: `${inventory.sku}-split-node`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: splitNodeColor,
           lotCode: inventory.lotCode,
           priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
           priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
@@ -406,6 +468,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       quantity: number,
       command: string,
       fitSensitive = false,
+      color = quoteColor,
     ) =>
       api(
         `automatic-quote-sessions/${sessionId}/items/${ordinal}/configuration`,
@@ -417,7 +480,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
             bodyIds: [bodyId],
             printConfigRevisionId: foundation.printConfigRevisionId,
             material: "PLA",
-            color: quoteColor,
+            color,
             infillPreset: "STANDARD",
             quantity,
             preferredPartsPerPlate: 1,
@@ -962,6 +1025,46 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       data: { remainingMilligrams: 1_000_000n },
     });
 
+    expect(
+      (
+        await configure(
+          1,
+          "body-c",
+          1,
+          "configure-split-node",
+          false,
+          splitNodeColor,
+        )
+      ).response.status,
+    ).toBe(200);
+    const splitNodeGate = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("split-node-gate")),
+      },
+    );
+    expect(splitNodeGate.response.status).toBe(200);
+    expect(splitNodeGate.body.checkoutReady).toBe(false);
+    expect(splitNodeGate.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["BUILD_LIMIT_EXCEEDED"]),
+    });
+    expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
+      0,
+    );
+    expect(
+      (
+        await configure(
+          1,
+          "body-c",
+          1,
+          "configure-shared-node",
+          false,
+          quoteColor,
+        )
+      ).response.status,
+    ).toBe(200);
+
     const staged = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
       headers: capabilityHeaders(sessionToken, key("stage")),
@@ -1499,6 +1602,102 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       await prisma.outboxMessage.count({
         where: {
           aggregateId: automaticFile.inspectionJobId,
+          messageType: "slicing.model-inspection.requested",
+        },
+      }),
+    ).toBe(1);
+  });
+
+  it("hands off a dead-lettered source inspection instead of staying pending", async () => {
+    const modelFileId = randomUUID();
+    const modelFile = await prisma.modelFile.create({
+      data: {
+        id: modelFileId,
+        format: "STL",
+        originalFilename: "dead-lettered.stl",
+        storageObjectKey: `models/${modelFileId}/source`,
+        contentHash: sha(`${scope}:dead-lettered-source`),
+        sizeBytes: 1n,
+        uploadedAt: new Date(),
+        sourceDeleteAfter: new Date(Date.now() + 60 * 60 * 1_000),
+      },
+    });
+    const uploadToken = randomBytes(32).toString("base64url");
+    await prisma.uploadIntent.create({
+      data: {
+        assetKind: "MODEL_FILE",
+        capabilityTokenHash: sha(uploadToken),
+        originalFilename: modelFile.originalFilename,
+        modelFormat: "STL",
+        intendedAssetId: modelFile.id,
+        expectedContentType: "model/stl",
+        expectedSizeBytes: modelFile.sizeBytes,
+        expectedContentHash: modelFile.contentHash,
+        quarantineObjectKey: `${scope}/quarantine/dead-lettered.stl`,
+        finalObjectKey: `${scope}/final/dead-lettered.stl`,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+        status: "CONFIRMED",
+        confirmedModelFileId: modelFile.id,
+        confirmedAt: new Date(),
+      },
+    });
+    const created = await api("automatic-quote-sessions", {
+      method: "POST",
+      headers: jsonHeaders(key("dead-letter-create")),
+      body: "{}",
+    });
+    const sessionId = string(created.body.sessionId);
+    const sessionToken = string(created.body.sessionToken);
+    const attached = await api(
+      `automatic-quote-sessions/${sessionId}/model-files`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("dead-letter-attach")),
+        body: JSON.stringify({ modelFileId: modelFile.id, uploadToken }),
+      },
+    );
+    expect(attached.response.status).toBe(200);
+    const automaticFile = await prisma.automaticQuoteModelFile.findFirstOrThrow(
+      {
+        where: {
+          draft: { order: { automaticOrigin: { quoteSessionId: sessionId } } },
+        },
+      },
+    );
+    const dispatch = await prisma.outboxMessage.findFirstOrThrow({
+      where: {
+        aggregateId: automaticFile.inspectionJobId,
+        aggregateType: "ModelInspectionDispatch",
+        messageType: "slicing.model-inspection.requested",
+      },
+    });
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `${scope}:source-inspection-dead-letter`,
+        aggregateType: "SlicingDispatchDeadLetter",
+        aggregateId: dispatch.id,
+        messageType: "slicing.model_inspection.dead-lettered",
+        schemaVersion: 2,
+        payload: { dispatchId: dispatch.id },
+      },
+    });
+
+    const failed = await api(`automatic-quote-sessions/${sessionId}`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(failed.response.status).toBe(200);
+    expect(failed.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(failed.body.modelFiles).toEqual([
+      expect.objectContaining({ inspectionStatus: "FAILED" }),
+    ]);
+    expect(failed.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["INSPECTION_FAILED"]),
+    });
+    expect(
+      await prisma.outboxMessage.count({
+        where: {
+          aggregateId: automaticFile.inspectionJobId,
+          aggregateType: "ModelInspectionDispatch",
           messageType: "slicing.model-inspection.requested",
         },
       }),
