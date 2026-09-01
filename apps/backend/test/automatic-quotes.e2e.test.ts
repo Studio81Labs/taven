@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../src/app.module";
 import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
+import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { PersistenceFactory } from "./support/persistence-factory";
@@ -76,6 +77,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
   let prisma: PrismaService;
   let automaticQuotes: AutomaticQuotesService;
   let candidates: CandidateEstimateService;
+  let eligibilityPlans: EligibilityPlanService;
   let resourceReservations: ResourceReservationService;
   let pool: Pool;
 
@@ -89,6 +91,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     prisma = app.get(PrismaService);
     automaticQuotes = app.get(AutomaticQuotesService);
     candidates = app.get(CandidateEstimateService);
+    eligibilityPlans = app.get(EligibilityPlanService);
     resourceReservations = app.get(ResourceReservationService);
     pool = new Pool({ connectionString: databaseUrl });
   });
@@ -1727,6 +1730,35 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       resourceReservations.releaseBeforePrint(recoveryReservation.id),
     ).resolves.toBe(true);
 
+    const riskDraft = await draftItem(0);
+    const riskFinding = await prisma.preflightFinding.create({
+      data: {
+        modelFileId: riskDraft.sourceModelFileId,
+        modelGeometryId: riskDraft.targetModelGeometryId,
+        inspectionRevision: sha(`${scope}:binding-risk-revision`),
+        code: "AUTOMATIC_BINDING_WARNING",
+        severity: "WARNING",
+        message: "binding risk warning",
+        evidence: { acknowledgementKey: "binding-risk" },
+      },
+    });
+    const acknowledgedRisk = await api(
+      `automatic-quote-sessions/${sessionId}/risk-decisions`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("risk-acknowledge")),
+        body: JSON.stringify({
+          itemOrdinal: 0,
+          findingId: riskFinding.id,
+          acknowledgementKey: "binding-risk",
+          decision: "ACKNOWLEDGED",
+        }),
+      },
+    );
+    expect(acknowledgedRisk.response.status).toBe(200);
+    const acknowledgedRevision = number(
+      acknowledgedRisk.body.configurationRevision,
+    );
     const staged = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
       headers: capabilityHeaders(sessionToken, key("stage")),
@@ -1735,11 +1767,157 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(staged.body.checkoutReady).toBe(false);
     expect(staged.body.bindingQuote).toBeNull();
 
+    const staleRiskBinding =
+      await prisma.orderActivePriceBinding.findUniqueOrThrow({
+        where: { orderId },
+      });
+    const staleRiskPlanIds = new Set(
+      (
+        await prisma.shipmentPlan.findMany({
+          where: {
+            orderPriceBindingId: staleRiskBinding.orderPriceBindingId,
+          },
+          select: { id: true },
+        })
+      ).map(({ id }) => id),
+    );
+    const staleRiskDispatches = (
+      await prisma.outboxMessage.findMany({
+        where: {
+          aggregateType: "CandidateEstimateDispatch",
+          messageType: "slicing.candidate-estimate.requested",
+          payload: { path: ["job", "correlationId"], equals: orderId },
+        },
+      })
+    ).filter(({ payload }) =>
+      staleRiskPlanIds.has(candidateJob(payload).input.shipmentPlanId),
+    );
+    expect(staleRiskDispatches.length).toBeGreaterThan(0);
+    const staleRiskCapacityBase = Date.now() + 60_000;
+    for (const [index, dispatch] of staleRiskDispatches.entries()) {
+      const startsAt = new Date(staleRiskCapacityBase + index * 120_000);
+      await candidates.ingest({
+        result: successfulCandidateResult(candidateJob(dispatch.payload)),
+        capacityWindows: [
+          { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
+        ],
+        expiresAt: new Date(Date.now() + 25 * 60_000),
+      });
+    }
+    const staleRiskCapacityEndsAt = new Date(
+      staleRiskCapacityBase + staleRiskDispatches.length * 120_000,
+    );
+    const staleRiskDispatchesByNode = new Map<string, CandidateEstimateJob[]>();
+    for (const dispatch of staleRiskDispatches) {
+      const payload = dispatch.payload as unknown as {
+        nodeId: string;
+        job: CandidateEstimateJob;
+      };
+      const jobs = staleRiskDispatchesByNode.get(payload.nodeId) ?? [];
+      jobs.push(payload.job);
+      staleRiskDispatchesByNode.set(payload.nodeId, jobs);
+    }
+    const staleRiskNodeId = [...staleRiskDispatchesByNode].find(
+      ([, jobs]) =>
+        new Set(jobs.map((job) => job.input.geometry.modelGeometryId)).size ===
+        2,
+    )?.[0];
+    if (!staleRiskNodeId) {
+      throw new Error("expected a complete stale risk candidate node");
+    }
+    const staleRiskPhase = await prisma.orderPhase.findUniqueOrThrow({
+      where: { orderId },
+    });
+    const staleRiskPlan = await eligibilityPlans.createCompletePlan({
+      nodeId: staleRiskNodeId,
+      orderPhaseId: staleRiskPhase.id,
+      planKey: `${scope}:stale-risk-plan`,
+    });
+    const staleRiskReservation = await resourceReservations.reserve({
+      nodeId: staleRiskNodeId,
+      phaseResourcePlanId: staleRiskPlan.phaseResourcePlanId,
+      reservationKey: `${scope}:stale-risk-reservation`,
+    });
+    const declinedRisk = await api(
+      `automatic-quote-sessions/${sessionId}/risk-decisions`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("risk-decline")),
+        body: JSON.stringify({
+          itemOrdinal: 0,
+          findingId: riskFinding.id,
+          acknowledgementKey: "binding-risk",
+          decision: "DECLINED",
+        }),
+      },
+    );
+    expect(declinedRisk.response.status).toBe(200);
+    expect(declinedRisk.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(declinedRisk.body.checkoutReady).toBe(false);
+    expect(declinedRisk.body.bindingQuote).toBeNull();
+    expect(declinedRisk.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["RISK_DECLINED"]),
+    });
+    expect(number(declinedRisk.body.configurationRevision)).toBe(
+      acknowledgedRevision + 1,
+    );
+    const declinedPrepare = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("risk-declined-prepare")),
+      },
+    );
+    expect(declinedPrepare.response.status).toBe(200);
+    expect(declinedPrepare.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(declinedPrepare.body.checkoutReady).toBe(false);
+    expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
+      1,
+    );
+    await expect(
+      prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
+    ).resolves.toMatchObject({ status: "DRAFT" });
+    await expect(
+      prisma.phaseReservationSet.findUniqueOrThrow({
+        where: { id: staleRiskReservation.phaseReservationSetId },
+      }),
+    ).resolves.toMatchObject({ status: "RELEASED" });
+    const reacknowledgedRisk = await api(
+      `automatic-quote-sessions/${sessionId}/risk-decisions`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("risk-reacknowledge")),
+        body: JSON.stringify({
+          itemOrdinal: 0,
+          findingId: riskFinding.id,
+          acknowledgementKey: "binding-risk",
+          decision: "ACKNOWLEDGED",
+        }),
+      },
+    );
+    expect(reacknowledgedRisk.response.status).toBe(200);
+    const riskRestaged = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("risk-restage")),
+      },
+    );
+    expect(riskRestaged.response.status).toBe(200);
+    expect(riskRestaged.body.checkoutReady).toBe(false);
     const firstBinding = await prisma.orderActivePriceBinding.findUniqueOrThrow(
       {
         where: { orderId },
       },
     );
+    expect(firstBinding.orderPriceBindingId).not.toBe(
+      staleRiskBinding.orderPriceBindingId,
+    );
+    await expect(
+      prisma.orderPriceBinding.findUniqueOrThrow({
+        where: { id: staleRiskBinding.orderPriceBindingId },
+      }),
+    ).resolves.toMatchObject({ invalidatedAt: expect.any(Date) });
     const persistedSlots = await prisma.fulfilmentSlot.findMany({
       where: { orderId },
       orderBy: { packingUnitKey: "asc" },
@@ -1764,14 +1942,19 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(
       persistedPlans.flatMap((plan) => plan.fulfilmentSlotAllocations).length,
     ).toBe(persistedSlots.length);
-    const allCandidateDispatches = await prisma.outboxMessage.findMany({
-      where: {
-        aggregateType: "CandidateEstimateDispatch",
-        messageType: "slicing.candidate-estimate.requested",
-        payload: { path: ["job", "correlationId"], equals: orderId },
-      },
-      orderBy: { createdAt: "asc" },
-    });
+    const persistedPlanIds = new Set(persistedPlans.map(({ id }) => id));
+    const allCandidateDispatches = (
+      await prisma.outboxMessage.findMany({
+        where: {
+          aggregateType: "CandidateEstimateDispatch",
+          messageType: "slicing.candidate-estimate.requested",
+          payload: { path: ["job", "correlationId"], equals: orderId },
+        },
+        orderBy: { createdAt: "asc" },
+      })
+    ).filter(({ payload }) =>
+      persistedPlanIds.has(candidateJob(payload).input.shipmentPlanId),
+    );
     expect(
       allCandidateDispatches.some(
         ({ payload }) =>
@@ -1823,7 +2006,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
       data: { remainingMilligrams: 1_000_000n },
     });
-    const capacityBase = Date.now() + 60_000;
+    const capacityBase = staleRiskCapacityEndsAt.getTime() + 60_000;
     const retryCandidate = candidateDispatches[0];
     if (!retryCandidate) throw new Error("expected a candidate to retry");
     await candidates.ingest({
@@ -1995,13 +2178,21 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(replay.response.status).toBe(200);
     expect(replay.body.checkoutReady).toBe(true);
     expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
-      1,
+      2,
     );
     expect(
       await prisma.phaseReservationSet.count({
         where: {
           phaseResourcePlan: {
-            eligibilitySnapshot: { orderPhase: { orderId } },
+            jobs: {
+              some: {
+                candidateResourceEstimate: {
+                  shipmentPlan: {
+                    orderPriceBindingId: firstBinding.orderPriceBindingId,
+                  },
+                },
+              },
+            },
           },
         },
       }),
@@ -2024,7 +2215,15 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       await prisma.phaseReservationSet.findFirstOrThrow({
         where: {
           phaseResourcePlan: {
-            eligibilitySnapshot: { orderPhase: { orderId } },
+            jobs: {
+              some: {
+                candidateResourceEstimate: {
+                  shipmentPlan: {
+                    orderPriceBindingId: firstBinding.orderPriceBindingId,
+                  },
+                },
+              },
+            },
           },
         },
       });
@@ -2080,14 +2279,32 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const reservationSets = await prisma.phaseReservationSet.findMany({
       where: {
         phaseResourcePlan: {
-          eligibilitySnapshot: { orderPhase: { orderId } },
+          jobs: {
+            some: {
+              candidateResourceEstimate: {
+                shipmentPlan: {
+                  orderPriceBindingId: firstBinding.orderPriceBindingId,
+                },
+              },
+            },
+          },
         },
       },
     });
     expect(reservationSets).toHaveLength(2);
     expect(
       await prisma.phaseResourcePlan.count({
-        where: { eligibilitySnapshot: { orderPhase: { orderId } } },
+        where: {
+          jobs: {
+            some: {
+              candidateResourceEstimate: {
+                shipmentPlan: {
+                  orderPriceBindingId: firstBinding.orderPriceBindingId,
+                },
+              },
+            },
+          },
+        },
       }),
     ).toBe(2);
     expect(
@@ -2562,6 +2779,11 @@ function capabilityHeaders(
 
 function string(value: unknown): string {
   if (typeof value !== "string") throw new Error("expected a string");
+  return value;
+}
+
+function number(value: unknown): number {
+  if (typeof value !== "number") throw new Error("expected a number");
   return value;
 }
 

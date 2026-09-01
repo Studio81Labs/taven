@@ -559,26 +559,44 @@ export class AutomaticQuotesService {
         });
         if (!item)
           throw new NotFoundException("Automatic quote item was not found");
+        const decisionIdentity = {
+          automaticQuoteItemId: item.id,
+          preflightFindingId: findingId,
+          configurationFingerprint: item.configurationFingerprint,
+        };
+        const current =
+          await transaction.automaticQuoteRiskDecisionRecord.findUnique({
+            where: {
+              automaticQuoteItemId_preflightFindingId_configurationFingerprint:
+                decisionIdentity,
+            },
+          });
+        if (
+          current?.acknowledgementKey === acknowledgementKey &&
+          current.decision === input.decision
+        ) {
+          return;
+        }
         await transaction.automaticQuoteRiskDecisionRecord.upsert({
           where: {
-            automaticQuoteItemId_preflightFindingId_configurationFingerprint: {
-              automaticQuoteItemId: item.id,
-              preflightFindingId: findingId,
-              configurationFingerprint: item.configurationFingerprint,
-            },
+            automaticQuoteItemId_preflightFindingId_configurationFingerprint:
+              decisionIdentity,
           },
           create: {
             orderId: item.orderId,
-            automaticQuoteItemId: item.id,
-            preflightFindingId: findingId,
-            configurationFingerprint: item.configurationFingerprint,
+            ...decisionIdentity,
             acknowledgementKey,
             decision: input.decision,
           },
           update: { acknowledgementKey, decision: input.decision },
         });
+        await transaction.automaticQuoteDraft.update({
+          where: { orderId: item.orderId },
+          data: { configurationRevision: { increment: 1 } },
+        });
       },
     );
+    await this.releaseSupersededReservations(sessionId);
     return this.getSession(sessionId, authorization);
   }
 
@@ -3645,6 +3663,17 @@ function automaticBindingExpressRequested(
   return typeof requested === "boolean" ? requested : null;
 }
 
+function automaticBindingConfigurationRevision(
+  inputSnapshot: Prisma.JsonValue,
+): number | null {
+  const revision = asRecord(
+    asRecord(inputSnapshot)?.automaticQuote,
+  )?.configurationRevision;
+  return typeof revision === "number" && Number.isSafeInteger(revision)
+    ? revision
+    : null;
+}
+
 function bindingMatchesAutomaticDraft(
   binding: {
     deliveryDestinationId: string;
@@ -3653,12 +3682,16 @@ function bindingMatchesAutomaticDraft(
   draft: {
     selectedDeliveryDestinationId: string | null;
     expressRequested: boolean;
+    configurationRevision: number;
   },
 ): boolean {
   return (
     binding.deliveryDestinationId === draft.selectedDeliveryDestinationId &&
     automaticBindingExpressRequested(binding.priceSnapshot.inputSnapshot) ===
-      draft.expressRequested
+      draft.expressRequested &&
+    automaticBindingConfigurationRevision(
+      binding.priceSnapshot.inputSnapshot,
+    ) === draft.configurationRevision
   );
 }
 
