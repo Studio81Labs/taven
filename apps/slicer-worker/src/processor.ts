@@ -23,6 +23,7 @@ import {
 import { sha256, type WorkerObjectStore } from "./object-store.js";
 import {
   parseOrcaArtifact,
+  validateProductionArtifact,
   type OrcaEngine,
   type OrcaSliceOutput,
 } from "./orca-engine.js";
@@ -452,7 +453,14 @@ export class SlicingProcessor {
           })
         ).artifactBytes,
       job.inputFingerprintSha256,
-      ({ sha256: artifactSha256 }) => {
+      ({ bytes, sha256: artifactSha256 }) => {
+        validateProductionArtifact(
+          bytes,
+          job.input.machineProfile.productionArtifactFormat,
+          parts.length,
+          this.config.engine.version,
+          this.config.limits.artifactBytes,
+        );
         const result = resultForArtifact(artifactSha256);
         assertResultEnvelopeSize(result, "Production");
         slicingResultForJobSchema(job).parse(result);

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   access,
   copyFile,
@@ -11,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { readBoundedZipEntries } from "./bounded-zip.js";
 import { SlicingWorkerError } from "./failures.js";
 import type { WorkerConfig } from "./config.js";
 
@@ -102,6 +104,105 @@ export function parseOrcaArtifact(
       Math.max(1, Math.round(estimatedMaterialMilligrams)),
     ),
     ...preflight,
+  };
+}
+
+function invalidProductionArtifact(message: string): never {
+  throw new SlicingWorkerError(
+    "deterministic_invalid",
+    "INVALID_GEOMETRY",
+    message,
+  );
+}
+
+export function validateProductionArtifact(
+  bytes: Uint8Array,
+  format: OrcaSliceRequest["artifactFormat"],
+  expectedPlateCount: number,
+  expectedVersion: string,
+  maximumExpandedBytes: number,
+): void {
+  if (format === "gcode") {
+    parseOrcaArtifact(bytes, expectedVersion);
+    return;
+  }
+  if (format !== "gcode_3mf") {
+    invalidProductionArtifact("Production artifact format is unsupported");
+  }
+  const entries = readBoundedZipEntries(bytes, {
+    label: "G-code 3MF archive",
+    invalidCode: "INVALID_GEOMETRY",
+    maximumEntries: 256,
+    maximumEntryBytes: maximumExpandedBytes,
+    maximumTotalBytes: maximumExpandedBytes,
+  });
+  const sliceInfo = entries.get("Metadata/slice_info.config");
+  if (!sliceInfo || sliceInfo.byteLength === 0) {
+    invalidProductionArtifact(
+      "G-code 3MF archive is missing its slice information",
+    );
+  }
+  const plateEntries = [...entries.keys()].filter(
+    (name) => name.startsWith("Metadata/plate_") && name.endsWith(".gcode"),
+  );
+  if (plateEntries.length !== expectedPlateCount) {
+    invalidProductionArtifact(
+      "G-code 3MF archive does not match the accepted plate count",
+    );
+  }
+  for (let plate = 1; plate <= expectedPlateCount; plate += 1) {
+    const name = `Metadata/plate_${plate}.gcode`;
+    const gcode = entries.get(name);
+    const declaredDigest = entries.get(`${name}.md5`);
+    if (!gcode || gcode.byteLength === 0 || !declaredDigest) {
+      invalidProductionArtifact(
+        "G-code 3MF archive has an incomplete plate artifact",
+      );
+    }
+    let expectedDigest: string;
+    try {
+      expectedDigest = new TextDecoder("utf-8", { fatal: true })
+        .decode(declaredDigest)
+        .trim();
+    } catch {
+      invalidProductionArtifact(
+        "G-code 3MF archive contains an invalid plate checksum",
+      );
+    }
+    const observedDigest = createHash("md5")
+      .update(gcode)
+      .digest("hex")
+      .toUpperCase();
+    if (
+      !/^[A-F0-9]{32}$/u.test(expectedDigest!) ||
+      expectedDigest !== observedDigest
+    ) {
+      invalidProductionArtifact(
+        "G-code 3MF archive plate checksum does not match its contents",
+      );
+    }
+    parseOrcaArtifact(gcode, expectedVersion);
+  }
+}
+
+function validatedProductionMetrics(
+  bytes: Uint8Array,
+  input: OrcaSliceRequest,
+  platePlan: readonly number[] | null,
+  config: EngineRuntimeConfig,
+): Omit<OrcaSliceOutput, "artifactBytes"> {
+  validateProductionArtifact(
+    bytes,
+    input.artifactFormat,
+    platePlan?.length ?? 1,
+    config.version,
+    config.maximumArtifactBytes,
+  );
+  return {
+    estimatedPrintSeconds: 1n,
+    estimatedMaterialMilligrams: 1n,
+    thinWallFeatureCount: 0,
+    supportVolumeRatioPpm: 0,
   };
 }
 
@@ -501,12 +602,12 @@ export class OrcaCliEngine implements OrcaEngine {
     }
     const metrics =
       input.requireMetrics === false
-        ? {
-            estimatedPrintSeconds: 1n,
-            estimatedMaterialMilligrams: 1n,
-            thinWallFeatureCount: 0,
-            supportVolumeRatioPpm: 0,
-          }
+        ? validatedProductionMetrics(
+            artifactBytes,
+            input,
+            platePlan,
+            this.config,
+          )
         : input.artifactFormat === "gcode"
           ? parseOrcaArtifact(artifactBytes, this.config.version)
           : (() => {
@@ -679,7 +780,7 @@ export class OrcaSidecarEngine implements OrcaEngine {
       const deadline = Date.now() + this.config.timeoutMilliseconds + 10_000;
       while (Date.now() < deadline) {
         if (await exists(path.join(requestDirectory, "complete"))) {
-          return this.readResult(requestDirectory, input);
+          return this.readResult(requestDirectory, input, platePlan);
         }
         if (await exists(path.join(requestDirectory, "failed"))) {
           throw await this.runnerFailure(requestDirectory);
@@ -749,6 +850,7 @@ export class OrcaSidecarEngine implements OrcaEngine {
   private async readResult(
     requestDirectory: string,
     input: OrcaSliceRequest,
+    platePlan: readonly number[] | null,
   ): Promise<OrcaSliceOutput> {
     const files = await outputFiles(
       path.join(requestDirectory, "output"),
@@ -771,12 +873,12 @@ export class OrcaSidecarEngine implements OrcaEngine {
     }
     const metrics =
       input.requireMetrics === false
-        ? {
-            estimatedPrintSeconds: 1n,
-            estimatedMaterialMilligrams: 1n,
-            thinWallFeatureCount: 0,
-            supportVolumeRatioPpm: 0,
-          }
+        ? validatedProductionMetrics(
+            artifactBytes,
+            input,
+            platePlan,
+            this.config,
+          )
         : input.artifactFormat === "gcode"
           ? parseOrcaArtifact(artifactBytes, this.config.version)
           : (() => {

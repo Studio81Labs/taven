@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { inflateRawSync } from "node:zlib";
 import { orient2d, orient3d } from "robust-predicates";
 import { SaxesParser, type SaxesAttributeNS, type SaxesTagNS } from "saxes";
+import { readBoundedZipEntries } from "./bounded-zip.js";
 import { SlicingWorkerError } from "./failures.js";
 import { sha256 } from "./object-store.js";
 
@@ -63,9 +63,6 @@ const MAX_CONTAINMENT_TRIANGLE_CHECKS = 4_000_000;
 const MAX_INTERSHELL_GEOMETRY_CHECKS = 4_000_000;
 const TRIANGLE_BVH_LEAF_SIZE = 8;
 const MAX_SIGNED_INT64 = 9_223_372_036_854_775_807n;
-const ZIP_EOCD = 0x06054b50;
-const ZIP_CENTRAL_FILE = 0x02014b50;
-const ZIP_LOCAL_FILE = 0x04034b50;
 const CORE_3MF_NAMESPACE =
   "http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
 const PRODUCTION_3MF_NAMESPACE =
@@ -82,6 +79,18 @@ function invalid(message: string): never {
     "INVALID_MODEL",
     message,
   );
+}
+
+function safeArchivePath(name: string): string {
+  const normalized = name.replace(/\\/gu, "/");
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    normalized.split("/").some((part) => part === ".." || part === "")
+  ) {
+    invalid("3MF archive contains an unsafe entry path");
+  }
+  return normalized;
 }
 
 function finiteNumber(value: string | undefined, label: string): number {
@@ -881,119 +890,14 @@ function parseStl(bytes: Uint8Array): ParsedModel {
   };
 }
 
-function safeArchivePath(name: string): string {
-  const normalized = name.replace(/\\/gu, "/");
-  if (
-    !normalized ||
-    normalized.startsWith("/") ||
-    normalized.split("/").some((part) => part === ".." || part === "")
-  ) {
-    invalid("3MF archive contains an unsafe entry path");
-  }
-  return normalized;
-}
-
 function zipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let eocd = -1;
-  for (
-    let offset = Math.max(0, bytes.byteLength - 65_557);
-    offset <= bytes.byteLength - 22;
-    offset += 1
-  ) {
-    if (view.getUint32(offset, true) === ZIP_EOCD) eocd = offset;
-  }
-  if (eocd < 0) invalid("3MF archive has no end directory");
-  const count = view.getUint16(eocd + 10, true);
-  const directorySize = view.getUint32(eocd + 12, true);
-  const directoryOffset = view.getUint32(eocd + 16, true);
-  if (
-    count < 1 ||
-    count > MAX_ZIP_ENTRIES ||
-    directoryOffset + directorySize > eocd
-  ) {
-    invalid("3MF archive directory is invalid");
-  }
-  const entries = new Map<string, Uint8Array>();
-  let offset = directoryOffset;
-  let totalUncompressedBytes = 0;
-  for (let index = 0; index < count; index += 1) {
-    if (
-      offset + 46 > eocd ||
-      view.getUint32(offset, true) !== ZIP_CENTRAL_FILE
-    ) {
-      invalid("3MF archive central entry is invalid");
-    }
-    const flags = view.getUint16(offset + 8, true);
-    const method = view.getUint16(offset + 10, true);
-    const compressedSize = view.getUint32(offset + 20, true);
-    const uncompressedSize = view.getUint32(offset + 24, true);
-    const nameLength = view.getUint16(offset + 28, true);
-    const extraLength = view.getUint16(offset + 30, true);
-    const commentLength = view.getUint16(offset + 32, true);
-    const localOffset = view.getUint32(offset + 42, true);
-    if (
-      (flags & 1) !== 0 ||
-      ![0, 8].includes(method) ||
-      uncompressedSize > MAX_XML_BYTES
-    ) {
-      invalid("3MF archive uses an unsupported entry encoding");
-    }
-    totalUncompressedBytes += uncompressedSize;
-    if (totalUncompressedBytes > MAX_ARCHIVE_OUTPUT_BYTES) {
-      throw new SlicingWorkerError(
-        "deterministic_invalid",
-        "RESOURCE_LIMIT_EXCEEDED",
-        "3MF archive exceeds the decompressed byte limit",
-      );
-    }
-    const nameEnd = offset + 46 + nameLength;
-    if (nameEnd + extraLength + commentLength > eocd) {
-      invalid("3MF archive entry exceeds its directory");
-    }
-    const rawName = new TextDecoder("utf-8", { fatal: true }).decode(
-      bytes.subarray(offset + 46, nameEnd),
-    );
-    const isDirectory = rawName.endsWith("/");
-    const name = safeArchivePath(isDirectory ? rawName.slice(0, -1) : rawName);
-    if (!isDirectory && entries.has(name)) {
-      invalid("3MF archive contains duplicate entries");
-    }
-    if (
-      localOffset + 30 > directoryOffset ||
-      view.getUint32(localOffset, true) !== ZIP_LOCAL_FILE
-    ) {
-      invalid("3MF archive local entry is invalid");
-    }
-    const localNameLength = view.getUint16(localOffset + 26, true);
-    const localExtraLength = view.getUint16(localOffset + 28, true);
-    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
-    if (dataOffset + compressedSize > directoryOffset) {
-      invalid("3MF archive entry data is truncated");
-    }
-    const compressed = bytes.subarray(dataOffset, dataOffset + compressedSize);
-    let contents: Uint8Array;
-    try {
-      contents =
-        method === 0
-          ? new Uint8Array(compressed)
-          : inflateRawSync(compressed, { maxOutputLength: MAX_XML_BYTES });
-    } catch {
-      invalid("3MF archive entry cannot be decompressed safely");
-    }
-    if (contents.byteLength !== uncompressedSize) {
-      invalid("3MF archive entry size does not match its directory");
-    }
-    if (isDirectory) {
-      if (contents.byteLength !== 0) {
-        invalid("3MF archive directory entry contains data");
-      }
-    } else {
-      entries.set(name, contents);
-    }
-    offset = nameEnd + extraLength + commentLength;
-  }
-  return entries;
+  return readBoundedZipEntries(bytes, {
+    label: "3MF archive",
+    invalidCode: "INVALID_MODEL",
+    maximumEntries: MAX_ZIP_ENTRIES,
+    maximumEntryBytes: MAX_XML_BYTES,
+    maximumTotalBytes: MAX_ARCHIVE_OUTPUT_BYTES,
+  });
 }
 
 function relationshipSource(name: string): string | null {
