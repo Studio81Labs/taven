@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  bodyAssignmentKey,
+  canRecoverWithStandardProduction,
   canAddBodyGroup,
   configurationValues,
-  groupsFromAssignments,
-  initialBodyAssignments,
-  initialBodyGroups,
+  initialModelBodyAssignments,
+  initialModelBodyGroups,
   isExpressVisible,
+  modelGroupsFromAssignments,
   quantityComparison,
   requiresAssistedQuote,
   requiresQuoteRestart,
@@ -34,59 +36,94 @@ const options: ConfigurationOption[] = [
 ];
 
 describe("body grouping", () => {
-  it("keeps multiple bodies together by default and permits meaningful groups", () => {
-    expect(initialBodyGroups(["case", "lid", "pin"], [])).toEqual([
-      { bodyIds: ["case", "lid", "pin"], ordinal: 0 },
-    ]);
-    expect(
-      groupsFromAssignments(["case", "lid", "pin"], {
-        case: 0,
-        lid: 0,
-        pin: 1,
-      }),
-    ).toEqual([
-      { bodyIds: ["case", "lid"], ordinal: 0 },
-      { bodyIds: ["pin"], ordinal: 1 },
+  const modelFiles = [
+    { discoveredBodyIds: ["body-1", "support"], modelFileId: "model-a" },
+    { discoveredBodyIds: ["body-1", "lid"], modelFileId: "model-b" },
+  ];
+
+  it("creates one globally numbered default group per attached model file", () => {
+    expect(initialModelBodyGroups(modelFiles, [])).toEqual([
+      {
+        bodyIds: ["body-1", "support"],
+        modelFileId: "model-a",
+        ordinal: 0,
+      },
+      {
+        bodyIds: ["body-1", "lid"],
+        modelFileId: "model-b",
+        ordinal: 1,
+      },
     ]);
   });
 
-  it("omits bodies that the customer explicitly excludes", () => {
-    expect(
-      groupsFromAssignments(["case", "support", "lid"], {
-        case: 0,
-        support: -1,
-        lid: 0,
-      }),
-    ).toEqual([{ bodyIds: ["case", "lid"], ordinal: 0 }]);
-  });
+  it("restores stable ordinals and explicit exclusions across files", () => {
+    const groups = initialModelBodyGroups(modelFiles, [
+      { bodyIds: ["body-1"], modelFileId: "model-a", ordinal: 2 },
+      { bodyIds: ["lid"], modelFileId: "model-b", ordinal: 7 },
+    ]);
+    const assignments = initialModelBodyAssignments(modelFiles, groups);
 
-  it("restores bodies absent from saved items as explicitly excluded", () => {
-    const groups = initialBodyGroups(
-      ["case", "lid", "pin"],
-      [{ bodyIds: ["case"], ordinal: 0 }],
-    );
-
-    expect(groups).toEqual([{ bodyIds: ["case"], ordinal: 0 }]);
-    expect(initialBodyAssignments(["case", "lid", "pin"], groups)).toEqual({
-      case: 0,
-      lid: -1,
-      pin: -1,
+    expect(groups).toEqual([
+      { bodyIds: ["body-1"], modelFileId: "model-a", ordinal: 2 },
+      { bodyIds: ["lid"], modelFileId: "model-b", ordinal: 7 },
+    ]);
+    expect(assignments).toEqual({
+      [bodyAssignmentKey("model-a", "body-1")]: 2,
+      [bodyAssignmentKey("model-a", "support")]: -1,
+      [bodyAssignmentKey("model-b", "body-1")]: -1,
+      [bodyAssignmentKey("model-b", "lid")]: 7,
     });
+  });
+
+  it("scopes duplicate body IDs by model file", () => {
+    const assignments = {
+      [bodyAssignmentKey("model-a", "body-1")]: 2,
+      [bodyAssignmentKey("model-a", "support")]: -1,
+      [bodyAssignmentKey("model-b", "body-1")]: 7,
+      [bodyAssignmentKey("model-b", "lid")]: -1,
+    };
+
+    expect(modelGroupsFromAssignments(modelFiles, assignments)).toEqual([
+      { bodyIds: ["body-1"], modelFileId: "model-a", ordinal: 2 },
+      { bodyIds: ["body-1"], modelFileId: "model-b", ordinal: 7 },
+    ]);
+  });
+
+  it("does not re-include a wholly excluded file", () => {
+    const groups = initialModelBodyGroups(modelFiles, [
+      { bodyIds: ["body-1"], modelFileId: "model-a", ordinal: 2 },
+    ]);
+    const assignments = initialModelBodyAssignments(modelFiles, groups);
+
+    expect(modelGroupsFromAssignments(modelFiles, assignments)).toEqual([
+      { bodyIds: ["body-1"], modelFileId: "model-a", ordinal: 2 },
+    ]);
+    expect(assignments[bodyAssignmentKey("model-b", "body-1")]).toBe(-1);
+    expect(assignments[bodyAssignmentKey("model-b", "lid")]).toBe(-1);
   });
 
   it("allows a fully assigned saved item to be split into another group", () => {
     expect(canAddBodyGroup(3, 1)).toBe(true);
     expect(canAddBodyGroup(3, 3)).toBe(false);
     expect(canAddBodyGroup(1, 1)).toBe(false);
+    expect(canAddBodyGroup(1, 0)).toBe(true);
   });
 
   it("preserves the remaining group identity when an earlier group is excluded", () => {
     expect(
-      groupsFromAssignments(["red-body", "blue-body"], {
-        "red-body": -1,
-        "blue-body": 1,
-      }),
-    ).toEqual([{ bodyIds: ["blue-body"], ordinal: 1 }]);
+      modelGroupsFromAssignments(
+        [
+          {
+            discoveredBodyIds: ["red-body", "blue-body"],
+            modelFileId: "model-a",
+          },
+        ],
+        {
+          [bodyAssignmentKey("model-a", "red-body")]: -1,
+          [bodyAssignmentKey("model-a", "blue-body")]: 1,
+        },
+      ),
+    ).toEqual([{ bodyIds: ["blue-body"], modelFileId: "model-a", ordinal: 1 }]);
   });
 });
 
@@ -155,6 +192,50 @@ describe("quote boundary states", () => {
           reasons: ["EXPRESS_INELIGIBLE"],
           requested: false,
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("offers standard production only for pending or Express-only recovery", () => {
+    expect(
+      canRecoverWithStandardProduction({
+        express: {
+          eligible: false,
+          reasons: ["ELIGIBILITY_PENDING"],
+          requested: true,
+        },
+        handoff: null,
+        phase: "ELIGIBILITY_PENDING",
+      }),
+    ).toBe(true);
+    expect(
+      canRecoverWithStandardProduction({
+        express: {
+          eligible: false,
+          reasons: ["EXPRESS_INELIGIBLE"],
+          requested: true,
+        },
+        handoff: {
+          kind: "INDIVIDUAL_QUOTE_REQUEST",
+          reasons: ["EXPRESS_INELIGIBLE"],
+          safeContext: {},
+        },
+        phase: "HANDOFF_REQUIRED",
+      }),
+    ).toBe(true);
+    expect(
+      canRecoverWithStandardProduction({
+        express: {
+          eligible: false,
+          reasons: ["EXPRESS_INELIGIBLE"],
+          requested: true,
+        },
+        handoff: {
+          kind: "INDIVIDUAL_QUOTE_REQUEST",
+          reasons: ["EXPRESS_INELIGIBLE", "BUILD_LIMIT_EXCEEDED"],
+          safeContext: {},
+        },
+        phase: "HANDOFF_REQUIRED",
       }),
     ).toBe(false);
   });

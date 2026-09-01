@@ -17,6 +17,7 @@ import {
   loadQuoteSession,
   saveQuoteSession,
 } from "../utils/quote-session-storage";
+import { canRecoverWithStandardProduction } from "../utils/automatic-quote-configurator";
 import { UploadFailure, uploadFile } from "../utils/upload-file";
 
 type QuoteSession = components["schemas"]["AutomaticQuoteSessionDto"];
@@ -45,6 +46,15 @@ export function requiresPreparationAdvance(
 ): boolean {
   return (
     phase === "REFERENCE_SLICES_PENDING" || phase === "ELIGIBILITY_PENDING"
+  );
+}
+
+export function isTerminalQuoteHandoff(
+  quote: Pick<QuoteSession, "express" | "handoff" | "phase">,
+): boolean {
+  return (
+    quote.phase === "HANDOFF_REQUIRED" &&
+    !canRecoverWithStandardProduction(quote)
   );
 }
 
@@ -328,6 +338,12 @@ export function useModelUploadQuote() {
       return true;
     }
     if (nextQuote.phase === "HANDOFF_REQUIRED") {
+      if (!isTerminalQuoteHandoff(nextQuote)) {
+        phase.value = "complete";
+        handoffMessage.value = undefined;
+        stopPolling();
+        return true;
+      }
       phase.value = "handoff";
       const reasons = nextQuote.handoff?.reasons ?? [];
       handoffMessage.value = reasons.includes("UNSUPPORTED_FORMAT")

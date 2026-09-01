@@ -5,6 +5,7 @@ import {
   createUploadCommandKeys,
   createUploadTransferCheckpoint,
   isBackgroundQuotePhase,
+  isTerminalQuoteHandoff,
   isTerminalAttachmentStatus,
   isTerminalUploadConfirmationStatus,
   requiresPreparationAdvance,
@@ -49,6 +50,53 @@ describe("automatic quote preparation advancement", () => {
     "HANDOFF_REQUIRED",
   ] as const)("does not automatically advance %s", (phase) => {
     expect(requiresPreparationAdvance(phase)).toBe(false);
+  });
+});
+
+describe("automatic quote handoff", () => {
+  const express = {
+    eligible: false,
+    reasons: ["EXPRESS_INELIGIBLE"],
+    requested: true,
+  };
+
+  it("keeps an Express-only handoff in the configurator for recovery", () => {
+    expect(
+      isTerminalQuoteHandoff({
+        express,
+        handoff: {
+          kind: "INDIVIDUAL_QUOTE_REQUEST",
+          reasons: ["EXPRESS_INELIGIBLE"],
+          safeContext: {},
+        },
+        phase: "HANDOFF_REQUIRED",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps mixed and non-Express handoffs terminal", () => {
+    expect(
+      isTerminalQuoteHandoff({
+        express,
+        handoff: {
+          kind: "INDIVIDUAL_QUOTE_REQUEST",
+          reasons: ["EXPRESS_INELIGIBLE", "BUILD_LIMIT_EXCEEDED"],
+          safeContext: {},
+        },
+        phase: "HANDOFF_REQUIRED",
+      }),
+    ).toBe(true);
+    expect(
+      isTerminalQuoteHandoff({
+        express: { ...express, requested: false },
+        handoff: {
+          kind: "INDIVIDUAL_QUOTE_REQUEST",
+          reasons: ["BUILD_LIMIT_EXCEEDED"],
+          safeContext: {},
+        },
+        phase: "HANDOFF_REQUIRED",
+      }),
+    ).toBe(true);
   });
 });
 

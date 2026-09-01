@@ -8,8 +8,10 @@ export type PriceComponent =
   components["schemas"]["AutomaticQuotePriceComponentDto"];
 export type QuantityComparison =
   components["schemas"]["AutomaticQuoteQuantityComparisonDto"];
+export type QuoteModelFile = QuoteSession["modelFiles"][number];
 
-export type BodyGroup = Readonly<{
+export type ModelBodyGroup = Readonly<{
+  modelFileId: string;
   ordinal: number;
   bodyIds: readonly string[];
 }>;
@@ -18,55 +20,89 @@ export function canAddBodyGroup(
   bodyCount: number,
   groupCount: number,
 ): boolean {
-  return bodyCount > 1 && groupCount < bodyCount;
+  return bodyCount > groupCount;
 }
 
-export function initialBodyGroups(
-  bodyIds: readonly string[],
-  items: readonly Pick<QuoteItem, "bodyIds" | "ordinal">[],
-): BodyGroup[] {
+export function bodyAssignmentKey(modelFileId: string, bodyId: string): string {
+  return JSON.stringify([modelFileId, bodyId]);
+}
+
+export function initialModelBodyGroups(
+  modelFiles: readonly Pick<
+    QuoteModelFile,
+    "discoveredBodyIds" | "modelFileId"
+  >[],
+  items: readonly Pick<QuoteItem, "bodyIds" | "modelFileId" | "ordinal">[],
+): ModelBodyGroup[] {
   if (items.length > 0) {
     return [...items]
       .sort((left, right) => left.ordinal - right.ordinal)
-      .map((item) => ({ ordinal: item.ordinal, bodyIds: [...item.bodyIds] }));
+      .map((item) => ({
+        ordinal: item.ordinal,
+        modelFileId: item.modelFileId,
+        bodyIds: [...item.bodyIds],
+      }));
   }
-  return bodyIds.length > 0 ? [{ ordinal: 0, bodyIds: [...bodyIds] }] : [];
+  return modelFiles
+    .filter((modelFile) => modelFile.discoveredBodyIds.length > 0)
+    .map((modelFile, ordinal) => ({
+      ordinal,
+      modelFileId: modelFile.modelFileId,
+      bodyIds: [...modelFile.discoveredBodyIds],
+    }));
 }
 
-export function initialBodyAssignments(
-  bodyIds: readonly string[],
-  groups: readonly BodyGroup[],
+export function initialModelBodyAssignments(
+  modelFiles: readonly Pick<
+    QuoteModelFile,
+    "discoveredBodyIds" | "modelFileId"
+  >[],
+  groups: readonly ModelBodyGroup[],
 ): Record<string, number> {
-  const assignments = Object.fromEntries(bodyIds.map((bodyId) => [bodyId, -1]));
+  const assignments = Object.fromEntries(
+    modelFiles.flatMap((modelFile) =>
+      modelFile.discoveredBodyIds.map((bodyId) => [
+        bodyAssignmentKey(modelFile.modelFileId, bodyId),
+        -1,
+      ]),
+    ),
+  );
   for (const group of groups) {
-    for (const bodyId of group.bodyIds) assignments[bodyId] = group.ordinal;
+    for (const bodyId of group.bodyIds) {
+      assignments[bodyAssignmentKey(group.modelFileId, bodyId)] = group.ordinal;
+    }
   }
   return assignments;
 }
 
-export function groupsFromAssignments(
-  bodyIds: readonly string[],
+export function modelGroupsFromAssignments(
+  modelFiles: readonly Pick<
+    QuoteModelFile,
+    "discoveredBodyIds" | "modelFileId"
+  >[],
   assignments: Readonly<Record<string, number>>,
-): BodyGroup[] {
-  const groups = new Map<number, string[]>();
-  for (const bodyId of bodyIds) {
-    const assigned = assignments[bodyId];
-    if (
-      typeof assigned !== "number" ||
-      !Number.isSafeInteger(assigned) ||
-      assigned < 0
-    )
-      continue;
-    const group = groups.get(assigned) ?? [];
-    group.push(bodyId);
-    groups.set(assigned, group);
+): ModelBodyGroup[] {
+  const groups: ModelBodyGroup[] = [];
+  for (const modelFile of modelFiles) {
+    const groupsByOrdinal = new Map<number, string[]>();
+    for (const bodyId of modelFile.discoveredBodyIds) {
+      const assigned =
+        assignments[bodyAssignmentKey(modelFile.modelFileId, bodyId)];
+      if (
+        typeof assigned !== "number" ||
+        !Number.isSafeInteger(assigned) ||
+        assigned < 0
+      )
+        continue;
+      const group = groupsByOrdinal.get(assigned) ?? [];
+      group.push(bodyId);
+      groupsByOrdinal.set(assigned, group);
+    }
+    for (const [ordinal, bodyIds] of groupsByOrdinal) {
+      groups.push({ modelFileId: modelFile.modelFileId, ordinal, bodyIds });
+    }
   }
-  return [...groups.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([ordinal, groupedBodyIds]) => ({
-      ordinal,
-      bodyIds: groupedBodyIds,
-    }));
+  return groups.sort((left, right) => left.ordinal - right.ordinal);
 }
 
 export type ConfigurationField =
@@ -171,6 +207,18 @@ export function isExpressVisible(
   quote: Pick<QuoteSession, "express">,
 ): boolean {
   return quote.express.eligible || quote.express.requested;
+}
+
+export function canRecoverWithStandardProduction(
+  quote: Pick<QuoteSession, "express" | "handoff" | "phase">,
+): boolean {
+  if (!quote.express.requested) return false;
+  if (quote.phase === "ELIGIBILITY_PENDING") return true;
+  return (
+    quote.phase === "HANDOFF_REQUIRED" &&
+    quote.handoff?.reasons.length === 1 &&
+    quote.handoff.reasons[0] === "EXPRESS_INELIGIBLE"
+  );
 }
 
 export function requiresAssistedQuote(

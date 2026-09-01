@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
 import {
+  bodyAssignmentKey,
+  canRecoverWithStandardProduction,
   canAddBodyGroup,
   configurationValues,
   formatMoney,
-  groupsFromAssignments,
-  initialBodyAssignments,
-  initialBodyGroups,
+  initialModelBodyAssignments,
+  initialModelBodyGroups,
   isExpressVisible,
+  modelGroupsFromAssignments,
   priceLabel,
   quantityComparison,
   selectConfigurationOption,
@@ -44,7 +46,8 @@ type ItemDraft = {
 
 const assignments = ref<Record<string, number>>({});
 const draftByOrdinal = ref<Record<number, ItemDraft>>({});
-const groupCount = ref(1);
+const groupOrdinalsByModelFileId = ref<Record<string, number[]>>({});
+const nextGroupOrdinal = ref(0);
 const acknowledgement = ref<Record<string, boolean>>({});
 const selectedDestination = ref("");
 const expressRequested = ref(false);
@@ -52,13 +55,25 @@ const localError = ref<string>();
 const saving = ref(false);
 const configurationLocked = computed(() => props.pending || saving.value);
 
-const modelFile = computed(() => props.quote.modelFiles[0]);
-const bodyIds = computed(() => modelFile.value?.discoveredBodyIds ?? []);
 const configuredBodyIds = computed(
-  () => new Set(props.quote.items.flatMap((item) => item.bodyIds)),
+  () =>
+    new Set(
+      props.quote.items.flatMap((item) =>
+        item.bodyIds.map((bodyId) =>
+          bodyAssignmentKey(item.modelFileId, bodyId),
+        ),
+      ),
+    ),
 );
 const hasUnconfiguredBodies = computed(() =>
-  bodyIds.value.some((bodyId) => !configuredBodyIds.value.has(bodyId)),
+  props.quote.modelFiles.some((modelFile) =>
+    modelFile.discoveredBodyIds.some(
+      (bodyId) =>
+        !configuredBodyIds.value.has(
+          bodyAssignmentKey(modelFile.modelFileId, bodyId),
+        ),
+    ),
+  ),
 );
 const needsConfiguration = computed(
   () =>
@@ -68,7 +83,7 @@ const needsConfiguration = computed(
       hasUnconfiguredBodies.value),
 );
 const groups = computed(() =>
-  groupsFromAssignments(bodyIds.value, assignments.value),
+  modelGroupsFromAssignments(props.quote.modelFiles, assignments.value),
 );
 const currentPrice = computed(
   () => props.quote.bindingQuote ?? props.quote.roughEstimate,
@@ -108,7 +123,10 @@ watch(
     JSON.stringify({
       configurationRevision: props.quote.configurationRevision,
       itemCount: props.quote.items.length,
-      modelBodies: props.quote.modelFiles.map((file) => file.discoveredBodyIds),
+      modelBodies: props.quote.modelFiles.map((file) => ({
+        bodyIds: file.discoveredBodyIds,
+        modelFileId: file.modelFileId,
+      })),
       optionCount: props.quote.configurationOptions.length,
       sessionId: props.quote.sessionId,
     }),
@@ -119,10 +137,24 @@ watch(
 );
 
 function initializeDrafts(): void {
-  const sourceGroups = initialBodyGroups(bodyIds.value, props.quote.items);
-  assignments.value = initialBodyAssignments(bodyIds.value, sourceGroups);
-  groupCount.value = Math.max(
-    1,
+  const sourceGroups = initialModelBodyGroups(
+    props.quote.modelFiles,
+    props.quote.items,
+  );
+  assignments.value = initialModelBodyAssignments(
+    props.quote.modelFiles,
+    sourceGroups,
+  );
+  groupOrdinalsByModelFileId.value = Object.fromEntries(
+    props.quote.modelFiles.map((modelFile) => [
+      modelFile.modelFileId,
+      sourceGroups
+        .filter((group) => group.modelFileId === modelFile.modelFileId)
+        .map((group) => group.ordinal),
+    ]),
+  );
+  nextGroupOrdinal.value = Math.max(
+    0,
     ...sourceGroups.map((group) => group.ordinal + 1),
   );
   const firstOption = props.quote.configurationOptions[0];
@@ -165,17 +197,34 @@ function initializeDrafts(): void {
     : "";
 }
 
-function addGroup(): void {
-  if (canAddBodyGroup(bodyIds.value.length, groupCount.value)) {
-    groupCount.value += 1;
-  }
+function addGroup(modelFileId: string): void {
+  const modelFile = props.quote.modelFiles.find(
+    (candidate) => candidate.modelFileId === modelFileId,
+  );
+  const current = groupOrdinals(modelFileId);
+  if (
+    !modelFile ||
+    !canAddBodyGroup(modelFile.discoveredBodyIds.length, current.length)
+  )
+    return;
+  groupOrdinalsByModelFileId.value = {
+    ...groupOrdinalsByModelFileId.value,
+    [modelFileId]: [...current, nextGroupOrdinal.value],
+  };
+  nextGroupOrdinal.value += 1;
 }
 
-function assignBody(bodyId: string, event: Event): void {
+function assignBody(modelFileId: string, bodyId: string, event: Event): void {
   assignments.value = {
     ...assignments.value,
-    [bodyId]: Number((event.currentTarget as HTMLSelectElement).value),
+    [bodyAssignmentKey(modelFileId, bodyId)]: Number(
+      (event.currentTarget as HTMLSelectElement).value,
+    ),
   };
+}
+
+function groupOrdinals(modelFileId: string): number[] {
+  return groupOrdinalsByModelFileId.value[modelFileId] ?? [];
 }
 
 function draftFor(ordinal: number): ItemDraft | undefined {
@@ -236,13 +285,19 @@ function setQuantity(ordinal: number, quantity: number): void {
 
 async function saveConfiguration(): Promise<void> {
   localError.value = undefined;
-  const modelFileId = modelFile.value?.modelFileId;
-  if (!modelFileId) return;
   if (groups.value.length === 0) {
     localError.value = "Vyberte alespoň jedno těleso, které chcete vytisknout.";
     return;
   }
-  if (Object.keys(assignments.value).length !== bodyIds.value.length) {
+  const allBodiesAssigned = props.quote.modelFiles.every((modelFile) =>
+    modelFile.discoveredBodyIds.every(
+      (bodyId) =>
+        typeof assignments.value[
+          bodyAssignmentKey(modelFile.modelFileId, bodyId)
+        ] === "number",
+    ),
+  );
+  if (!allBodiesAssigned) {
     localError.value = "Každé těleso musí být přiřazené právě k jedné položce.";
     return;
   }
@@ -256,7 +311,7 @@ async function saveConfiguration(): Promise<void> {
           fitSensitive: draft.fitSensitive,
           infillPreset: draft.option.infillPreset,
           material: draft.option.material,
-          modelFileId,
+          modelFileId: group.modelFileId,
           printConfigRevisionId: draft.option.printConfigRevisionId,
           quantity: draft.quantity,
         }
@@ -337,6 +392,25 @@ async function submitDestination(): Promise<void> {
   }
 }
 
+async function continueWithoutExpress(): Promise<void> {
+  saving.value = true;
+  try {
+    if (!(await props.onSetExpress(false))) return;
+    expressRequested.value = false;
+    await props.onPrepare();
+  } finally {
+    saving.value = false;
+  }
+}
+
+function modelFileLabel(modelFileId: string): string {
+  const index = props.quote.modelFiles.findIndex(
+    (modelFile) => modelFile.modelFileId === modelFileId,
+  );
+  const format = props.quote.modelFiles[index]?.format ?? "MODEL";
+  return `Soubor ${index + 1} · ${format === "THREE_MF" ? "3MF" : format}`;
+}
+
 function deliveryIdentity(option: {
   endpointType: string;
   providerEndpointId: string;
@@ -400,43 +474,69 @@ function quantityPrice(choice: {
             <p class="eyebrow">TĚLESA A POLOŽKY</p>
             <h3 id="grouping-title">Co se má tisknout společně?</h3>
           </div>
-          <button
-            v-if="canAddBodyGroup(bodyIds.length, groupCount)"
-            class="secondary-button compact-button"
-            type="button"
-            :disabled="configurationLocked"
-            @click="addGroup"
-          >
-            Přidat položku
-          </button>
         </div>
         <p>
           Tělesa v jedné položce mají stejný materiál, barvu a množství.
           Rozdělte je jen tehdy, když potřebují jiné nastavení; tělesa, která
           tisknout nechcete, výslovně vyřaďte.
         </p>
-        <ul class="body-list">
-          <li v-for="bodyId in bodyIds" :key="bodyId">
-            <span class="mono">{{ bodyId }}</span>
-            <label>
-              <span class="visually-hidden">Položka pro {{ bodyId }}</span>
-              <select
-                :value="assignments[bodyId]"
-                :disabled="configurationLocked"
-                @change="assignBody(bodyId, $event)"
-              >
-                <option :value="-1">Netisknout</option>
-                <option
-                  v-for="index in groupCount"
-                  :key="index"
-                  :value="index - 1"
+        <article
+          v-for="modelFile in quote.modelFiles"
+          :key="modelFile.modelFileId"
+          class="item-configuration"
+        >
+          <div class="configurator-section-heading">
+            <strong class="eyebrow">
+              {{ modelFileLabel(modelFile.modelFileId) }}
+            </strong>
+            <button
+              v-if="
+                canAddBodyGroup(
+                  modelFile.discoveredBodyIds.length,
+                  groupOrdinals(modelFile.modelFileId).length,
+                )
+              "
+              class="secondary-button compact-button"
+              type="button"
+              :disabled="configurationLocked"
+              @click="addGroup(modelFile.modelFileId)"
+            >
+              Přidat položku
+            </button>
+          </div>
+          <ul class="body-list">
+            <li
+              v-for="bodyId in modelFile.discoveredBodyIds"
+              :key="bodyAssignmentKey(modelFile.modelFileId, bodyId)"
+            >
+              <span class="mono">{{ bodyId }}</span>
+              <label>
+                <span class="visually-hidden">
+                  Položka pro {{ bodyId }} v
+                  {{ modelFileLabel(modelFile.modelFileId) }}
+                </span>
+                <select
+                  :value="
+                    assignments[
+                      bodyAssignmentKey(modelFile.modelFileId, bodyId)
+                    ]
+                  "
+                  :disabled="configurationLocked"
+                  @change="assignBody(modelFile.modelFileId, bodyId, $event)"
                 >
-                  Položka {{ index }}
-                </option>
-              </select>
-            </label>
-          </li>
-        </ul>
+                  <option :value="-1">Netisknout</option>
+                  <option
+                    v-for="ordinal in groupOrdinals(modelFile.modelFileId)"
+                    :key="ordinal"
+                    :value="ordinal"
+                  >
+                    Položka {{ ordinal + 1 }}
+                  </option>
+                </select>
+              </label>
+            </li>
+          </ul>
+        </article>
       </section>
 
       <section
@@ -452,6 +552,7 @@ function quantityPrice(choice: {
               {{ group.bodyIds.length }}
               {{ group.bodyIds.length === 1 ? "těleso" : "tělesa" }}
             </h3>
+            <small>{{ modelFileLabel(group.modelFileId) }}</small>
           </div>
           <span class="mono">{{ group.bodyIds.join(", ") }}</span>
         </div>
@@ -643,8 +744,40 @@ function quantityPrice(choice: {
         >
           Obnovit výpočet
         </button>
+        <button
+          v-if="canRecoverWithStandardProduction(quote)"
+          class="secondary-button compact-button"
+          type="button"
+          :disabled="configurationLocked"
+          @click="continueWithoutExpress"
+        >
+          Pokračovat bez expresu
+        </button>
       </div>
     </div>
+
+    <section
+      v-if="
+        quote.phase === 'HANDOFF_REQUIRED' &&
+        canRecoverWithStandardProduction(quote)
+      "
+      class="configurator-section"
+    >
+      <p class="eyebrow">EXPRESNÍ VÝROBA</p>
+      <h3>Expresní termín teď nemůžeme bezpečně potvrdit.</h3>
+      <p>
+        Ověřenou dopravu zachováme a zkusíme závaznou cenu pro standardní
+        výrobu.
+      </p>
+      <button
+        class="primary-button"
+        type="button"
+        :disabled="configurationLocked"
+        @click="continueWithoutExpress"
+      >
+        Pokračovat bez expresu
+      </button>
+    </section>
 
     <section
       v-if="quote.phase === 'ACTION_REQUIRED'"
