@@ -626,12 +626,13 @@ export class AutomaticQuotesService {
         });
         if (draft.expressRequested === requested) return;
         if (
-          await transaction.orderPriceBinding.findFirst({
+          requested &&
+          (await transaction.orderPriceBinding.findFirst({
             where: { orderId: origin.orderId },
-          })
+          }))
         ) {
           throw new ConflictException(
-            "Express choice is frozen after quote preparation starts",
+            "Express cannot be enabled after quote preparation starts",
           );
         }
         await transaction.automaticQuoteDraft.update({
@@ -643,6 +644,7 @@ export class AutomaticQuotesService {
         });
       },
     );
+    await this.releaseSupersededReservations(sessionId);
     return this.getSession(sessionId, authorization);
   }
 
@@ -1188,7 +1190,9 @@ export class AutomaticQuotesService {
           include: { selectedDeliveryDestination: true, items: true },
         },
         activePriceBinding: {
-          include: { orderPriceBinding: true },
+          include: {
+            orderPriceBinding: { include: { priceSnapshot: true } },
+          },
         },
       },
     });
@@ -1196,8 +1200,11 @@ export class AutomaticQuotesService {
     const destination = draft?.selectedDeliveryDestination;
     if (!draft || !destination || draft.items.length === 0) return;
     if (
-      draftOrder.activePriceBinding?.orderPriceBinding.deliveryDestinationId ===
-      destination.id
+      draftOrder.activePriceBinding &&
+      bindingMatchesAutomaticDraft(
+        draftOrder.activePriceBinding.orderPriceBinding,
+        draft,
+      )
     ) {
       return;
     }
@@ -1318,6 +1325,7 @@ export class AutomaticQuotesService {
       priceList,
       destinationId: destination.id,
       configurationRevision: draft.configurationRevision,
+      expressRequested: draft.expressRequested,
       prepared: prepared.prepared,
       paymentFeeRateBasisPoints: prepared.parameters.paymentFeeRateBasisPoints,
       paymentFeeFixedMinor: prepared.parameters.paymentFeeFixedMinor,
@@ -1585,6 +1593,7 @@ export class AutomaticQuotesService {
       };
       destinationId: string;
       configurationRevision: number;
+      expressRequested: boolean;
       prepared: AutomaticBindingQuote;
       paymentFeeRateBasisPoints: number;
       paymentFeeFixedMinor: bigint;
@@ -1600,6 +1609,7 @@ export class AutomaticQuotesService {
         orderId: input.orderId,
         configurationRevision: input.configurationRevision,
         deliveryDestinationId: input.destinationId,
+        expressRequested: input.expressRequested,
         priceListRevision: input.priceList.revision,
         expressEligibility: input.prepared.expressEligibility,
         shipmentPlan: jsonSafe(input.prepared.shipmentPlan),
@@ -1823,8 +1833,16 @@ export class AutomaticQuotesService {
     const automaticParameters = parseAutomaticQuotePricingParameters(
       active.orderPriceBinding.priceSnapshot.priceList.parameters,
     );
-    const expressCapacityWindowSeconds = active.order.automaticQuoteDraft
-      ?.expressRequested
+    const draft = active.order.automaticQuoteDraft;
+    if (
+      !draft ||
+      !bindingMatchesAutomaticDraft(active.orderPriceBinding, draft)
+    ) {
+      return;
+    }
+    const expressCapacityWindowSeconds = automaticBindingExpressRequested(
+      active.orderPriceBinding.priceSnapshot.inputSnapshot,
+    )
       ? automaticExpressCapacityWindowSeconds(automaticParameters)
       : undefined;
     await this.dispatchAutomaticCandidates(orderId, bindingId);
@@ -1876,7 +1894,7 @@ export class AutomaticQuotesService {
                 expressCapacityWindowSeconds,
               );
         if (latestPlan && liveReservation && liveReservationCapacityFits) {
-          await this.finalizeAutomaticQuote({
+          const finalized = await this.finalizeAutomaticQuote({
             orderId,
             bindingId,
             phaseResourcePlanId: latestPlan.id,
@@ -1885,7 +1903,10 @@ export class AutomaticQuotesService {
               ? { capacityWindowSeconds: expressCapacityWindowSeconds }
               : {}),
           });
-          return;
+          if (finalized) return;
+          await this.resourceReservations.releaseBeforePrint(
+            liveReservation.id,
+          );
         }
         if (liveReservation && !liveReservationCapacityFits) {
           await this.resourceReservations.releaseBeforePrint(
@@ -1925,7 +1946,7 @@ export class AutomaticQuotesService {
           phaseResourcePlanId: plan.phaseResourcePlanId,
           reservationKey: `automatic:${fingerprintOf({ orderId, bindingId, nodeId, plan: plan.phaseResourcePlanId })}`,
         });
-        await this.finalizeAutomaticQuote({
+        const finalized = await this.finalizeAutomaticQuote({
           orderId,
           bindingId,
           phaseResourcePlanId: plan.phaseResourcePlanId,
@@ -1934,7 +1955,10 @@ export class AutomaticQuotesService {
             ? { capacityWindowSeconds: expressCapacityWindowSeconds }
             : {}),
         });
-        return;
+        if (finalized) return;
+        await this.resourceReservations.releaseBeforePrint(
+          reservation.phaseReservationSetId,
+        );
       } catch (error) {
         if (
           error instanceof ResourceConflictError ||
@@ -1954,18 +1978,18 @@ export class AutomaticQuotesService {
       where: { automaticOrigin: { quoteSessionId: sessionId } },
       include: {
         automaticQuoteDraft: true,
-        activePriceBinding: { include: { orderPriceBinding: true } },
+        activePriceBinding: {
+          include: {
+            orderPriceBinding: { include: { priceSnapshot: true } },
+          },
+        },
       },
     });
     const active = order?.activePriceBinding?.orderPriceBinding;
-    if (
-      !order?.automaticQuoteDraft ||
-      !active ||
-      active.deliveryDestinationId ===
-        order.automaticQuoteDraft.selectedDeliveryDestinationId
-    ) {
+    if (!order?.automaticQuoteDraft || !active) {
       return;
     }
+    if (bindingMatchesAutomaticDraft(active, order.automaticQuoteDraft)) return;
     const reservations = await this.prisma.phaseReservationSet.findMany({
       where: {
         status: "RESERVED",
@@ -2280,11 +2304,42 @@ export class AutomaticQuotesService {
     orderId: string,
   ): Promise<boolean> {
     const rows = await this.prisma.$queryRaw<Array<{ allTerminal: boolean }>>`
-      WITH ranked_dispatches AS (
+      WITH item_requirements AS (
         SELECT
           shipment_plan.id AS shipment_plan_id,
-          dispatch.payload #>> '{job,input,geometry,modelGeometryId}'
-            AS model_geometry_id,
+          item.id AS order_item_id,
+          item.model_geometry_id,
+          item.print_config_revision_id,
+          item.material::text AS material,
+          item.color,
+          count(*)::integer AS quantity
+        FROM order_active_price_bindings active_binding
+        JOIN order_price_bindings binding
+          ON binding.id = active_binding.order_price_binding_id
+         AND binding.invalidated_at IS NULL
+        JOIN shipment_plans shipment_plan
+          ON shipment_plan.order_price_binding_id = binding.id
+        JOIN shipment_plan_fulfilment_slots allocation
+          ON allocation.shipment_plan_id = shipment_plan.id
+         AND allocation.order_price_binding_id = binding.id
+        JOIN fulfilment_slots slot
+          ON slot.id = allocation.fulfilment_slot_id
+         AND slot.order_id = active_binding.order_id
+        JOIN order_items item
+          ON item.id = slot.order_item_id
+         AND item.order_id = slot.order_id
+        WHERE active_binding.order_id = ${orderId}::uuid
+        GROUP BY
+          shipment_plan.id,
+          item.id,
+          item.model_geometry_id,
+          item.print_config_revision_id,
+          item.material,
+          item.color
+      ), ranked_dispatches AS (
+        SELECT
+          requirement.shipment_plan_id,
+          requirement.order_item_id,
           dispatch.payload #>> '{job,inputFingerprintSha256}'
             AS input_fingerprint,
           dispatch.payload #>> '{inventoryId}' AS inventory_id,
@@ -2300,8 +2355,8 @@ export class AutomaticQuotesService {
           ) AS dead_lettered,
           row_number() OVER (
             PARTITION BY
-              shipment_plan.id,
-              dispatch.payload #>> '{job,input,geometry,modelGeometryId}',
+              requirement.shipment_plan_id,
+              requirement.order_item_id,
               dispatch.payload #>> '{job,inputFingerprintSha256}',
               dispatch.payload #>> '{inventoryId}'
             ORDER BY
@@ -2309,24 +2364,28 @@ export class AutomaticQuotesService {
               (dispatch.payload #>> '{job,attempt}')::integer DESC,
               dispatch.id DESC
           ) AS dispatch_rank
-        FROM order_active_price_bindings active_binding
-        JOIN order_price_bindings binding
-          ON binding.id = active_binding.order_price_binding_id
-         AND binding.invalidated_at IS NULL
-        JOIN shipment_plans shipment_plan
-          ON shipment_plan.order_price_binding_id = binding.id
+        FROM item_requirements requirement
         JOIN outbox_messages dispatch
           ON dispatch.aggregate_type = 'CandidateEstimateDispatch'
          AND dispatch.message_type = 'slicing.candidate-estimate.requested'
          AND dispatch.payload #>> '{job,input,shipmentPlanId}' =
-             shipment_plan.id::text
+             requirement.shipment_plan_id::text
+         AND dispatch.payload #>> '{job,input,geometry,modelGeometryId}' =
+             requirement.model_geometry_id::text
+         AND dispatch.payload #>> '{job,input,printConfig,revisionId}' =
+             requirement.print_config_revision_id::text
+         AND (dispatch.payload #>> '{job,input,quantity}')::integer <=
+             requirement.quantity
+        JOIN inventories inventory
+          ON inventory.id::text = dispatch.payload #>> '{inventoryId}'
+         AND inventory.material::text = requirement.material
+         AND (requirement.color IS NULL OR inventory.color = requirement.color)
         LEFT JOIN candidate_estimate_terminal_results terminal
           ON terminal.outbox_message_id = dispatch.id
-        WHERE active_binding.order_id = ${orderId}::uuid
       ), grouped_dispatches AS (
         SELECT
           shipment_plan_id,
-          model_geometry_id,
+          order_item_id,
           bool_and(
             dead_lettered
             OR COALESCE(
@@ -2342,7 +2401,7 @@ export class AutomaticQuotesService {
           ) AS all_terminal
         FROM ranked_dispatches
         WHERE dispatch_rank = 1
-        GROUP BY shipment_plan_id, model_geometry_id
+        GROUP BY shipment_plan_id, order_item_id
       )
       SELECT all_terminal AS "allTerminal"
       FROM grouped_dispatches
@@ -2358,14 +2417,18 @@ export class AutomaticQuotesService {
     phaseResourcePlanId: string;
     phaseReservationSetId: string;
     capacityWindowSeconds?: bigint;
-  }): Promise<void> {
-    await this.prisma.$transaction(async (transaction) => {
+  }): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`
         SELECT taven_lock_automatic_order_session(${input.orderId}::uuid)::text
       `;
       const observedAt = await databaseNow(transaction);
       const active = await transaction.orderActivePriceBinding.findUnique({
         where: { orderId: input.orderId },
+        include: {
+          order: { include: { automaticQuoteDraft: true } },
+          orderPriceBinding: { include: { priceSnapshot: true } },
+        },
       });
       const plan = await transaction.phaseResourcePlan.findUnique({
         where: { id: input.phaseResourcePlanId },
@@ -2379,6 +2442,13 @@ export class AutomaticQuotesService {
       const origin = await transaction.automaticOrderOrigin.findUnique({
         where: { orderId: input.orderId },
       });
+      const bindingMatchesDraft = Boolean(
+        active?.order.automaticQuoteDraft &&
+        bindingMatchesAutomaticDraft(
+          active.orderPriceBinding,
+          active.order.automaticQuoteDraft,
+        ),
+      );
       const capacityFits = !input.capacityWindowSeconds
         ? true
         : plan
@@ -2398,9 +2468,10 @@ export class AutomaticQuotesService {
         reservation.status !== "RESERVED" ||
         reservation.expiresAt <= observedAt ||
         !capacityFits ||
+        !bindingMatchesDraft ||
         !origin
       ) {
-        return;
+        return false;
       }
       await transaction.order.updateMany({
         where: { id: input.orderId, status: OrderStatus.DRAFT },
@@ -2421,6 +2492,7 @@ export class AutomaticQuotesService {
         },
       });
       await transaction.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
+      return true;
     });
   }
 
@@ -2886,10 +2958,9 @@ export class AutomaticQuotesService {
         handoffReasons.push(reason);
       }
     }
-    const selectedDestinationId = draft.selectedDeliveryDestinationId;
     const candidateActive = order.activePriceBinding?.orderPriceBinding;
     const active =
-      candidateActive?.deliveryDestinationId === selectedDestinationId
+      candidateActive && bindingMatchesAutomaticDraft(candidateActive, draft)
         ? candidateActive
         : undefined;
     const currentPlan = active
@@ -3008,6 +3079,32 @@ function totalEstimatedMaterial(item: AutomaticQuotePricingItem): bigint {
     (remainder > 0 && item.quantity > item.referencePartsPerPlate
       ? (item.tail?.estimatedMaterialMilligrams ?? 0n)
       : 0n)
+  );
+}
+
+function automaticBindingExpressRequested(
+  inputSnapshot: Prisma.JsonValue,
+): boolean | null {
+  const requested = asRecord(
+    asRecord(inputSnapshot)?.automaticQuote,
+  )?.expressRequested;
+  return typeof requested === "boolean" ? requested : null;
+}
+
+function bindingMatchesAutomaticDraft(
+  binding: {
+    deliveryDestinationId: string;
+    priceSnapshot: { inputSnapshot: Prisma.JsonValue };
+  },
+  draft: {
+    selectedDeliveryDestinationId: string | null;
+    expressRequested: boolean;
+  },
+): boolean {
+  return (
+    binding.deliveryDestinationId === draft.selectedDeliveryDestinationId &&
+    automaticBindingExpressRequested(binding.priceSnapshot.inputSnapshot) ===
+      draft.expressRequested
   );
 }
 

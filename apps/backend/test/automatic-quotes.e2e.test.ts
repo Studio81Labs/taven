@@ -1078,6 +1078,318 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       eligible: true,
     });
 
+    const recoveryCreated = await api("automatic-quote-sessions", {
+      method: "POST",
+      headers: jsonHeaders(key("capacity-recovery-create")),
+      body: "{}",
+    });
+    const recoverySessionId = string(recoveryCreated.body.sessionId);
+    const recoverySessionToken = string(recoveryCreated.body.sessionToken);
+    const recoveryOrderId = string(recoveryCreated.body.orderId);
+    expect(
+      (
+        await api(`automatic-quote-sessions/${recoverySessionId}/model-files`, {
+          method: "POST",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-attach"),
+          ),
+          body: JSON.stringify({ modelFileId: modelFile.id, uploadToken }),
+        })
+      ).response.status,
+    ).toBe(200);
+    expect(
+      (
+        await api(
+          `automatic-quote-sessions/${recoverySessionId}/items/0/configuration`,
+          {
+            method: "PUT",
+            headers: capabilityHeaders(
+              recoverySessionToken,
+              key("capacity-recovery-configure"),
+            ),
+            body: JSON.stringify({
+              modelFileId: modelFile.id,
+              bodyIds: ["body-b"],
+              printConfigRevisionId: foundation.printConfigRevisionId,
+              material: "PLA",
+              color: quoteColor,
+              infillPreset: "STANDARD",
+              quantity: 1,
+              preferredPartsPerPlate: 1,
+              fitSensitive: false,
+            }),
+          },
+        )
+      ).response.status,
+    ).toBe(200);
+    expect(
+      (
+        await api(
+          `automatic-quote-sessions/${recoverySessionId}/delivery-destination`,
+          {
+            method: "PUT",
+            headers: capabilityHeaders(
+              recoverySessionToken,
+              key("capacity-recovery-destination"),
+            ),
+            body: JSON.stringify({
+              providerEndpointId: "test-pickup",
+              endpointType: "pickup_point",
+            }),
+          },
+        )
+      ).response.status,
+    ).toBe(200);
+    expect(
+      (
+        await api(`automatic-quote-sessions/${recoverySessionId}/express`, {
+          method: "PUT",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-express"),
+          ),
+          body: JSON.stringify({ requested: true }),
+        })
+      ).response.status,
+    ).toBe(200);
+    const recoveryStaged = await api(
+      `automatic-quote-sessions/${recoverySessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("capacity-recovery-stage"),
+        ),
+      },
+    );
+    expect(recoveryStaged.response.status).toBe(200);
+    expect(recoveryStaged.body.checkoutReady).toBe(false);
+    const recoveryTopology = {
+      itemIds: (
+        await prisma.orderItem.findMany({
+          where: { orderId: recoveryOrderId },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        })
+      ).map(({ id }) => id),
+      phaseIds: (
+        await prisma.orderPhase.findMany({
+          where: { orderId: recoveryOrderId },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        })
+      ).map(({ id }) => id),
+      slotIds: (
+        await prisma.fulfilmentSlot.findMany({
+          where: { orderId: recoveryOrderId },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        })
+      ).map(({ id }) => id),
+    };
+    const staleExpressBinding =
+      await prisma.orderActivePriceBinding.findUniqueOrThrow({
+        where: { orderId: recoveryOrderId },
+      });
+    const staleExpressPlanIds = new Set(
+      (
+        await prisma.shipmentPlan.findMany({
+          where: {
+            orderPriceBindingId: staleExpressBinding.orderPriceBindingId,
+          },
+          select: { id: true },
+        })
+      ).map(({ id }) => id),
+    );
+    const lateCapacityStartsAt = new Date(Date.now() + 25 * 60 * 60 * 1_000);
+    const lateCapacityEndsAt = new Date(
+      lateCapacityStartsAt.getTime() + 60_000,
+    );
+    const lateExpressDispatches = (
+      await prisma.outboxMessage.findMany({
+        where: {
+          aggregateType: "CandidateEstimateDispatch",
+          messageType: "slicing.candidate-estimate.requested",
+          payload: {
+            path: ["job", "correlationId"],
+            equals: recoveryOrderId,
+          },
+        },
+      })
+    ).filter(({ payload }) =>
+      staleExpressPlanIds.has(candidateJob(payload).input.shipmentPlanId),
+    );
+    expect(lateExpressDispatches.length).toBeGreaterThan(0);
+    for (const dispatch of lateExpressDispatches) {
+      await candidates.ingest({
+        result: successfulCandidateResult(candidateJob(dispatch.payload)),
+        capacityWindows: [
+          { startsAt: lateCapacityStartsAt, endsAt: lateCapacityEndsAt },
+        ],
+        expiresAt: new Date(Date.now() + 26 * 60 * 60 * 1_000),
+      });
+    }
+    const lateExpress = await api(
+      `automatic-quote-sessions/${recoverySessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("capacity-recovery-late-express"),
+        ),
+      },
+    );
+    expect(lateExpress.response.status).toBe(200);
+    expect(lateExpress.body.checkoutReady).toBe(false);
+    expect(lateExpress.body.bindingQuote).toBeNull();
+    await expect(
+      prisma.order.findUniqueOrThrow({ where: { id: recoveryOrderId } }),
+    ).resolves.toMatchObject({ status: "DRAFT" });
+    const recoveryFallback = await api(
+      `automatic-quote-sessions/${recoverySessionId}/express`,
+      {
+        method: "PUT",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("capacity-recovery-fallback"),
+        ),
+        body: JSON.stringify({ requested: false }),
+      },
+    );
+    expect(recoveryFallback.response.status).toBe(200);
+    expect(recoveryFallback.body.express).toMatchObject({ requested: false });
+    expect(recoveryFallback.body.checkoutReady).toBe(false);
+    expect(recoveryFallback.body.bindingQuote).toBeNull();
+    const recoveryRestaged = await api(
+      `automatic-quote-sessions/${recoverySessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("capacity-recovery-restage"),
+        ),
+      },
+    );
+    expect(recoveryRestaged.response.status).toBe(200);
+    expect(recoveryRestaged.body.checkoutReady).toBe(false);
+    const standardRecoveryBinding =
+      await prisma.orderActivePriceBinding.findUniqueOrThrow({
+        where: { orderId: recoveryOrderId },
+        include: { orderPriceBinding: { include: { priceSnapshot: true } } },
+      });
+    expect(standardRecoveryBinding.orderPriceBindingId).not.toBe(
+      staleExpressBinding.orderPriceBindingId,
+    );
+    expect(
+      (
+        standardRecoveryBinding.orderPriceBinding.priceSnapshot
+          .inputSnapshot as {
+          automaticQuote: { expressRequested: boolean };
+        }
+      ).automaticQuote.expressRequested,
+    ).toBe(false);
+    await expect(
+      prisma.orderPriceBinding.findUniqueOrThrow({
+        where: { id: staleExpressBinding.orderPriceBindingId },
+      }),
+    ).resolves.toMatchObject({ invalidatedAt: expect.any(Date) });
+    await expect(
+      Promise.all([
+        prisma.orderItem
+          .findMany({
+            where: { orderId: recoveryOrderId },
+            select: { id: true },
+            orderBy: { id: "asc" },
+          })
+          .then((items) => items.map(({ id }) => id)),
+        prisma.orderPhase
+          .findMany({
+            where: { orderId: recoveryOrderId },
+            select: { id: true },
+            orderBy: { id: "asc" },
+          })
+          .then((phases) => phases.map(({ id }) => id)),
+        prisma.fulfilmentSlot
+          .findMany({
+            where: { orderId: recoveryOrderId },
+            select: { id: true },
+            orderBy: { id: "asc" },
+          })
+          .then((slots) => slots.map(({ id }) => id)),
+      ]),
+    ).resolves.toEqual([
+      recoveryTopology.itemIds,
+      recoveryTopology.phaseIds,
+      recoveryTopology.slotIds,
+    ]);
+    expect(
+      (
+        await api(`automatic-quote-sessions/${recoverySessionId}/express`, {
+          method: "PUT",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-reenable"),
+          ),
+          body: JSON.stringify({ requested: true }),
+        })
+      ).response.status,
+    ).toBe(409);
+    const standardRecoveryPlanIds = new Set(
+      (
+        await prisma.shipmentPlan.findMany({
+          where: {
+            orderPriceBindingId: standardRecoveryBinding.orderPriceBindingId,
+          },
+          select: { id: true },
+        })
+      ).map(({ id }) => id),
+    );
+    const standardRecoveryDispatches = (
+      await prisma.outboxMessage.findMany({
+        where: {
+          aggregateType: "CandidateEstimateDispatch",
+          messageType: "slicing.candidate-estimate.requested",
+          payload: {
+            path: ["job", "correlationId"],
+            equals: recoveryOrderId,
+          },
+        },
+      })
+    ).filter(({ payload }) =>
+      standardRecoveryPlanIds.has(candidateJob(payload).input.shipmentPlanId),
+    );
+    expect(standardRecoveryDispatches.length).toBeGreaterThan(0);
+    for (const [index, dispatch] of standardRecoveryDispatches.entries()) {
+      const startsAt = new Date(
+        lateCapacityEndsAt.getTime() + (index + 1) * 120_000,
+      );
+      await candidates.ingest({
+        result: successfulCandidateResult(candidateJob(dispatch.payload)),
+        capacityWindows: [
+          { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
+        ],
+        expiresAt: new Date(Date.now() + 28 * 60 * 60 * 1_000),
+      });
+    }
+    const standardRecoveryReady = await api(
+      `automatic-quote-sessions/${recoverySessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("capacity-recovery-standard-ready"),
+        ),
+      },
+    );
+    expect(standardRecoveryReady.response.status).toBe(200);
+    expect(standardRecoveryReady.body.phase).toBe("CHECKOUT_READY");
+    expect(standardRecoveryReady.body.checkoutReady).toBe(true);
+    expect(standardRecoveryReady.body.bindingQuote).toMatchObject({
+      kind: "BINDING",
+      currency: "CZK",
+    });
+
     const staged = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
       headers: capabilityHeaders(sessionToken, key("stage")),
