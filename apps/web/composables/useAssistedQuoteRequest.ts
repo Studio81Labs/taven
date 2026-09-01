@@ -86,6 +86,23 @@ export function shouldRestartPhotoIntent(status: number | undefined): boolean {
   return status === 401 || status === 403 || status === 409 || status === 410;
 }
 
+export function isEditableCreateFailure(
+  stage: "confirm" | "create" | "intent",
+  status: number,
+): boolean {
+  return stage === "create" && status === 400;
+}
+
+export function isEditableAttachmentFailure(
+  stage: "confirm" | "create" | "intent",
+  status: number,
+): boolean {
+  return (
+    (stage === "confirm" || stage === "intent") &&
+    (status === 400 || status === 409)
+  );
+}
+
 export function useAssistedQuoteRequest() {
   const { $api } = useNuxtApp();
   const phase = ref<AssistedQuoteRequestPhase>("editing");
@@ -93,6 +110,8 @@ export function useAssistedQuoteRequest() {
   const errorMessage = ref<string>();
   const uploadProgress = ref(0);
   const activePhotoName = ref<string>();
+  const attachmentsEditable = ref(false);
+  const rejectedPhoto = shallowRef<File>();
   const submitted = ref(false);
   const requestKey = createQuoteRequestCommandKey();
   const photoCheckpoints = new Map<string, PhotoCheckpoint>();
@@ -113,6 +132,11 @@ export function useAssistedQuoteRequest() {
     if (!lockedSubmission) {
       lockedSubmission = { body, files: [...files], fingerprint };
       submitted.value = true;
+    } else if (attachmentsEditable.value && created.value) {
+      lockedSubmission = { ...lockedSubmission, files: [...files] };
+      preparedPhotos = undefined;
+      attachmentsEditable.value = false;
+      rejectedPhoto.value = undefined;
     } else if (lockedSubmission.fingerprint !== fingerprint) {
       errorMessage.value =
         "Po zahájení odesílání už nelze měnit údaje. Zopakujte původní požadavek.";
@@ -135,6 +159,7 @@ export function useAssistedQuoteRequest() {
     errorMessage.value = undefined;
     uploadProgress.value = 0;
     activePhotoName.value = undefined;
+    let currentPhoto: File | undefined;
 
     try {
       if (!preparedPhotos) {
@@ -175,7 +200,8 @@ export function useAssistedQuoteRequest() {
       phase.value = "uploading";
       for (let index = 0; index < preparedPhotos.length; index += 1) {
         const photo = preparedPhotos[index]!;
-        const identity = `${index}:${photo.file.lastModified}:${photo.metadata.originalFilename}:${photo.metadata.sizeBytes}:${photo.sha256}`;
+        currentPhoto = photo.file;
+        const identity = `${photo.file.lastModified}:${photo.metadata.originalFilename}:${photo.metadata.sizeBytes}:${photo.sha256}`;
         const checkpoint = photoCheckpoints.get(identity) ?? {
           confirmed: false,
           putCompleted: false,
@@ -201,6 +227,9 @@ export function useAssistedQuoteRequest() {
             signal,
           });
           if (!intent.response.ok || !intent.data) {
+            if (isEditableAttachmentFailure("intent", intent.response.status)) {
+              photoCheckpoints.delete(identity);
+            }
             throw new RequestFailure(
               "intent",
               intent.response.status,
@@ -252,6 +281,11 @@ export function useAssistedQuoteRequest() {
             checkpoint.intent = undefined;
             checkpoint.putCompleted = false;
           }
+          if (
+            isEditableAttachmentFailure("confirm", confirmation.response.status)
+          ) {
+            photoCheckpoints.delete(identity);
+          }
           throw new RequestFailure(
             "confirm",
             confirmation.response.status,
@@ -268,6 +302,7 @@ export function useAssistedQuoteRequest() {
       }
 
       activePhotoName.value = undefined;
+      rejectedPhoto.value = undefined;
       uploadProgress.value = 100;
       phase.value = "success";
     } catch (error) {
@@ -277,6 +312,18 @@ export function useAssistedQuoteRequest() {
           : "Odesílání bylo pozastavené. Stejnou poptávku můžete zkusit znovu.";
       } else if (error instanceof RequestFailure) {
         errorMessage.value = error.message;
+        if (isEditableCreateFailure(error.stage, error.status)) {
+          lockedSubmission = undefined;
+          preparedPhotos = undefined;
+          photoCheckpoints.clear();
+          submitted.value = false;
+        } else if (
+          created.value &&
+          isEditableAttachmentFailure(error.stage, error.status)
+        ) {
+          attachmentsEditable.value = true;
+          rejectedPhoto.value = currentPhoto;
+        }
       } else if (error instanceof Error) {
         errorMessage.value = created.value
           ? `Poptávka je uložená, ale přílohy čekají na dokončení. ${error.message}`
@@ -301,12 +348,14 @@ export function useAssistedQuoteRequest() {
 
   return {
     activePhotoName,
+    attachmentsEditable,
     cancel,
     created,
     errorMessage,
     pending,
     phase,
     retry,
+    rejectedPhoto,
     submit,
     submitted,
     uploadProgress,

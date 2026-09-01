@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   assistedQuoteRequestMessage,
   createQuoteRequestCommandKey,
+  isEditableAttachmentFailure,
+  isEditableCreateFailure,
   shouldRestartPhotoIntent,
 } from "./useAssistedQuoteRequest";
 
@@ -29,6 +31,20 @@ describe("assisted request recovery messages", () => {
     expect(assistedQuoteRequestMessage(429, "intent")).toContain(
       "Poptávka je uložená",
     );
+  });
+
+  it("unlocks only a definite pre-create validation failure", () => {
+    expect(isEditableCreateFailure("create", 400)).toBe(true);
+    expect(isEditableCreateFailure("create", 409)).toBe(false);
+    expect(isEditableCreateFailure("intent", 400)).toBe(false);
+  });
+
+  it("allows replacing only definitely rejected attachments", () => {
+    expect(isEditableAttachmentFailure("intent", 400)).toBe(true);
+    expect(isEditableAttachmentFailure("confirm", 400)).toBe(true);
+    expect(isEditableAttachmentFailure("confirm", 409)).toBe(true);
+    expect(isEditableAttachmentFailure("confirm", 410)).toBe(false);
+    expect(isEditableAttachmentFailure("create", 400)).toBe(false);
   });
 
   it.each([401, 403, 409, 410])(

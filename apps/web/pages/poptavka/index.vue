@@ -36,9 +36,9 @@ const selectedPhotos = shallowRef<File[]>([]);
 const selectionError = ref<string>();
 const description = ref(initialPrefill.description);
 const purpose = ref("");
-const widthMm = ref("");
-const depthMm = ref("");
-const heightMm = ref("");
+const widthMm = ref<number | "">("");
+const depthMm = ref<number | "">("");
+const heightMm = ref<number | "">("");
 const requestedDate = ref("");
 const contactName = ref("");
 const contactEmail = ref("");
@@ -49,12 +49,14 @@ const photoInput = ref<HTMLInputElement>();
 
 const {
   activePhotoName,
+  attachmentsEditable,
   cancel,
   created,
   errorMessage,
   pending,
   phase,
   retry,
+  rejectedPhoto,
   submit,
   submitted,
   uploadProgress,
@@ -63,15 +65,16 @@ const {
 const prefill = computed(() =>
   assistedQuotePrefill(source, handoffContext.value),
 );
-const fieldsLocked = computed(() => submitted.value);
+const requestFieldsLocked = computed(() => submitted.value);
+const photoFieldsLocked = computed(
+  () => submitted.value && !attachmentsEditable.value,
+);
 const hasDimensions = computed(() =>
-  [widthMm.value, depthMm.value, heightMm.value].some(
-    (value) => value.trim().length > 0,
-  ),
+  [widthMm.value, depthMm.value, heightMm.value].some(isPositiveDimension),
 );
 const canSubmit = computed(
   () =>
-    !fieldsLocked.value &&
+    !requestFieldsLocked.value &&
     description.value.trim().length >= 10 &&
     contactName.value.trim().length > 0 &&
     contactEmail.value.trim().length > 0 &&
@@ -106,9 +109,11 @@ function onPhotoChange(event: Event): void {
 }
 
 function addPhotos(files: FileList | null): void {
-  if (!files || fieldsLocked.value) return;
+  if (!files || photoFieldsLocked.value) return;
   selectionError.value = undefined;
-  const next = [...selectedPhotos.value];
+  const next = attachmentsEditable.value
+    ? selectedPhotos.value.filter((photo) => photo !== rejectedPhoto.value)
+    : [...selectedPhotos.value];
   try {
     for (const file of Array.from(files)) {
       validateQuotePhoto(file);
@@ -130,7 +135,12 @@ function addPhotos(files: FileList | null): void {
 }
 
 function removePhoto(index: number): void {
-  if (fieldsLocked.value) return;
+  const photo = selectedPhotos.value[index];
+  if (
+    photoFieldsLocked.value ||
+    (requestFieldsLocked.value && photo !== rejectedPhoto.value)
+  )
+    return;
   selectedPhotos.value = selectedPhotos.value.filter(
     (_, candidateIndex) => candidateIndex !== index,
   );
@@ -140,9 +150,10 @@ function removePhoto(index: number): void {
 async function submitRequest(): Promise<void> {
   selectionError.value = undefined;
   const measurements: Record<string, unknown> = {};
-  if (widthMm.value) measurements.widthMm = Number(widthMm.value);
-  if (depthMm.value) measurements.depthMm = Number(depthMm.value);
-  if (heightMm.value) measurements.heightMm = Number(heightMm.value);
+  if (isPositiveDimension(widthMm.value)) measurements.widthMm = widthMm.value;
+  if (isPositiveDimension(depthMm.value)) measurements.depthMm = depthMm.value;
+  if (isPositiveDimension(heightMm.value))
+    measurements.heightMm = heightMm.value;
   if (hasDimensions.value) measurements.unit = "mm";
 
   const context =
@@ -192,6 +203,10 @@ function localDateValue(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function isPositiveDimension(value: number | ""): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 </script>
 
@@ -249,7 +264,7 @@ function localDateValue(date: Date): string {
             <p>{{ prefill.note }}</p>
           </div>
 
-          <fieldset :disabled="fieldsLocked">
+          <fieldset :disabled="requestFieldsLocked">
             <legend>Zakázka</legend>
             <label class="form-field wide-form-field">
               <span>Co potřebujete vyrobit? *</span>
@@ -278,7 +293,7 @@ function localDateValue(date: Date): string {
             </label>
           </fieldset>
 
-          <fieldset :disabled="fieldsLocked">
+          <fieldset :disabled="requestFieldsLocked">
             <legend>Rozměry a termín</legend>
             <p class="field-guidance">
               Zadejte známé maximální rozměry. Neznámou hodnotu nechte prázdnou.
@@ -309,7 +324,7 @@ function localDateValue(date: Date): string {
             </label>
           </fieldset>
 
-          <fieldset :disabled="fieldsLocked">
+          <fieldset :disabled="photoFieldsLocked">
             <legend>Referenční fotografie</legend>
             <p class="field-guidance">
               Pokud má díl vzniknout podle předlohy, vyfoťte ji ze tří stran s
@@ -339,7 +354,7 @@ function localDateValue(date: Date): string {
                 <button
                   class="text-button"
                   type="button"
-                  :disabled="fieldsLocked"
+                  :disabled="requestFieldsLocked && photo !== rejectedPhoto"
                   @click="removePhoto(index)"
                 >
                   Odebrat
@@ -351,7 +366,7 @@ function localDateValue(date: Date): string {
             </p>
           </fieldset>
 
-          <fieldset :disabled="fieldsLocked">
+          <fieldset :disabled="requestFieldsLocked">
             <legend>Kontakt</legend>
             <div class="contact-grid">
               <label class="form-field">
@@ -385,7 +400,7 @@ function localDateValue(date: Date): string {
             </div>
           </fieldset>
 
-          <fieldset class="privacy-fieldset" :disabled="fieldsLocked">
+          <fieldset class="privacy-fieldset" :disabled="requestFieldsLocked">
             <legend>Soukromí</legend>
             <label class="consent-row">
               <input v-model="privacyAcknowledged" required type="checkbox" />
@@ -445,8 +460,27 @@ function localDateValue(date: Date): string {
               }}
             </h2>
             <p>{{ errorMessage }}</p>
-            <button class="primary-button" type="button" @click="retry">
+            <p v-if="attachmentsEditable && activePhotoName" class="mono">
+              Opravte přílohu: {{ activePhotoName }}
+            </p>
+            <button
+              v-if="attachmentsEditable"
+              class="primary-button"
+              type="submit"
+              :disabled="Boolean(selectionError)"
+            >
+              Odeslat opravené přílohy
+            </button>
+            <button
+              v-else-if="submitted"
+              class="primary-button"
+              type="button"
+              @click="retry"
+            >
               Zkusit stejný požadavek znovu
+            </button>
+            <button v-else class="primary-button" type="submit">
+              Opravit a znovu odeslat
             </button>
           </div>
 
