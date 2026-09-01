@@ -19,6 +19,12 @@ describe("quote reference photo validation", () => {
       validateQuotePhoto({ name: "photo.jpg", size: 10, type: "image/png" }),
     ).toThrow("neodpovídá");
     expect(() =>
+      validateQuotePhoto({ name: "photo", size: 10, type: "image/jpeg" }),
+    ).toThrow("příponou");
+    expect(() =>
+      validateQuotePhoto({ name: "photo.jfif", size: 10, type: "image/jpeg" }),
+    ).toThrow("příponou");
+    expect(() =>
       validateQuotePhoto({
         name: "../photo.jpg",
         size: 10,

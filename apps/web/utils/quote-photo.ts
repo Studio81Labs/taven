@@ -54,10 +54,10 @@ export function validateQuotePhoto(
     .toLowerCase();
   const extensionType = extensionTypes[extension];
   const declaredType = normalizedContentType(file.type);
-  if (!extensionType && !declaredType) {
+  if (!extensionType) {
     throw new QuotePhotoValidationError(
       "UNSUPPORTED_TYPE",
-      "Přijímáme fotografie JPG, PNG nebo WebP.",
+      "Přijímáme fotografie s příponou JPG, JPEG, PNG nebo WebP.",
     );
   }
   if (extensionType && declaredType && extensionType !== declaredType) {
@@ -67,7 +67,7 @@ export function validateQuotePhoto(
     );
   }
   return {
-    contentType: declaredType ?? extensionType!,
+    contentType: declaredType ?? extensionType,
     originalFilename: file.name,
     sizeBytes: file.size,
   };
