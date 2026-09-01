@@ -662,7 +662,9 @@ function quantityPrice(choice: {
         <label>
           <input
             v-model="acknowledgement[entry.finding.id]"
-            :disabled="entry.finding.decision === 'ACKNOWLEDGED'"
+            :disabled="
+              entry.finding.decision === 'ACKNOWLEDGED' || configurationLocked
+            "
             type="checkbox"
           />
           <span>{{ entry.finding.message }}</span>
@@ -670,6 +672,7 @@ function quantityPrice(choice: {
         <button
           class="text-button"
           type="button"
+          :disabled="configurationLocked"
           @click="declineRisk(entry.item.ordinal, entry.finding)"
         >
           Nepřijmout a požádat o individuální nabídku
@@ -678,7 +681,7 @@ function quantityPrice(choice: {
       <button
         class="primary-button"
         type="button"
-        :disabled="!allWarningsAcknowledged || pending || saving"
+        :disabled="!allWarningsAcknowledged || configurationLocked"
         @click="submitRiskDecisions"
       >
         Potvrdit a pokračovat
