@@ -68,6 +68,7 @@ describe("quote gates", () => {
       evaluateExpressEligibility({
         phaseKind: "SINGLE",
         requiredPlateCount: 2n,
+        maximumPlateCount: 2n,
         materialAndColorAvailable: true,
         hasNonstandardPostprocessing: false,
         requiredProductionSeconds: 3_000n,
@@ -79,6 +80,7 @@ describe("quote gates", () => {
       evaluateExpressEligibility({
         phaseKind: "SAMPLE",
         requiredPlateCount: 3n,
+        maximumPlateCount: 2n,
         materialAndColorAvailable: false,
         hasNonstandardPostprocessing: true,
         requiredProductionSeconds: 3_001n,

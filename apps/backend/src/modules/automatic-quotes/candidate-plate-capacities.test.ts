@@ -6,7 +6,7 @@ describe("candidatePlateCapacities", () => {
   it.each([37, 72, 73, 1_000])(
     "keeps every capacity for quantity %i within the 36-plate contract",
     (quantity) => {
-      const capacities = candidatePlateCapacities(quantity);
+      const capacities = candidatePlateCapacities(quantity, "gcode_3mf");
 
       expect(
         capacities.every(
@@ -18,6 +18,11 @@ describe("candidatePlateCapacities", () => {
   );
 
   it("retains the single-part fallback when the quantity fits within 36 plates", () => {
-    expect(candidatePlateCapacities(3)).toEqual([3, 2, 1]);
+    expect(candidatePlateCapacities(3, "gcode_3mf")).toEqual([3, 2, 1]);
+  });
+
+  it("only emits runtime-executable capacities for single-file formats", () => {
+    expect(candidatePlateCapacities(3, "gcode")).toEqual([3]);
+    expect(candidatePlateCapacities(3, "bgcode")).toEqual([]);
   });
 });

@@ -212,6 +212,7 @@ export async function prepareAutomaticQuote(
     expressEligibility: {
       phaseKind: "SINGLE",
       requiredPlateCount,
+      maximumPlateCount: parameters.expressMaximumPlateCount,
       materialAndColorAvailable: input.materialAndColorAvailable,
       hasNonstandardPostprocessing: false,
       requiredProductionSeconds,
@@ -237,6 +238,7 @@ export async function prepareAutomaticQuote(
     expressEligibility: {
       phaseKind: "SINGLE" as const,
       requiredPlateCount,
+      maximumPlateCount: parameters.expressMaximumPlateCount,
       materialAndColorAvailable: input.materialAndColorAvailable,
       hasNonstandardPostprocessing: false,
       requiredProductionSeconds,

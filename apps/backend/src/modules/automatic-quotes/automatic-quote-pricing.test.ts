@@ -136,6 +136,29 @@ describe("automatic quote pricing preparation", () => {
     );
   });
 
+  it("uses the configured express plate limit", async () => {
+    const configuredForOnePlate = structuredClone(parameters);
+    configuredForOnePlate.automaticQuote.expressMaximumPlateCount = "1";
+
+    const result = await prepareAutomaticQuote(
+      input({
+        expressRequested: true,
+        priceList: {
+          id: "price-list",
+          revision: "automatic-v0-czk",
+          termsRevision: "terms-v0-cz",
+          currency: "CZK",
+          parameters: configuredForOnePlate,
+        },
+      }),
+    );
+
+    expect(result.prepared.kind).toBe("custom_request");
+    expect(result.prepared.expressEligibility.reasons).toContain(
+      "TOO_MANY_PLATES",
+    );
+  });
+
   it("returns a shipment handoff instead of binding to an incompatible endpoint", async () => {
     const result = await prepareAutomaticQuote(
       input({

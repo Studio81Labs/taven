@@ -137,6 +137,14 @@ enum SliceKind {
   @@map("slice_kind")
 }
 
+enum ProductionArtifactFormat {
+  GCODE_3MF @map("gcode_3mf")
+  BGCODE    @map("bgcode")
+  GCODE     @map("gcode")
+
+  @@map("production_artifact_format")
+}
+
 enum PhaseReservationSetStatus {
   BUILDING
   RESERVED
@@ -717,19 +725,20 @@ model MachineCapability {
 }
 
 model MachineProfile {
-  id                        String        @id @db.Uuid
-  machineCapabilityId       String        @map("machine_capability_id") @db.Uuid
-  referenceProfileId        String        @map("reference_profile_id") @db.Uuid
+  id                        String                   @id @db.Uuid
+  machineCapabilityId       String                   @map("machine_capability_id") @db.Uuid
+  referenceProfileId        String                   @map("reference_profile_id") @db.Uuid
   material                  Material
   quality                   PrintQuality
-  nozzleDiameterMicrometers Int           @map("nozzle_diameter_micrometers")
-  slicerEngine              String        @map("slicer_engine") @db.VarChar(100)
-  slicerVersion             String        @map("slicer_version") @db.VarChar(100)
-  settings                  Json          @db.JsonB
-  state                     RevisionState @default(DRAFT)
-  activatedAt               DateTime?     @map("activated_at") @db.Timestamptz(3)
-  retiredAt                 DateTime?     @map("retired_at") @db.Timestamptz(3)
-  createdAt                 DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  nozzleDiameterMicrometers Int                      @map("nozzle_diameter_micrometers")
+  slicerEngine              String                   @map("slicer_engine") @db.VarChar(100)
+  slicerVersion             String                   @map("slicer_version") @db.VarChar(100)
+  productionArtifactFormat  ProductionArtifactFormat @map("production_artifact_format")
+  settings                  Json                     @db.JsonB
+  state                     RevisionState            @default(DRAFT)
+  activatedAt               DateTime?                @map("activated_at") @db.Timestamptz(3)
+  retiredAt                 DateTime?                @map("retired_at") @db.Timestamptz(3)
+  createdAt                 DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
 
   revision               RevisionIdentity            @relation(fields: [id], references: [id], onDelete: Restrict)
   machineCapability      MachineCapability           @relation(fields: [machineCapabilityId], references: [id], onDelete: Restrict)

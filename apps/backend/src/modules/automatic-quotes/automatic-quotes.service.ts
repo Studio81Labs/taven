@@ -43,6 +43,7 @@ import {
 } from "../resources/resource-errors";
 import { ResourceReservationService } from "../resources/resource-reservation.service";
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
+import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import {
   parseAutomaticQuotePricingParameters,
   prepareAutomaticQuote,
@@ -2109,10 +2110,15 @@ export class AutomaticQuotesService {
     ) {
       return;
     }
-    const expressCapacityWindowSeconds = automaticBindingExpressRequested(
-      active.orderPriceBinding.priceSnapshot.inputSnapshot,
-    )
+    const expressRequested =
+      automaticBindingExpressRequested(
+        active.orderPriceBinding.priceSnapshot.inputSnapshot,
+      ) === true;
+    const expressCapacityWindowSeconds = expressRequested
       ? automaticExpressCapacityWindowSeconds(automaticParameters)
+      : undefined;
+    const expressMaximumPlateCount = expressRequested
+      ? automaticParameters.expressMaximumPlateCount
       : undefined;
     await this.dispatchAutomaticCandidates(orderId, bindingId);
     const phase = await this.prisma.orderPhase.findUnique({
@@ -2160,7 +2166,21 @@ export class AutomaticQuotesService {
                 planningObservedAt,
                 expressCapacityWindowSeconds,
               );
-        if (latestPlan && liveReservation && liveReservationCapacityFits) {
+        const latestPlanPlateCountFits =
+          !latestPlan || !expressMaximumPlateCount
+            ? true
+            : await this.planPlateCountFitsLimit(
+                this.prisma,
+                latestPlan.id,
+                latestPlan.nodeId,
+                expressMaximumPlateCount,
+              );
+        if (
+          latestPlan &&
+          liveReservation &&
+          liveReservationCapacityFits &&
+          latestPlanPlateCountFits
+        ) {
           const finalized = await this.finalizeAutomaticQuote({
             orderId,
             bindingId,
@@ -2169,13 +2189,19 @@ export class AutomaticQuotesService {
             ...(expressCapacityWindowSeconds
               ? { capacityWindowSeconds: expressCapacityWindowSeconds }
               : {}),
+            ...(expressMaximumPlateCount
+              ? { maximumPlateCount: expressMaximumPlateCount }
+              : {}),
           });
           if (finalized) return;
           await this.resourceReservations.releaseBeforePrint(
             liveReservation.id,
           );
         }
-        if (liveReservation && !liveReservationCapacityFits) {
+        if (
+          liveReservation &&
+          (!liveReservationCapacityFits || !latestPlanPlateCountFits)
+        ) {
           await this.resourceReservations.releaseBeforePrint(
             liveReservation.id,
           );
@@ -2183,7 +2209,8 @@ export class AutomaticQuotesService {
         const needsSuccessor = Boolean(
           latestPlan &&
           (latestPlan.expiresAt <= planningObservedAt ||
-            latestPlan.reservationSets.length > 0),
+            latestPlan.reservationSets.length > 0 ||
+            !latestPlanPlateCountFits),
         );
         const planKey =
           latestPlan && !needsSuccessor
@@ -2198,6 +2225,11 @@ export class AutomaticQuotesService {
                         expressCapacityWindowSeconds.toString(),
                     }
                   : {}),
+                ...(expressMaximumPlateCount
+                  ? {
+                      maximumPlateCount: expressMaximumPlateCount.toString(),
+                    }
+                  : {}),
                 ...(latestPlan ? { retryOf: latestPlan.id } : {}),
               })}`;
         const plan = await this.eligibilityPlans.createCompletePlan({
@@ -2206,6 +2238,9 @@ export class AutomaticQuotesService {
           planKey,
           ...(expressCapacityWindowSeconds
             ? { capacityWindowSeconds: expressCapacityWindowSeconds }
+            : {}),
+          ...(expressMaximumPlateCount
+            ? { maximumPlateCount: expressMaximumPlateCount }
             : {}),
         });
         const reservation = await this.resourceReservations.reserve({
@@ -2220,6 +2255,9 @@ export class AutomaticQuotesService {
           phaseReservationSetId: reservation.phaseReservationSetId,
           ...(expressCapacityWindowSeconds
             ? { capacityWindowSeconds: expressCapacityWindowSeconds }
+            : {}),
+          ...(expressMaximumPlateCount
+            ? { maximumPlateCount: expressMaximumPlateCount }
             : {}),
         });
         if (finalized) return;
@@ -2381,6 +2419,14 @@ export class AutomaticQuotesService {
           orderBy: { id: "asc" },
         });
         for (const profile of profiles) {
+          const productionArtifactFormat = toSlicerProductionArtifactFormat(
+            profile.productionArtifactFormat,
+          );
+          const plateCapacities = candidatePlateCapacities(
+            quantity,
+            productionArtifactFormat,
+          );
+          if (plateCapacities.length === 0) continue;
           if (
             !geometryFitsCapability(
               item.modelGeometry,
@@ -2400,7 +2446,7 @@ export class AutomaticQuotesService {
             const calibration = machine.calibrations[0];
             if (!calibration) continue;
             for (const inventory of machine.inventories) {
-              for (const partsPerPlate of candidatePlateCapacities(quantity)) {
+              for (const partsPerPlate of plateCapacities) {
                 const arrangementRevisionId = deterministicUuid(
                   `automatic-arrangement:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${quantity}:${partsPerPlate}`,
                 );
@@ -2439,7 +2485,7 @@ export class AutomaticQuotesService {
                       .contentSha256,
                     slicerEngine: profile.slicerEngine,
                     slicerVersion: profile.slicerVersion,
-                    productionArtifactFormat: "gcode_3mf" as const,
+                    productionArtifactFormat,
                   },
                   machineCalibration: {
                     revisionId: calibration.id,
@@ -2987,6 +3033,7 @@ export class AutomaticQuotesService {
     phaseResourcePlanId: string;
     phaseReservationSetId: string;
     capacityWindowSeconds?: bigint;
+    maximumPlateCount?: bigint;
   }): Promise<boolean> {
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`
@@ -3030,6 +3077,16 @@ export class AutomaticQuotesService {
               input.capacityWindowSeconds,
             )
           : false;
+      const plateCountFits = !input.maximumPlateCount
+        ? true
+        : plan
+          ? await this.planPlateCountFitsLimit(
+              transaction,
+              input.phaseResourcePlanId,
+              plan.nodeId,
+              input.maximumPlateCount,
+            )
+          : false;
       if (
         active?.orderPriceBindingId !== input.bindingId ||
         plan?.eligibilitySnapshot.orderPhase.orderId !== input.orderId ||
@@ -3038,6 +3095,7 @@ export class AutomaticQuotesService {
         reservation.status !== "RESERVED" ||
         reservation.expiresAt <= observedAt ||
         !capacityFits ||
+        !plateCountFits ||
         !bindingMatchesDraft ||
         !origin
       ) {
@@ -3083,6 +3141,27 @@ export class AutomaticQuotesService {
           candidate_interval.starts_at > ${observedAt}
           AND candidate_interval.ends_at <= ${capacityEndsAt}
         ) AS fits
+      FROM phase_resource_plan_jobs plan_job
+      JOIN candidate_capacity_intervals candidate_interval
+        ON candidate_interval.candidate_resource_estimate_id =
+           plan_job.candidate_resource_estimate_id
+       AND candidate_interval.node_id = plan_job.node_id
+      WHERE plan_job.phase_resource_plan_id = ${phaseResourcePlanId}::uuid
+        AND plan_job.node_id = ${nodeId}::uuid
+    `;
+    return rows[0]?.fits === true;
+  }
+
+  private async planPlateCountFitsLimit(
+    transaction: Transaction | PrismaService,
+    phaseResourcePlanId: string,
+    nodeId: string,
+    maximumPlateCount: bigint,
+  ): Promise<boolean> {
+    const rows = await transaction.$queryRaw<Array<{ fits: boolean }>>`
+      SELECT
+        count(candidate_interval.id) > 0
+        AND count(candidate_interval.id) <= ${maximumPlateCount}::bigint AS fits
       FROM phase_resource_plan_jobs plan_job
       JOIN candidate_capacity_intervals candidate_interval
         ON candidate_interval.candidate_resource_estimate_id =

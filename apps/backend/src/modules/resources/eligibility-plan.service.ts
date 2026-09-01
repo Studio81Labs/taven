@@ -77,6 +77,8 @@ export type CreateEligibilityPlanInput = {
   planKey: string;
   /** Optional planning-time horizon for every selected production interval. */
   capacityWindowSeconds?: bigint;
+  /** Optional whole-plan production plate limit. */
+  maximumPlateCount?: bigint;
 };
 
 export type EligibilityPlanResult = {
@@ -181,6 +183,15 @@ export class EligibilityPlanService {
         "capacityWindowSeconds must be a positive safe duration",
       );
     }
+    if (
+      input.maximumPlateCount !== undefined &&
+      (input.maximumPlateCount <= 0n ||
+        input.maximumPlateCount > BigInt(Number.MAX_SAFE_INTEGER))
+    ) {
+      throw new ResourceValidationError(
+        "maximumPlateCount must be a positive safe integer",
+      );
+    }
     const planAdvisoryKey = `eligibility-plan:${planKey}`;
     try {
       return await this.prisma.$transaction(
@@ -203,6 +214,27 @@ export class EligibilityPlanService {
                 "plan key belongs to a different node or order phase",
                 "phase_resource_plans_plan_key_key",
               );
+            }
+            if (input.maximumPlateCount !== undefined) {
+              const plateRows = await transaction.$queryRaw<
+                Array<{ plate_count: bigint }>
+              >`
+                SELECT count(candidate_interval.id) AS plate_count
+                FROM phase_resource_plan_jobs plan_job
+                JOIN candidate_capacity_intervals candidate_interval
+                  ON candidate_interval.candidate_resource_estimate_id =
+                     plan_job.candidate_resource_estimate_id
+                 AND candidate_interval.node_id = plan_job.node_id
+                WHERE plan_job.phase_resource_plan_id = ${existing.id}::uuid
+                  AND plan_job.node_id = ${existing.nodeId}::uuid
+              `;
+              const plateCount = plateRows[0]?.plate_count ?? 0n;
+              if (plateCount === 0n || plateCount > input.maximumPlateCount) {
+                throw new ResourceConflictError(
+                  "existing complete plan exceeds the production plate limit",
+                  "phase_resource_plan_plate_limit_check",
+                );
+              }
             }
             return {
               eligibilitySnapshotId: existing.eligibilitySnapshotId,
@@ -451,6 +483,11 @@ export class EligibilityPlanService {
               startsAt: row.starts_at,
               endsAt: row.ends_at,
             })),
+            ...(input.maximumPlateCount === undefined
+              ? {}
+              : {
+                  maximumCapacityIntervalCount: Number(input.maximumPlateCount),
+                }),
             now: planningNow,
           });
           if (!selected) {
@@ -502,6 +539,7 @@ export class EligibilityPlanService {
                 orderPhaseId: input.orderPhaseId,
                 planKey,
                 capacityEndsAt: capacityEndsAt?.toISOString() ?? null,
+                maximumPlateCount: input.maximumPlateCount?.toString() ?? null,
                 requiredSlotIds,
                 selectedCandidateIds,
               }),

@@ -209,6 +209,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
             compatibleProfile.nozzleDiameterMicrometers,
           slicerEngine: compatibleProfile.slicerEngine,
           slicerVersion: compatibleProfile.slicerVersion,
+          productionArtifactFormat: compatibleProfile.productionArtifactFormat,
           settings: compatibleProfile.settings as Prisma.InputJsonValue,
           state: "ACTIVE",
           activatedAt: new Date(),
@@ -1961,6 +1962,13 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           candidateJob(payload).input.machineId === invalidMachineId,
       ),
     ).toBe(false);
+    expect(
+      allCandidateDispatches.every(
+        ({ payload }) =>
+          candidateJob(payload).input.machineProfile
+            .productionArtifactFormat === "gcode_3mf",
+      ),
+    ).toBe(true);
     const dispatchesByNode = new Map<
       string,
       Array<{
