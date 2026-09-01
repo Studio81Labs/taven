@@ -111,6 +111,14 @@ export function shouldUnlockAfterAttachmentPreparationFailure(input: {
   return !input.aborted && !input.hasCreatedRequest && !input.hasPreparedPhotos;
 }
 
+export function shouldRestoreAttachmentCorrectionAfterPreparationFailure(input: {
+  aborted: boolean;
+  hasCreatedRequest: boolean;
+  hasPreparedPhotos: boolean;
+}): boolean {
+  return !input.aborted && input.hasCreatedRequest && !input.hasPreparedPhotos;
+}
+
 export function useAssistedQuoteRequest() {
   const { $api } = useNuxtApp();
   const phase = ref<AssistedQuoteRequestPhase>("editing");
@@ -174,6 +182,7 @@ export function useAssistedQuoteRequest() {
         phase.value = "creating";
         const prepared: PreparedPhoto[] = [];
         for (const file of submission.files) {
+          currentPhoto = file;
           const metadata = validateQuotePhoto(file);
           prepared.push({
             file,
@@ -324,6 +333,16 @@ export function useAssistedQuoteRequest() {
         lockedSubmission = undefined;
         photoCheckpoints.clear();
         submitted.value = false;
+      }
+      if (
+        shouldRestoreAttachmentCorrectionAfterPreparationFailure({
+          aborted: signal.aborted,
+          hasCreatedRequest: Boolean(created.value),
+          hasPreparedPhotos: preparedPhotos !== undefined,
+        })
+      ) {
+        attachmentsEditable.value = true;
+        rejectedPhoto.value = currentPhoto;
       }
 
       if (signal.aborted) {

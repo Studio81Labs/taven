@@ -4,6 +4,7 @@ import {
   createQuoteRequestCommandKey,
   isEditableAttachmentFailure,
   isEditableCreateFailure,
+  shouldRestoreAttachmentCorrectionAfterPreparationFailure,
   shouldUnlockAfterAttachmentPreparationFailure,
   shouldRestartPhotoIntent,
 } from "./useAssistedQuoteRequest";
@@ -74,6 +75,37 @@ describe("assisted request recovery messages", () => {
       shouldUnlockAfterAttachmentPreparationFailure({
         aborted: false,
         hasCreatedRequest: true,
+        hasPreparedPhotos: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("restores attachment correction after a local replacement failure", () => {
+    expect(
+      shouldRestoreAttachmentCorrectionAfterPreparationFailure({
+        aborted: false,
+        hasCreatedRequest: true,
+        hasPreparedPhotos: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRestoreAttachmentCorrectionAfterPreparationFailure({
+        aborted: true,
+        hasCreatedRequest: true,
+        hasPreparedPhotos: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRestoreAttachmentCorrectionAfterPreparationFailure({
+        aborted: false,
+        hasCreatedRequest: true,
+        hasPreparedPhotos: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRestoreAttachmentCorrectionAfterPreparationFailure({
+        aborted: false,
+        hasCreatedRequest: false,
         hasPreparedPhotos: false,
       }),
     ).toBe(false);
