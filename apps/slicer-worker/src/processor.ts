@@ -62,7 +62,13 @@ function inspectionMetrics(inspection: ModelInspection) {
     suggestedScaleFactorPpm:
       inspection.unitHint === "unknown" || inspection.unitHint === "millimeter"
         ? null
-        : { inch: 25_400_000, meter: 1_000_000_000 }[inspection.unitHint],
+        : {
+            micron: 1_000,
+            centimeter: 10_000_000,
+            inch: 25_400_000,
+            foot: 304_800_000,
+            meter: 1_000_000_000,
+          }[inspection.unitHint],
     thinWallFeatureCount: 0,
     hasPaintAssignments: inspection.hasPaintAssignments,
     materialAssignmentCount: inspection.materialAssignmentCount,

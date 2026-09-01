@@ -31,7 +31,14 @@ export type InspectedBody = {
 type ParsedBody = InspectedBody & { triangles: Triangle[] };
 
 export type ModelInspection = {
-  unitHint: "millimeter" | "inch" | "meter" | "unknown";
+  unitHint:
+    | "micron"
+    | "millimeter"
+    | "centimeter"
+    | "inch"
+    | "foot"
+    | "meter"
+    | "unknown";
   bodies: InspectedBody[];
   boundingBox: InspectedBody["boundingBox"];
   objectCount: number;
@@ -901,10 +908,14 @@ function parseModelPart(
           invalid("3MF model element is missing");
         }
         sawModel = true;
-        const declaredUnit = attribute(tag, "unit")?.toLowerCase();
+        const declaredUnit =
+          attribute(tag, "unit")?.toLowerCase() ?? "millimeter";
         unitHint =
+          declaredUnit === "micron" ||
           declaredUnit === "millimeter" ||
+          declaredUnit === "centimeter" ||
           declaredUnit === "inch" ||
+          declaredUnit === "foot" ||
           declaredUnit === "meter"
             ? declaredUnit
             : "unknown";
@@ -1400,8 +1411,11 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
   const buildItems = root.buildItems.filter(({ printable }) => printable);
   if (buildItems.length < 1) invalid("3MF root model contains no build items");
   const micrometersPerUnit = {
+    micron: 1,
     millimeter: 1_000,
+    centimeter: 10_000,
     inch: 25_400,
+    foot: 304_800,
     meter: 1_000_000,
     unknown: 1_000,
   }[root.unitHint];

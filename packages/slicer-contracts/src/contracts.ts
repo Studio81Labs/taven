@@ -387,14 +387,25 @@ const ModelGeometryTargetSchema = z
 
 export const ConfirmedUnitConversionSchema = z
   .strictObject({
-    sourceUnit: z.enum(["millimeter", "inch", "meter", "custom"]),
+    sourceUnit: z.enum([
+      "micron",
+      "millimeter",
+      "centimeter",
+      "inch",
+      "foot",
+      "meter",
+      "custom",
+    ]),
     targetUnit: z.literal("millimeter"),
     scaleFactorPpm: boundedPositiveInteger(1_000_000_000),
   })
   .superRefine((value, context) => {
     const canonicalScaleFactorPpm = {
+      micron: 1_000,
       millimeter: 1_000_000,
+      centimeter: 10_000_000,
       inch: 25_400_000,
+      foot: 304_800_000,
       meter: 1_000_000_000,
     } as const;
     if (
@@ -853,7 +864,15 @@ const InspectionMetricsSchema = z.strictObject({
   boundingBox: BoundingBoxSchema,
   objectCount: boundedPositiveInteger(MAX_BODY_COUNT),
   bodyCount: boundedPositiveInteger(MAX_BODY_COUNT),
-  unitHint: z.enum(["millimeter", "inch", "meter", "unknown"]),
+  unitHint: z.enum([
+    "micron",
+    "millimeter",
+    "centimeter",
+    "inch",
+    "foot",
+    "meter",
+    "unknown",
+  ]),
   scaleAssessment: z.enum(["trusted", "converted", "confirmation_required"]),
   suggestedScaleFactorPpm: boundedPositiveInteger(1_000_000_000).nullable(),
   thinWallFeatureCount: boundedNonnegativeInteger(1_000_000),

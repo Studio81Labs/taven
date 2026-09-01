@@ -507,6 +507,22 @@ describe("versioned slicing jobs", () => {
         scaleFactorPpm: 1_000_000,
       }),
     ).toThrow();
+    for (const [sourceUnit, scaleFactorPpm] of [
+      ["micron", 1_000],
+      ["millimeter", 1_000_000],
+      ["centimeter", 10_000_000],
+      ["inch", 25_400_000],
+      ["foot", 304_800_000],
+      ["meter", 1_000_000_000],
+    ] as const) {
+      expect(
+        ConfirmedUnitConversionSchema.parse({
+          sourceUnit,
+          targetUnit: "millimeter",
+          scaleFactorPpm,
+        }),
+      ).toEqual({ sourceUnit, targetUnit: "millimeter", scaleFactorPpm });
+    }
     expect(() =>
       SlicingJobSchema.parse(
         envelope("model_inspection", {

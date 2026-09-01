@@ -478,7 +478,9 @@ describe("slicing outbox queue bridge", () => {
       prisma,
       queue,
       new CandidateEstimateService(prisma, snapshots),
-      new SlicingResultIngestionService(prisma),
+      new SlicingResultIngestionService(prisma, {
+        deleteObjects: async () => undefined,
+      } as unknown as ObjectStorage),
       snapshots,
     );
   });

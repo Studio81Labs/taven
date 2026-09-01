@@ -14,6 +14,10 @@ import type {
   SlicingResult,
 } from "@taven/slicer-contracts" with { "resolution-mode": "import" };
 import { PrismaService } from "../../prisma/prisma.service";
+import {
+  OBJECT_STORAGE,
+  type ObjectStorage,
+} from "../storage/object-storage.port";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -62,9 +66,31 @@ export class PermanentSlicingResultIngestionError extends Error {
   }
 }
 
+function cleanupArtifactObjectKey(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const key = (value as Record<string, unknown>)["cleanupArtifactObjectKey"];
+  return typeof key === "string" ? key : null;
+}
+
+function staleProductionResult(
+  result: ProductionSliceResult,
+  reason: string,
+): Prisma.InputJsonObject {
+  return {
+    status: "stale",
+    reason,
+    ...(result.outcome.status === "succeeded"
+      ? { cleanupArtifactObjectKey: result.outcome.artifact.objectKey }
+      : {}),
+  };
+}
+
 @Injectable()
 export class SlicingResultIngestionService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(OBJECT_STORAGE) private readonly objects: ObjectStorage,
+  ) {}
 
   async ingest(input: {
     dispatchId: string;
@@ -72,66 +98,76 @@ export class SlicingResultIngestionService {
     result: SlicingResult;
     resultFingerprintSha256: string;
   }): Promise<void> {
-    await this.prisma.$transaction(async (transaction) => {
-      await transaction.$queryRaw`
+    const cleanupObjectKey = await this.prisma.$transaction(
+      async (transaction) => {
+        await transaction.$queryRaw`
         SELECT pg_advisory_xact_lock(hashtextextended(${input.dispatchId}, 0))::text
       `;
-      const messageType = `slicing.${input.result.kind}.result-received`;
-      const existingReceipt = await transaction.outboxMessage.findFirst({
-        where: {
-          aggregateType: "SlicingDispatchResult",
-          aggregateId: input.dispatchId,
-          messageType,
-        },
-      });
-      if (existingReceipt) {
-        const payload = existingReceipt.payload as Record<string, unknown>;
-        if (payload.resultFingerprintSha256 !== input.resultFingerprintSha256) {
-          throw new PermanentSlicingResultIngestionError(
-            "slicing dispatch already has a different terminal result",
+        const messageType = `slicing.${input.result.kind}.result-received`;
+        const existingReceipt = await transaction.outboxMessage.findFirst({
+          where: {
+            aggregateType: "SlicingDispatchResult",
+            aggregateId: input.dispatchId,
+            messageType,
+          },
+        });
+        if (existingReceipt) {
+          const payload = existingReceipt.payload as Record<string, unknown>;
+          if (
+            payload.resultFingerprintSha256 !== input.resultFingerprintSha256
+          ) {
+            throw new PermanentSlicingResultIngestionError(
+              "slicing dispatch already has a different terminal result",
+            );
+          }
+          return cleanupArtifactObjectKey(
+            (payload["materialization"] as unknown) ?? null,
           );
         }
-        return;
-      }
 
-      let materialization: Prisma.InputJsonObject = { status: "recorded" };
-      if (input.result.kind === "model_inspection") {
-        materialization = await this.ingestInspection(
-          transaction,
-          input.result,
-          input.resultFingerprintSha256,
-        );
-      } else if (input.result.kind === "reference_slice") {
-        materialization = await this.ingestReference(
-          transaction,
-          input.result,
-          input.resultFingerprintSha256,
-        );
-      } else if (input.result.kind === "production_slice") {
-        materialization = await this.ingestProduction(
-          transaction,
-          input.result,
-          input.dispatchId,
-        );
-      }
+        let materialization: Prisma.InputJsonObject = { status: "recorded" };
+        if (input.result.kind === "model_inspection") {
+          materialization = await this.ingestInspection(
+            transaction,
+            input.result,
+            input.resultFingerprintSha256,
+          );
+        } else if (input.result.kind === "reference_slice") {
+          materialization = await this.ingestReference(
+            transaction,
+            input.result,
+            input.resultFingerprintSha256,
+          );
+        } else if (input.result.kind === "production_slice") {
+          materialization = await this.ingestProduction(
+            transaction,
+            input.result,
+            input.dispatchId,
+          );
+        }
 
-      await transaction.outboxMessage.create({
-        data: {
-          deduplicationKey: `slicer-result:v2:${input.dispatchId}:${input.resultFingerprintSha256}`,
-          aggregateType: "SlicingDispatchResult",
-          aggregateId: input.dispatchId,
-          messageType,
-          schemaVersion: input.result.contractVersion,
-          payload: {
-            dispatchId: input.dispatchId,
-            jobId: input.job.jobId,
-            resultFingerprintSha256: input.resultFingerprintSha256,
-            materialization,
-            result: input.result as unknown as Prisma.InputJsonObject,
+        await transaction.outboxMessage.create({
+          data: {
+            deduplicationKey: `slicer-result:v2:${input.dispatchId}:${input.resultFingerprintSha256}`,
+            aggregateType: "SlicingDispatchResult",
+            aggregateId: input.dispatchId,
+            messageType,
+            schemaVersion: input.result.contractVersion,
+            payload: {
+              dispatchId: input.dispatchId,
+              jobId: input.job.jobId,
+              resultFingerprintSha256: input.resultFingerprintSha256,
+              materialization,
+              result: input.result as unknown as Prisma.InputJsonObject,
+            },
           },
-        },
-      });
-    });
+        });
+        return cleanupArtifactObjectKey(materialization);
+      },
+    );
+    if (cleanupObjectKey) {
+      await this.objects.deleteObjects([cleanupObjectKey]);
+    }
   }
 
   private async ingestInspection(
@@ -338,7 +374,7 @@ export class SlicingResultIngestionService {
       select: { orderId: true },
     });
     if (!identity) {
-      return { status: "stale", reason: "job-no-longer-exists" };
+      return staleProductionResult(result, "job-no-longer-exists");
     }
     await transaction.$queryRaw`
       SELECT id FROM orders WHERE id = ${identity.orderId}::uuid FOR UPDATE
@@ -410,7 +446,7 @@ export class SlicingResultIngestionService {
       candidate.quantity !== result.input.quantity ||
       candidate.partsPerPlate !== result.input.partsPerPlate
     ) {
-      return { status: "stale", reason: "production-inputs-changed" };
+      return staleProductionResult(result, "production-inputs-changed");
     }
     if (result.outcome.status === "failed") {
       if (job.status === JobStatus.ACCEPTED) {
@@ -456,7 +492,7 @@ export class SlicingResultIngestionService {
           sliceResultId: job.productionSliceResultId!,
         };
       }
-      return { status: "stale", reason: "reservation-no-longer-held" };
+      return staleProductionResult(result, "reservation-no-longer-held");
     }
     await this.assertGeometry(transaction, result.input.geometry);
     const { buildProductionPackageKey, RevisionRef, Sha256Digest } =

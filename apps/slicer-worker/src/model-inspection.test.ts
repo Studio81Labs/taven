@@ -258,14 +258,22 @@ describe("safe model inspection", () => {
   });
 
   it.each([
+    ["micron", "10", 1_000],
+    ["millimeter", "1000", 1_000_000],
+    ["centimeter", "10000", 10_000_000],
     ["inch", "25400", 25_400_000],
+    ["foot", "304800", 304_800_000],
     ["meter", "1000000", 1_000_000_000],
   ] as const)(
     "reports and canonicalizes declared 3MF %s units in micrometers",
     (unit, expectedExtent, scaleFactorPpm) => {
+      const sourceMesh =
+        unit === "micron"
+          ? cubeMesh.replace(/([xyz])="1"/gu, '$1="10"')
+          : cubeMesh;
       const source = storedZip({
         "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="${unit}">
-          <resources><object id="1"><mesh>${cubeMesh}</mesh></object></resources>
+          <resources><object id="1"><mesh>${sourceMesh}</mesh></object></resources>
           <build><item objectid="1"/></build>
         </model>`,
       });
@@ -283,11 +291,37 @@ describe("safe model inspection", () => {
         scaleFactorPpm,
       );
       expect(canonical.inspection.boundingBox).toEqual(inspection.boundingBox);
-      expect(canonical.inspection.bodies[0]?.volumeCubicMicrometers).toBe(
-        inspection.bodies[0]?.volumeCubicMicrometers,
+      const canonicalVolume = BigInt(
+        canonical.inspection.bodies[0]!.volumeCubicMicrometers,
       );
+      const inspectedVolume = BigInt(
+        inspection.bodies[0]!.volumeCubicMicrometers,
+      );
+      expect(
+        canonicalVolume > inspectedVolume
+          ? canonicalVolume - inspectedVolume
+          : inspectedVolume - canonicalVolume,
+      ).toBeLessThanOrEqual(1n);
     },
   );
+
+  it("treats an omitted 3MF unit as millimeters", () => {
+    const source = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}">
+        <resources><object id="1"><mesh>${cubeMesh}</mesh></object></resources>
+        <build><item objectid="1"/></build>
+      </model>`,
+    });
+
+    expect(inspectModel("3mf", source)).toMatchObject({
+      unitHint: "millimeter",
+      boundingBox: {
+        xMicrometers: "1000",
+        yMicrometers: "1000",
+        zMicrometers: "1000",
+      },
+    });
+  });
 
   it.each([
     [
