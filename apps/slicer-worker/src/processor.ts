@@ -48,13 +48,16 @@ function envelope(job: SlicingJob, engine: WorkerConfig["engine"]) {
   } as const;
 }
 
-function assertResultEnvelopeSize(result: unknown): void {
+function assertResultEnvelopeSize(
+  result: unknown,
+  operation: "Inspection" | "Production",
+): void {
   const bytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
   if (bytes > SLICING_MESSAGE_MAX_BYTES) {
     throw new SlicingWorkerError(
       "deterministic_invalid",
       "RESOURCE_LIMIT_EXCEEDED",
-      "Inspection result exceeds the slicing message size limit",
+      `${operation} result exceeds the slicing message size limit`,
     );
   }
 }
@@ -409,6 +412,30 @@ export class SlicingProcessor {
         "Multi-plate production requires a G-code 3MF package",
       );
     }
+    const totals = sumPlates(plates);
+    const preflight = aggregatePreflight(parts, (partsOnPlate) =>
+      occupancy.get(partsOnPlate)!,
+    );
+    const resultForArtifact = (artifactSha256: string) => ({
+      ...envelope(job, this.config.engine),
+      outcome: {
+        status: "succeeded" as const,
+        metrics: sliceMetrics(
+          inspected,
+          totals.seconds,
+          totals.material,
+          preflight,
+          plates.length,
+          job.input.geometry.bodyIds.length,
+        ),
+        plates,
+        artifact: {
+          format: job.input.machineProfile.productionArtifactFormat,
+          objectKey,
+          sha256: artifactSha256,
+        },
+      },
+    });
     const artifact = await this.reusableArtifact(
       objectKey,
       "application/octet-stream",
@@ -425,31 +452,13 @@ export class SlicingProcessor {
           })
         ).artifactBytes,
       job.inputFingerprintSha256,
-    );
-    const totals = sumPlates(plates);
-    const preflight = aggregatePreflight(parts, (partsOnPlate) =>
-      occupancy.get(partsOnPlate)!,
-    );
-    return {
-      ...envelope(job, this.config.engine),
-      outcome: {
-        status: "succeeded",
-        metrics: sliceMetrics(
-          inspected,
-          totals.seconds,
-          totals.material,
-          preflight,
-          plates.length,
-          job.input.geometry.bodyIds.length,
-        ),
-        plates,
-        artifact: {
-          format: job.input.machineProfile.productionArtifactFormat,
-          objectKey,
-          sha256: artifact.sha256,
-        },
+      ({ sha256: artifactSha256 }) => {
+        const result = resultForArtifact(artifactSha256);
+        assertResultEnvelopeSize(result, "Production");
+        slicingResultForJobSchema(job).parse(result);
       },
-    };
+    );
+    return resultForArtifact(artifact.sha256);
   }
 
   private async inspect(
@@ -480,7 +489,7 @@ export class SlicingProcessor {
           findings: inspectionFindings(inspection),
         },
       };
-      assertResultEnvelopeSize(result);
+      assertResultEnvelopeSize(result, "Inspection");
       return result;
     }
     const operation = job.input.operation;
@@ -511,7 +520,7 @@ export class SlicingProcessor {
         findings: inspectionFindings(resultInspection),
       },
     };
-    assertResultEnvelopeSize(result);
+    assertResultEnvelopeSize(result, "Inspection");
     await this.store.write(
       operation.targetGeometry.canonicalObjectKey,
       canonical.bytes,
@@ -555,6 +564,7 @@ export class SlicingProcessor {
     contentType: string,
     produce: () => Promise<Uint8Array>,
     immutableInputFingerprintSha256?: string,
+    validate?: (artifact: { bytes: Uint8Array; sha256: string }) => void,
   ): Promise<{ bytes: Uint8Array; sha256: string }> {
     const cached = await this.store.read(
       objectKey,
@@ -562,10 +572,12 @@ export class SlicingProcessor {
     );
     if (cached) {
       this.assertReusableIdentity(cached, immutableInputFingerprintSha256);
+      validate?.(cached);
       return cached;
     }
     const bytes = await produce();
     const producedSha256 = sha256(bytes);
+    validate?.({ bytes, sha256: producedSha256 });
     try {
       const stored = await this.store.write(
         objectKey,
@@ -581,6 +593,7 @@ export class SlicingProcessor {
       );
       if (winner?.sha256 === producedSha256) {
         this.assertReusableIdentity(winner, immutableInputFingerprintSha256);
+        validate?.(winner);
         return winner;
       }
       throw error;
