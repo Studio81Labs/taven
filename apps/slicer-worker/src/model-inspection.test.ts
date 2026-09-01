@@ -126,6 +126,47 @@ function disconnectedTetrahedraStl(): Uint8Array {
   `);
 }
 
+function nestedTetrahedraStl(): Uint8Array {
+  const tetrahedron = (
+    offset: readonly [number, number, number],
+    scale: number,
+    reversed: boolean,
+  ) => {
+    const point = (x: number, y: number, z: number) =>
+      [
+        offset[0] + x * scale,
+        offset[1] + y * scale,
+        offset[2] + z * scale,
+      ] as const;
+    const triangles = [
+      [point(0, 0, 0), point(0, 1, 0), point(1, 0, 0)],
+      [point(0, 0, 0), point(1, 0, 0), point(0, 0, 1)],
+      [point(1, 0, 0), point(0, 1, 0), point(0, 0, 1)],
+      [point(0, 1, 0), point(0, 0, 0), point(0, 0, 1)],
+    ] as const;
+    return triangles.map((triangle) =>
+      reversed ? [triangle[0], triangle[2], triangle[1]] : triangle,
+    );
+  };
+  const triangles = [
+    ...tetrahedron([0, 0, 0], 10, false),
+    ...tetrahedron([1, 1, 1], 4, true),
+  ];
+  return new TextEncoder().encode(`
+    solid cavity
+      ${triangles
+        .map(
+          (triangle) => `facet normal 0 0 0
+            outer loop
+              ${triangle.map((vertex) => `vertex ${vertex.join(" ")}`).join("\n")}
+            endloop
+          endfacet`,
+        )
+        .join("\n")}
+    endsolid cavity
+  `);
+}
+
 describe("safe model inspection", () => {
   it("parses vertices only from complete ASCII STL facet blocks", () => {
     const source = new TextEncoder().encode(`
@@ -205,6 +246,30 @@ describe("safe model inspection", () => {
     );
     expect(canonical.inspection.bodies[0]?.volumeCubicMicrometers).toBe(
       "1500000000",
+    );
+  });
+
+  it("subtracts the volume of a nested cavity shell", () => {
+    const source = nestedTetrahedraStl();
+
+    const inspection = inspectModel("stl", source);
+    expect(inspection.bodies[0]).toMatchObject({
+      volumeCubicMicrometers: "156000000000",
+      topology: {
+        watertight: true,
+        manifold: true,
+        normals: "consistent",
+      },
+    });
+
+    const canonical = canonicalizeModel(
+      "stl",
+      source,
+      ["body-0001"],
+      1_000_000,
+    );
+    expect(canonical.inspection.bodies[0]?.volumeCubicMicrometers).toBe(
+      "156000000000",
     );
   });
 

@@ -57,6 +57,8 @@ const MAX_COMPONENT_EDGES = 4_096;
 const MAX_COMPONENT_DEPTH = 64;
 const MAX_MODEL_OBJECTS = 4_096;
 const MAX_ASSIGNMENT_IDS = 256;
+const MAX_SHELL_PAIR_CHECKS = 2_000_000;
+const MAX_CONTAINMENT_TRIANGLE_CHECKS = 4_000_000;
 const MAX_SIGNED_INT64 = 9_223_372_036_854_775_807n;
 const ZIP_EOCD = 0x06054b50;
 const ZIP_CENTRAL_FILE = 0x02014b50;
@@ -151,6 +153,136 @@ function pointIdentity(point: Point): string {
   return point.map((coordinate) => coordinate.toPrecision(15)).join(",");
 }
 
+type Shell = {
+  bounds: {
+    minimum: [number, number, number];
+    maximum: [number, number, number];
+  };
+  signedSixTimesVolume: number;
+  triangleIndices: number[];
+};
+
+function shellBounds(
+  triangles: readonly Triangle[],
+  triangleIndices: readonly number[],
+): Shell["bounds"] {
+  const minimum: [number, number, number] = [Infinity, Infinity, Infinity];
+  const maximum: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (const triangleIndex of triangleIndices) {
+    for (const point of triangles[triangleIndex]!) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        minimum[axis] = Math.min(minimum[axis]!, point[axis]!);
+        maximum[axis] = Math.max(maximum[axis]!, point[axis]!);
+      }
+    }
+  }
+  return { minimum, maximum };
+}
+
+function strictlyContainsBounds(
+  outer: Shell["bounds"],
+  inner: Shell["bounds"],
+): boolean {
+  let hasStrictBoundary = false;
+  for (let axis = 0; axis < 3; axis += 1) {
+    if (
+      outer.minimum[axis]! > inner.minimum[axis]! ||
+      outer.maximum[axis]! < inner.maximum[axis]!
+    ) {
+      return false;
+    }
+    hasStrictBoundary ||=
+      outer.minimum[axis]! < inner.minimum[axis]! ||
+      outer.maximum[axis]! > inner.maximum[axis]!;
+  }
+  return hasStrictBoundary;
+}
+
+function pointInsideShell(
+  point: Point,
+  shell: Shell,
+  triangles: readonly Triangle[],
+  triangleChecks: { count: number },
+): boolean {
+  let solidAngle = 0;
+  let compensation = 0;
+  for (const triangleIndex of shell.triangleIndices) {
+    triangleChecks.count += 1;
+    if (triangleChecks.count > MAX_CONTAINMENT_TRIANGLE_CHECKS) {
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "RESOURCE_LIMIT_EXCEEDED",
+        "Model exceeds the nested-shell inspection limit",
+      );
+    }
+    const vectors = triangles[triangleIndex]!.map(
+      (vertex) =>
+        [
+          vertex[0] - point[0],
+          vertex[1] - point[1],
+          vertex[2] - point[2],
+        ] as Point,
+    );
+    const [a, b, c] = vectors;
+    const aLength = Math.hypot(...a!);
+    const bLength = Math.hypot(...b!);
+    const cLength = Math.hypot(...c!);
+    if (aLength === 0 || bLength === 0 || cLength === 0) {
+      invalid("Model contains touching or intersecting geometry shells");
+    }
+    const numerator =
+      a![0] * (b![1] * c![2] - b![2] * c![1]) -
+      a![1] * (b![0] * c![2] - b![2] * c![0]) +
+      a![2] * (b![0] * c![1] - b![1] * c![0]);
+    const denominator =
+      aLength * bLength * cLength +
+      (a![0] * b![0] + a![1] * b![1] + a![2] * b![2]) * cLength +
+      (b![0] * c![0] + b![1] * c![1] + b![2] * c![2]) * aLength +
+      (c![0] * a![0] + c![1] * a![1] + c![2] * a![2]) * bLength;
+    const angle = 2 * Math.atan2(numerator, denominator);
+    const corrected = angle - compensation;
+    const next = solidAngle + corrected;
+    compensation = next - solidAngle - corrected;
+    solidAngle = next;
+  }
+  const winding = Math.abs(solidAngle) / (4 * Math.PI);
+  if (winding <= 1e-6) return false;
+  if (Math.abs(winding - 1) <= 1e-6) return true;
+  invalid("Model contains touching or intersecting geometry shells");
+}
+
+function nestedShellVolume(
+  shells: readonly Shell[],
+  triangles: readonly Triangle[],
+): number {
+  if ((shells.length * (shells.length - 1)) / 2 > MAX_SHELL_PAIR_CHECKS) {
+    throw new SlicingWorkerError(
+      "deterministic_invalid",
+      "RESOURCE_LIMIT_EXCEEDED",
+      "Model exceeds the nested-shell inspection limit",
+    );
+  }
+  const triangleChecks = { count: 0 };
+  let total = 0;
+  for (const inner of shells) {
+    const point = triangles[inner.triangleIndices[0]!]![0];
+    let depth = 0;
+    for (const outer of shells) {
+      if (
+        outer === inner ||
+        !strictlyContainsBounds(outer.bounds, inner.bounds)
+      ) {
+        continue;
+      }
+      if (pointInsideShell(point, outer, triangles, triangleChecks)) depth += 1;
+    }
+    const shellVolume = Math.abs(inner.signedSixTimesVolume);
+    total += depth % 2 === 0 ? shellVolume : -shellVolume;
+  }
+  if (total < 0) invalid("Model contains invalid nested geometry shells");
+  return total;
+}
+
 function geometryAnalysis(triangles: readonly Triangle[]) {
   const parents = Int32Array.from(triangles, (_, index) => index);
   const signedSixTimesVolumes = new Float64Array(triangles.length);
@@ -208,6 +340,7 @@ function geometryAnalysis(triangles: readonly Triangle[]) {
   const consistent =
     watertight && [...edges.values()].every(({ direction }) => direction === 0);
   const shellSignedSixTimesVolumes = new Map<number, number>();
+  const shellTriangleIndices = new Map<number, number[]>();
   for (let index = 0; index < triangles.length; index += 1) {
     const root = find(index);
     shellSignedSixTimesVolumes.set(
@@ -215,7 +348,15 @@ function geometryAnalysis(triangles: readonly Triangle[]) {
       (shellSignedSixTimesVolumes.get(root) ?? 0) +
         signedSixTimesVolumes[index]!,
     );
+    const indices = shellTriangleIndices.get(root) ?? [];
+    indices.push(index);
+    shellTriangleIndices.set(root, indices);
   }
+  const shells = [...shellTriangleIndices].map(([root, triangleIndices]) => ({
+    bounds: shellBounds(triangles, triangleIndices),
+    signedSixTimesVolume: shellSignedSixTimesVolumes.get(root)!,
+    triangleIndices,
+  }));
   return {
     topology: {
       watertight,
@@ -226,10 +367,12 @@ function geometryAnalysis(triangles: readonly Triangle[]) {
           : "inconsistent"
         : "unknown",
     } as const,
-    absoluteSixTimesVolume: [...shellSignedSixTimesVolumes.values()].reduce(
-      (total, value) => total + Math.abs(value),
-      0,
-    ),
+    absoluteSixTimesVolume: consistent
+      ? nestedShellVolume(shells, triangles)
+      : shells.reduce(
+          (total, shell) => total + Math.abs(shell.signedSixTimesVolume),
+          0,
+        ),
   } as const;
 }
 
