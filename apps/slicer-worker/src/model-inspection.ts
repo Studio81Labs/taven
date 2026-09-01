@@ -56,6 +56,8 @@ const CORE_3MF_NAMESPACE =
   "http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
 const PRODUCTION_3MF_NAMESPACE =
   "http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
+const MATERIAL_3MF_NAMESPACE =
+  "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
 const PACKAGE_RELATIONSHIPS_NAMESPACE =
   "http://schemas.openxmlformats.org/package/2006/relationships";
 const SLIC3R_3MF_NAMESPACE = "http://schemas.slic3r.org/3mf/2017/06";
@@ -582,7 +584,34 @@ type MeshDefinition = {
   paint: boolean;
   materials: Set<string>;
   extruders: Set<string>;
+  propertyAssignments: Map<string, PropertyAssignment>;
 };
+
+type PropertyAssignment = {
+  resourceId: string;
+  propertyIndex: string;
+};
+
+type PropertyResource =
+  | {
+      kind: "base";
+      entryCount: number;
+    }
+  | {
+      kind: "appearance";
+      entryCount: number;
+    }
+  | {
+      kind: "composite";
+      materialResourceId: string;
+      materialIndices: string[];
+      entries: string[][];
+    }
+  | {
+      kind: "multi";
+      propertyResourceIds: string[];
+      entries: string[][];
+    };
 
 type ComponentDefinition = {
   objectId: string;
@@ -670,16 +699,15 @@ function transformedTriangles(
 function referencedPart(
   tag: SaxesTagNS,
   currentPart: string,
-  rootPart: string,
-  allowedRootTargets: ReadonlySet<string>,
+  relationships: ReadonlyMap<string, ReadonlySet<string>>,
 ): string {
   const reference = attribute(tag, "path", PRODUCTION_3MF_NAMESPACE);
   if (reference === undefined) return currentPart;
-  if (currentPart !== rootPart || !reference.startsWith("/")) {
+  if (!reference.startsWith("/")) {
     invalid("3MF production path is not permitted in this model part");
   }
-  const target = relationshipTarget(rootPart, reference);
-  if (!allowedRootTargets.has(target)) {
+  const target = relationshipTarget(currentPart, reference);
+  if (!relationships.get(currentPart)?.has(target)) {
     invalid("3MF production path has no matching model relationship");
   }
   return target;
@@ -688,12 +716,12 @@ function referencedPart(
 function parseModelPart(
   partPath: string,
   bytes: Uint8Array,
-  rootPart: string,
-  allowedRootTargets: ReadonlySet<string>,
+  relationships: ReadonlyMap<string, ReadonlySet<string>>,
 ): ModelPart {
   let unitHint: ModelInspection["unitHint"] = "unknown";
   const objects = new Map<string, ObjectDefinition>();
   const buildItems: BuildItemDefinition[] = [];
+  const propertyResources = new Map<string, PropertyResource>();
   const stack: Array<{ uri: string; local: string }> = [];
   const partIdentity = createHash("sha256")
     .update(partPath)
@@ -702,6 +730,13 @@ function parseModelPart(
   let sawModel = false;
   let sourceTriangleCount = 0;
   let sourceComponentCount = 0;
+  let currentPropertyResource:
+    | {
+        uri: string;
+        local: string;
+        definition: PropertyResource;
+      }
+    | undefined;
   let currentObject:
     | {
         id: string;
@@ -721,6 +756,80 @@ function parseModelPart(
     if (!value || !/^[0-9]{1,9}$/u.test(value)) invalid(label);
     return value;
   };
+  const indexList = (value: string | undefined, label: string): string[] => {
+    if (!value) invalid(label);
+    const values = value.trim().split(/\s+/u);
+    if (
+      values.length < 1 ||
+      values.some((candidate) => !/^[0-9]{1,9}$/u.test(candidate))
+    ) {
+      invalid(label);
+    }
+    return values;
+  };
+  const numberList = (value: string | undefined, label: string): number[] => {
+    if (!value) invalid(label);
+    const values = value.trim().split(/\s+/u).map(Number);
+    if (
+      values.length < 1 ||
+      values.some(
+        (candidate) =>
+          !Number.isFinite(candidate) || candidate < 0 || candidate > 1,
+      )
+    ) {
+      invalid(label);
+    }
+    return values;
+  };
+  const startPropertyResource = (
+    tag: SaxesTagNS,
+    definition: PropertyResource,
+  ): void => {
+    if (!parentIs(CORE_3MF_NAMESPACE, "resources")) {
+      invalid("3MF property resource is outside model resources");
+    }
+    if (currentPropertyResource) {
+      invalid("3MF property resources cannot be nested");
+    }
+    const id = positiveIndex(
+      attribute(tag, "id"),
+      "3MF property resource identifier is invalid",
+    );
+    if (propertyResources.has(id)) {
+      invalid("3MF contains duplicate property resource identifiers");
+    }
+    if (propertyResources.size >= MAX_MODEL_OBJECTS) {
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "RESOURCE_LIMIT_EXCEEDED",
+        "3MF exceeds the property resource limit",
+      );
+    }
+    propertyResources.set(id, definition);
+    currentPropertyResource = {
+      uri: tag.uri,
+      local: tag.local,
+      definition,
+    };
+  };
+  const incrementLeafEntry = (expectedLocal: string): void => {
+    const resource = currentPropertyResource;
+    if (
+      resource?.local !== expectedLocal ||
+      (resource.definition.kind !== "base" &&
+        resource.definition.kind !== "appearance")
+    ) {
+      invalid("3MF property entry is outside its resource group");
+    }
+    resource.definition.entryCount += 1;
+    if (resource.definition.entryCount > MAX_TRIANGLES * 3) {
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "RESOURCE_LIMIT_EXCEEDED",
+        "3MF exceeds the property entry limit",
+      );
+    }
+  };
 
   parseXml(bytes, (parser) => {
     parser.on("opentag", (tag) => {
@@ -738,6 +847,15 @@ function parseModelPart(
             : "unknown";
       } else if (tag.uri === CORE_3MF_NAMESPACE) {
         switch (tag.local) {
+          case "basematerials":
+            startPropertyResource(tag, { kind: "base", entryCount: 0 });
+            break;
+          case "base":
+            if (!parentIs(CORE_3MF_NAMESPACE, "basematerials")) {
+              invalid("3MF base material is outside its resource group");
+            }
+            incrementLeafEntry("basematerials");
+            break;
           case "object": {
             if (!parentIs(CORE_3MF_NAMESPACE, "resources") || currentObject) {
               invalid("3MF object is outside model resources");
@@ -756,10 +874,24 @@ function parseModelPart(
                 "3MF exceeds the model object limit",
               );
             }
+            const pid = attribute(tag, "pid");
+            const pindex = attribute(tag, "pindex");
+            if ((pid === undefined) !== (pindex === undefined)) {
+              invalid("3MF object property assignment is incomplete");
+            }
             currentObject = {
               id: objectId,
-              pid: attribute(tag, "pid"),
-              pindex: attribute(tag, "pindex"),
+              pid:
+                pid === undefined
+                  ? undefined
+                  : positiveIndex(pid, "3MF object property id is invalid"),
+              pindex:
+                pindex === undefined
+                  ? undefined
+                  : positiveIndex(
+                      pindex,
+                      "3MF object property index is invalid",
+                    ),
               kind: null,
               mesh: null,
               components: [],
@@ -782,6 +914,7 @@ function parseModelPart(
               paint: false,
               materials: new Set(),
               extruders: new Set(),
+              propertyAssignments: new Map(),
             };
             break;
           case "components":
@@ -850,22 +983,37 @@ function parseModelPart(
               selected[1]!,
               selected[2]!,
             ]);
-            const pid = attribute(tag, "pid") ?? currentObject.pid;
+            const trianglePid = attribute(tag, "pid");
+            const pid =
+              trianglePid === undefined
+                ? currentObject.pid
+                : positiveIndex(
+                    trianglePid,
+                    "3MF triangle property id is invalid",
+                  );
             const propertyIndices = ["p1", "p2", "p3"]
               .map((name) => attribute(tag, name))
               .filter((value): value is string => value !== undefined);
+            if (propertyIndices.length > 0 && pid === undefined) {
+              invalid("3MF triangle property assignment has no resource id");
+            }
             const fallbackPropertyIndex =
-              attribute(tag, "pindex") ?? currentObject.pindex;
+              trianglePid === undefined ? currentObject.pindex : undefined;
             if (pid) {
               const assigned =
                 propertyIndices.length > 0
                   ? propertyIndices
                   : fallbackPropertyIndex
                     ? [fallbackPropertyIndex]
-                    : [null];
+                    : invalid("3MF triangle property assignment is incomplete");
               for (const propertyIndex of assigned) {
-                currentObject.mesh.materials.add(
-                  `material-${partIdentity}-${pid}${propertyIndex ? `-${propertyIndex}` : ""}`,
+                const validatedIndex = positiveIndex(
+                  propertyIndex,
+                  "3MF triangle property index is invalid",
+                );
+                currentObject.mesh.propertyAssignments.set(
+                  `${pid}\0${validatedIndex}`,
+                  { resourceId: pid, propertyIndex: validatedIndex },
                 );
               }
             }
@@ -904,12 +1052,7 @@ function parseModelPart(
                 attribute(tag, "objectid"),
                 "3MF component object identifier is invalid",
               ),
-              partPath: referencedPart(
-                tag,
-                partPath,
-                rootPart,
-                allowedRootTargets,
-              ),
+              partPath: referencedPart(tag, partPath, relationships),
               transform: transformValue(attribute(tag, "transform")),
             });
             break;
@@ -938,15 +1081,103 @@ function parseModelPart(
                 attribute(tag, "objectid"),
                 "3MF build item object identifier is invalid",
               ),
-              partPath: referencedPart(
-                tag,
-                partPath,
-                rootPart,
-                allowedRootTargets,
-              ),
+              partPath: referencedPart(tag, partPath, relationships),
               transform: transformValue(attribute(tag, "transform")),
               printable: printable !== "0",
             });
+            break;
+          }
+        }
+      } else if (tag.uri === MATERIAL_3MF_NAMESPACE) {
+        switch (tag.local) {
+          case "colorgroup":
+          case "texture2dgroup":
+            startPropertyResource(tag, {
+              kind: "appearance",
+              entryCount: 0,
+            });
+            break;
+          case "color":
+            if (!parentIs(MATERIAL_3MF_NAMESPACE, "colorgroup")) {
+              invalid("3MF color is outside its resource group");
+            }
+            incrementLeafEntry("colorgroup");
+            break;
+          case "tex2coord":
+            if (!parentIs(MATERIAL_3MF_NAMESPACE, "texture2dgroup")) {
+              invalid("3MF texture coordinate is outside its resource group");
+            }
+            incrementLeafEntry("texture2dgroup");
+            break;
+          case "compositematerials": {
+            const materialIndices = indexList(
+              attribute(tag, "matindices"),
+              "3MF composite material indices are invalid",
+            );
+            if (materialIndices.length < 2) {
+              invalid(
+                "3MF composite material requires at least two constituents",
+              );
+            }
+            startPropertyResource(tag, {
+              kind: "composite",
+              materialResourceId: positiveIndex(
+                attribute(tag, "matid"),
+                "3MF composite material resource id is invalid",
+              ),
+              materialIndices,
+              entries: [],
+            });
+            break;
+          }
+          case "composite": {
+            if (!parentIs(MATERIAL_3MF_NAMESPACE, "compositematerials")) {
+              invalid("3MF composite is outside its resource group");
+            }
+            const resource = currentPropertyResource?.definition;
+            if (!resource || resource.kind !== "composite") {
+              invalid("3MF composite is outside its resource group");
+            }
+            const values = numberList(
+              attribute(tag, "values"),
+              "3MF composite values are invalid",
+            );
+            const selected = resource.materialIndices.filter(
+              (_materialIndex, index) => (values[index] ?? 0) > 0,
+            );
+            resource.entries.push(
+              selected.length > 0 ? selected : [...resource.materialIndices],
+            );
+            break;
+          }
+          case "multiproperties": {
+            startPropertyResource(tag, {
+              kind: "multi",
+              propertyResourceIds: indexList(
+                attribute(tag, "pids"),
+                "3MF multiproperty resource ids are invalid",
+              ),
+              entries: [],
+            });
+            break;
+          }
+          case "multi": {
+            if (!parentIs(MATERIAL_3MF_NAMESPACE, "multiproperties")) {
+              invalid("3MF multiproperty entry is outside its resource group");
+            }
+            const resource = currentPropertyResource?.definition;
+            if (!resource || resource.kind !== "multi") {
+              invalid("3MF multiproperty entry is outside its resource group");
+            }
+            const indices = indexList(
+              attribute(tag, "pindices"),
+              "3MF multiproperty indices are invalid",
+            );
+            resource.entries.push(
+              resource.propertyResourceIds.map(
+                (_resourceId, index) => indices[index] ?? "0",
+              ),
+            );
             break;
           }
         }
@@ -977,10 +1208,104 @@ function parseModelPart(
         }
         currentObject = undefined;
       }
+      if (
+        currentPropertyResource?.uri === tag.uri &&
+        currentPropertyResource.local === tag.local
+      ) {
+        currentPropertyResource = undefined;
+      }
       stack.pop();
     });
   });
   if (!sawModel) invalid("3MF model element is missing");
+  const propertyCache = new Map<string, ReadonlySet<string>>();
+  const resolveProperty = (
+    resourceId: string,
+    propertyIndex: string,
+    stack: ReadonlySet<string>,
+  ): ReadonlySet<string> => {
+    const key = `${resourceId}\0${propertyIndex}`;
+    const cached = propertyCache.get(key);
+    if (cached) return cached;
+    if (stack.has(key)) invalid("3MF property resource graph contains a cycle");
+    const resource = propertyResources.get(resourceId);
+    if (!resource)
+      invalid("3MF property assignment references a missing resource");
+    const index = Number(propertyIndex);
+    if (!Number.isSafeInteger(index)) {
+      invalid("3MF property assignment index is invalid");
+    }
+    const nextStack = new Set(stack).add(key);
+    const resolved = new Set<string>();
+    if (resource.kind === "base" || resource.kind === "appearance") {
+      if (index >= resource.entryCount) {
+        invalid("3MF property assignment index is out of range");
+      }
+      resolved.add(`material-${partIdentity}-${resourceId}-${propertyIndex}`);
+    } else if (resource.kind === "composite") {
+      const base = propertyResources.get(resource.materialResourceId);
+      if (base?.kind !== "base") {
+        invalid("3MF composite references a non-base material resource");
+      }
+      const constituents = resource.entries[index];
+      if (!constituents) {
+        invalid("3MF composite property index is out of range");
+      }
+      for (const constituent of constituents) {
+        for (const value of resolveProperty(
+          resource.materialResourceId,
+          constituent,
+          nextStack,
+        )) {
+          resolved.add(value);
+        }
+      }
+    } else {
+      const indices = resource.entries[index];
+      if (!indices) invalid("3MF multiproperty index is out of range");
+      let materialResourceCount = 0;
+      for (
+        let position = 0;
+        position < resource.propertyResourceIds.length;
+        position += 1
+      ) {
+        const childResourceId = resource.propertyResourceIds[position]!;
+        const child = propertyResources.get(childResourceId);
+        if (!child) invalid("3MF multiproperty references a missing resource");
+        if (child.kind === "multi") {
+          invalid("3MF multiproperty cannot reference another multiproperty");
+        }
+        if (child.kind === "base" || child.kind === "composite") {
+          materialResourceCount += 1;
+          if (materialResourceCount > 1) {
+            invalid("3MF multiproperty references multiple material resources");
+          }
+        }
+        for (const value of resolveProperty(
+          childResourceId,
+          indices[position]!,
+          nextStack,
+        )) {
+          resolved.add(value);
+        }
+      }
+    }
+    propertyCache.set(key, resolved);
+    return resolved;
+  };
+  for (const definition of objects.values()) {
+    if (!definition.mesh) continue;
+    for (const assignment of definition.mesh.propertyAssignments.values()) {
+      for (const value of resolveProperty(
+        assignment.resourceId,
+        assignment.propertyIndex,
+        new Set(),
+      )) {
+        definition.mesh.materials.add(value);
+      }
+    }
+    definition.mesh.propertyAssignments.clear();
+  }
   return { path: partPath, unitHint, objects, buildItems };
 }
 
@@ -996,7 +1321,6 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
         : invalid("3MF archive must identify exactly one root model part");
   const rootBytes = entries.get(rootPart);
   if (!rootBytes) invalid("3MF archive root model part is missing");
-  const allowedRootTargets = relationships.get(rootPart) ?? new Set<string>();
   const parts = new Map<string, ModelPart>();
   const loadPart = (partPath: string): ModelPart => {
     const existing = parts.get(partPath);
@@ -1005,12 +1329,7 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
     if (!partBytes || !partPath.toLowerCase().endsWith(".model")) {
       invalid("3MF component references a missing model part");
     }
-    const parsed = parseModelPart(
-      partPath,
-      partBytes,
-      rootPart,
-      allowedRootTargets,
-    );
+    const parsed = parseModelPart(partPath, partBytes, relationships);
     parts.set(partPath, parsed);
     return parsed;
   };
@@ -1054,6 +1373,7 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
         paint: definition.mesh.paint,
         materials: new Set(definition.mesh.materials),
         extruders: new Set(definition.mesh.extruders),
+        propertyAssignments: new Map(),
       };
     }
     const nextStack = new Set(stack).add(identity);
@@ -1062,6 +1382,7 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
       paint: false,
       materials: new Set(),
       extruders: new Set(),
+      propertyAssignments: new Map(),
     };
     for (const component of definition.components) {
       traversedEdges += 1;

@@ -7,6 +7,8 @@ const coreNamespace =
   "http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
 const productionNamespace =
   "http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
+const materialNamespace =
+  "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
 const relationshipsNamespace =
   "http://schemas.openxmlformats.org/package/2006/relationships";
 
@@ -308,6 +310,35 @@ describe("safe model inspection", () => {
     expect(inspection.bodies[0]?.boundingBox.xMicrometers).toBe("1000");
   });
 
+  it("resolves production relationships relative to nested model parts", () => {
+    const source = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter" xmlns:p="${productionNamespace}"><resources>
+        <object id="1"><components>
+          <component objectid="7" p:path="/3D/Objects/part-a.model"/>
+        </components></object>
+      </resources><build><item objectid="1"/></build></model>`,
+      "3D/_rels/3dmodel.model.rels": `<Relationships xmlns="${relationshipsNamespace}">
+        <Relationship Target="/3D/Objects/part-a.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+      </Relationships>`,
+      "3D/Objects/part-a.model": `<model xmlns="${coreNamespace}" unit="millimeter" xmlns:p="${productionNamespace}"><resources>
+        <object id="7"><components>
+          <component objectid="9" p:path="/3D/Objects/part-b.model" transform="1 0 0 0 1 0 0 0 1 25 0 0"/>
+        </components></object>
+      </resources></model>`,
+      "3D/Objects/_rels/part-a.model.rels": `<Relationships xmlns="${relationshipsNamespace}">
+        <Relationship Target="/3D/Objects/part-b.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+      </Relationships>`,
+      "3D/Objects/part-b.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
+        <object id="9"><mesh>${cubeMesh}</mesh></object>
+      </resources></model>`,
+    });
+
+    const inspection = inspectModel("3mf", source);
+    expect(inspection.bodies).toHaveLength(1);
+    expect(inspection.bodies[0]?.triangleCount).toBe(4);
+    expect(inspection.bodies[0]?.boundingBox.xMicrometers).toBe("1000");
+  });
+
   it("preserves painted two-extruder evidence as a blocking-capable inspection", async () => {
     const model = await readFile(
       path.resolve(
@@ -353,7 +384,10 @@ describe("safe model inspection", () => {
       '<triangle v1="0" v2="2" v3="1" pid="7" p1="0" p2="1" p3="0"/>',
     );
     const source = storedZip({
-      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources><object id="1"><mesh>${assignedMesh}</mesh></object></resources><build><item objectid="1"/></build></model>`,
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
+        <basematerials id="7"><base name="one" displaycolor="#FFFFFFFF"/><base name="two" displaycolor="#000000FF"/></basematerials>
+        <object id="1"><mesh>${assignedMesh}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
     });
 
     expect(inspectModel("3mf", source).materialAssignmentCount).toBe(2);
@@ -365,14 +399,15 @@ describe("safe model inspection", () => {
   it("blocks a selection that combines bodies with different materials", () => {
     const materialOne = cubeMesh.replace(
       '<triangle v1="0" v2="2" v3="1"/>',
-      '<triangle v1="0" v2="2" v3="1" pid="7" pindex="0"/>',
+      '<triangle v1="0" v2="2" v3="1" pid="7" p1="0"/>',
     );
     const materialTwo = cubeMesh.replace(
       '<triangle v1="0" v2="2" v3="1"/>',
-      '<triangle v1="0" v2="2" v3="1" pid="7" pindex="1"/>',
+      '<triangle v1="0" v2="2" v3="1" pid="7" p1="1"/>',
     );
     const source = storedZip({
       "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
+        <basematerials id="7"><base name="one" displaycolor="#FFFFFFFF"/><base name="two" displaycolor="#000000FF"/></basematerials>
         <object id="1"><mesh>${materialOne}</mesh></object>
         <object id="2"><mesh>${materialTwo}</mesh></object>
       </resources><build><item objectid="1"/><item objectid="2"/></build></model>`,
@@ -382,6 +417,55 @@ describe("safe model inspection", () => {
     expect(() =>
       canonicalizeModel("3mf", source, ["body-0001", "body-0002"], 1_000_000),
     ).toThrow("individual offer");
+  });
+
+  it("resolves composite resources into their base material constituents", () => {
+    const source = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter" xmlns:m="${materialNamespace}"><resources>
+        <basematerials id="7"><base name="one" displaycolor="#FFFFFFFF"/><base name="two" displaycolor="#000000FF"/></basematerials>
+        <m:compositematerials id="8" matid="7" matindices="0 1"><m:composite values="0.5 0.5"/></m:compositematerials>
+        <object id="1" pid="8" pindex="0"><mesh>${cubeMesh}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
+    });
+
+    expect(inspectModel("3mf", source).materialAssignmentCount).toBe(2);
+    expect(() =>
+      canonicalizeModel("3mf", source, ["body-0001"], 1_000_000),
+    ).toThrow("individual offer");
+  });
+
+  it("resolves multiproperties through composite material resources", () => {
+    const source = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter" xmlns:m="${materialNamespace}"><resources>
+        <basematerials id="7"><base name="one" displaycolor="#FFFFFFFF"/><base name="two" displaycolor="#000000FF"/></basematerials>
+        <m:compositematerials id="8" matid="7" matindices="0 1"><m:composite values="0.5 0.5"/></m:compositematerials>
+        <m:colorgroup id="9"><m:color color="#FFFFFFFF"/></m:colorgroup>
+        <m:multiproperties id="10" pids="8 9"><m:multi pindices="0 0"/></m:multiproperties>
+        <object id="1" pid="10" pindex="0"><mesh>${cubeMesh}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
+    });
+
+    expect(inspectModel("3mf", source).materialAssignmentCount).toBe(3);
+    expect(() =>
+      canonicalizeModel("3mf", source, ["body-0001"], 1_000_000),
+    ).toThrow("individual offer");
+  });
+
+  it("rejects missing and out-of-range 3MF property references", () => {
+    const missing = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
+        <object id="1" pid="7" pindex="0"><mesh>${cubeMesh}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
+    });
+    const outOfRange = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
+        <basematerials id="7"><base name="one" displaycolor="#FFFFFFFF"/></basematerials>
+        <object id="1" pid="7" pindex="1"><mesh>${cubeMesh}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
+    });
+
+    expect(() => inspectModel("3mf", missing)).toThrow("missing resource");
+    expect(() => inspectModel("3mf", outOfRange)).toThrow("out of range");
   });
 
   it("rejects traversal before reading 3MF relationships", () => {
