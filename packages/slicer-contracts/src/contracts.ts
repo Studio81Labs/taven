@@ -1000,6 +1000,26 @@ const InspectionSuccessSchema = z
           "painted or multimaterial inputs require a blocking inspection finding",
       });
     }
+    const requiresTopologyReview = value.bodies.some(
+      ({ topology }) =>
+        !topology.watertight ||
+        !topology.manifold ||
+        topology.normals !== "consistent",
+    );
+    const hasBlockingTopologyFinding = value.findings.some(
+      ({ code, severity, phase }) =>
+        code === "INVALID_TOPOLOGY" &&
+        severity === "blocking" &&
+        phase === "inspection",
+    );
+    if (requiresTopologyReview && !hasBlockingTopologyFinding) {
+      context.addIssue({
+        code: "custom",
+        path: ["findings"],
+        message:
+          "open, non-manifold, or inconsistent topology requires a blocking inspection finding",
+      });
+    }
   });
 
 const ReferenceSliceSuccessSchema = z.strictObject({

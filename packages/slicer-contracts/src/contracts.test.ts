@@ -1063,6 +1063,43 @@ describe("versioned slicing results", () => {
     ).toBeDefined();
   });
 
+  it("requires a blocking inspection finding for invalid topology", () => {
+    const invalidTopologyOutcome = {
+      ...inspectionOutcome,
+      bodies: inspectionOutcome.bodies.map((body) => ({
+        ...body,
+        topology: {
+          watertight: false,
+          manifold: true,
+          normals: "unknown" as const,
+        },
+      })),
+      findings: [],
+    };
+    expect(() =>
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, invalidTopologyOutcome),
+      ),
+    ).toThrow();
+
+    expect(
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...invalidTopologyOutcome,
+          findings: [
+            {
+              code: "INVALID_TOPOLOGY",
+              severity: "blocking",
+              phase: "inspection",
+              message: "mesh topology requires repair or an individual offer",
+              acknowledgementKey: null,
+            },
+          ],
+        }),
+      ),
+    ).toBeDefined();
+  });
+
   it("rejects duplicate finding codes in each persistence scope", () => {
     const duplicateFindings = [
       {

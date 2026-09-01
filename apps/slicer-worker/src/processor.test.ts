@@ -244,6 +244,85 @@ describe("SlicingProcessor", () => {
     expect(engine.calls).toHaveLength(0);
   });
 
+  it("blocks automatic quoting for open mesh topology", async () => {
+    const store = new MemoryStore();
+    const model = await readFile(
+      path.resolve("../../tools/slicing-fixtures/fixtures/single-pla/cube.stl"),
+    );
+    const openModel = new TextEncoder().encode(
+      new TextDecoder()
+        .decode(model)
+        .replace(/ {2}facet normal 0 0 -1[\s\S]*? {2}endfacet\n/u, ""),
+    );
+    const sourceHash = sha256(openModel);
+    store.objects.set(`models/${ids.source}/source`, openModel);
+    const input = {
+      source: {
+        modelFileId: ids.source,
+        format: "stl",
+        objectKey: `models/${ids.source}/source`,
+        contentSha256: sourceHash,
+      },
+      operation: { mode: "inspect_source" },
+      inspectionRevision: "inspection-v1",
+      inspectionConfigSha256: "b".repeat(64),
+      canonicalizerRevision: "canonicalizer-v1",
+      canonicalizerConfigSha256: "c".repeat(64),
+    };
+
+    const result = await new SlicingProcessor(
+      store,
+      new FakeEngine(),
+      config,
+    ).process(envelope("model_inspection", input));
+
+    expect(result.outcome).toMatchObject({
+      status: "succeeded",
+      bodies: [{ topology: { watertight: false } }],
+      findings: [
+        {
+          code: "INVALID_TOPOLOGY",
+          severity: "blocking",
+          phase: "inspection",
+          acknowledgementKey: null,
+        },
+      ],
+    });
+
+    const bodyIds = ["body-0001"];
+    const canonicalInput = {
+      ...input,
+      operation: {
+        mode: "canonicalize_selection",
+        sourceInspectionFingerprintSha256: slicingInputFingerprint(
+          "model_inspection",
+          input,
+        ),
+        bodyIds,
+        selectionSha256: geometrySelectionSha256(bodyIds),
+        confirmedUnitConversion: {
+          sourceUnit: "millimeter",
+          targetUnit: "millimeter",
+          scaleFactorPpm: 1_000_000,
+        },
+        targetGeometry: {
+          modelGeometryId: ids.geometry,
+          canonicalObjectKey: `geometries/${ids.geometry}/canonical`,
+        },
+      },
+    };
+    const canonicalResult = await new SlicingProcessor(
+      store,
+      new FakeEngine(),
+      config,
+    ).process(envelope("model_inspection", canonicalInput));
+    expect(canonicalResult.outcome).toMatchObject({
+      status: "succeeded",
+      canonicalGeometry: { modelGeometryId: ids.geometry },
+      findings: [{ code: "INVALID_TOPOLOGY", severity: "blocking" }],
+    });
+  });
+
   it("reuses a persisted reference artifact across dispatch jobs without regenerating timestamped G-code", async () => {
     const store = new MemoryStore();
     const engine = new FakeEngine();

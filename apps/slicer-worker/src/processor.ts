@@ -70,23 +70,43 @@ function inspectionMetrics(inspection: ModelInspection) {
   } as const;
 }
 
-function paintedFinding(inspection: ModelInspection) {
-  const blocked =
+function inspectionFindings(inspection: ModelInspection) {
+  const invalidTopology = inspection.bodies.some(
+    ({ topology }) =>
+      !topology.watertight ||
+      !topology.manifold ||
+      topology.normals !== "consistent",
+  );
+  const paintedOrMultimaterial =
     inspection.hasPaintAssignments ||
     inspection.materialAssignmentCount > 1 ||
     inspection.extruderAssignmentCount > 1;
-  return blocked
-    ? [
-        {
-          code: "PAINTED_OR_MULTIMATERIAL",
-          severity: "blocking" as const,
-          phase: "inspection" as const,
-          message:
-            "Painted or multimaterial input requires an individual offer",
-          acknowledgementKey: null,
-        },
-      ]
-    : [];
+  return [
+    ...(invalidTopology
+      ? [
+          {
+            code: "INVALID_TOPOLOGY",
+            severity: "blocking" as const,
+            phase: "inspection" as const,
+            message:
+              "Open, non-manifold, or inconsistent mesh topology requires a repaired model or individual offer",
+            acknowledgementKey: null,
+          },
+        ]
+      : []),
+    ...(paintedOrMultimaterial
+      ? [
+          {
+            code: "PAINTED_OR_MULTIMATERIAL",
+            severity: "blocking" as const,
+            phase: "inspection" as const,
+            message:
+              "Painted or multimaterial input requires an individual offer",
+            acknowledgementKey: null,
+          },
+        ]
+      : []),
+  ];
 }
 
 type PreflightMetrics = Pick<
@@ -424,7 +444,7 @@ export class SlicingProcessor {
           canonicalGeometry: null,
           metrics: inspectionMetrics(inspection),
           bodies: inspection.bodies,
-          findings: paintedFinding(inspection),
+          findings: inspectionFindings(inspection),
         },
       };
     }
@@ -458,7 +478,7 @@ export class SlicingProcessor {
         },
         metrics: inspectionMetrics(resultInspection),
         bodies,
-        findings: [],
+        findings: inspectionFindings(resultInspection),
       },
     };
   }
