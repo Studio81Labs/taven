@@ -21,6 +21,7 @@
     "@taven/ui-web": "workspace:*",
     "fflate": "^0.8.3",
     "nuxt": "^4.2.0",
+    "robust-predicates": "^3.0.3",
     "vue": "^3.5.0"
   }
 }

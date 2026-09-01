@@ -1,3 +1,4 @@
+import { orient2d, orient3d } from "robust-predicates";
 import type { DirectModelFormat } from "./model-file";
 
 const MAX_PREVIEW_TRIANGLES = 6_000;
@@ -10,8 +11,10 @@ const MAX_3MF_VERTICES = 300_000;
 const MAX_3MF_COMPONENTS = 20_000;
 const MAX_3MF_COMPONENT_DEPTH = 64;
 const MAX_3MF_EXPANDED_OBJECTS = 25_000;
-const MAX_STL_CONTAINMENT_TRIANGLE_CHECKS = 4 * MAX_LOCAL_TRIANGLES;
-const MAX_STL_SHELL_PAIR_CHECKS = 1_000_000;
+const MAX_LOCAL_CONTAINMENT_TRIANGLE_CHECKS = 4 * MAX_LOCAL_TRIANGLES;
+const MAX_LOCAL_INTERSHELL_GEOMETRY_CHECKS = 4 * MAX_LOCAL_TRIANGLES;
+const MAX_LOCAL_SHELL_PAIR_CHECKS = 1_000_000;
+const TRIANGLE_BVH_LEAF_SIZE = 8;
 
 type Point = readonly [number, number, number];
 type TrianglePoints = readonly [Point, Point, Point];
@@ -215,16 +218,271 @@ function strictlyContainsBounds(
   );
 }
 
+type TriangleBounds = ReturnType<typeof triangleBodyBounds>;
+
+interface TriangleBvh {
+  bounds: TriangleBounds;
+  left?: TriangleBvh;
+  right?: TriangleBvh;
+  triangleCount: number;
+  triangles?: TrianglePoints[];
+}
+
+function boundsOverlap(left: TriangleBounds, right: TriangleBounds): boolean {
+  return left.minimum.every(
+    (minimum, axis) =>
+      left.maximum[axis]! >= right.minimum[axis]! &&
+      right.maximum[axis]! >= minimum,
+  );
+}
+
+function buildTriangleBvh(triangles: readonly TrianglePoints[]): TriangleBvh {
+  const bounds = triangleBodyBounds(triangles);
+  if (triangles.length <= TRIANGLE_BVH_LEAF_SIZE) {
+    return {
+      bounds,
+      triangleCount: triangles.length,
+      triangles: [...triangles],
+    };
+  }
+  let splitAxis = 0;
+  for (let axis = 1; axis < 3; axis += 1) {
+    if (
+      bounds.maximum[axis]! - bounds.minimum[axis]! >
+      bounds.maximum[splitAxis]! - bounds.minimum[splitAxis]!
+    ) {
+      splitAxis = axis;
+    }
+  }
+  const sorted = [...triangles].sort((left, right) => {
+    const center = (triangle: TrianglePoints) =>
+      (triangle[0][splitAxis]! +
+        triangle[1][splitAxis]! +
+        triangle[2][splitAxis]!) /
+      3;
+    return center(left) - center(right);
+  });
+  const middle = Math.floor(sorted.length / 2);
+  return {
+    bounds,
+    left: buildTriangleBvh(sorted.slice(0, middle)),
+    right: buildTriangleBvh(sorted.slice(middle)),
+    triangleCount: sorted.length,
+  };
+}
+
+function projectedPoint(
+  point: Point,
+  projection: number,
+): readonly [number, number] {
+  return projection === 0
+    ? [point[1], point[2]]
+    : projection === 1
+      ? [point[0], point[2]]
+      : [point[0], point[1]];
+}
+
+function triangleProjection(triangle: TrianglePoints): number {
+  for (let projection = 0; projection < 3; projection += 1) {
+    const [a, b, c] = triangle.map((point) =>
+      projectedPoint(point, projection),
+    );
+    if (orient2d(...a!, ...b!, ...c!) !== 0) return projection;
+  }
+  throw new ModelGeometryError(
+    "INVALID_GEOMETRY",
+    "Model obsahuje degenerovanou plochu.",
+  );
+}
+
+function pointInTriangle2d(
+  point: readonly [number, number],
+  triangle: readonly [
+    readonly [number, number],
+    readonly [number, number],
+    readonly [number, number],
+  ],
+): boolean {
+  const [a, b, c] = triangle;
+  const ab = orient2d(...a, ...b, ...point);
+  const bc = orient2d(...b, ...c, ...point);
+  const ca = orient2d(...c, ...a, ...point);
+  return (ab >= 0 && bc >= 0 && ca >= 0) || (ab <= 0 && bc <= 0 && ca <= 0);
+}
+
+function pointOnSegment2d(
+  point: readonly [number, number],
+  start: readonly [number, number],
+  end: readonly [number, number],
+): boolean {
+  return (
+    Math.min(start[0], end[0]) <= point[0] &&
+    point[0] <= Math.max(start[0], end[0]) &&
+    Math.min(start[1], end[1]) <= point[1] &&
+    point[1] <= Math.max(start[1], end[1])
+  );
+}
+
+function segmentsTouch2d(
+  leftStart: readonly [number, number],
+  leftEnd: readonly [number, number],
+  rightStart: readonly [number, number],
+  rightEnd: readonly [number, number],
+): boolean {
+  const leftToRightStart = orient2d(...leftStart, ...leftEnd, ...rightStart);
+  const leftToRightEnd = orient2d(...leftStart, ...leftEnd, ...rightEnd);
+  const rightToLeftStart = orient2d(...rightStart, ...rightEnd, ...leftStart);
+  const rightToLeftEnd = orient2d(...rightStart, ...rightEnd, ...leftEnd);
+  if (
+    ((leftToRightStart > 0 && leftToRightEnd < 0) ||
+      (leftToRightStart < 0 && leftToRightEnd > 0)) &&
+    ((rightToLeftStart > 0 && rightToLeftEnd < 0) ||
+      (rightToLeftStart < 0 && rightToLeftEnd > 0))
+  ) {
+    return true;
+  }
+  return (
+    (leftToRightStart === 0 &&
+      pointOnSegment2d(rightStart, leftStart, leftEnd)) ||
+    (leftToRightEnd === 0 && pointOnSegment2d(rightEnd, leftStart, leftEnd)) ||
+    (rightToLeftStart === 0 &&
+      pointOnSegment2d(leftStart, rightStart, rightEnd)) ||
+    (rightToLeftEnd === 0 && pointOnSegment2d(leftEnd, rightStart, rightEnd))
+  );
+}
+
+function coplanarSegmentTouchesTriangle(
+  start: Point,
+  end: Point,
+  triangle: TrianglePoints,
+): boolean {
+  const projection = triangleProjection(triangle);
+  const projectedStart = projectedPoint(start, projection);
+  const projectedEnd = projectedPoint(end, projection);
+  const projectedTriangle = triangle.map((point) =>
+    projectedPoint(point, projection),
+  ) as [
+    readonly [number, number],
+    readonly [number, number],
+    readonly [number, number],
+  ];
+  if (
+    pointInTriangle2d(projectedStart, projectedTriangle) ||
+    pointInTriangle2d(projectedEnd, projectedTriangle)
+  ) {
+    return true;
+  }
+  return projectedTriangle.some((edgeStart, index) =>
+    segmentsTouch2d(
+      projectedStart,
+      projectedEnd,
+      edgeStart,
+      projectedTriangle[(index + 1) % 3]!,
+    ),
+  );
+}
+
+function segmentTouchesTriangle(
+  start: Point,
+  end: Point,
+  triangle: TrianglePoints,
+): boolean {
+  const [a, b, c] = triangle;
+  const startSide = orient3d(...a, ...b, ...c, ...start);
+  const endSide = orient3d(...a, ...b, ...c, ...end);
+  if ((startSide > 0 && endSide > 0) || (startSide < 0 && endSide < 0)) {
+    return false;
+  }
+  if (startSide === 0 && endSide === 0) {
+    return coplanarSegmentTouchesTriangle(start, end, triangle);
+  }
+  const ab = orient3d(...start, ...end, ...a, ...b);
+  const bc = orient3d(...start, ...end, ...b, ...c);
+  const ca = orient3d(...start, ...end, ...c, ...a);
+  return (ab >= 0 && bc >= 0 && ca >= 0) || (ab <= 0 && bc <= 0 && ca <= 0);
+}
+
+function trianglesTouchOrIntersect(
+  left: TrianglePoints,
+  right: TrianglePoints,
+): boolean {
+  const edges = (triangle: TrianglePoints) =>
+    [
+      [triangle[0], triangle[1]],
+      [triangle[1], triangle[2]],
+      [triangle[2], triangle[0]],
+    ] as const;
+  return (
+    edges(left).some(([start, end]) =>
+      segmentTouchesTriangle(start, end, right),
+    ) ||
+    edges(right).some(([start, end]) =>
+      segmentTouchesTriangle(start, end, left),
+    )
+  );
+}
+
+function spendIntershellCheck(budget: ShellInspectionBudget): void {
+  budget.intershellGeometryChecks += 1;
+  if (budget.intershellGeometryChecks > MAX_LOCAL_INTERSHELL_GEOMETRY_CHECKS) {
+    throw new ModelGeometryError(
+      "PREVIEW_LIMIT_EXCEEDED",
+      "Model je příliš složitý pro bezpečnou kontrolu oddělených těles.",
+    );
+  }
+}
+
+function shellsTouchOrIntersect(
+  left: TriangleBvh,
+  right: TriangleBvh,
+  budget: ShellInspectionBudget,
+): boolean {
+  const pending: Array<readonly [TriangleBvh, TriangleBvh]> = [[left, right]];
+  while (pending.length > 0) {
+    const [leftNode, rightNode] = pending.pop()!;
+    spendIntershellCheck(budget);
+    if (!boundsOverlap(leftNode.bounds, rightNode.bounds)) continue;
+    if (leftNode.triangles && rightNode.triangles) {
+      for (const leftTriangle of leftNode.triangles) {
+        for (const rightTriangle of rightNode.triangles) {
+          spendIntershellCheck(budget);
+          if (
+            boundsOverlap(
+              triangleBodyBounds([leftTriangle]),
+              triangleBodyBounds([rightTriangle]),
+            ) &&
+            trianglesTouchOrIntersect(leftTriangle, rightTriangle)
+          ) {
+            return true;
+          }
+        }
+      }
+      continue;
+    }
+    if (
+      rightNode.triangles ||
+      (!leftNode.triangles && leftNode.triangleCount >= rightNode.triangleCount)
+    ) {
+      pending.push([leftNode.left!, rightNode], [leftNode.right!, rightNode]);
+    } else {
+      pending.push([leftNode, rightNode.left!], [leftNode, rightNode.right!]);
+    }
+  }
+  return false;
+}
+
 function pointInsideShell(
   point: Point,
   triangles: readonly TrianglePoints[],
-  triangleChecks: { count: number },
+  budget: ShellInspectionBudget,
 ): boolean {
   let solidAngle = 0;
   let compensation = 0;
   for (const triangle of triangles) {
-    triangleChecks.count += 1;
-    if (triangleChecks.count > MAX_STL_CONTAINMENT_TRIANGLE_CHECKS) {
+    budget.containmentTriangleChecks += 1;
+    if (
+      budget.containmentTriangleChecks > MAX_LOCAL_CONTAINMENT_TRIANGLE_CHECKS
+    ) {
       throw new ModelGeometryError(
         "PREVIEW_LIMIT_EXCEEDED",
         "Model je příliš složitý pro bezpečné rozpoznání vnořených těles.",
@@ -283,15 +541,49 @@ function signedShellVolume(triangles: readonly TrianglePoints[]): number {
   );
 }
 
-function nestedStlVolume(shells: readonly TrianglePoints[][]): number {
-  if ((shells.length * (shells.length - 1)) / 2 > MAX_STL_SHELL_PAIR_CHECKS) {
+interface ShellInspectionBudget {
+  containmentTriangleChecks: number;
+  intershellGeometryChecks: number;
+  shellPairChecks: number;
+}
+
+function nestedShellVolume(
+  shells: readonly TrianglePoints[][],
+  budget: ShellInspectionBudget,
+): number {
+  budget.shellPairChecks += (shells.length * (shells.length - 1)) / 2;
+  if (budget.shellPairChecks > MAX_LOCAL_SHELL_PAIR_CHECKS) {
     throw new ModelGeometryError(
       "PREVIEW_LIMIT_EXCEEDED",
       "Model obsahuje příliš mnoho oddělených těles pro bezpečný náhled.",
     );
   }
   const bounds = shells.map(triangleBodyBounds);
-  const triangleChecks = { count: 0 };
+  const bvhs = new Map<number, TriangleBvh>();
+  const bvh = (shellIndex: number): TriangleBvh => {
+    const cached = bvhs.get(shellIndex);
+    if (cached) return cached;
+    const created = buildTriangleBvh(shells[shellIndex]!);
+    bvhs.set(shellIndex, created);
+    return created;
+  };
+  for (let leftIndex = 0; leftIndex < shells.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < shells.length;
+      rightIndex += 1
+    ) {
+      if (
+        boundsOverlap(bounds[leftIndex]!, bounds[rightIndex]!) &&
+        shellsTouchOrIntersect(bvh(leftIndex), bvh(rightIndex), budget)
+      ) {
+        throw new ModelGeometryError(
+          "INVALID_GEOMETRY",
+          "Model obsahuje dotýkající se nebo protínající se tělesa.",
+        );
+      }
+    }
+  }
   let volumeMm3 = 0;
   shells.forEach((inner, innerIndex) => {
     let depth = 0;
@@ -299,7 +591,7 @@ function nestedStlVolume(shells: readonly TrianglePoints[][]): number {
       if (
         outerIndex !== innerIndex &&
         strictlyContainsBounds(bounds[outerIndex]!, bounds[innerIndex]!) &&
-        pointInsideShell(inner[0]![0], outer, triangleChecks)
+        pointInsideShell(inner[0]![0], outer, budget)
       ) {
         depth += 1;
       }
@@ -320,8 +612,13 @@ function addStlBodies(
   geometry: GeometryAccumulator,
   triangles: readonly TrianglePoints[],
 ): void {
+  const budget: ShellInspectionBudget = {
+    containmentTriangleChecks: 0,
+    intershellGeometryChecks: 0,
+    shellPairChecks: 0,
+  };
   const shells = connectedTriangleBodies(triangles);
-  geometry.addBody(triangles, nestedStlVolume(shells));
+  geometry.addBody(triangles, nestedShellVolume(shells, budget));
 }
 
 function finitePoint(x: number, y: number, z: number): Point {
@@ -462,6 +759,16 @@ function parseTransform(
     throw new ModelGeometryError(
       "INVALID_GEOMETRY",
       "3MF obsahuje neplatnou transformaci objektu.",
+    );
+  }
+  const determinant =
+    parts[0]! * (parts[4]! * parts[8]! - parts[5]! * parts[7]!) -
+    parts[1]! * (parts[3]! * parts[8]! - parts[5]! * parts[6]!) +
+    parts[2]! * (parts[3]! * parts[7]! - parts[4]! * parts[6]!);
+  if (Math.abs(determinant) < 1e-12) {
+    throw new ModelGeometryError(
+      "INVALID_GEOMETRY",
+      "3MF obsahuje singulární transformaci objektu.",
     );
   }
   parts[9] = parts[9]! * translationScale;
@@ -718,13 +1025,16 @@ function assertSingleMaterial3mf(xml: string): void {
       const explicitIndices = ["p1", "p2", "p3"]
         .map((name) => attribute(triangleAttributes, name))
         .filter((value): value is string => value !== undefined);
+      if (explicitIndices.length > 0 && !resourceId) {
+        return invalidAssignment();
+      }
+      if (!resourceId) continue;
       const indices =
         explicitIndices.length > 0
           ? explicitIndices
           : trianglePid === undefined && objectPindex !== undefined
             ? [objectPindex]
-            : [];
-      if (!resourceId) continue;
+            : invalidAssignment();
       for (const propertyIndex of indices) {
         const evidence = resolve(resourceId, propertyIndex, new Set());
         evidence.assignmentIds.forEach((value) => assignmentIds.add(value));
@@ -932,6 +1242,11 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
 
   const geometry = new GeometryAccumulator();
   const bodyNames: string[] = [];
+  const shellBudget: ShellInspectionBudget = {
+    containmentTriangleChecks: 0,
+    intershellGeometryChecks: 0,
+    shellPairChecks: 0,
+  };
   let expandedObjectCount = 0;
   const expand = (
     objectId: string,
@@ -968,12 +1283,14 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
     if (object.triangles.length > 0) {
       bodyNames.push(object.name?.trim() || `Těleso ${bodyNames.length + 1}`);
     }
+    const triangles = object.triangles.map(([a, b, c]): TrianglePoints => [
+      applyTransforms(object.vertices[a]!, transforms),
+      applyTransforms(object.vertices[b]!, transforms),
+      applyTransforms(object.vertices[c]!, transforms),
+    ]);
     geometry.addBody(
-      object.triangles.map(([a, b, c]) => [
-        applyTransforms(object.vertices[a]!, transforms),
-        applyTransforms(object.vertices[b]!, transforms),
-        applyTransforms(object.vertices[c]!, transforms),
-      ]),
+      triangles,
+      nestedShellVolume(connectedTriangleBodies(triangles), shellBudget),
     );
     for (const component of object.components) {
       expand(

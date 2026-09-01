@@ -176,6 +176,18 @@ endsolid part`).buffer;
     expect(geometry.dimensions).toEqual({ width: 4, depth: 4, height: 4 });
     expect(geometry.volumeMm3).toBeCloseTo(64.125 / 6, 6);
   });
+
+  it("rejects intersecting disconnected shells", async () => {
+    await expect(
+      parseModelGeometry(
+        "STL",
+        binaryStl([
+          ...scaledTetrahedron(4, [0, 0, 0]),
+          ...scaledTetrahedron(3, [0.5, 0.5, 0.5], true),
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_GEOMETRY" });
+  });
 });
 
 describe("3MF geometry", () => {
@@ -207,6 +219,34 @@ describe("3MF geometry", () => {
 
     expect(geometry.objectCount).toBe(2);
     expect(geometry.volumeMm3).toBeCloseTo(2_000 / 6, 5);
+  });
+
+  it("sums disconnected shell volumes within one mesh", async () => {
+    const multipleShells = tetrahedron3mf
+      .replace(
+        "</vertices>",
+        '<vertex x="2" y="0" z="0"/><vertex x="3" y="0" z="0"/><vertex x="2" y="1" z="0"/><vertex x="2" y="0" z="1"/></vertices>',
+      )
+      .replace(
+        "</triangles>",
+        '<triangle v1="4" v2="5" v3="6"/><triangle v1="4" v2="7" v3="5"/><triangle v1="4" v2="6" v3="7"/><triangle v1="5" v2="7" v3="6"/></triangles>',
+      );
+    const geometry = await parseModelGeometry("3MF", threeMf(multipleShells));
+
+    expect(geometry.objectCount).toBe(1);
+    expect(geometry.dimensions).toEqual({ width: 30, depth: 10, height: 10 });
+    expect(geometry.volumeMm3).toBeCloseTo(2_000 / 6, 5);
+  });
+
+  it("rejects singular build transforms", async () => {
+    const singular = tetrahedron3mf.replace(
+      'transform="1 0 0 0 1 0 0 0 1 5 6 7"',
+      'transform="0 0 0 0 1 0 0 0 1 5 6 7"',
+    );
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(singular)),
+    ).rejects.toMatchObject({ code: "INVALID_GEOMETRY" });
   });
 
   it("allows unused appearance resources", async () => {
@@ -282,6 +322,23 @@ describe("3MF geometry", () => {
     await expect(
       parseModelGeometry("3MF", threeMf(singleMaterial)),
     ).resolves.toMatchObject({ objectCount: 1 });
+  });
+
+  it("rejects incomplete triangle property assignments", async () => {
+    const incomplete = tetrahedron3mf
+      .replace(
+        "<resources>",
+        '<resources><basematerials id="8"><base name="PLA" displaycolor="#ffffffff"/></basematerials>',
+      )
+      .replace('<object id="1"', '<object id="1" pid="8" pindex="0"')
+      .replace(
+        '<triangle v1="0" v2="2" v3="1"/>',
+        '<triangle v1="0" v2="2" v3="1" pid="8"/>',
+      );
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(incomplete)),
+    ).rejects.toMatchObject({ code: "INVALID_GEOMETRY" });
   });
 
   it("blocks assigned appearance properties instead of flattening them", async () => {
