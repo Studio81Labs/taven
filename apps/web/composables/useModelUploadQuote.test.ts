@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createUploadCommandKeys,
   isBackgroundQuotePhase,
+  isTerminalUploadConfirmationStatus,
 } from "./useModelUploadQuote";
 
 describe("automatic quote polling", () => {
@@ -37,9 +38,28 @@ describe("upload command idempotency", () => {
     expect(keys.attachModel()).toBe("attach-model-2");
     expect(keys.attachModel()).toBe("attach-model-2");
 
+    keys.resetAttachModel();
+
+    expect(keys.createSession()).toBe("create-session-1");
+    expect(keys.attachModel()).toBe("attach-model-3");
+
     keys.reset();
 
-    expect(keys.createSession()).toBe("create-session-3");
-    expect(keys.attachModel()).toBe("attach-model-4");
+    expect(keys.createSession()).toBe("create-session-4");
+    expect(keys.attachModel()).toBe("attach-model-5");
   });
+
+  it.each([401, 409, 410])(
+    "discards an upload checkpoint after terminal confirmation status %s",
+    (status) => {
+      expect(isTerminalUploadConfirmationStatus(status)).toBe(true);
+    },
+  );
+
+  it.each([429, 500, 503])(
+    "retains an upload checkpoint after retryable confirmation status %s",
+    (status) => {
+      expect(isTerminalUploadConfirmationStatus(status)).toBe(false);
+    },
+  );
 });

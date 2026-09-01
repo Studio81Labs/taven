@@ -59,11 +59,18 @@ export function createUploadCommandKeys(
   return {
     attachModel: () => (attachModel ??= createKey("attach-model")),
     createSession: () => (createSession ??= createKey("create-session")),
+    resetAttachModel: () => {
+      attachModel = undefined;
+    },
     reset: () => {
       attachModel = undefined;
       createSession = undefined;
     },
   };
+}
+
+export function isTerminalUploadConfirmationStatus(status: number): boolean {
+  return status === 401 || status === 409 || status === 410;
 }
 
 function requestMessage(
@@ -131,6 +138,13 @@ export function useModelUploadQuote() {
       pollTimer = undefined;
       if (!disposed) void refreshQuote();
     }, delay);
+  }
+
+  function discardUploadCheckpoint(): void {
+    uploadIntent = undefined;
+    confirmedUpload = undefined;
+    commandKeys.resetAttachModel();
+    uploadProgress.value = 0;
   }
 
   function resetState(clearStoredSession = true): void {
@@ -333,6 +347,11 @@ export function useModelUploadQuote() {
           },
         );
         if (!confirmation.response.ok || !confirmation.data) {
+          if (
+            isTerminalUploadConfirmationStatus(confirmation.response.status)
+          ) {
+            discardUploadCheckpoint();
+          }
           throw new Error(
             requestMessage(confirmation.response.status, "confirm"),
           );
@@ -392,6 +411,9 @@ export function useModelUploadQuote() {
         void refreshQuote();
       }
     } catch (error) {
+      if (error instanceof UploadFailure && error.code === "REJECTED") {
+        discardUploadCheckpoint();
+      }
       if (
         signal.aborted ||
         (error instanceof UploadFailure && error.code === "ABORTED")

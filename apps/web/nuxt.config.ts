@@ -23,7 +23,7 @@ export default defineNuxtConfig({
       meta: [
         {
           name: "description",
-          content: "Lokální 3D tisk s přehledným průběhem výroby.",
+          content: "Local 3D printing with a transparent production path.",
         },
       ],
     },
