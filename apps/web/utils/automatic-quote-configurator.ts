@@ -19,17 +19,22 @@ export function initialBodyGroups(
   items: readonly Pick<QuoteItem, "bodyIds" | "ordinal">[],
 ): BodyGroup[] {
   if (items.length > 0) {
-    const groups = [...items]
+    return [...items]
       .sort((left, right) => left.ordinal - right.ordinal)
       .map((item) => ({ ordinal: item.ordinal, bodyIds: [...item.bodyIds] }));
-    const configured = new Set(groups.flatMap((group) => group.bodyIds));
-    const unconfigured = bodyIds.filter((bodyId) => !configured.has(bodyId));
-    if (unconfigured.length > 0) {
-      groups.push({ ordinal: groups.length, bodyIds: unconfigured });
-    }
-    return groups;
   }
   return bodyIds.length > 0 ? [{ ordinal: 0, bodyIds: [...bodyIds] }] : [];
+}
+
+export function initialBodyAssignments(
+  bodyIds: readonly string[],
+  groups: readonly BodyGroup[],
+): Record<string, number> {
+  const assignments = Object.fromEntries(bodyIds.map((bodyId) => [bodyId, -1]));
+  for (const group of groups) {
+    for (const bodyId of group.bodyIds) assignments[bodyId] = group.ordinal;
+  }
+  return assignments;
 }
 
 export function groupsFromAssignments(

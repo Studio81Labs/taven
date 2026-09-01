@@ -4,6 +4,7 @@ import {
   configurationValues,
   formatMoney,
   groupsFromAssignments,
+  initialBodyAssignments,
   initialBodyGroups,
   isExpressVisible,
   priceLabel,
@@ -118,11 +119,7 @@ watch(
 
 function initializeDrafts(): void {
   const sourceGroups = initialBodyGroups(bodyIds.value, props.quote.items);
-  const nextAssignments: Record<string, number> = {};
-  for (const group of sourceGroups) {
-    for (const bodyId of group.bodyIds) nextAssignments[bodyId] = group.ordinal;
-  }
-  assignments.value = nextAssignments;
+  assignments.value = initialBodyAssignments(bodyIds.value, sourceGroups);
   groupCount.value = Math.max(1, sourceGroups.length);
   const firstOption = props.quote.configurationOptions[0];
   if (!firstOption) return;

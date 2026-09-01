@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   configurationValues,
   groupsFromAssignments,
+  initialBodyAssignments,
   initialBodyGroups,
   isExpressVisible,
   quantityComparison,
@@ -57,16 +58,18 @@ describe("body grouping", () => {
     ).toEqual([{ bodyIds: ["case", "lid"], ordinal: 0 }]);
   });
 
-  it("keeps unconfigured bodies available after an interrupted multi-item save", () => {
-    expect(
-      initialBodyGroups(
-        ["case", "lid", "pin"],
-        [{ bodyIds: ["case"], ordinal: 0 }],
-      ),
-    ).toEqual([
-      { bodyIds: ["case"], ordinal: 0 },
-      { bodyIds: ["lid", "pin"], ordinal: 1 },
-    ]);
+  it("restores bodies absent from saved items as explicitly excluded", () => {
+    const groups = initialBodyGroups(
+      ["case", "lid", "pin"],
+      [{ bodyIds: ["case"], ordinal: 0 }],
+    );
+
+    expect(groups).toEqual([{ bodyIds: ["case"], ordinal: 0 }]);
+    expect(initialBodyAssignments(["case", "lid", "pin"], groups)).toEqual({
+      case: 0,
+      lid: -1,
+      pin: -1,
+    });
   });
 });
 
