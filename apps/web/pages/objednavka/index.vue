@@ -167,15 +167,14 @@ function chooseAdditionalFile(): void {
 function openAssistedQuote(): void {
   let source: AssistedQuoteEntrySource = "individual-file";
   const activeQuote = quote.value;
-  if (activeQuote?.handoff) {
-    source = "automatic-quote";
-    if (import.meta.client) {
-      const storage = getSessionStorage(window);
-      const context = sanitizeAssistedQuoteHandoff(
-        activeQuote.handoff,
-        activeQuote.expiresAt,
-      );
-      if (storage && context) saveAssistedQuoteHandoff(storage, context);
+  if (activeQuote?.handoff && import.meta.client) {
+    const storage = getSessionStorage(window);
+    const context = sanitizeAssistedQuoteHandoff(
+      activeQuote.handoff,
+      activeQuote.expiresAt,
+    );
+    if (storage && context && saveAssistedQuoteHandoff(storage, context)) {
+      source = "automatic-quote";
     }
   } else if (metadata.value?.format === "3MF") {
     source = "blocked-3mf";

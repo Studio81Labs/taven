@@ -151,6 +151,7 @@ export function saveAssistedQuoteHandoff(
   context: AssistedQuoteHandoffContext,
 ): boolean {
   try {
+    storage.removeItem(STORAGE_KEY);
     storage.setItem(STORAGE_KEY, JSON.stringify(context));
     return true;
   } catch {

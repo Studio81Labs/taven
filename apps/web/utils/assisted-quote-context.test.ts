@@ -13,6 +13,7 @@ const modelFileId = "0198a6c8-7c2b-7f35-8ea8-5f181f490442";
 
 class MemoryStorage implements StorageLike {
   readonly values = new Map<string, string>();
+  failWrites = false;
 
   getItem(key: string): string | null {
     return this.values.get(key) ?? null;
@@ -21,6 +22,7 @@ class MemoryStorage implements StorageLike {
     this.values.delete(key);
   }
   setItem(key: string, value: string): void {
+    if (this.failWrites) throw new Error("storage write failed");
     this.values.set(key, value);
   }
 }
@@ -126,6 +128,28 @@ describe("automatic quote safe-context handoff", () => {
     expect(
       loadAssistedQuoteHandoff(storage, Date.parse("2031-01-01T00:00:00.000Z")),
     ).toBeUndefined();
+    expect(storage.values.size).toBe(0);
+  });
+
+  it("clears stale context before a failed replacement", () => {
+    const storage = new MemoryStorage();
+    const context = {
+      automaticQuoteSessionId: sessionId,
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      itemSelections: [],
+      modelFileIds: [modelFileId],
+      reasons: ["NO_CONFIGURATION_AVAILABLE"],
+    };
+    expect(saveAssistedQuoteHandoff(storage, context)).toBe(true);
+
+    storage.failWrites = true;
+
+    expect(
+      saveAssistedQuoteHandoff(storage, {
+        ...context,
+        reasons: ["FIT_SENSITIVE"],
+      }),
+    ).toBe(false);
     expect(storage.values.size).toBe(0);
   });
 });
