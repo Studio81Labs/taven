@@ -1436,18 +1436,41 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       staleExpressPlanIds.has(candidateJob(payload).input.shipmentPlanId),
     );
     expect(lateExpressDispatches.length).toBeGreaterThan(0);
+    expect(
+      new Set(
+        lateExpressDispatches.map(
+          ({ payload }) => candidateJob(payload).input.partsPerPlate,
+        ),
+      ),
+    ).toEqual(new Set([1, 2, 3]));
     for (const [index, dispatch] of lateExpressDispatches.entries()) {
-      const startsAt = new Date(lateCapacityBase + index * 120_000);
+      const job = candidateJob(dispatch.payload);
+      if (job.input.partsPerPlate > 1) {
+        await candidates.ingest({
+          result: deterministicCandidateArrangementResult(job),
+        });
+        continue;
+      }
+      const plateCount = Math.ceil(
+        job.input.quantity / job.input.partsPerPlate,
+      );
+      const capacityWindows = Array.from({ length: plateCount }, (_, plate) => {
+        const startsAt = new Date(
+          lateCapacityBase + index * 600_000 + plate * 120_000,
+        );
+        return {
+          startsAt,
+          endsAt: new Date(startsAt.getTime() + 60_000),
+        };
+      });
       await candidates.ingest({
-        result: successfulCandidateResult(candidateJob(dispatch.payload)),
-        capacityWindows: [
-          { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
-        ],
+        result: successfulCandidateResult(job),
+        capacityWindows,
         expiresAt: new Date(Date.now() + 26 * 60 * 60 * 1_000),
       });
     }
     const lateCapacityEndsAt = new Date(
-      lateCapacityBase + (lateExpressDispatches.length - 1) * 120_000 + 60_000,
+      lateCapacityBase + lateExpressDispatches.length * 600_000,
     );
     const lateExpress = await api(
       `automatic-quote-sessions/${recoverySessionId}/prepare`,
@@ -1580,18 +1603,30 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     );
     expect(standardRecoveryDispatches.length).toBeGreaterThan(0);
     for (const [index, dispatch] of standardRecoveryDispatches.entries()) {
-      const startsAt = new Date(
-        lateCapacityEndsAt.getTime() + (index + 1) * 120_000,
+      const job = candidateJob(dispatch.payload);
+      if (job.input.partsPerPlate > 1) {
+        await candidates.ingest({
+          result: deterministicCandidateArrangementResult(job),
+        });
+        continue;
+      }
+      const plateCount = Math.ceil(
+        job.input.quantity / job.input.partsPerPlate,
       );
+      const capacityWindows = Array.from({ length: plateCount }, (_, plate) => {
+        const startsAt = new Date(
+          lateCapacityEndsAt.getTime() +
+            (index + 1) * 600_000 +
+            plate * 120_000,
+        );
+        return {
+          startsAt,
+          endsAt: new Date(startsAt.getTime() + 60_000),
+        };
+      });
       await candidates.ingest({
-        result: successfulCandidateResult(
-          candidateJob(dispatch.payload),
-          "60",
-          "400000",
-        ),
-        capacityWindows: [
-          { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
-        ],
+        result: successfulCandidateResult(job, "60", "400000"),
+        capacityWindows,
         expiresAt: new Date(Date.now() + 28 * 60 * 60 * 1_000),
       });
     }
@@ -1634,7 +1669,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     ];
     await prisma.inventory.updateMany({
       where: { id: { in: standardRecoveryInventoryIds } },
-      data: { remainingMilligrams: 1_000_000n },
+      data: { remainingMilligrams: 2_000_000n },
     });
     const recoveredCandidateFrontier = await api(
       `automatic-quote-sessions/${recoverySessionId}`,
@@ -2549,6 +2584,23 @@ function retryableCandidateResult(
       retryable: true,
       message: "engine timed out",
       retryAfterMilliseconds: 1_000,
+    },
+  };
+}
+
+function deterministicCandidateArrangementResult(
+  job: CandidateEstimateJob,
+): CandidateEstimateResult {
+  return {
+    ...job,
+    engine: { name: "orca", version: "test", imageSha256: "b".repeat(64) },
+    outcome: {
+      status: "failed",
+      failureClass: "deterministic_invalid",
+      code: "INVALID_GEOMETRY",
+      retryable: false,
+      message: "Requested copies do not fit on the production plate",
+      retryAfterMilliseconds: null,
     },
   };
 }

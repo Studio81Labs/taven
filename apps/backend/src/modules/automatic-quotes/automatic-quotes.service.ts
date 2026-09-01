@@ -50,6 +50,7 @@ import {
   type AutomaticQuotePricingItem,
   type AutomaticQuotePricingParameters,
 } from "./automatic-quote-pricing";
+import { candidatePlateCapacities } from "./candidate-plate-capacities";
 import type {
   AttachAutomaticQuoteModelFileDto,
   AutomaticQuoteSessionCreatedDto,
@@ -2381,114 +2382,116 @@ export class AutomaticQuotesService {
             const calibration = machine.calibrations[0];
             if (!calibration) continue;
             for (const inventory of machine.inventories) {
-              const partsPerPlate = Math.min(
-                item.referencePartsPerPlate ?? quantity,
-                quantity,
-              );
-              const arrangementRevisionId = deterministicUuid(
-                `automatic-arrangement:${bindingId}:${item.id}:${shipmentPlan.id}:${quantity}`,
-              );
-              const arrangementContentSha256 = fingerprintOf({
-                bindingId,
-                itemId: item.id,
-                shipmentPlanId: shipmentPlan.id,
-                quantity,
-                partsPerPlate,
-              });
-              await this.prisma.arrangementRevision.upsert({
-                where: { id: arrangementRevisionId },
-                create: {
-                  id: arrangementRevisionId,
-                  contentSha256: arrangementContentSha256,
-                },
-                update: {},
-              });
-              const inputBase = {
-                geometry: {
-                  sourceModelFileId: item.sourceModelFile.id,
-                  sourceContentSha256: item.sourceModelFile.contentHash,
-                  modelGeometryId: item.modelGeometry.id,
-                  canonicalObjectKey: item.modelGeometry.canonicalObjectKey,
-                  geometrySha256: item.modelGeometry.geometryHash,
-                  bodyIds: draft.bodyIds,
-                  selectionSha256: draft.selectionSha256,
-                },
-                machineId: machine.id,
-                machineProfile: {
-                  revisionId: profile.id,
-                  contentSha256: slicerSettingsSnapshot(profile.settings)
-                    .contentSha256,
-                  slicerEngine: profile.slicerEngine,
-                  slicerVersion: profile.slicerVersion,
-                  productionArtifactFormat: "gcode_3mf" as const,
-                },
-                machineCalibration: {
-                  revisionId: calibration.id,
-                  contentSha256: slicerSettingsSnapshot(calibration.settings)
-                    .contentSha256,
-                },
-                printConfig: {
-                  revisionId: item.printConfigRevision.id,
-                  contentSha256: slicerSettingsSnapshot(
-                    item.printConfigRevision.settings,
-                  ).contentSha256,
-                },
-                partsPerPlate,
-                quantity,
-                shipmentPlanId: shipmentPlan.id,
-                arrangementRevision: {
-                  revisionId: arrangementRevisionId,
-                  contentSha256: arrangementContentSha256,
-                },
-              };
-              const occupancySliceTargets = referenceOccupancies(
-                quantity,
-                partsPerPlate,
-              ).map((occupancy) => {
-                const cacheIdentitySha256 =
-                  contracts.machineOccupancyCacheIdentitySha256(
-                    inputBase,
-                    occupancy,
-                  );
-                return {
-                  partsPerPlate: occupancy,
-                  cacheIdentitySha256,
-                  analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
-                };
-              });
-              const candidateInput = { ...inputBase, occupancySliceTargets };
-              const initialJobId = deterministicUuid(
-                `automatic-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}`,
-              );
-              const dispatchIdentity =
-                await this.nextAutomaticCandidateDispatch(
-                  initialJobId,
-                  observedAt,
+              for (const partsPerPlate of candidatePlateCapacities(quantity)) {
+                const arrangementRevisionId = deterministicUuid(
+                  `automatic-arrangement:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${quantity}:${partsPerPlate}`,
                 );
-              if (!dispatchIdentity) continue;
-              const inputFingerprintSha256 = contracts.slicingInputFingerprint(
-                "candidate_estimate",
-                candidateInput,
-              );
-              const idempotencyKey = `slicer:v2:candidate_estimate:${dispatchIdentity.jobId}:${inputFingerprintSha256}`;
-              const job = contracts.CandidateEstimateJobSchema.parse({
-                contractVersion: 2,
-                kind: "candidate_estimate",
-                jobId: dispatchIdentity.jobId,
-                correlationId: orderId,
-                inputFingerprintSha256,
-                idempotencyKey,
-                attempt: dispatchIdentity.attempt,
-                input: candidateInput,
-              });
-              await this.candidateEstimates.dispatch({
-                nodeId: machine.nodeId,
-                inventoryId: inventory.id,
-                job,
-                ...(dispatchIdentity.availableAt
-                  ? { availableAt: dispatchIdentity.availableAt }
-                  : {}),
-              });
+                const arrangementContentSha256 = fingerprintOf({
+                  bindingId,
+                  itemId: item.id,
+                  shipmentPlanId: shipmentPlan.id,
+                  machineId: machine.id,
+                  machineProfileId: profile.id,
+                  machineCalibrationId: calibration.id,
+                  quantity,
+                  partsPerPlate,
+                });
+                await this.prisma.arrangementRevision.upsert({
+                  where: { id: arrangementRevisionId },
+                  create: {
+                    id: arrangementRevisionId,
+                    contentSha256: arrangementContentSha256,
+                  },
+                  update: {},
+                });
+                const inputBase = {
+                  geometry: {
+                    sourceModelFileId: item.sourceModelFile.id,
+                    sourceContentSha256: item.sourceModelFile.contentHash,
+                    modelGeometryId: item.modelGeometry.id,
+                    canonicalObjectKey: item.modelGeometry.canonicalObjectKey,
+                    geometrySha256: item.modelGeometry.geometryHash,
+                    bodyIds: draft.bodyIds,
+                    selectionSha256: draft.selectionSha256,
+                  },
+                  machineId: machine.id,
+                  machineProfile: {
+                    revisionId: profile.id,
+                    contentSha256: slicerSettingsSnapshot(profile.settings)
+                      .contentSha256,
+                    slicerEngine: profile.slicerEngine,
+                    slicerVersion: profile.slicerVersion,
+                    productionArtifactFormat: "gcode_3mf" as const,
+                  },
+                  machineCalibration: {
+                    revisionId: calibration.id,
+                    contentSha256: slicerSettingsSnapshot(calibration.settings)
+                      .contentSha256,
+                  },
+                  printConfig: {
+                    revisionId: item.printConfigRevision.id,
+                    contentSha256: slicerSettingsSnapshot(
+                      item.printConfigRevision.settings,
+                    ).contentSha256,
+                  },
+                  partsPerPlate,
+                  quantity,
+                  shipmentPlanId: shipmentPlan.id,
+                  arrangementRevision: {
+                    revisionId: arrangementRevisionId,
+                    contentSha256: arrangementContentSha256,
+                  },
+                };
+                const occupancySliceTargets = referenceOccupancies(
+                  quantity,
+                  partsPerPlate,
+                ).map((occupancy) => {
+                  const cacheIdentitySha256 =
+                    contracts.machineOccupancyCacheIdentitySha256(
+                      inputBase,
+                      occupancy,
+                    );
+                  return {
+                    partsPerPlate: occupancy,
+                    cacheIdentitySha256,
+                    analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
+                  };
+                });
+                const candidateInput = { ...inputBase, occupancySliceTargets };
+                const initialJobId = deterministicUuid(
+                  `automatic-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}:${partsPerPlate}`,
+                );
+                const dispatchIdentity =
+                  await this.nextAutomaticCandidateDispatch(
+                    initialJobId,
+                    observedAt,
+                  );
+                if (!dispatchIdentity) continue;
+                const inputFingerprintSha256 =
+                  contracts.slicingInputFingerprint(
+                    "candidate_estimate",
+                    candidateInput,
+                  );
+                const idempotencyKey = `slicer:v2:candidate_estimate:${dispatchIdentity.jobId}:${inputFingerprintSha256}`;
+                const job = contracts.CandidateEstimateJobSchema.parse({
+                  contractVersion: 2,
+                  kind: "candidate_estimate",
+                  jobId: dispatchIdentity.jobId,
+                  correlationId: orderId,
+                  inputFingerprintSha256,
+                  idempotencyKey,
+                  attempt: dispatchIdentity.attempt,
+                  input: candidateInput,
+                });
+                await this.candidateEstimates.dispatch({
+                  nodeId: machine.nodeId,
+                  inventoryId: inventory.id,
+                  job,
+                  ...(dispatchIdentity.availableAt
+                    ? { availableAt: dispatchIdentity.availableAt }
+                    : {}),
+                });
+              }
             }
           }
         }
