@@ -25,6 +25,7 @@ export type WorkerConfig = {
 
 const DEFAULT_ORCA_IMAGE_SHA256 =
   "bd93c5e4f02ee51509351fa7bf005773a7abd257d768f83a626abf7a319f786f";
+const PINNED_ORCA_VERSION = "2.4.2";
 const MAXIMUM_ORCA_TIMEOUT_MILLISECONDS = 30 * 60 * 1_000;
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -63,6 +64,16 @@ function sha256(value: string | undefined, fallback: string, name: string) {
   const parsed = value?.trim() || fallback;
   if (!/^[a-f0-9]{64}$/u.test(parsed)) {
     throw new Error(`${name} must be a lowercase SHA-256 digest`);
+  }
+  return parsed;
+}
+
+function pinnedOrcaVersion(value: string | undefined): string {
+  const parsed = value?.trim() || PINNED_ORCA_VERSION;
+  if (parsed !== PINNED_ORCA_VERSION) {
+    throw new Error(
+      `TAVEN_ORCA_VERSION must match the pinned runtime ${PINNED_ORCA_VERSION}`,
+    );
   }
   return parsed;
 }
@@ -109,7 +120,7 @@ export function readWorkerConfig(
     engine: {
       executable: env.TAVEN_ORCA_EXECUTABLE?.trim() || "/opt/orca/AppRun",
       name: "orcaslicer",
-      version: env.TAVEN_ORCA_VERSION?.trim() || "2.4.2",
+      version: pinnedOrcaVersion(env.TAVEN_ORCA_VERSION),
       imageSha256: sha256(
         env.TAVEN_ORCA_IMAGE_SHA256,
         DEFAULT_ORCA_IMAGE_SHA256,

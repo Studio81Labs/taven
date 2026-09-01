@@ -58,6 +58,12 @@ describe("worker configuration", () => {
     expect(() =>
       readWorkerConfig({
         ...requiredEnvironment,
+        TAVEN_ORCA_VERSION: "2.4.3",
+      }),
+    ).toThrow("must match the pinned runtime 2.4.2");
+    expect(() =>
+      readWorkerConfig({
+        ...requiredEnvironment,
         TAVEN_ORCA_TIMEOUT_MILLISECONDS: "1800001",
       }),
     ).toThrow("must not exceed 1800000");
