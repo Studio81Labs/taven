@@ -572,22 +572,6 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       await transaction.inventory.create({
         data: {
           nodeId: compatibleMachine.nodeId,
-          machineId: compatibleMachine.id,
-          sku: `${inventory.sku}-no-color-preference`,
-          material: inventory.material,
-          vendor: inventory.vendor,
-          color: null,
-          lotCode: inventory.lotCode,
-          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
-          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
-          currency: inventory.currency,
-          remainingMilligrams: 1n,
-          status: "AVAILABLE",
-        },
-      });
-      await transaction.inventory.create({
-        data: {
-          nodeId: compatibleMachine.nodeId,
           machineId: undersizedMachineId,
           sku: `${inventory.sku}-undersized`,
           material: inventory.material,
@@ -713,8 +697,31 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           printConfigRevisionId: foundation.printConfigRevisionId,
           quality: printConfig.quality,
         }),
+        expect.objectContaining({
+          color: null,
+          infillPreset: "STANDARD",
+          material: "PLA",
+          printConfigRevisionId: foundation.printConfigRevisionId,
+          quality: printConfig.quality,
+        }),
       ]),
     );
+    expect(
+      (
+        created.body.configurationOptions as Array<{
+          color: string | null;
+          infillPreset: string;
+          material: string;
+          printConfigRevisionId: string;
+        }>
+      ).filter(
+        (option) =>
+          option.color === null &&
+          option.infillPreset === "STANDARD" &&
+          option.material === "PLA" &&
+          option.printConfigRevisionId === foundation.printConfigRevisionId,
+      ),
+    ).toHaveLength(1);
     expect(created.body.configurationEditable).toBe(true);
     expect(created.body.deliveryOptions).toEqual(
       expect.arrayContaining([

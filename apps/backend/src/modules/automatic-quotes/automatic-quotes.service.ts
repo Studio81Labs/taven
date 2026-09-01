@@ -4533,7 +4533,7 @@ export class AutomaticQuotesService {
         reference.id
     `;
     const options = new Map<string, (typeof rows)[number]>();
-    for (const row of rows) {
+    const addOption = (row: (typeof rows)[number]) => {
       const key = JSON.stringify([
         row.printConfigRevisionId,
         row.material,
@@ -4542,6 +4542,10 @@ export class AutomaticQuotesService {
         row.infillPercent,
       ]);
       if (!options.has(key)) options.set(key, row);
+    };
+    for (const row of rows) {
+      addOption(row);
+      if (row.color !== null) addOption({ ...row, color: null });
     }
     return [...options.values()].map((row) => ({
       referenceProfileId: row.referenceProfileId,
