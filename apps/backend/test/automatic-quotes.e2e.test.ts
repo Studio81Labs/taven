@@ -397,6 +397,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       bodyId: string,
       quantity: number,
       command: string,
+      fitSensitive = false,
     ) =>
       api(
         `automatic-quote-sessions/${sessionId}/items/${ordinal}/configuration`,
@@ -412,7 +413,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
             infillPreset: "STANDARD",
             quantity,
             preferredPartsPerPlate: 1,
-            fitSensitive: ordinal === 1,
+            fitSensitive,
           }),
         },
       );
@@ -533,10 +534,29 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(await prisma.orderItem.count({ where: { orderId } })).toBe(0);
 
     expect(
-      (await configure(1, "body-c", 2, "configure-current-1")).response.status,
+      (await configure(1, "body-c", 2, "configure-current-1", true)).response
+        .status,
     ).toBe(200);
     await seedReference(await draftItem(0), "body-b", "current-0");
     await seedReference(await draftItem(1), "body-c", "current-1");
+
+    const fitHandoff = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("fit-handoff")),
+      },
+    );
+    expect(fitHandoff.response.status).toBe(200);
+    expect(fitHandoff.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(fitHandoff.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["FIT_SENSITIVE"]),
+    });
+    expect(await prisma.orderItem.count({ where: { orderId } })).toBe(0);
+    expect(
+      (await configure(1, "body-c", 2, "configure-fit-cleared")).response
+        .status,
+    ).toBe(200);
 
     const rough = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
@@ -1052,6 +1072,27 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         where: { id: firstBinding.orderPriceBindingId },
       }),
     ).resolves.toMatchObject({ invalidatedAt: expect.any(Date) });
+
+    const warningDraft = await draftItem(0);
+    await prisma.preflightFinding.createMany({
+      data: Array.from({ length: 4 }, (_, index) => ({
+        modelFileId: warningDraft.sourceModelFileId,
+        modelGeometryId: warningDraft.targetModelGeometryId,
+        inspectionRevision: sha(`${scope}:warning-revision`),
+        code: `AUTOMATIC_WARNING_${index + 1}`,
+        severity: "WARNING" as const,
+        message: `warning ${index + 1}`,
+        evidence: { acknowledgementKey: `warning-risk-${index + 1}` },
+      })),
+    });
+    const warningHandoff = await api(`automatic-quote-sessions/${sessionId}`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(warningHandoff.response.status).toBe(200);
+    expect(warningHandoff.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(warningHandoff.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["RISK_ACKNOWLEDGEMENT_LIMIT_EXCEEDED"]),
+    });
   }, 120_000);
 
   it("surfaces unsupported 3MF worker results without duplicate quote work", async () => {

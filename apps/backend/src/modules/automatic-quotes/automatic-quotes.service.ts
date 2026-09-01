@@ -1099,7 +1099,9 @@ export class AutomaticQuotesService {
       where: { orderId },
       include: { riskDecisions: true },
     });
+    let warningCount = 0;
     for (const item of items) {
+      if (item.fitSensitive) return false;
       const findings = await transaction.preflightFinding.findMany({
         where: {
           modelFileId: item.sourceModelFileId,
@@ -1116,6 +1118,10 @@ export class AutomaticQuotesService {
       ) {
         return false;
       }
+      warningCount += findings.filter(
+        (finding) => finding.severity === PreflightSeverity.WARNING,
+      ).length;
+      if (warningCount > 3) return false;
       const decisionByFinding = new Map(
         item.riskDecisions
           .filter(
@@ -2063,7 +2069,15 @@ export class AutomaticQuotesService {
             item,
             geometry,
             occupancies,
-          ).catch(() => null)
+          ).catch((error: unknown) => {
+            if (
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === "P2025"
+            ) {
+              return null;
+            }
+            throw error;
+          })
         : null;
       let bounds: {
         volumeCubicMicrometers: bigint;
@@ -2354,6 +2368,19 @@ export class AutomaticQuotesService {
       )
     ) {
       handoffReasons.push("RISK_DECLINED");
+    }
+    if (itemDtos.some((item) => item.fitSensitive)) {
+      handoffReasons.push("FIT_SENSITIVE");
+    }
+    const warningCount = itemDtos.reduce(
+      (count, item) =>
+        count +
+        item.findings.filter((finding) => finding.severity === "WARNING")
+          .length,
+      0,
+    );
+    if (warningCount > 3) {
+      handoffReasons.push("RISK_ACKNOWLEDGEMENT_LIMIT_EXCEEDED");
     }
     const readyItems =
       itemDtos.length > 0 && itemDtos.every((item) => item.status === "READY");

@@ -178,4 +178,43 @@ describe("automatic quote pricing preparation", () => {
       ]),
     );
   });
+
+  it("applies the automatic-value ceiling to the fee-inclusive checkout total", async () => {
+    const destination = {
+      deliveryDestination: {
+        id: "destination",
+        capabilitySnapshot: { supportedCategoryIds: ["box"] },
+      },
+      shipmentPlanIdForOrdinal: (ordinal: number) => `plan-${ordinal}`,
+    };
+    const baselineInput = input(destination);
+    const baseline = await prepareAutomaticQuote(baselineInput);
+    expect(baseline.prepared.kind).toBe("binding_quote");
+    if (baseline.prepared.kind !== "binding_quote") return;
+    const contractTotal = baseline.prepared.price.contractTotal.minorUnits;
+    expect(contractTotal).toBeGreaterThan(
+      baseline.prepared.price.breakdown.subtotal.minorUnits,
+    );
+
+    const withCap = (maximumAutomaticAmountMinor: bigint) => ({
+      ...baselineInput,
+      priceList: {
+        ...baselineInput.priceList,
+        parameters: {
+          automaticQuote: {
+            ...parameters.automaticQuote,
+            maximumAutomaticAmountMinor: maximumAutomaticAmountMinor.toString(),
+          },
+        },
+      },
+    });
+    const overLimit = await prepareAutomaticQuote(withCap(contractTotal - 1n));
+    expect(overLimit.prepared.kind).toBe("custom_request");
+    expect(overLimit.prepared.reasons).toContain(
+      "AUTOMATIC_AMOUNT_LIMIT_EXCEEDED",
+    );
+
+    const atLimit = await prepareAutomaticQuote(withCap(contractTotal));
+    expect(atLimit.prepared.kind).toBe("binding_quote");
+  });
 });

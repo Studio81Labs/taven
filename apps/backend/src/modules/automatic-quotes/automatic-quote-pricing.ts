@@ -292,35 +292,47 @@ export async function prepareAutomaticQuote(
       );
     }
   }
-  return {
-    prepared: prepareOrderQuote({
-      ...common,
-      destinationShipment: {
-        deliveryDestinationId: input.deliveryDestination.id,
-        deliveryCapabilitySnapshotId: capabilitySnapshotIdentity(
-          input.deliveryDestination.capabilitySnapshot,
-        ),
-        shipmentPlanIdsByOrdinal,
-        plannerInput,
-        categoryPricing: parameters.shipmentCategories.map((category) => ({
-          categoryId: category.id,
-          carrierCost: Money.of(
-            category.carrierCostMinor,
-            input.priceList.currency,
-          ),
-          customerShippingRate: Money.of(
-            category.customerShippingRateMinor,
-            input.priceList.currency,
-          ),
-          packagingCost: Money.of(
-            category.packagingCostMinor,
-            input.priceList.currency,
-          ),
-        })),
-      },
-    }),
-    parameters,
+  const destinationShipment = {
+    deliveryDestinationId: input.deliveryDestination.id,
+    deliveryCapabilitySnapshotId: capabilitySnapshotIdentity(
+      input.deliveryDestination.capabilitySnapshot,
+    ),
+    shipmentPlanIdsByOrdinal,
+    plannerInput,
+    categoryPricing: parameters.shipmentCategories.map((category) => ({
+      categoryId: category.id,
+      carrierCost: Money.of(
+        category.carrierCostMinor,
+        input.priceList.currency,
+      ),
+      customerShippingRate: Money.of(
+        category.customerShippingRateMinor,
+        input.priceList.currency,
+      ),
+      packagingCost: Money.of(
+        category.packagingCostMinor,
+        input.priceList.currency,
+      ),
+    })),
   };
+  const bindingCandidate = prepareOrderQuote({
+    ...common,
+    destinationShipment,
+  });
+  const prepared =
+    bindingCandidate.kind !== "binding_quote" ||
+    bindingCandidate.price.contractTotal.minorUnits <=
+      parameters.maximumAutomaticAmountMinor
+      ? bindingCandidate
+      : prepareOrderQuote({
+          ...common,
+          automaticQuoteFacts: {
+            ...common.automaticQuoteFacts,
+            withinAutomaticAmountLimit: false,
+          },
+          destinationShipment,
+        });
+  return { prepared, parameters };
 }
 
 function productionMetrics(
