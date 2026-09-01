@@ -56,6 +56,7 @@ const MAX_TRIANGLES = 1_000_000;
 const MAX_COMPONENT_EDGES = 4_096;
 const MAX_COMPONENT_DEPTH = 64;
 const MAX_MODEL_OBJECTS = 4_096;
+const MAX_ASSIGNMENT_IDS = 256;
 const MAX_SIGNED_INT64 = 9_223_372_036_854_775_807n;
 const ZIP_EOCD = 0x06054b50;
 const ZIP_CENTRAL_FILE = 0x02014b50;
@@ -1510,6 +1511,16 @@ function parseThreeMf(bytes: Uint8Array): ParsedModel {
   const extruderIds = new Set(
     parsedBodies.flatMap((item) => item.extruderAssignmentIds),
   );
+  if (
+    materialIds.size > MAX_ASSIGNMENT_IDS ||
+    extruderIds.size > MAX_ASSIGNMENT_IDS
+  ) {
+    throw new SlicingWorkerError(
+      "deterministic_invalid",
+      "RESOURCE_LIMIT_EXCEEDED",
+      "3MF exceeds the distinct material or extruder assignment limit",
+    );
+  }
   return {
     unitHint: root.unitHint,
     bodies: parsedBodies,

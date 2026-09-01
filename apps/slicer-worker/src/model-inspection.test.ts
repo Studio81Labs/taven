@@ -601,6 +601,47 @@ describe("safe model inspection", () => {
     ).toThrow("individual offer");
   });
 
+  it("rejects 3MFs with more assignment identities than the result contract", () => {
+    const materialResources = Array.from(
+      { length: 257 },
+      (_, index) => `<base name="material-${index}" displaycolor="#FFFFFFFF"/>`,
+    ).join("");
+    const materialTriangles = Array.from(
+      { length: 257 },
+      (_, index) => `<triangle v1="0" v2="2" v3="1" pid="7" p1="${index}"/>`,
+    ).join("");
+    const materialSource = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
+        <basematerials id="7">${materialResources}</basematerials>
+        <object id="1"><mesh>${cubeMesh.replace("</triangles>", `${materialTriangles}</triangles>`)}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
+    });
+    const paintAssignments = Array.from({ length: 257 }, (_, index) =>
+      String((index + 1) << 2),
+    ).join(" ");
+    const paintedMesh = cubeMesh.replace(
+      '<triangle v1="0" v2="2" v3="1"/>',
+      `<triangle v1="0" v2="2" v3="1" slic3r:mmu_segmentation="${paintAssignments}"/>`,
+    );
+    const extruderSource = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" xmlns:slic3r="http://schemas.slic3r.org/3mf/2017/06" unit="millimeter"><resources>
+        <object id="1"><mesh>${paintedMesh}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
+    });
+
+    for (const source of [materialSource, extruderSource]) {
+      try {
+        inspectModel("3mf", source);
+        expect.fail("over-limit assignments should fail");
+      } catch (error) {
+        expect(error).toMatchObject({
+          failureClass: "deterministic_invalid",
+          code: "RESOURCE_LIMIT_EXCEEDED",
+        });
+      }
+    }
+  });
+
   it("blocks a selection that combines bodies with different materials", () => {
     const materialOne = cubeMesh.replace(
       '<triangle v1="0" v2="2" v3="1"/>',

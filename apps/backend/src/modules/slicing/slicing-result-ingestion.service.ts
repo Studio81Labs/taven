@@ -53,6 +53,13 @@ type SliceExpectation = {
   slicerVersion: string;
 };
 
+type UploadedArtifact = {
+  objectKey: string;
+  owner: "modelGeometry" | "sliceResult";
+};
+
+const MAX_SIGNED_INT64 = 9_223_372_036_854_775_807n;
+
 const severity = {
   info: PreflightSeverity.INFO,
   warning: PreflightSeverity.WARNING,
@@ -85,6 +92,25 @@ function staleProductionResult(
   };
 }
 
+function uploadedArtifact(result: SlicingResult): UploadedArtifact | null {
+  if (result.outcome.status !== "succeeded") return null;
+  if (result.kind === "model_inspection") {
+    return result.outcome.canonicalGeometry
+      ? {
+          objectKey: result.outcome.canonicalGeometry.canonicalObjectKey,
+          owner: "modelGeometry",
+        }
+      : null;
+  }
+  if (result.kind === "reference_slice" || result.kind === "production_slice") {
+    return {
+      objectKey: result.outcome.artifact.objectKey,
+      owner: "sliceResult",
+    };
+  }
+  return null;
+}
+
 @Injectable()
 export class SlicingResultIngestionService {
   constructor(
@@ -98,8 +124,9 @@ export class SlicingResultIngestionService {
     result: SlicingResult;
     resultFingerprintSha256: string;
   }): Promise<void> {
-    const cleanupObjectKey = await this.prisma.$transaction(
-      async (transaction) => {
+    let cleanupObjectKey: string | null;
+    try {
+      cleanupObjectKey = await this.prisma.$transaction(async (transaction) => {
         await transaction.$queryRaw`
         SELECT pg_advisory_xact_lock(hashtextextended(${input.dispatchId}, 0))::text
       `;
@@ -163,10 +190,35 @@ export class SlicingResultIngestionService {
           },
         });
         return cleanupArtifactObjectKey(materialization);
-      },
-    );
+      });
+    } catch (error) {
+      if (error instanceof PermanentSlicingResultIngestionError) {
+        await this.deleteUnownedUploadedArtifact(input.result);
+      }
+      throw error;
+    }
     if (cleanupObjectKey) {
       await this.objects.deleteObjects([cleanupObjectKey]);
+    }
+  }
+
+  private async deleteUnownedUploadedArtifact(
+    result: SlicingResult,
+  ): Promise<void> {
+    const artifact = uploadedArtifact(result);
+    if (!artifact) return;
+    const owner =
+      artifact.owner === "modelGeometry"
+        ? await this.prisma.modelGeometry.findUnique({
+            where: { canonicalObjectKey: artifact.objectKey },
+            select: { id: true },
+          })
+        : await this.prisma.sliceResult.findUnique({
+            where: { artifactObjectKey: artifact.objectKey },
+            select: { id: true },
+          });
+    if (!owner) {
+      await this.objects.deleteObjects([artifact.objectKey]);
     }
   }
 
@@ -205,6 +257,15 @@ export class SlicingResultIngestionService {
           "canonical inspection result has no geometry artifact",
         );
       }
+      const aggregateVolumeCubicMicrometers = result.outcome.bodies.reduce(
+        (total, body) => total + BigInt(body.volumeCubicMicrometers),
+        0n,
+      );
+      if (aggregateVolumeCubicMicrometers > MAX_SIGNED_INT64) {
+        throw new PermanentSlicingResultIngestionError(
+          "canonical geometry aggregate volume exceeds PostgreSQL bigint",
+        );
+      }
       const expected = {
         id: artifact.modelGeometryId,
         sourceModelFileId: result.input.source.modelFileId,
@@ -216,10 +277,7 @@ export class SlicingResultIngestionService {
         canonicalObjectKey: artifact.canonicalObjectKey,
         geometryHash: artifact.geometrySha256,
         canonicalizerRevision: result.input.canonicalizerRevision,
-        volumeCubicMicrometers: result.outcome.bodies.reduce(
-          (total, body) => total + BigInt(body.volumeCubicMicrometers),
-          0n,
-        ),
+        volumeCubicMicrometers: aggregateVolumeCubicMicrometers,
         boundsXMicrometers: BigInt(
           result.outcome.metrics.boundingBox.xMicrometers,
         ),

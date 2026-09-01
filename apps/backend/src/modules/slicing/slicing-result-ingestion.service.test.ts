@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Prisma } from "@prisma/client";
 import type {
+  ModelInspectionResult,
   ProductionSliceResult,
+  ReferenceSliceResult,
   SlicingJob,
 } from "@taven/slicer-contracts" with { "resolution-mode": "import" };
 import type { PrismaService } from "../../prisma/prisma.service";
 import type { ObjectStorage } from "../storage/object-storage.port";
-import { SlicingResultIngestionService } from "./slicing-result-ingestion.service";
+import {
+  PermanentSlicingResultIngestionError,
+  SlicingResultIngestionService,
+} from "./slicing-result-ingestion.service";
 
 const jobId = "00000000-0000-4000-8000-000000000002";
 const dispatchId = "00000000-0000-4000-8000-000000000003";
 const fingerprint = "a".repeat(64);
 const artifactObjectKey = `gcode/${jobId}/toolpaths.gcode.3mf`;
+const canonicalObjectKey = `geometries/${jobId}/canonical`;
 
 function staleProductionHarness(input?: {
   receipt?: Record<string, unknown> | null;
@@ -69,6 +75,72 @@ function productionInput(outcome: "succeeded" | "failed") {
     dispatchId,
     job: { jobId } as SlicingJob,
     result,
+    resultFingerprintSha256: fingerprint,
+  };
+}
+
+function permanentFailureHarness(input?: {
+  canonicalOwner?: boolean;
+  sliceOwner?: boolean;
+  deleteObjects?: ReturnType<typeof vi.fn>;
+}) {
+  const failure = new PermanentSlicingResultIngestionError(
+    "immutable input was retired",
+  );
+  const modelGeometryFindUnique = vi
+    .fn()
+    .mockResolvedValue(input?.canonicalOwner ? { id: jobId } : null);
+  const sliceResultFindUnique = vi
+    .fn()
+    .mockResolvedValue(input?.sliceOwner ? { id: jobId } : null);
+  const prisma = {
+    $transaction: vi.fn().mockRejectedValue(failure),
+    modelGeometry: { findUnique: modelGeometryFindUnique },
+    sliceResult: { findUnique: sliceResultFindUnique },
+  } as unknown as PrismaService;
+  const deleteObjects =
+    input?.deleteObjects ?? vi.fn().mockResolvedValue(undefined);
+  return {
+    deleteObjects,
+    failure,
+    modelGeometryFindUnique,
+    service: new SlicingResultIngestionService(prisma, {
+      deleteObjects,
+    } as unknown as ObjectStorage),
+    sliceResultFindUnique,
+  };
+}
+
+function permanentReferenceInput() {
+  return {
+    dispatchId,
+    job: { jobId } as SlicingJob,
+    result: {
+      contractVersion: 2,
+      kind: "reference_slice",
+      jobId,
+      outcome: {
+        status: "succeeded",
+        artifact: { objectKey: artifactObjectKey },
+      },
+    } as unknown as ReferenceSliceResult,
+    resultFingerprintSha256: fingerprint,
+  };
+}
+
+function permanentCanonicalInput() {
+  return {
+    dispatchId,
+    job: { jobId } as SlicingJob,
+    result: {
+      contractVersion: 2,
+      kind: "model_inspection",
+      jobId,
+      outcome: {
+        status: "succeeded",
+        canonicalGeometry: { canonicalObjectKey },
+      },
+    } as unknown as ModelInspectionResult,
     resultFingerprintSha256: fingerprint,
   };
 }
@@ -162,5 +234,128 @@ describe("slicing result ingestion", () => {
     });
     await materializedHarness.service.ingest(productionInput("succeeded"));
     expect(materializedHarness.deleteObjects).not.toHaveBeenCalled();
+  });
+
+  it("deletes unowned reference and canonical artifacts after permanent rejection", async () => {
+    const reference = permanentFailureHarness();
+    await expect(
+      reference.service.ingest(permanentReferenceInput()),
+    ).rejects.toBe(reference.failure);
+    expect(reference.sliceResultFindUnique).toHaveBeenCalledWith({
+      where: { artifactObjectKey },
+      select: { id: true },
+    });
+    expect(reference.deleteObjects).toHaveBeenCalledWith([artifactObjectKey]);
+
+    const canonical = permanentFailureHarness();
+    await expect(
+      canonical.service.ingest(permanentCanonicalInput()),
+    ).rejects.toBe(canonical.failure);
+    expect(canonical.modelGeometryFindUnique).toHaveBeenCalledWith({
+      where: { canonicalObjectKey },
+      select: { id: true },
+    });
+    expect(canonical.deleteObjects).toHaveBeenCalledWith([canonicalObjectKey]);
+  });
+
+  it("retries permanent-result cleanup when object storage is unavailable", async () => {
+    const deleteObjects = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("storage unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const harness = permanentFailureHarness({ deleteObjects });
+    const input = permanentReferenceInput();
+
+    await expect(harness.service.ingest(input)).rejects.toThrow(
+      "storage unavailable",
+    );
+    await expect(harness.service.ingest(input)).rejects.toBe(harness.failure);
+
+    expect(deleteObjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves permanently rejected artifacts that already have an owner", async () => {
+    const reference = permanentFailureHarness({ sliceOwner: true });
+    await expect(
+      reference.service.ingest(permanentReferenceInput()),
+    ).rejects.toBe(reference.failure);
+    expect(reference.deleteObjects).not.toHaveBeenCalled();
+
+    const canonical = permanentFailureHarness({ canonicalOwner: true });
+    await expect(
+      canonical.service.ingest(permanentCanonicalInput()),
+    ).rejects.toBe(canonical.failure);
+    expect(canonical.deleteObjects).not.toHaveBeenCalled();
+  });
+
+  it("rejects aggregate canonical volume that cannot fit PostgreSQL bigint", async () => {
+    const findMany = vi.fn();
+    const create = vi.fn();
+    const transaction = {
+      modelFile: { findFirst: vi.fn().mockResolvedValue({ id: jobId }) },
+      modelGeometry: { findMany, create },
+    } as unknown as Prisma.TransactionClient;
+    const service = new SlicingResultIngestionService(
+      {} as PrismaService,
+      {} as ObjectStorage,
+    ) as unknown as {
+      ingestInspection(
+        transaction: Prisma.TransactionClient,
+        result: ModelInspectionResult,
+        resultFingerprintSha256: string,
+      ): Promise<Prisma.InputJsonObject>;
+    };
+    const result = {
+      kind: "model_inspection",
+      input: {
+        source: {
+          modelFileId: jobId,
+          objectKey: "models/source",
+          contentSha256: "b".repeat(64),
+        },
+        operation: {
+          mode: "canonicalize_selection",
+          bodyIds: ["body-0001", "body-0002"],
+        },
+        canonicalizerRevision: "canonicalizer-v1",
+      },
+      outcome: {
+        status: "succeeded",
+        canonicalGeometry: {
+          modelGeometryId: jobId,
+          canonicalObjectKey,
+          geometrySha256: "c".repeat(64),
+          bodyIds: ["body-0001", "body-0002"],
+          selectionSha256: "d".repeat(64),
+          appliedUnitConversion: {
+            sourceUnit: "millimeter",
+            targetUnit: "millimeter",
+            scaleFactorPpm: 1_000_000,
+          },
+        },
+        bodies: [
+          {
+            volumeCubicMicrometers: "9223372036854775807",
+            triangleCount: 1,
+          },
+          { volumeCubicMicrometers: "1", triangleCount: 1 },
+        ],
+        metrics: {
+          boundingBox: {
+            xMicrometers: "1",
+            yMicrometers: "1",
+            zMicrometers: "1",
+          },
+        },
+      },
+    } as unknown as ModelInspectionResult;
+
+    await expect(
+      service.ingestInspection(transaction, result, fingerprint),
+    ).rejects.toThrow(
+      "canonical geometry aggregate volume exceeds PostgreSQL bigint",
+    );
+    expect(findMany).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 });
