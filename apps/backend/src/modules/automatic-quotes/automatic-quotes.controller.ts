@@ -4,6 +4,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Ip,
   Param,
   Post,
   Put,
@@ -58,9 +59,14 @@ export class AutomaticQuotesController {
   @ApiConflictResponse({ description: "Idempotency input changed" })
   create(
     @Body() body: CreateAutomaticQuoteSessionDto,
+    @Ip() clientAddress: string,
     @Headers("idempotency-key") idempotencyKey?: string,
   ): Promise<AutomaticQuoteSessionCreatedDto> {
-    return this.automaticQuotes.createSession(body, idempotencyKey);
+    return this.automaticQuotes.createSession(
+      body,
+      clientAddress,
+      idempotencyKey,
+    );
   }
 
   @Get(":sessionId")

@@ -1,13 +1,18 @@
 import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import type { CandidateEstimateJob } from "@taven/slicer-contracts" with {
+import { Prisma } from "@prisma/client";
+import type {
+  CandidateEstimateJob,
+  CandidateEstimateResult,
+} from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../src/app.module";
+import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { PersistenceFactory } from "./support/persistence-factory";
@@ -61,6 +66,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
   let app: INestApplication;
   let baseUrl: URL;
   let prisma: PrismaService;
+  let automaticQuotes: AutomaticQuotesService;
   let candidates: CandidateEstimateService;
   let pool: Pool;
 
@@ -72,6 +78,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     await app.listen(0, "127.0.0.1");
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
+    automaticQuotes = app.get(AutomaticQuotesService);
     candidates = app.get(CandidateEstimateService);
     pool = new Pool({ connectionString: databaseUrl });
   });
@@ -80,6 +87,26 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     await app?.close();
     await pool?.end();
   }, 30_000);
+
+  it("binds create-session idempotency replay to the initiating client", async () => {
+    const idempotencyKey = key("client-bound-create");
+    const body = { attribution: { campaign: "client-bound" } };
+    const created = await automaticQuotes.createSession(
+      body,
+      "198.51.100.10",
+      idempotencyKey,
+    );
+    const replayed = await automaticQuotes.createSession(
+      body,
+      "::ffff:198.51.100.10",
+      idempotencyKey,
+    );
+    expect(replayed.sessionId).toBe(created.sessionId);
+    expect(replayed.sessionToken).toBe(created.sessionToken);
+    await expect(
+      automaticQuotes.createSession(body, "198.51.100.11", idempotencyKey),
+    ).rejects.toMatchObject({ status: 409 });
+  });
 
   it("resumes a quote through binding, complete reservation, and endpoint replacement", async () => {
     const sql = await pool.connect();
@@ -107,6 +134,120 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     await prisma.inventory.update({
       where: { id: foundation.inventoryId },
       data: { remainingMilligrams: 1_000_000n },
+    });
+    const compatibleMachine = await prisma.machine.findUniqueOrThrow({
+      where: { id: foundation.machineId },
+      include: {
+        machineCapability: true,
+        calibrations: { where: { state: "ACTIVE" } },
+        inventories: { where: { status: "AVAILABLE" } },
+      },
+    });
+    const invalidMachineId = randomUUID();
+    const invalidCalibrationId = randomUUID();
+    const invalidCapabilityId = randomUUID();
+    const invalidProfileId = randomUUID();
+    const compatibleProfile = await prisma.machineProfile.findUniqueOrThrow({
+      where: { id: foundation.machineProfileId },
+    });
+    const incompatibleNozzle =
+      compatibleMachine.installedNozzleMicrometers + 200;
+    await prisma.$transaction(async (transaction) => {
+      await transaction.machineCapability.create({
+        data: {
+          id: invalidCapabilityId,
+          capabilityKey: `invalid-${scope}`,
+          manufacturer: compatibleMachine.machineCapability.manufacturer,
+          model: `${compatibleMachine.machineCapability.model}-invalid`,
+          buildVolumeXMicrometers:
+            compatibleMachine.machineCapability.buildVolumeXMicrometers,
+          buildVolumeYMicrometers:
+            compatibleMachine.machineCapability.buildVolumeYMicrometers,
+          buildVolumeZMicrometers:
+            compatibleMachine.machineCapability.buildVolumeZMicrometers,
+          supportedNozzleMicrometers: [
+            compatibleProfile.nozzleDiameterMicrometers,
+            incompatibleNozzle,
+          ],
+          supportedMaterials:
+            compatibleMachine.machineCapability.supportedMaterials,
+        },
+      });
+      await transaction.revisionIdentity.create({
+        data: {
+          id: invalidProfileId,
+          kind: "MACHINE_PROFILE",
+          digest: sha(`${scope}:invalid-machine-profile`),
+        },
+      });
+      await transaction.machineProfile.create({
+        data: {
+          id: invalidProfileId,
+          machineCapabilityId: invalidCapabilityId,
+          referenceProfileId: compatibleProfile.referenceProfileId,
+          material: compatibleProfile.material,
+          quality: compatibleProfile.quality,
+          nozzleDiameterMicrometers:
+            compatibleProfile.nozzleDiameterMicrometers,
+          slicerEngine: compatibleProfile.slicerEngine,
+          slicerVersion: compatibleProfile.slicerVersion,
+          settings: compatibleProfile.settings as Prisma.InputJsonValue,
+          state: "ACTIVE",
+          activatedAt: new Date(),
+        },
+      });
+      await transaction.machine.create({
+        data: {
+          id: invalidMachineId,
+          nodeId: compatibleMachine.nodeId,
+          machineCapabilityId: invalidCapabilityId,
+          code: `invalid-${scope.slice(-12)}`,
+          displayName: "Incompatible nozzle machine",
+          status: "ACTIVE",
+          installedNozzleMicrometers: incompatibleNozzle,
+        },
+      });
+      await transaction.revisionIdentity.create({
+        data: {
+          id: invalidCalibrationId,
+          kind: "MACHINE_CALIBRATION",
+          digest: sha(`${scope}:invalid-calibration`),
+        },
+      });
+      const calibration = compatibleMachine.calibrations[0];
+      if (!calibration) throw new Error("expected an active calibration");
+      await transaction.machineCalibration.create({
+        data: {
+          id: invalidCalibrationId,
+          nodeId: compatibleMachine.nodeId,
+          machineId: invalidMachineId,
+          flowRatioPartsPerMillion: calibration.flowRatioPartsPerMillion,
+          xyCompensationMicrometers: calibration.xyCompensationMicrometers,
+          elephantFootCompensationMicrometers:
+            calibration.elephantFootCompensationMicrometers,
+          settings: calibration.settings as Prisma.InputJsonValue,
+          state: "ACTIVE",
+          activatedAt: new Date(),
+        },
+      });
+      const inventory = compatibleMachine.inventories[0];
+      if (!inventory) throw new Error("expected available inventory");
+      await transaction.inventory.create({
+        data: {
+          nodeId: compatibleMachine.nodeId,
+          machineId: invalidMachineId,
+          sku: `${inventory.sku}-invalid-nozzle`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: inventory.color,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1_000_000n,
+          status: "AVAILABLE",
+        },
+      });
     });
     const printConfig = await prisma.printConfigRevision.findUniqueOrThrow({
       where: { id: foundation.printConfigRevisionId },
@@ -547,6 +688,12 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
       orderBy: { createdAt: "asc" },
     });
+    expect(
+      allCandidateDispatches.some(
+        ({ payload }) =>
+          candidateJob(payload).input.machineId === invalidMachineId,
+      ),
+    ).toBe(false);
     const dispatchesByNode = new Map<
       string,
       Array<{
@@ -593,74 +740,144 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       data: { remainingMilligrams: 1_000_000n },
     });
     const capacityBase = Date.now() + 60_000;
-    for (const [index, { job }] of candidateDispatches.entries()) {
+    const retryCandidate = candidateDispatches[0];
+    if (!retryCandidate) throw new Error("expected a candidate to retry");
+    await candidates.ingest({
+      result: retryableCandidateResult(retryCandidate.job),
+    });
+    for (const [index, { job }] of candidateDispatches.slice(1).entries()) {
       const startsAt = new Date(capacityBase + index * 120_000);
       const endsAt = new Date(startsAt.getTime() + 60_000);
-      const result = {
-        ...job,
-        engine: { name: "orca", version: "test", imageSha256: "b".repeat(64) },
-        outcome: {
-          status: "succeeded" as const,
-          metrics: {
-            boundingBox: {
-              xMicrometers: "20000",
-              yMicrometers: "20000",
-              zMicrometers: "20000",
-            },
-            objectCount: 1,
-            bodyCount: 1,
-            topology: {
-              watertight: true,
-              manifold: true,
-              normals: "consistent" as const,
-            },
-            thinWallFeatureCount: 0,
-            supportVolumeRatioPpm: 0,
-            hasPaintAssignments: false,
-            materialAssignmentCount: 0,
-            estimatedPrintSeconds: "60",
-            estimatedMaterialMilligrams: "60",
-            plateCount: 1,
-          },
-          plates: [
-            {
-              plateOrdinal: 1,
-              partsOnPlate: 1,
-              estimatedPrintSeconds: "60",
-              estimatedMaterialMilligrams: "60",
-            },
-          ],
-          occupancySlices: job.input.occupancySliceTargets.map((target) => ({
-            partsPerPlate: target.partsPerPlate,
-            cacheIdentitySha256: target.cacheIdentitySha256,
-            estimatedPrintSeconds: "60",
-            estimatedMaterialMilligrams: "60",
-            artifact: {
-              objectKey: target.analysisObjectKey,
-              sha256: sha(target.analysisObjectKey),
-            },
-          })),
-        },
-      };
       await candidates.ingest({
-        result,
+        result: successfulCandidateResult(job),
         capacityWindows: [{ startsAt, endsAt }],
         expiresAt: new Date(Date.now() + 25 * 60_000),
       });
     }
 
-    const ready = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
-      method: "POST",
-      headers: capabilityHeaders(sessionToken, key("finalize")),
+    const retryPrepares = await Promise.all(
+      ["retry-candidate-a", "retry-candidate-b"].map((command) =>
+        api(`automatic-quote-sessions/${sessionId}/prepare`, {
+          method: "POST",
+          headers: capabilityHeaders(sessionToken, key(command)),
+        }),
+      ),
+    );
+    expect(retryPrepares.map(({ response }) => response.status)).toEqual([
+      200, 200,
+    ]);
+    const retryDispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateId: retryCandidate.job.jobId,
+        aggregateType: "CandidateEstimateDispatch",
+        messageType: "slicing.candidate-estimate.requested",
+      },
+      orderBy: { createdAt: "asc" },
     });
-    expect(ready.response.status).toBe(200);
-    expect(ready.body.phase).toBe("CHECKOUT_READY");
-    expect(ready.body.checkoutReady).toBe(true);
-    expect(ready.body.bindingQuote).toMatchObject({
+    expect(retryDispatches).toHaveLength(2);
+    const retryJob = candidateJob(retryDispatches[1]!.payload);
+    expect(retryJob).toMatchObject({
+      jobId: retryCandidate.job.jobId,
+      idempotencyKey: retryCandidate.job.idempotencyKey,
+      attempt: 2,
+      inputFingerprintSha256: retryCandidate.job.inputFingerprintSha256,
+    });
+    const refreshableStartsAt = new Date(Date.now() + 2_000);
+    const refreshable = await candidates.ingest({
+      result: successfulCandidateResult(retryJob, "1"),
+      capacityWindows: [
+        {
+          startsAt: refreshableStartsAt,
+          endsAt: new Date(refreshableStartsAt.getTime() + 1_000),
+        },
+      ],
+      expiresAt: new Date(Date.now() + 5_000),
+    });
+    if (refreshable.status !== "succeeded") {
+      throw new Error("expected the retry candidate to succeed");
+    }
+
+    const shortLivedPending = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("short-lived-pending")),
+      },
+    );
+    expect(shortLivedPending.response.status).toBe(200);
+    expect(shortLivedPending.body.phase).toBe("ELIGIBILITY_PENDING");
+    expect(shortLivedPending.body.checkoutReady).toBe(false);
+
+    const refreshableEstimate =
+      await prisma.candidateResourceEstimate.findUniqueOrThrow({
+        where: { id: refreshable.candidateResourceEstimateId },
+      });
+    await new Promise((resolve) =>
+      setTimeout(
+        resolve,
+        Math.max(0, refreshableEstimate.expiresAt.getTime() - Date.now() + 50),
+      ),
+    );
+    const refreshPrepares = await Promise.all(
+      ["refresh-candidate-a", "refresh-candidate-b"].map((command) =>
+        api(`automatic-quote-sessions/${sessionId}/prepare`, {
+          method: "POST",
+          headers: capabilityHeaders(sessionToken, key(command)),
+        }),
+      ),
+    );
+    expect(refreshPrepares.map(({ response }) => response.status)).toEqual([
+      200, 200,
+    ]);
+    const refreshedDispatches = (
+      await prisma.outboxMessage.findMany({
+        where: {
+          aggregateType: "CandidateEstimateDispatch",
+          messageType: "slicing.candidate-estimate.requested",
+          payload: { path: ["job", "correlationId"], equals: orderId },
+        },
+      })
+    )
+      .map((dispatch) => ({
+        dispatch,
+        job: candidateJob(dispatch.payload),
+      }))
+      .filter(
+        ({ job }) =>
+          job.jobId !== retryCandidate.job.jobId &&
+          job.input.machineId === retryCandidate.job.input.machineId &&
+          job.input.shipmentPlanId ===
+            retryCandidate.job.input.shipmentPlanId &&
+          job.input.geometry.modelGeometryId ===
+            retryCandidate.job.input.geometry.modelGeometryId,
+      );
+    expect(refreshedDispatches).toHaveLength(1);
+    const refreshedJob = refreshedDispatches[0]!.job;
+    expect(refreshedJob).toMatchObject({
+      attempt: 1,
+      inputFingerprintSha256: retryCandidate.job.inputFingerprintSha256,
+      input: retryCandidate.job.input,
+    });
+    expect(refreshedJob.jobId).not.toBe(retryCandidate.job.jobId);
+    await candidates.ingest({
+      result: successfulCandidateResult(refreshedJob, "1"),
+      expiresAt: new Date(Date.now() + 25 * 60_000),
+    });
+    const refreshedReady = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("refresh-finalize")),
+      },
+    );
+    expect(refreshedReady.response.status).toBe(200);
+    expect(refreshedReady.body.phase).toBe("CHECKOUT_READY");
+    expect(refreshedReady.body.checkoutReady).toBe(true);
+    expect(refreshedReady.body.bindingQuote).toMatchObject({
       kind: "BINDING",
       currency: "CZK",
     });
-    const binding = ready.body.bindingQuote as {
+    const binding = refreshedReady.body.bindingQuote as {
       totalMinor: number;
       components: Array<{ amountMinor: number }>;
     };
@@ -670,6 +887,15 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         0,
       ),
     ).toBe(binding.totalMinor);
+    expect(
+      await prisma.candidateResourceEstimate.count({
+        where: {
+          modelGeometryId: retryCandidate.job.input.geometry.modelGeometryId,
+          shipmentPlanId: retryCandidate.job.input.shipmentPlanId,
+          machineId: retryCandidate.job.input.machineId,
+        },
+      }),
+    ).toBe(2);
 
     const replay = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
@@ -702,7 +928,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           aggregateId: { in: initialCandidateJobIds },
         },
       }),
-    ).toBe(initialCandidateJobIds.length);
+    ).toBe(initialCandidateJobIds.length + 1);
     const expiredReservation =
       await prisma.phaseReservationSet.findFirstOrThrow({
         where: {
@@ -1068,4 +1294,79 @@ function capabilityHeaders(
 function string(value: unknown): string {
   if (typeof value !== "string") throw new Error("expected a string");
   return value;
+}
+
+function candidateJob(value: unknown): CandidateEstimateJob {
+  const payload = value as { job?: CandidateEstimateJob };
+  if (!payload.job) throw new Error("expected a candidate job payload");
+  return payload.job;
+}
+
+function retryableCandidateResult(
+  job: CandidateEstimateJob,
+): CandidateEstimateResult {
+  return {
+    ...job,
+    engine: { name: "orca", version: "test", imageSha256: "b".repeat(64) },
+    outcome: {
+      status: "failed",
+      failureClass: "retryable_infrastructure",
+      code: "ENGINE_TIMEOUT",
+      retryable: true,
+      message: "engine timed out",
+      retryAfterMilliseconds: 1_000,
+    },
+  };
+}
+
+function successfulCandidateResult(
+  job: CandidateEstimateJob,
+  estimatedPrintSeconds = "60",
+): CandidateEstimateResult {
+  return {
+    ...job,
+    engine: { name: "orca", version: "test", imageSha256: "b".repeat(64) },
+    outcome: {
+      status: "succeeded",
+      metrics: {
+        boundingBox: {
+          xMicrometers: "20000",
+          yMicrometers: "20000",
+          zMicrometers: "20000",
+        },
+        objectCount: 1,
+        bodyCount: 1,
+        topology: {
+          watertight: true,
+          manifold: true,
+          normals: "consistent",
+        },
+        thinWallFeatureCount: 0,
+        supportVolumeRatioPpm: 0,
+        hasPaintAssignments: false,
+        materialAssignmentCount: 0,
+        estimatedPrintSeconds,
+        estimatedMaterialMilligrams: "60",
+        plateCount: 1,
+      },
+      plates: [
+        {
+          plateOrdinal: 1,
+          partsOnPlate: 1,
+          estimatedPrintSeconds,
+          estimatedMaterialMilligrams: "60",
+        },
+      ],
+      occupancySlices: job.input.occupancySliceTargets.map((target) => ({
+        partsPerPlate: target.partsPerPlate,
+        cacheIdentitySha256: target.cacheIdentitySha256,
+        estimatedPrintSeconds,
+        estimatedMaterialMilligrams: "60",
+        artifact: {
+          objectKey: target.analysisObjectKey,
+          sha256: sha(target.analysisObjectKey),
+        },
+      })),
+    },
+  };
 }

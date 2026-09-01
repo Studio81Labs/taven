@@ -83,6 +83,13 @@ const INFILL_PERCENT = {
 type Transaction = Prisma.TransactionClient;
 type JsonRecord = Record<string, unknown>;
 type QuoteCapabilityKey = { id: string; key: string };
+type AutomaticCandidateDispatchState = {
+  attempt: number;
+  outcome: "SUCCEEDED" | "FAILED" | null;
+  failureClass: string | null;
+  expiresAt: Date | null;
+  deadLettered: boolean;
+};
 
 @Injectable()
 export class AutomaticQuotesService {
@@ -101,19 +108,31 @@ export class AutomaticQuotesService {
 
   async createSession(
     input: CreateAutomaticQuoteSessionDto,
+    clientAddress: string,
     idempotencyKey: string | undefined,
   ): Promise<AutomaticQuoteSessionCreatedDto> {
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const attribution = optionalJsonObject(input?.attribution, "attribution");
-    const fingerprint = fingerprintOf({ attribution });
-    const capabilityKey = currentQuoteCapabilityKey();
+    const capabilityRequests = quoteCapabilityKeyRing().all.map(
+      (capabilityKey) => ({
+        capabilityKey,
+        fingerprint: fingerprintOf({
+          attribution,
+          clientSubjectHash: automaticQuoteClientSubject(
+            capabilityKey.key,
+            clientAddress,
+          ),
+        }),
+      }),
+    );
+    const currentCapabilityRequest = capabilityRequests[0]!;
 
     const created = await this.prisma.$transaction(async (transaction) => {
       const record = await lockIdempotency(
         transaction,
         "automatic-quote.create",
         commandKey,
-        fingerprint,
+        capabilityRequests.map(({ fingerprint }) => fingerprint),
       );
       if (record.replayed) {
         const stored = record.response as {
@@ -124,12 +143,20 @@ export class AutomaticQuotesService {
           where: { id: stored.sessionId },
           select: { capabilityKeyId: true },
         });
+        const replayRequest = capabilityRequests.find(
+          ({ capabilityKey }) => capabilityKey.id === session.capabilityKeyId,
+        );
+        if (!replayRequest) {
+          throw new Error(
+            `Quote capability key ${session.capabilityKeyId || "<missing>"} is unavailable`,
+          );
+        }
         return {
           ...stored,
           sessionToken: sessionToken(
-            quoteCapabilityKeyForId(session.capabilityKeyId),
+            replayRequest.capabilityKey.key,
             commandKey,
-            fingerprint,
+            replayRequest.fingerprint,
             record.generation,
           ),
         };
@@ -140,16 +167,16 @@ export class AutomaticQuotesService {
       const orderId = randomUUID();
       const publicReference = `A-${orderId.replaceAll("-", "").slice(0, 12).toUpperCase()}`;
       const token = sessionToken(
-        capabilityKey.key,
+        currentCapabilityRequest.capabilityKey.key,
         commandKey,
-        fingerprint,
+        currentCapabilityRequest.fingerprint,
         record.generation,
       );
       await transaction.quoteSession.create({
         data: {
           id: sessionId,
           publicTokenHash: hashToken(token),
-          capabilityKeyId: capabilityKey.id,
+          capabilityKeyId: currentCapabilityRequest.capabilityKey.id,
           attribution: jsonNullable(attribution),
           expiresAt: addDays(observedAt, SESSION_DAYS),
           createdAt: observedAt,
@@ -1674,6 +1701,7 @@ export class AutomaticQuotesService {
     ) {
       return;
     }
+    const observedAt = await databaseNow(this.prisma);
     const draftsByOrdinal = new Map(
       order.automaticQuoteDraft.items.map((item) => [item.ordinal, item]),
     );
@@ -1723,8 +1751,22 @@ export class AutomaticQuotesService {
           orderBy: { id: "asc" },
         });
         for (const profile of profiles) {
+          if (
+            !geometryFitsCapability(
+              item.modelGeometry,
+              profile.machineCapability,
+            )
+          ) {
+            continue;
+          }
           for (const machine of profile.machineCapability.machines) {
-            if (!machine.node.active) continue;
+            if (
+              !machine.node.active ||
+              machine.installedNozzleMicrometers !==
+                profile.nozzleDiameterMicrometers
+            ) {
+              continue;
+            }
             const calibration = machine.calibrations[0];
             if (!calibration) continue;
             for (const inventory of machine.inventories) {
@@ -1804,21 +1846,28 @@ export class AutomaticQuotesService {
                 };
               });
               const candidateInput = { ...inputBase, occupancySliceTargets };
-              const jobId = deterministicUuid(
+              const initialJobId = deterministicUuid(
                 `automatic-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}`,
               );
+              const dispatchIdentity =
+                await this.nextAutomaticCandidateDispatch(
+                  initialJobId,
+                  observedAt,
+                );
+              if (!dispatchIdentity) continue;
               const inputFingerprintSha256 = contracts.slicingInputFingerprint(
                 "candidate_estimate",
                 candidateInput,
               );
+              const idempotencyKey = `slicer:v2:candidate_estimate:${dispatchIdentity.jobId}:${inputFingerprintSha256}`;
               const job = contracts.CandidateEstimateJobSchema.parse({
                 contractVersion: 2,
                 kind: "candidate_estimate",
-                jobId,
+                jobId: dispatchIdentity.jobId,
                 correlationId: orderId,
                 inputFingerprintSha256,
-                idempotencyKey: `slicer:v2:candidate_estimate:${jobId}:${inputFingerprintSha256}`,
-                attempt: 1,
+                idempotencyKey,
+                attempt: dispatchIdentity.attempt,
                 input: candidateInput,
               });
               await this.candidateEstimates.dispatch({
@@ -1831,6 +1880,53 @@ export class AutomaticQuotesService {
         }
       }
     }
+  }
+
+  private async nextAutomaticCandidateDispatch(
+    initialJobId: string,
+    observedAt: Date,
+  ): Promise<{ jobId: string; attempt: number } | null> {
+    let jobId = initialJobId;
+    for (let generation = 0; generation < 100; generation += 1) {
+      const states = await this.prisma.$queryRaw<
+        AutomaticCandidateDispatchState[]
+      >`
+        SELECT
+          (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
+          terminal.outcome::text AS outcome,
+          terminal.failure_class AS "failureClass",
+          candidate.expires_at AS "expiresAt",
+          EXISTS (
+            SELECT 1
+            FROM outbox_messages dead_letter
+            WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+              AND dead_letter.aggregate_id = dispatch.id
+              AND dead_letter.message_type = 'slicing.candidate_estimate.dead-lettered'
+          ) AS "deadLettered"
+        FROM outbox_messages dispatch
+        LEFT JOIN candidate_estimate_terminal_results terminal
+          ON terminal.outbox_message_id = dispatch.id
+        LEFT JOIN candidate_resource_estimates candidate
+          ON candidate.id = terminal.candidate_resource_estimate_id
+        WHERE dispatch.aggregate_type = 'CandidateEstimateDispatch'
+          AND dispatch.aggregate_id = ${jobId}::uuid
+          AND dispatch.message_type = 'slicing.candidate-estimate.requested'
+        ORDER BY (dispatch.payload #>> '{job,attempt}')::integer DESC
+        LIMIT 1
+      `;
+      const latest = states[0];
+      if (!latest) return { jobId, attempt: 1 };
+      if (latest.deadLettered || latest.outcome === null) return null;
+      if (latest.outcome === "FAILED") {
+        return latest.failureClass === "retryable_infrastructure" &&
+          latest.attempt < 100
+          ? { jobId, attempt: latest.attempt + 1 }
+          : null;
+      }
+      if (!latest.expiresAt || latest.expiresAt > observedAt) return null;
+      jobId = deterministicUuid(`automatic-candidate-successor:${jobId}`);
+    }
+    return null;
   }
 
   private async finalizeAutomaticQuote(input: {
@@ -2825,8 +2921,16 @@ async function lockIdempotency(
   transaction: Transaction,
   namespace: string,
   idempotencyKey: string,
-  requestFingerprint: string,
+  requestFingerprint: string | readonly string[],
 ) {
+  const acceptedFingerprints =
+    typeof requestFingerprint === "string"
+      ? [requestFingerprint]
+      : requestFingerprint;
+  const primaryFingerprint = acceptedFingerprints[0];
+  if (!primaryFingerprint) {
+    throw new Error("At least one idempotency fingerprint is required");
+  }
   await transaction.$queryRaw`
     SELECT pg_advisory_xact_lock(
       hashtextextended(${`${namespace}:${idempotencyKey}`}, 0)
@@ -2838,7 +2942,7 @@ async function lockIdempotency(
     orderBy: { generation: "desc" },
   });
   if (existing && existing.expiresAt.getTime() > observedAt.getTime()) {
-    if (existing.requestFingerprint !== requestFingerprint) {
+    if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
       throw new ConflictException(
         "Idempotency key was already used with different input",
       );
@@ -2861,7 +2965,7 @@ async function lockIdempotency(
       namespace,
       idempotencyKey,
       generation: (existing?.generation ?? 0) + 1,
-      requestFingerprint,
+      requestFingerprint: primaryFingerprint,
       expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
     },
   });
@@ -2911,23 +3015,53 @@ function sessionToken(
     .digest("base64url");
 }
 
-function currentQuoteCapabilityKey(): QuoteCapabilityKey {
-  return quoteCapabilityKeyRing().current;
+function automaticQuoteClientSubject(
+  capabilityKey: string,
+  clientAddress: string,
+): string {
+  return createHmac("sha256", capabilityKey)
+    .update(
+      `anonymous-automatic-quote\0${normalizeClientAddress(clientAddress)}`,
+    )
+    .digest("hex");
 }
 
-function quoteCapabilityKeyForId(keyId: string | null): string {
-  const key = keyId ? quoteCapabilityKeyRing().byId.get(keyId) : undefined;
-  if (!key) {
-    throw new Error(
-      `Quote capability key ${keyId || "<missing>"} is unavailable`,
-    );
-  }
-  return key;
+function normalizeClientAddress(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("::ffff:")
+    ? normalized.slice("::ffff:".length)
+    : normalized || "unknown";
+}
+
+function geometryFitsCapability(
+  geometry: {
+    boundsXMicrometers: bigint;
+    boundsYMicrometers: bigint;
+    boundsZMicrometers: bigint;
+  },
+  capability: {
+    buildVolumeXMicrometers: bigint;
+    buildVolumeYMicrometers: bigint;
+    buildVolumeZMicrometers: bigint;
+  },
+): boolean {
+  const compare = (left: bigint, right: bigint) =>
+    left < right ? -1 : left > right ? 1 : 0;
+  const bounds = [
+    geometry.boundsXMicrometers,
+    geometry.boundsYMicrometers,
+    geometry.boundsZMicrometers,
+  ].sort(compare);
+  const buildVolume = [
+    capability.buildVolumeXMicrometers,
+    capability.buildVolumeYMicrometers,
+    capability.buildVolumeZMicrometers,
+  ].sort(compare);
+  return bounds.every((bound, index) => bound <= buildVolume[index]!);
 }
 
 function quoteCapabilityKeyRing(): {
-  current: QuoteCapabilityKey;
-  byId: ReadonlyMap<string, string>;
+  all: readonly QuoteCapabilityKey[];
 } {
   const currentKey = process.env.TAVEN_QUOTE_CAPABILITY_KEY;
   if (!currentKey || currentKey.length < 32) {
@@ -2945,8 +3079,7 @@ function quoteCapabilityKeyRing(): {
     return { id: quoteCapabilityKeyId(key), key } satisfies QuoteCapabilityKey;
   });
   return {
-    current: keys[0]!,
-    byId: new Map(keys.map(({ id, key }) => [id, key])),
+    all: keys,
   };
 }
 
