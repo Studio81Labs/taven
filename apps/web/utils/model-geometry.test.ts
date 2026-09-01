@@ -7,6 +7,8 @@ type Triangle = readonly [Point, Point, Point];
 
 const materialNamespace =
   "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
+const packageRelationshipsNamespace =
+  "http://schemas.openxmlformats.org/package/2006/relationships";
 
 const tetrahedron: Triangle[] = [
   [
@@ -79,10 +81,14 @@ function scaledTetrahedron(
 }
 
 function threeMf(model: string): ArrayBuffer {
-  const archive = zipSync({
+  return threeMfArchive({
     "3D/3dmodel.model": new TextEncoder().encode(model),
     "[Content_Types].xml": new TextEncoder().encode("<Types />"),
   });
+}
+
+function threeMfArchive(entries: Record<string, Uint8Array>): ArrayBuffer {
+  const archive = zipSync(entries);
   return archive.buffer.slice(
     archive.byteOffset,
     archive.byteOffset + archive.byteLength,
@@ -197,6 +203,53 @@ describe("3MF geometry", () => {
     expect(geometry.objectCount).toBe(1);
     expect(geometry.dimensions).toEqual({ width: 10, depth: 10, height: 10 });
     expect(geometry.volumeMm3).toBeCloseTo(1_000 / 6, 5);
+  });
+
+  it("uses the package relationship to select a noncanonical root model", async () => {
+    const paintedAuxiliary = tetrahedron3mf.replace(
+      '<triangle v1="0" v2="2" v3="1"/>',
+      '<triangle v1="0" v2="2" v3="1" paint_color="#ff0000"/>',
+    );
+    const geometry = await parseModelGeometry(
+      "3MF",
+      threeMfArchive({
+        "3D/auxiliary.model": new TextEncoder().encode(paintedAuxiliary),
+        "Models/printable.model": new TextEncoder().encode(tetrahedron3mf),
+        "_rels/.rels": new TextEncoder().encode(
+          `<Relationships xmlns="${packageRelationshipsNamespace}"><Relationship Target="/Models/printable.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`,
+        ),
+      }),
+    );
+
+    expect(geometry.dimensions).toEqual({ width: 10, depth: 10, height: 10 });
+    expect(geometry.volumeMm3).toBeCloseTo(1_000 / 6, 5);
+  });
+
+  it("does not guess an arbitrary model part when no root is declared", async () => {
+    await expect(
+      parseModelGeometry(
+        "3MF",
+        threeMfArchive({
+          "Models/printable.model": new TextEncoder().encode(tetrahedron3mf),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_GEOMETRY" });
+  });
+
+  it("rejects ambiguous package root relationships", async () => {
+    const encode = (value: string) => new TextEncoder().encode(value);
+    await expect(
+      parseModelGeometry(
+        "3MF",
+        threeMfArchive({
+          "Models/first.model": encode(tetrahedron3mf),
+          "Models/second.model": encode(tetrahedron3mf),
+          "_rels/.rels": encode(
+            `<Relationships xmlns="${packageRelationshipsNamespace}"><Relationship Target="/Models/first.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/><Relationship Target="/Models/second.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`,
+          ),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_GEOMETRY" });
   });
 
   it("scales build translations using the model unit", async () => {

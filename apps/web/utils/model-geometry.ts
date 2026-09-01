@@ -1,4 +1,5 @@
 import { orient2d, orient3d } from "robust-predicates";
+import type { SaxesAttributeNS, SaxesTagNS } from "saxes";
 import type { DirectModelFormat } from "./model-file";
 
 const MAX_PREVIEW_TRIANGLES = 6_000;
@@ -15,6 +16,8 @@ const MAX_LOCAL_CONTAINMENT_TRIANGLE_CHECKS = 4 * MAX_LOCAL_TRIANGLES;
 const MAX_LOCAL_INTERSHELL_GEOMETRY_CHECKS = 4 * MAX_LOCAL_TRIANGLES;
 const MAX_LOCAL_SHELL_PAIR_CHECKS = 1_000_000;
 const TRIANGLE_BVH_LEAF_SIZE = 8;
+const PACKAGE_RELATIONSHIPS_NAMESPACE =
+  "http://schemas.openxmlformats.org/package/2006/relationships";
 
 type Point = readonly [number, number, number];
 type TrianglePoints = readonly [Point, Point, Point];
@@ -1312,10 +1315,155 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
   };
 }
 
+function invalid3mfPackage(message: string): never {
+  throw new ModelGeometryError("INVALID_GEOMETRY", message);
+}
+
+function safeArchivePart(name: string): string {
+  if (
+    !name ||
+    name.startsWith("/") ||
+    name.includes("\\") ||
+    name.split("/").some((part) => part === "" || part === "..")
+  ) {
+    return invalid3mfPackage("Archiv 3MF obsahuje nebezpečnou cestu.");
+  }
+  return name;
+}
+
+function relationshipSource(name: string): string | undefined {
+  if (name === "_rels/.rels") return "";
+  const match = /^(.*)\/_rels\/([^/]+)\.rels$/u.exec(name);
+  return match ? `${match[1]!}/${match[2]!}` : undefined;
+}
+
+function relationshipTarget(sourcePart: string, target: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target);
+  } catch {
+    return invalid3mfPackage("3MF obsahuje nebezpečný odkaz na soubor.");
+  }
+  if (
+    !decoded ||
+    decoded.includes("\\") ||
+    /[?#]/u.test(decoded) ||
+    /^[a-z][a-z0-9+.-]*:/iu.test(decoded)
+  ) {
+    return invalid3mfPackage("3MF obsahuje nebezpečný odkaz na soubor.");
+  }
+  const relative = decoded.startsWith("/") ? decoded.slice(1) : decoded;
+  if (
+    relative
+      .split("/")
+      .some((part) => part === "" || part === "." || part === "..")
+  ) {
+    return invalid3mfPackage("3MF obsahuje nebezpečný odkaz na soubor.");
+  }
+  const base = decoded.startsWith("/")
+    ? ""
+    : sourcePart.includes("/")
+      ? sourcePart.slice(0, sourcePart.lastIndexOf("/"))
+      : "";
+  return safeArchivePart(base ? `${base}/${relative}` : relative);
+}
+
+function relationshipAttribute(
+  tag: SaxesTagNS,
+  local: string,
+): string | undefined {
+  return Object.values(tag.attributes).find(
+    (candidate: SaxesAttributeNS) =>
+      candidate.local === local && candidate.uri === "",
+  )?.value;
+}
+
+async function packageModelRoots(
+  files: Readonly<Record<string, Uint8Array>>,
+  archiveParts: ReadonlySet<string>,
+): Promise<string[]> {
+  const { SaxesParser } = await import("saxes");
+  const roots = new Set<string>();
+  for (const [name, bytes] of Object.entries(files)) {
+    if (!name.endsWith(".rels")) continue;
+    const sourcePart = relationshipSource(name);
+    if (sourcePart === undefined) {
+      return invalid3mfPackage("3MF obsahuje chybně umístěné vztahy.");
+    }
+    let xml: string;
+    try {
+      xml = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      return invalid3mfPackage("Vztahy 3MF nejsou platný textový soubor.");
+    }
+    const parser = new SaxesParser({ xmlns: true, position: false });
+    const stack: Array<{ local: string; uri: string }> = [];
+    let sawRoot = false;
+    parser.on("doctype", () =>
+      invalid3mfPackage("3MF obsahuje nepodporovanou XML deklaraci."),
+    );
+    parser.on("error", () =>
+      invalid3mfPackage("Vztahy 3MF nejsou platné XML."),
+    );
+    parser.on("opentag", (tag) => {
+      const parent = stack.at(-1);
+      if (stack.length === 0) {
+        if (
+          tag.uri !== PACKAGE_RELATIONSHIPS_NAMESPACE ||
+          tag.local !== "Relationships"
+        ) {
+          return invalid3mfPackage("Kořen vztahů 3MF není platný.");
+        }
+        sawRoot = true;
+      } else if (
+        parent?.uri === PACKAGE_RELATIONSHIPS_NAMESPACE &&
+        parent.local === "Relationships" &&
+        tag.uri === PACKAGE_RELATIONSHIPS_NAMESPACE &&
+        tag.local === "Relationship"
+      ) {
+        if (
+          relationshipAttribute(tag, "TargetMode")?.toLowerCase() === "external"
+        ) {
+          return invalid3mfPackage("3MF obsahuje externí odkaz.");
+        }
+        const target = relationshipAttribute(tag, "Target");
+        if (!target) {
+          return invalid3mfPackage("Vztah 3MF nemá cílový soubor.");
+        }
+        const packageTarget = relationshipTarget(sourcePart, target);
+        if (!archiveParts.has(packageTarget)) {
+          return invalid3mfPackage("Vztah 3MF odkazuje na chybějící soubor.");
+        }
+        if (
+          sourcePart === "" &&
+          relationshipAttribute(tag, "Type")?.toLowerCase().endsWith("/3dmodel")
+        ) {
+          roots.add(packageTarget);
+        }
+      }
+      stack.push({ local: tag.local, uri: tag.uri });
+    });
+    parser.on("closetag", () => {
+      stack.pop();
+    });
+    try {
+      parser.write(xml).close();
+    } catch (error) {
+      if (error instanceof ModelGeometryError) throw error;
+      return invalid3mfPackage("Vztahy 3MF nejsou platné XML.");
+    }
+    if (!sawRoot) {
+      return invalid3mfPackage("Vztahům 3MF chybí kořenový element.");
+    }
+  }
+  return [...roots];
+}
+
 async function parse3mf(bytes: Uint8Array): Promise<ModelGeometry> {
   const { unzipSync } = await import("fflate");
   let totalXmlBytes = 0;
   let archiveEntries = 0;
+  const archiveParts = new Set<string>();
   let files: Record<string, Uint8Array>;
   try {
     files = unzipSync(bytes, {
@@ -1327,8 +1475,15 @@ async function parse3mf(bytes: Uint8Array): Promise<ModelGeometry> {
             "Archiv 3MF obsahuje příliš mnoho souborů pro bezpečný náhled.",
           );
         }
-        const isModel = file.name.toLowerCase().endsWith(".model");
-        if (!isModel) return false;
+        if (file.name.endsWith("/")) {
+          safeArchivePart(file.name.slice(0, -1));
+          return false;
+        }
+        const name = safeArchivePart(file.name);
+        archiveParts.add(name);
+        const isModelXml = name.toLowerCase().endsWith(".model");
+        const isRelationshipXml = name.endsWith(".rels");
+        if (!isModelXml && !isRelationshipXml) return false;
         totalXmlBytes += file.originalSize;
         if (
           file.originalSize > MAX_3MF_MODEL_XML_BYTES ||
@@ -1350,20 +1505,21 @@ async function parse3mf(bytes: Uint8Array): Promise<ModelGeometry> {
     );
   }
 
-  const entry =
-    Object.entries(files).find(
-      ([name]) => name.replace(/^\//u, "").toLowerCase() === "3d/3dmodel.model",
-    ) ?? Object.entries(files)[0];
-  if (!entry) {
-    throw new ModelGeometryError(
-      "INVALID_GEOMETRY",
-      "Archiv 3MF neobsahuje hlavní model.",
-    );
+  const packageRoots = await packageModelRoots(files, archiveParts);
+  const rootPart =
+    packageRoots.length === 1
+      ? packageRoots[0]!
+      : packageRoots.length === 0 && files["3D/3dmodel.model"]
+        ? "3D/3dmodel.model"
+        : invalid3mfPackage("Archiv 3MF musí určit právě jeden hlavní model.");
+  const rootBytes = files[rootPart];
+  if (!rootBytes || !rootPart.toLowerCase().endsWith(".model")) {
+    return invalid3mfPackage("Archiv 3MF neobsahuje hlavní model.");
   }
 
   let xml: string;
   try {
-    xml = new TextDecoder("utf-8", { fatal: true }).decode(entry[1]);
+    xml = new TextDecoder("utf-8", { fatal: true }).decode(rootBytes);
   } catch {
     throw new ModelGeometryError(
       "INVALID_GEOMETRY",
