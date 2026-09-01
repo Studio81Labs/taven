@@ -10,6 +10,7 @@ import {
   requiresAssistedQuote,
   requiresQuoteRestart,
   selectConfigurationOption,
+  shouldShowUnavailableConfigurationWarning,
   visiblePriceComponents,
   type ConfigurationOption,
   type PriceComponent,
@@ -169,6 +170,45 @@ describe("quote boundary states", () => {
         phase: "HANDOFF_REQUIRED",
       }),
     ).toBe(true);
+  });
+
+  it("only warns about an empty configuration catalog while editable or handed off", () => {
+    expect(
+      shouldShowUnavailableConfigurationWarning({
+        configurationEditable: true,
+        configurationOptions: [],
+        handoff: null,
+        phase: "CONFIGURATION_REQUIRED",
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowUnavailableConfigurationWarning({
+        configurationEditable: false,
+        configurationOptions: [],
+        handoff: {
+          kind: "INDIVIDUAL_QUOTE_REQUEST",
+          reasons: ["NO_CONFIGURATION_AVAILABLE"],
+          safeContext: {},
+        },
+        phase: "HANDOFF_REQUIRED",
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowUnavailableConfigurationWarning({
+        configurationEditable: false,
+        configurationOptions: [],
+        handoff: null,
+        phase: "CHECKOUT_READY",
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowUnavailableConfigurationWarning({
+        configurationEditable: true,
+        configurationOptions: options,
+        handoff: null,
+        phase: "CONFIGURATION_REQUIRED",
+      }),
+    ).toBe(false);
   });
 });
 

@@ -11,6 +11,7 @@ import {
   priceLabel,
   quantityComparison,
   selectConfigurationOption,
+  shouldShowUnavailableConfigurationWarning,
   visiblePriceComponents,
   type ConfigurationField,
   type ConfigurationOption,
@@ -49,6 +50,7 @@ const selectedDestination = ref("");
 const expressRequested = ref(false);
 const localError = ref<string>();
 const saving = ref(false);
+const configurationLocked = computed(() => props.pending || saving.value);
 
 const modelFile = computed(() => props.quote.modelFiles[0]);
 const bodyIds = computed(() => modelFile.value?.discoveredBodyIds ?? []);
@@ -384,7 +386,7 @@ function quantityPrice(choice: {
     </header>
 
     <div
-      v-if="quote.configurationOptions.length === 0"
+      v-if="shouldShowUnavailableConfigurationWarning(quote)"
       class="notice error-state"
     >
       <strong>Pro tento model teď není dostupná výrobní kombinace.</strong>
@@ -402,6 +404,7 @@ function quantityPrice(choice: {
             v-if="canAddBodyGroup(bodyIds.length, groupCount)"
             class="secondary-button compact-button"
             type="button"
+            :disabled="configurationLocked"
             @click="addGroup"
           >
             Přidat položku
@@ -419,6 +422,7 @@ function quantityPrice(choice: {
               <span class="visually-hidden">Položka pro {{ bodyId }}</span>
               <select
                 :value="assignments[bodyId]"
+                :disabled="configurationLocked"
                 @change="assignBody(bodyId, $event)"
               >
                 <option :value="-1">Netisknout</option>
@@ -457,6 +461,7 @@ function quantityPrice(choice: {
             <span>Materiál</span>
             <select
               :value="draftFor(group.ordinal)!.option.material"
+              :disabled="configurationLocked"
               @change="changeOption(group.ordinal, 'material', $event)"
             >
               <option
@@ -472,6 +477,7 @@ function quantityPrice(choice: {
             <span>Barva</span>
             <select
               :value="draftFor(group.ordinal)!.option.color ?? '__none__'"
+              :disabled="configurationLocked"
               @change="changeOption(group.ordinal, 'color', $event)"
             >
               <option
@@ -487,6 +493,7 @@ function quantityPrice(choice: {
             <span>Kvalita</span>
             <select
               :value="draftFor(group.ordinal)!.option.quality"
+              :disabled="configurationLocked"
               @change="changeOption(group.ordinal, 'quality', $event)"
             >
               <option
@@ -502,6 +509,7 @@ function quantityPrice(choice: {
             <span>Výplň</span>
             <select
               :value="draftFor(group.ordinal)!.option.infillPreset"
+              :disabled="configurationLocked"
               @change="changeOption(group.ordinal, 'infillPreset', $event)"
             >
               <option
@@ -529,6 +537,7 @@ function quantityPrice(choice: {
               :key="choice.value"
               :class="{ selected: choice.active }"
               type="button"
+              :disabled="configurationLocked"
               @click="setQuantity(group.ordinal, choice.value)"
             >
               <span>{{ choice.value }} ks</span>
@@ -544,6 +553,7 @@ function quantityPrice(choice: {
                 min="1"
                 type="number"
                 :value="draftFor(group.ordinal)!.quantity"
+                :disabled="configurationLocked"
                 @input="
                   setQuantity(
                     group.ordinal,
@@ -559,6 +569,7 @@ function quantityPrice(choice: {
           <input
             v-model="draftFor(group.ordinal)!.fitSensitive"
             type="checkbox"
+            :disabled="configurationLocked"
           />
           <span>
             Díl musí přesně lícovat.<br />u dílů, které do sebe musí zapadnout,
@@ -572,7 +583,7 @@ function quantityPrice(choice: {
         <button
           class="primary-button"
           type="button"
-          :disabled="pending || saving"
+          :disabled="configurationLocked"
           @click="saveConfiguration"
         >
           Uložit a přepočítat

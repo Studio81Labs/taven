@@ -179,6 +179,18 @@ export function requiresAssistedQuote(
   return quote.phase === "HANDOFF_REQUIRED" || Boolean(quote.handoff);
 }
 
+export function shouldShowUnavailableConfigurationWarning(
+  quote: Pick<
+    QuoteSession,
+    "configurationEditable" | "configurationOptions" | "handoff" | "phase"
+  >,
+): boolean {
+  return (
+    quote.configurationOptions.length === 0 &&
+    (quote.configurationEditable || requiresAssistedQuote(quote))
+  );
+}
+
 export function requiresQuoteRestart(
   quote: Pick<QuoteSession, "phase">,
 ): boolean {
