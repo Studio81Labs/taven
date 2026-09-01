@@ -601,11 +601,6 @@
             "format": "uuid",
             "type": "string"
           },
-          "preferredPartsPerPlate": {
-            "maximum": 1000,
-            "minimum": 1,
-            "type": "integer"
-          },
           "printConfigRevisionId": {
             "format": "uuid",
             "type": "string"

@@ -66,6 +66,11 @@ import {
   DELIVERY_CAPABILITY,
   type DeliveryCapabilityPort,
 } from "./delivery-capability.port";
+import {
+  nextReferenceOccupancyProbe,
+  recordReferenceOccupancyProbe,
+  resolvedReferenceOccupancy,
+} from "./reference-occupancy-probe";
 
 const SESSION_DAYS = 30;
 const IDEMPOTENCY_DAYS = 7;
@@ -138,6 +143,7 @@ type PreprocessingDispatchState = {
   attempt: number;
   status: "succeeded" | "failed" | null;
   failureClass: string | null;
+  failureCode: string | null;
   retryAfterMilliseconds: number | null;
   receiptCreatedAt: Date | null;
   deadLettered: boolean;
@@ -156,8 +162,14 @@ type AutomaticQuoteCandidateDraftItem = {
   color: string | null;
   infillPreset: string;
   quantity: number;
-  referencePartsPerPlate: number;
+  referencePartsPerPlate: number | null;
+  referenceProbeLowerBound: number;
+  referenceProbeUpperBound: number;
 };
+type ReferenceOccupancyResolution =
+  | { kind: "resolved"; partsPerPlate: number }
+  | { kind: "pending"; partsPerPlate: number }
+  | { kind: "failed" };
 
 @Injectable()
 export class AutomaticQuotesService {
@@ -494,7 +506,9 @@ export class AutomaticQuotesService {
             infillPreset: configuration.infillPreset,
             quantity: configuration.quantity,
             fitSensitive: configuration.fitSensitive,
-            referencePartsPerPlate: configuration.referencePartsPerPlate,
+            referencePartsPerPlate: null,
+            referenceProbeLowerBound: 0,
+            referenceProbeUpperBound: configuration.quantity + 1,
             configurationFingerprint,
           },
           update: {
@@ -509,7 +523,9 @@ export class AutomaticQuotesService {
             infillPreset: configuration.infillPreset,
             quantity: configuration.quantity,
             fitSensitive: configuration.fitSensitive,
-            referencePartsPerPlate: configuration.referencePartsPerPlate,
+            referencePartsPerPlate: null,
+            referenceProbeLowerBound: 0,
+            referenceProbeUpperBound: configuration.quantity + 1,
             configurationFingerprint,
           },
         });
@@ -784,10 +800,33 @@ export class AutomaticQuotesService {
             enqueued = true;
             continue;
           }
+          const occupancy = await this.resolveReferenceOccupancy(
+            transaction,
+            item,
+            geometry,
+            order.id,
+            true,
+          );
+          if (occupancy.kind === "failed") {
+            enqueued = true;
+            continue;
+          }
+          if (occupancy.kind === "pending") {
+            await this.enqueueReferenceSlice(
+              transaction,
+              item,
+              geometry,
+              occupancy.partsPerPlate,
+              order.id,
+            );
+            enqueued = true;
+            continue;
+          }
           const missing = await this.missingReferenceSlices(
             transaction,
             item,
             geometry,
+            referenceOccupancies(item.quantity, occupancy.partsPerPlate),
           );
           for (const partsPerPlate of missing) {
             await this.enqueueReferenceSlice(
@@ -866,14 +905,6 @@ export class AutomaticQuotesService {
       "quantity",
       MAX_ITEM_QUANTITY,
     );
-    const preferredPartsPerPlate =
-      input.preferredPartsPerPlate === undefined
-        ? Math.min(quantity, 10)
-        : positiveInteger(
-            input.preferredPartsPerPlate,
-            "preferredPartsPerPlate",
-            quantity,
-          );
     return {
       modelFileId,
       bodyIds,
@@ -883,7 +914,6 @@ export class AutomaticQuotesService {
       infillPreset: input.infillPreset,
       quantity,
       fitSensitive: input.fitSensitive === true,
-      referencePartsPerPlate: preferredPartsPerPlate,
     };
   }
 
@@ -1131,6 +1161,7 @@ export class AutomaticQuotesService {
         (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
         terminal.status,
         terminal.failure_class AS "failureClass",
+        terminal.failure_code AS "failureCode",
         terminal.retry_after_milliseconds AS "retryAfterMilliseconds",
         terminal.created_at AS "receiptCreatedAt",
         EXISTS (
@@ -1145,6 +1176,7 @@ export class AutomaticQuotesService {
         SELECT
           receipt.payload #>> '{result,outcome,status}' AS status,
           receipt.payload #>> '{result,outcome,failureClass}' AS failure_class,
+          receipt.payload #>> '{result,outcome,code}' AS failure_code,
           (receipt.payload #>> '{result,outcome,retryAfterMilliseconds}')::integer
             AS retry_after_milliseconds,
           receipt.created_at
@@ -1162,6 +1194,121 @@ export class AutomaticQuotesService {
       LIMIT 1
     `;
     return states[0];
+  }
+
+  private async resolveReferenceOccupancy(
+    transaction: Transaction | PrismaService,
+    item: AutomaticQuoteCandidateDraftItem,
+    geometry: {
+      id: string;
+      sourceModelFileId: string;
+      canonicalObjectKey: string;
+      geometryHash: string;
+      sourceModelFile?: never;
+    },
+    correlationId: string,
+    persist: boolean,
+  ): Promise<ReferenceOccupancyResolution> {
+    if (item.referencePartsPerPlate !== null) {
+      return { kind: "resolved", partsPerPlate: item.referencePartsPerPlate };
+    }
+    let bounds = {
+      lowerBound: item.referenceProbeLowerBound,
+      upperBound: item.referenceProbeUpperBound,
+    };
+    for (;;) {
+      const resolved = resolvedReferenceOccupancy(item.quantity, bounds);
+      if (resolved !== undefined) {
+        if (resolved === null) return { kind: "failed" };
+        if (persist) {
+          await transaction.automaticQuoteItemDraft.update({
+            where: { id: item.id },
+            data: {
+              referencePartsPerPlate: resolved,
+              referenceProbeLowerBound: bounds.lowerBound,
+              referenceProbeUpperBound: bounds.upperBound,
+            },
+          });
+        }
+        return { kind: "resolved", partsPerPlate: resolved };
+      }
+      const partsPerPlate = nextReferenceOccupancyProbe(item.quantity, bounds);
+      if (partsPerPlate === null) {
+        throw new Error("Reference occupancy probe did not resolve");
+      }
+      const missing = await this.missingReferenceSlices(
+        transaction,
+        item,
+        geometry,
+        [partsPerPlate],
+      );
+      if (missing.length === 0) {
+        bounds = recordReferenceOccupancyProbe(
+          item.quantity,
+          bounds,
+          partsPerPlate,
+          true,
+        );
+        if (persist) {
+          await transaction.automaticQuoteItemDraft.update({
+            where: { id: item.id },
+            data: {
+              referenceProbeLowerBound: bounds.lowerBound,
+              referenceProbeUpperBound: bounds.upperBound,
+            },
+          });
+        }
+        continue;
+      }
+      const job = await this.referenceSliceJob(
+        transaction,
+        item,
+        geometry,
+        partsPerPlate,
+        correlationId,
+        1,
+      );
+      const dispatch = await this.latestPreprocessingDispatch(
+        transaction,
+        job.jobId,
+        "slicing.reference-slice.requested",
+      );
+      if (!this.referenceProbeDoesNotFit(dispatch)) {
+        return this.preprocessingDispatchRequiresHandoff(dispatch)
+          ? { kind: "failed" }
+          : { kind: "pending", partsPerPlate };
+      }
+      bounds = recordReferenceOccupancyProbe(
+        item.quantity,
+        bounds,
+        partsPerPlate,
+        false,
+      );
+      if (persist) {
+        await transaction.automaticQuoteItemDraft.update({
+          where: { id: item.id },
+          data: {
+            referenceProbeLowerBound: bounds.lowerBound,
+            referenceProbeUpperBound: bounds.upperBound,
+          },
+        });
+      }
+    }
+  }
+
+  private referenceProbeDoesNotFit(
+    dispatch: PreprocessingDispatchState | undefined,
+  ): boolean {
+    // Orca reports an over-full one-plate arrangement through the same bounded
+    // failure codes. Probing downward distinguishes that case from a model that
+    // cannot be sliced even at one copy, which converges to the failed frontier.
+    return (
+      dispatch?.status === "failed" &&
+      !dispatch.deadLettered &&
+      dispatch.failureClass === "deterministic_invalid" &&
+      (dispatch.failureCode === "INVALID_GEOMETRY" ||
+        dispatch.failureCode === "RESOURCE_LIMIT_EXCEEDED")
+    );
   }
 
   private preprocessingDispatchRequiresHandoff(
@@ -1195,10 +1342,20 @@ export class AutomaticQuotesService {
         if (this.preprocessingDispatchRequiresHandoff(dispatch)) return true;
         continue;
       }
+      const occupancy = await this.resolveReferenceOccupancy(
+        this.prisma,
+        item,
+        geometry,
+        orderId,
+        false,
+      );
+      if (occupancy.kind === "failed") return true;
+      if (occupancy.kind === "pending") continue;
       const missing = await this.missingReferenceSlices(
         this.prisma,
         item,
         geometry,
+        referenceOccupancies(item.quantity, occupancy.partsPerPlate),
       );
       for (const partsPerPlate of missing) {
         const job = await this.referenceSliceJob(
@@ -1311,7 +1468,7 @@ export class AutomaticQuotesService {
       selectionSha256: string;
       printConfigRevisionId: string;
       referenceProfileId: string;
-      referencePartsPerPlate: number;
+      referencePartsPerPlate: number | null;
       quantity: number;
     },
     geometry: {
@@ -1320,9 +1477,16 @@ export class AutomaticQuotesService {
     },
     requestedOccupancies?: readonly number[],
   ): Promise<number[]> {
+    if (
+      requestedOccupancies === undefined &&
+      item.referencePartsPerPlate === null
+    ) {
+      throw new Error("Reference occupancy is unresolved");
+    }
     const requested =
-      requestedOccupancies ??
-      referenceOccupancies(item.quantity, item.referencePartsPerPlate);
+      requestedOccupancies === undefined
+        ? referenceOccupancies(item.quantity, item.referencePartsPerPlate!)
+        : [...requestedOccupancies];
     const { buildReferenceSliceCacheKey, RevisionRef, Sha256Digest } =
       await import("@taven/core");
     const missing: number[] = [];
@@ -1585,6 +1749,9 @@ export class AutomaticQuotesService {
       orderBy: { ordinal: "asc" },
     });
     for (const item of drafts) {
+      if (item.referencePartsPerPlate === null) {
+        throw new ConflictException("Reference occupancy is unresolved");
+      }
       const geometry = await transaction.modelGeometry.findUniqueOrThrow({
         where: { id: item.targetModelGeometryId },
       });
@@ -3270,7 +3437,7 @@ export class AutomaticQuotesService {
       material: Material;
       infillPreset: string;
       quantity: number;
-      referencePartsPerPlate: number;
+      referencePartsPerPlate: number | null;
     }>,
     roughParameters: AutomaticQuotePricingParameters | null,
   ): Promise<{
@@ -3283,9 +3450,12 @@ export class AutomaticQuotesService {
       const geometry = await transaction.modelGeometry.findUnique({
         where: { id: item.targetModelGeometryId },
       });
+      const referencePartsPerPlate =
+        item.referencePartsPerPlate ?? (roughParameters ? item.quantity : null);
+      if (referencePartsPerPlate === null) return null;
       const occupancies = referenceOccupancies(
         item.quantity,
-        item.referencePartsPerPlate,
+        referencePartsPerPlate,
       );
       const slices = geometry
         ? await this.referenceSlices(
@@ -3337,7 +3507,7 @@ export class AutomaticQuotesService {
       if (!primary) {
         if (!roughParameters) return null;
         const estimated = roughSliceMetrics(
-          item,
+          { ...item, referencePartsPerPlate },
           bounds.volumeCubicMicrometers,
           roughParameters,
         );
@@ -3539,9 +3709,24 @@ export class AutomaticQuotesService {
         const geometry = await this.prisma.modelGeometry.findUnique({
           where: { id: item.targetModelGeometryId },
         });
-        const missing = geometry
-          ? await this.missingReferenceSlices(this.prisma, item, geometry)
-          : [];
+        const occupancy = geometry
+          ? await this.resolveReferenceOccupancy(
+              this.prisma,
+              item,
+              geometry,
+              order.id,
+              false,
+            )
+          : null;
+        const missing =
+          geometry && occupancy?.kind === "resolved"
+            ? await this.missingReferenceSlices(
+                this.prisma,
+                item,
+                geometry,
+                referenceOccupancies(item.quantity, occupancy.partsPerPlate),
+              )
+            : [];
         const findings = await this.prisma.preflightFinding.findMany({
           where: {
             modelFileId: item.sourceModelFileId,
@@ -3573,7 +3758,9 @@ export class AutomaticQuotesService {
           fitSensitive: item.fitSensitive,
           status: !geometry
             ? ("CANONICALIZATION_PENDING" as const)
-            : missing.length > 0
+            : occupancy?.kind !== "resolved" ||
+                item.referencePartsPerPlate !== occupancy.partsPerPlate ||
+                missing.length > 0
               ? ("REFERENCE_SLICING_PENDING" as const)
               : ("READY" as const),
           findings: findings.map((finding) => ({

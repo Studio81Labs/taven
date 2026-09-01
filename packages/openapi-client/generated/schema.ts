@@ -593,7 +593,6 @@ export interface components {
             material: "PLA" | "PETG";
             /** Format: uuid */
             modelFileId: string;
-            preferredPartsPerPlate?: number;
             /** Format: uuid */
             printConfigRevisionId: string;
             quantity: number;

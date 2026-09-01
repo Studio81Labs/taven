@@ -705,6 +705,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       bodyId: string,
       marker: string,
       createSlice = true,
+      partsPerPlate = draft.referencePartsPerPlate ?? draft.quantity,
     ) => {
       const geometryHash = sha(`${scope}:geometry:${marker}`);
       const referenceProfile = await prisma.referenceProfile.findUniqueOrThrow({
@@ -737,7 +738,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           "print-config",
           draft.printConfigRevisionId,
         ),
-        partsPerPlate: 1,
+        partsPerPlate,
       });
       if (createSlice) {
         await prisma.sliceResult.create({
@@ -747,7 +748,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
             modelGeometryId: draft.targetModelGeometryId,
             printConfigRevisionId: draft.printConfigRevisionId,
             referenceProfileId: draft.referenceProfileId,
-            partsPerPlate: 1,
+            partsPerPlate,
             artifactObjectKey: `${scope}/reference/${marker}.json`,
             artifactHash: sha(`${scope}:reference:${marker}`),
             estimatedPrintSeconds: 60n,
@@ -916,7 +917,14 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       "current-0",
       false,
     );
-    await seedReference(await draftItem(1), "body-c", "current-1");
+    const currentOneDraft = await draftItem(1);
+    expect(currentOneDraft).toMatchObject({
+      quantity: 2,
+      referencePartsPerPlate: null,
+      referenceProbeLowerBound: 0,
+      referenceProbeUpperBound: 3,
+    });
+    await seedReference(currentOneDraft, "body-c", "current-1", true, 1);
     const referenceAttemptOneResponse = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
       {
@@ -939,6 +947,47 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
             },
           },
         ],
+      },
+    });
+    const serverOwnedOccupancyProbe =
+      await prisma.outboxMessage.findFirstOrThrow({
+        where: {
+          aggregateType: "ReferenceSliceDispatch",
+          messageType: "slicing.reference-slice.requested",
+          AND: [
+            { payload: { path: ["job", "correlationId"], equals: orderId } },
+            {
+              payload: {
+                path: ["job", "input", "geometry", "modelGeometryId"],
+                equals: currentOneDraft.targetModelGeometryId,
+              },
+            },
+            {
+              payload: {
+                path: ["job", "input", "partsPerPlate"],
+                equals: 2,
+              },
+            },
+          ],
+        },
+      });
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `${scope}:server-owned-occupancy-non-fit`,
+        aggregateType: "SlicingDispatchResult",
+        aggregateId: serverOwnedOccupancyProbe.id,
+        messageType: "slicing.reference_slice.result-received",
+        schemaVersion: 2,
+        payload: {
+          result: {
+            outcome: {
+              status: "failed",
+              failureClass: "deterministic_invalid",
+              code: "INVALID_GEOMETRY",
+              retryAfterMilliseconds: null,
+            },
+          },
+        },
       },
     });
     await prisma.outboxMessage.create({
@@ -970,6 +1019,15 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(
       referenceRetryResponses.map(({ response }) => response.status),
     ).toEqual([200, 200]);
+    await expect(
+      prisma.automaticQuoteItemDraft.findUniqueOrThrow({
+        where: { id: currentOneDraft.id },
+      }),
+    ).resolves.toMatchObject({
+      referencePartsPerPlate: 1,
+      referenceProbeLowerBound: 1,
+      referenceProbeUpperBound: 2,
+    });
     const referenceDispatches = await prisma.outboxMessage.findMany({
       where: {
         aggregateId: referenceAttemptOne.aggregateId,
@@ -1108,7 +1166,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           payload: { path: ["job", "correlationId"], equals: orderId },
         },
       }),
-    ).toBe(referenceDispatches.length);
+    ).toBe(referenceDispatches.length + 1);
 
     const expressRejected = await api(
       `automatic-quote-sessions/${sessionId}/express`,

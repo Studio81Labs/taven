@@ -1715,7 +1715,9 @@ model AutomaticQuoteItemDraft {
   infillPreset             String   @map("infill_preset") @db.VarChar(50)
   quantity                 Int
   fitSensitive             Boolean  @default(false) @map("fit_sensitive")
-  referencePartsPerPlate   Int      @map("reference_parts_per_plate")
+  referencePartsPerPlate   Int?     @map("reference_parts_per_plate")
+  referenceProbeLowerBound Int      @default(0) @map("reference_probe_lower_bound")
+  referenceProbeUpperBound Int      @map("reference_probe_upper_bound")
   configurationFingerprint String   @map("configuration_fingerprint") @db.VarChar(64)
   createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)

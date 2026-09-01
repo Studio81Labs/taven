@@ -42,9 +42,6 @@ export class ConfigureAutomaticQuoteItemDto {
 
   @ApiPropertyOptional({ type: Boolean, default: false })
   fitSensitive?: boolean;
-
-  @ApiPropertyOptional({ type: "integer", minimum: 1, maximum: 1_000 })
-  preferredPartsPerPlate?: number;
 }
 
 export class AutomaticQuoteRiskDecisionDto {
