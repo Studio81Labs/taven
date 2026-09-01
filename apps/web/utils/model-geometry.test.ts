@@ -329,6 +329,22 @@ describe("3MF geometry", () => {
     ).resolves.toMatchObject({ objectCount: 1 });
   });
 
+  it("ignores paint-like attributes from unrelated namespaces", async () => {
+    const vendorMetadata = tetrahedron3mf
+      .replace(
+        '<model unit="centimeter"',
+        '<model unit="centimeter" xmlns:vendor="urn:vendor"',
+      )
+      .replace(
+        '<triangle v1="0" v2="2" v3="1"/>',
+        '<triangle v1="0" v2="2" v3="1" vendor:paint_color="#ff0000" vendor:mmu_segmentation="4"/>',
+      );
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(vendorMetadata)),
+    ).resolves.toMatchObject({ objectCount: 1 });
+  });
+
   it("excludes non-printable build items from preview eligibility and geometry", async () => {
     const object = /<object id="1"[\s\S]*?<\/object>/u.exec(
       tetrahedron3mf,

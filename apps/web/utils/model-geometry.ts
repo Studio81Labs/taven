@@ -18,6 +18,7 @@ const MAX_LOCAL_SHELL_PAIR_CHECKS = 1_000_000;
 const TRIANGLE_BVH_LEAF_SIZE = 8;
 const PACKAGE_RELATIONSHIPS_NAMESPACE =
   "http://schemas.openxmlformats.org/package/2006/relationships";
+const SLIC3R_3MF_NAMESPACE = "http://schemas.slic3r.org/3mf/2017/06";
 
 type Point = readonly [number, number, number];
 type TrianglePoints = readonly [Point, Point, Point];
@@ -737,6 +738,15 @@ function attribute(source: string, name: string): string | undefined {
   return match?.[1] ?? match?.[2];
 }
 
+function exactAttribute(source: string, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const match = new RegExp(
+    `(?:^|\\s)${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
+    "iu",
+  ).exec(source);
+  return match?.[1] ?? match?.[2];
+}
+
 function requiredNumber(source: string, name: string): number {
   const raw = attribute(source, name);
   const value =
@@ -1021,8 +1031,9 @@ function assertSingleMaterial3mf(xml: string): void {
     let hasPaint = false;
     for (const triangleAttributes of xmlTagAttributes(body, "triangle")) {
       hasPaint ||=
-        attribute(triangleAttributes, "paint_color") !== undefined ||
-        attribute(triangleAttributes, "mmu_segmentation") !== undefined;
+        exactAttribute(triangleAttributes, "paint_color") !== undefined ||
+        exactAttribute(triangleAttributes, "slic3r:mmu_segmentation") !==
+          undefined;
       const trianglePid = attribute(triangleAttributes, "pid");
       const resourceId = trianglePid ?? objectPid;
       const explicitIndices = ["p1", "p2", "p3"]
@@ -1395,10 +1406,17 @@ async function structuralModelXml(xml: string): Promise<string> {
   parser.on("error", () => invalid3mfPackage("Model 3MF není platné XML."));
   parser.on("opentag", (tag) => {
     const attributes = Object.values(tag.attributes)
-      .map(
+      .filter(
         (candidate: SaxesAttributeNS) =>
-          ` ${candidate.name}="${xmlAttributeValue(candidate.value)}"`,
+          candidate.uri === "" || candidate.uri === SLIC3R_3MF_NAMESPACE,
       )
+      .map((candidate: SaxesAttributeNS) => {
+        const name =
+          candidate.uri === SLIC3R_3MF_NAMESPACE
+            ? `slic3r:${candidate.local}`
+            : candidate.local;
+        return ` ${name}="${xmlAttributeValue(candidate.value)}"`;
+      })
       .join("");
     structural.push(`<${tag.name}${attributes}>`);
   });
