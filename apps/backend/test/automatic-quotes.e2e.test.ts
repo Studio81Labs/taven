@@ -1064,6 +1064,19 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         )
       ).response.status,
     ).toBe(200);
+    const expressCapacity = await api(
+      `automatic-quote-sessions/${sessionId}/express`,
+      {
+        method: "PUT",
+        headers: capabilityHeaders(sessionToken, key("express-capacity")),
+        body: JSON.stringify({ requested: true }),
+      },
+    );
+    expect(expressCapacity.response.status).toBe(200);
+    expect(expressCapacity.body.express).toMatchObject({
+      requested: true,
+      eligible: true,
+    });
 
     const staged = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",

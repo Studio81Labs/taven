@@ -1787,13 +1787,24 @@ export class AutomaticQuotesService {
     const active = await this.prisma.orderActivePriceBinding.findUnique({
       where: { orderId },
       include: {
+        order: { include: { automaticQuoteDraft: true } },
         orderPriceBinding: {
-          include: { shipmentPlans: true },
+          include: {
+            shipmentPlans: true,
+            priceSnapshot: { include: { priceList: true } },
+          },
         },
       },
     });
     if (!active || active.orderPriceBinding.invalidatedAt) return;
     const bindingId = active.orderPriceBindingId;
+    const automaticParameters = parseAutomaticQuotePricingParameters(
+      active.orderPriceBinding.priceSnapshot.priceList.parameters,
+    );
+    const expressCapacityWindowSeconds = active.order.automaticQuoteDraft
+      ?.expressRequested
+      ? automaticExpressCapacityWindowSeconds(automaticParameters)
+      : undefined;
     await this.dispatchAutomaticCandidates(orderId, bindingId);
     const phase = await this.prisma.orderPhase.findUnique({
       where: { orderId },
@@ -1832,14 +1843,32 @@ export class AutomaticQuotesService {
             reservation.expiresAt > observedAt &&
             latestPlan.expiresAt > observedAt,
         );
-        if (latestPlan && liveReservation) {
+        const liveReservationCapacityFits =
+          !latestPlan || !liveReservation || !expressCapacityWindowSeconds
+            ? true
+            : await this.planCapacityFitsWindow(
+                this.prisma,
+                latestPlan.id,
+                latestPlan.nodeId,
+                observedAt,
+                expressCapacityWindowSeconds,
+              );
+        if (latestPlan && liveReservation && liveReservationCapacityFits) {
           await this.finalizeAutomaticQuote({
             orderId,
             bindingId,
             phaseResourcePlanId: latestPlan.id,
             phaseReservationSetId: liveReservation.id,
+            ...(expressCapacityWindowSeconds
+              ? { capacityWindowSeconds: expressCapacityWindowSeconds }
+              : {}),
           });
           return;
+        }
+        if (liveReservation && !liveReservationCapacityFits) {
+          await this.resourceReservations.releaseBeforePrint(
+            liveReservation.id,
+          );
         }
         const needsSuccessor = Boolean(
           latestPlan &&
@@ -1853,12 +1882,21 @@ export class AutomaticQuotesService {
                 orderId,
                 bindingId,
                 nodeId,
+                ...(expressCapacityWindowSeconds
+                  ? {
+                      capacityWindowSeconds:
+                        expressCapacityWindowSeconds.toString(),
+                    }
+                  : {}),
                 ...(latestPlan ? { retryOf: latestPlan.id } : {}),
               })}`;
         const plan = await this.eligibilityPlans.createCompletePlan({
           nodeId,
           orderPhaseId: phase.id,
           planKey,
+          ...(expressCapacityWindowSeconds
+            ? { capacityWindowSeconds: expressCapacityWindowSeconds }
+            : {}),
         });
         const reservation = await this.resourceReservations.reserve({
           nodeId,
@@ -1870,6 +1908,9 @@ export class AutomaticQuotesService {
           bindingId,
           phaseResourcePlanId: plan.phaseResourcePlanId,
           phaseReservationSetId: reservation.phaseReservationSetId,
+          ...(expressCapacityWindowSeconds
+            ? { capacityWindowSeconds: expressCapacityWindowSeconds }
+            : {}),
         });
         return;
       } catch (error) {
@@ -2294,6 +2335,7 @@ export class AutomaticQuotesService {
     bindingId: string;
     phaseResourcePlanId: string;
     phaseReservationSetId: string;
+    capacityWindowSeconds?: bigint;
   }): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`
@@ -2315,6 +2357,17 @@ export class AutomaticQuotesService {
       const origin = await transaction.automaticOrderOrigin.findUnique({
         where: { orderId: input.orderId },
       });
+      const capacityFits = !input.capacityWindowSeconds
+        ? true
+        : plan
+          ? await this.planCapacityFitsWindow(
+              transaction,
+              input.phaseResourcePlanId,
+              plan.nodeId,
+              observedAt,
+              input.capacityWindowSeconds,
+            )
+          : false;
       if (
         active?.orderPriceBindingId !== input.bindingId ||
         plan?.eligibilitySnapshot.orderPhase.orderId !== input.orderId ||
@@ -2322,6 +2375,7 @@ export class AutomaticQuotesService {
         reservation?.phaseResourcePlanId !== plan.id ||
         reservation.status !== "RESERVED" ||
         reservation.expiresAt <= observedAt ||
+        !capacityFits ||
         !origin
       ) {
         return;
@@ -2346,6 +2400,34 @@ export class AutomaticQuotesService {
       });
       await transaction.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
     });
+  }
+
+  private async planCapacityFitsWindow(
+    transaction: Transaction | PrismaService,
+    phaseResourcePlanId: string,
+    nodeId: string,
+    observedAt: Date,
+    capacityWindowSeconds: bigint,
+  ): Promise<boolean> {
+    const capacityEndsAt = new Date(
+      observedAt.getTime() + Number(capacityWindowSeconds * 1_000n),
+    );
+    const rows = await transaction.$queryRaw<Array<{ fits: boolean }>>`
+      SELECT
+        count(*) > 0
+        AND bool_and(
+          candidate_interval.starts_at > ${observedAt}
+          AND candidate_interval.ends_at <= ${capacityEndsAt}
+        ) AS fits
+      FROM phase_resource_plan_jobs plan_job
+      JOIN candidate_capacity_intervals candidate_interval
+        ON candidate_interval.candidate_resource_estimate_id =
+           plan_job.candidate_resource_estimate_id
+       AND candidate_interval.node_id = plan_job.node_id
+      WHERE plan_job.phase_resource_plan_id = ${phaseResourcePlanId}::uuid
+        AND plan_job.node_id = ${nodeId}::uuid
+    `;
+    return rows[0]?.fits === true;
   }
 
   private async referenceSlices(
@@ -2892,6 +2974,22 @@ function totalEstimatedMaterial(item: AutomaticQuotePricingItem): bigint {
       ? (item.tail?.estimatedMaterialMilligrams ?? 0n)
       : 0n)
   );
+}
+
+function automaticExpressCapacityWindowSeconds(
+  parameters: AutomaticQuotePricingParameters,
+): bigint {
+  const productionWindowSeconds =
+    parameters.expressAvailableProductionWindowSeconds -
+    parameters.expressPackagingBufferSeconds;
+  const milliseconds = productionWindowSeconds * 1_000n;
+  if (
+    productionWindowSeconds <= 0n ||
+    milliseconds > BigInt(Number.MAX_SAFE_INTEGER)
+  ) {
+    throw new ConflictException("Automatic express capacity is unavailable");
+  }
+  return productionWindowSeconds;
 }
 
 function hasUsableInventoryAssignment(

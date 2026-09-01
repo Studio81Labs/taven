@@ -75,6 +75,8 @@ export type CreateEligibilityPlanInput = {
   orderPhaseId: string;
   /** Caller-owned idempotency identity for this exact planning attempt. */
   planKey: string;
+  /** Optional planning-time horizon for every selected production interval. */
+  capacityWindowSeconds?: bigint;
 };
 
 export type EligibilityPlanResult = {
@@ -169,6 +171,16 @@ export class EligibilityPlanService {
     input: CreateEligibilityPlanInput,
   ): Promise<EligibilityPlanResult> {
     const planKey = nonBlank(input.planKey, "planKey");
+    if (
+      input.capacityWindowSeconds !== undefined &&
+      (input.capacityWindowSeconds <= 0n ||
+        input.capacityWindowSeconds >
+          BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1_000)))
+    ) {
+      throw new ResourceValidationError(
+        "capacityWindowSeconds must be a positive safe duration",
+      );
+    }
     const planAdvisoryKey = `eligibility-plan:${planKey}`;
     try {
       return await this.prisma.$transaction(
@@ -281,6 +293,12 @@ export class EligibilityPlanService {
               "resource planning clock was unavailable",
             );
           }
+          const capacityEndsAt = input.capacityWindowSeconds
+            ? new Date(
+                planningNow.getTime() +
+                  Number(input.capacityWindowSeconds * 1_000n),
+              )
+            : null;
           const candidates = await transaction.$queryRaw<CandidateRow[]>`
             SELECT candidate.id, candidate.estimate_key, candidate.node_id,
                    candidate.machine_id, candidate.machine_profile_id,
@@ -339,6 +357,16 @@ export class EligibilityPlanService {
              AND candidate_interval.node_id = candidate.node_id
             WHERE candidate.node_id = ${input.nodeId}::uuid
               AND candidate.expires_at > ${planningNow}
+              AND (
+                    ${capacityEndsAt}::timestamptz IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM candidate_capacity_intervals deadline_interval
+                      WHERE deadline_interval.candidate_resource_estimate_id = candidate.id
+                        AND deadline_interval.node_id = candidate.node_id
+                        AND deadline_interval.ends_at > ${capacityEndsAt}::timestamptz
+                    )
+                  )
               AND (
                     source.retention_hold <> 'NONE'
                     OR source.source_delete_after > (
@@ -473,6 +501,7 @@ export class EligibilityPlanService {
                 nodeId: input.nodeId,
                 orderPhaseId: input.orderPhaseId,
                 planKey,
+                capacityEndsAt: capacityEndsAt?.toISOString() ?? null,
                 requiredSlotIds,
                 selectedCandidateIds,
               }),
