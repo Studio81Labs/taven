@@ -2345,13 +2345,27 @@ export class AutomaticQuotesService {
       const pricingItem = pricingItems[index];
       if (!pricingItem) return false;
       const rows = await transaction.$queryRaw<
-        Array<{ inventoryId: string; availableMilligrams: bigint }>
+        Array<{
+          inventoryId: string;
+          availableMilligrams: bigint;
+          buildVolumeXMicrometers: bigint;
+          buildVolumeYMicrometers: bigint;
+          buildVolumeZMicrometers: bigint;
+        }>
       >`
         SELECT DISTINCT
           inventory.id AS "inventoryId",
           inventory.remaining_milligrams - inventory.reserved_milligrams
-            AS "availableMilligrams"
+            AS "availableMilligrams",
+          capability.build_volume_x_micrometers
+            AS "buildVolumeXMicrometers",
+          capability.build_volume_y_micrometers
+            AS "buildVolumeYMicrometers",
+          capability.build_volume_z_micrometers
+            AS "buildVolumeZMicrometers"
         FROM machine_profiles profile
+        JOIN machine_capabilities capability
+          ON capability.id = profile.machine_capability_id
         JOIN print_config_revisions config
           ON config.id = ${item.printConfigRevisionId}::uuid
          AND config.quality = profile.quality
@@ -2380,10 +2394,12 @@ export class AutomaticQuotesService {
       `;
       demands.push({
         requiredMaterialMilligrams: totalEstimatedMaterial(pricingItem),
-        options: rows.map((row) => ({
-          inventoryId: row.inventoryId,
-          available: row.availableMilligrams,
-        })),
+        options: rows
+          .filter((row) => geometryFitsCapability(pricingItem, row))
+          .map((row) => ({
+            inventoryId: row.inventoryId,
+            available: row.availableMilligrams,
+          })),
       });
     }
     return hasUsableInventoryAssignment(demands);
@@ -5032,32 +5048,24 @@ function inspectionMeshEstimate(
   ) {
     return null;
   }
+  // Source inspection exposes body dimensions but not their relative origins.
+  // A single body's bounds are exact; for a multi-body subset, use the whole
+  // source bounds so rough pricing and pre-canonicalization machine admission
+  // cannot underestimate a spaced assembly. Canonical geometry replaces this
+  // conservative estimate once the selection has been materialized.
+  const selectedBounds =
+    bodies.length === 1
+      ? bodies[0]!.boundingBox
+      : positiveBoundingBox(asRecord(outcome.metrics)?.boundingBox);
+  if (!selectedBounds) return null;
   return {
     volumeCubicMicrometers: bodies.reduce(
       (total, body) => total + body.volume,
       0n,
     ),
-    boundsXMicrometers: bodies.reduce(
-      (maximum, body) =>
-        body.boundingBox.xMicrometers > maximum
-          ? body.boundingBox.xMicrometers
-          : maximum,
-      0n,
-    ),
-    boundsYMicrometers: bodies.reduce(
-      (maximum, body) =>
-        body.boundingBox.yMicrometers > maximum
-          ? body.boundingBox.yMicrometers
-          : maximum,
-      0n,
-    ),
-    boundsZMicrometers: bodies.reduce(
-      (maximum, body) =>
-        body.boundingBox.zMicrometers > maximum
-          ? body.boundingBox.zMicrometers
-          : maximum,
-      0n,
-    ),
+    boundsXMicrometers: selectedBounds.xMicrometers,
+    boundsYMicrometers: selectedBounds.yMicrometers,
+    boundsZMicrometers: selectedBounds.zMicrometers,
   };
 }
 

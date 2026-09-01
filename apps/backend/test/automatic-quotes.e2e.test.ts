@@ -355,6 +355,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const factory = new PersistenceFactory(sql, `${scope}:happy`);
     const quoteColor = `red-${scope.slice(-12)}`;
     const splitNodeColor = `blue-${scope.slice(-12)}`;
+    const undersizedMachineColor = `small-${scope.slice(-12)}`;
     await sql.query("BEGIN");
     const foundation = await factory
       .createFoundation(
@@ -391,6 +392,8 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const invalidCalibrationId = randomUUID();
     const invalidCapabilityId = randomUUID();
     const invalidProfileId = randomUUID();
+    const undersizedMachineId = randomUUID();
+    const undersizedCalibrationId = randomUUID();
     const splitNodeId = randomUUID();
     const splitMachineId = randomUUID();
     const splitCalibrationId = randomUUID();
@@ -446,12 +449,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           capabilityKey: `invalid-${scope}`,
           manufacturer: compatibleMachine.machineCapability.manufacturer,
           model: `${compatibleMachine.machineCapability.model}-invalid`,
-          buildVolumeXMicrometers:
-            compatibleMachine.machineCapability.buildVolumeXMicrometers,
-          buildVolumeYMicrometers:
-            compatibleMachine.machineCapability.buildVolumeYMicrometers,
-          buildVolumeZMicrometers:
-            compatibleMachine.machineCapability.buildVolumeZMicrometers,
+          buildVolumeXMicrometers: 10_000n,
+          buildVolumeYMicrometers: 10_000n,
+          buildVolumeZMicrometers: 10_000n,
           supportedNozzleMicrometers: [
             compatibleProfile.nozzleDiameterMicrometers,
             incompatibleNozzle,
@@ -495,6 +495,18 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           installedNozzleMicrometers: incompatibleNozzle,
         },
       });
+      await transaction.machine.create({
+        data: {
+          id: undersizedMachineId,
+          nodeId: compatibleMachine.nodeId,
+          machineCapabilityId: invalidCapabilityId,
+          code: `undersized-${scope.slice(-12)}`,
+          displayName: "Undersized compatible machine",
+          status: "ACTIVE",
+          installedNozzleMicrometers:
+            compatibleMachine.installedNozzleMicrometers,
+        },
+      });
       await transaction.revisionIdentity.create({
         data: {
           id: invalidCalibrationId,
@@ -518,6 +530,27 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           activatedAt: new Date(),
         },
       });
+      await transaction.revisionIdentity.create({
+        data: {
+          id: undersizedCalibrationId,
+          kind: "MACHINE_CALIBRATION",
+          digest: sha(`${scope}:undersized-calibration`),
+        },
+      });
+      await transaction.machineCalibration.create({
+        data: {
+          id: undersizedCalibrationId,
+          nodeId: compatibleMachine.nodeId,
+          machineId: undersizedMachineId,
+          flowRatioPartsPerMillion: calibration.flowRatioPartsPerMillion,
+          xyCompensationMicrometers: calibration.xyCompensationMicrometers,
+          elephantFootCompensationMicrometers:
+            calibration.elephantFootCompensationMicrometers,
+          settings: calibration.settings as Prisma.InputJsonValue,
+          state: "ACTIVE",
+          activatedAt: new Date(),
+        },
+      });
       const inventory = compatibleMachine.inventories[0];
       if (!inventory) throw new Error("expected available inventory");
       await transaction.inventory.create({
@@ -528,6 +561,22 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           material: inventory.material,
           vendor: inventory.vendor,
           color: inventory.color,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1_000_000n,
+          status: "AVAILABLE",
+        },
+      });
+      await transaction.inventory.create({
+        data: {
+          nodeId: compatibleMachine.nodeId,
+          machineId: undersizedMachineId,
+          sku: `${inventory.sku}-undersized`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: undersizedMachineColor,
           lotCode: inventory.lotCode,
           priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
           priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
@@ -754,6 +803,13 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           result: {
             outcome: {
               status: "succeeded",
+              metrics: {
+                boundingBox: {
+                  xMicrometers: "20000",
+                  yMicrometers: "20000",
+                  zMicrometers: "20000",
+                },
+              },
               bodies: [
                 inspectedBody("body-a"),
                 inspectedBody("body-b"),
@@ -895,6 +951,33 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       "not-in-stock",
     );
     expect(unavailableConfiguration.response.status).toBe(400);
+
+    const undersizedMachineConfiguration = await configure(
+      0,
+      "body-a",
+      1,
+      "configure-oversized-geometry",
+      false,
+      undersizedMachineColor,
+    );
+    expect(undersizedMachineConfiguration.response.status).toBe(400);
+    expect(
+      await prisma.automaticQuoteItemDraft.count({ where: { orderId } }),
+    ).toBe(0);
+    const undersizedMachineReplacement = await replaceConfiguration(
+      [
+        {
+          ordinal: 0,
+          bodyId: "body-a",
+          color: undersizedMachineColor,
+        },
+      ],
+      "replace-oversized-geometry",
+    );
+    expect(undersizedMachineReplacement.response.status).toBe(400);
+    expect(
+      await prisma.automaticQuoteItemDraft.count({ where: { orderId } }),
+    ).toBe(0);
 
     await prisma.inventory.update({
       where: { id: foundation.inventoryId },
