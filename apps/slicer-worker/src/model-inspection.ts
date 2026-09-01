@@ -143,9 +143,34 @@ function pointIdentity(point: Point): string {
   return point.map((coordinate) => coordinate.toPrecision(15)).join(",");
 }
 
-function topology(triangles: readonly Triangle[]) {
-  const edges = new Map<string, { count: number; direction: number }>();
-  for (const triangle of triangles) {
+function geometryAnalysis(triangles: readonly Triangle[]) {
+  const parents = Int32Array.from(triangles, (_, index) => index);
+  const signedSixTimesVolumes = new Float64Array(triangles.length);
+  const find = (index: number): number => {
+    let root = index;
+    while (parents[root] !== root) root = parents[root]!;
+    while (parents[index] !== index) {
+      const parent = parents[index]!;
+      parents[index] = root;
+      index = parent;
+    }
+    return root;
+  };
+  const unite = (left: number, right: number): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+  };
+  const edges = new Map<
+    string,
+    { count: number; direction: number; triangleIndex: number }
+  >();
+  for (const [triangleIndex, triangle] of triangles.entries()) {
+    const [a, b, c] = triangle;
+    signedSixTimesVolumes[triangleIndex] =
+      a[0] * (b[1] * c[2] - b[2] * c[1]) -
+      a[1] * (b[0] * c[2] - b[2] * c[0]) +
+      a[2] * (b[0] * c[1] - b[1] * c[0]);
     for (const [left, right] of [
       [triangle[0], triangle[1]],
       [triangle[1], triangle[2]],
@@ -158,7 +183,12 @@ function topology(triangles: readonly Triangle[]) {
           ? `${leftKey}|${rightKey}`
           : `${rightKey}|${leftKey}`;
       const direction = leftKey < rightKey ? 1 : -1;
-      const current = edges.get(key) ?? { count: 0, direction: 0 };
+      const current = edges.get(key) ?? {
+        count: 0,
+        direction: 0,
+        triangleIndex,
+      };
+      unite(triangleIndex, current.triangleIndex);
       current.count += 1;
       current.direction += direction;
       edges.set(key, current);
@@ -169,30 +199,38 @@ function topology(triangles: readonly Triangle[]) {
     manifold && [...edges.values()].every(({ count }) => count === 2);
   const consistent =
     watertight && [...edges.values()].every(({ direction }) => direction === 0);
+  const shellSignedSixTimesVolumes = new Map<number, number>();
+  for (let index = 0; index < triangles.length; index += 1) {
+    const root = find(index);
+    shellSignedSixTimesVolumes.set(
+      root,
+      (shellSignedSixTimesVolumes.get(root) ?? 0) +
+        signedSixTimesVolumes[index]!,
+    );
+  }
   return {
-    watertight,
-    manifold,
-    normals: watertight
-      ? consistent
-        ? "consistent"
-        : "inconsistent"
-      : "unknown",
+    topology: {
+      watertight,
+      manifold,
+      normals: watertight
+        ? consistent
+          ? "consistent"
+          : "inconsistent"
+        : "unknown",
+    } as const,
+    absoluteSixTimesVolume: [...shellSignedSixTimesVolumes.values()].reduce(
+      (total, value) => total + Math.abs(value),
+      0,
+    ),
   } as const;
 }
 
 function volume(
-  triangles: readonly Triangle[],
+  absoluteSixTimesVolume: number,
   micrometersPerUnit = 1_000,
 ): string {
-  let signedSixTimesVolume = 0;
-  for (const [a, b, c] of triangles) {
-    signedSixTimesVolume +=
-      a[0] * (b[1] * c[2] - b[2] * c[1]) -
-      a[1] * (b[0] * c[2] - b[2] * c[0]) +
-      a[2] * (b[0] * c[1] - b[1] * c[0]);
-  }
   const roundedCubicMicrometers = Math.round(
-    (Math.abs(signedSixTimesVolume) / 6) * micrometersPerUnit ** 3,
+    (absoluteSixTimesVolume / 6) * micrometersPerUnit ** 3,
   );
   if (!Number.isFinite(roundedCubicMicrometers)) {
     throw new SlicingWorkerError(
@@ -235,7 +273,11 @@ function body(
     "utf8",
   );
   const dimensions = boundingBox(triangles, micrometersPerUnit);
-  const bodyVolume = volume(triangles, micrometersPerUnit);
+  const analysis = geometryAnalysis(triangles);
+  const bodyVolume = volume(
+    analysis.absoluteSixTimesVolume,
+    micrometersPerUnit,
+  );
   if (
     bodyVolume === "0" ||
     dimensions.xMicrometers === "0" ||
@@ -252,7 +294,7 @@ function body(
     boundingBox: dimensions,
     volumeCubicMicrometers: bodyVolume,
     triangleCount: triangles.length,
-    topology: topology(triangles),
+    topology: analysis.topology,
     hasPaintAssignments: assignment.paint,
     materialAssignmentIds: [...new Set(assignment.materials)].sort(),
     extruderAssignmentIds: [...new Set(assignment.extruders)].sort(),

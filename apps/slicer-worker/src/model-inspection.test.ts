@@ -96,6 +96,36 @@ function tetrahedronStl(offsetX: number): Uint8Array {
   `);
 }
 
+function disconnectedTetrahedraStl(): Uint8Array {
+  const tetrahedron = (offsetX: number, scale: number, reversed: boolean) => {
+    const point = (x: number, y: number, z: number) =>
+      [offsetX + x * scale, y * scale, z * scale] as const;
+    const triangles = [
+      [point(0, 0, 0), point(0, 1, 0), point(1, 0, 0)],
+      [point(0, 0, 0), point(1, 0, 0), point(0, 0, 1)],
+      [point(1, 0, 0), point(0, 1, 0), point(0, 0, 1)],
+      [point(0, 1, 0), point(0, 0, 0), point(0, 0, 1)],
+    ] as const;
+    return triangles.map((triangle) =>
+      reversed ? [triangle[0], triangle[2], triangle[1]] : triangle,
+    );
+  };
+  const triangles = [...tetrahedron(0, 1, false), ...tetrahedron(10, 2, true)];
+  return new TextEncoder().encode(`
+    solid disconnected
+      ${triangles
+        .map(
+          (triangle) => `facet normal 0 0 0
+            outer loop
+              ${triangle.map((vertex) => `vertex ${vertex.join(" ")}`).join("\n")}
+            endloop
+          endfacet`,
+        )
+        .join("\n")}
+    endsolid disconnected
+  `);
+}
+
 describe("safe model inspection", () => {
   it("parses vertices only from complete ASCII STL facet blocks", () => {
     const source = new TextEncoder().encode(`
@@ -151,6 +181,30 @@ describe("safe model inspection", () => {
 
     expect(() => inspectModel("stl", planar)).toThrow(
       "positive volume and three-dimensional bounds",
+    );
+  });
+
+  it("sums absolute volumes for disconnected shells with opposite winding", () => {
+    const source = disconnectedTetrahedraStl();
+
+    const inspection = inspectModel("stl", source);
+    expect(inspection.bodies[0]).toMatchObject({
+      volumeCubicMicrometers: "1500000000",
+      topology: {
+        watertight: true,
+        manifold: true,
+        normals: "consistent",
+      },
+    });
+
+    const canonical = canonicalizeModel(
+      "stl",
+      source,
+      ["body-0001"],
+      1_000_000,
+    );
+    expect(canonical.inspection.bodies[0]?.volumeCubicMicrometers).toBe(
+      "1500000000",
     );
   });
 

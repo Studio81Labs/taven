@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   geometrySelectionSha256,
@@ -8,12 +8,17 @@ import {
   type SlicingJob,
   type SlicingJobKind,
 } from "@taven/slicer-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkerConfig } from "./config.js";
 import { RetryableSlicingResultError, SlicingWorkerError } from "./failures.js";
 import { sha256, type WorkerObjectStore } from "./object-store.js";
 import type { OrcaEngine, OrcaSliceRequest } from "./orca-engine.js";
 import { SlicingProcessor } from "./processor.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, mkdtemp: vi.fn(actual.mkdtemp) };
+});
 
 const ids = {
   source: "00000000-0000-4000-8000-000000000001",
@@ -166,6 +171,42 @@ function envelope<K extends SlicingJobKind>(kind: K, input: unknown) {
 }
 
 describe("SlicingProcessor", () => {
+  it("rejects with a validated envelope when workspace creation fails", async () => {
+    vi.mocked(mkdtemp).mockRejectedValueOnce(
+      Object.assign(new Error("temporary workspace is full"), {
+        code: "ENOSPC",
+      }),
+    );
+    const input = {
+      source: {
+        modelFileId: ids.source,
+        format: "stl",
+        objectKey: `models/${ids.source}/source`,
+        contentSha256: "a".repeat(64),
+      },
+      operation: { mode: "inspect_source" },
+      inspectionRevision: "inspection-v1",
+      inspectionConfigSha256: "b".repeat(64),
+      canonicalizerRevision: "canonicalizer-v1",
+      canonicalizerConfigSha256: "c".repeat(64),
+    };
+
+    await expect(
+      new SlicingProcessor(new MemoryStore(), new FakeEngine(), config).process(
+        envelope("model_inspection", input),
+      ),
+    ).rejects.toMatchObject({
+      name: "RetryableSlicingResultError",
+      result: {
+        outcome: {
+          status: "failed",
+          failureClass: "retryable_infrastructure",
+          code: "TEMPORARY_CAPACITY",
+        },
+      },
+    } satisfies Partial<RetryableSlicingResultError>);
+  });
+
   it("rejects with a validated envelope for retryable infrastructure failures", async () => {
     const store = new MemoryStore();
     store.read = async () => {

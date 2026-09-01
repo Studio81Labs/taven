@@ -193,9 +193,8 @@ export class SlicingProcessor {
 
   async process(input: unknown): Promise<SlicingResult> {
     const job = SlicingJobSchema.parse(input);
-    const workspace = await mkdtemp(path.join(tmpdir(), "taven-slicer-"));
     try {
-      const result = await this.processJob(job, workspace);
+      const result = await this.processInWorkspace(job);
       return slicingResultForJobSchema(job).parse(result);
     } catch (error) {
       const result = slicingResultForJobSchema(job).parse({
@@ -209,6 +208,22 @@ export class SlicingProcessor {
         throw new RetryableSlicingResultError(result);
       }
       return result;
+    }
+  }
+
+  private async processInWorkspace(job: SlicingJob): Promise<unknown> {
+    let workspace: string;
+    try {
+      workspace = await mkdtemp(path.join(tmpdir(), "taven-slicer-"));
+    } catch {
+      throw new SlicingWorkerError(
+        "retryable_infrastructure",
+        "TEMPORARY_CAPACITY",
+        "Temporary slicing workspace is unavailable",
+      );
+    }
+    try {
+      return await this.processJob(job, workspace);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
