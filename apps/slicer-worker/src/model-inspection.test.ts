@@ -126,7 +126,10 @@ function disconnectedTetrahedraStl(): Uint8Array {
   `);
 }
 
-function nestedTetrahedraStl(): Uint8Array {
+function nestedTetrahedraStl(
+  innerScale = 4,
+  innerOffset: readonly [number, number, number] = [1, 1, 1],
+): Uint8Array {
   const tetrahedron = (
     offset: readonly [number, number, number],
     scale: number,
@@ -150,7 +153,7 @@ function nestedTetrahedraStl(): Uint8Array {
   };
   const triangles = [
     ...tetrahedron([0, 0, 0], 10, false),
-    ...tetrahedron([1, 1, 1], 4, true),
+    ...tetrahedron(innerOffset, innerScale, true),
   ];
   return new TextEncoder().encode(`
     solid cavity
@@ -271,6 +274,21 @@ describe("safe model inspection", () => {
     expect(canonical.inspection.bodies[0]?.volumeCubicMicrometers).toBe(
       "156000000000",
     );
+  });
+
+  it.each([
+    ["crossing", 8],
+    ["coplanar", 7],
+  ])("rejects %s watertight shells before cavity subtraction", (_, scale) => {
+    expect(() => inspectModel("stl", nestedTetrahedraStl(scale))).toThrow(
+      "touching or intersecting geometry shells",
+    );
+  });
+
+  it("does not subtract a disjoint shell whose bounds are nested", () => {
+    const inspection = inspectModel("stl", nestedTetrahedraStl(1, [8, 8, 8]));
+
+    expect(inspection.bodies[0]?.volumeCubicMicrometers).toBe("166833333333");
   });
 
   it("rejects body volumes that cannot fit the persistence contract", () => {

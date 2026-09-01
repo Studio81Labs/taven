@@ -92,23 +92,33 @@ function staleProductionResult(
   };
 }
 
-function uploadedArtifact(result: SlicingResult): UploadedArtifact | null {
-  if (result.outcome.status !== "succeeded") return null;
+function uploadedArtifacts(result: SlicingResult): UploadedArtifact[] {
+  if (result.outcome.status !== "succeeded") return [];
   if (result.kind === "model_inspection") {
     return result.outcome.canonicalGeometry
-      ? {
-          objectKey: result.outcome.canonicalGeometry.canonicalObjectKey,
-          owner: "modelGeometry",
-        }
-      : null;
+      ? [
+          {
+            objectKey: result.outcome.canonicalGeometry.canonicalObjectKey,
+            owner: "modelGeometry",
+          },
+        ]
+      : [];
   }
   if (result.kind === "reference_slice" || result.kind === "production_slice") {
-    return {
-      objectKey: result.outcome.artifact.objectKey,
-      owner: "sliceResult",
-    };
+    return [
+      {
+        objectKey: result.outcome.artifact.objectKey,
+        owner: "sliceResult",
+      },
+    ];
   }
-  return null;
+  if (result.kind === "candidate_estimate") {
+    return result.outcome.occupancySlices.map(({ artifact }) => ({
+      objectKey: artifact.objectKey,
+      owner: "sliceResult",
+    }));
+  }
+  return [];
 }
 
 @Injectable()
@@ -193,7 +203,7 @@ export class SlicingResultIngestionService {
       });
     } catch (error) {
       if (error instanceof PermanentSlicingResultIngestionError) {
-        await this.deleteUnownedUploadedArtifact(input.result);
+        await this.deleteUnownedUploadedArtifacts(input.result);
       }
       throw error;
     }
@@ -202,24 +212,30 @@ export class SlicingResultIngestionService {
     }
   }
 
-  private async deleteUnownedUploadedArtifact(
-    result: SlicingResult,
-  ): Promise<void> {
-    const artifact = uploadedArtifact(result);
-    if (!artifact) return;
-    const owner =
-      artifact.owner === "modelGeometry"
-        ? await this.prisma.modelGeometry.findUnique({
-            where: { canonicalObjectKey: artifact.objectKey },
-            select: { id: true },
-          })
-        : await this.prisma.sliceResult.findUnique({
-            where: { artifactObjectKey: artifact.objectKey },
-            select: { id: true },
-          });
-    if (!owner) {
-      await this.objects.deleteObjects([artifact.objectKey]);
+  async deleteUnownedUploadedArtifacts(result: SlicingResult): Promise<void> {
+    const artifacts = [
+      ...new Map(
+        uploadedArtifacts(result).map((artifact) => [
+          artifact.objectKey,
+          artifact,
+        ]),
+      ).values(),
+    ];
+    const unownedKeys: string[] = [];
+    for (const artifact of artifacts) {
+      const owner =
+        artifact.owner === "modelGeometry"
+          ? await this.prisma.modelGeometry.findUnique({
+              where: { canonicalObjectKey: artifact.objectKey },
+              select: { id: true },
+            })
+          : await this.prisma.sliceResult.findUnique({
+              where: { artifactObjectKey: artifact.objectKey },
+              select: { id: true },
+            });
+      if (!owner) unownedKeys.push(artifact.objectKey);
     }
+    if (unownedKeys.length > 0) await this.objects.deleteObjects(unownedKeys);
   }
 
   private async ingestInspection(

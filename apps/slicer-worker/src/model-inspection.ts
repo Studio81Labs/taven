@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { inflateRawSync } from "node:zlib";
+import { orient2d, orient3d } from "robust-predicates";
 import { SaxesParser, type SaxesAttributeNS, type SaxesTagNS } from "saxes";
 import { SlicingWorkerError } from "./failures.js";
 import { sha256 } from "./object-store.js";
@@ -59,6 +60,8 @@ const MAX_MODEL_OBJECTS = 4_096;
 const MAX_ASSIGNMENT_IDS = 256;
 const MAX_SHELL_PAIR_CHECKS = 2_000_000;
 const MAX_CONTAINMENT_TRIANGLE_CHECKS = 4_000_000;
+const MAX_INTERSHELL_GEOMETRY_CHECKS = 4_000_000;
+const TRIANGLE_BVH_LEAF_SIZE = 8;
 const MAX_SIGNED_INT64 = 9_223_372_036_854_775_807n;
 const ZIP_EOCD = 0x06054b50;
 const ZIP_CENTRAL_FILE = 0x02014b50;
@@ -153,11 +156,22 @@ function pointIdentity(point: Point): string {
   return point.map((coordinate) => coordinate.toPrecision(15)).join(",");
 }
 
+type Bounds = {
+  minimum: [number, number, number];
+  maximum: [number, number, number];
+};
+
+type TriangleBvh = {
+  bounds: Bounds;
+  triangleCount: number;
+  triangleIndices?: number[];
+  left?: TriangleBvh;
+  right?: TriangleBvh;
+};
+
 type Shell = {
-  bounds: {
-    minimum: [number, number, number];
-    maximum: [number, number, number];
-  };
+  bounds: Bounds;
+  bvh?: TriangleBvh;
   signedSixTimesVolume: number;
   triangleIndices: number[];
 };
@@ -165,7 +179,7 @@ type Shell = {
 function shellBounds(
   triangles: readonly Triangle[],
   triangleIndices: readonly number[],
-): Shell["bounds"] {
+): Bounds {
   const minimum: [number, number, number] = [Infinity, Infinity, Infinity];
   const maximum: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   for (const triangleIndex of triangleIndices) {
@@ -179,23 +193,288 @@ function shellBounds(
   return { minimum, maximum };
 }
 
-function strictlyContainsBounds(
-  outer: Shell["bounds"],
-  inner: Shell["bounds"],
-): boolean {
-  let hasStrictBoundary = false;
+function strictlyContainsBounds(outer: Bounds, inner: Bounds): boolean {
   for (let axis = 0; axis < 3; axis += 1) {
     if (
-      outer.minimum[axis]! > inner.minimum[axis]! ||
-      outer.maximum[axis]! < inner.maximum[axis]!
+      outer.minimum[axis]! >= inner.minimum[axis]! ||
+      outer.maximum[axis]! <= inner.maximum[axis]!
     ) {
       return false;
     }
-    hasStrictBoundary ||=
-      outer.minimum[axis]! < inner.minimum[axis]! ||
-      outer.maximum[axis]! > inner.maximum[axis]!;
   }
-  return hasStrictBoundary;
+  return true;
+}
+
+function triangleBounds(triangle: Triangle): Bounds {
+  const minimum: [number, number, number] = [Infinity, Infinity, Infinity];
+  const maximum: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (const point of triangle) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      minimum[axis] = Math.min(minimum[axis]!, point[axis]!);
+      maximum[axis] = Math.max(maximum[axis]!, point[axis]!);
+    }
+  }
+  return { minimum, maximum };
+}
+
+function boundsOverlap(left: Bounds, right: Bounds): boolean {
+  for (let axis = 0; axis < 3; axis += 1) {
+    if (
+      left.maximum[axis]! < right.minimum[axis]! ||
+      right.maximum[axis]! < left.minimum[axis]!
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildTriangleBvh(
+  triangles: readonly Triangle[],
+  triangleIndices: readonly number[],
+): TriangleBvh {
+  const bounds = shellBounds(triangles, triangleIndices);
+  if (triangleIndices.length <= TRIANGLE_BVH_LEAF_SIZE) {
+    return {
+      bounds,
+      triangleCount: triangleIndices.length,
+      triangleIndices: [...triangleIndices],
+    };
+  }
+  let splitAxis = 0;
+  for (let axis = 1; axis < 3; axis += 1) {
+    if (
+      bounds.maximum[axis]! - bounds.minimum[axis]! >
+      bounds.maximum[splitAxis]! - bounds.minimum[splitAxis]!
+    ) {
+      splitAxis = axis;
+    }
+  }
+  const sorted = [...triangleIndices].sort((left, right) => {
+    const leftTriangle = triangles[left]!;
+    const rightTriangle = triangles[right]!;
+    const leftCenter =
+      (leftTriangle[0][splitAxis]! +
+        leftTriangle[1][splitAxis]! +
+        leftTriangle[2][splitAxis]!) /
+      3;
+    const rightCenter =
+      (rightTriangle[0][splitAxis]! +
+        rightTriangle[1][splitAxis]! +
+        rightTriangle[2][splitAxis]!) /
+      3;
+    return leftCenter - rightCenter || left - right;
+  });
+  const middle = Math.floor(sorted.length / 2);
+  return {
+    bounds,
+    triangleCount: sorted.length,
+    left: buildTriangleBvh(triangles, sorted.slice(0, middle)),
+    right: buildTriangleBvh(triangles, sorted.slice(middle)),
+  };
+}
+
+function projectedPoint(
+  point: Point,
+  projection: number,
+): readonly [number, number] {
+  return projection === 0
+    ? [point[1], point[2]]
+    : projection === 1
+      ? [point[0], point[2]]
+      : [point[0], point[1]];
+}
+
+function triangleProjection(triangle: Triangle): number {
+  for (let projection = 0; projection < 3; projection += 1) {
+    const [a, b, c] = triangle.map((point) =>
+      projectedPoint(point, projection),
+    );
+    if (orient2d(...a!, ...b!, ...c!) !== 0) return projection;
+  }
+  invalid("Model contains a degenerate triangle");
+}
+
+function pointInTriangle2d(
+  point: readonly [number, number],
+  triangle: readonly [
+    readonly [number, number],
+    readonly [number, number],
+    readonly [number, number],
+  ],
+): boolean {
+  const [a, b, c] = triangle;
+  const ab = orient2d(...a, ...b, ...point);
+  const bc = orient2d(...b, ...c, ...point);
+  const ca = orient2d(...c, ...a, ...point);
+  return (ab >= 0 && bc >= 0 && ca >= 0) || (ab <= 0 && bc <= 0 && ca <= 0);
+}
+
+function pointOnSegment2d(
+  point: readonly [number, number],
+  start: readonly [number, number],
+  end: readonly [number, number],
+): boolean {
+  return (
+    Math.min(start[0], end[0]) <= point[0] &&
+    point[0] <= Math.max(start[0], end[0]) &&
+    Math.min(start[1], end[1]) <= point[1] &&
+    point[1] <= Math.max(start[1], end[1])
+  );
+}
+
+function segmentsTouch2d(
+  leftStart: readonly [number, number],
+  leftEnd: readonly [number, number],
+  rightStart: readonly [number, number],
+  rightEnd: readonly [number, number],
+): boolean {
+  const leftToRightStart = orient2d(...leftStart, ...leftEnd, ...rightStart);
+  const leftToRightEnd = orient2d(...leftStart, ...leftEnd, ...rightEnd);
+  const rightToLeftStart = orient2d(...rightStart, ...rightEnd, ...leftStart);
+  const rightToLeftEnd = orient2d(...rightStart, ...rightEnd, ...leftEnd);
+  if (
+    ((leftToRightStart > 0 && leftToRightEnd < 0) ||
+      (leftToRightStart < 0 && leftToRightEnd > 0)) &&
+    ((rightToLeftStart > 0 && rightToLeftEnd < 0) ||
+      (rightToLeftStart < 0 && rightToLeftEnd > 0))
+  ) {
+    return true;
+  }
+  return (
+    (leftToRightStart === 0 &&
+      pointOnSegment2d(rightStart, leftStart, leftEnd)) ||
+    (leftToRightEnd === 0 && pointOnSegment2d(rightEnd, leftStart, leftEnd)) ||
+    (rightToLeftStart === 0 &&
+      pointOnSegment2d(leftStart, rightStart, rightEnd)) ||
+    (rightToLeftEnd === 0 && pointOnSegment2d(leftEnd, rightStart, rightEnd))
+  );
+}
+
+function coplanarSegmentTouchesTriangle(
+  start: Point,
+  end: Point,
+  triangle: Triangle,
+): boolean {
+  const projection = triangleProjection(triangle);
+  const projectedStart = projectedPoint(start, projection);
+  const projectedEnd = projectedPoint(end, projection);
+  const projectedTriangle = triangle.map((point) =>
+    projectedPoint(point, projection),
+  ) as [
+    readonly [number, number],
+    readonly [number, number],
+    readonly [number, number],
+  ];
+  if (
+    pointInTriangle2d(projectedStart, projectedTriangle) ||
+    pointInTriangle2d(projectedEnd, projectedTriangle)
+  ) {
+    return true;
+  }
+  return projectedTriangle.some((edgeStart, index) =>
+    segmentsTouch2d(
+      projectedStart,
+      projectedEnd,
+      edgeStart,
+      projectedTriangle[(index + 1) % 3]!,
+    ),
+  );
+}
+
+function segmentTouchesTriangle(
+  start: Point,
+  end: Point,
+  triangle: Triangle,
+): boolean {
+  const [a, b, c] = triangle;
+  const startSide = orient3d(...a, ...b, ...c, ...start);
+  const endSide = orient3d(...a, ...b, ...c, ...end);
+  if ((startSide > 0 && endSide > 0) || (startSide < 0 && endSide < 0)) {
+    return false;
+  }
+  if (startSide === 0 && endSide === 0) {
+    return coplanarSegmentTouchesTriangle(start, end, triangle);
+  }
+  const ab = orient3d(...start, ...end, ...a, ...b);
+  const bc = orient3d(...start, ...end, ...b, ...c);
+  const ca = orient3d(...start, ...end, ...c, ...a);
+  return (ab >= 0 && bc >= 0 && ca >= 0) || (ab <= 0 && bc <= 0 && ca <= 0);
+}
+
+function trianglesTouchOrIntersect(left: Triangle, right: Triangle): boolean {
+  const edges = (triangle: Triangle) =>
+    [
+      [triangle[0], triangle[1]],
+      [triangle[1], triangle[2]],
+      [triangle[2], triangle[0]],
+    ] as const;
+  return (
+    edges(left).some(([start, end]) =>
+      segmentTouchesTriangle(start, end, right),
+    ) ||
+    edges(right).some(([start, end]) =>
+      segmentTouchesTriangle(start, end, left),
+    )
+  );
+}
+
+function spendIntershellCheck(budget: { count: number }): void {
+  budget.count += 1;
+  if (budget.count > MAX_INTERSHELL_GEOMETRY_CHECKS) {
+    throw new SlicingWorkerError(
+      "deterministic_invalid",
+      "RESOURCE_LIMIT_EXCEEDED",
+      "Model exceeds the inter-shell geometry inspection limit",
+    );
+  }
+}
+
+function shellsTouchOrIntersect(
+  left: Shell,
+  right: Shell,
+  triangles: readonly Triangle[],
+  budget: { count: number },
+): boolean {
+  left.bvh ??= buildTriangleBvh(triangles, left.triangleIndices);
+  right.bvh ??= buildTriangleBvh(triangles, right.triangleIndices);
+  const pending: Array<readonly [TriangleBvh, TriangleBvh]> = [
+    [left.bvh, right.bvh],
+  ];
+  while (pending.length > 0) {
+    const [leftNode, rightNode] = pending.pop()!;
+    spendIntershellCheck(budget);
+    if (!boundsOverlap(leftNode.bounds, rightNode.bounds)) continue;
+    if (leftNode.triangleIndices && rightNode.triangleIndices) {
+      for (const leftIndex of leftNode.triangleIndices) {
+        for (const rightIndex of rightNode.triangleIndices) {
+          spendIntershellCheck(budget);
+          const leftTriangle = triangles[leftIndex]!;
+          const rightTriangle = triangles[rightIndex]!;
+          if (
+            boundsOverlap(
+              triangleBounds(leftTriangle),
+              triangleBounds(rightTriangle),
+            ) &&
+            trianglesTouchOrIntersect(leftTriangle, rightTriangle)
+          ) {
+            return true;
+          }
+        }
+      }
+      continue;
+    }
+    if (
+      rightNode.triangleIndices ||
+      (!leftNode.triangleIndices &&
+        leftNode.triangleCount >= rightNode.triangleCount)
+    ) {
+      pending.push([leftNode.left!, rightNode], [leftNode.right!, rightNode]);
+    } else {
+      pending.push([leftNode, rightNode.left!], [leftNode, rightNode.right!]);
+    }
+  }
+  return false;
 }
 
 function pointInsideShell(
@@ -261,6 +540,24 @@ function nestedShellVolume(
       "RESOURCE_LIMIT_EXCEEDED",
       "Model exceeds the nested-shell inspection limit",
     );
+  }
+  for (const triangle of triangles) triangleProjection(triangle);
+  const intershellBudget = { count: 0 };
+  for (let leftIndex = 0; leftIndex < shells.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < shells.length;
+      rightIndex += 1
+    ) {
+      const left = shells[leftIndex]!;
+      const right = shells[rightIndex]!;
+      if (
+        boundsOverlap(left.bounds, right.bounds) &&
+        shellsTouchOrIntersect(left, right, triangles, intershellBudget)
+      ) {
+        invalid("Model contains touching or intersecting geometry shells");
+      }
+    }
   }
   const triangleChecks = { count: 0 };
   let total = 0;

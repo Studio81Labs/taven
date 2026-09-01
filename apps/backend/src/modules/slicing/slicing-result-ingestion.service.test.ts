@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Prisma } from "@prisma/client";
 import type {
+  CandidateEstimateResult,
   ModelInspectionResult,
   ProductionSliceResult,
   ReferenceSliceResult,
@@ -286,6 +287,41 @@ describe("slicing result ingestion", () => {
       canonical.service.ingest(permanentCanonicalInput()),
     ).rejects.toBe(canonical.failure);
     expect(canonical.deleteObjects).not.toHaveBeenCalled();
+  });
+
+  it("deletes only unowned candidate metric artifacts", async () => {
+    const ownedObjectKey = `slice-metrics/${"c".repeat(64)}/result.json`;
+    const unownedObjectKey = `slice-metrics/${"d".repeat(64)}/result.json`;
+    const findUnique = vi
+      .fn()
+      .mockImplementation(
+        ({ where }: { where: { artifactObjectKey: string } }) =>
+          Promise.resolve(
+            where.artifactObjectKey === ownedObjectKey ? { id: jobId } : null,
+          ),
+      );
+    const deleteObjects = vi.fn().mockResolvedValue(undefined);
+    const service = new SlicingResultIngestionService(
+      {
+        sliceResult: { findUnique },
+      } as unknown as PrismaService,
+      { deleteObjects } as unknown as ObjectStorage,
+    );
+    const result = {
+      kind: "candidate_estimate",
+      outcome: {
+        status: "succeeded",
+        occupancySlices: [
+          { artifact: { objectKey: ownedObjectKey } },
+          { artifact: { objectKey: unownedObjectKey } },
+        ],
+      },
+    } as unknown as CandidateEstimateResult;
+
+    await service.deleteUnownedUploadedArtifacts(result);
+
+    expect(findUnique).toHaveBeenCalledTimes(2);
+    expect(deleteObjects).toHaveBeenCalledWith([unownedObjectKey]);
   });
 
   it("rejects aggregate canonical volume that cannot fit PostgreSQL bigint", async () => {

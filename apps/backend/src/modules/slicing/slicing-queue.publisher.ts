@@ -5,6 +5,9 @@ import type { Job, Queue } from "bullmq";
 import type { SlicingJob } from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
+import type { CandidateEstimateResult } from "@taven/slicer-contracts" with {
+  "resolution-mode": "import",
+};
 import { PrismaService } from "../../prisma/prisma.service";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
 import {
@@ -213,7 +216,7 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
       const resultFingerprintSha256 = slicingResultFingerprint(result);
       try {
         if (result.kind === "candidate_estimate") {
-          await this.candidateEstimates.ingest({ result });
+          await this.ingestCandidateResult(result);
         }
         await this.results.ingest({
           dispatchId,
@@ -236,6 +239,19 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.queue.close();
+  }
+
+  private async ingestCandidateResult(
+    result: CandidateEstimateResult,
+  ): Promise<void> {
+    try {
+      await this.candidateEstimates.ingest({ result });
+    } catch (error) {
+      if (isPermanentIngestionError(error)) {
+        await this.results.deleteUnownedUploadedArtifacts(result);
+      }
+      throw error;
+    }
   }
 
   private async claim(limit: number): Promise<ClaimedDispatch[]> {

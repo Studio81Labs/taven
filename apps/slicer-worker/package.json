@@ -24,6 +24,7 @@
     "@taven/slicer-contracts": "workspace:*",
     "bullmq": "^5.81.3",
     "dotenv": "^17.4.2",
+    "robust-predicates": "^3.0.3",
     "saxes": "^6.0.0"
   }
 }
