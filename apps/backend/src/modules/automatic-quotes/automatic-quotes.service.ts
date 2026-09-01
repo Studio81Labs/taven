@@ -4148,6 +4148,7 @@ export class AutomaticQuotesService {
       this.prisma.automaticQuoteDraft.findUnique({
         where: { orderId },
         include: {
+          modelFiles: true,
           selectedDeliveryDestination: true,
           items: { orderBy: { ordinal: "asc" } },
         },
@@ -4165,58 +4166,117 @@ export class AutomaticQuotesService {
     const parameters = parseAutomaticQuotePricingParameters(
       priceList.parameters,
     );
-    const comparisons = await Promise.all(
-      draft.items.flatMap((activeItem) =>
-        ([1, 5, 20] as const).map(async (quantity) => {
-          const comparisonItems = draft.items.map((item) =>
-            item.id === activeItem.id
-              ? { ...item, quantity, referencePartsPerPlate: null }
-              : item,
-          );
-          const pricing = await this.pricingItemsFromDraft(
-            this.prisma,
-            orderId,
-            comparisonItems,
-            parameters,
-          );
-          if (!pricing) return null;
-          const prepared = await prepareAutomaticQuote({
-            priceList,
-            items: pricing.items,
-            expressRequested: draft.expressRequested,
-            materialAndColorAvailable: true,
-            withinBuildLimits: true,
-            riskAcknowledgementsComplete: true,
-            hasBlockingPreflightFinding: false,
-            ...(draft.selectedDeliveryDestination
-              ? {
-                  deliveryDestination: draft.selectedDeliveryDestination,
-                  shipmentPlanIdForOrdinal: (ordinal: number) =>
-                    deterministicUuid(
-                      `automatic-quantity-comparison:${orderId}:${draft.configurationRevision}:${activeItem.ordinal}:${quantity}:${ordinal}`,
-                    ),
-                }
-              : {}),
-          });
-          return {
-            itemOrdinal: activeItem.ordinal,
-            quantity,
-            currency: priceList.currency,
-            orderTotalMinor: safeNumber(
-              prepared.prepared.price.kind === "binding"
-                ? prepared.prepared.price.contractTotal.minorUnits
-                : prepared.prepared.price.breakdown.subtotal.minorUnits,
-            ),
-          };
-        }),
+    const baseline = await this.pricingItemsFromDraft(
+      this.prisma,
+      orderId,
+      draft.items,
+      parameters,
+    );
+    if (!baseline) return [];
+    const geometries = await this.prisma.modelGeometry.findMany({
+      where: {
+        id: {
+          in: draft.items.map(
+            ({ targetModelGeometryId }) => targetModelGeometryId,
+          ),
+        },
+      },
+    });
+    const geometryById = new Map(
+      geometries.map((geometry) => [geometry.id, geometry]),
+    );
+    const missingGeometryModelFileIds = new Set(
+      draft.items
+        .filter((item) => !geometryById.has(item.targetModelGeometryId))
+        .map(({ sourceModelFileId }) => sourceModelFileId),
+    );
+    const inspectionByModelFileId = new Map(
+      await Promise.all(
+        draft.modelFiles
+          .filter(({ modelFileId }) =>
+            missingGeometryModelFileIds.has(modelFileId),
+          )
+          .map(
+            async (attached) =>
+              [
+                attached.modelFileId,
+                await terminalResultForJob(
+                  this.prisma,
+                  attached.inspectionJobId,
+                  "model_inspection",
+                ),
+              ] as const,
+          ),
       ),
     );
-    return comparisons.filter(
-      (
-        comparison,
-      ): comparison is AutomaticQuoteSessionDto["quantityComparisons"][number] =>
-        comparison !== null,
-    );
+    const comparisons: AutomaticQuoteSessionDto["quantityComparisons"] = [];
+    for (const [activeIndex, activeItem] of draft.items.entries()) {
+      const bounds =
+        geometryById.get(activeItem.targetModelGeometryId) ??
+        inspectionMeshEstimate(
+          inspectionByModelFileId.get(activeItem.sourceModelFileId),
+          activeItem.bodyIds,
+        );
+      if (!bounds) continue;
+      for (const quantity of [1, 5, 20] as const) {
+        let comparisonItem = baseline.items[activeIndex]!;
+        if (quantity !== activeItem.quantity) {
+          const referencePartsPerPlate =
+            activeItem.referencePartsPerPlate ?? quantity;
+          const metrics = roughSliceMetrics(
+            { ...activeItem, quantity, referencePartsPerPlate },
+            bounds.volumeCubicMicrometers,
+            parameters,
+          );
+          comparisonItem = {
+            id: comparisonItem.id,
+            referenceProfileId: activeItem.referenceProfileId,
+            material: activeItem.material,
+            quantity,
+            referencePartsPerPlate,
+            primary: metrics.primary,
+            tail: metrics.tail,
+            boundsXMicrometers: bounds.boundsXMicrometers,
+            boundsYMicrometers: bounds.boundsYMicrometers,
+            boundsZMicrometers: bounds.boundsZMicrometers,
+            fulfilmentSlots: Array.from({ length: quantity }, (_, index) => ({
+              packingUnitKey: `${comparisonItem.id}:single:${index + 1}`,
+            })),
+          };
+        }
+        const comparisonItems = [...baseline.items];
+        comparisonItems[activeIndex] = comparisonItem;
+        const prepared = await prepareAutomaticQuote({
+          priceList,
+          items: comparisonItems,
+          expressRequested: draft.expressRequested,
+          materialAndColorAvailable: true,
+          withinBuildLimits: true,
+          riskAcknowledgementsComplete: true,
+          hasBlockingPreflightFinding: false,
+          ...(draft.selectedDeliveryDestination
+            ? {
+                deliveryDestination: draft.selectedDeliveryDestination,
+                shipmentPlanIdForOrdinal: (ordinal: number) =>
+                  deterministicUuid(
+                    `automatic-quantity-comparison:${orderId}:${draft.configurationRevision}:${activeItem.ordinal}:${quantity}:${ordinal}`,
+                  ),
+              }
+            : {}),
+        });
+        comparisons.push({
+          itemOrdinal: activeItem.ordinal,
+          quantity,
+          currency: priceList.currency,
+          orderTotalMinor: safeNumber(
+            prepared.prepared.price.kind === "binding"
+              ? prepared.prepared.price.contractTotal.minorUnits
+              : prepared.prepared.price.breakdown.subtotal.minorUnits,
+          ),
+        });
+      }
+    }
+    return comparisons;
   }
 }
 

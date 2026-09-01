@@ -238,6 +238,10 @@ async function saveConfiguration(): Promise<void> {
     localError.value = "Každé těleso musí být přiřazené právě k jedné položce.";
     return;
   }
+  if (groups.value.length === 0) {
+    localError.value = "Vyberte alespoň jedno těleso, které chcete vytisknout.";
+    return;
+  }
   const commands = groups.value.map((group) => {
     const draft = draftFor(group.ordinal);
     return draft
@@ -401,7 +405,8 @@ function quantityPrice(choice: {
         </div>
         <p>
           Tělesa v jedné položce mají stejný materiál, barvu a množství.
-          Rozdělte je jen tehdy, když potřebují jiné nastavení.
+          Rozdělte je jen tehdy, když potřebují jiné nastavení; tělesa, která
+          tisknout nechcete, výslovně vyřaďte.
         </p>
         <ul class="body-list">
           <li v-for="bodyId in bodyIds" :key="bodyId">
@@ -413,6 +418,7 @@ function quantityPrice(choice: {
                 :value="assignments[bodyId]"
                 @change="assignBody(bodyId, $event)"
               >
+                <option :value="-1">Netisknout</option>
                 <option
                   v-for="index in groupCount"
                   :key="index"

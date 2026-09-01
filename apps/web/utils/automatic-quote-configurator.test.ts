@@ -47,6 +47,16 @@ describe("body grouping", () => {
     ]);
   });
 
+  it("omits bodies that the customer explicitly excludes", () => {
+    expect(
+      groupsFromAssignments(["case", "support", "lid"], {
+        case: 0,
+        support: -1,
+        lid: 0,
+      }),
+    ).toEqual([{ bodyIds: ["case", "lid"], ordinal: 0 }]);
+  });
+
   it("keeps unconfigured bodies available after an interrupted multi-item save", () => {
     expect(
       initialBodyGroups(
