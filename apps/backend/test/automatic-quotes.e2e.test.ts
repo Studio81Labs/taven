@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../src/app.module";
 import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
+import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { PersistenceFactory } from "./support/persistence-factory";
 
@@ -75,6 +76,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
   let prisma: PrismaService;
   let automaticQuotes: AutomaticQuotesService;
   let candidates: CandidateEstimateService;
+  let resourceReservations: ResourceReservationService;
   let pool: Pool;
 
   beforeAll(async () => {
@@ -87,6 +89,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     prisma = app.get(PrismaService);
     automaticQuotes = app.get(AutomaticQuotesService);
     candidates = app.get(CandidateEstimateService);
+    resourceReservations = app.get(ResourceReservationService);
     pool = new Pool({ connectionString: databaseUrl });
   });
 
@@ -883,6 +886,19 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       kind: "ROUGH_ESTIMATE",
       currency: "CZK",
     });
+    const provisionalPrice = rough.body.roughEstimate as {
+      totalMinor: number;
+      components: Array<{ kind: string; amountMinor: number }>;
+    };
+    expect(
+      provisionalPrice.components.some(({ kind }) => kind === "PAYMENT_FEE"),
+    ).toBe(false);
+    expect(
+      provisionalPrice.components.reduce(
+        (total, component) => total + component.amountMinor,
+        0,
+      ),
+    ).toBe(provisionalPrice.totalMinor);
     expect(rough.body.bindingQuote).toBeNull();
     expect(rough.body.phase).toBe("DESTINATION_REQUIRED");
     expect(
@@ -1078,6 +1094,38 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       eligible: true,
     });
 
+    const recoveryPrintConfigId = randomUUID();
+    const basePrintConfig = await prisma.printConfigRevision.findUniqueOrThrow({
+      where: { id: foundation.printConfigRevisionId },
+    });
+    await prisma.$transaction(async (transaction) => {
+      await transaction.revisionIdentity.create({
+        data: {
+          id: recoveryPrintConfigId,
+          kind: "PRINT_CONFIG",
+          digest: sha(`${scope}:capacity-recovery-print-config`),
+        },
+      });
+      await transaction.printConfigRevision.create({
+        data: {
+          id: recoveryPrintConfigId,
+          quality: basePrintConfig.quality,
+          infillPercent: basePrintConfig.infillPercent,
+          layerHeightMicrometers: basePrintConfig.layerHeightMicrometers,
+          supportsEnabled: basePrintConfig.supportsEnabled,
+          brimEnabled: basePrintConfig.brimEnabled,
+          settings: basePrintConfig.settings as Prisma.InputJsonValue,
+        },
+      });
+    });
+    await prisma.inventory.updateMany({
+      where: {
+        machineId: compatibleMachine.id,
+        color: quoteColor,
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 300_000n },
+    });
     const recoveryCreated = await api("automatic-quote-sessions", {
       method: "POST",
       headers: jsonHeaders(key("capacity-recovery-create")),
@@ -1110,19 +1158,73 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
             ),
             body: JSON.stringify({
               modelFileId: modelFile.id,
-              bodyIds: ["body-b"],
-              printConfigRevisionId: foundation.printConfigRevisionId,
+              bodyIds: ["body-a", "body-b"],
+              printConfigRevisionId: recoveryPrintConfigId,
               material: "PLA",
               color: quoteColor,
               infillPreset: "STANDARD",
-              quantity: 1,
-              preferredPartsPerPlate: 1,
+              quantity: 4,
+              preferredPartsPerPlate: 4,
               fitSensitive: false,
             }),
           },
         )
       ).response.status,
     ).toBe(200);
+    const recoveryDraft = await prisma.automaticQuoteItemDraft.findFirstOrThrow(
+      {
+        where: { orderId: recoveryOrderId, ordinal: 0 },
+      },
+    );
+    const recoveryGeometry = await prisma.modelGeometry.create({
+      data: {
+        id: recoveryDraft.targetModelGeometryId,
+        sourceModelFileId: recoveryDraft.sourceModelFileId,
+        sourceSelector: JSON.stringify({ bodyIds: ["body-a", "body-b"] }),
+        canonicalObjectKey: `geometries/${recoveryDraft.targetModelGeometryId}/canonical`,
+        geometryHash: sha(`${scope}:capacity-recovery-geometry`),
+        canonicalizerRevision: "canonical-v1",
+        volumeCubicMicrometers: 8_000_000_000_000_000n,
+        boundsXMicrometers: 200_000n,
+        boundsYMicrometers: 200_000n,
+        boundsZMicrometers: 200_000n,
+        triangleCount: 24,
+      },
+    });
+    const recoveryReferenceProfile =
+      await prisma.referenceProfile.findUniqueOrThrow({
+        where: { id: recoveryDraft.referenceProfileId },
+      });
+    const recoveryPrimaryCacheKey = buildReferenceSliceCacheKey({
+      geometryHash: Sha256Digest.parse(recoveryGeometry.geometryHash),
+      modelGeometryId: recoveryGeometry.id,
+      geometrySelectionHash: Sha256Digest.parse(recoveryDraft.selectionSha256),
+      referenceProfileRevision: RevisionRef.create(
+        "reference-profile",
+        recoveryDraft.referenceProfileId,
+      ),
+      printConfigRevision: RevisionRef.create(
+        "print-config",
+        recoveryDraft.printConfigRevisionId,
+      ),
+      partsPerPlate: 4,
+    });
+    await prisma.sliceResult.create({
+      data: {
+        kind: "REFERENCE",
+        cacheKey: recoveryPrimaryCacheKey,
+        modelGeometryId: recoveryGeometry.id,
+        printConfigRevisionId: recoveryDraft.printConfigRevisionId,
+        referenceProfileId: recoveryDraft.referenceProfileId,
+        partsPerPlate: 4,
+        artifactObjectKey: `${scope}/reference/capacity-recovery-primary.json`,
+        artifactHash: sha(`${scope}:reference:capacity-recovery-primary`),
+        estimatedPrintSeconds: 60n,
+        estimatedMaterialMilligrams: 320_000n,
+        slicerEngine: recoveryReferenceProfile.slicerEngine,
+        slicerVersion: recoveryReferenceProfile.slicerVersion,
+      },
+    });
     expect(
       (
         await api(
@@ -1134,7 +1236,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
               key("capacity-recovery-destination"),
             ),
             body: JSON.stringify({
-              providerEndpointId: "test-pickup",
+              providerEndpointId: "test-zbox",
               endpointType: "pickup_point",
             }),
           },
@@ -1153,6 +1255,121 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         })
       ).response.status,
     ).toBe(200);
+    const recoveryOccupancyPending = await api(
+      `automatic-quote-sessions/${recoverySessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("capacity-recovery-occupancy"),
+        ),
+      },
+    );
+    expect(recoveryOccupancyPending.response.status).toBe(200);
+    expect(recoveryOccupancyPending.body.checkoutReady).toBe(false);
+    expect(recoveryOccupancyPending.body.roughEstimate).toMatchObject({
+      kind: "ROUGH_ESTIMATE",
+      currency: "CZK",
+    });
+    const recoveryPendingPrice = recoveryOccupancyPending.body
+      .roughEstimate as {
+      totalMinor: number;
+      components: Array<{ kind: string; amountMinor: number }>;
+    };
+    expect(
+      recoveryPendingPrice.components.some(
+        ({ kind }) => kind === "PAYMENT_FEE",
+      ),
+    ).toBe(true);
+    expect(
+      recoveryPendingPrice.components.reduce(
+        (total, component) => total + component.amountMinor,
+        0,
+      ),
+    ).toBe(recoveryPendingPrice.totalMinor);
+    expect(
+      await prisma.orderItem.count({ where: { orderId: recoveryOrderId } }),
+    ).toBe(0);
+    expect(
+      await prisma.orderPhase.count({ where: { orderId: recoveryOrderId } }),
+    ).toBe(0);
+    expect(
+      await prisma.fulfilmentSlot.count({
+        where: { orderId: recoveryOrderId },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.orderPriceBinding.count({
+        where: { orderId: recoveryOrderId },
+      }),
+    ).toBe(0);
+    for (const partsPerPlate of [1, 3]) {
+      const recoveryParcelReferenceDispatch =
+        await prisma.outboxMessage.findFirstOrThrow({
+          where: {
+            aggregateType: "ReferenceSliceDispatch",
+            messageType: "slicing.reference-slice.requested",
+            AND: [
+              {
+                payload: {
+                  path: ["job", "correlationId"],
+                  equals: recoveryOrderId,
+                },
+              },
+              {
+                payload: {
+                  path: ["job", "input", "partsPerPlate"],
+                  equals: partsPerPlate,
+                },
+              },
+            ],
+          },
+        });
+      const recoveryParcelCacheKey = buildReferenceSliceCacheKey({
+        geometryHash: Sha256Digest.parse(recoveryGeometry.geometryHash),
+        modelGeometryId: recoveryGeometry.id,
+        geometrySelectionHash: Sha256Digest.parse(
+          recoveryDraft.selectionSha256,
+        ),
+        referenceProfileRevision: RevisionRef.create(
+          "reference-profile",
+          recoveryDraft.referenceProfileId,
+        ),
+        printConfigRevision: RevisionRef.create(
+          "print-config",
+          recoveryDraft.printConfigRevisionId,
+        ),
+        partsPerPlate,
+      });
+      await prisma.sliceResult.create({
+        data: {
+          kind: "REFERENCE",
+          cacheKey: recoveryParcelCacheKey,
+          modelGeometryId: recoveryGeometry.id,
+          printConfigRevisionId: recoveryDraft.printConfigRevisionId,
+          referenceProfileId: recoveryDraft.referenceProfileId,
+          partsPerPlate,
+          artifactObjectKey: `${scope}/reference/capacity-recovery-parcel-${partsPerPlate}.json`,
+          artifactHash: sha(
+            `${scope}:reference:capacity-recovery-parcel:${partsPerPlate}`,
+          ),
+          estimatedPrintSeconds: 60n,
+          estimatedMaterialMilligrams: 60n * BigInt(partsPerPlate),
+          slicerEngine: recoveryReferenceProfile.slicerEngine,
+          slicerVersion: recoveryReferenceProfile.slicerVersion,
+        },
+      });
+      await prisma.outboxMessage.create({
+        data: {
+          deduplicationKey: `${scope}:capacity-recovery-reference-result:${partsPerPlate}`,
+          aggregateType: "SlicingDispatchResult",
+          aggregateId: recoveryParcelReferenceDispatch.id,
+          messageType: "slicing.reference_slice.result-received",
+          schemaVersion: 2,
+          payload: { result: { outcome: { status: "succeeded" } } },
+        },
+      });
+    }
     const recoveryStaged = await api(
       `automatic-quote-sessions/${recoverySessionId}/prepare`,
       {
@@ -1202,10 +1419,8 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         })
       ).map(({ id }) => id),
     );
-    const lateCapacityStartsAt = new Date(Date.now() + 25 * 60 * 60 * 1_000);
-    const lateCapacityEndsAt = new Date(
-      lateCapacityStartsAt.getTime() + 60_000,
-    );
+    expect(staleExpressPlanIds.size).toBe(2);
+    const lateCapacityBase = Date.now() + 25 * 60 * 60 * 1_000;
     const lateExpressDispatches = (
       await prisma.outboxMessage.findMany({
         where: {
@@ -1221,15 +1436,19 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       staleExpressPlanIds.has(candidateJob(payload).input.shipmentPlanId),
     );
     expect(lateExpressDispatches.length).toBeGreaterThan(0);
-    for (const dispatch of lateExpressDispatches) {
+    for (const [index, dispatch] of lateExpressDispatches.entries()) {
+      const startsAt = new Date(lateCapacityBase + index * 120_000);
       await candidates.ingest({
         result: successfulCandidateResult(candidateJob(dispatch.payload)),
         capacityWindows: [
-          { startsAt: lateCapacityStartsAt, endsAt: lateCapacityEndsAt },
+          { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
         ],
         expiresAt: new Date(Date.now() + 26 * 60 * 60 * 1_000),
       });
     }
+    const lateCapacityEndsAt = new Date(
+      lateCapacityBase + (lateExpressDispatches.length - 1) * 120_000 + 60_000,
+    );
     const lateExpress = await api(
       `automatic-quote-sessions/${recoverySessionId}/prepare`,
       {
@@ -1389,6 +1608,37 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       kind: "BINDING",
       currency: "CZK",
     });
+    const expiredRecoveryClock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(
+        new Date(string(standardRecoveryReady.body.expiresAt)).getTime() + 1,
+      );
+    try {
+      const expiredRecovery = await api(
+        `automatic-quote-sessions/${recoverySessionId}`,
+        { headers: { authorization: `Bearer ${recoverySessionToken}` } },
+      );
+      expect(expiredRecovery.response.status).toBe(200);
+      expect(expiredRecovery.body.phase).toBe("EXPIRED");
+      expect(expiredRecovery.body.checkoutReady).toBe(false);
+      expect(expiredRecovery.body.bindingQuote).toBeNull();
+    } finally {
+      expiredRecoveryClock.mockRestore();
+    }
+    const recoveryReservation =
+      await prisma.phaseReservationSet.findFirstOrThrow({
+        where: {
+          phaseResourcePlan: {
+            eligibilitySnapshot: {
+              orderPhase: { orderId: recoveryOrderId },
+            },
+          },
+          status: "RESERVED",
+        },
+      });
+    await expect(
+      resourceReservations.releaseBeforePrint(recoveryReservation.id),
+    ).resolves.toBe(true);
 
     const staged = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
@@ -2255,6 +2505,12 @@ function successfulCandidateResult(
   job: CandidateEstimateJob,
   estimatedPrintSeconds = "60",
 ): CandidateEstimateResult {
+  const plateCount = Math.ceil(job.input.quantity / job.input.partsPerPlate);
+  const plateOccupancies = Array.from({ length: plateCount }, (_, index) =>
+    index < plateCount - 1
+      ? job.input.partsPerPlate
+      : job.input.quantity - job.input.partsPerPlate * (plateCount - 1),
+  );
   return {
     ...job,
     engine: { name: "orca", version: "test", imageSha256: "b".repeat(64) },
@@ -2267,7 +2523,7 @@ function successfulCandidateResult(
           zMicrometers: "20000",
         },
         objectCount: 1,
-        bodyCount: 1,
+        bodyCount: job.input.geometry.bodyIds.length,
         topology: {
           watertight: true,
           manifold: true,
@@ -2277,18 +2533,18 @@ function successfulCandidateResult(
         supportVolumeRatioPpm: 0,
         hasPaintAssignments: false,
         materialAssignmentCount: 0,
+        estimatedPrintSeconds: (
+          BigInt(estimatedPrintSeconds) * BigInt(plateCount)
+        ).toString(),
+        estimatedMaterialMilligrams: (60n * BigInt(plateCount)).toString(),
+        plateCount,
+      },
+      plates: plateOccupancies.map((partsOnPlate, index) => ({
+        plateOrdinal: index + 1,
+        partsOnPlate,
         estimatedPrintSeconds,
         estimatedMaterialMilligrams: "60",
-        plateCount: 1,
-      },
-      plates: [
-        {
-          plateOrdinal: 1,
-          partsOnPlate: 1,
-          estimatedPrintSeconds,
-          estimatedMaterialMilligrams: "60",
-        },
-      ],
+      })),
       occupancySlices: job.input.occupancySliceTargets.map((target) => ({
         partsPerPlate: target.partsPerPlate,
         cacheIdentitySha256: target.cacheIdentitySha256,

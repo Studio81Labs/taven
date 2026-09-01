@@ -103,6 +103,21 @@ type PreprocessingDispatchState = {
   deadLettered: boolean;
 };
 type PreprocessingDispatch = { attempt: number; availableAt?: Date };
+type AutomaticQuoteCandidateDraftItem = {
+  id: string;
+  ordinal: number;
+  sourceModelFileId: string;
+  bodyIds: string[];
+  selectionSha256: string;
+  targetModelGeometryId: string;
+  printConfigRevisionId: string;
+  referenceProfileId: string;
+  material: Material;
+  color: string | null;
+  infillPreset: string;
+  quantity: number;
+  referencePartsPerPlate: number;
+};
 
 @Injectable()
 export class AutomaticQuotesService {
@@ -1082,16 +1097,7 @@ export class AutomaticQuotesService {
 
   private async preprocessingRequiresHandoff(
     orderId: string,
-    items: ReadonlyArray<{
-      id: string;
-      bodyIds: string[];
-      selectionSha256: string;
-      targetModelGeometryId: string;
-      printConfigRevisionId: string;
-      referenceProfileId: string;
-      referencePartsPerPlate: number;
-      quantity: number;
-    }>,
+    items: readonly AutomaticQuoteCandidateDraftItem[],
   ): Promise<boolean> {
     for (const item of items) {
       const geometry = await this.prisma.modelGeometry.findUnique({
@@ -1130,11 +1136,95 @@ export class AutomaticQuotesService {
         if (this.preprocessingDispatchRequiresHandoff(dispatch)) return true;
       }
     }
+    const [draft, priceList] = await Promise.all([
+      this.prisma.automaticQuoteDraft.findUnique({
+        where: { orderId },
+        include: { selectedDeliveryDestination: true },
+      }),
+      this.prisma.priceList.findUnique({
+        where: {
+          currency_revision: {
+            currency: "CZK",
+            revision: AUTOMATIC_PRICE_LIST_REVISION,
+          },
+        },
+      }),
+    ]);
+    if (!draft?.selectedDeliveryDestination || !priceList) return false;
+    const pricing = await this.pricingItemsFromDraft(
+      this.prisma,
+      orderId,
+      items,
+      null,
+    );
+    if (!pricing) return false;
+    const provisional = await prepareAutomaticQuote({
+      priceList,
+      items: pricing.items,
+      expressRequested: draft.expressRequested,
+      materialAndColorAvailable: true,
+      withinBuildLimits: true,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+      deliveryDestination: draft.selectedDeliveryDestination,
+      shipmentPlanIdForOrdinal: (ordinal) =>
+        deterministicUuid(
+          `automatic-handoff-shipment-plan:${orderId}:${draft.configurationRevision}:${ordinal}`,
+        ),
+    });
+    if (provisional.prepared.kind !== "binding_quote") return false;
+    const parcelDemands = candidateParcelDemands(
+      pricing.items,
+      provisional.prepared.shipmentPlan,
+    );
+    if (!parcelDemands) return false;
+    const itemByPricingId = new Map(
+      pricing.items.map((pricingItem, index) => [pricingItem.id, items[index]]),
+    );
+    const checked = new Set<string>();
+    for (const demand of parcelDemands) {
+      const item = itemByPricingId.get(demand.itemId);
+      const pricingItem = pricing.items.find(({ id }) => id === demand.itemId);
+      if (!item || !pricingItem) continue;
+      const geometry = await this.prisma.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      if (!geometry) continue;
+      const occupancies = referenceOccupancies(
+        demand.quantity,
+        Math.min(pricingItem.referencePartsPerPlate, demand.quantity),
+      );
+      const missing = await this.missingReferenceSlices(
+        this.prisma,
+        item,
+        geometry,
+        occupancies,
+      );
+      for (const partsPerPlate of missing) {
+        const requestKey = `${item.id}:${partsPerPlate}`;
+        if (checked.has(requestKey)) continue;
+        checked.add(requestKey);
+        const job = await this.referenceSliceJob(
+          this.prisma,
+          item,
+          geometry,
+          partsPerPlate,
+          orderId,
+          1,
+        );
+        const dispatch = await this.latestPreprocessingDispatch(
+          this.prisma,
+          job.jobId,
+          "slicing.reference-slice.requested",
+        );
+        if (this.preprocessingDispatchRequiresHandoff(dispatch)) return true;
+      }
+    }
     return false;
   }
 
   private async missingReferenceSlices(
-    transaction: Transaction,
+    transaction: Transaction | PrismaService,
     item: {
       bodyIds: string[];
       selectionSha256: string;
@@ -1147,11 +1237,11 @@ export class AutomaticQuotesService {
       id: string;
       geometryHash: string;
     },
+    requestedOccupancies?: readonly number[],
   ): Promise<number[]> {
-    const requested = referenceOccupancies(
-      item.quantity,
-      item.referencePartsPerPlate,
-    );
+    const requested =
+      requestedOccupancies ??
+      referenceOccupancies(item.quantity, item.referencePartsPerPlate);
     const { buildReferenceSliceCacheKey, RevisionRef, Sha256Digest } =
       await import("@taven/core");
     const missing: number[] = [];
@@ -1248,12 +1338,24 @@ export class AutomaticQuotesService {
       withinBuildLimits: true,
     });
     if (provisionalPlan.prepared.kind !== "binding_quote") return;
+    if (
+      await this.enqueueMissingCandidateReferenceSlices(
+        transaction,
+        orderId,
+        draft.items,
+        transient.items,
+        provisionalPlan.prepared.shipmentPlan,
+      )
+    ) {
+      return;
+    }
     const candidateResourcesAvailable = await this.candidateResourcesAvailable(
       transaction,
       draft.items,
       transient.items,
       provisionalPlan.prepared.shipmentPlan,
     );
+    if (candidateResourcesAvailable === null) return;
     const gateResult = candidateResourcesAvailable
       ? provisionalPlan
       : await prepareAutomaticQuote({
@@ -1479,18 +1581,119 @@ export class AutomaticQuotesService {
     return { phaseId: phase.id };
   }
 
+  private async enqueueMissingCandidateReferenceSlices(
+    transaction: Transaction,
+    orderId: string,
+    items: readonly AutomaticQuoteCandidateDraftItem[],
+    pricingItems: readonly AutomaticQuotePricingItem[],
+    shipmentPlan: AutomaticBindingQuote["shipmentPlan"],
+  ): Promise<boolean> {
+    const parcelDemands = candidateParcelDemands(pricingItems, shipmentPlan);
+    if (!parcelDemands) return false;
+    const draftByPricingItemId = new Map(
+      pricingItems.map((pricingItem, index) => [pricingItem.id, items[index]]),
+    );
+    const requested = new Set<string>();
+    let enqueued = false;
+    for (const demand of parcelDemands) {
+      const item = draftByPricingItemId.get(demand.itemId);
+      const pricingItem = pricingItems.find(({ id }) => id === demand.itemId);
+      if (!item || !pricingItem) return false;
+      const geometry = await transaction.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      if (!geometry) return false;
+      const occupancies = referenceOccupancies(
+        demand.quantity,
+        Math.min(pricingItem.referencePartsPerPlate, demand.quantity),
+      );
+      const missing = await this.missingReferenceSlices(
+        transaction,
+        item,
+        geometry,
+        occupancies,
+      );
+      for (const partsPerPlate of missing) {
+        const requestKey = `${item.id}:${partsPerPlate}`;
+        if (requested.has(requestKey)) continue;
+        requested.add(requestKey);
+        await this.enqueueReferenceSlice(
+          transaction,
+          item,
+          geometry,
+          partsPerPlate,
+          orderId,
+        );
+        enqueued = true;
+      }
+    }
+    return enqueued;
+  }
+
+  private async exactCandidateMaterialDemands(
+    transaction: Transaction | PrismaService,
+    items: readonly AutomaticQuoteCandidateDraftItem[],
+    pricingItems: readonly AutomaticQuotePricingItem[],
+    shipmentPlan: AutomaticBindingQuote["shipmentPlan"],
+  ): Promise<Array<{
+    itemId: string;
+    requiredMaterialMilligrams: bigint;
+  }> | null> {
+    const parcelDemands = candidateParcelDemands(pricingItems, shipmentPlan);
+    if (!parcelDemands) return null;
+    const draftByPricingItemId = new Map(
+      pricingItems.map((pricingItem, index) => [pricingItem.id, items[index]]),
+    );
+    const demands: Array<{
+      itemId: string;
+      requiredMaterialMilligrams: bigint;
+    }> = [];
+    for (const demand of parcelDemands) {
+      const item = draftByPricingItemId.get(demand.itemId);
+      const pricingItem = pricingItems.find(({ id }) => id === demand.itemId);
+      if (!item || !pricingItem) return null;
+      const geometry = await transaction.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      if (!geometry) return null;
+      const partsPerPlate = Math.min(
+        pricingItem.referencePartsPerPlate,
+        demand.quantity,
+      );
+      const occupancies = referenceOccupancies(demand.quantity, partsPerPlate);
+      const slices = await this.referenceSlices(
+        transaction,
+        item,
+        geometry,
+        occupancies,
+      ).catch((error: unknown) => {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2025"
+        ) {
+          return null;
+        }
+        throw error;
+      });
+      if (!slices) return null;
+      demands.push({
+        itemId: demand.itemId,
+        requiredMaterialMilligrams: estimatedMaterialForQuantity(
+          demand.quantity,
+          partsPerPlate,
+          slices,
+        ),
+      });
+    }
+    return demands;
+  }
+
   private async candidateResourcesAvailable(
     transaction: Transaction | PrismaService,
-    items: ReadonlyArray<{
-      targetModelGeometryId: string;
-      printConfigRevisionId: string;
-      referenceProfileId: string;
-      material: Material;
-      color: string | null;
-    }>,
+    items: readonly AutomaticQuoteCandidateDraftItem[],
     pricingItems: readonly AutomaticQuotePricingItem[],
     shipmentPlan?: AutomaticBindingQuote["shipmentPlan"],
-  ): Promise<boolean> {
+  ): Promise<boolean | null> {
     if (items.length !== pricingItems.length || items.length === 0) {
       return false;
     }
@@ -1563,8 +1766,19 @@ export class AutomaticQuotesService {
       if (byNode.size === 0) return false;
       resourcesByItemId.set(pricingItem.id, byNode);
     }
-    const demands = candidateMaterialDemands(pricingItems, shipmentPlan);
-    if (!demands || demands.length === 0) return false;
+    const demands = shipmentPlan
+      ? await this.exactCandidateMaterialDemands(
+          transaction,
+          items,
+          pricingItems,
+          shipmentPlan,
+        )
+      : pricingItems.map((item) => ({
+          itemId: item.id,
+          requiredMaterialMilligrams: totalEstimatedMaterial(item),
+        }));
+    if (demands === null) return null;
+    if (demands.length === 0) return false;
     const commonNodeIds = [
       ...(resourcesByItemId.get(demands[0]!.itemId)?.keys() ?? []),
     ].filter((nodeId) =>
@@ -2525,7 +2739,7 @@ export class AutomaticQuotesService {
   }
 
   private async referenceSlices(
-    transaction: Transaction,
+    transaction: Transaction | PrismaService,
     item: {
       selectionSha256: string;
       printConfigRevisionId: string;
@@ -2736,7 +2950,8 @@ export class AutomaticQuotesService {
         ? provisionalPlan.prepared.shipmentPlan
         : undefined,
     );
-    const result = candidateResourcesAvailable
+    const candidateGate = candidateResourcesAvailable ?? true;
+    const result = candidateGate
       ? provisionalPlan.prepared
       : (
           await prepareAutomaticQuote({
@@ -2986,6 +3201,7 @@ export class AutomaticQuotesService {
         reservation.expiresAt.getTime() > Date.now(),
     );
     const checkoutReady =
+      !expired &&
       order.status === OrderStatus.QUOTED &&
       Boolean(active && currentPlan && currentReservation);
     const bindingQuote =
@@ -3108,17 +3324,10 @@ function bindingMatchesAutomaticDraft(
   );
 }
 
-function candidateMaterialDemands(
+function candidateParcelDemands(
   items: readonly AutomaticQuotePricingItem[],
-  shipmentPlan?: AutomaticBindingQuote["shipmentPlan"],
-): Array<{ itemId: string; requiredMaterialMilligrams: bigint }> | null {
-  if (!shipmentPlan) {
-    return items.map((item) => ({
-      itemId: item.id,
-      requiredMaterialMilligrams: totalEstimatedMaterial(item),
-    }));
-  }
-
+  shipmentPlan: AutomaticBindingQuote["shipmentPlan"],
+): Array<{ itemId: string; quantity: number }> | null {
   const itemByPackingUnitKey = new Map<string, AutomaticQuotePricingItem>();
   for (const item of items) {
     for (const slot of item.fulfilmentSlots) {
@@ -3151,10 +3360,34 @@ function candidateMaterialDemands(
 
   return [...quantitiesByDemand.values()].map(({ item, quantity }) => ({
     itemId: item.id,
-    requiredMaterialMilligrams:
-      ceilDivide(BigInt(quantity), BigInt(item.referencePartsPerPlate)) *
-      item.primary.estimatedMaterialMilligrams,
+    quantity,
   }));
+}
+
+function estimatedMaterialForQuantity(
+  quantity: number,
+  partsPerPlate: number,
+  slices: ReadonlyArray<{ estimatedMaterialMilligrams: bigint }>,
+): bigint {
+  const primary = slices[0];
+  if (!primary) {
+    throw new Error(
+      "Candidate material calculation is missing its primary slice",
+    );
+  }
+  const fullPlateCount = Math.floor(quantity / partsPerPlate);
+  const remainder = quantity % partsPerPlate;
+  if (quantity <= partsPerPlate) {
+    return primary.estimatedMaterialMilligrams;
+  }
+  const tail = remainder > 0 ? slices[1] : null;
+  if (remainder > 0 && !tail) {
+    throw new Error("Candidate material calculation is missing its tail slice");
+  }
+  return (
+    primary.estimatedMaterialMilligrams * BigInt(fullPlateCount) +
+    (tail?.estimatedMaterialMilligrams ?? 0n)
+  );
 }
 
 function automaticExpressCapacityWindowSeconds(
@@ -3545,21 +3778,38 @@ function priceDto(
 }
 
 function provisionalPriceDto(
-  price: {
-    breakdown: { subtotal: { minorUnits: bigint; currency: string } };
-    components: ReadonlyArray<{
-      componentId: string;
-      kind: string;
-      targetId?: string;
-      amount: { minorUnits: bigint };
-    }>;
-  },
+  price:
+    | {
+        kind: "provisional";
+        breakdown: { subtotal: { minorUnits: bigint; currency: string } };
+        components: ReadonlyArray<{
+          componentId: string;
+          kind: string;
+          targetId?: string;
+          amount: { minorUnits: bigint };
+        }>;
+      }
+    | {
+        kind: "binding";
+        breakdown: { subtotal: { minorUnits: bigint; currency: string } };
+        contractTotal: { minorUnits: bigint };
+        components: ReadonlyArray<{
+          componentId: string;
+          kind: string;
+          targetId?: string;
+          amount: { minorUnits: bigint };
+        }>;
+      },
   itemOrdinals: ReadonlyMap<string, number>,
 ): AutomaticQuoteSessionDto["roughEstimate"] {
   return {
     kind: "ROUGH_ESTIMATE",
     currency: price.breakdown.subtotal.currency,
-    totalMinor: safeNumber(price.breakdown.subtotal.minorUnits),
+    totalMinor: safeNumber(
+      price.kind === "binding"
+        ? price.contractTotal.minorUnits
+        : price.breakdown.subtotal.minorUnits,
+    ),
     components: price.components.map((component) => ({
       id: component.componentId,
       kind: component.kind,
