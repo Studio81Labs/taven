@@ -137,6 +137,14 @@ enum SliceKind {
   @@map("slice_kind")
 }
 
+enum ProductionArtifactFormat {
+  GCODE_3MF @map("gcode_3mf")
+  BGCODE    @map("bgcode")
+  GCODE     @map("gcode")
+
+  @@map("production_artifact_format")
+}
+
 enum PhaseReservationSetStatus {
   BUILDING
   RESERVED
@@ -436,6 +444,13 @@ enum AuditActorKind {
   @@map("audit_actor_kind")
 }
 
+enum AutomaticQuoteRiskDecision {
+  ACKNOWLEDGED
+  DECLINED
+
+  @@map("automatic_quote_risk_decision")
+}
+
 model RevisionIdentity {
   id        String       @id @db.Uuid
   kind      RevisionKind
@@ -467,10 +482,12 @@ model ModelFile {
 
   geometries             ModelGeometry[]
   preflightFindings      PreflightFinding[]
-  quoteItems             QuoteItem[]           @relation("QuoteItemSourceModelFile")
-  orderItems             OrderItem[]           @relation("OrderItemSourceModelFile")
-  confirmedUploadIntents UploadIntent[]        @relation("UploadIntentModelFile")
-  retentionDeletionJob   RetentionDeletionJob? @relation("ModelFileRetentionDeletionJob", fields: [retentionDeletionJobId], references: [id], onDelete: Restrict)
+  quoteItems             QuoteItem[]               @relation("QuoteItemSourceModelFile")
+  orderItems             OrderItem[]               @relation("OrderItemSourceModelFile")
+  confirmedUploadIntents UploadIntent[]            @relation("UploadIntentModelFile")
+  retentionDeletionJob   RetentionDeletionJob?     @relation("ModelFileRetentionDeletionJob", fields: [retentionDeletionJobId], references: [id], onDelete: Restrict)
+  automaticQuoteFiles    AutomaticQuoteModelFile[]
+  automaticQuoteItems    AutomaticQuoteItemDraft[]
 
   @@index([contentHash])
   @@index([sourceDeleteAfter, retentionHold, deletedAt])
@@ -517,8 +534,9 @@ model PreflightFinding {
   acknowledgedAt     DateTime?         @map("acknowledged_at") @db.Timestamptz(3)
   createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  modelFile     ModelFile      @relation(fields: [modelFileId], references: [id], onDelete: Restrict)
-  modelGeometry ModelGeometry? @relation(fields: [modelGeometryId, modelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  modelFile                   ModelFile                          @relation(fields: [modelFileId], references: [id], onDelete: Restrict)
+  modelGeometry               ModelGeometry?                     @relation(fields: [modelGeometryId, modelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  automaticQuoteRiskDecisions AutomaticQuoteRiskDecisionRecord[]
 
   @@unique([modelGeometryId, inspectionRevision, code], map: "preflight_findings_geometry_scope_key")
   @@index([modelGeometryId])
@@ -661,6 +679,7 @@ model PrintConfigRevision {
   productionReservations ProductionReservation[]
   orderItems             OrderItem[]
   quoteItems             QuoteItem[]
+  automaticQuoteItems    AutomaticQuoteItemDraft[]
 
   @@index([quality, infillPercent])
   @@map("print_config_revisions")
@@ -678,9 +697,10 @@ model ReferenceProfile {
   retiredAt     DateTime?     @map("retired_at") @db.Timestamptz(3)
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  revision        RevisionIdentity @relation(fields: [id], references: [id], onDelete: Restrict)
-  sliceResults    SliceResult[]
-  machineProfiles MachineProfile[]
+  revision            RevisionIdentity          @relation(fields: [id], references: [id], onDelete: Restrict)
+  sliceResults        SliceResult[]
+  machineProfiles     MachineProfile[]
+  automaticQuoteItems AutomaticQuoteItemDraft[]
 
   @@index([material, quality, state])
   @@map("reference_profiles")
@@ -705,19 +725,20 @@ model MachineCapability {
 }
 
 model MachineProfile {
-  id                        String        @id @db.Uuid
-  machineCapabilityId       String        @map("machine_capability_id") @db.Uuid
-  referenceProfileId        String        @map("reference_profile_id") @db.Uuid
+  id                        String                   @id @db.Uuid
+  machineCapabilityId       String                   @map("machine_capability_id") @db.Uuid
+  referenceProfileId        String                   @map("reference_profile_id") @db.Uuid
   material                  Material
   quality                   PrintQuality
-  nozzleDiameterMicrometers Int           @map("nozzle_diameter_micrometers")
-  slicerEngine              String        @map("slicer_engine") @db.VarChar(100)
-  slicerVersion             String        @map("slicer_version") @db.VarChar(100)
-  settings                  Json          @db.JsonB
-  state                     RevisionState @default(DRAFT)
-  activatedAt               DateTime?     @map("activated_at") @db.Timestamptz(3)
-  retiredAt                 DateTime?     @map("retired_at") @db.Timestamptz(3)
-  createdAt                 DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  nozzleDiameterMicrometers Int                      @map("nozzle_diameter_micrometers")
+  slicerEngine              String                   @map("slicer_engine") @db.VarChar(100)
+  slicerVersion             String                   @map("slicer_version") @db.VarChar(100)
+  productionArtifactFormat  ProductionArtifactFormat @map("production_artifact_format")
+  settings                  Json                     @db.JsonB
+  state                     RevisionState            @default(DRAFT)
+  activatedAt               DateTime?                @map("activated_at") @db.Timestamptz(3)
+  retiredAt                 DateTime?                @map("retired_at") @db.Timestamptz(3)
+  createdAt                 DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
 
   revision               RevisionIdentity            @relation(fields: [id], references: [id], onDelete: Restrict)
   machineCapability      MachineCapability           @relation(fields: [machineCapabilityId], references: [id], onDelete: Restrict)
@@ -1198,6 +1219,7 @@ model CandidateEstimateTerminalResult {
   candidateResourceEstimateId String?                          @unique(map: "candidate_terminal_results_candidate_key") @map("candidate_resource_estimate_id") @db.Uuid
   failureClass                String?                          @map("failure_class") @db.VarChar(64)
   failureCode                 String?                          @map("failure_code") @db.VarChar(64)
+  retryAfterMilliseconds      Int?                             @map("retry_after_milliseconds")
   createdAt                   DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
 
   outboxMessage             OutboxMessage              @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
@@ -1545,6 +1567,7 @@ model Order {
   fulfilmentSlots        FulfilmentSlot[]
   settlements            OrderSettlement[]
   handoffReconciliations HandoffReconciliation[]
+  automaticQuoteDraft    AutomaticQuoteDraft?
 
   @@index([customerId, createdAt])
   @@index([status, createdAt])
@@ -1632,14 +1655,104 @@ model DeliveryDestination {
   capabilitySnapshot Json     @map("capability_snapshot") @db.JsonB
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  order         Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  priceBindings OrderPriceBinding[]
-  shipmentPlans ShipmentPlan[]
-  shipments     Shipment[]
+  order                     Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  priceBindings             OrderPriceBinding[]
+  shipmentPlans             ShipmentPlan[]
+  shipments                 Shipment[]
+  selectedForAutomaticDraft AutomaticQuoteDraft? @relation("AutomaticQuoteSelectedDestination")
 
   @@unique([id, orderId])
   @@index([orderId, createdAt])
   @@map("delivery_destinations")
+}
+
+model AutomaticQuoteDraft {
+  orderId                       String   @id @map("order_id") @db.Uuid
+  selectedDeliveryDestinationId String?  @unique(map: "automatic_quote_drafts_selected_destination_id_key") @map("selected_delivery_destination_id") @db.Uuid
+  expressRequested              Boolean  @default(false) @map("express_requested")
+  configurationRevision         Int      @default(1) @map("configuration_revision")
+  createdAt                     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order                       Order                              @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  selectedDeliveryDestination DeliveryDestination?               @relation("AutomaticQuoteSelectedDestination", fields: [selectedDeliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  modelFiles                  AutomaticQuoteModelFile[]
+  items                       AutomaticQuoteItemDraft[]
+  riskDecisions               AutomaticQuoteRiskDecisionRecord[]
+
+  @@unique([selectedDeliveryDestinationId, orderId], map: "automatic_quote_drafts_selected_destination_order_key")
+  @@map("automatic_quote_drafts")
+}
+
+model AutomaticQuoteModelFile {
+  id              String   @id @default(uuid()) @db.Uuid
+  orderId         String   @map("order_id") @db.Uuid
+  modelFileId     String   @map("model_file_id") @db.Uuid
+  inspectionJobId String   @map("inspection_job_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  draft     AutomaticQuoteDraft @relation(fields: [orderId], references: [orderId], onDelete: Restrict)
+  modelFile ModelFile           @relation(fields: [modelFileId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, modelFileId])
+  @@unique([orderId, inspectionJobId])
+  @@index([modelFileId])
+  @@map("automatic_quote_model_files")
+}
+
+model AutomaticQuoteItemDraft {
+  id                       String   @id @default(uuid()) @db.Uuid
+  orderId                  String   @map("order_id") @db.Uuid
+  ordinal                  Int
+  sourceModelFileId        String   @map("source_model_file_id") @db.Uuid
+  bodyIds                  String[] @map("body_ids")
+  selectionSha256          String   @map("selection_sha256") @db.VarChar(64)
+  targetModelGeometryId    String   @map("target_model_geometry_id") @db.Uuid
+  printConfigRevisionId    String   @map("print_config_revision_id") @db.Uuid
+  referenceProfileId       String   @map("reference_profile_id") @db.Uuid
+  material                 Material
+  color                    String?  @db.VarChar(100)
+  infillPreset             String   @map("infill_preset") @db.VarChar(50)
+  quantity                 Int
+  fitSensitive             Boolean  @default(false) @map("fit_sensitive")
+  referencePartsPerPlate   Int?     @map("reference_parts_per_plate")
+  referenceProbeLowerBound Int      @default(0) @map("reference_probe_lower_bound")
+  referenceProbeUpperBound Int      @map("reference_probe_upper_bound")
+  configurationFingerprint String   @map("configuration_fingerprint") @db.VarChar(64)
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  draft               AutomaticQuoteDraft                @relation(fields: [orderId], references: [orderId], onDelete: Restrict)
+  sourceModelFile     ModelFile                          @relation(fields: [sourceModelFileId], references: [id], onDelete: Restrict)
+  printConfigRevision PrintConfigRevision                @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
+  referenceProfile    ReferenceProfile                   @relation(fields: [referenceProfileId], references: [id], onDelete: Restrict)
+  riskDecisions       AutomaticQuoteRiskDecisionRecord[]
+
+  @@unique([orderId, ordinal])
+  @@unique([orderId, configurationFingerprint])
+  @@unique([id, orderId])
+  @@index([sourceModelFileId])
+  @@index([targetModelGeometryId])
+  @@map("automatic_quote_item_drafts")
+}
+
+model AutomaticQuoteRiskDecisionRecord {
+  id                       String                     @id @default(uuid()) @db.Uuid
+  orderId                  String                     @map("order_id") @db.Uuid
+  automaticQuoteItemId     String                     @map("automatic_quote_item_id") @db.Uuid
+  preflightFindingId       String                     @map("preflight_finding_id") @db.Uuid
+  configurationFingerprint String                     @map("configuration_fingerprint") @db.VarChar(64)
+  acknowledgementKey       String                     @map("acknowledgement_key") @db.VarChar(128)
+  decision                 AutomaticQuoteRiskDecision
+  createdAt                DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  draft            AutomaticQuoteDraft     @relation(fields: [orderId], references: [orderId], onDelete: Restrict)
+  item             AutomaticQuoteItemDraft @relation(fields: [automaticQuoteItemId, orderId], references: [id, orderId], onDelete: Restrict)
+  preflightFinding PreflightFinding        @relation(fields: [preflightFindingId], references: [id], onDelete: Restrict)
+
+  @@unique([automaticQuoteItemId, preflightFindingId, configurationFingerprint], map: "automatic_quote_risk_decisions_current_finding_key")
+  @@index([orderId, configurationFingerprint])
+  @@map("automatic_quote_risk_decisions")
 }
 
 model OrderActivePriceBinding {

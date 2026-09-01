@@ -74,6 +74,7 @@ function input(): PrepareOrderQuoteInput {
     expressEligibility: {
       phaseKind: "SINGLE",
       requiredPlateCount: 1n,
+      maximumPlateCount: 2n,
       materialAndColorAvailable: true,
       hasNonstandardPostprocessing: false,
       requiredProductionSeconds: 10n,

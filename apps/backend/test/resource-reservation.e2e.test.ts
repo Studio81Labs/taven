@@ -220,6 +220,63 @@ describe("phase resource reservation execution", () => {
     });
   });
 
+  it("rejects a complete plan whose capacity ends after its deadline", async () => {
+    const setupClient = await pool.connect();
+    await setupClient.query("BEGIN");
+    let nodeId: string;
+    let orderPhaseId: string;
+    const now = new Date();
+    try {
+      const fixtures = new PersistenceFactory(
+        setupClient,
+        `${testScope}:eligibility-capacity-deadline`,
+      );
+      const foundation = await fixtures.createFoundation(
+        "eligibility-capacity-deadline",
+      );
+      await fixtures.planProduction(
+        foundation,
+        "eligibility-capacity-deadline-production",
+        {
+          startsAt: new Date(now.getTime() + 60 * 60 * 1_000),
+          endsAt: new Date(now.getTime() + 2 * 60 * 60 * 1_000),
+        },
+      );
+      await setupClient.query(
+        'UPDATE "inventories" SET "remaining_milligrams" = 1_000 WHERE "id" = $1',
+        [foundation.inventoryId],
+      );
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+      nodeId = foundation.nodeId;
+      orderPhaseId = foundation.orderPhaseId;
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    await expect(
+      eligibility.createCompletePlan({
+        nodeId,
+        orderPhaseId,
+        planKey: `eligibility-capacity-deadline:${testScope}`,
+        capacityWindowSeconds: 90n * 60n,
+      }),
+    ).rejects.toMatchObject({
+      message: "no complete machine-specific resource plan covers the phase",
+    });
+    await expect(
+      pool.query(
+        `SELECT count(*)::text AS count
+         FROM phase_resource_plans
+         WHERE order_phase_id = $1`,
+        [orderPhaseId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: "0" }] });
+  });
+
   it("combines partial candidate jobs to cover every slot of one item", async () => {
     const setupClient = await pool.connect();
     await setupClient.query("BEGIN");

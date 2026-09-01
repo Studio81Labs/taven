@@ -18,6 +18,7 @@ import {
   type ObjectStorage,
 } from "../storage/object-storage.port";
 import { slicerRevisionObjectKey } from "../storage/storage-keys";
+import { toSlicerProductionArtifactFormat } from "./production-artifact-format";
 
 type RevisionPointer = {
   revisionId: string;
@@ -172,7 +173,12 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
     const [profile, calibration, config] = await Promise.all([
       this.prisma.machineProfile.findUnique({
         where: { id: job.input.machineProfile.revisionId },
-        select: { settings: true, slicerEngine: true, slicerVersion: true },
+        select: {
+          settings: true,
+          slicerEngine: true,
+          slicerVersion: true,
+          productionArtifactFormat: true,
+        },
       }),
       this.prisma.machineCalibration.findUnique({
         where: { id: job.input.machineCalibration.revisionId },
@@ -190,7 +196,9 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
     }
     if (
       profile.slicerEngine !== job.input.machineProfile.slicerEngine ||
-      profile.slicerVersion !== job.input.machineProfile.slicerVersion
+      profile.slicerVersion !== job.input.machineProfile.slicerVersion ||
+      toSlicerProductionArtifactFormat(profile.productionArtifactFormat) !==
+        job.input.machineProfile.productionArtifactFormat
     ) {
       throw new SlicerProfileSnapshotMismatchError(
         "machine profile slicer identity does not match persisted state",

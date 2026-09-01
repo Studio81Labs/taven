@@ -19,6 +19,7 @@ export function evaluateExpressEligibility(
   input: ExpressEligibilityInput,
 ): ExpressEligibility {
   assertNonNegative(input.requiredPlateCount, "required plate count");
+  assertNonNegative(input.maximumPlateCount, "maximum plate count");
   assertNonNegative(
     input.requiredProductionSeconds,
     "required production seconds",
@@ -31,7 +32,8 @@ export function evaluateExpressEligibility(
 
   const reasons: ExpressGateReason[] = [];
   if (input.phaseKind !== "SINGLE") reasons.push("PHASE_NOT_SINGLE");
-  if (input.requiredPlateCount > 2n) reasons.push("TOO_MANY_PLATES");
+  if (input.requiredPlateCount > input.maximumPlateCount)
+    reasons.push("TOO_MANY_PLATES");
   if (!input.materialAndColorAvailable)
     reasons.push("MATERIAL_OR_COLOR_UNAVAILABLE");
   if (input.hasNonstandardPostprocessing)

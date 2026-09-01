@@ -5,6 +5,7 @@ import {
   Prisma,
   PrismaClient,
   PrintQuality,
+  ProductionArtifactFormat,
   RevisionKind,
   RevisionState,
   MachineStatus,
@@ -256,7 +257,10 @@ async function main() {
       [ids.machinePla, Material.PLA, ids.refPla],
       [ids.machinePetg, Material.PETG, ids.refPetg],
     ] as const) {
-      const data = {
+      // Keep the deterministic seed identity compatible with profiles created
+      // before productionArtifactFormat became explicit. The migration backfills
+      // those immutable revisions to the same gcode_3mf behavior.
+      const revisionData = {
         id,
         machineCapabilityId: ids.capability,
         referenceProfileId,
@@ -270,31 +274,44 @@ async function main() {
         activatedAt: at,
         createdAt: at,
       };
-      await revision(tx, id, RevisionKind.MACHINE_PROFILE, data, async () => {
-        const existing = await tx.machineProfile.findUnique({ where: { id } });
-        if (existing) {
-          if (
-            ![
-              "machineCapabilityId",
-              "referenceProfileId",
-              "material",
-              "quality",
-              "nozzleDiameterMicrometers",
-              "slicerEngine",
-              "slicerVersion",
-              "settings",
-              "state",
-              "activatedAt",
-            ].every((k) =>
-              same(
-                existing[k as keyof typeof existing],
-                data[k as keyof typeof data],
-              ),
+      const data = {
+        ...revisionData,
+        productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
+      };
+      await revision(
+        tx,
+        id,
+        RevisionKind.MACHINE_PROFILE,
+        revisionData,
+        async () => {
+          const existing = await tx.machineProfile.findUnique({
+            where: { id },
+          });
+          if (existing) {
+            if (
+              ![
+                "machineCapabilityId",
+                "referenceProfileId",
+                "material",
+                "quality",
+                "nozzleDiameterMicrometers",
+                "slicerEngine",
+                "slicerVersion",
+                "productionArtifactFormat",
+                "settings",
+                "state",
+                "activatedAt",
+              ].every((k) =>
+                same(
+                  existing[k as keyof typeof existing],
+                  data[k as keyof typeof data],
+                ),
+              )
             )
-          )
-            throw new Error(`Seed machine profile ${id} does not match`);
-        } else await tx.machineProfile.create({ data });
-      });
+              throw new Error(`Seed machine profile ${id} does not match`);
+          } else await tx.machineProfile.create({ data });
+        },
+      );
     }
 
     const calData = {

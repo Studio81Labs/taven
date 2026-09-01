@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ProductionArtifactFormat } from "@prisma/client";
 import type { SlicingJob } from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
@@ -10,11 +11,14 @@ import {
   slicerSettingsSnapshot,
 } from "./slicer-profile-snapshot.service";
 
-function candidateJob(hashes: {
-  machine: string;
-  calibration: string;
-  config: string;
-}): SlicingJob {
+function candidateJob(
+  hashes: {
+    machine: string;
+    calibration: string;
+    config: string;
+  },
+  productionArtifactFormat = "gcode_3mf",
+): SlicingJob {
   return {
     kind: "candidate_estimate",
     input: {
@@ -23,6 +27,7 @@ function candidateJob(hashes: {
         contentSha256: hashes.machine,
         slicerEngine: "orcaslicer",
         slicerVersion: "2.4.2",
+        productionArtifactFormat,
       },
       machineCalibration: {
         revisionId: "calibration",
@@ -67,6 +72,7 @@ describe("SlicerProfileSnapshotService", () => {
           settings: machine,
           slicerEngine: "orcaslicer",
           slicerVersion: "2.4.2",
+          productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
         }),
       },
       machineCalibration: {
@@ -97,5 +103,9 @@ describe("SlicerProfileSnapshotService", () => {
       ),
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotMismatchError);
     expect(putImmutableObject).not.toHaveBeenCalled();
+
+    await expect(
+      service.ensureJobSnapshots(candidateJob(hashes, "gcode")),
+    ).rejects.toBeInstanceOf(SlicerProfileSnapshotMismatchError);
   });
 });

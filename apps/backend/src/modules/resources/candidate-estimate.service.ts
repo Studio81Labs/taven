@@ -23,6 +23,7 @@ export type CandidateEstimateDispatch = {
   nodeId: string;
   inventoryId: string;
   job: CandidateEstimateJob;
+  availableAt?: Date;
 };
 
 export type CandidateCapacityWindow = {
@@ -82,6 +83,7 @@ type CandidateTerminalReceiptRow = {
   estimate_key: string | null;
   failure_class: string | null;
   failure_code: string | null;
+  retry_after_milliseconds: number | null;
 };
 
 type CandidateDispatchOutboxRow = {
@@ -260,6 +262,9 @@ export class CandidateEstimateService {
   async dispatch(
     input: CandidateEstimateDispatch,
   ): Promise<CandidateEstimateJob> {
+    if (input.availableAt !== undefined) {
+      assertValidDate(input.availableAt, "availableAt");
+    }
     let job: CandidateEstimateJob;
     try {
       const { CandidateEstimateJobSchema } =
@@ -436,6 +441,7 @@ export class CandidateEstimateService {
             messageType: CANDIDATE_DISPATCH_TYPE,
             schemaVersion: CANDIDATE_SCHEMA_VERSION,
             payload: payload as unknown as Prisma.InputJsonObject,
+            ...(input.availableAt ? { availableAt: input.availableAt } : {}),
           },
         });
         return job;
@@ -611,6 +617,7 @@ export class CandidateEstimateService {
             resultFingerprint,
             result.outcome.failureClass,
             result.outcome.code,
+            result.outcome.retryAfterMilliseconds,
           );
           return {
             status: "failed",
@@ -1048,7 +1055,8 @@ export class CandidateEstimateService {
              receipt.candidate_resource_estimate_id,
              candidate.estimate_key,
              receipt.failure_class,
-             receipt.failure_code
+             receipt.failure_code,
+             receipt.retry_after_milliseconds
       FROM candidate_estimate_terminal_results receipt
       LEFT JOIN candidate_resource_estimates candidate
         ON candidate.id = receipt.candidate_resource_estimate_id
@@ -1063,6 +1071,7 @@ export class CandidateEstimateService {
     resultFingerprint: string,
     failureClass: string,
     failureCode: string,
+    retryAfterMilliseconds: number | null,
   ): Promise<void> {
     await transaction.$executeRaw`
       INSERT INTO candidate_estimate_terminal_results (
@@ -1070,13 +1079,15 @@ export class CandidateEstimateService {
         result_fingerprint_sha256,
         outcome,
         failure_class,
-        failure_code
+        failure_code,
+        retry_after_milliseconds
       ) VALUES (
         ${dispatchId}::uuid,
         ${resultFingerprint},
         'FAILED'::candidate_estimate_terminal_outcome,
         ${failureClass},
-        ${failureCode}
+        ${failureCode},
+        ${retryAfterMilliseconds}
       )
     `;
   }

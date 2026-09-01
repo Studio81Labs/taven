@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { HealthModule } from "./health/health.module";
 import { AdminAccessModule } from "./modules/admin-access/admin-access.module";
+import { AutomaticQuotesModule } from "./modules/automatic-quotes/automatic-quotes.module";
 import { OrdersModule } from "./modules/orders/orders.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
 import { PricingModule } from "./modules/pricing/pricing.module";
@@ -12,6 +13,7 @@ import { ResourcesModule } from "./modules/resources/resources.module";
 @Module({
   imports: [
     HealthModule,
+    AutomaticQuotesModule,
     OrdersModule,
     QuotesModule,
     SlicingModule,

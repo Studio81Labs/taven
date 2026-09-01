@@ -75,6 +75,10 @@ export type CreateEligibilityPlanInput = {
   orderPhaseId: string;
   /** Caller-owned idempotency identity for this exact planning attempt. */
   planKey: string;
+  /** Optional planning-time horizon for every selected production interval. */
+  capacityWindowSeconds?: bigint;
+  /** Optional whole-plan production plate limit. */
+  maximumPlateCount?: bigint;
 };
 
 export type EligibilityPlanResult = {
@@ -169,6 +173,25 @@ export class EligibilityPlanService {
     input: CreateEligibilityPlanInput,
   ): Promise<EligibilityPlanResult> {
     const planKey = nonBlank(input.planKey, "planKey");
+    if (
+      input.capacityWindowSeconds !== undefined &&
+      (input.capacityWindowSeconds <= 0n ||
+        input.capacityWindowSeconds >
+          BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1_000)))
+    ) {
+      throw new ResourceValidationError(
+        "capacityWindowSeconds must be a positive safe duration",
+      );
+    }
+    if (
+      input.maximumPlateCount !== undefined &&
+      (input.maximumPlateCount <= 0n ||
+        input.maximumPlateCount > BigInt(Number.MAX_SAFE_INTEGER))
+    ) {
+      throw new ResourceValidationError(
+        "maximumPlateCount must be a positive safe integer",
+      );
+    }
     const planAdvisoryKey = `eligibility-plan:${planKey}`;
     try {
       return await this.prisma.$transaction(
@@ -191,6 +214,27 @@ export class EligibilityPlanService {
                 "plan key belongs to a different node or order phase",
                 "phase_resource_plans_plan_key_key",
               );
+            }
+            if (input.maximumPlateCount !== undefined) {
+              const plateRows = await transaction.$queryRaw<
+                Array<{ plate_count: bigint }>
+              >`
+                SELECT count(candidate_interval.id) AS plate_count
+                FROM phase_resource_plan_jobs plan_job
+                JOIN candidate_capacity_intervals candidate_interval
+                  ON candidate_interval.candidate_resource_estimate_id =
+                     plan_job.candidate_resource_estimate_id
+                 AND candidate_interval.node_id = plan_job.node_id
+                WHERE plan_job.phase_resource_plan_id = ${existing.id}::uuid
+                  AND plan_job.node_id = ${existing.nodeId}::uuid
+              `;
+              const plateCount = plateRows[0]?.plate_count ?? 0n;
+              if (plateCount === 0n || plateCount > input.maximumPlateCount) {
+                throw new ResourceConflictError(
+                  "existing complete plan exceeds the production plate limit",
+                  "phase_resource_plan_plate_limit_check",
+                );
+              }
             }
             return {
               eligibilitySnapshotId: existing.eligibilitySnapshotId,
@@ -255,9 +299,13 @@ export class EligibilityPlanService {
               ON item.id = slot.order_item_id AND item.order_id = slot.order_id
             JOIN shipment_plan_fulfilment_slots allocation
               ON allocation.fulfilment_slot_id = slot.id
+            JOIN order_active_price_bindings active_binding
+              ON active_binding.order_id = slot.order_id
+             AND active_binding.order_price_binding_id = allocation.order_price_binding_id
             JOIN shipment_plans shipment_plan
               ON shipment_plan.id = allocation.shipment_plan_id
              AND shipment_plan.order_phase_id = slot.order_phase_id
+             AND shipment_plan.order_price_binding_id = active_binding.order_price_binding_id
             WHERE slot.order_phase_id = ${input.orderPhaseId}::uuid
               AND slot.outcome = 'PENDING'
             ORDER BY slot.packing_unit_key, slot.id
@@ -277,6 +325,12 @@ export class EligibilityPlanService {
               "resource planning clock was unavailable",
             );
           }
+          const capacityEndsAt = input.capacityWindowSeconds
+            ? new Date(
+                planningNow.getTime() +
+                  Number(input.capacityWindowSeconds * 1_000n),
+              )
+            : null;
           const candidates = await transaction.$queryRaw<CandidateRow[]>`
             SELECT candidate.id, candidate.estimate_key, candidate.node_id,
                    candidate.machine_id, candidate.machine_profile_id,
@@ -295,6 +349,9 @@ export class EligibilityPlanService {
             JOIN shipment_plans shipment_plan
               ON shipment_plan.id = candidate.shipment_plan_id
              AND shipment_plan.order_phase_id = ${input.orderPhaseId}::uuid
+            JOIN order_active_price_bindings active_binding
+              ON active_binding.order_id = shipment_plan.order_id
+             AND active_binding.order_price_binding_id = shipment_plan.order_price_binding_id
             JOIN inventories inventory
               ON inventory.id = candidate.inventory_id
              AND inventory.node_id = candidate.node_id
@@ -332,6 +389,16 @@ export class EligibilityPlanService {
              AND candidate_interval.node_id = candidate.node_id
             WHERE candidate.node_id = ${input.nodeId}::uuid
               AND candidate.expires_at > ${planningNow}
+              AND (
+                    ${capacityEndsAt}::timestamptz IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM candidate_capacity_intervals deadline_interval
+                      WHERE deadline_interval.candidate_resource_estimate_id = candidate.id
+                        AND deadline_interval.node_id = candidate.node_id
+                        AND deadline_interval.ends_at > ${capacityEndsAt}::timestamptz
+                    )
+                  )
               AND (
                     source.retention_hold <> 'NONE'
                     OR source.source_delete_after > (
@@ -416,6 +483,11 @@ export class EligibilityPlanService {
               startsAt: row.starts_at,
               endsAt: row.ends_at,
             })),
+            ...(input.maximumPlateCount === undefined
+              ? {}
+              : {
+                  maximumCapacityIntervalCount: Number(input.maximumPlateCount),
+                }),
             now: planningNow,
           });
           if (!selected) {
@@ -466,6 +538,8 @@ export class EligibilityPlanService {
                 nodeId: input.nodeId,
                 orderPhaseId: input.orderPhaseId,
                 planKey,
+                capacityEndsAt: capacityEndsAt?.toISOString() ?? null,
+                maximumPlateCount: input.maximumPlateCount?.toString() ?? null,
                 requiredSlotIds,
                 selectedCandidateIds,
               }),

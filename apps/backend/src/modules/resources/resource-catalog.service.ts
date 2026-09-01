@@ -5,6 +5,7 @@ import {
   Material,
   Prisma,
   PrintQuality,
+  ProductionArtifactFormat,
   RevisionKind,
   RevisionState,
 } from "@prisma/client";
@@ -39,6 +40,7 @@ export type CreateMachineProfileInput = {
   nozzleDiameterMicrometers: number;
   slicerEngine: string;
   slicerVersion: string;
+  productionArtifactFormat: ProductionArtifactFormat;
   settings: JsonSettings;
 };
 
@@ -186,6 +188,7 @@ export class ResourceCatalogService {
       settings: canonicalSettings(input.settings),
       slicerEngine,
       slicerVersion,
+      productionArtifactFormat: input.productionArtifactFormat,
     } satisfies CanonicalJson;
     const id = randomUUID();
     await this.snapshots.provisionSettings(input.settings as Prisma.JsonValue);

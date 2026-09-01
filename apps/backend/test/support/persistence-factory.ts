@@ -417,7 +417,7 @@ export class PersistenceFactory {
     }
     await this.createRevisionIdentity(machineProfileId, "MACHINE_PROFILE");
     await this.sql.query(
-      'INSERT INTO "machine_profiles" ("id", "machine_capability_id", "reference_profile_id", "material", "quality", "nozzle_diameter_micrometers", "slicer_engine", "slicer_version", "settings", "state", "activated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)',
+      'INSERT INTO "machine_profiles" ("id", "machine_capability_id", "reference_profile_id", "material", "quality", "nozzle_diameter_micrometers", "slicer_engine", "slicer_version", "production_artifact_format", "settings", "state", "activated_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)',
       [
         machineProfileId,
         capabilityId,
@@ -427,6 +427,7 @@ export class PersistenceFactory {
         400,
         "orca",
         "test",
+        "gcode_3mf",
         JSON.stringify({}),
         "ACTIVE",
         createdAt,

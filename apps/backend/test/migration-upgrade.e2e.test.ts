@@ -38,7 +38,7 @@ it("upgrades sealed legacy individual FULL contracts and outstanding quotes with
       .filter((name) => /^20/.test(name))
       .sort();
     for (const migration of migrations.filter(
-      (name) => name !== finalMigration,
+      (name) => name < finalMigration,
     )) {
       await target.query(
         await readFile(

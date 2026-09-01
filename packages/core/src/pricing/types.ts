@@ -111,6 +111,7 @@ export type ExpressGateReason =
 export interface ExpressEligibilityInput {
   readonly phaseKind: "SINGLE" | "SAMPLE" | "BATCH";
   readonly requiredPlateCount: bigint;
+  readonly maximumPlateCount: bigint;
   readonly materialAndColorAvailable: boolean;
   readonly hasNonstandardPostprocessing: boolean;
   readonly requiredProductionSeconds: bigint;

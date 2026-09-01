@@ -89,6 +89,8 @@ export interface ResourcePlanSelectorInput {
   readonly inventory: readonly ResourceInventoryAvailability[];
   /** Existing active capacity reservations, represented as half-open ranges. */
   readonly occupiedCapacity?: readonly ResourceCapacityInterval[];
+  /** Optional whole-plan ceiling for selected production intervals/plates. */
+  readonly maximumCapacityIntervalCount?: number;
   readonly now: Date;
 }
 
@@ -480,6 +482,15 @@ export function selectCompleteResourcePlan(
   if (!(input.now instanceof Date) || Number.isNaN(input.now.getTime())) {
     throw new RangeError("now must be a valid Date");
   }
+  if (
+    input.maximumCapacityIntervalCount !== undefined &&
+    (!Number.isSafeInteger(input.maximumCapacityIntervalCount) ||
+      input.maximumCapacityIntervalCount < 1)
+  ) {
+    throw new RangeError(
+      "maximum capacity interval count must be a positive safe integer",
+    );
+  }
 
   const slotById = new Map<string, FulfilmentSlotResourceInput>();
   for (const slot of slots) {
@@ -644,6 +655,13 @@ export function selectCompleteResourcePlan(
     const options = candidatesBySlot.get(uncoveredSlotId) ?? [];
     for (const candidate of options) {
       if (selected.has(candidate.id)) continue;
+      if (
+        input.maximumCapacityIntervalCount !== undefined &&
+        usedIntervals.length + candidate.intervals.length >
+          input.maximumCapacityIntervalCount
+      ) {
+        continue;
+      }
       const availableSlotIds = candidate.slotIds.filter(
         (slotId) => !covered.has(slotId),
       );

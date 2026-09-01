@@ -461,6 +461,39 @@ describe("selectCompleteResourcePlan", () => {
     ).toBeUndefined();
   });
 
+  it("selects a complete plan within the aggregate capacity interval limit", () => {
+    const dense = candidate("dense", ["slot-a"], {
+      requiredMaterialMilligrams: 50n,
+      intervals: [
+        {
+          machineId: "dense-machine",
+          startsAt: later,
+          endsAt: new Date("2026-08-30T12:30:00.000Z"),
+        },
+        {
+          machineId: "dense-machine",
+          startsAt: new Date("2026-08-30T12:30:00.000Z"),
+          endsAt: end,
+        },
+      ],
+    });
+    const compact = candidate("compact", ["slot-a"]);
+    const second = candidate("second", ["slot-b"]);
+    const constrained = baseInput([dense, compact, second], {
+      maximumCapacityIntervalCount: 2,
+    });
+
+    expect(
+      selectCompleteResourcePlan(constrained)?.candidateResourceEstimateIds,
+    ).toEqual(["compact", "second"]);
+    expect(
+      selectCompleteResourcePlan({
+        ...constrained,
+        maximumCapacityIntervalCount: 1,
+      }),
+    ).toBeUndefined();
+  });
+
   it("permits adjacent intervals and uses remaining minus reserved inventory", () => {
     const first = candidate("first", ["slot-a"], {
       inventoryId: "inventory",
