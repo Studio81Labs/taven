@@ -226,6 +226,57 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     ).toEqual({ issuedCount: 5 });
   });
 
+  it("binds preparation idempotency to the revision observed under the session lock", async () => {
+    const created = await automaticQuotes.createSession(
+      {},
+      "198.51.100.30",
+      key("prepare-revision-create"),
+    );
+    const draft = await prisma.automaticQuoteDraft.findUniqueOrThrow({
+      where: { orderId: created.orderId },
+    });
+    type AutomaticQuoteLoadHarness = {
+      loadSession(sessionId: string): Promise<unknown>;
+    };
+    const loadHarness = automaticQuotes as unknown as AutomaticQuoteLoadHarness;
+    const originalLoadSession = loadHarness.loadSession.bind(loadHarness);
+    const loadGap = vi
+      .spyOn(loadHarness, "loadSession")
+      .mockImplementationOnce(async (sessionId) => {
+        const loaded = await originalLoadSession(sessionId);
+        await prisma.automaticQuoteDraft.update({
+          where: { orderId: created.orderId },
+          data: { configurationRevision: { increment: 1 } },
+        });
+        return loaded;
+      });
+    const commandKey = key("prepare-revision-race");
+    const prepared = await automaticQuotes.prepare(
+      created.sessionId,
+      `Bearer ${created.sessionToken}`,
+      commandKey,
+    );
+    loadGap.mockRestore();
+    expect(prepared.configurationRevision).toBe(
+      draft.configurationRevision + 1,
+    );
+    const replayed = await automaticQuotes.prepare(
+      created.sessionId,
+      `Bearer ${created.sessionToken}`,
+      commandKey,
+    );
+    expect(replayed.configurationRevision).toBe(prepared.configurationRevision);
+    expect(
+      await prisma.idempotencyRecord.count({
+        where: {
+          namespace: "automatic-quote.prepare",
+          idempotencyKey: commandKey,
+          status: "COMPLETED",
+        },
+      }),
+    ).toBe(1);
+  });
+
   it("resumes a quote through binding, complete reservation, and endpoint replacement", async () => {
     const sql = await pool.connect();
     const factory = new PersistenceFactory(sql, `${scope}:happy`);
@@ -1142,11 +1193,11 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     );
     expect(destination.response.status).toBe(200);
-    await expect(
-      prisma.deliveryDestination.findFirstOrThrow({
+    const selectedDestination =
+      await prisma.deliveryDestination.findFirstOrThrow({
         where: { orderId, providerEndpointId: "test-pickup" },
-      }),
-    ).resolves.toMatchObject({
+      });
+    expect(selectedDestination).toMatchObject({
       addressSnapshot: {
         country: "CZ",
         city: "Prague",
@@ -1157,6 +1208,57 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         supportedCategoryIds: ["oversize", "pickup"],
       },
     });
+    const destinationRevision = number(destination.body.configurationRevision);
+    const configuredEndpoints = process.env.TAVEN_DELIVERY_ENDPOINTS_JSON;
+    process.env.TAVEN_DELIVERY_ENDPOINTS_JSON = JSON.stringify([
+      {
+        providerEndpointId: "test-zbox",
+        endpointType: "pickup_point",
+        addressSnapshot: {
+          country: "CZ",
+          city: "Brno",
+          label: "Test Z-BOX",
+        },
+        supportedCategoryIds: ["zbox"],
+        provider: "test",
+      },
+    ]);
+    try {
+      const destinationReplay = await api(
+        `automatic-quote-sessions/${sessionId}/delivery-destination`,
+        {
+          method: "PUT",
+          headers: capabilityHeaders(sessionToken, key("destination")),
+          body: JSON.stringify({
+            providerEndpointId: "test-pickup",
+            endpointType: "pickup_point",
+          }),
+        },
+      );
+      expect(destinationReplay.response.status).toBe(200);
+      expect(number(destinationReplay.body.configurationRevision)).toBe(
+        destinationRevision,
+      );
+      expect(
+        await prisma.deliveryDestination.count({
+          where: { orderId, providerEndpointId: "test-pickup" },
+        }),
+      ).toBe(1);
+      await expect(
+        prisma.deliveryDestination.findUniqueOrThrow({
+          where: { id: selectedDestination.id },
+        }),
+      ).resolves.toMatchObject({
+        addressSnapshot: selectedDestination.addressSnapshot,
+        capabilitySnapshot: selectedDestination.capabilitySnapshot,
+      });
+    } finally {
+      if (configuredEndpoints === undefined) {
+        delete process.env.TAVEN_DELIVERY_ENDPOINTS_JSON;
+      } else {
+        process.env.TAVEN_DELIVERY_ENDPOINTS_JSON = configuredEndpoints;
+      }
+    }
 
     await prisma.inventory.updateMany({
       where: {

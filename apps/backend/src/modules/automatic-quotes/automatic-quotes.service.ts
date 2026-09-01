@@ -618,15 +618,17 @@ export class AutomaticQuotesService {
     sessionId = normalizedUuid(sessionId, "sessionId");
     const sessionCapability = bearerCapability(authorization);
     const commandKey = requireIdempotencyKey(idempotencyKey);
-    const resolved = await this.deliveryCapabilities.resolve({
-      providerEndpointId: requiredText(
-        input?.providerEndpointId,
-        "providerEndpointId",
-        255,
-      ),
-      endpointType: requiredText(input?.endpointType, "endpointType", 100),
+    const providerEndpointId = requiredText(
+      input?.providerEndpointId,
+      "providerEndpointId",
+      255,
+    );
+    const endpointType = requiredText(input?.endpointType, "endpointType", 100);
+    const fingerprint = fingerprintOf({
+      sessionId,
+      providerEndpointId,
+      endpointType,
     });
-    const fingerprint = fingerprintOf({ sessionId, resolved });
     await this.idempotentEffect(
       "automatic-quote.select-destination",
       commandKey,
@@ -634,6 +636,10 @@ export class AutomaticQuotesService {
       async (transaction) => {
         const session = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(session, sessionCapability);
+        const resolved = await this.deliveryCapabilities.resolve({
+          providerEndpointId,
+          endpointType,
+        });
         const origin = await transaction.automaticOrderOrigin.findUnique({
           where: { quoteSessionId: sessionId },
         });
@@ -737,16 +743,22 @@ export class AutomaticQuotesService {
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const session = await this.loadSession(sessionId);
     assertSessionCapability(session, sessionCapability);
-    const fingerprint = fingerprintOf({
-      sessionId,
-      configurationRevision:
-        session.automaticOrderOrigin?.order.automaticQuoteDraft
-          ?.configurationRevision,
-    });
     await this.idempotentEffect(
       "automatic-quote.prepare",
       commandKey,
-      fingerprint,
+      async (transaction) => {
+        const locked = await lockedSession(transaction, sessionId);
+        assertOpenOrConvertedSession(locked, sessionCapability);
+        const draft = await transaction.automaticQuoteDraft.findFirst({
+          where: { order: { automaticOrigin: { quoteSessionId: sessionId } } },
+          select: { configurationRevision: true },
+        });
+        if (!draft) throw new ConflictException("Automatic order is missing");
+        return fingerprintOf({
+          sessionId,
+          configurationRevision: draft.configurationRevision,
+        });
+      },
       async (transaction) => {
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
@@ -799,15 +811,20 @@ export class AutomaticQuotesService {
   private async idempotentEffect(
     namespace: string,
     idempotencyKey: string,
-    fingerprint: string,
+    fingerprint: string | ((transaction: Transaction) => Promise<string>),
     operation: (transaction: Transaction) => Promise<void>,
   ): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
-      const record = await lockIdempotency(
+      await lockIdempotencyKey(transaction, namespace, idempotencyKey);
+      const resolvedFingerprint =
+        typeof fingerprint === "string"
+          ? fingerprint
+          : await fingerprint(transaction);
+      const record = await idempotencyRecordAfterLock(
         transaction,
         namespace,
         idempotencyKey,
-        fingerprint,
+        resolvedFingerprint,
       );
       if (record.replayed) return;
       await operation(transaction);
@@ -4378,6 +4395,33 @@ async function lockIdempotency(
   idempotencyKey: string,
   requestFingerprint: string | readonly string[],
 ) {
+  await lockIdempotencyKey(transaction, namespace, idempotencyKey);
+  return idempotencyRecordAfterLock(
+    transaction,
+    namespace,
+    idempotencyKey,
+    requestFingerprint,
+  );
+}
+
+async function lockIdempotencyKey(
+  transaction: Transaction,
+  namespace: string,
+  idempotencyKey: string,
+): Promise<void> {
+  await transaction.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtextextended(${`${namespace}:${idempotencyKey}`}, 0)
+    )::text
+  `;
+}
+
+async function idempotencyRecordAfterLock(
+  transaction: Transaction,
+  namespace: string,
+  idempotencyKey: string,
+  requestFingerprint: string | readonly string[],
+) {
   const acceptedFingerprints =
     typeof requestFingerprint === "string"
       ? [requestFingerprint]
@@ -4386,11 +4430,6 @@ async function lockIdempotency(
   if (!primaryFingerprint) {
     throw new Error("At least one idempotency fingerprint is required");
   }
-  await transaction.$queryRaw`
-    SELECT pg_advisory_xact_lock(
-      hashtextextended(${`${namespace}:${idempotencyKey}`}, 0)
-    )::text
-  `;
   const observedAt = await databaseNow(transaction);
   const existing = await transaction.idempotencyRecord.findFirst({
     where: { namespace, idempotencyKey },
