@@ -281,8 +281,8 @@ INSERT INTO "price_lists" (
     '{
       "automaticQuote": {
         "machineRateMinorPerSecond": {"numerator": "1", "denominator": "2"},
-        "laborRateMinorPerSecond": {"numerator": "1", "denominator": "1"},
-        "amortizationRateMinorPerSecond": {"numerator": "1", "denominator": "10"},
+        "laborRateMinorPerSecond": {"numerator": "25", "denominator": "3"},
+        "amortizationRateMinorPerSecond": {"numerator": "0", "denominator": "1"},
         "reprintRate": {"numerator": "5", "denominator": "100"},
         "marginRate": {"numerator": "30", "denominator": "100"},
         "materialRateMinorPerMilligram": {
@@ -294,9 +294,9 @@ INSERT INTO "price_lists" (
           "PETG": {"numerator": "127", "denominator": "100"}
         },
         "roughMaterialVolumeRatioByInfillPreset": {
-          "DECORATIVE": {"numerator": "30", "denominator": "100"},
-          "STANDARD": {"numerator": "40", "denominator": "100"},
-          "STRONG": {"numerator": "60", "denominator": "100"}
+          "DECORATIVE": {"numerator": "10", "denominator": "100"},
+          "STANDARD": {"numerator": "20", "denominator": "100"},
+          "STRONG": {"numerator": "40", "denominator": "100"}
         },
         "roughExtrusionMilligramsPerSecond": {"numerator": "5", "denominator": "1"},
         "handlingOrderFixedSeconds": "180",
@@ -304,7 +304,7 @@ INSERT INTO "price_lists" (
         "handlingPieceSeconds": "30",
         "handlingPackSeconds": "180",
         "shippingTripSeconds": "600",
-        "shippingTripPricingDivisor": "4",
+        "shippingTripPricingDivisor": "1",
         "minimumPrintPriceMinor": "25000",
         "smallOrderWeightThresholdMilligrams": "100000",
         "smallOrderSurchargeMinor": "5000",
@@ -315,7 +315,7 @@ INSERT INTO "price_lists" (
         "expressPackagingBufferSeconds": "7200",
         "maximumAutomaticQuantity": "1000",
         "maximumAutomaticAmountMinor": "1000000",
-        "packingPaddingMicrometers": "5000",
+        "packingPaddingMicrometers": "40000",
         "fillCoefficient": {"numerator": "55", "denominator": "100"},
         "packagingWeightMilligrams": "150000",
         "paymentFeeRateBasisPoints": 150,
@@ -325,35 +325,35 @@ INSERT INTO "price_lists" (
           {
             "id": "zbox",
             "maxXMicrometers": "600000",
-            "maxYMicrometers": "450000",
+            "maxYMicrometers": "430000",
             "maxZMicrometers": "350000",
-            "maxDimensionSumMicrometers": "1400000",
+            "maxDimensionSumMicrometers": "1380000",
             "maxWeightMilligrams": "15000000",
-            "maxParcelVolumeCubicMicrometers": "94500000000000000",
+            "maxParcelVolumeCubicMicrometers": "90300000000000000",
             "carrierCostMinor": "8500",
             "customerShippingRateMinor": "8500",
             "packagingCostMinor": "1500"
           },
           {
             "id": "pickup",
-            "maxXMicrometers": "1000000",
-            "maxYMicrometers": "1000000",
-            "maxZMicrometers": "1000000",
-            "maxDimensionSumMicrometers": "3000000",
-            "maxWeightMilligrams": "50000000",
-            "maxParcelVolumeCubicMicrometers": "1000000000000000000",
-            "carrierCostMinor": "0",
-            "customerShippingRateMinor": "0",
+            "maxXMicrometers": "600000",
+            "maxYMicrometers": "600000",
+            "maxZMicrometers": "600000",
+            "maxDimensionSumMicrometers": "1200000",
+            "maxWeightMilligrams": "5000000",
+            "maxParcelVolumeCubicMicrometers": "64000000000000000",
+            "carrierCostMinor": "8500",
+            "customerShippingRateMinor": "8500",
             "packagingCostMinor": "1500"
           },
           {
             "id": "oversize",
-            "maxXMicrometers": "2000000",
-            "maxYMicrometers": "2000000",
-            "maxZMicrometers": "2000000",
-            "maxDimensionSumMicrometers": "6000000",
+            "maxXMicrometers": "1200000",
+            "maxYMicrometers": "1200000",
+            "maxZMicrometers": "1200000",
+            "maxDimensionSumMicrometers": "1500000",
             "maxWeightMilligrams": "100000000",
-            "maxParcelVolumeCubicMicrometers": "8000000000000000000",
+            "maxParcelVolumeCubicMicrometers": "125000000000000000",
             "carrierCostMinor": "20000",
             "customerShippingRateMinor": "20000",
             "packagingCostMinor": "3000"

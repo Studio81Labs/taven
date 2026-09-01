@@ -2074,7 +2074,10 @@ export class AutomaticQuotesService {
         deliveryDestinationId: input.destinationId,
         expressRequested: input.expressRequested,
         priceListRevision: input.priceList.revision,
-        expressEligibility: input.prepared.expressEligibility,
+        expressEligibilityAtPricing: {
+          state: input.expressRequested ? "CANDIDATE_PENDING" : "NOT_REQUESTED",
+          preCandidateEvaluation: input.prepared.expressEligibility,
+        },
         shipmentPlan: jsonSafe(input.prepared.shipmentPlan),
         breakdown: jsonSafe(input.prepared.price.breakdown),
       },
@@ -3871,6 +3874,11 @@ export class AutomaticQuotesService {
       !expired &&
       order.status === OrderStatus.QUOTED &&
       Boolean(active && currentPlan && currentReservation);
+    const expressCandidatePending =
+      draft.expressRequested &&
+      !expired &&
+      !checkoutReady &&
+      rough?.express.eligible === true;
     const bindingQuote =
       checkoutReady && active
         ? priceDto(
@@ -3910,10 +3918,13 @@ export class AutomaticQuotesService {
       bindingQuote,
       express: {
         requested: draft.expressRequested,
-        eligible: rough?.express.eligible ?? false,
-        reasons:
-          (rough ? [...rough.express.reasons] : undefined) ??
-          (draft.expressRequested ? ["ELIGIBILITY_PENDING"] : []),
+        eligible: draft.expressRequested
+          ? checkoutReady && rough?.express.eligible === true
+          : (rough?.express.eligible ?? false),
+        reasons: expressCandidatePending
+          ? ["ELIGIBILITY_PENDING"]
+          : ((rough ? [...rough.express.reasons] : undefined) ??
+            (draft.expressRequested ? ["ELIGIBILITY_PENDING"] : [])),
       },
       handoff:
         handoffReasons.length > 0

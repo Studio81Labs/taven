@@ -118,6 +118,79 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     });
   });
 
+  it("loads the v0 automatic pricing and carrier constraints", async () => {
+    const priceList = await prisma.priceList.findUniqueOrThrow({
+      where: {
+        currency_revision: {
+          currency: "CZK",
+          revision: "automatic-v0-czk",
+        },
+      },
+    });
+    const automaticQuote = (
+      priceList.parameters as {
+        automaticQuote: {
+          laborRateMinorPerSecond: unknown;
+          amortizationRateMinorPerSecond: unknown;
+          roughMaterialVolumeRatioByInfillPreset: unknown;
+          shippingTripPricingDivisor: string;
+          packingPaddingMicrometers: string;
+          shipmentCategories: unknown[];
+        };
+      }
+    ).automaticQuote;
+
+    expect(automaticQuote).toMatchObject({
+      laborRateMinorPerSecond: { numerator: "25", denominator: "3" },
+      amortizationRateMinorPerSecond: { numerator: "0", denominator: "1" },
+      roughMaterialVolumeRatioByInfillPreset: {
+        DECORATIVE: { numerator: "10", denominator: "100" },
+        STANDARD: { numerator: "20", denominator: "100" },
+        STRONG: { numerator: "40", denominator: "100" },
+      },
+      shippingTripPricingDivisor: "1",
+      packingPaddingMicrometers: "40000",
+      shipmentCategories: [
+        {
+          id: "zbox",
+          maxXMicrometers: "600000",
+          maxYMicrometers: "430000",
+          maxZMicrometers: "350000",
+          maxDimensionSumMicrometers: "1380000",
+          maxWeightMilligrams: "15000000",
+          maxParcelVolumeCubicMicrometers: "90300000000000000",
+          carrierCostMinor: "8500",
+          customerShippingRateMinor: "8500",
+          packagingCostMinor: "1500",
+        },
+        {
+          id: "pickup",
+          maxXMicrometers: "600000",
+          maxYMicrometers: "600000",
+          maxZMicrometers: "600000",
+          maxDimensionSumMicrometers: "1200000",
+          maxWeightMilligrams: "5000000",
+          maxParcelVolumeCubicMicrometers: "64000000000000000",
+          carrierCostMinor: "8500",
+          customerShippingRateMinor: "8500",
+          packagingCostMinor: "1500",
+        },
+        {
+          id: "oversize",
+          maxXMicrometers: "1200000",
+          maxYMicrometers: "1200000",
+          maxZMicrometers: "1200000",
+          maxDimensionSumMicrometers: "1500000",
+          maxWeightMilligrams: "100000000",
+          maxParcelVolumeCubicMicrometers: "125000000000000000",
+          carrierCostMinor: "20000",
+          customerShippingRateMinor: "20000",
+          packagingCostMinor: "3000",
+        },
+      ],
+    });
+  });
+
   it("binds create-session idempotency replay to the initiating client", async () => {
     const idempotencyKey = key("client-bound-create");
     const body = { attribution: { campaign: "client-bound" } };
@@ -1168,7 +1241,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       }),
     ).toBe(referenceDispatches.length + 1);
 
-    const expressRejected = await api(
+    const expressPending = await api(
       `automatic-quote-sessions/${sessionId}/express`,
       {
         method: "PUT",
@@ -1176,15 +1249,20 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         body: JSON.stringify({ requested: true }),
       },
     );
-    expect(expressRejected.response.status).toBe(200);
-    expect(expressRejected.body.express).toMatchObject({
+    expect(expressPending.response.status).toBe(200);
+    expect(expressPending.body.phase).toBe("DESTINATION_REQUIRED");
+    expect(expressPending.body.express).toMatchObject({
       requested: true,
       eligible: false,
-      reasons: expect.arrayContaining(["TOO_MANY_PLATES"]),
+      reasons: ["ELIGIBILITY_PENDING"],
     });
-    expect(expressRejected.body.handoff).toMatchObject({
-      reasons: expect.arrayContaining(["EXPRESS_INELIGIBLE"]),
-    });
+    const expressPendingPrice = expressPending.body.roughEstimate as {
+      components: Array<{ kind: string }>;
+    };
+    expect(expressPendingPrice.components).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "EXPRESS" })]),
+    );
+    expect(expressPending.body.handoff).toBeNull();
     expect(
       (
         await api(`automatic-quote-sessions/${sessionId}/express`, {
@@ -1424,7 +1502,8 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(expressCapacity.response.status).toBe(200);
     expect(expressCapacity.body.express).toMatchObject({
       requested: true,
-      eligible: true,
+      eligible: false,
+      reasons: ["ELIGIBILITY_PENDING"],
     });
 
     const recoveryPrintConfigId = randomUUID();
@@ -1636,7 +1715,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         where: { orderId: recoveryOrderId },
       }),
     ).toBe(0);
-    for (const partsPerPlate of [1, 3]) {
+    for (const partsPerPlate of [2]) {
       const recoveryParcelReferenceDispatch =
         await prisma.outboxMessage.findFirstOrThrow({
           where: {
@@ -1849,7 +1928,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           ({ payload }) => candidateJob(payload).input.partsPerPlate,
         ),
       ),
-    ).toEqual(new Set([1, 2, 3]));
+    ).toEqual(new Set([1, 2]));
     for (const [index, dispatch] of lateExpressDispatches.entries()) {
       const job = candidateJob(dispatch.payload);
       if (job.input.partsPerPlate > 1) {
@@ -2558,14 +2637,22 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(refreshedReady.response.status).toBe(200);
     expect(refreshedReady.body.phase).toBe("CHECKOUT_READY");
     expect(refreshedReady.body.checkoutReady).toBe(true);
+    expect(refreshedReady.body.express).toMatchObject({
+      requested: true,
+      eligible: true,
+      reasons: [],
+    });
     expect(refreshedReady.body.bindingQuote).toMatchObject({
       kind: "BINDING",
       currency: "CZK",
     });
     const binding = refreshedReady.body.bindingQuote as {
       totalMinor: number;
-      components: Array<{ amountMinor: number }>;
+      components: Array<{ kind: string; amountMinor: number }>;
     };
+    expect(binding.components).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "EXPRESS" })]),
+    );
     expect(
       binding.components.reduce(
         (sum, component) => sum + component.amountMinor,

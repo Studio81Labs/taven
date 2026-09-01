@@ -115,17 +115,13 @@ export async function prepareAutomaticQuote(
   const parameters = parseAutomaticQuotePricingParameters(
     input.priceList.parameters,
   );
-  const requiredPlateCount = input.items.reduce(
-    (total, item) => total + productionMetrics(item, parameters).plateCount,
-    0n,
-  );
-  const requiredProductionSeconds = input.items.reduce(
-    (total, item) =>
-      total +
-      productionMetrics(item, parameters).base.machineSeconds +
-      productionMetrics(item, parameters).quantityEffect.machineSeconds,
-    0n,
-  );
+  // Reference slices price the selected Express option, while candidate
+  // arrangements determine its production plate and capacity eligibility.
+  // The read model exposes this provisional surcharge as eligibility pending.
+  const pendingCandidateProduction = {
+    requiredPlateCount: 0n,
+    requiredProductionSeconds: 0n,
+  };
   const totalQuantity = input.items.reduce(
     (total, item) => total + BigInt(item.quantity),
     0n,
@@ -211,11 +207,10 @@ export async function prepareAutomaticQuote(
     },
     expressEligibility: {
       phaseKind: "SINGLE",
-      requiredPlateCount,
+      ...pendingCandidateProduction,
       maximumPlateCount: parameters.expressMaximumPlateCount,
       materialAndColorAvailable: input.materialAndColorAvailable,
       hasNonstandardPostprocessing: false,
-      requiredProductionSeconds,
       availableProductionWindowSeconds:
         parameters.expressAvailableProductionWindowSeconds,
       packagingBufferSeconds: parameters.expressPackagingBufferSeconds,
@@ -237,11 +232,10 @@ export async function prepareAutomaticQuote(
     },
     expressEligibility: {
       phaseKind: "SINGLE" as const,
-      requiredPlateCount,
+      ...pendingCandidateProduction,
       maximumPlateCount: parameters.expressMaximumPlateCount,
       materialAndColorAvailable: input.materialAndColorAvailable,
       hasNonstandardPostprocessing: false,
-      requiredProductionSeconds,
       availableProductionWindowSeconds:
         parameters.expressAvailableProductionWindowSeconds,
       packagingBufferSeconds: parameters.expressPackagingBufferSeconds,

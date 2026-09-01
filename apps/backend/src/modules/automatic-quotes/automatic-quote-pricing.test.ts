@@ -136,7 +136,7 @@ describe("automatic quote pricing preparation", () => {
     );
   });
 
-  it("uses the configured express plate limit", async () => {
+  it("defers the express plate limit until candidate arrangements are known", async () => {
     const configuredForOnePlate = structuredClone(parameters);
     configuredForOnePlate.automaticQuote.expressMaximumPlateCount = "1";
 
@@ -153,10 +153,11 @@ describe("automatic quote pricing preparation", () => {
       }),
     );
 
-    expect(result.prepared.kind).toBe("custom_request");
-    expect(result.prepared.expressEligibility.reasons).toContain(
-      "TOO_MANY_PLATES",
-    );
+    expect(result.prepared.kind).toBe("provisional");
+    expect(result.prepared.expressEligibility).toEqual({
+      eligible: true,
+      reasons: [],
+    });
   });
 
   it("returns a shipment handoff instead of binding to an incompatible endpoint", async () => {
