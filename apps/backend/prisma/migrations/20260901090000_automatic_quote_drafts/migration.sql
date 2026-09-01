@@ -289,6 +289,16 @@ INSERT INTO "price_lists" (
           "PLA": {"numerator": "1", "denominator": "20"},
           "PETG": {"numerator": "3", "denominator": "50"}
         },
+        "roughMaterialDensityMilligramsPerCubicMillimeter": {
+          "PLA": {"numerator": "124", "denominator": "100"},
+          "PETG": {"numerator": "127", "denominator": "100"}
+        },
+        "roughMaterialVolumeRatioByInfillPreset": {
+          "DECORATIVE": {"numerator": "30", "denominator": "100"},
+          "STANDARD": {"numerator": "40", "denominator": "100"},
+          "STRONG": {"numerator": "60", "denominator": "100"}
+        },
+        "roughExtrusionMilligramsPerSecond": {"numerator": "5", "denominator": "1"},
         "handlingOrderFixedSeconds": "180",
         "handlingPlateSeconds": "120",
         "handlingPieceSeconds": "30",

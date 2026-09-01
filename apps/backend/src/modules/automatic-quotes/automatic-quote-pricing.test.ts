@@ -12,6 +12,16 @@ const parameters = {
       PLA: { numerator: "1", denominator: "20" },
       PETG: { numerator: "3", denominator: "50" },
     },
+    roughMaterialDensityMilligramsPerCubicMillimeter: {
+      PLA: { numerator: "124", denominator: "100" },
+      PETG: { numerator: "127", denominator: "100" },
+    },
+    roughMaterialVolumeRatioByInfillPreset: {
+      DECORATIVE: { numerator: "30", denominator: "100" },
+      STANDARD: { numerator: "40", denominator: "100" },
+      STRONG: { numerator: "60", denominator: "100" },
+    },
+    roughExtrusionMilligramsPerSecond: { numerator: "5", denominator: "1" },
     handlingOrderFixedSeconds: "180",
     handlingPlateSeconds: "120",
     handlingPieceSeconds: "30",
@@ -67,7 +77,6 @@ function item(id: string, quantity = 1) {
     boundsYMicrometers: 20_000n,
     boundsZMicrometers: 20_000n,
     fulfilmentSlots: Array.from({ length: quantity }, (_, index) => ({
-      id: `${id}-slot-${index + 1}`,
       packingUnitKey: `${id}:single:${index + 1}`,
     })),
   };
@@ -162,5 +171,11 @@ describe("automatic quote pricing preparation", () => {
     expect(componentTotal).toBe(result.prepared.price.contractTotal.minorUnits);
     expect(result.prepared.price.captures).toHaveLength(1);
     expect(result.prepared.price.captures[0]?.role).toBe("FULL");
+    expect(result.prepared.shipmentPlan.parcels[0]?.placements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ packingUnitKey: "item-a:single:1" }),
+        expect.objectContaining({ packingUnitKey: "item-b:single:1" }),
+      ]),
+    );
   });
 });

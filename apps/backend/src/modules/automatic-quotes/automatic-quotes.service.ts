@@ -42,8 +42,11 @@ import {
 import { ResourceReservationService } from "../resources/resource-reservation.service";
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import {
+  parseAutomaticQuotePricingParameters,
   prepareAutomaticQuote,
   type AutomaticBindingQuote,
+  type AutomaticQuotePricingItem,
+  type AutomaticQuotePricingParameters,
 } from "./automatic-quote-pricing";
 import type {
   AttachAutomaticQuoteModelFileDto,
@@ -923,39 +926,22 @@ export class AutomaticQuotesService {
     orderId: string,
   ): Promise<void> {
     if (!(await this.riskAllowsAutomaticQuote(transaction, orderId))) return;
-    const selectedDestination =
-      await transaction.automaticQuoteDraft.findUnique({
-        where: { orderId },
-        select: { selectedDeliveryDestinationId: true },
-      });
-    if (!selectedDestination?.selectedDeliveryDestinationId) return;
-    await this.ensureOrderItems(transaction, orderId);
-    const topology = await this.ensureQuoteTopology(transaction, orderId);
-    const order = await transaction.order.findUniqueOrThrow({
+    const draftOrder = await transaction.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {
         automaticQuoteDraft: {
           include: { selectedDeliveryDestination: true, items: true },
-        },
-        items: {
-          include: {
-            modelGeometry: true,
-            primaryReferenceSliceResult: true,
-            tailReferenceSliceResult: true,
-            fulfilmentSlots: { orderBy: { quantityOrdinal: "asc" } },
-          },
-          orderBy: { ordinal: "asc" },
         },
         activePriceBinding: {
           include: { orderPriceBinding: true },
         },
       },
     });
-    const draft = order.automaticQuoteDraft;
+    const draft = draftOrder.automaticQuoteDraft;
     const destination = draft?.selectedDeliveryDestination;
-    if (!draft || !destination || order.items.length === 0) return;
+    if (!draft || !destination || draft.items.length === 0) return;
     if (
-      order.activePriceBinding?.orderPriceBinding.deliveryDestinationId ===
+      draftOrder.activePriceBinding?.orderPriceBinding.deliveryDestinationId ===
       destination.id
     ) {
       return;
@@ -974,17 +960,57 @@ export class AutomaticQuotesService {
     const draftsByOrdinal = new Map(
       draft.items.map((item) => [item.ordinal, item]),
     );
-    const materialAndColorAvailable = await this.materialsAvailable(
+    const transient = await this.pricingItemsFromDraft(
       transaction,
-      order.items,
+      orderId,
+      draft.items,
+      null,
     );
-    const withinBuildLimits = await this.geometriesFitActiveMachines(
-      transaction,
-      order.items,
-    );
+    if (!transient) return;
     const bindingId = deterministicUuid(
       `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}`,
     );
+    const materialAndColorAvailable = await this.materialsAvailable(
+      transaction,
+      draft.items,
+    );
+    const withinBuildLimits = await this.geometriesFitActiveMachines(
+      transaction,
+      transient.items.map((item) => ({
+        material: item.material,
+        modelGeometry: item,
+      })),
+    );
+    const gateResult = await prepareAutomaticQuote({
+      priceList,
+      items: transient.items,
+      expressRequested: draft.expressRequested,
+      materialAndColorAvailable,
+      withinBuildLimits,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+      deliveryDestination: destination,
+      shipmentPlanIdForOrdinal: (ordinal) =>
+        deterministicUuid(`automatic-shipment-plan:${bindingId}:${ordinal}`),
+    });
+    if (gateResult.prepared.kind !== "binding_quote") return;
+
+    await this.ensureOrderItems(transaction, orderId);
+    const topology = await this.ensureQuoteTopology(transaction, orderId);
+    const order = await transaction.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: {
+        items: {
+          include: {
+            modelGeometry: true,
+            primaryReferenceSliceResult: true,
+            tailReferenceSliceResult: true,
+            fulfilmentSlots: { orderBy: { quantityOrdinal: "asc" } },
+          },
+          orderBy: { ordinal: "asc" },
+        },
+      },
+    });
     const prepared = await prepareAutomaticQuote({
       priceList,
       items: order.items.map((item) => {
@@ -1019,7 +1045,11 @@ export class AutomaticQuotesService {
       shipmentPlanIdForOrdinal: (ordinal) =>
         deterministicUuid(`automatic-shipment-plan:${bindingId}:${ordinal}`),
     });
-    if (prepared.prepared.kind !== "binding_quote") return;
+    if (prepared.prepared.kind !== "binding_quote") {
+      throw new ConflictException(
+        "Automatic quote gates changed while creating final topology",
+      );
+    }
     await this.persistBinding(transaction, {
       orderId,
       orderPhaseId: topology.phaseId,
@@ -1115,6 +1145,7 @@ export class AutomaticQuotesService {
       );
       await transaction.orderItem.create({
         data: {
+          id: deterministicUuid(`automatic-order-item:${item.id}`),
           orderId,
           ordinal: item.ordinal,
           sourceModelFileId: item.sourceModelFileId,
@@ -1286,6 +1317,13 @@ export class AutomaticQuotesService {
         createdAt: observedAt,
       },
     });
+    const fulfilmentSlots = await transaction.fulfilmentSlot.findMany({
+      where: { orderId: input.orderId },
+      select: { id: true, packingUnitKey: true },
+    });
+    const slotIdByPackingUnitKey = new Map(
+      fulfilmentSlots.map((slot) => [slot.packingUnitKey, slot.id]),
+    );
     const shipmentAmountById = new Map(
       input.prepared.price.components
         .filter((component) => component.kind === "SHIPMENT")
@@ -1329,7 +1367,13 @@ export class AutomaticQuotesService {
       const id = input.prepared.price.shipmentPlanIds[index];
       if (!id) throw new Error("Shipment plan identity is unavailable");
       for (const placement of parcel.placements) {
-        shipmentPlanIdBySlotId.set(placement.packingUnitKey, id);
+        const fulfilmentSlotId = slotIdByPackingUnitKey.get(
+          placement.packingUnitKey,
+        );
+        if (!fulfilmentSlotId) {
+          throw new Error("Shipment packing unit has no fulfilment slot");
+        }
+        shipmentPlanIdBySlotId.set(fulfilmentSlotId, id);
       }
     }
     await transaction.shipmentPlanFulfilmentSlot.createMany({
@@ -1374,20 +1418,41 @@ export class AutomaticQuotesService {
           amountMinor: component.amount.minorUnits,
           allocation: jsonSafe({
             calculationComponentId: component.componentId,
-            allocations: component.allocations.map((allocation) => ({
-              fulfilmentSlotId: allocation.targetId,
-              amountMinor: allocation.amount.minorUnits.toString(),
-            })),
+            allocations: component.allocations.map((allocation) => {
+              const fulfilmentSlotId = slotIdByPackingUnitKey.get(
+                allocation.targetId,
+              );
+              if (!fulfilmentSlotId) {
+                throw new Error(
+                  "Price allocation packing unit has no fulfilment slot",
+                );
+              }
+              return {
+                packingUnitKey: allocation.targetId,
+                fulfilmentSlotId,
+                amountMinor: allocation.amount.minorUnits.toString(),
+              };
+            }),
           }),
           createdAt: observedAt,
         },
       });
       await transaction.priceComponentFulfilmentAllocation.createMany({
-        data: component.allocations.map((allocation) => ({
-          priceSnapshotComponentId: componentId,
-          fulfilmentSlotId: allocation.targetId,
-          amountMinor: allocation.amount.minorUnits,
-        })),
+        data: component.allocations.map((allocation) => {
+          const fulfilmentSlotId = slotIdByPackingUnitKey.get(
+            allocation.targetId,
+          );
+          if (!fulfilmentSlotId) {
+            throw new Error(
+              "Price allocation packing unit has no fulfilment slot",
+            );
+          }
+          return {
+            priceSnapshotComponentId: componentId,
+            fulfilmentSlotId,
+            amountMinor: allocation.amount.minorUnits,
+          };
+        }),
       });
     }
     const fullCapture = input.prepared.price.captures.find(
@@ -1457,10 +1522,55 @@ export class AutomaticQuotesService {
     });
     for (const { nodeId } of candidates) {
       try {
+        const observedAt = new Date();
+        const latestPlan = await this.prisma.phaseResourcePlan.findFirst({
+          where: {
+            nodeId,
+            orderPhaseId: phase.id,
+            jobs: {
+              some: {
+                candidateResourceEstimate: {
+                  shipmentPlan: { orderPriceBindingId: bindingId },
+                },
+              },
+            },
+          },
+          include: { reservationSets: true },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        });
+        const liveReservation = latestPlan?.reservationSets.find(
+          (reservation) =>
+            reservation.status === "RESERVED" &&
+            reservation.expiresAt > observedAt &&
+            latestPlan.expiresAt > observedAt,
+        );
+        if (latestPlan && liveReservation) {
+          await this.finalizeAutomaticQuote({
+            orderId,
+            bindingId,
+            phaseResourcePlanId: latestPlan.id,
+            phaseReservationSetId: liveReservation.id,
+          });
+          return;
+        }
+        const needsSuccessor = Boolean(
+          latestPlan &&
+          (latestPlan.expiresAt <= observedAt ||
+            latestPlan.reservationSets.length > 0),
+        );
+        const planKey =
+          latestPlan && !needsSuccessor
+            ? latestPlan.planKey
+            : `automatic:${fingerprintOf({
+                orderId,
+                bindingId,
+                nodeId,
+                ...(latestPlan ? { retryOf: latestPlan.id } : {}),
+              })}`;
         const plan = await this.eligibilityPlans.createCompletePlan({
           nodeId,
           orderPhaseId: phase.id,
-          planKey: `automatic:${fingerprintOf({ orderId, bindingId, nodeId })}`,
+          planKey,
         });
         const reservation = await this.resourceReservations.reserve({
           nodeId,
@@ -1819,6 +1929,108 @@ export class AutomaticQuotesService {
     return slices;
   }
 
+  private async pricingItemsFromDraft(
+    transaction: Transaction | PrismaService,
+    orderId: string,
+    draftItems: ReadonlyArray<{
+      id: string;
+      ordinal: number;
+      sourceModelFileId: string;
+      bodyIds: string[];
+      selectionSha256: string;
+      targetModelGeometryId: string;
+      printConfigRevisionId: string;
+      referenceProfileId: string;
+      material: Material;
+      infillPreset: string;
+      quantity: number;
+      referencePartsPerPlate: number;
+    }>,
+    roughParameters: AutomaticQuotePricingParameters | null,
+  ): Promise<{
+    items: AutomaticQuotePricingItem[];
+    allReferenceSliced: boolean;
+  } | null> {
+    const items: AutomaticQuotePricingItem[] = [];
+    let allReferenceSliced = true;
+    for (const item of draftItems) {
+      const geometry = await transaction.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      const occupancies = referenceOccupancies(
+        item.quantity,
+        item.referencePartsPerPlate,
+      );
+      const slices = geometry
+        ? await this.referenceSlices(
+            transaction,
+            item,
+            geometry,
+            occupancies,
+          ).catch(() => null)
+        : null;
+      let bounds: {
+        volumeCubicMicrometers: bigint;
+        boundsXMicrometers: bigint;
+        boundsYMicrometers: bigint;
+        boundsZMicrometers: bigint;
+      } | null = geometry;
+      if (!bounds && roughParameters) {
+        const attachment = await transaction.automaticQuoteModelFile.findUnique(
+          {
+            where: {
+              orderId_modelFileId: {
+                orderId,
+                modelFileId: item.sourceModelFileId,
+              },
+            },
+          },
+        );
+        const inspection = attachment
+          ? await terminalResultForJob(
+              transaction,
+              attachment.inspectionJobId,
+              "model_inspection",
+            )
+          : null;
+        bounds = inspectionMeshEstimate(inspection, item.bodyIds);
+      }
+      if (!bounds) return null;
+
+      let primary: AutomaticQuotePricingItem["primary"] | null =
+        slices?.[0] ?? null;
+      let tail: AutomaticQuotePricingItem["tail"] = slices?.[1] ?? null;
+      if (!primary) {
+        if (!roughParameters) return null;
+        const estimated = roughSliceMetrics(
+          item,
+          bounds.volumeCubicMicrometers,
+          roughParameters,
+        );
+        primary = estimated.primary;
+        tail = estimated.tail;
+        allReferenceSliced = false;
+      }
+      const itemId = deterministicUuid(`automatic-order-item:${item.id}`);
+      items.push({
+        id: itemId,
+        referenceProfileId: item.referenceProfileId,
+        material: item.material,
+        quantity: item.quantity,
+        referencePartsPerPlate: occupancies[0]!,
+        primary,
+        tail,
+        boundsXMicrometers: bounds.boundsXMicrometers,
+        boundsYMicrometers: bounds.boundsYMicrometers,
+        boundsZMicrometers: bounds.boundsZMicrometers,
+        fulfilmentSlots: Array.from({ length: item.quantity }, (_, index) => ({
+          packingUnitKey: `${itemId}:single:${index + 1}`,
+        })),
+      });
+    }
+    return { items, allReferenceSliced };
+  }
+
   private async roughQuote(orderId: string): Promise<{
     quote: AutomaticQuoteSessionDto["roughEstimate"];
     express: { eligible: boolean; reasons: readonly string[] };
@@ -1842,48 +2054,24 @@ export class AutomaticQuotesService {
       }),
     ]);
     if (!draft || !priceList || draft.items.length === 0) return null;
-    const pricingItems = [];
-    const itemOrdinals = new Map<string, number>();
-    for (const item of draft.items) {
-      const geometry = await this.prisma.modelGeometry.findUnique({
-        where: { id: item.targetModelGeometryId },
-      });
-      if (!geometry) return null;
-      const occupancies = referenceOccupancies(
-        item.quantity,
-        item.referencePartsPerPlate,
-      );
-      const slices = await this.referenceSlices(
-        this.prisma,
-        item,
-        geometry,
-        occupancies,
-      ).catch(() => null);
-      if (!slices?.[0]) return null;
-      const itemId = deterministicUuid(`automatic-rough-item:${item.id}`);
-      itemOrdinals.set(itemId, item.ordinal);
-      pricingItems.push({
-        id: itemId,
-        referenceProfileId: item.referenceProfileId,
-        material: item.material,
-        quantity: item.quantity,
-        referencePartsPerPlate: occupancies[0]!,
-        primary: slices[0],
-        tail: slices[1] ?? null,
-        boundsXMicrometers: geometry.boundsXMicrometers,
-        boundsYMicrometers: geometry.boundsYMicrometers,
-        boundsZMicrometers: geometry.boundsZMicrometers,
-        fulfilmentSlots: Array.from({ length: item.quantity }, (_, index) => ({
-          id: deterministicUuid(`automatic-rough-slot:${item.id}:${index + 1}`),
-          packingUnitKey: `${itemId}:single:${index + 1}`,
-        })),
-      });
-    }
+    const pricing = await this.pricingItemsFromDraft(
+      this.prisma,
+      orderId,
+      draft.items,
+      parseAutomaticQuotePricingParameters(priceList.parameters),
+    );
+    if (!pricing) return null;
+    const itemOrdinals = new Map(
+      pricing.items.map((item, index) => [
+        item.id,
+        draft.items[index]!.ordinal,
+      ]),
+    );
     const [materialAndColorAvailable, withinBuildLimits] = await Promise.all([
       this.materialsAvailable(this.prisma, draft.items),
       this.geometriesFitActiveMachines(
         this.prisma,
-        pricingItems.map((item) => ({
+        pricing.items.map((item) => ({
           material: item.material,
           modelGeometry: item,
         })),
@@ -1892,7 +2080,7 @@ export class AutomaticQuotesService {
     const result = (
       await prepareAutomaticQuote({
         priceList,
-        items: pricingItems,
+        items: pricing.items,
         expressRequested: draft.expressRequested,
         materialAndColorAvailable,
         withinBuildLimits,
@@ -1912,7 +2100,7 @@ export class AutomaticQuotesService {
     return {
       quote: provisionalPriceDto(result.price, itemOrdinals),
       express: result.expressEligibility,
-      reasons: result.reasons,
+      reasons: pricing.allReferenceSliced ? result.reasons : [],
     };
   }
 
@@ -2079,7 +2267,7 @@ export class AutomaticQuotesService {
           finding.severity === "WARNING" && finding.decision !== "ACKNOWLEDGED",
       ),
     );
-    const rough = readyItems ? await this.roughQuote(order.id) : null;
+    const rough = itemDtos.length > 0 ? await this.roughQuote(order.id) : null;
     const permanentRoughReasons = new Set([
       "UNSUPPORTED_FORMAT",
       "BLOCKING_PREFLIGHT_FINDING",
@@ -2319,6 +2507,150 @@ function successfulInspectionBodies(result: unknown): string[] {
       return typeof bodyRecord?.bodyId === "string" ? [bodyRecord.bodyId] : [];
     })
     .sort();
+}
+
+function inspectionMeshEstimate(
+  result: unknown,
+  selectedBodyIds: readonly string[],
+): {
+  volumeCubicMicrometers: bigint;
+  boundsXMicrometers: bigint;
+  boundsYMicrometers: bigint;
+  boundsZMicrometers: bigint;
+} | null {
+  const outcome = asRecord(asRecord(result)?.outcome);
+  if (outcome?.status !== "succeeded" || !Array.isArray(outcome.bodies)) {
+    return null;
+  }
+  const selectedIds = new Set(selectedBodyIds);
+  const bodies = outcome.bodies.flatMap((value) => {
+    const body = asRecord(value);
+    if (typeof body?.bodyId !== "string" || !selectedIds.has(body.bodyId)) {
+      return [];
+    }
+    const boundingBox = positiveBoundingBox(body.boundingBox);
+    const volume = positiveBigInt(body.volumeCubicMicrometers);
+    return boundingBox && volume
+      ? [{ bodyId: body.bodyId, boundingBox, volume }]
+      : [];
+  });
+  if (
+    bodies.length !== selectedIds.size ||
+    bodies.some(({ bodyId }) => !selectedIds.has(bodyId))
+  ) {
+    return null;
+  }
+  return {
+    volumeCubicMicrometers: bodies.reduce(
+      (total, body) => total + body.volume,
+      0n,
+    ),
+    boundsXMicrometers: bodies.reduce(
+      (maximum, body) =>
+        body.boundingBox.xMicrometers > maximum
+          ? body.boundingBox.xMicrometers
+          : maximum,
+      0n,
+    ),
+    boundsYMicrometers: bodies.reduce(
+      (maximum, body) =>
+        body.boundingBox.yMicrometers > maximum
+          ? body.boundingBox.yMicrometers
+          : maximum,
+      0n,
+    ),
+    boundsZMicrometers: bodies.reduce(
+      (maximum, body) =>
+        body.boundingBox.zMicrometers > maximum
+          ? body.boundingBox.zMicrometers
+          : maximum,
+      0n,
+    ),
+  };
+}
+
+function positiveBoundingBox(value: unknown): {
+  xMicrometers: bigint;
+  yMicrometers: bigint;
+  zMicrometers: bigint;
+} | null {
+  const box = asRecord(value);
+  const xMicrometers = positiveBigInt(box?.xMicrometers);
+  const yMicrometers = positiveBigInt(box?.yMicrometers);
+  const zMicrometers = positiveBigInt(box?.zMicrometers);
+  return xMicrometers && yMicrometers && zMicrometers
+    ? { xMicrometers, yMicrometers, zMicrometers }
+    : null;
+}
+
+function positiveBigInt(value: unknown): bigint | null {
+  if (
+    (typeof value !== "string" && typeof value !== "bigint") ||
+    !/^\d+$/.test(String(value))
+  ) {
+    return null;
+  }
+  const parsed = BigInt(value);
+  return parsed > 0n ? parsed : null;
+}
+
+function roughSliceMetrics(
+  item: {
+    material: Material;
+    infillPreset: string;
+    quantity: number;
+    referencePartsPerPlate: number;
+  },
+  volumeCubicMicrometers: bigint,
+  parameters: AutomaticQuotePricingParameters,
+): {
+  primary: {
+    estimatedPrintSeconds: bigint;
+    estimatedMaterialMilligrams: bigint;
+  };
+  tail: {
+    estimatedPrintSeconds: bigint;
+    estimatedMaterialMilligrams: bigint;
+  } | null;
+} {
+  if (
+    !(item.infillPreset in parameters.roughMaterialVolumeRatioByInfillPreset)
+  ) {
+    throw new ConflictException("Automatic rough-estimate infill is invalid");
+  }
+  const infillPreset = item.infillPreset as
+    "DECORATIVE" | "STANDARD" | "STRONG";
+  const density =
+    parameters.roughMaterialDensityMilligramsPerCubicMillimeter[item.material];
+  const volumeRatio =
+    parameters.roughMaterialVolumeRatioByInfillPreset[infillPreset];
+  const materialPerUnit = ceilDivide(
+    volumeCubicMicrometers * density.numerator * volumeRatio.numerator,
+    1_000_000_000n * density.denominator * volumeRatio.denominator,
+  );
+  const metricsForQuantity = (quantity: number) => {
+    const material = materialPerUnit * BigInt(quantity);
+    return {
+      estimatedMaterialMilligrams: material,
+      estimatedPrintSeconds: ceilDivide(
+        material * parameters.roughExtrusionMilligramsPerSecond.denominator,
+        parameters.roughExtrusionMilligramsPerSecond.numerator,
+      ),
+    };
+  };
+  const primaryQuantity = Math.min(item.quantity, item.referencePartsPerPlate);
+  const remainder = item.quantity % item.referencePartsPerPlate;
+  return {
+    primary: metricsForQuantity(primaryQuantity),
+    tail:
+      item.quantity > item.referencePartsPerPlate && remainder > 0
+        ? metricsForQuantity(remainder)
+        : null,
+  };
+}
+
+function ceilDivide(value: bigint, divisor: bigint): bigint {
+  return (value + divisor - 1n) / divisor;
 }
 
 function terminalStatus(

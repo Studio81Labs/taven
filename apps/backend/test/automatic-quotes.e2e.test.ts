@@ -47,6 +47,15 @@ process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??=
 const databaseUrl = process.env.DATABASE_URL;
 const scope = `automatic-quotes-${randomUUID()}`;
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+const inspectedBody = (bodyId: string) => ({
+  bodyId,
+  boundingBox: {
+    xMicrometers: "20000",
+    yMicrometers: "20000",
+    zMicrometers: "20000",
+  },
+  volumeCubicMicrometers: "8000000000000",
+});
 
 describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
   let app: INestApplication;
@@ -232,9 +241,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
             outcome: {
               status: "succeeded",
               bodies: [
-                { bodyId: "body-a" },
-                { bodyId: "body-b" },
-                { bodyId: "body-c" },
+                inspectedBody("body-a"),
+                inspectedBody("body-b"),
+                inspectedBody("body-c"),
               ],
             },
           },
@@ -331,9 +340,14 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       });
     };
 
-    expect(
-      (await configure(0, "body-a", 1, "configure-stale")).response.status,
-    ).toBe(200);
+    const immediateRough = await configure(0, "body-a", 1, "configure-stale");
+    expect(immediateRough.response.status).toBe(200);
+    expect(immediateRough.body.phase).toBe("REFERENCE_SLICES_PENDING");
+    expect(immediateRough.body.roughEstimate).toMatchObject({
+      kind: "ROUGH_ESTIMATE",
+      currency: "CZK",
+    });
+    expect(immediateRough.body.bindingQuote).toBeNull();
     const staleDraft = await draftItem(0);
     for (const command of ["stale-dispatch", "stale-dispatch-replay"]) {
       expect(
@@ -466,6 +480,13 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
       0,
     );
+    expect(await prisma.orderItem.count({ where: { orderId } })).toBe(0);
+    expect(await prisma.orderPhase.count({ where: { orderId } })).toBe(0);
+    expect(await prisma.fulfilmentSlot.count({ where: { orderId } })).toBe(0);
+    expect(
+      (await configure(0, "body-b", 1, "configure-after-incompatible")).response
+        .status,
+    ).toBe(200);
 
     const destination = await api(
       `automatic-quote-sessions/${sessionId}/delivery-destination`,
@@ -494,6 +515,30 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         where: { orderId },
       },
     );
+    const persistedSlots = await prisma.fulfilmentSlot.findMany({
+      where: { orderId },
+      orderBy: { packingUnitKey: "asc" },
+    });
+    const persistedPlans = await prisma.shipmentPlan.findMany({
+      where: { orderPriceBindingId: firstBinding.orderPriceBindingId },
+      include: { fulfilmentSlotAllocations: true },
+      orderBy: { ordinal: "asc" },
+    });
+    const persistedPackingUnitKeys = persistedPlans.flatMap((plan) => {
+      const snapshot = plan.allocationSnapshot as {
+        packingUnitKeys: string[];
+      };
+      return snapshot.packingUnitKeys;
+    });
+    expect(persistedPackingUnitKeys.sort()).toEqual(
+      persistedSlots.map(({ packingUnitKey }) => packingUnitKey).sort(),
+    );
+    expect(persistedPackingUnitKeys).not.toEqual(
+      expect.arrayContaining(persistedSlots.map(({ id }) => id)),
+    );
+    expect(
+      persistedPlans.flatMap((plan) => plan.fulfilmentSlotAllocations).length,
+    ).toBe(persistedSlots.length);
     const allCandidateDispatches = await prisma.outboxMessage.findMany({
       where: {
         aggregateType: "CandidateEstimateDispatch",
@@ -658,13 +703,83 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         },
       }),
     ).toBe(initialCandidateJobIds.length);
-    const firstReservation = await prisma.phaseReservationSet.findFirstOrThrow({
+    const expiredReservation =
+      await prisma.phaseReservationSet.findFirstOrThrow({
+        where: {
+          phaseResourcePlan: {
+            eligibilitySnapshot: { orderPhase: { orderId } },
+          },
+        },
+      });
+    await prisma.$transaction(async (transaction) => {
+      await transaction.inventoryReservation.updateMany({
+        where: {
+          productionReservation: {
+            phaseReservationSetId: expiredReservation.id,
+          },
+          status: "RESERVED",
+        },
+        data: { status: "EXPIRED" },
+      });
+      await transaction.capacityReservation.updateMany({
+        where: {
+          productionReservation: {
+            phaseReservationSetId: expiredReservation.id,
+          },
+          status: "RESERVED",
+        },
+        data: { status: "EXPIRED" },
+      });
+      await transaction.productionReservation.updateMany({
+        where: {
+          phaseReservationSetId: expiredReservation.id,
+          status: "RESERVED",
+        },
+        data: { status: "EXPIRED" },
+      });
+      await transaction.phaseReservationSet.update({
+        where: { id: expiredReservation.id },
+        data: { status: "EXPIRED" },
+      });
+    });
+    const recovered = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("recover-expired")),
+      },
+    );
+    expect(recovered.response.status).toBe(200);
+    expect(recovered.body.checkoutReady).toBe(true);
+    const recoveredReplay = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("recover-expired-replay")),
+      },
+    );
+    expect(recoveredReplay.response.status).toBe(200);
+    expect(recoveredReplay.body.checkoutReady).toBe(true);
+    const reservationSets = await prisma.phaseReservationSet.findMany({
       where: {
         phaseResourcePlan: {
           eligibilitySnapshot: { orderPhase: { orderId } },
         },
       },
     });
+    expect(reservationSets).toHaveLength(2);
+    expect(
+      await prisma.phaseResourcePlan.count({
+        where: { eligibilitySnapshot: { orderPhase: { orderId } } },
+      }),
+    ).toBe(2);
+    expect(
+      reservationSets.filter(({ status }) => status === "EXPIRED"),
+    ).toHaveLength(1);
+    const successorReservation = reservationSets.find(
+      ({ status }) => status === "RESERVED",
+    );
+    expect(successorReservation).toBeDefined();
 
     const changed = await api(
       `automatic-quote-sessions/${sessionId}/delivery-destination`,
@@ -683,9 +798,14 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(changed.body.bindingQuote).toBeNull();
     await expect(
       prisma.phaseReservationSet.findUniqueOrThrow({
-        where: { id: firstReservation.id },
+        where: { id: successorReservation!.id },
       }),
     ).resolves.toMatchObject({ status: "RELEASED" });
+    await expect(
+      prisma.phaseReservationSet.findUniqueOrThrow({
+        where: { id: expiredReservation.id },
+      }),
+    ).resolves.toMatchObject({ status: "EXPIRED" });
 
     const restaged = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,

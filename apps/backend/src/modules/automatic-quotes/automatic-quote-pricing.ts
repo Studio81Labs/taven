@@ -12,6 +12,13 @@ export type AutomaticQuotePricingParameters = Readonly<{
   reprintRate: RationalValue;
   marginRate: RationalValue;
   materialRateMinorPerMilligram: Readonly<Record<Material, RationalValue>>;
+  roughMaterialDensityMilligramsPerCubicMillimeter: Readonly<
+    Record<Material, RationalValue>
+  >;
+  roughMaterialVolumeRatioByInfillPreset: Readonly<
+    Record<"DECORATIVE" | "STANDARD" | "STRONG", RationalValue>
+  >;
+  roughExtrusionMilligramsPerSecond: RationalValue;
   handlingOrderFixedSeconds: bigint;
   handlingPlateSeconds: bigint;
   handlingPieceSeconds: bigint;
@@ -63,7 +70,7 @@ export type AutomaticQuotePricingItem = Readonly<{
   boundsXMicrometers: bigint;
   boundsYMicrometers: bigint;
   boundsZMicrometers: bigint;
-  fulfilmentSlots: readonly { id: string; packingUnitKey: string }[];
+  fulfilmentSlots: readonly { packingUnitKey: string }[];
 }>;
 
 type SliceMetrics = Readonly<{
@@ -170,7 +177,7 @@ export async function prepareAutomaticQuote(
         quantityEffect: metrics.quantityEffect,
         postprocessingSeconds: 0n,
         packingUnits: item.fulfilmentSlots.map((slot) => ({
-          id: slot.id,
+          id: slot.packingUnitKey,
           basis: perUnitBasis(item),
         })),
       };
@@ -249,7 +256,7 @@ export async function prepareAutomaticQuote(
   const plannerInput = {
     units: input.items.flatMap((item) =>
       item.fulfilmentSlots.map((slot) => ({
-        packingUnitKey: slot.id,
+        packingUnitKey: slot.packingUnitKey,
         box: {
           xMicrometers:
             item.boundsXMicrometers + parameters.packingPaddingMicrometers * 2n,
@@ -451,6 +458,18 @@ export function parseAutomaticQuotePricingParameters(
       PLA: rational(materialRates.PLA, "materialRate.PLA"),
       PETG: rational(materialRates.PETG, "materialRate.PETG"),
     },
+    roughMaterialDensityMilligramsPerCubicMillimeter: materialRationals(
+      automatic.roughMaterialDensityMilligramsPerCubicMillimeter,
+      "roughMaterialDensityMilligramsPerCubicMillimeter",
+    ),
+    roughMaterialVolumeRatioByInfillPreset: infillRationals(
+      automatic.roughMaterialVolumeRatioByInfillPreset,
+      "roughMaterialVolumeRatioByInfillPreset",
+    ),
+    roughExtrusionMilligramsPerSecond: rational(
+      automatic.roughExtrusionMilligramsPerSecond,
+      "roughExtrusionMilligramsPerSecond",
+    ),
     handlingOrderFixedSeconds: integer(
       automatic.handlingOrderFixedSeconds,
       "handlingOrderFixedSeconds",
@@ -547,6 +566,29 @@ function rational(value: unknown, name: string): RationalValue {
     denominator: positiveInteger(parsed.denominator, `${name}.denominator`),
   };
   return result;
+}
+
+function materialRationals(
+  value: unknown,
+  name: string,
+): Readonly<Record<Material, RationalValue>> {
+  const values = record(value, name);
+  return {
+    PLA: rational(values.PLA, `${name}.PLA`),
+    PETG: rational(values.PETG, `${name}.PETG`),
+  };
+}
+
+function infillRationals(
+  value: unknown,
+  name: string,
+): Readonly<Record<"DECORATIVE" | "STANDARD" | "STRONG", RationalValue>> {
+  const values = record(value, name);
+  return {
+    DECORATIVE: rational(values.DECORATIVE, `${name}.DECORATIVE`),
+    STANDARD: rational(values.STANDARD, `${name}.STANDARD`),
+    STRONG: rational(values.STRONG, `${name}.STRONG`),
+  };
 }
 
 function integer(value: unknown, name: string): bigint {
