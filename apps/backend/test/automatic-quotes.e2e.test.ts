@@ -871,6 +871,60 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     );
     expect(unavailableConfiguration.response.status).toBe(400);
 
+    await prisma.inventory.update({
+      where: { id: foundation.inventoryId },
+      data: { remainingMilligrams: 1n },
+    });
+    const insufficientInventory = await configure(
+      0,
+      "body-a",
+      1,
+      "configure-insufficient-inventory",
+    );
+    expect(insufficientInventory.response.status).toBe(400);
+    expect(insufficientInventory.body.message).toBe(
+      "Selected automatic quote configuration lacks sufficient inventory",
+    );
+    expect(
+      await prisma.automaticQuoteItemDraft.count({ where: { orderId } }),
+    ).toBe(0);
+    await prisma.inventory.update({
+      where: { id: foundation.inventoryId },
+      data: { remainingMilligrams: 3_000n },
+    });
+    expect(
+      (await configure(0, "body-a", 1, "configure-inventory-plan-first"))
+        .response.status,
+    ).toBe(200);
+    const oversubscribedInventoryPlan = await configure(
+      1,
+      "body-b",
+      1,
+      "configure-inventory-plan-second",
+    );
+    expect(oversubscribedInventoryPlan.response.status).toBe(400);
+    expect(
+      await prisma.automaticQuoteItemDraft.count({ where: { orderId } }),
+    ).toBe(1);
+    expect(
+      (
+        await api(
+          `automatic-quote-sessions/${sessionId}/items/0/configuration`,
+          {
+            method: "DELETE",
+            headers: capabilityHeaders(
+              sessionToken,
+              key("remove-inventory-plan"),
+            ),
+          },
+        )
+      ).response.status,
+    ).toBe(200);
+    await prisma.inventory.update({
+      where: { id: foundation.inventoryId },
+      data: { remainingMilligrams: 1_000_000n },
+    });
+
     const removableConfiguration = await configure(
       9,
       "body-c",

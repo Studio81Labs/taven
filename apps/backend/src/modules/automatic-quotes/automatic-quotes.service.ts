@@ -460,7 +460,7 @@ export class AutomaticQuotesService {
           );
         }
         const selectedOption = (
-          await this.configurationOptions(transaction)
+          await this.configurationCapabilities(transaction)
         ).find(
           (option) =>
             option.printConfigRevisionId ===
@@ -490,6 +490,60 @@ export class AutomaticQuotesService {
         const current = await transaction.automaticQuoteItemDraft.findUnique({
           where: { orderId_ordinal: { orderId: origin.orderId, ordinal } },
         });
+        const priceList = await transaction.priceList.findUnique({
+          where: {
+            currency_revision: {
+              currency: "CZK",
+              revision: AUTOMATIC_PRICE_LIST_REVISION,
+            },
+          },
+        });
+        if (!priceList) {
+          throw new ConflictException("Automatic quote pricing is unavailable");
+        }
+        const proposedItem = {
+          id:
+            current?.id ??
+            deterministicUuid(`automatic-draft:${origin.orderId}:${ordinal}`),
+          ordinal,
+          sourceModelFileId: configuration.modelFileId,
+          bodyIds: configuration.bodyIds,
+          selectionSha256,
+          targetModelGeometryId,
+          printConfigRevisionId: configuration.printConfigRevisionId,
+          referenceProfileId: selectedOption.referenceProfileId,
+          material: configuration.material,
+          color: configuration.color,
+          infillPreset: configuration.infillPreset,
+          quantity: configuration.quantity,
+          referencePartsPerPlate: null,
+          referenceProbeLowerBound: 0,
+          referenceProbeUpperBound: configuration.quantity + 1,
+        } satisfies AutomaticQuoteCandidateDraftItem;
+        const proposedItems: AutomaticQuoteCandidateDraftItem[] = [
+          ...(await transaction.automaticQuoteItemDraft.findMany({
+            where: { orderId: origin.orderId, ordinal: { not: ordinal } },
+          })),
+          proposedItem,
+        ].sort((left, right) => left.ordinal - right.ordinal);
+        const proposedPricing = await this.pricingItemsFromDraft(
+          transaction,
+          origin.orderId,
+          proposedItems,
+          parseAutomaticQuotePricingParameters(priceList.parameters),
+        );
+        if (
+          !proposedPricing ||
+          !(await this.draftInventoryAvailable(
+            transaction,
+            proposedItems,
+            proposedPricing.items,
+          ))
+        ) {
+          throw new BadRequestException(
+            "Selected automatic quote configuration lacks sufficient inventory",
+          );
+        }
         if (current?.configurationFingerprint === configurationFingerprint) {
           return;
         }
@@ -2034,6 +2088,63 @@ export class AutomaticQuotesService {
       });
     }
     return demands;
+  }
+
+  private async draftInventoryAvailable(
+    transaction: Transaction | PrismaService,
+    items: readonly AutomaticQuoteCandidateDraftItem[],
+    pricingItems: readonly AutomaticQuotePricingItem[],
+  ): Promise<boolean> {
+    if (items.length !== pricingItems.length || items.length === 0) {
+      return false;
+    }
+    const demands = [];
+    for (const [index, item] of items.entries()) {
+      const pricingItem = pricingItems[index];
+      if (!pricingItem) return false;
+      const rows = await transaction.$queryRaw<
+        Array<{ inventoryId: string; availableMilligrams: bigint }>
+      >`
+        SELECT DISTINCT
+          inventory.id AS "inventoryId",
+          inventory.remaining_milligrams - inventory.reserved_milligrams
+            AS "availableMilligrams"
+        FROM machine_profiles profile
+        JOIN print_config_revisions config
+          ON config.id = ${item.printConfigRevisionId}::uuid
+         AND config.quality = profile.quality
+        JOIN machines machine
+          ON machine.machine_capability_id = profile.machine_capability_id
+         AND machine.status = 'ACTIVE'
+         AND machine.installed_nozzle_micrometers =
+             profile.nozzle_diameter_micrometers
+        JOIN nodes node
+          ON node.id = machine.node_id
+         AND node.active
+        JOIN machine_calibrations calibration
+          ON calibration.node_id = machine.node_id
+         AND calibration.machine_id = machine.id
+         AND calibration.state = 'ACTIVE'
+        JOIN inventories inventory
+          ON inventory.node_id = machine.node_id
+         AND inventory.machine_id = machine.id
+         AND inventory.status = 'AVAILABLE'
+         AND inventory.material = ${item.material}::material
+         AND inventory.color IS NOT DISTINCT FROM ${item.color}::text
+        WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
+          AND profile.material = ${item.material}::material
+          AND profile.state = 'ACTIVE'
+          AND profile.production_artifact_format <> 'bgcode'
+      `;
+      demands.push({
+        requiredMaterialMilligrams: totalEstimatedMaterial(pricingItem),
+        options: rows.map((row) => ({
+          inventoryId: row.inventoryId,
+          available: row.availableMilligrams,
+        })),
+      });
+    }
+    return hasUsableInventoryAssignment(demands);
   }
 
   private async candidateResourcesAvailable(
@@ -3816,7 +3927,7 @@ export class AutomaticQuotesService {
       }),
     );
     const [configurationCapabilities, deliveryOptions] = await Promise.all([
-      this.configurationOptions(),
+      this.configurationCapabilities(),
       this.deliveryOptions(),
     ]);
     const configurationOptions = configurationCapabilities.map(
@@ -4082,7 +4193,10 @@ export class AutomaticQuotesService {
     };
   }
 
-  private async configurationOptions(
+  // This catalog seeds the selector before the customer has supplied bodies and
+  // quantity. configureItem applies the authoritative whole-draft inventory
+  // gate before persisting the selection or allowing slicing to be enqueued.
+  private async configurationCapabilities(
     client: Transaction | PrismaService = this.prisma,
   ) {
     const rows = await client.$queryRaw<
