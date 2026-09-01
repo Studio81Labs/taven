@@ -60,6 +60,42 @@ const cubeMesh = `
     <triangle v1="1" v2="2" v3="3"/><triangle v1="2" v2="0" v3="3"/>
   </triangles>`;
 
+function tetrahedronStl(offsetX: number): Uint8Array {
+  const x = (delta: number) => String(offsetX + delta);
+  return new TextEncoder().encode(`
+    solid tetrahedron
+      facet normal 0 0 -1
+        outer loop
+          vertex ${x(0)} 0 0
+          vertex ${x(0)} 1 0
+          vertex ${x(1)} 0 0
+        endloop
+      endfacet
+      facet normal 0 -1 0
+        outer loop
+          vertex ${x(0)} 0 0
+          vertex ${x(1)} 0 0
+          vertex ${x(0)} 0 1
+        endloop
+      endfacet
+      facet normal 1 1 1
+        outer loop
+          vertex ${x(1)} 0 0
+          vertex ${x(0)} 1 0
+          vertex ${x(0)} 0 1
+        endloop
+      endfacet
+      facet normal -1 0 0
+        outer loop
+          vertex ${x(0)} 1 0
+          vertex ${x(0)} 0 0
+          vertex ${x(0)} 0 1
+        endloop
+      endfacet
+    endsolid tetrahedron
+  `);
+}
+
 describe("safe model inspection", () => {
   it("parses vertices only from complete ASCII STL facet blocks", () => {
     const source = new TextEncoder().encode(`
@@ -139,6 +175,32 @@ describe("safe model inspection", () => {
         code: "RESOURCE_LIMIT_EXCEEDED",
       });
     }
+  });
+
+  it("normalizes large source offsets before float32 canonical serialization", () => {
+    const source = tetrahedronStl(999_999_999);
+    const translated = tetrahedronStl(999_998_999);
+
+    const canonical = canonicalizeModel(
+      "stl",
+      source,
+      ["body-0001"],
+      1_000_000,
+    );
+    const translatedCanonical = canonicalizeModel(
+      "stl",
+      translated,
+      ["body-0001"],
+      1_000_000,
+    );
+
+    expect(inspectModel("stl", canonical.bytes).boundingBox).toEqual({
+      xMicrometers: "1000",
+      yMicrometers: "1000",
+      zMicrometers: "1000",
+    });
+    expect(translatedCanonical.sha256).toBe(canonical.sha256);
+    expect(translatedCanonical.bytes).toEqual(canonical.bytes);
   });
 
   it.each([

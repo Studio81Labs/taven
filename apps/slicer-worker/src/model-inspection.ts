@@ -1509,6 +1509,27 @@ function scaledTriangle(triangle: Triangle, factor: number): Triangle {
   ) as unknown as Triangle;
 }
 
+function translatedTriangle(triangle: Triangle, origin: Point): Triangle {
+  return triangle.map(
+    (point) =>
+      point.map(
+        (coordinate, axis) => coordinate - origin[axis]!,
+      ) as unknown as Point,
+  ) as unknown as Triangle;
+}
+
+function selectionOrigin(triangles: readonly Triangle[]): Point {
+  const minimum: [number, number, number] = [Infinity, Infinity, Infinity];
+  for (const triangle of triangles) {
+    for (const point of triangle) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        minimum[axis] = Math.min(minimum[axis]!, point[axis]!);
+      }
+    }
+  }
+  return minimum;
+}
+
 function canonicalBinaryStl(triangles: readonly Triangle[]): Uint8Array {
   const bytes = Buffer.alloc(84 + triangles.length * 50);
   bytes.write("Taven canonical STL v1", 0, "ascii");
@@ -1567,10 +1588,16 @@ export function canonicalizeModel(
     );
   }
   const factor = scaleFactorPpm / 1_000_000;
-  const scaledBodies = selected.map((item) =>
+  const scaledTriangles = selected.map((item) =>
+    item!.triangles.map((triangle) => scaledTriangle(triangle, factor)),
+  );
+  const origin = selectionOrigin(scaledTriangles.flat());
+  const scaledBodies = selected.map((item, index) =>
     body(
       item!.bodyId,
-      item!.triangles.map((triangle) => scaledTriangle(triangle, factor)),
+      scaledTriangles[index]!.map((triangle) =>
+        translatedTriangle(triangle, origin),
+      ),
       {
         paint: item!.hasPaintAssignments,
         materials: item!.materialAssignmentIds,
@@ -1580,13 +1607,21 @@ export function canonicalizeModel(
   );
   const triangles = scaledBodies.flatMap((item) => item.triangles);
   const canonical = canonicalBinaryStl(triangles);
+  const serializedInspection = inspectModel("stl", canonical);
+  const intendedBounds = boundingBox(triangles);
+  if (
+    JSON.stringify(serializedInspection.boundingBox) !==
+    JSON.stringify(intendedBounds)
+  ) {
+    invalid("Canonical STL serialization loses model precision");
+  }
   return {
     bytes: canonical,
     sha256: sha256(canonical),
     inspection: {
       unitHint: "millimeter",
       bodies: scaledBodies.map(({ triangles: _triangles, ...value }) => value),
-      boundingBox: boundingBox(triangles),
+      boundingBox: intendedBounds,
       objectCount: scaledBodies.length,
       hasPaintAssignments: scaledBodies.some(
         (item) => item.hasPaintAssignments,
