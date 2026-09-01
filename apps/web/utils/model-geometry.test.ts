@@ -5,6 +5,9 @@ import { parseModelGeometry } from "./model-geometry";
 type Point = readonly [number, number, number];
 type Triangle = readonly [Point, Point, Point];
 
+const materialNamespace =
+  "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
+
 const tetrahedron: Triangle[] = [
   [
     [0, 0, 0],
@@ -56,6 +59,23 @@ function translatedReversedTetrahedron(offsetX: number): Triangle[] {
     [b[0] + offsetX, b[1], b[2]],
     [a[0] + offsetX, a[1], a[2]],
   ]);
+}
+
+function scaledTetrahedron(
+  scale: number,
+  offset: Point,
+  reversed = false,
+): Triangle[] {
+  return tetrahedron.map((triangle) => {
+    const transformed = triangle.map((point): Point => [
+      point[0] * scale + offset[0],
+      point[1] * scale + offset[1],
+      point[2] * scale + offset[2],
+    ]);
+    return reversed
+      ? [transformed[2]!, transformed[1]!, transformed[0]!]
+      : [transformed[0]!, transformed[1]!, transformed[2]!];
+  });
 }
 
 function threeMf(model: string): ArrayBuffer {
@@ -127,6 +147,19 @@ endsolid part`).buffer;
     expect(geometry.triangleCount).toBe(8);
     expect(geometry.volumeMm3).toBeCloseTo(2 / 6, 6);
   });
+
+  it("preserves signed subtraction for a nested cavity shell", async () => {
+    const geometry = await parseModelGeometry(
+      "STL",
+      binaryStl([
+        ...scaledTetrahedron(4, [0, 0, 0]),
+        ...scaledTetrahedron(1, [0.5, 0.5, 0.5], true),
+      ]),
+    );
+
+    expect(geometry.dimensions).toEqual({ width: 4, depth: 4, height: 4 });
+    expect(geometry.volumeMm3).toBeCloseTo(63 / 6, 6);
+  });
 });
 
 describe("3MF geometry", () => {
@@ -160,16 +193,68 @@ describe("3MF geometry", () => {
     expect(geometry.volumeMm3).toBeCloseTo(2_000 / 6, 5);
   });
 
-  it("blocks painted or multimaterial 3MF instead of flattening it", async () => {
-    const painted = tetrahedron3mf.replace(
-      "<resources>",
-      '<resources><colorgroup id="8"><color color="#ff0000"/></colorgroup>',
-    );
+  it("allows unused appearance resources", async () => {
+    const unusedAppearance = tetrahedron3mf
+      .replace(
+        '<model unit="centimeter"',
+        `<model unit="centimeter" xmlns:m="${materialNamespace}"`,
+      )
+      .replace(
+        "<resources>",
+        '<resources><m:colorgroup id="8"><m:color color="#ff0000"/></m:colorgroup>',
+      );
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(unusedAppearance)),
+    ).resolves.toMatchObject({ objectCount: 1 });
+  });
+
+  it("allows one uniformly assigned base material", async () => {
+    const singleMaterial = tetrahedron3mf
+      .replace(
+        "<resources>",
+        '<resources><basematerials id="8"><base name="PLA" displaycolor="#ffffffff"/></basematerials>',
+      )
+      .replace('<object id="1"', '<object id="1" pid="8" pindex="0"');
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(singleMaterial)),
+    ).resolves.toMatchObject({ objectCount: 1 });
+  });
+
+  it("blocks assigned appearance properties instead of flattening them", async () => {
+    const painted = tetrahedron3mf
+      .replace(
+        '<model unit="centimeter"',
+        `<model unit="centimeter" xmlns:m="${materialNamespace}"`,
+      )
+      .replace(
+        "<resources>",
+        '<resources><m:colorgroup id="8"><m:color color="#ff0000"/></m:colorgroup>',
+      )
+      .replace('<object id="1"', '<object id="1" pid="8" pindex="0"');
     await expect(parseModelGeometry("3MF", threeMf(painted))).rejects.toEqual(
       expect.objectContaining({
         code: "PAINTED_OR_MULTIMATERIAL_3MF",
       }),
     );
+  });
+
+  it("blocks multiple assigned base materials", async () => {
+    const multimaterial = tetrahedron3mf
+      .replace(
+        "<resources>",
+        '<resources><basematerials id="8"><base name="PLA" displaycolor="#ffffffff"/><base name="PETG" displaycolor="#000000ff"/></basematerials>',
+      )
+      .replace('<object id="1"', '<object id="1" pid="8" pindex="0"')
+      .replace(
+        '<triangle v1="0" v2="2" v3="1"/>',
+        '<triangle v1="0" v2="2" v3="1" pid="8" p1="1"/>',
+      );
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(multimaterial)),
+    ).rejects.toMatchObject({ code: "PAINTED_OR_MULTIMATERIAL_3MF" });
   });
 
   it("reports malformed archives as recoverable preview errors", async () => {

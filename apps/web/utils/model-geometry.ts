@@ -182,11 +182,75 @@ function connectedTriangleBodies(
   return [...bodies.values()];
 }
 
-function addConnectedBodies(
+function triangleBodyBounds(triangles: readonly TrianglePoints[]): {
+  maximum: [number, number, number];
+  minimum: [number, number, number];
+} {
+  const minimum: [number, number, number] = [Infinity, Infinity, Infinity];
+  const maximum: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (const triangle of triangles) {
+    for (const point of triangle) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        minimum[axis] = Math.min(minimum[axis]!, point[axis]!);
+        maximum[axis] = Math.max(maximum[axis]!, point[axis]!);
+      }
+    }
+  }
+  return { maximum, minimum };
+}
+
+function independentStlBodies(
+  triangles: readonly TrianglePoints[],
+): TrianglePoints[][] {
+  const shells = connectedTriangleBodies(triangles);
+  const bounds = shells.map(triangleBodyBounds);
+  const parents = shells.map((_, shellIndex) => {
+    const inner = bounds[shellIndex]!;
+    let parent: number | undefined;
+    let parentVolume = Infinity;
+    bounds.forEach((outer, candidateIndex) => {
+      if (
+        candidateIndex === shellIndex ||
+        outer.minimum.some(
+          (value, axis) =>
+            value >= inner.minimum[axis]! ||
+            outer.maximum[axis]! <= inner.maximum[axis]!,
+        )
+      ) {
+        return;
+      }
+      const volume = outer.maximum.reduce(
+        (product, maximum, axis) => product * (maximum - outer.minimum[axis]!),
+        1,
+      );
+      if (volume < parentVolume) {
+        parent = candidateIndex;
+        parentVolume = volume;
+      }
+    });
+    return parent;
+  });
+  const root = (shellIndex: number): number => {
+    while (parents[shellIndex] !== undefined) {
+      shellIndex = parents[shellIndex]!;
+    }
+    return shellIndex;
+  };
+  const bodies = new Map<number, TrianglePoints[]>();
+  shells.forEach((shell, shellIndex) => {
+    const bodyRoot = root(shellIndex);
+    const body = bodies.get(bodyRoot) ?? [];
+    body.push(...shell);
+    bodies.set(bodyRoot, body);
+  });
+  return [...bodies.values()];
+}
+
+function addStlBodies(
   geometry: GeometryAccumulator,
   triangles: readonly TrianglePoints[],
 ): void {
-  for (const body of connectedTriangleBodies(triangles)) {
+  for (const body of independentStlBodies(triangles)) {
     geometry.addBody(body);
   }
 }
@@ -227,7 +291,7 @@ function parseBinaryStl(bytes: Uint8Array): ModelGeometry | undefined {
     });
     triangles.push([points[0]!, points[1]!, points[2]!]);
   }
-  addConnectedBodies(geometry, triangles);
+  addStlBodies(geometry, triangles);
 
   return {
     ...geometry.finish(),
@@ -281,7 +345,7 @@ function parseAsciiStl(bytes: Uint8Array): ModelGeometry {
       "Textový STL soubor obsahuje neúplnou plochu.",
     );
   }
-  addConnectedBodies(geometry, triangles);
+  addStlBodies(geometry, triangles);
 
   return {
     ...geometry.finish(),
@@ -382,11 +446,247 @@ function unitScale(xml: string): number {
   return scale;
 }
 
+type PreviewPropertyResource =
+  | { entryCount: number; kind: "appearance" }
+  | { entryCount: number; kind: "base" }
+  | {
+      entries: string[][];
+      kind: "composite";
+      materialIndices: string[];
+      materialResourceId: string;
+    }
+  | { entries: string[][]; kind: "multi"; resourceIds: string[] };
+
+function xmlElements(
+  source: string,
+  localName: string,
+): Array<{ attributes: string; body: string }> {
+  const pattern = new RegExp(
+    `<(?:[\\w.-]+:)?${localName}\\b([^>]*)>([\\s\\S]*?)<\\/(?:[\\w.-]+:)?${localName}\\s*>`,
+    "giu",
+  );
+  return [...source.matchAll(pattern)].map((match) => ({
+    attributes: match[1] ?? "",
+    body: match[2] ?? "",
+  }));
+}
+
+function xmlTagAttributes(source: string, localName: string): string[] {
+  const pattern = new RegExp(
+    `<(?:[\\w.-]+:)?${localName}\\b([^>]*)\\/?\\s*>`,
+    "giu",
+  );
+  return [...source.matchAll(pattern)].map((match) => match[1] ?? "");
+}
+
+function indexList(value: string | undefined): string[] {
+  return value?.trim().split(/\s+/u).filter(Boolean) ?? [];
+}
+
+function previewPropertyResources(
+  xml: string,
+): Map<string, PreviewPropertyResource> {
+  const resources = new Map<string, PreviewPropertyResource>();
+  for (const { attributes, body } of xmlElements(xml, "basematerials")) {
+    const id = attribute(attributes, "id");
+    if (id) {
+      resources.set(id, {
+        entryCount: xmlTagAttributes(body, "base").length,
+        kind: "base",
+      });
+    }
+  }
+  for (const localName of ["colorgroup", "texture2dgroup"] as const) {
+    const entryName = localName === "colorgroup" ? "color" : "tex2coord";
+    for (const { attributes, body } of xmlElements(xml, localName)) {
+      const id = attribute(attributes, "id");
+      if (id) {
+        resources.set(id, {
+          entryCount: xmlTagAttributes(body, entryName).length,
+          kind: "appearance",
+        });
+      }
+    }
+  }
+  for (const { attributes, body } of xmlElements(xml, "compositematerials")) {
+    const id = attribute(attributes, "id");
+    const materialResourceId = attribute(attributes, "matid");
+    const materialIndices = indexList(attribute(attributes, "matindices"));
+    if (id && materialResourceId) {
+      resources.set(id, {
+        entries: xmlTagAttributes(body, "composite").map((entry) => {
+          const values = indexList(attribute(entry, "values")).map(Number);
+          const selected = materialIndices.filter(
+            (_, index) => (values[index] ?? 0) > 0,
+          );
+          return selected.length > 0 ? selected : [...materialIndices];
+        }),
+        kind: "composite",
+        materialIndices,
+        materialResourceId,
+      });
+    }
+  }
+  for (const { attributes, body } of xmlElements(xml, "multiproperties")) {
+    const id = attribute(attributes, "id");
+    const resourceIds = indexList(attribute(attributes, "pids"));
+    if (id) {
+      resources.set(id, {
+        entries: xmlTagAttributes(body, "multi").map((entry) =>
+          indexList(attribute(entry, "pindices")),
+        ),
+        kind: "multi",
+        resourceIds,
+      });
+    }
+  }
+  return resources;
+}
+
 function assertSingleMaterial3mf(xml: string): void {
-  const resourcePattern =
-    /<(?:[\w.-]+:)?(?:basematerials|colorgroup|compositematerials|multiproperties|texture2d|texture2dgroup)\b/iu;
-  const propertyPattern = /\s(?:pid|pindex|p1|p2|p3)\s*=/iu;
-  if (resourcePattern.test(xml) || propertyPattern.test(xml)) {
+  if (/\s(?:[\w.-]+:)?(?:paint_color|mmu_segmentation)\s*=/iu.test(xml)) {
+    throw new ModelGeometryError(
+      "PAINTED_OR_MULTIMATERIAL_3MF",
+      "Barevný nebo vícemateriálový 3MF přímá kalkulace nepodporuje. Exportujte model bez barev a materiálových vlastností.",
+    );
+  }
+
+  const resources = previewPropertyResources(xml);
+  const cache = new Map<
+    string,
+    { assignmentIds: ReadonlySet<string>; hasAppearance: boolean }
+  >();
+  const invalidAssignment = (): never => {
+    throw new ModelGeometryError(
+      "INVALID_GEOMETRY",
+      "3MF obsahuje neplatné přiřazení materiálu nebo vzhledu.",
+    );
+  };
+  const resolve = (
+    resourceId: string,
+    propertyIndex: string,
+    path: ReadonlySet<string>,
+  ): { assignmentIds: ReadonlySet<string>; hasAppearance: boolean } => {
+    const key = `${resourceId}\0${propertyIndex}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+    if (path.has(key)) return invalidAssignment();
+    const resource = resources.get(resourceId);
+    const index = Number(propertyIndex);
+    if (!resource || !Number.isSafeInteger(index) || index < 0) {
+      return invalidAssignment();
+    }
+    const nextPath = new Set(path).add(key);
+    const assignmentIds = new Set<string>();
+    let hasAppearance = false;
+    if (resource.kind === "base" || resource.kind === "appearance") {
+      if (index >= resource.entryCount) return invalidAssignment();
+      assignmentIds.add(`${resourceId}:${propertyIndex}`);
+      hasAppearance = resource.kind === "appearance";
+    } else if (resource.kind === "composite") {
+      const constituents = resource.entries[index];
+      if (!constituents) return invalidAssignment();
+      for (const constituent of constituents) {
+        const resolved = resolve(
+          resource.materialResourceId,
+          constituent,
+          nextPath,
+        );
+        resolved.assignmentIds.forEach((value) => assignmentIds.add(value));
+        hasAppearance ||= resolved.hasAppearance;
+      }
+    } else {
+      const indices = resource.entries[index];
+      if (!indices) return invalidAssignment();
+      for (
+        let position = 0;
+        position < resource.resourceIds.length;
+        position += 1
+      ) {
+        const childResourceId = resource.resourceIds[position]!;
+        const childIndex = indices[position];
+        if (childIndex === undefined) return invalidAssignment();
+        const resolved = resolve(childResourceId, childIndex, nextPath);
+        resolved.assignmentIds.forEach((value) => assignmentIds.add(value));
+        hasAppearance ||= resolved.hasAppearance;
+      }
+    }
+    const evidence = { assignmentIds, hasAppearance };
+    cache.set(key, evidence);
+    return evidence;
+  };
+
+  const objects = new Map<
+    string,
+    {
+      assignmentIds: Set<string>;
+      components: string[];
+      hasAppearance: boolean;
+    }
+  >();
+  for (const { attributes: objectAttributes, body } of xmlElements(
+    xml,
+    "object",
+  )) {
+    const id = attribute(objectAttributes, "id");
+    if (!id) continue;
+    const objectPid = attribute(objectAttributes, "pid");
+    const objectPindex = attribute(objectAttributes, "pindex");
+    const assignmentIds = new Set<string>();
+    let hasAppearance = false;
+    for (const triangleAttributes of xmlTagAttributes(body, "triangle")) {
+      const trianglePid = attribute(triangleAttributes, "pid");
+      const resourceId = trianglePid ?? objectPid;
+      const explicitIndices = ["p1", "p2", "p3"]
+        .map((name) => attribute(triangleAttributes, name))
+        .filter((value): value is string => value !== undefined);
+      const indices =
+        explicitIndices.length > 0
+          ? explicitIndices
+          : trianglePid === undefined && objectPindex !== undefined
+            ? [objectPindex]
+            : [];
+      if (!resourceId) continue;
+      for (const propertyIndex of indices) {
+        const evidence = resolve(resourceId, propertyIndex, new Set());
+        evidence.assignmentIds.forEach((value) => assignmentIds.add(value));
+        hasAppearance ||= evidence.hasAppearance;
+      }
+    }
+    objects.set(id, {
+      assignmentIds,
+      components: xmlTagAttributes(body, "component")
+        .map((component) => attribute(component, "objectid"))
+        .filter((value): value is string => Boolean(value)),
+      hasAppearance,
+    });
+  }
+
+  const build = xmlElements(xml, "build")[0]?.body ?? "";
+  const buildRoots = xmlTagAttributes(build, "item")
+    .map((item) => attribute(item, "objectid"))
+    .filter((value): value is string => Boolean(value));
+  const referenced = new Set(
+    [...objects.values()].flatMap((object) => object.components),
+  );
+  const roots =
+    buildRoots.length > 0
+      ? buildRoots
+      : [...objects.keys()].filter((id) => !referenced.has(id));
+  const assignmentIds = new Set<string>();
+  let hasAppearance = false;
+  const visited = new Set<string>();
+  const visit = (objectId: string): void => {
+    if (visited.has(objectId)) return;
+    visited.add(objectId);
+    const object = objects.get(objectId);
+    if (!object) return;
+    object.assignmentIds.forEach((value) => assignmentIds.add(value));
+    hasAppearance ||= object.hasAppearance;
+    object.components.forEach(visit);
+  };
+  roots.forEach(visit);
+  if (hasAppearance || assignmentIds.size > 1) {
     throw new ModelGeometryError(
       "PAINTED_OR_MULTIMATERIAL_3MF",
       "Barevný nebo vícemateriálový 3MF přímá kalkulace nepodporuje. Exportujte model bez barev a materiálových vlastností.",
@@ -582,8 +882,7 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
     if (object.triangles.length > 0) {
       bodyNames.push(object.name?.trim() || `Těleso ${bodyNames.length + 1}`);
     }
-    addConnectedBodies(
-      geometry,
+    geometry.addBody(
       object.triangles.map(([a, b, c]) => [
         applyTransforms(object.vertices[a]!, transforms),
         applyTransforms(object.vertices[b]!, transforms),
