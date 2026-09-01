@@ -23,6 +23,7 @@ import {
   PriceComponentKind,
   PriceComponentScope,
   QuoteSessionStatus,
+  RetentionHold,
   RevisionState,
   UploadIntentStatus,
 } from "@prisma/client";
@@ -268,6 +269,13 @@ export class AutomaticQuotesService {
           throw new UnauthorizedException("Upload capability is invalid");
         }
         if (intent.confirmedModelFile.deletedAt) {
+          throw new GoneException("Model source is no longer available");
+        }
+        const observedAt = await databaseNow(transaction);
+        if (
+          intent.confirmedModelFile.retentionHold === RetentionHold.NONE &&
+          intent.confirmedModelFile.sourceDeleteAfter <= observedAt
+        ) {
           throw new GoneException("Model source is no longer available");
         }
         const origin = await transaction.automaticOrderOrigin.findUnique({
@@ -1217,23 +1225,35 @@ export class AutomaticQuotesService {
     const bindingId = deterministicUuid(
       `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}`,
     );
+    const preparationInput = {
+      priceList,
+      items: transient.items,
+      expressRequested: draft.expressRequested,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+      deliveryDestination: destination,
+      shipmentPlanIdForOrdinal: (ordinal: number) =>
+        deterministicUuid(`automatic-shipment-plan:${bindingId}:${ordinal}`),
+    };
+    const provisionalPlan = await prepareAutomaticQuote({
+      ...preparationInput,
+      materialAndColorAvailable: true,
+      withinBuildLimits: true,
+    });
+    if (provisionalPlan.prepared.kind !== "binding_quote") return;
     const candidateResourcesAvailable = await this.candidateResourcesAvailable(
       transaction,
       draft.items,
       transient.items,
+      provisionalPlan.prepared.shipmentPlan,
     );
-    const gateResult = await prepareAutomaticQuote({
-      priceList,
-      items: transient.items,
-      expressRequested: draft.expressRequested,
-      materialAndColorAvailable: candidateResourcesAvailable,
-      withinBuildLimits: candidateResourcesAvailable,
-      riskAcknowledgementsComplete: true,
-      hasBlockingPreflightFinding: false,
-      deliveryDestination: destination,
-      shipmentPlanIdForOrdinal: (ordinal) =>
-        deterministicUuid(`automatic-shipment-plan:${bindingId}:${ordinal}`),
-    });
+    const gateResult = candidateResourcesAvailable
+      ? provisionalPlan
+      : await prepareAutomaticQuote({
+          ...preparationInput,
+          materialAndColorAvailable: false,
+          withinBuildLimits: false,
+        });
     if (gateResult.prepared.kind !== "binding_quote") return;
 
     await this.ensureOrderItems(transaction, orderId);
@@ -1461,14 +1481,15 @@ export class AutomaticQuotesService {
       color: string | null;
     }>,
     pricingItems: readonly AutomaticQuotePricingItem[],
+    shipmentPlan?: AutomaticBindingQuote["shipmentPlan"],
   ): Promise<boolean> {
     if (items.length !== pricingItems.length || items.length === 0) {
       return false;
     }
-    const resourceOptions: Array<{
-      requiredMaterialMilligrams: bigint;
-      byNode: Map<string, Array<{ inventoryId: string; available: bigint }>>;
-    }> = [];
+    const resourcesByItemId = new Map<
+      string,
+      Map<string, Array<{ inventoryId: string; available: bigint }>>
+    >();
     for (const [index, item] of items.entries()) {
       const pricingItem = pricingItems[index];
       if (!pricingItem) return false;
@@ -1532,19 +1553,20 @@ export class AutomaticQuotesService {
         byNode.set(row.nodeId, options);
       }
       if (byNode.size === 0) return false;
-      resourceOptions.push({
-        requiredMaterialMilligrams: totalEstimatedMaterial(pricingItem),
-        byNode,
-      });
+      resourcesByItemId.set(pricingItem.id, byNode);
     }
-    const commonNodeIds = [...resourceOptions[0]!.byNode.keys()].filter(
-      (nodeId) => resourceOptions.every(({ byNode }) => byNode.has(nodeId)),
+    const demands = candidateMaterialDemands(pricingItems, shipmentPlan);
+    if (!demands || demands.length === 0) return false;
+    const commonNodeIds = [
+      ...(resourcesByItemId.get(demands[0]!.itemId)?.keys() ?? []),
+    ].filter((nodeId) =>
+      demands.every(({ itemId }) => resourcesByItemId.get(itemId)?.has(nodeId)),
     );
     return commonNodeIds.some((nodeId) =>
       hasUsableInventoryAssignment(
-        resourceOptions.map(({ requiredMaterialMilligrams, byNode }) => ({
+        demands.map(({ itemId, requiredMaterialMilligrams }) => ({
           requiredMaterialMilligrams,
-          options: byNode.get(nodeId) ?? [],
+          options: resourcesByItemId.get(itemId)?.get(nodeId) ?? [],
         })),
       ),
     );
@@ -2613,31 +2635,44 @@ export class AutomaticQuotesService {
         draft.items[index]!.ordinal,
       ]),
     );
+    const preparationInput = {
+      priceList,
+      items: pricing.items,
+      expressRequested: draft.expressRequested,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+      ...(draft.selectedDeliveryDestination
+        ? {
+            deliveryDestination: draft.selectedDeliveryDestination,
+            shipmentPlanIdForOrdinal: (ordinal: number) =>
+              deterministicUuid(
+                `automatic-rough-shipment-plan:${orderId}:${draft.configurationRevision}:${ordinal}`,
+              ),
+          }
+        : {}),
+    };
+    const provisionalPlan = await prepareAutomaticQuote({
+      ...preparationInput,
+      materialAndColorAvailable: true,
+      withinBuildLimits: true,
+    });
     const candidateResourcesAvailable = await this.candidateResourcesAvailable(
       this.prisma,
       draft.items,
       pricing.items,
+      provisionalPlan.prepared.kind === "binding_quote"
+        ? provisionalPlan.prepared.shipmentPlan
+        : undefined,
     );
-    const result = (
-      await prepareAutomaticQuote({
-        priceList,
-        items: pricing.items,
-        expressRequested: draft.expressRequested,
-        materialAndColorAvailable: candidateResourcesAvailable,
-        withinBuildLimits: candidateResourcesAvailable,
-        riskAcknowledgementsComplete: true,
-        hasBlockingPreflightFinding: false,
-        ...(draft.selectedDeliveryDestination
-          ? {
-              deliveryDestination: draft.selectedDeliveryDestination,
-              shipmentPlanIdForOrdinal: (ordinal: number) =>
-                deterministicUuid(
-                  `automatic-rough-shipment-plan:${orderId}:${draft.configurationRevision}:${ordinal}`,
-                ),
-            }
-          : {}),
-      })
-    ).prepared;
+    const result = candidateResourcesAvailable
+      ? provisionalPlan.prepared
+      : (
+          await prepareAutomaticQuote({
+            ...preparationInput,
+            materialAndColorAvailable: false,
+            withinBuildLimits: false,
+          })
+        ).prepared;
     return {
       quote: provisionalPriceDto(result.price, itemOrdinals),
       express: result.expressEligibility,
@@ -2974,6 +3009,55 @@ function totalEstimatedMaterial(item: AutomaticQuotePricingItem): bigint {
       ? (item.tail?.estimatedMaterialMilligrams ?? 0n)
       : 0n)
   );
+}
+
+function candidateMaterialDemands(
+  items: readonly AutomaticQuotePricingItem[],
+  shipmentPlan?: AutomaticBindingQuote["shipmentPlan"],
+): Array<{ itemId: string; requiredMaterialMilligrams: bigint }> | null {
+  if (!shipmentPlan) {
+    return items.map((item) => ({
+      itemId: item.id,
+      requiredMaterialMilligrams: totalEstimatedMaterial(item),
+    }));
+  }
+
+  const itemByPackingUnitKey = new Map<string, AutomaticQuotePricingItem>();
+  for (const item of items) {
+    for (const slot of item.fulfilmentSlots) {
+      if (itemByPackingUnitKey.has(slot.packingUnitKey)) return null;
+      itemByPackingUnitKey.set(slot.packingUnitKey, item);
+    }
+  }
+
+  const quantitiesByDemand = new Map<
+    string,
+    { item: AutomaticQuotePricingItem; quantity: number }
+  >();
+  const placedPackingUnitKeys = new Set<string>();
+  for (const parcel of shipmentPlan.parcels) {
+    for (const placement of parcel.placements) {
+      const item = itemByPackingUnitKey.get(placement.packingUnitKey);
+      if (!item || placedPackingUnitKeys.has(placement.packingUnitKey)) {
+        return null;
+      }
+      placedPackingUnitKeys.add(placement.packingUnitKey);
+      const demandKey = `${item.id}:${parcel.ordinal}`;
+      const current = quantitiesByDemand.get(demandKey);
+      quantitiesByDemand.set(demandKey, {
+        item,
+        quantity: (current?.quantity ?? 0) + 1,
+      });
+    }
+  }
+  if (placedPackingUnitKeys.size !== itemByPackingUnitKey.size) return null;
+
+  return [...quantitiesByDemand.values()].map(({ item, quantity }) => ({
+    itemId: item.id,
+    requiredMaterialMilligrams:
+      ceilDivide(BigInt(quantity), BigInt(item.referencePartsPerPlate)) *
+      item.primary.estimatedMaterialMilligrams,
+  }));
 }
 
 function automaticExpressCapacityWindowSeconds(

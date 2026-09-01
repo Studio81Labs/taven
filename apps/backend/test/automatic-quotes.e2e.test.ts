@@ -1620,6 +1620,14 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     );
     expect(attached.response.status).toBe(200);
+    const retainedSource = await prisma.modelFile.findUniqueOrThrow({
+      where: { id: modelFile.id },
+    });
+    const sessionExpiry = new Date(string(created.body.expiresAt));
+    expect(retainedSource.sourceDeleteAfter.getTime()).toBeGreaterThanOrEqual(
+      sessionExpiry.getTime() +
+        retainedSource.sourceRetentionDays * 24 * 60 * 60 * 1_000,
+    );
     const automaticFile = await prisma.automaticQuoteModelFile.findFirstOrThrow(
       {
         where: {
