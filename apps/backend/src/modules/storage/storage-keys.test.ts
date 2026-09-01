@@ -47,6 +47,9 @@ describe("storage object keys", () => {
       ),
     ).not.toThrow();
     expect(() =>
+      assertStorageObjectKey(`slice-metrics/${"a".repeat(64)}/result.json`),
+    ).not.toThrow();
+    expect(() =>
       assertStorageObjectKey("slices/commerce-foundations:fixture/part/0"),
     ).not.toThrow();
     expect(() => assertStorageObjectKey(`qc/${id}/../../secret`)).toThrow(

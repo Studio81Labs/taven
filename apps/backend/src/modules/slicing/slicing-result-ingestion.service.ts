@@ -221,6 +221,12 @@ export class SlicingResultIngestionService {
         ]),
       ).values(),
     ];
+    if (result.kind === "candidate_estimate") {
+      await this.deleteUnclaimedCandidateArtifacts(
+        artifacts.map(({ objectKey }) => objectKey),
+      );
+      return;
+    }
     const unownedKeys: string[] = [];
     for (const artifact of artifacts) {
       const owner =
@@ -236,6 +242,61 @@ export class SlicingResultIngestionService {
       if (!owner) unownedKeys.push(artifact.objectKey);
     }
     if (unownedKeys.length > 0) await this.objects.deleteObjects(unownedKeys);
+  }
+
+  private async deleteUnclaimedCandidateArtifacts(
+    objectKeys: readonly string[],
+  ): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      const unclaimedKeys: string[] = [];
+      for (const objectKey of [...new Set(objectKeys)].sort()) {
+        await transaction.$queryRaw`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(${objectKey}, 1)
+          )::text
+        `;
+        const owner = await transaction.sliceResult.findUnique({
+          where: { artifactObjectKey: objectKey },
+          select: { id: true },
+        });
+        if (owner) continue;
+        const pendingClaim = await transaction.$queryRaw<
+          Array<{ protected: boolean }>
+        >`
+          SELECT EXISTS (
+            SELECT 1
+            FROM outbox_messages dispatch
+            CROSS JOIN LATERAL jsonb_array_elements(
+              CASE
+                WHEN jsonb_typeof(
+                  dispatch.payload #> '{job,input,occupancySliceTargets}'
+                ) = 'array'
+                THEN dispatch.payload #> '{job,input,occupancySliceTargets}'
+                ELSE '[]'::jsonb
+              END
+            ) target
+            WHERE dispatch.message_type = 'slicing.candidate-estimate.requested'
+              AND target ->> 'analysisObjectKey' = ${objectKey}
+              AND NOT EXISTS (
+                SELECT 1
+                FROM candidate_estimate_terminal_results terminal
+                WHERE terminal.outbox_message_id = dispatch.id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM outbox_messages dead_letter
+                WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+                  AND dead_letter.aggregate_id = dispatch.id
+                  AND dead_letter.message_type = 'slicing.candidate_estimate.dead-lettered'
+              )
+          ) AS protected
+        `;
+        if (!pendingClaim[0]?.protected) unclaimedKeys.push(objectKey);
+      }
+      if (unclaimedKeys.length > 0) {
+        await this.objects.deleteObjects(unclaimedKeys);
+      }
+    });
   }
 
   private async ingestInspection(

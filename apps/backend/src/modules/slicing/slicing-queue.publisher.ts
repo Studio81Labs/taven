@@ -5,9 +5,6 @@ import type { Job, Queue } from "bullmq";
 import type { SlicingJob } from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
-import type { CandidateEstimateResult } from "@taven/slicer-contracts" with {
-  "resolution-mode": "import",
-};
 import { PrismaService } from "../../prisma/prisma.service";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
 import {
@@ -214,9 +211,15 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
         continue;
       }
       const resultFingerprintSha256 = slicingResultFingerprint(result);
+      let cleanupRejectedCandidate = false;
       try {
         if (result.kind === "candidate_estimate") {
-          await this.ingestCandidateResult(result);
+          try {
+            await this.candidateEstimates.ingest({ result });
+          } catch (error) {
+            cleanupRejectedCandidate = isPermanentIngestionError(error);
+            throw error;
+          }
         }
         await this.results.ingest({
           dispatchId,
@@ -227,6 +230,9 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
       } catch (error) {
         if (!isPermanentIngestionError(error)) throw error;
         await this.deadLetter(queued, dispatchId, job, error);
+        if (cleanupRejectedCandidate) {
+          await this.results.deleteUnownedUploadedArtifacts(result);
+        }
         await queued.remove();
         reconciled += 1;
         continue;
@@ -239,19 +245,6 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.queue.close();
-  }
-
-  private async ingestCandidateResult(
-    result: CandidateEstimateResult,
-  ): Promise<void> {
-    try {
-      await this.candidateEstimates.ingest({ result });
-    } catch (error) {
-      if (isPermanentIngestionError(error)) {
-        await this.results.deleteUnownedUploadedArtifacts(result);
-      }
-      throw error;
-    }
   }
 
   private async claim(limit: number): Promise<ClaimedDispatch[]> {
@@ -412,6 +405,18 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
       await transaction.$queryRaw`
         SELECT pg_advisory_xact_lock(hashtextextended(${dispatchId}, 0))::text
       `;
+      if (job.kind === "candidate_estimate") {
+        const terminal = await transaction.$queryRaw<
+          Array<{ exists: boolean }>
+        >`
+          SELECT EXISTS (
+            SELECT 1
+            FROM candidate_estimate_terminal_results
+            WHERE outbox_message_id = ${dispatchId}::uuid
+          ) AS exists
+        `;
+        if (terminal[0]?.exists) return;
+      }
       const messageType = `slicing.${job.kind}.dead-lettered`;
       const existing = await transaction.outboxMessage.findFirst({
         where: {

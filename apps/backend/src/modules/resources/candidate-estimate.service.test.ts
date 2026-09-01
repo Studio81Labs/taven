@@ -21,6 +21,13 @@ type CandidateResourceLocker = {
   }>;
 };
 
+type CandidateArtifactLocker = {
+  lockCandidateArtifactKeys(
+    transaction: Prisma.TransactionClient,
+    objectKeys: readonly string[],
+  ): Promise<void>;
+};
+
 describe("CandidateEstimateService resource locks", () => {
   it("acquires profile, machine, calibration, then inventory locks", async () => {
     const observedAt = new Date("2026-08-30T12:00:00.000Z");
@@ -72,5 +79,27 @@ describe("CandidateEstimateService resource locks", () => {
     for (const statement of statements) {
       expect(statement).toContain("FOR UPDATE");
     }
+  });
+
+  it("locks unique candidate artifact keys in deterministic order", async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const transaction = {
+      $queryRaw: queryRaw,
+    } as unknown as Prisma.TransactionClient;
+    const service = new CandidateEstimateService(
+      {} as PrismaService,
+      {} as SlicerProfileSnapshotService,
+    ) as unknown as CandidateArtifactLocker;
+
+    await service.lockCandidateArtifactKeys(transaction, [
+      "key-z",
+      "key-a",
+      "key-a",
+    ]);
+
+    expect(queryRaw.mock.calls.map((call) => call[1])).toEqual([
+      "key-a",
+      "key-z",
+    ]);
   });
 });

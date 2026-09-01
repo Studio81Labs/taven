@@ -422,6 +422,12 @@ export class CandidateEstimateService {
             "candidate dispatch resources do not match persisted revisions",
           );
         }
+        await this.lockCandidateArtifactKeys(
+          transaction,
+          job.input.occupancySliceTargets.map(
+            ({ analysisObjectKey }) => analysisObjectKey,
+          ),
+        );
         await transaction.outboxMessage.create({
           data: {
             deduplicationKey: attemptDeduplicationKey,
@@ -488,6 +494,28 @@ export class CandidateEstimateService {
             "persisted candidate estimate dispatch was not found",
           );
         }
+        await transaction.$queryRaw`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(${dispatchRow.id}, 0)
+          )::text
+        `;
+        const deadLetter = await transaction.$queryRaw<
+          Array<{ exists: boolean }>
+        >`
+          SELECT EXISTS (
+            SELECT 1
+            FROM outbox_messages dead_letter
+            WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+              AND dead_letter.aggregate_id = ${dispatchRow.id}::uuid
+              AND dead_letter.message_type = 'slicing.candidate_estimate.dead-lettered'
+          ) AS exists
+        `;
+        if (deadLetter[0]?.exists) {
+          throw new ResourceConflictError(
+            "candidate dispatch was already dead-lettered",
+            "candidate_estimate_terminal_disposition_check",
+          );
+        }
         const dispatch = await parseDispatchPayload(dispatchRow.payload);
         let result: CandidateEstimateResult;
         let resultFingerprint: string;
@@ -505,6 +533,14 @@ export class CandidateEstimateService {
         } catch (error) {
           throw new ResourceValidationError(
             `candidate result does not match its persisted dispatch: ${errorMessage(error)}`,
+          );
+        }
+        if (result.outcome.status === "succeeded") {
+          await this.lockCandidateArtifactKeys(
+            transaction,
+            result.outcome.occupancySlices.map(
+              ({ artifact }) => artifact.objectKey,
+            ),
           );
         }
 
@@ -969,6 +1005,19 @@ export class CandidateEstimateService {
       );
     }
     return observed;
+  }
+
+  private async lockCandidateArtifactKeys(
+    transaction: Prisma.TransactionClient,
+    objectKeys: readonly string[],
+  ): Promise<void> {
+    for (const objectKey of [...new Set(objectKeys)].sort()) {
+      await transaction.$queryRaw`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${objectKey}, 1)
+        )::text
+      `;
+    }
   }
 
   private async hasSameDispatchEffect(

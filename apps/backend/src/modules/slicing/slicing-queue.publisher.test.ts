@@ -1,14 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Queue } from "bullmq";
-import type {
-  CandidateEstimateResult,
-  SlicingJob,
-} from "@taven/slicer-contracts" with {
+import type { SlicingJob } from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
 import { PrismaService } from "../../prisma/prisma.service";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
-import { ResourceNotFoundError } from "../resources/resource-errors";
 import { SlicingQueuePublisher } from "./slicing-queue.publisher";
 import {
   PermanentSlicingResultIngestionError,
@@ -28,10 +24,6 @@ type RetryableResultReader = {
     opts: { attempts?: number };
     progress: unknown;
   }): unknown;
-};
-
-type CandidateResultIngester = {
-  ingestCandidateResult(result: CandidateEstimateResult): Promise<void>;
 };
 
 async function inspectionTerminal(seed: number) {
@@ -253,37 +245,6 @@ describe("SlicingQueuePublisher production authorization", () => {
         },
       }),
     ).toThrow("no current validated retryable result");
-  });
-
-  it("cleans unowned candidate metrics before permanent rejection", async () => {
-    const result = {
-      kind: "candidate_estimate",
-      outcome: {
-        status: "succeeded",
-        occupancySlices: [
-          {
-            artifact: {
-              objectKey: `slice-metrics/${"a".repeat(64)}/result.json`,
-            },
-          },
-        ],
-      },
-    } as unknown as CandidateEstimateResult;
-    const failure = new ResourceNotFoundError("candidate machine was retired");
-    const ingest = vi.fn().mockRejectedValue(failure);
-    const deleteUnownedUploadedArtifacts = vi.fn().mockResolvedValue(undefined);
-    const publisher = new SlicingQueuePublisher(
-      {} as PrismaService,
-      {} as Queue,
-      { ingest } as unknown as CandidateEstimateService,
-      {
-        deleteUnownedUploadedArtifacts,
-      } as unknown as SlicingResultIngestionService,
-      {} as SlicerProfileSnapshotService,
-    ) as unknown as CandidateResultIngester;
-
-    await expect(publisher.ingestCandidateResult(result)).rejects.toBe(failure);
-    expect(deleteUnownedUploadedArtifacts).toHaveBeenCalledWith(result);
   });
 
   it("leaves a valid completed job in place when dispatch lookup fails transiently", async () => {

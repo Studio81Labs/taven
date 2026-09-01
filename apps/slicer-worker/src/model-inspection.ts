@@ -2139,6 +2139,34 @@ export function canonicalizeModel(
   const triangles = scaledBodies.flatMap((item) => item.triangles);
   const canonical = canonicalBinaryStl(triangles);
   const serializedInspection = inspectModel("stl", canonical);
+  const serializedTriangles = parseBinaryStl(canonical);
+  if (!serializedTriangles) invalid("Canonical STL serialization is invalid");
+  let triangleOffset = 0;
+  const serializedBodies = scaledBodies.map((intendedBody) => {
+    const nextOffset = triangleOffset + intendedBody.triangleCount;
+    const serializedBody = body(
+      intendedBody.bodyId,
+      serializedTriangles.slice(triangleOffset, nextOffset),
+      {
+        paint: intendedBody.hasPaintAssignments,
+        materials: intendedBody.materialAssignmentIds,
+        extruders: intendedBody.extruderAssignmentIds,
+      },
+    );
+    triangleOffset = nextOffset;
+    if (
+      JSON.stringify(serializedBody.boundingBox) !==
+        JSON.stringify(intendedBody.boundingBox) ||
+      JSON.stringify(serializedBody.topology) !==
+        JSON.stringify(intendedBody.topology)
+    ) {
+      invalid("Canonical STL serialization loses body precision");
+    }
+    return serializedBody;
+  });
+  if (triangleOffset !== serializedTriangles.length) {
+    invalid("Canonical STL serialization loses body correspondence");
+  }
   const intendedBounds = boundingBox(triangles);
   if (
     JSON.stringify(serializedInspection.boundingBox) !==
@@ -2151,17 +2179,19 @@ export function canonicalizeModel(
     sha256: sha256(canonical),
     inspection: {
       unitHint: "millimeter",
-      bodies: scaledBodies.map(({ triangles: _triangles, ...value }) => value),
+      bodies: serializedBodies.map(
+        ({ triangles: _triangles, ...value }) => value,
+      ),
       boundingBox: intendedBounds,
-      objectCount: scaledBodies.length,
-      hasPaintAssignments: scaledBodies.some(
+      objectCount: serializedBodies.length,
+      hasPaintAssignments: serializedBodies.some(
         (item) => item.hasPaintAssignments,
       ),
       materialAssignmentCount: new Set(
-        scaledBodies.flatMap((item) => item.materialAssignmentIds),
+        serializedBodies.flatMap((item) => item.materialAssignmentIds),
       ).size,
       extruderAssignmentCount: new Set(
-        scaledBodies.flatMap((item) => item.extruderAssignmentIds),
+        serializedBodies.flatMap((item) => item.extruderAssignmentIds),
       ).size,
     },
   };

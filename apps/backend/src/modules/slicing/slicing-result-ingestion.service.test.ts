@@ -301,9 +301,24 @@ describe("slicing result ingestion", () => {
           ),
       );
     const deleteObjects = vi.fn().mockResolvedValue(undefined);
+    const queryRaw = vi
+      .fn()
+      .mockImplementation((strings: TemplateStringsArray) =>
+        Promise.resolve(
+          strings.join("?").includes("AS protected")
+            ? [{ protected: false }]
+            : [],
+        ),
+      );
+    const transaction = {
+      $queryRaw: queryRaw,
+      sliceResult: { findUnique },
+    } as unknown as Prisma.TransactionClient;
     const service = new SlicingResultIngestionService(
       {
-        sliceResult: { findUnique },
+        $transaction: <T>(
+          operation: (client: Prisma.TransactionClient) => Promise<T>,
+        ) => operation(transaction),
       } as unknown as PrismaService,
       { deleteObjects } as unknown as ObjectStorage,
     );
@@ -322,6 +337,37 @@ describe("slicing result ingestion", () => {
 
     expect(findUnique).toHaveBeenCalledTimes(2);
     expect(deleteObjects).toHaveBeenCalledWith([unownedObjectKey]);
+  });
+
+  it("preserves candidate metrics claimed by an unreconciled dispatch", async () => {
+    const objectKey = `slice-metrics/${"e".repeat(64)}/result.json`;
+    const deleteObjects = vi.fn().mockResolvedValue(undefined);
+    const transaction = {
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ protected: true }]),
+      sliceResult: { findUnique: vi.fn().mockResolvedValue(null) },
+    } as unknown as Prisma.TransactionClient;
+    const service = new SlicingResultIngestionService(
+      {
+        $transaction: <T>(
+          operation: (client: Prisma.TransactionClient) => Promise<T>,
+        ) => operation(transaction),
+      } as unknown as PrismaService,
+      { deleteObjects } as unknown as ObjectStorage,
+    );
+    const result = {
+      kind: "candidate_estimate",
+      outcome: {
+        status: "succeeded",
+        occupancySlices: [{ artifact: { objectKey } }],
+      },
+    } as unknown as CandidateEstimateResult;
+
+    await service.deleteUnownedUploadedArtifacts(result);
+
+    expect(deleteObjects).not.toHaveBeenCalled();
   });
 
   it("rejects aggregate canonical volume that cannot fit PostgreSQL bigint", async () => {

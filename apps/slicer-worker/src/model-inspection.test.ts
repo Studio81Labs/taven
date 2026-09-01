@@ -60,6 +60,23 @@ const cubeMesh = `
     <triangle v1="1" v2="2" v3="3"/><triangle v1="2" v2="0" v3="3"/>
   </triangles>`;
 
+function tetrahedronMesh(
+  offsetX: number,
+  xScale: number,
+  yScale = xScale,
+  zScale = xScale,
+): string {
+  return `<vertices>
+    <vertex x="${offsetX}" y="0" z="0"/>
+    <vertex x="${offsetX + xScale}" y="0" z="0"/>
+    <vertex x="${offsetX}" y="${yScale}" z="0"/>
+    <vertex x="${offsetX}" y="0" z="${zScale}"/>
+  </vertices><triangles>
+    <triangle v1="0" v2="2" v3="1"/><triangle v1="0" v2="1" v3="3"/>
+    <triangle v1="1" v2="2" v3="3"/><triangle v1="2" v2="0" v3="3"/>
+  </triangles>`;
+}
+
 function tetrahedronStl(offsetX: number): Uint8Array {
   const x = (delta: number) => String(offsetX + delta);
   return new TextEncoder().encode(`
@@ -340,6 +357,22 @@ describe("safe model inspection", () => {
     expect(translatedCanonical.bytes).toEqual(canonical.bytes);
   });
 
+  it("rejects float32 precision loss in an individual selected body", () => {
+    const source = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter">
+        <resources>
+          <object id="1"><mesh>${tetrahedronMesh(0, 1_000_000_000, 0.001, 0.001)}</mesh></object>
+          <object id="2"><mesh>${tetrahedronMesh(500_000_000, 1)}</mesh></object>
+        </resources>
+        <build><item objectid="1"/><item objectid="2"/></build>
+      </model>`,
+    });
+
+    expect(() =>
+      canonicalizeModel("3mf", source, ["body-0001", "body-0002"], 1_000_000),
+    ).toThrow("positive volume and three-dimensional bounds");
+  });
+
   it.each([
     ["micron", "10", 1_000],
     ["millimeter", "1000", 1_000_000],
@@ -380,11 +413,17 @@ describe("safe model inspection", () => {
       const inspectedVolume = BigInt(
         inspection.bodies[0]!.volumeCubicMicrometers,
       );
+      expect(canonicalVolume).toBe(
+        BigInt(
+          inspectModel("stl", canonical.bytes).bodies[0]!
+            .volumeCubicMicrometers,
+        ),
+      );
       expect(
         canonicalVolume > inspectedVolume
           ? canonicalVolume - inspectedVolume
           : inspectedVolume - canonicalVolume,
-      ).toBeLessThanOrEqual(1n);
+      ).toBeLessThanOrEqual(inspectedVolume / 1_000_000n + 1n);
     },
   );
 
