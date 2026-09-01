@@ -255,9 +255,13 @@ export class EligibilityPlanService {
               ON item.id = slot.order_item_id AND item.order_id = slot.order_id
             JOIN shipment_plan_fulfilment_slots allocation
               ON allocation.fulfilment_slot_id = slot.id
+            JOIN order_active_price_bindings active_binding
+              ON active_binding.order_id = slot.order_id
+             AND active_binding.order_price_binding_id = allocation.order_price_binding_id
             JOIN shipment_plans shipment_plan
               ON shipment_plan.id = allocation.shipment_plan_id
              AND shipment_plan.order_phase_id = slot.order_phase_id
+             AND shipment_plan.order_price_binding_id = active_binding.order_price_binding_id
             WHERE slot.order_phase_id = ${input.orderPhaseId}::uuid
               AND slot.outcome = 'PENDING'
             ORDER BY slot.packing_unit_key, slot.id
@@ -295,6 +299,9 @@ export class EligibilityPlanService {
             JOIN shipment_plans shipment_plan
               ON shipment_plan.id = candidate.shipment_plan_id
              AND shipment_plan.order_phase_id = ${input.orderPhaseId}::uuid
+            JOIN order_active_price_bindings active_binding
+              ON active_binding.order_id = shipment_plan.order_id
+             AND active_binding.order_price_binding_id = shipment_plan.order_price_binding_id
             JOIN inventories inventory
               ON inventory.id = candidate.inventory_id
              AND inventory.node_id = candidate.node_id

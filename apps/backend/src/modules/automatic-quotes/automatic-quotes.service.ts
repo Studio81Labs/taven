@@ -1,0 +1,2811 @@
+import {
+  BadRequestException,
+  ConflictException,
+  GoneException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from "@nestjs/common";
+import {
+  AutomaticQuoteRiskDecision,
+  IdempotencyStatus,
+  InventoryStatus,
+  MachineStatus,
+  Material,
+  ModelFileFormat,
+  OrderPhaseKind,
+  OrderPhaseStatus,
+  OrderStatus,
+  PaymentRole,
+  PreflightSeverity,
+  Prisma,
+  PriceComponentKind,
+  PriceComponentScope,
+  QuoteSessionStatus,
+  RevisionState,
+  UploadIntentStatus,
+} from "@prisma/client";
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
+import { PrismaService } from "../../prisma/prisma.service";
+import { CandidateEstimateService } from "../resources/candidate-estimate.service";
+import { EligibilityPlanService } from "../resources/eligibility-plan.service";
+import {
+  ResourceConflictError,
+  ResourceNotFoundError,
+} from "../resources/resource-errors";
+import { ResourceReservationService } from "../resources/resource-reservation.service";
+import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
+import {
+  prepareAutomaticQuote,
+  type AutomaticBindingQuote,
+} from "./automatic-quote-pricing";
+import type {
+  AttachAutomaticQuoteModelFileDto,
+  AutomaticQuoteSessionCreatedDto,
+  AutomaticQuoteSessionDto,
+  AutomaticQuoteRiskDecisionDto,
+  ConfigureAutomaticQuoteItemDto,
+  CreateAutomaticQuoteSessionDto,
+  SelectAutomaticQuoteDestinationDto,
+} from "./automatic-quotes.dto";
+import {
+  DELIVERY_CAPABILITY,
+  type DeliveryCapabilityPort,
+} from "./delivery-capability.port";
+
+const SESSION_DAYS = 30;
+const IDEMPOTENCY_DAYS = 7;
+const INSPECTION_REVISION = "inspection-v1";
+const CANONICALIZER_REVISION = "canonical-v1";
+const INSPECTION_CONFIG_SHA256 = createHash("sha256")
+  .update("taven-inspection-v1")
+  .digest("hex");
+const CANONICALIZER_CONFIG_SHA256 = createHash("sha256")
+  .update("taven-canonicalizer-v1")
+  .digest("hex");
+const MAX_ITEM_QUANTITY = 1_000;
+const AUTOMATIC_PRICE_LIST_REVISION = "automatic-v0-czk";
+const INFILL_PERCENT = {
+  DECORATIVE: 10,
+  STANDARD: 20,
+  STRONG: 40,
+} as const;
+
+type Transaction = Prisma.TransactionClient;
+type JsonRecord = Record<string, unknown>;
+type QuoteCapabilityKey = { id: string; key: string };
+
+@Injectable()
+export class AutomaticQuotesService {
+  constructor(
+    @Inject(PrismaService)
+    private readonly prisma: PrismaService,
+    @Inject(CandidateEstimateService)
+    private readonly candidateEstimates: CandidateEstimateService,
+    @Inject(EligibilityPlanService)
+    private readonly eligibilityPlans: EligibilityPlanService,
+    @Inject(ResourceReservationService)
+    private readonly resourceReservations: ResourceReservationService,
+    @Inject(DELIVERY_CAPABILITY)
+    private readonly deliveryCapabilities: DeliveryCapabilityPort,
+  ) {}
+
+  async createSession(
+    input: CreateAutomaticQuoteSessionDto,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionCreatedDto> {
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const attribution = optionalJsonObject(input?.attribution, "attribution");
+    const fingerprint = fingerprintOf({ attribution });
+    const capabilityKey = currentQuoteCapabilityKey();
+
+    const created = await this.prisma.$transaction(async (transaction) => {
+      const record = await lockIdempotency(
+        transaction,
+        "automatic-quote.create",
+        commandKey,
+        fingerprint,
+      );
+      if (record.replayed) {
+        const stored = record.response as {
+          sessionId: string;
+          orderId: string;
+        };
+        const session = await transaction.quoteSession.findUniqueOrThrow({
+          where: { id: stored.sessionId },
+          select: { capabilityKeyId: true },
+        });
+        return {
+          ...stored,
+          sessionToken: sessionToken(
+            quoteCapabilityKeyForId(session.capabilityKeyId),
+            commandKey,
+            fingerprint,
+            record.generation,
+          ),
+        };
+      }
+
+      const observedAt = await databaseNow(transaction);
+      const sessionId = randomUUID();
+      const orderId = randomUUID();
+      const publicReference = `A-${orderId.replaceAll("-", "").slice(0, 12).toUpperCase()}`;
+      const token = sessionToken(
+        capabilityKey.key,
+        commandKey,
+        fingerprint,
+        record.generation,
+      );
+      await transaction.quoteSession.create({
+        data: {
+          id: sessionId,
+          publicTokenHash: hashToken(token),
+          capabilityKeyId: capabilityKey.id,
+          attribution: jsonNullable(attribution),
+          expiresAt: addDays(observedAt, SESSION_DAYS),
+          createdAt: observedAt,
+          updatedAt: observedAt,
+        },
+      });
+      await transaction.order.create({
+        data: {
+          id: orderId,
+          publicReference,
+          status: OrderStatus.DRAFT,
+          createdAt: observedAt,
+          updatedAt: observedAt,
+        },
+      });
+      await transaction.automaticOrderOrigin.create({
+        data: { orderId, quoteSessionId: sessionId },
+      });
+      await transaction.automaticQuoteDraft.create({
+        data: { orderId, createdAt: observedAt, updatedAt: observedAt },
+      });
+      await completeIdempotency(transaction, record.id, {
+        sessionId,
+        orderId,
+      });
+      return { sessionId, orderId, sessionToken: token };
+    });
+    const view = await this.getSession(
+      created.sessionId,
+      `Bearer ${created.sessionToken}`,
+    );
+    return { ...view, sessionToken: created.sessionToken };
+  }
+
+  async getSession(
+    sessionId: string,
+    authorization: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const token = bearerCapability(authorization);
+    const session = await this.loadSession(sessionId);
+    assertSessionCapability(session, token);
+    return this.readModel(session);
+  }
+
+  async attachModelFile(
+    sessionId: string,
+    input: AttachAutomaticQuoteModelFileDto,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const modelFileId = normalizedUuid(input?.modelFileId, "modelFileId");
+    const uploadToken = bearerTokenValue(input?.uploadToken, "uploadToken");
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const fingerprint = fingerprintOf({ sessionId, modelFileId });
+
+    await this.idempotentEffect(
+      "automatic-quote.attach-model",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const locked = await lockedSession(transaction, sessionId);
+        assertOpenSession(locked, sessionCapability);
+        const intent = await transaction.uploadIntent.findFirst({
+          where: {
+            confirmedModelFileId: modelFileId,
+            status: UploadIntentStatus.CONFIRMED,
+          },
+          include: { confirmedModelFile: true },
+        });
+        if (
+          !intent?.confirmedModelFile ||
+          !matchesTokenHash(uploadToken, intent.capabilityTokenHash)
+        ) {
+          throw new UnauthorizedException("Upload capability is invalid");
+        }
+        if (intent.confirmedModelFile.deletedAt) {
+          throw new GoneException("Model source is no longer available");
+        }
+        const origin = await transaction.automaticOrderOrigin.findUnique({
+          where: { quoteSessionId: sessionId },
+        });
+        if (!origin) throw new ConflictException("Automatic order is missing");
+        const existing = await transaction.automaticQuoteModelFile.findUnique({
+          where: {
+            orderId_modelFileId: { orderId: origin.orderId, modelFileId },
+          },
+        });
+        if (existing) return;
+
+        const inspectionJobId = deterministicUuid(
+          `automatic-inspection:${modelFileId}:${INSPECTION_REVISION}:${INSPECTION_CONFIG_SHA256}`,
+        );
+        await transaction.automaticQuoteModelFile.create({
+          data: {
+            orderId: origin.orderId,
+            modelFileId,
+            inspectionJobId,
+          },
+        });
+        if (intent.confirmedModelFile.format !== ModelFileFormat.STEP) {
+          await enqueueInspection(transaction, {
+            jobId: inspectionJobId,
+            correlationId: origin.orderId,
+            source: intent.confirmedModelFile,
+            operation: { mode: "inspect_source" },
+          });
+        }
+      },
+    );
+    return this.getSession(sessionId, authorization);
+  }
+
+  async configureItem(
+    sessionId: string,
+    ordinalValue: string,
+    input: ConfigureAutomaticQuoteItemDto,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const ordinal = nonnegativeInteger(ordinalValue, "ordinal", 999);
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const configuration = await this.validateConfiguration(input);
+    const fingerprint = fingerprintOf({ sessionId, ordinal, configuration });
+
+    await this.idempotentEffect(
+      "automatic-quote.configure-item",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const session = await lockedSession(transaction, sessionId);
+        assertOpenSession(session, sessionCapability);
+        const origin = await transaction.automaticOrderOrigin.findUnique({
+          where: { quoteSessionId: sessionId },
+        });
+        if (!origin) throw new ConflictException("Automatic order is missing");
+        if (
+          (await transaction.orderItem.count({
+            where: { orderId: origin.orderId },
+          })) > 0
+        ) {
+          throw new ConflictException(
+            "Configuration is frozen after quote preparation starts",
+          );
+        }
+        const attached = await transaction.automaticQuoteModelFile.findUnique({
+          where: {
+            orderId_modelFileId: {
+              orderId: origin.orderId,
+              modelFileId: configuration.modelFileId,
+            },
+          },
+          include: { modelFile: true },
+        });
+        if (!attached) {
+          throw new BadRequestException("Model file is not attached");
+        }
+        const inspection = await terminalResultForJob(
+          transaction,
+          attached.inspectionJobId,
+          "model_inspection",
+        );
+        const discoveredBodyIds = successfulInspectionBodies(inspection);
+        if (
+          discoveredBodyIds.length === 0 ||
+          configuration.bodyIds.some(
+            (bodyId) => !discoveredBodyIds.includes(bodyId),
+          )
+        ) {
+          throw new ConflictException(
+            "Selected bodies are not available in the completed inspection",
+          );
+        }
+        const printConfig = await transaction.printConfigRevision.findUnique({
+          where: { id: configuration.printConfigRevisionId },
+        });
+        if (
+          !printConfig ||
+          printConfig.infillPercent !==
+            INFILL_PERCENT[configuration.infillPreset]
+        ) {
+          throw new BadRequestException(
+            "Print configuration does not match the named infill preset",
+          );
+        }
+        const referenceProfile = await transaction.referenceProfile.findFirst({
+          where: {
+            state: RevisionState.ACTIVE,
+            material: configuration.material,
+            quality: printConfig.quality,
+          },
+          orderBy: [{ activatedAt: "desc" }, { id: "asc" }],
+        });
+        if (!referenceProfile) {
+          throw new BadRequestException(
+            "No active reference profile supports this configuration",
+          );
+        }
+        const { geometrySelectionSha256 } =
+          await import("@taven/slicer-contracts");
+        const selectionSha256 = geometrySelectionSha256(configuration.bodyIds);
+        const targetModelGeometryId = deterministicUuid(
+          `automatic-geometry:${configuration.modelFileId}:${selectionSha256}`,
+        );
+        const configurationFingerprint = fingerprintOf({
+          ...configuration,
+          referenceProfileId: referenceProfile.id,
+          selectionSha256,
+          targetModelGeometryId,
+        });
+        const current = await transaction.automaticQuoteItemDraft.findUnique({
+          where: { orderId_ordinal: { orderId: origin.orderId, ordinal } },
+        });
+        if (current?.configurationFingerprint === configurationFingerprint) {
+          return;
+        }
+        await transaction.automaticQuoteItemDraft.upsert({
+          where: { orderId_ordinal: { orderId: origin.orderId, ordinal } },
+          create: {
+            orderId: origin.orderId,
+            ordinal,
+            sourceModelFileId: configuration.modelFileId,
+            bodyIds: configuration.bodyIds,
+            selectionSha256,
+            targetModelGeometryId,
+            printConfigRevisionId: configuration.printConfigRevisionId,
+            referenceProfileId: referenceProfile.id,
+            material: configuration.material,
+            color: configuration.color,
+            infillPreset: configuration.infillPreset,
+            quantity: configuration.quantity,
+            fitSensitive: configuration.fitSensitive,
+            referencePartsPerPlate: configuration.referencePartsPerPlate,
+            configurationFingerprint,
+          },
+          update: {
+            sourceModelFileId: configuration.modelFileId,
+            bodyIds: configuration.bodyIds,
+            selectionSha256,
+            targetModelGeometryId,
+            printConfigRevisionId: configuration.printConfigRevisionId,
+            referenceProfileId: referenceProfile.id,
+            material: configuration.material,
+            color: configuration.color,
+            infillPreset: configuration.infillPreset,
+            quantity: configuration.quantity,
+            fitSensitive: configuration.fitSensitive,
+            referencePartsPerPlate: configuration.referencePartsPerPlate,
+            configurationFingerprint,
+          },
+        });
+        await transaction.automaticQuoteDraft.update({
+          where: { orderId: origin.orderId },
+          data: { configurationRevision: { increment: 1 } },
+        });
+      },
+    );
+    return this.getSession(sessionId, authorization);
+  }
+
+  async decideRisk(
+    sessionId: string,
+    input: AutomaticQuoteRiskDecisionDto,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const itemOrdinal = nonnegativeInteger(
+      input?.itemOrdinal,
+      "itemOrdinal",
+      999,
+    );
+    const findingId = normalizedUuid(input?.findingId, "findingId");
+    const acknowledgementKey = safeIdentifier(
+      input?.acknowledgementKey,
+      "acknowledgementKey",
+    );
+    if (!Object.values(AutomaticQuoteRiskDecision).includes(input?.decision)) {
+      throw new BadRequestException("decision is invalid");
+    }
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const fingerprint = fingerprintOf({
+      sessionId,
+      itemOrdinal,
+      findingId,
+      acknowledgementKey,
+      decision: input.decision,
+    });
+    await this.idempotentEffect(
+      "automatic-quote.risk-decision",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const session = await lockedSession(transaction, sessionId);
+        assertOpenSession(session, sessionCapability);
+        const item = await transaction.automaticQuoteItemDraft.findFirst({
+          where: {
+            draft: {
+              order: { automaticOrigin: { quoteSessionId: sessionId } },
+            },
+            ordinal: itemOrdinal,
+          },
+        });
+        if (!item)
+          throw new NotFoundException("Automatic quote item was not found");
+        await transaction.automaticQuoteRiskDecisionRecord.upsert({
+          where: {
+            automaticQuoteItemId_preflightFindingId_configurationFingerprint: {
+              automaticQuoteItemId: item.id,
+              preflightFindingId: findingId,
+              configurationFingerprint: item.configurationFingerprint,
+            },
+          },
+          create: {
+            orderId: item.orderId,
+            automaticQuoteItemId: item.id,
+            preflightFindingId: findingId,
+            configurationFingerprint: item.configurationFingerprint,
+            acknowledgementKey,
+            decision: input.decision,
+          },
+          update: { acknowledgementKey, decision: input.decision },
+        });
+      },
+    );
+    return this.getSession(sessionId, authorization);
+  }
+
+  async selectDestination(
+    sessionId: string,
+    input: SelectAutomaticQuoteDestinationDto,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const resolved = await this.deliveryCapabilities.resolve({
+      providerEndpointId: requiredText(
+        input?.providerEndpointId,
+        "providerEndpointId",
+        255,
+      ),
+      endpointType: requiredText(input?.endpointType, "endpointType", 100),
+      address: requiredJsonObject(input?.address, "address"),
+    });
+    const fingerprint = fingerprintOf({ sessionId, resolved });
+    await this.idempotentEffect(
+      "automatic-quote.select-destination",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const session = await lockedSession(transaction, sessionId);
+        assertOpenOrConvertedSession(session, sessionCapability);
+        const origin = await transaction.automaticOrderOrigin.findUnique({
+          where: { quoteSessionId: sessionId },
+        });
+        if (!origin) throw new ConflictException("Automatic order is missing");
+        const draft = await transaction.automaticQuoteDraft.findUniqueOrThrow({
+          where: { orderId: origin.orderId },
+          include: { selectedDeliveryDestination: true },
+        });
+        const current = draft.selectedDeliveryDestination;
+        if (
+          current &&
+          current.providerEndpointId === resolved.providerEndpointId &&
+          current.endpointType === resolved.endpointType &&
+          fingerprintOf(current.addressSnapshot) ===
+            fingerprintOf(resolved.addressSnapshot) &&
+          fingerprintOf(current.capabilitySnapshot) ===
+            fingerprintOf(resolved.capabilitySnapshot)
+        ) {
+          return;
+        }
+        const destination = await transaction.deliveryDestination.create({
+          data: {
+            orderId: origin.orderId,
+            providerEndpointId: resolved.providerEndpointId,
+            endpointType: resolved.endpointType,
+            addressSnapshot: resolved.addressSnapshot,
+            capabilitySnapshot: resolved.capabilitySnapshot,
+          },
+        });
+        await transaction.automaticQuoteDraft.update({
+          where: { orderId: origin.orderId },
+          data: {
+            selectedDeliveryDestinationId: destination.id,
+            configurationRevision: { increment: 1 },
+          },
+        });
+      },
+    );
+    await this.releaseSupersededReservations(sessionId);
+    return this.getSession(sessionId, authorization);
+  }
+
+  async setExpress(
+    sessionId: string,
+    requested: boolean,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    if (typeof requested !== "boolean") {
+      throw new BadRequestException("requested must be boolean");
+    }
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const fingerprint = fingerprintOf({ sessionId, requested });
+    await this.idempotentEffect(
+      "automatic-quote.set-express",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const session = await lockedSession(transaction, sessionId);
+        assertOpenSession(session, sessionCapability);
+        const origin = await transaction.automaticOrderOrigin.findUnique({
+          where: { quoteSessionId: sessionId },
+        });
+        if (!origin) throw new ConflictException("Automatic order is missing");
+        const draft = await transaction.automaticQuoteDraft.findUniqueOrThrow({
+          where: { orderId: origin.orderId },
+        });
+        if (draft.expressRequested === requested) return;
+        if (
+          await transaction.orderPriceBinding.findFirst({
+            where: { orderId: origin.orderId },
+          })
+        ) {
+          throw new ConflictException(
+            "Express choice is frozen after quote preparation starts",
+          );
+        }
+        await transaction.automaticQuoteDraft.update({
+          where: { orderId: origin.orderId },
+          data: {
+            expressRequested: requested,
+            configurationRevision: { increment: 1 },
+          },
+        });
+      },
+    );
+    return this.getSession(sessionId, authorization);
+  }
+
+  async prepare(
+    sessionId: string,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const session = await this.loadSession(sessionId);
+    assertSessionCapability(session, sessionCapability);
+    const fingerprint = fingerprintOf({
+      sessionId,
+      configurationRevision:
+        session.automaticOrderOrigin?.order.automaticQuoteDraft
+          ?.configurationRevision,
+    });
+    await this.idempotentEffect(
+      "automatic-quote.prepare",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const locked = await lockedSession(transaction, sessionId);
+        assertOpenOrConvertedSession(locked, sessionCapability);
+        const order = await transaction.order.findFirst({
+          where: { automaticOrigin: { quoteSessionId: sessionId } },
+          include: {
+            automaticQuoteDraft: {
+              include: { items: { orderBy: { ordinal: "asc" } } },
+            },
+          },
+        });
+        const draft = order?.automaticQuoteDraft;
+        if (!order || !draft)
+          throw new ConflictException("Automatic order is missing");
+        if (draft.items.length === 0) return;
+        let enqueued = false;
+        for (const item of draft.items) {
+          const geometry = await transaction.modelGeometry.findUnique({
+            where: { id: item.targetModelGeometryId },
+          });
+          if (!geometry) {
+            await this.enqueueCanonicalization(transaction, item, order.id);
+            enqueued = true;
+            continue;
+          }
+          const missing = await this.missingReferenceSlices(
+            transaction,
+            item,
+            geometry,
+          );
+          for (const partsPerPlate of missing) {
+            await this.enqueueReferenceSlice(
+              transaction,
+              item,
+              geometry,
+              partsPerPlate,
+              order.id,
+            );
+            enqueued = true;
+          }
+        }
+        if (enqueued) return;
+        await this.stageOrFinalizeBinding(transaction, order.id);
+      },
+    );
+    await this.advanceEligibility(session.automaticOrderOrigin!.order.id);
+    return this.getSession(sessionId, authorization);
+  }
+
+  private async idempotentEffect(
+    namespace: string,
+    idempotencyKey: string,
+    fingerprint: string,
+    operation: (transaction: Transaction) => Promise<void>,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      const record = await lockIdempotency(
+        transaction,
+        namespace,
+        idempotencyKey,
+        fingerprint,
+      );
+      if (record.replayed) return;
+      await operation(transaction);
+      await completeIdempotency(transaction, record.id, { completed: true });
+    });
+  }
+
+  private async validateConfiguration(input: ConfigureAutomaticQuoteItemDto) {
+    const modelFileId = normalizedUuid(input?.modelFileId, "modelFileId");
+    const printConfigRevisionId = normalizedUuid(
+      input?.printConfigRevisionId,
+      "printConfigRevisionId",
+    );
+    if (
+      !Array.isArray(input?.bodyIds) ||
+      input.bodyIds.length === 0 ||
+      input.bodyIds.length > 256
+    ) {
+      throw new BadRequestException(
+        "bodyIds must contain 1 through 256 bodies",
+      );
+    }
+    const bodyIds = [
+      ...new Set(
+        input.bodyIds.map((bodyId) => safeIdentifier(bodyId, "bodyId")),
+      ),
+    ].sort();
+    if (bodyIds.length !== input.bodyIds.length) {
+      throw new BadRequestException("bodyIds must be unique");
+    }
+    if (!Object.values(Material).includes(input.material as Material)) {
+      throw new BadRequestException("material is invalid");
+    }
+    if (!(input.infillPreset in INFILL_PERCENT)) {
+      throw new BadRequestException("infillPreset is invalid");
+    }
+    const quantity = positiveInteger(
+      input.quantity,
+      "quantity",
+      MAX_ITEM_QUANTITY,
+    );
+    const preferredPartsPerPlate =
+      input.preferredPartsPerPlate === undefined
+        ? Math.min(quantity, 10)
+        : positiveInteger(
+            input.preferredPartsPerPlate,
+            "preferredPartsPerPlate",
+            quantity,
+          );
+    return {
+      modelFileId,
+      bodyIds,
+      printConfigRevisionId,
+      material: input.material as Material,
+      color: optionalText(input.color, "color", 100),
+      infillPreset: input.infillPreset,
+      quantity,
+      fitSensitive: input.fitSensitive === true,
+      referencePartsPerPlate: preferredPartsPerPlate,
+    };
+  }
+
+  private async enqueueCanonicalization(
+    transaction: Transaction,
+    item: {
+      id: string;
+      sourceModelFileId: string;
+      bodyIds: string[];
+      selectionSha256: string;
+      targetModelGeometryId: string;
+    },
+    correlationId: string,
+  ): Promise<void> {
+    const source = await transaction.modelFile.findUniqueOrThrow({
+      where: { id: item.sourceModelFileId },
+    });
+    const sourceInput = inspectionInput(source, { mode: "inspect_source" });
+    const { slicingInputFingerprint } = await import("@taven/slicer-contracts");
+    await enqueueInspection(transaction, {
+      jobId: deterministicUuid(
+        `canonicalization:${item.id}:${item.selectionSha256}`,
+      ),
+      correlationId,
+      source,
+      operation: {
+        mode: "canonicalize_selection",
+        sourceInspectionFingerprintSha256: slicingInputFingerprint(
+          "model_inspection",
+          sourceInput,
+        ),
+        bodyIds: item.bodyIds,
+        selectionSha256: item.selectionSha256,
+        confirmedUnitConversion: {
+          sourceUnit: "millimeter",
+          targetUnit: "millimeter",
+          scaleFactorPpm: 1_000_000,
+        },
+        targetGeometry: {
+          modelGeometryId: item.targetModelGeometryId,
+          canonicalObjectKey: `geometries/${item.targetModelGeometryId}/canonical`,
+        },
+      },
+    });
+  }
+
+  private async enqueueReferenceSlice(
+    transaction: Transaction,
+    item: {
+      id: string;
+      bodyIds: string[];
+      selectionSha256: string;
+      printConfigRevisionId: string;
+      referenceProfileId: string;
+    },
+    geometry: {
+      id: string;
+      sourceModelFileId: string;
+      canonicalObjectKey: string;
+      geometryHash: string;
+      sourceModelFile?: never;
+    },
+    partsPerPlate: number,
+    correlationId: string,
+  ): Promise<void> {
+    const [source, profile, config] = await Promise.all([
+      transaction.modelFile.findUniqueOrThrow({
+        where: { id: geometry.sourceModelFileId },
+      }),
+      transaction.referenceProfile.findUniqueOrThrow({
+        where: { id: item.referenceProfileId },
+      }),
+      transaction.printConfigRevision.findUniqueOrThrow({
+        where: { id: item.printConfigRevisionId },
+      }),
+    ]);
+    const input = {
+      geometry: {
+        sourceModelFileId: source.id,
+        sourceContentSha256: source.contentHash,
+        modelGeometryId: geometry.id,
+        canonicalObjectKey: geometry.canonicalObjectKey,
+        geometrySha256: geometry.geometryHash,
+        bodyIds: item.bodyIds,
+        selectionSha256: item.selectionSha256,
+      },
+      referenceProfile: {
+        revisionId: profile.id,
+        contentSha256: slicerSettingsSnapshot(profile.settings).contentSha256,
+        slicerEngine: profile.slicerEngine,
+        slicerVersion: profile.slicerVersion,
+      },
+      printConfig: {
+        revisionId: config.id,
+        contentSha256: slicerSettingsSnapshot(config.settings).contentSha256,
+      },
+      partsPerPlate,
+    };
+    const {
+      ReferenceSliceJobSchema,
+      slicingDispatchAttemptKey,
+      slicingInputFingerprint,
+    } = await import("@taven/slicer-contracts");
+    const jobId = deterministicUuid(
+      `reference:${item.id}:${partsPerPlate}:${fingerprintOf(input)}`,
+    );
+    const inputFingerprintSha256 = slicingInputFingerprint(
+      "reference_slice",
+      input,
+    );
+    const job = ReferenceSliceJobSchema.parse({
+      contractVersion: 2,
+      kind: "reference_slice",
+      jobId,
+      correlationId,
+      inputFingerprintSha256,
+      idempotencyKey: `slicer:v2:reference_slice:${jobId}:${inputFingerprintSha256}`,
+      attempt: 1,
+      input,
+    });
+    await transaction.outboxMessage.upsert({
+      where: {
+        deduplicationKey: slicingDispatchAttemptKey(job.idempotencyKey, 1),
+      },
+      create: {
+        deduplicationKey: slicingDispatchAttemptKey(job.idempotencyKey, 1),
+        aggregateType: "ReferenceSliceDispatch",
+        aggregateId: job.jobId,
+        messageType: "slicing.reference-slice.requested",
+        schemaVersion: 2,
+        payload: { job } as unknown as Prisma.InputJsonObject,
+      },
+      update: {},
+    });
+  }
+
+  private async missingReferenceSlices(
+    transaction: Transaction,
+    item: {
+      bodyIds: string[];
+      selectionSha256: string;
+      printConfigRevisionId: string;
+      referenceProfileId: string;
+      referencePartsPerPlate: number;
+      quantity: number;
+    },
+    geometry: {
+      id: string;
+      geometryHash: string;
+    },
+  ): Promise<number[]> {
+    const requested = referenceOccupancies(
+      item.quantity,
+      item.referencePartsPerPlate,
+    );
+    const { buildReferenceSliceCacheKey, RevisionRef, Sha256Digest } =
+      await import("@taven/core");
+    const missing: number[] = [];
+    for (const partsPerPlate of requested) {
+      const cacheKey = buildReferenceSliceCacheKey({
+        geometryHash: Sha256Digest.parse(geometry.geometryHash),
+        modelGeometryId: geometry.id,
+        geometrySelectionHash: Sha256Digest.parse(item.selectionSha256),
+        referenceProfileRevision: RevisionRef.create(
+          "reference-profile",
+          item.referenceProfileId,
+        ),
+        printConfigRevision: RevisionRef.create(
+          "print-config",
+          item.printConfigRevisionId,
+        ),
+        partsPerPlate,
+      });
+      const slice = await transaction.sliceResult.findUnique({
+        where: { cacheKey },
+      });
+      if (!slice) missing.push(partsPerPlate);
+    }
+    return missing;
+  }
+
+  private async stageOrFinalizeBinding(
+    transaction: Transaction,
+    orderId: string,
+  ): Promise<void> {
+    if (!(await this.riskAllowsAutomaticQuote(transaction, orderId))) return;
+    const selectedDestination =
+      await transaction.automaticQuoteDraft.findUnique({
+        where: { orderId },
+        select: { selectedDeliveryDestinationId: true },
+      });
+    if (!selectedDestination?.selectedDeliveryDestinationId) return;
+    await this.ensureOrderItems(transaction, orderId);
+    const topology = await this.ensureQuoteTopology(transaction, orderId);
+    const order = await transaction.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: {
+        automaticQuoteDraft: {
+          include: { selectedDeliveryDestination: true, items: true },
+        },
+        items: {
+          include: {
+            modelGeometry: true,
+            primaryReferenceSliceResult: true,
+            tailReferenceSliceResult: true,
+            fulfilmentSlots: { orderBy: { quantityOrdinal: "asc" } },
+          },
+          orderBy: { ordinal: "asc" },
+        },
+        activePriceBinding: {
+          include: { orderPriceBinding: true },
+        },
+      },
+    });
+    const draft = order.automaticQuoteDraft;
+    const destination = draft?.selectedDeliveryDestination;
+    if (!draft || !destination || order.items.length === 0) return;
+    if (
+      order.activePriceBinding?.orderPriceBinding.deliveryDestinationId ===
+      destination.id
+    ) {
+      return;
+    }
+    const priceList = await transaction.priceList.findUnique({
+      where: {
+        currency_revision: {
+          currency: "CZK",
+          revision: AUTOMATIC_PRICE_LIST_REVISION,
+        },
+      },
+    });
+    if (!priceList) {
+      throw new ConflictException("Automatic quote pricing is unavailable");
+    }
+    const draftsByOrdinal = new Map(
+      draft.items.map((item) => [item.ordinal, item]),
+    );
+    const materialAndColorAvailable = await this.materialsAvailable(
+      transaction,
+      order.items,
+    );
+    const withinBuildLimits = await this.geometriesFitActiveMachines(
+      transaction,
+      order.items,
+    );
+    const bindingId = deterministicUuid(
+      `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}`,
+    );
+    const prepared = await prepareAutomaticQuote({
+      priceList,
+      items: order.items.map((item) => {
+        const itemDraft = draftsByOrdinal.get(item.ordinal);
+        if (
+          !itemDraft ||
+          !item.primaryReferenceSliceResult ||
+          item.fulfilmentSlots.length !== item.quantity
+        ) {
+          throw new ConflictException("Automatic quote topology is incomplete");
+        }
+        return {
+          id: item.id,
+          referenceProfileId: itemDraft.referenceProfileId,
+          material: item.material,
+          quantity: item.quantity,
+          referencePartsPerPlate: item.referencePartsPerPlate ?? item.quantity,
+          primary: item.primaryReferenceSliceResult,
+          tail: item.tailReferenceSliceResult,
+          boundsXMicrometers: item.modelGeometry.boundsXMicrometers,
+          boundsYMicrometers: item.modelGeometry.boundsYMicrometers,
+          boundsZMicrometers: item.modelGeometry.boundsZMicrometers,
+          fulfilmentSlots: item.fulfilmentSlots,
+        };
+      }),
+      expressRequested: draft.expressRequested,
+      materialAndColorAvailable,
+      withinBuildLimits,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+      deliveryDestination: destination,
+      shipmentPlanIdForOrdinal: (ordinal) =>
+        deterministicUuid(`automatic-shipment-plan:${bindingId}:${ordinal}`),
+    });
+    if (prepared.prepared.kind !== "binding_quote") return;
+    await this.persistBinding(transaction, {
+      orderId,
+      orderPhaseId: topology.phaseId,
+      bindingId,
+      priceList,
+      destinationId: destination.id,
+      configurationRevision: draft.configurationRevision,
+      prepared: prepared.prepared,
+      paymentFeeRateBasisPoints: prepared.parameters.paymentFeeRateBasisPoints,
+      paymentFeeFixedMinor: prepared.parameters.paymentFeeFixedMinor,
+      paymentProviderConfig: prepared.parameters.paymentProviderConfig,
+    });
+  }
+
+  private async riskAllowsAutomaticQuote(
+    transaction: Transaction,
+    orderId: string,
+  ): Promise<boolean> {
+    const items = await transaction.automaticQuoteItemDraft.findMany({
+      where: { orderId },
+      include: { riskDecisions: true },
+    });
+    for (const item of items) {
+      const findings = await transaction.preflightFinding.findMany({
+        where: {
+          modelFileId: item.sourceModelFileId,
+          OR: [
+            { modelGeometryId: null },
+            { modelGeometryId: item.targetModelGeometryId },
+          ],
+        },
+      });
+      if (
+        findings.some(
+          (finding) => finding.severity === PreflightSeverity.BLOCKING,
+        )
+      ) {
+        return false;
+      }
+      const decisionByFinding = new Map(
+        item.riskDecisions
+          .filter(
+            (decision) =>
+              decision.configurationFingerprint ===
+              item.configurationFingerprint,
+          )
+          .map((decision) => [decision.preflightFindingId, decision.decision]),
+      );
+      if (
+        [...decisionByFinding.values()].some(
+          (decision) => decision === AutomaticQuoteRiskDecision.DECLINED,
+        ) ||
+        findings.some(
+          (finding) =>
+            finding.severity === PreflightSeverity.WARNING &&
+            decisionByFinding.get(finding.id) !==
+              AutomaticQuoteRiskDecision.ACKNOWLEDGED,
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async ensureOrderItems(
+    transaction: Transaction,
+    orderId: string,
+  ): Promise<void> {
+    if (await transaction.orderPriceBinding.findFirst({ where: { orderId } }))
+      return;
+    const existingItems = await transaction.orderItem.count({
+      where: { orderId },
+    });
+    if (existingItems > 0) return;
+    const drafts = await transaction.automaticQuoteItemDraft.findMany({
+      where: { orderId },
+      orderBy: { ordinal: "asc" },
+    });
+    for (const item of drafts) {
+      const geometry = await transaction.modelGeometry.findUniqueOrThrow({
+        where: { id: item.targetModelGeometryId },
+      });
+      const occupancies = referenceOccupancies(
+        item.quantity,
+        item.referencePartsPerPlate,
+      );
+      const slices = await this.referenceSlices(
+        transaction,
+        item,
+        geometry,
+        occupancies,
+      );
+      await transaction.orderItem.create({
+        data: {
+          orderId,
+          ordinal: item.ordinal,
+          sourceModelFileId: item.sourceModelFileId,
+          modelGeometryId: geometry.id,
+          printConfigRevisionId: item.printConfigRevisionId,
+          primaryReferenceSliceResultId: slices[0]!.id,
+          tailReferenceSliceResultId: slices[1]?.id ?? null,
+          referencePartsPerPlate: occupancies[0]!,
+          material: item.material,
+          color: item.color,
+          quantity: item.quantity,
+        },
+      });
+    }
+  }
+
+  private async ensureQuoteTopology(
+    transaction: Transaction,
+    orderId: string,
+  ): Promise<{ phaseId: string }> {
+    const phase = await transaction.orderPhase.upsert({
+      where: { orderId },
+      create: {
+        id: deterministicUuid(`automatic-phase:${orderId}:single`),
+        orderId,
+        kind: OrderPhaseKind.SINGLE,
+        status: OrderPhaseStatus.QUOTED,
+      },
+      update: {},
+    });
+    const items = await transaction.orderItem.findMany({
+      where: { orderId },
+      include: { fulfilmentSlots: true },
+      orderBy: { ordinal: "asc" },
+    });
+    for (const item of items) {
+      if (item.fulfilmentSlots.length > 0) {
+        if (item.fulfilmentSlots.length !== item.quantity) {
+          throw new ConflictException(
+            "Automatic quote fulfilment topology is incomplete",
+          );
+        }
+        continue;
+      }
+      await transaction.fulfilmentSlot.createMany({
+        data: Array.from({ length: item.quantity }, (_, index) => ({
+          id: deterministicUuid(
+            `automatic-slot:${phase.id}:${item.id}:${index + 1}`,
+          ),
+          orderId,
+          orderPhaseId: phase.id,
+          orderItemId: item.id,
+          quantityOrdinal: index + 1,
+          packingUnitKey: `${item.id}:single:${index + 1}`,
+          settlementAmountMinor: 0n,
+        })),
+      });
+    }
+    return { phaseId: phase.id };
+  }
+
+  private async materialsAvailable(
+    transaction: Transaction | PrismaService,
+    items: ReadonlyArray<{ material: Material; color: string | null }>,
+  ): Promise<boolean> {
+    for (const item of items) {
+      const inventory = await transaction.inventory.findFirst({
+        where: {
+          status: InventoryStatus.AVAILABLE,
+          material: item.material,
+          remainingMilligrams: { gt: 0n },
+          machine: { status: MachineStatus.ACTIVE, node: { active: true } },
+          ...(item.color ? { color: item.color } : {}),
+        },
+        select: { id: true },
+      });
+      if (!inventory) return false;
+    }
+    return true;
+  }
+
+  private async geometriesFitActiveMachines(
+    transaction: Transaction | PrismaService,
+    items: ReadonlyArray<{
+      material: Material;
+      modelGeometry: {
+        boundsXMicrometers: bigint;
+        boundsYMicrometers: bigint;
+        boundsZMicrometers: bigint;
+      };
+    }>,
+  ): Promise<boolean> {
+    for (const item of items) {
+      const capability = await transaction.machineCapability.findFirst({
+        where: {
+          supportedMaterials: { has: item.material },
+          buildVolumeXMicrometers: {
+            gte: item.modelGeometry.boundsXMicrometers,
+          },
+          buildVolumeYMicrometers: {
+            gte: item.modelGeometry.boundsYMicrometers,
+          },
+          buildVolumeZMicrometers: {
+            gte: item.modelGeometry.boundsZMicrometers,
+          },
+          machines: {
+            some: { status: MachineStatus.ACTIVE, node: { active: true } },
+          },
+        },
+        select: { id: true },
+      });
+      if (!capability) return false;
+    }
+    return true;
+  }
+
+  private async persistBinding(
+    transaction: Transaction,
+    input: {
+      orderId: string;
+      orderPhaseId: string;
+      bindingId: string;
+      priceList: {
+        id: string;
+        revision: string;
+        currency: string;
+      };
+      destinationId: string;
+      configurationRevision: number;
+      prepared: AutomaticBindingQuote;
+      paymentFeeRateBasisPoints: number;
+      paymentFeeFixedMinor: bigint;
+      paymentProviderConfig: Prisma.InputJsonObject;
+    },
+  ): Promise<void> {
+    const observedAt = await databaseNow(transaction);
+    const snapshotId = deterministicUuid(
+      `automatic-price-snapshot:${input.bindingId}`,
+    );
+    const snapshotInput = jsonSafe({
+      automaticQuote: {
+        orderId: input.orderId,
+        configurationRevision: input.configurationRevision,
+        deliveryDestinationId: input.destinationId,
+        priceListRevision: input.priceList.revision,
+        expressEligibility: input.prepared.expressEligibility,
+        shipmentPlan: jsonSafe(input.prepared.shipmentPlan),
+        breakdown: jsonSafe(input.prepared.price.breakdown),
+      },
+    });
+    await transaction.priceSnapshot.create({
+      data: {
+        id: snapshotId,
+        priceListId: input.priceList.id,
+        currency: input.priceList.currency,
+        contractTotalMinor: input.prepared.price.contractTotal.minorUnits,
+        pricingRevision: input.priceList.revision,
+        inputSnapshot: snapshotInput,
+        snapshotHash: fingerprintOf(snapshotInput),
+        createdAt: observedAt,
+      },
+    });
+    await transaction.orderPriceBinding.create({
+      data: {
+        id: input.bindingId,
+        orderId: input.orderId,
+        priceSnapshotId: snapshotId,
+        deliveryDestinationId: input.destinationId,
+        createdAt: observedAt,
+      },
+    });
+    const shipmentAmountById = new Map(
+      input.prepared.price.components
+        .filter((component) => component.kind === "SHIPMENT")
+        .map((component) => [component.targetId!, component.amount.minorUnits]),
+    );
+    await transaction.shipmentPlan.createMany({
+      data: input.prepared.shipmentPlan.parcels.map((parcel, index) => {
+        const id = input.prepared.price.shipmentPlanIds[index];
+        if (!id) throw new Error("Shipment plan identity is unavailable");
+        return {
+          id,
+          orderId: input.orderId,
+          orderPhaseId: input.orderPhaseId,
+          priceSnapshotId: snapshotId,
+          orderPriceBindingId: input.bindingId,
+          deliveryDestinationId: input.destinationId,
+          ordinal: parcel.ordinal,
+          category: parcel.categoryId,
+          plannedVolumeCubicMm: cubicMicrometersToCubicMillimeters(
+            parcel.volumeProxyCubicMicrometers,
+          ),
+          plannedWeightMilligrams: parcel.weightMilligrams,
+          shippingAmountMinor: shipmentAmountById.get(id) ?? 0n,
+          packagingAmountMinor: 0n,
+          handlingAmountMinor: 0n,
+          allocationSnapshot: jsonSafe({
+            placements: parcel.placements,
+            packingUnitKeys: parcel.placements.map(
+              ({ packingUnitKey }) => packingUnitKey,
+            ),
+          }),
+          createdAt: observedAt,
+        };
+      }),
+    });
+    const shipmentPlanIdBySlotId = new Map<string, string>();
+    for (const [
+      index,
+      parcel,
+    ] of input.prepared.shipmentPlan.parcels.entries()) {
+      const id = input.prepared.price.shipmentPlanIds[index];
+      if (!id) throw new Error("Shipment plan identity is unavailable");
+      for (const placement of parcel.placements) {
+        shipmentPlanIdBySlotId.set(placement.packingUnitKey, id);
+      }
+    }
+    await transaction.shipmentPlanFulfilmentSlot.createMany({
+      data: [...shipmentPlanIdBySlotId].map(
+        ([fulfilmentSlotId, shipmentPlanId]) => ({
+          shipmentPlanId,
+          orderPriceBindingId: input.bindingId,
+          fulfilmentSlotId,
+        }),
+      ),
+    });
+    const orderItemIds = new Set(
+      (
+        await transaction.orderItem.findMany({
+          where: { orderId: input.orderId },
+          select: { id: true },
+        })
+      ).map(({ id }) => id),
+    );
+    for (const component of input.prepared.price.components) {
+      const componentId = deterministicUuid(
+        `automatic-price-component:${snapshotId}:${component.componentId}`,
+      );
+      const shipmentPlanId =
+        component.kind === "SHIPMENT" ? component.targetId : undefined;
+      const orderItemId =
+        component.targetId && orderItemIds.has(component.targetId)
+          ? component.targetId
+          : undefined;
+      await transaction.priceSnapshotComponent.create({
+        data: {
+          id: componentId,
+          priceSnapshotId: snapshotId,
+          kind: PriceComponentKind[component.kind],
+          scope: shipmentPlanId
+            ? PriceComponentScope.SHIPMENT_PLAN
+            : orderItemId
+              ? PriceComponentScope.ORDER_ITEM
+              : PriceComponentScope.ORDER,
+          orderItemId: orderItemId ?? null,
+          shipmentPlanId: shipmentPlanId ?? null,
+          amountMinor: component.amount.minorUnits,
+          allocation: jsonSafe({
+            calculationComponentId: component.componentId,
+            allocations: component.allocations.map((allocation) => ({
+              fulfilmentSlotId: allocation.targetId,
+              amountMinor: allocation.amount.minorUnits.toString(),
+            })),
+          }),
+          createdAt: observedAt,
+        },
+      });
+      await transaction.priceComponentFulfilmentAllocation.createMany({
+        data: component.allocations.map((allocation) => ({
+          priceSnapshotComponentId: componentId,
+          fulfilmentSlotId: allocation.targetId,
+          amountMinor: allocation.amount.minorUnits,
+        })),
+      });
+    }
+    const fullCapture = input.prepared.price.captures.find(
+      (capture) => capture.role === "FULL",
+    );
+    if (!fullCapture) throw new Error("Full payment capture is unavailable");
+    await transaction.paymentSchedule.create({
+      data: {
+        id: deterministicUuid(`automatic-payment-schedule:${snapshotId}:full`),
+        priceSnapshotId: snapshotId,
+        sequence: fullCapture.sequence,
+        role: PaymentRole.FULL,
+        grossAmountMinor: fullCapture.gross.minorUnits,
+        feeRateBasisPoints: input.paymentFeeRateBasisPoints,
+        feeFixedMinor: input.paymentFeeFixedMinor,
+        providerConfig: input.paymentProviderConfig,
+        createdAt: observedAt,
+      },
+    });
+    await transaction.$executeRaw`
+      UPDATE fulfilment_slots slot
+      SET settlement_amount_minor = allocated.amount_minor,
+          updated_at = ${observedAt}
+      FROM (
+        SELECT allocation.fulfilment_slot_id,
+               sum(allocation.amount_minor)::bigint AS amount_minor
+        FROM price_component_fulfilment_allocations allocation
+        JOIN price_snapshot_components component
+          ON component.id = allocation.price_snapshot_component_id
+        WHERE component.price_snapshot_id = ${snapshotId}::uuid
+        GROUP BY allocation.fulfilment_slot_id
+      ) allocated
+      WHERE slot.id = allocated.fulfilment_slot_id
+    `;
+    await transaction.orderActivePriceBinding.upsert({
+      where: { orderId: input.orderId },
+      create: { orderId: input.orderId, orderPriceBindingId: input.bindingId },
+      update: { orderPriceBindingId: input.bindingId },
+    });
+    await transaction.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
+  }
+
+  private async advanceEligibility(orderId: string): Promise<void> {
+    const active = await this.prisma.orderActivePriceBinding.findUnique({
+      where: { orderId },
+      include: {
+        orderPriceBinding: {
+          include: { shipmentPlans: true },
+        },
+      },
+    });
+    if (!active || active.orderPriceBinding.invalidatedAt) return;
+    const bindingId = active.orderPriceBindingId;
+    await this.dispatchAutomaticCandidates(orderId, bindingId);
+    const phase = await this.prisma.orderPhase.findUnique({
+      where: { orderId },
+    });
+    if (!phase) return;
+    const candidates = await this.prisma.candidateResourceEstimate.findMany({
+      where: {
+        shipmentPlan: { orderPriceBindingId: bindingId },
+        expiresAt: { gt: new Date() },
+      },
+      select: { nodeId: true },
+      distinct: ["nodeId"],
+      orderBy: { nodeId: "asc" },
+    });
+    for (const { nodeId } of candidates) {
+      try {
+        const plan = await this.eligibilityPlans.createCompletePlan({
+          nodeId,
+          orderPhaseId: phase.id,
+          planKey: `automatic:${fingerprintOf({ orderId, bindingId, nodeId })}`,
+        });
+        const reservation = await this.resourceReservations.reserve({
+          nodeId,
+          phaseResourcePlanId: plan.phaseResourcePlanId,
+          reservationKey: `automatic:${fingerprintOf({ orderId, bindingId, nodeId, plan: plan.phaseResourcePlanId })}`,
+        });
+        await this.finalizeAutomaticQuote({
+          orderId,
+          bindingId,
+          phaseResourcePlanId: plan.phaseResourcePlanId,
+          phaseReservationSetId: reservation.phaseReservationSetId,
+        });
+        return;
+      } catch (error) {
+        if (
+          error instanceof ResourceConflictError ||
+          error instanceof ResourceNotFoundError
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private async releaseSupersededReservations(
+    sessionId: string,
+  ): Promise<void> {
+    const order = await this.prisma.order.findFirst({
+      where: { automaticOrigin: { quoteSessionId: sessionId } },
+      include: {
+        automaticQuoteDraft: true,
+        activePriceBinding: { include: { orderPriceBinding: true } },
+      },
+    });
+    const active = order?.activePriceBinding?.orderPriceBinding;
+    if (
+      !order?.automaticQuoteDraft ||
+      !active ||
+      active.deliveryDestinationId ===
+        order.automaticQuoteDraft.selectedDeliveryDestinationId
+    ) {
+      return;
+    }
+    const reservations = await this.prisma.phaseReservationSet.findMany({
+      where: {
+        status: "RESERVED",
+        phaseResourcePlan: {
+          jobs: {
+            some: {
+              candidateResourceEstimate: {
+                shipmentPlan: { orderPriceBindingId: active.id },
+              },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+    for (const reservation of reservations) {
+      await this.resourceReservations.releaseBeforePrint(reservation.id);
+    }
+  }
+
+  private async dispatchAutomaticCandidates(
+    orderId: string,
+    bindingId: string,
+  ): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        automaticQuoteDraft: { include: { items: true } },
+        items: {
+          include: {
+            sourceModelFile: true,
+            modelGeometry: true,
+            printConfigRevision: true,
+          },
+          orderBy: { ordinal: "asc" },
+        },
+        activePriceBinding: {
+          include: {
+            orderPriceBinding: {
+              include: {
+                shipmentPlans: {
+                  include: {
+                    fulfilmentSlotAllocations: {
+                      include: { fulfilmentSlot: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (
+      !order?.automaticQuoteDraft ||
+      order.activePriceBinding?.orderPriceBindingId !== bindingId
+    ) {
+      return;
+    }
+    const draftsByOrdinal = new Map(
+      order.automaticQuoteDraft.items.map((item) => [item.ordinal, item]),
+    );
+    const shipmentPlans =
+      order.activePriceBinding.orderPriceBinding.shipmentPlans;
+    const contracts = await import("@taven/slicer-contracts");
+    for (const item of order.items) {
+      const draft = draftsByOrdinal.get(item.ordinal);
+      if (!draft) continue;
+      for (const shipmentPlan of shipmentPlans) {
+        const quantity = shipmentPlan.fulfilmentSlotAllocations.filter(
+          ({ fulfilmentSlot }) => fulfilmentSlot.orderItemId === item.id,
+        ).length;
+        if (quantity === 0) continue;
+        const profiles = await this.prisma.machineProfile.findMany({
+          where: {
+            state: RevisionState.ACTIVE,
+            referenceProfileId: draft.referenceProfileId,
+            material: item.material,
+          },
+          include: {
+            machineCapability: {
+              include: {
+                machines: {
+                  where: { status: MachineStatus.ACTIVE },
+                  include: {
+                    node: true,
+                    calibrations: {
+                      where: { state: RevisionState.ACTIVE },
+                      orderBy: [{ activatedAt: "desc" }, { id: "asc" }],
+                    },
+                    inventories: {
+                      where: {
+                        status: InventoryStatus.AVAILABLE,
+                        material: item.material,
+                        remainingMilligrams: { gt: 0n },
+                        ...(item.color ? { color: item.color } : {}),
+                      },
+                      orderBy: { id: "asc" },
+                    },
+                  },
+                  orderBy: { id: "asc" },
+                },
+              },
+            },
+          },
+          orderBy: { id: "asc" },
+        });
+        for (const profile of profiles) {
+          for (const machine of profile.machineCapability.machines) {
+            if (!machine.node.active) continue;
+            const calibration = machine.calibrations[0];
+            if (!calibration) continue;
+            for (const inventory of machine.inventories) {
+              const partsPerPlate = Math.min(
+                item.referencePartsPerPlate ?? quantity,
+                quantity,
+              );
+              const arrangementRevisionId = deterministicUuid(
+                `automatic-arrangement:${bindingId}:${item.id}:${shipmentPlan.id}:${quantity}`,
+              );
+              const arrangementContentSha256 = fingerprintOf({
+                bindingId,
+                itemId: item.id,
+                shipmentPlanId: shipmentPlan.id,
+                quantity,
+                partsPerPlate,
+              });
+              await this.prisma.arrangementRevision.upsert({
+                where: { id: arrangementRevisionId },
+                create: {
+                  id: arrangementRevisionId,
+                  contentSha256: arrangementContentSha256,
+                },
+                update: {},
+              });
+              const inputBase = {
+                geometry: {
+                  sourceModelFileId: item.sourceModelFile.id,
+                  sourceContentSha256: item.sourceModelFile.contentHash,
+                  modelGeometryId: item.modelGeometry.id,
+                  canonicalObjectKey: item.modelGeometry.canonicalObjectKey,
+                  geometrySha256: item.modelGeometry.geometryHash,
+                  bodyIds: draft.bodyIds,
+                  selectionSha256: draft.selectionSha256,
+                },
+                machineId: machine.id,
+                machineProfile: {
+                  revisionId: profile.id,
+                  contentSha256: slicerSettingsSnapshot(profile.settings)
+                    .contentSha256,
+                  slicerEngine: profile.slicerEngine,
+                  slicerVersion: profile.slicerVersion,
+                  productionArtifactFormat: "gcode_3mf" as const,
+                },
+                machineCalibration: {
+                  revisionId: calibration.id,
+                  contentSha256: slicerSettingsSnapshot(calibration.settings)
+                    .contentSha256,
+                },
+                printConfig: {
+                  revisionId: item.printConfigRevision.id,
+                  contentSha256: slicerSettingsSnapshot(
+                    item.printConfigRevision.settings,
+                  ).contentSha256,
+                },
+                partsPerPlate,
+                quantity,
+                shipmentPlanId: shipmentPlan.id,
+                arrangementRevision: {
+                  revisionId: arrangementRevisionId,
+                  contentSha256: arrangementContentSha256,
+                },
+              };
+              const occupancySliceTargets = referenceOccupancies(
+                quantity,
+                partsPerPlate,
+              ).map((occupancy) => {
+                const cacheIdentitySha256 =
+                  contracts.machineOccupancyCacheIdentitySha256(
+                    inputBase,
+                    occupancy,
+                  );
+                return {
+                  partsPerPlate: occupancy,
+                  cacheIdentitySha256,
+                  analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
+                };
+              });
+              const candidateInput = { ...inputBase, occupancySliceTargets };
+              const jobId = deterministicUuid(
+                `automatic-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}`,
+              );
+              const inputFingerprintSha256 = contracts.slicingInputFingerprint(
+                "candidate_estimate",
+                candidateInput,
+              );
+              const job = contracts.CandidateEstimateJobSchema.parse({
+                contractVersion: 2,
+                kind: "candidate_estimate",
+                jobId,
+                correlationId: orderId,
+                inputFingerprintSha256,
+                idempotencyKey: `slicer:v2:candidate_estimate:${jobId}:${inputFingerprintSha256}`,
+                attempt: 1,
+                input: candidateInput,
+              });
+              await this.candidateEstimates.dispatch({
+                nodeId: machine.nodeId,
+                inventoryId: inventory.id,
+                job,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private async finalizeAutomaticQuote(input: {
+    orderId: string;
+    bindingId: string;
+    phaseResourcePlanId: string;
+    phaseReservationSetId: string;
+  }): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`
+        SELECT taven_lock_automatic_order_session(${input.orderId}::uuid)::text
+      `;
+      const observedAt = await databaseNow(transaction);
+      const active = await transaction.orderActivePriceBinding.findUnique({
+        where: { orderId: input.orderId },
+      });
+      const plan = await transaction.phaseResourcePlan.findUnique({
+        where: { id: input.phaseResourcePlanId },
+        include: {
+          eligibilitySnapshot: { include: { orderPhase: true } },
+        },
+      });
+      const reservation = await transaction.phaseReservationSet.findUnique({
+        where: { id: input.phaseReservationSetId },
+      });
+      const origin = await transaction.automaticOrderOrigin.findUnique({
+        where: { orderId: input.orderId },
+      });
+      if (
+        active?.orderPriceBindingId !== input.bindingId ||
+        plan?.eligibilitySnapshot.orderPhase.orderId !== input.orderId ||
+        plan.expiresAt <= observedAt ||
+        reservation?.phaseResourcePlanId !== plan.id ||
+        reservation.status !== "RESERVED" ||
+        reservation.expiresAt <= observedAt ||
+        !origin
+      ) {
+        return;
+      }
+      await transaction.order.updateMany({
+        where: { id: input.orderId, status: OrderStatus.DRAFT },
+        data: {
+          status: OrderStatus.QUOTED,
+          quotedAt: observedAt,
+          updatedAt: observedAt,
+        },
+      });
+      await transaction.quoteSession.updateMany({
+        where: {
+          id: origin.quoteSessionId,
+          status: QuoteSessionStatus.OPEN,
+        },
+        data: {
+          status: QuoteSessionStatus.CONVERTED,
+          updatedAt: observedAt,
+        },
+      });
+      await transaction.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
+    });
+  }
+
+  private async referenceSlices(
+    transaction: Transaction,
+    item: {
+      selectionSha256: string;
+      printConfigRevisionId: string;
+      referenceProfileId: string;
+    },
+    geometry: { id: string; geometryHash: string },
+    occupancies: readonly number[],
+  ) {
+    const { buildReferenceSliceCacheKey, RevisionRef, Sha256Digest } =
+      await import("@taven/core");
+    const slices = [];
+    for (const partsPerPlate of occupancies) {
+      const cacheKey = buildReferenceSliceCacheKey({
+        geometryHash: Sha256Digest.parse(geometry.geometryHash),
+        modelGeometryId: geometry.id,
+        geometrySelectionHash: Sha256Digest.parse(item.selectionSha256),
+        referenceProfileRevision: RevisionRef.create(
+          "reference-profile",
+          item.referenceProfileId,
+        ),
+        printConfigRevision: RevisionRef.create(
+          "print-config",
+          item.printConfigRevisionId,
+        ),
+        partsPerPlate,
+      });
+      slices.push(
+        await transaction.sliceResult.findUniqueOrThrow({
+          where: { cacheKey },
+        }),
+      );
+    }
+    return slices;
+  }
+
+  private async roughQuote(orderId: string): Promise<{
+    quote: AutomaticQuoteSessionDto["roughEstimate"];
+    express: { eligible: boolean; reasons: readonly string[] };
+    reasons: readonly string[];
+  } | null> {
+    const [draft, priceList] = await Promise.all([
+      this.prisma.automaticQuoteDraft.findUnique({
+        where: { orderId },
+        include: {
+          selectedDeliveryDestination: true,
+          items: { orderBy: { ordinal: "asc" } },
+        },
+      }),
+      this.prisma.priceList.findUnique({
+        where: {
+          currency_revision: {
+            currency: "CZK",
+            revision: AUTOMATIC_PRICE_LIST_REVISION,
+          },
+        },
+      }),
+    ]);
+    if (!draft || !priceList || draft.items.length === 0) return null;
+    const pricingItems = [];
+    const itemOrdinals = new Map<string, number>();
+    for (const item of draft.items) {
+      const geometry = await this.prisma.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      if (!geometry) return null;
+      const occupancies = referenceOccupancies(
+        item.quantity,
+        item.referencePartsPerPlate,
+      );
+      const slices = await this.referenceSlices(
+        this.prisma,
+        item,
+        geometry,
+        occupancies,
+      ).catch(() => null);
+      if (!slices?.[0]) return null;
+      const itemId = deterministicUuid(`automatic-rough-item:${item.id}`);
+      itemOrdinals.set(itemId, item.ordinal);
+      pricingItems.push({
+        id: itemId,
+        referenceProfileId: item.referenceProfileId,
+        material: item.material,
+        quantity: item.quantity,
+        referencePartsPerPlate: occupancies[0]!,
+        primary: slices[0],
+        tail: slices[1] ?? null,
+        boundsXMicrometers: geometry.boundsXMicrometers,
+        boundsYMicrometers: geometry.boundsYMicrometers,
+        boundsZMicrometers: geometry.boundsZMicrometers,
+        fulfilmentSlots: Array.from({ length: item.quantity }, (_, index) => ({
+          id: deterministicUuid(`automatic-rough-slot:${item.id}:${index + 1}`),
+          packingUnitKey: `${itemId}:single:${index + 1}`,
+        })),
+      });
+    }
+    const [materialAndColorAvailable, withinBuildLimits] = await Promise.all([
+      this.materialsAvailable(this.prisma, draft.items),
+      this.geometriesFitActiveMachines(
+        this.prisma,
+        pricingItems.map((item) => ({
+          material: item.material,
+          modelGeometry: item,
+        })),
+      ),
+    ]);
+    const result = (
+      await prepareAutomaticQuote({
+        priceList,
+        items: pricingItems,
+        expressRequested: draft.expressRequested,
+        materialAndColorAvailable,
+        withinBuildLimits,
+        riskAcknowledgementsComplete: true,
+        hasBlockingPreflightFinding: false,
+        ...(draft.selectedDeliveryDestination
+          ? {
+              deliveryDestination: draft.selectedDeliveryDestination,
+              shipmentPlanIdForOrdinal: (ordinal: number) =>
+                deterministicUuid(
+                  `automatic-rough-shipment-plan:${orderId}:${draft.configurationRevision}:${ordinal}`,
+                ),
+            }
+          : {}),
+      })
+    ).prepared;
+    return {
+      quote: provisionalPriceDto(result.price, itemOrdinals),
+      express: result.expressEligibility,
+      reasons: result.reasons,
+    };
+  }
+
+  private async loadSession(sessionId: string) {
+    const session = await this.prisma.quoteSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        automaticOrderOrigin: {
+          include: {
+            order: {
+              include: {
+                automaticQuoteDraft: {
+                  include: {
+                    selectedDeliveryDestination: true,
+                    modelFiles: {
+                      include: { modelFile: true },
+                      orderBy: { createdAt: "asc" },
+                    },
+                    items: {
+                      include: { riskDecisions: true },
+                      orderBy: { ordinal: "asc" },
+                    },
+                  },
+                },
+                activePriceBinding: {
+                  include: {
+                    orderPriceBinding: {
+                      include: {
+                        priceSnapshot: {
+                          include: { components: true },
+                        },
+                        shipmentPlans: true,
+                      },
+                    },
+                  },
+                },
+                items: { orderBy: { ordinal: "asc" } },
+                phases: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!session?.automaticOrderOrigin?.order.automaticQuoteDraft) {
+      throw new NotFoundException("Automatic quote session was not found");
+    }
+    return session;
+  }
+
+  private async readModel(
+    session: Awaited<ReturnType<AutomaticQuotesService["loadSession"]>>,
+  ): Promise<AutomaticQuoteSessionDto> {
+    const order = session.automaticOrderOrigin!.order;
+    const draft = order.automaticQuoteDraft!;
+    const expired =
+      session.status === QuoteSessionStatus.EXPIRED ||
+      session.expiresAt.getTime() <= Date.now();
+    const modelFiles = await Promise.all(
+      draft.modelFiles.map(async (attached) => {
+        if (attached.modelFile.format === ModelFileFormat.STEP) {
+          return {
+            modelFileId: attached.modelFileId,
+            format: attached.modelFile.format,
+            inspectionStatus: "UNSUPPORTED" as const,
+            discoveredBodyIds: [],
+          };
+        }
+        const result = await terminalResultForJob(
+          this.prisma,
+          attached.inspectionJobId,
+          "model_inspection",
+        );
+        return {
+          modelFileId: attached.modelFileId,
+          format: attached.modelFile.format,
+          inspectionStatus: terminalStatus(result),
+          discoveredBodyIds: successfulInspectionBodies(result),
+        };
+      }),
+    );
+    const itemDtos = await Promise.all(
+      draft.items.map(async (item) => {
+        const geometry = await this.prisma.modelGeometry.findUnique({
+          where: { id: item.targetModelGeometryId },
+        });
+        const missing = geometry
+          ? await this.missingReferenceSlices(this.prisma, item, geometry)
+          : [];
+        const findings = await this.prisma.preflightFinding.findMany({
+          where: {
+            modelFileId: item.sourceModelFileId,
+            OR: [
+              { modelGeometryId: null },
+              { modelGeometryId: item.targetModelGeometryId },
+            ],
+          },
+          orderBy: [{ severity: "desc" }, { code: "asc" }],
+        });
+        const decisions = new Map(
+          item.riskDecisions
+            .filter(
+              (decision) =>
+                decision.configurationFingerprint ===
+                item.configurationFingerprint,
+            )
+            .map((decision) => [
+              decision.preflightFindingId,
+              decision.decision,
+            ]),
+        );
+        return {
+          id: item.id,
+          ordinal: item.ordinal,
+          modelFileId: item.sourceModelFileId,
+          bodyIds: item.bodyIds,
+          material: item.material,
+          color: item.color,
+          infillPreset: item.infillPreset,
+          quantity: item.quantity,
+          fitSensitive: item.fitSensitive,
+          status: !geometry
+            ? ("CANONICALIZATION_PENDING" as const)
+            : missing.length > 0
+              ? ("REFERENCE_SLICING_PENDING" as const)
+              : ("READY" as const),
+          findings: findings.map((finding) => ({
+            id: finding.id,
+            code: finding.code,
+            severity: finding.severity,
+            message: finding.message,
+            acknowledgementKey: findingAcknowledgementKey(finding.evidence),
+            decision: decisions.get(finding.id) ?? null,
+          })),
+        };
+      }),
+    );
+    const handoffReasons: string[] = [];
+    if (modelFiles.some((file) => file.inspectionStatus === "UNSUPPORTED")) {
+      handoffReasons.push("UNSUPPORTED_FORMAT");
+    }
+    if (modelFiles.some((file) => file.inspectionStatus === "FAILED")) {
+      handoffReasons.push("INSPECTION_FAILED");
+    }
+    if (
+      itemDtos.some((item) =>
+        item.findings.some((finding) => finding.severity === "BLOCKING"),
+      )
+    ) {
+      handoffReasons.push("BLOCKING_PREFLIGHT_FINDING");
+    }
+    if (
+      itemDtos.some((item) =>
+        item.findings.some((finding) => finding.decision === "DECLINED"),
+      )
+    ) {
+      handoffReasons.push("RISK_DECLINED");
+    }
+    const readyItems =
+      itemDtos.length > 0 && itemDtos.every((item) => item.status === "READY");
+    const acknowledgementIncomplete = itemDtos.some((item) =>
+      item.findings.some(
+        (finding) =>
+          finding.severity === "WARNING" && finding.decision !== "ACKNOWLEDGED",
+      ),
+    );
+    const rough = readyItems ? await this.roughQuote(order.id) : null;
+    const permanentRoughReasons = new Set([
+      "UNSUPPORTED_FORMAT",
+      "BLOCKING_PREFLIGHT_FINDING",
+      "AUTOMATIC_QUANTITY_LIMIT_EXCEEDED",
+      "AUTOMATIC_AMOUNT_LIMIT_EXCEEDED",
+      "BUILD_LIMIT_EXCEEDED",
+      "SHIPMENT_INELIGIBLE",
+      "EXPRESS_INELIGIBLE",
+    ]);
+    for (const reason of rough?.reasons ?? []) {
+      if (
+        permanentRoughReasons.has(reason) &&
+        !handoffReasons.includes(reason)
+      ) {
+        handoffReasons.push(reason);
+      }
+    }
+    const selectedDestinationId = draft.selectedDeliveryDestinationId;
+    const candidateActive = order.activePriceBinding?.orderPriceBinding;
+    const active =
+      candidateActive?.deliveryDestinationId === selectedDestinationId
+        ? candidateActive
+        : undefined;
+    const currentPlan = active
+      ? await this.prisma.phaseResourcePlan.findFirst({
+          where: {
+            orderPhaseId: { in: order.phases.map((phase) => phase.id) },
+            expiresAt: { gt: new Date() },
+            jobs: {
+              some: {
+                candidateResourceEstimate: {
+                  shipmentPlan: { orderPriceBindingId: active.id },
+                },
+              },
+            },
+          },
+          include: { reservationSets: true },
+          orderBy: { createdAt: "desc" },
+        })
+      : null;
+    const currentReservation = currentPlan?.reservationSets.find(
+      (reservation) =>
+        reservation.status === "RESERVED" &&
+        reservation.expiresAt.getTime() > Date.now(),
+    );
+    const checkoutReady =
+      order.status === OrderStatus.QUOTED &&
+      Boolean(active && currentPlan && currentReservation);
+    const bindingQuote =
+      checkoutReady && active
+        ? priceDto(
+            active.priceSnapshot,
+            order.items,
+            active.shipmentPlans,
+            "BINDING",
+          )
+        : null;
+    const phase = expired
+      ? "EXPIRED"
+      : handoffReasons.length > 0
+        ? "HANDOFF_REQUIRED"
+        : modelFiles.length === 0 ||
+            modelFiles.some((file) => file.inspectionStatus === "PENDING")
+          ? "INSPECTION_PENDING"
+          : itemDtos.length === 0
+            ? "CONFIGURATION_REQUIRED"
+            : !readyItems
+              ? "REFERENCE_SLICES_PENDING"
+              : acknowledgementIncomplete
+                ? "ACTION_REQUIRED"
+                : !draft.selectedDeliveryDestinationId
+                  ? "DESTINATION_REQUIRED"
+                  : checkoutReady
+                    ? "CHECKOUT_READY"
+                    : "ELIGIBILITY_PENDING";
+    return {
+      sessionId: session.id,
+      orderId: order.id,
+      publicReference: order.publicReference,
+      phase,
+      configurationRevision: draft.configurationRevision,
+      modelFiles,
+      items: itemDtos,
+      roughEstimate: rough?.quote ?? null,
+      bindingQuote,
+      express: {
+        requested: draft.expressRequested,
+        eligible: rough?.express.eligible ?? false,
+        reasons:
+          (rough ? [...rough.express.reasons] : undefined) ??
+          (draft.expressRequested ? ["ELIGIBILITY_PENDING"] : []),
+      },
+      handoff:
+        handoffReasons.length > 0
+          ? {
+              kind: "INDIVIDUAL_QUOTE_REQUEST",
+              reasons: handoffReasons,
+              safeContext: {
+                automaticQuoteSessionId: session.id,
+                modelFileIds: draft.modelFiles.map(
+                  ({ modelFileId }) => modelFileId,
+                ),
+                itemSelections: draft.items.map((item) => ({
+                  ordinal: item.ordinal,
+                  modelFileId: item.sourceModelFileId,
+                  bodyIds: item.bodyIds,
+                  material: item.material,
+                  quantity: item.quantity,
+                  fitSensitive: item.fitSensitive,
+                })),
+              },
+            }
+          : null,
+      checkoutReady,
+      expiresAt: session.expiresAt.toISOString(),
+    };
+  }
+}
+
+function referenceOccupancies(
+  quantity: number,
+  partsPerPlate: number,
+): number[] {
+  if (quantity <= partsPerPlate) return [quantity];
+  const remainder = quantity % partsPerPlate;
+  return remainder === 0 ? [partsPerPlate] : [partsPerPlate, remainder];
+}
+
+function inspectionInput(
+  source: {
+    id: string;
+    format: ModelFileFormat;
+    storageObjectKey: string;
+    contentHash: string;
+  },
+  operation: JsonRecord,
+) {
+  return {
+    source: {
+      modelFileId: source.id,
+      format: source.format === ModelFileFormat.STL ? "stl" : "3mf",
+      objectKey: source.storageObjectKey,
+      contentSha256: source.contentHash,
+    },
+    operation,
+    inspectionRevision: INSPECTION_REVISION,
+    inspectionConfigSha256: INSPECTION_CONFIG_SHA256,
+    canonicalizerRevision: CANONICALIZER_REVISION,
+    canonicalizerConfigSha256: CANONICALIZER_CONFIG_SHA256,
+  };
+}
+
+async function enqueueInspection(
+  transaction: Transaction,
+  input: {
+    jobId: string;
+    correlationId: string;
+    source: {
+      id: string;
+      format: ModelFileFormat;
+      storageObjectKey: string;
+      contentHash: string;
+    };
+    operation: JsonRecord;
+  },
+): Promise<void> {
+  const {
+    ModelInspectionJobSchema,
+    slicingDispatchAttemptKey,
+    slicingInputFingerprint,
+  } = await import("@taven/slicer-contracts");
+  const jobInput = inspectionInput(input.source, input.operation);
+  const inputFingerprintSha256 = slicingInputFingerprint(
+    "model_inspection",
+    jobInput,
+  );
+  const job = ModelInspectionJobSchema.parse({
+    contractVersion: 2,
+    kind: "model_inspection",
+    jobId: input.jobId,
+    correlationId: input.correlationId,
+    inputFingerprintSha256,
+    idempotencyKey: `slicer:v2:model_inspection:${input.jobId}:${inputFingerprintSha256}`,
+    attempt: 1,
+    input: jobInput,
+  });
+  const deduplicationKey = slicingDispatchAttemptKey(job.idempotencyKey, 1);
+  await transaction.outboxMessage.upsert({
+    where: { deduplicationKey },
+    create: {
+      deduplicationKey,
+      aggregateType: "ModelInspectionDispatch",
+      aggregateId: job.jobId,
+      messageType: "slicing.model-inspection.requested",
+      schemaVersion: 2,
+      payload: { job } as unknown as Prisma.InputJsonObject,
+    },
+    update: {},
+  });
+}
+
+async function terminalResultForJob(
+  transaction: Transaction | PrismaService,
+  jobId: string,
+  kind: "model_inspection" | "reference_slice",
+): Promise<unknown> {
+  const dispatch = await transaction.outboxMessage.findFirst({
+    where: {
+      aggregateId: jobId,
+      messageType:
+        kind === "model_inspection"
+          ? "slicing.model-inspection.requested"
+          : "slicing.reference-slice.requested",
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!dispatch) return null;
+  const receipt = await transaction.outboxMessage.findFirst({
+    where: {
+      aggregateType: "SlicingDispatchResult",
+      aggregateId: dispatch.id,
+      messageType: `slicing.${kind}.result-received`,
+    },
+  });
+  const payload = asRecord(receipt?.payload);
+  return payload?.result ?? null;
+}
+
+function successfulInspectionBodies(result: unknown): string[] {
+  const record = asRecord(result);
+  const outcome = asRecord(record?.outcome);
+  if (outcome?.status !== "succeeded" || !Array.isArray(outcome.bodies))
+    return [];
+  return outcome.bodies
+    .flatMap((body) => {
+      const bodyRecord = asRecord(body);
+      return typeof bodyRecord?.bodyId === "string" ? [bodyRecord.bodyId] : [];
+    })
+    .sort();
+}
+
+function terminalStatus(
+  result: unknown,
+): "PENDING" | "SUCCEEDED" | "FAILED" | "UNSUPPORTED" {
+  const outcome = asRecord(asRecord(result)?.outcome);
+  const status = outcome?.status;
+  return status === "succeeded"
+    ? "SUCCEEDED"
+    : status === "failed" && outcome?.failureClass === "unsupported_input"
+      ? "UNSUPPORTED"
+      : status === "failed"
+        ? "FAILED"
+        : "PENDING";
+}
+
+function findingAcknowledgementKey(
+  value: Prisma.JsonValue | null,
+): string | null {
+  const key = asRecord(value)?.acknowledgementKey;
+  return typeof key === "string" ? key : null;
+}
+
+function priceDto(
+  snapshot: {
+    currency: string;
+    contractTotalMinor: bigint;
+    components: Array<{
+      id: string;
+      kind: string;
+      scope: string;
+      orderItemId: string | null;
+      shipmentPlanId: string | null;
+      amountMinor: bigint;
+    }>;
+  },
+  orderItems: Array<{ id: string; ordinal: number }>,
+  shipmentPlans: Array<{ id: string; ordinal: number }>,
+  kind: "ROUGH_ESTIMATE" | "BINDING",
+) {
+  const itemOrdinals = new Map(
+    orderItems.map((item) => [item.id, item.ordinal]),
+  );
+  const planOrdinals = new Map(
+    shipmentPlans.map((plan) => [plan.id, plan.ordinal]),
+  );
+  return {
+    kind,
+    currency: snapshot.currency,
+    totalMinor: safeNumber(snapshot.contractTotalMinor),
+    components: snapshot.components.map((component) => ({
+      id: component.id,
+      kind: component.kind,
+      scope:
+        component.scope === "ORDER_ITEM"
+          ? ("ORDER_ITEM" as const)
+          : component.scope === "SHIPMENT_PLAN"
+            ? ("SHIPMENT_PLAN" as const)
+            : ("ORDER" as const),
+      itemOrdinal: component.orderItemId
+        ? (itemOrdinals.get(component.orderItemId) ?? null)
+        : null,
+      shipmentPlanOrdinal: component.shipmentPlanId
+        ? (planOrdinals.get(component.shipmentPlanId) ?? null)
+        : null,
+      amountMinor: safeNumber(component.amountMinor),
+    })),
+  };
+}
+
+function provisionalPriceDto(
+  price: {
+    breakdown: { subtotal: { minorUnits: bigint; currency: string } };
+    components: ReadonlyArray<{
+      componentId: string;
+      kind: string;
+      targetId?: string;
+      amount: { minorUnits: bigint };
+    }>;
+  },
+  itemOrdinals: ReadonlyMap<string, number>,
+): AutomaticQuoteSessionDto["roughEstimate"] {
+  return {
+    kind: "ROUGH_ESTIMATE",
+    currency: price.breakdown.subtotal.currency,
+    totalMinor: safeNumber(price.breakdown.subtotal.minorUnits),
+    components: price.components.map((component) => ({
+      id: component.componentId,
+      kind: component.kind,
+      scope:
+        component.targetId && itemOrdinals.has(component.targetId)
+          ? ("ORDER_ITEM" as const)
+          : ("ORDER" as const),
+      itemOrdinal: component.targetId
+        ? (itemOrdinals.get(component.targetId) ?? null)
+        : null,
+      shipmentPlanOrdinal: null,
+      amountMinor: safeNumber(component.amount.minorUnits),
+    })),
+  };
+}
+
+function cubicMicrometersToCubicMillimeters(value: bigint): bigint {
+  const divisor = 1_000_000_000n;
+  return (value + divisor - 1n) / divisor;
+}
+
+function jsonSafe(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(
+    JSON.stringify(value, (_key, entry: unknown) =>
+      typeof entry === "bigint" ? entry.toString() : entry,
+    ),
+  ) as Prisma.InputJsonValue;
+}
+
+async function lockedSession(transaction: Transaction, sessionId: string) {
+  const rows = await transaction.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM quote_sessions WHERE id = ${sessionId}::uuid FOR UPDATE
+  `;
+  if (!rows[0])
+    throw new NotFoundException("Automatic quote session was not found");
+  return transaction.quoteSession.findUniqueOrThrow({
+    where: { id: sessionId },
+  });
+}
+
+function assertOpenSession(
+  session: {
+    publicTokenHash: string;
+    status: QuoteSessionStatus;
+    expiresAt: Date;
+  },
+  token: string,
+): void {
+  assertSessionCapability(session, token);
+  if (
+    session.status !== QuoteSessionStatus.OPEN ||
+    session.expiresAt.getTime() <= Date.now()
+  ) {
+    throw new GoneException("Automatic quote session is no longer editable");
+  }
+}
+
+function assertOpenOrConvertedSession(
+  session: {
+    publicTokenHash: string;
+    status: QuoteSessionStatus;
+    expiresAt: Date;
+  },
+  token: string,
+): void {
+  assertSessionCapability(session, token);
+  if (
+    (session.status !== QuoteSessionStatus.OPEN &&
+      session.status !== QuoteSessionStatus.CONVERTED) ||
+    session.expiresAt.getTime() <= Date.now()
+  ) {
+    throw new GoneException("Automatic quote session is no longer available");
+  }
+}
+
+function assertSessionCapability(
+  session: { publicTokenHash: string } | null | undefined,
+  token: string,
+): asserts session is { publicTokenHash: string } {
+  if (!session || !matchesTokenHash(token, session.publicTokenHash)) {
+    throw new UnauthorizedException("Capability is invalid");
+  }
+}
+
+async function lockIdempotency(
+  transaction: Transaction,
+  namespace: string,
+  idempotencyKey: string,
+  requestFingerprint: string,
+) {
+  await transaction.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtextextended(${`${namespace}:${idempotencyKey}`}, 0)
+    )::text
+  `;
+  const observedAt = await databaseNow(transaction);
+  const existing = await transaction.idempotencyRecord.findFirst({
+    where: { namespace, idempotencyKey },
+    orderBy: { generation: "desc" },
+  });
+  if (existing && existing.expiresAt.getTime() > observedAt.getTime()) {
+    if (existing.requestFingerprint !== requestFingerprint) {
+      throw new ConflictException(
+        "Idempotency key was already used with different input",
+      );
+    }
+    if (
+      existing.status !== IdempotencyStatus.COMPLETED ||
+      existing.responseBody === null
+    ) {
+      throw new ConflictException("Idempotent command is incomplete");
+    }
+    return {
+      id: existing.id,
+      generation: existing.generation,
+      replayed: true as const,
+      response: existing.responseBody,
+    };
+  }
+  const created = await transaction.idempotencyRecord.create({
+    data: {
+      namespace,
+      idempotencyKey,
+      generation: (existing?.generation ?? 0) + 1,
+      requestFingerprint,
+      expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
+    },
+  });
+  return {
+    id: created.id,
+    generation: created.generation,
+    replayed: false as const,
+    response: null,
+  };
+}
+
+async function completeIdempotency(
+  transaction: Transaction,
+  id: string,
+  response: unknown,
+): Promise<void> {
+  await transaction.idempotencyRecord.update({
+    where: { id },
+    data: {
+      status: IdempotencyStatus.COMPLETED,
+      responseStatusCode: 200,
+      responseBody: JSON.parse(
+        JSON.stringify(response),
+      ) as Prisma.InputJsonValue,
+    },
+  });
+}
+
+async function databaseNow(
+  transaction: Transaction | PrismaService,
+): Promise<Date> {
+  const rows = await transaction.$queryRaw<Array<{ observed_at: Date }>>`
+    SELECT clock_timestamp() AS observed_at
+  `;
+  if (!rows[0]) throw new Error("Database clock is unavailable");
+  return rows[0].observed_at;
+}
+
+function sessionToken(
+  secret: string,
+  commandKey: string,
+  fingerprint: string,
+  generation: number,
+): string {
+  return createHmac("sha256", secret)
+    .update(["automatic-quote", commandKey, fingerprint, generation].join("\0"))
+    .digest("base64url");
+}
+
+function currentQuoteCapabilityKey(): QuoteCapabilityKey {
+  return quoteCapabilityKeyRing().current;
+}
+
+function quoteCapabilityKeyForId(keyId: string | null): string {
+  const key = keyId ? quoteCapabilityKeyRing().byId.get(keyId) : undefined;
+  if (!key) {
+    throw new Error(
+      `Quote capability key ${keyId || "<missing>"} is unavailable`,
+    );
+  }
+  return key;
+}
+
+function quoteCapabilityKeyRing(): {
+  current: QuoteCapabilityKey;
+  byId: ReadonlyMap<string, string>;
+} {
+  const currentKey = process.env.TAVEN_QUOTE_CAPABILITY_KEY;
+  if (!currentKey || currentKey.length < 32) {
+    throw new Error(
+      "TAVEN_QUOTE_CAPABILITY_KEY must contain at least 32 characters",
+    );
+  }
+  const previousKeys = previousQuoteCapabilityKeys();
+  const keys = [currentKey, ...previousKeys].map((key) => {
+    if (key.length < 32) {
+      throw new Error(
+        "Every TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS entry must contain at least 32 characters",
+      );
+    }
+    return { id: quoteCapabilityKeyId(key), key } satisfies QuoteCapabilityKey;
+  });
+  return {
+    current: keys[0]!,
+    byId: new Map(keys.map(({ id, key }) => [id, key])),
+  };
+}
+
+function previousQuoteCapabilityKeys(): string[] {
+  const serialized = process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS;
+  if (!serialized) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new Error(
+      "TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS must be a JSON array of strings",
+    );
+  }
+  if (!Array.isArray(parsed) || parsed.some((key) => typeof key !== "string")) {
+    throw new Error(
+      "TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS must be a JSON array of strings",
+    );
+  }
+  return parsed;
+}
+
+function quoteCapabilityKeyId(key: string): string {
+  return createHash("sha256")
+    .update("taven-quote-capability-key\0")
+    .update(key)
+    .digest("hex");
+}
+
+function bearerCapability(authorization?: string): string {
+  const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization ?? "");
+  if (!match?.[1]) throw new UnauthorizedException("Capability is invalid");
+  return match[1];
+}
+
+function bearerTokenValue(value: unknown, name: string): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return value;
+}
+
+function matchesTokenHash(token: string, expectedHash: string): boolean {
+  const actual = Buffer.from(hashToken(token), "hex");
+  const expected = Buffer.from(expectedHash, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function hashToken(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function fingerprintOf(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.entries(value as JsonRecord)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+    .join(",")}}`;
+}
+
+function deterministicUuid(value: string): string {
+  const bytes = createHash("sha256").update(value).digest();
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function normalizedUuid(value: unknown, name: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  ) {
+    throw new BadRequestException(`${name} must be a UUID`);
+  }
+  return value.toLowerCase();
+}
+
+function requireIdempotencyKey(value?: string): string {
+  if (!value || value.trim().length < 8 || value.trim().length > 255) {
+    throw new BadRequestException(
+      "Idempotency-Key must contain between 8 and 255 characters",
+    );
+  }
+  return value.trim();
+}
+
+function requiredText(value: unknown, name: string, maximum: number): string {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.trim().length > maximum
+  ) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return value.trim();
+}
+
+function optionalText(
+  value: unknown,
+  name: string,
+  maximum: number,
+): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  return requiredText(value, name, maximum);
+}
+
+function safeIdentifier(value: unknown, name: string): string {
+  const text = requiredText(value, name, 128);
+  if (!/^[a-z0-9][a-z0-9._:-]*$/.test(text)) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return text;
+}
+
+function positiveInteger(
+  value: unknown,
+  name: string,
+  maximum: number,
+): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    Number(value) < 1 ||
+    Number(value) > maximum
+  ) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return Number(value);
+}
+
+function nonnegativeInteger(
+  value: unknown,
+  name: string,
+  maximum: number,
+): number {
+  if (typeof value === "string" && !/^(?:0|[1-9][0-9]*)$/.test(value)) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0 || number > maximum) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return number;
+}
+
+function requiredJsonObject(value: unknown, name: string): JsonRecord {
+  const object = optionalJsonObject(value, name);
+  if (!object) throw new BadRequestException(`${name} is required`);
+  return object;
+}
+
+function optionalJsonObject(value: unknown, name: string): JsonRecord | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new BadRequestException(`${name} must be an object`);
+  }
+  const serialized = JSON.stringify(value);
+  if (serialized.length > 16_384) {
+    throw new BadRequestException(`${name} is too large`);
+  }
+  return JSON.parse(serialized) as JsonRecord;
+}
+
+function jsonNullable(
+  value: JsonRecord | null,
+): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  return value ? (value as Prisma.InputJsonObject) : Prisma.JsonNull;
+}
+
+function asRecord(value: unknown): JsonRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+function addDays(value: Date, days: number): Date {
+  return new Date(value.getTime() + days * 24 * 60 * 60 * 1_000);
+}
+
+function safeNumber(value: bigint): number {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0) {
+    throw new ConflictException("Persisted money exceeds the API range");
+  }
+  return number;
+}

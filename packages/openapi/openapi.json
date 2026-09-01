@@ -44,6 +44,588 @@
         ],
         "type": "object"
       },
+      "AttachAutomaticQuoteModelFileDto": {
+        "properties": {
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "uploadToken": {
+            "description": "Capability returned for the confirmed source upload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelFileId",
+          "uploadToken"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteExpressDto": {
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "requested": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requested",
+          "eligible",
+          "reasons"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteFindingDto": {
+        "properties": {
+          "acknowledgementKey": {
+            "nullable": true,
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "ACKNOWLEDGED",
+              "DECLINED"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "INFO",
+              "WARNING",
+              "BLOCKING"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "severity",
+          "message"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteHandoffDto": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "INDIVIDUAL_QUOTE_REQUEST"
+            ],
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "safeContext": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "kind",
+          "reasons",
+          "safeContext"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteItemDto": {
+        "properties": {
+          "bodyIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "color": {
+            "nullable": true,
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteFindingDto"
+            },
+            "type": "array"
+          },
+          "fitSensitive": {
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "infillPreset": {
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "CANONICALIZATION_PENDING",
+              "REFERENCE_SLICING_PENDING",
+              "READY"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ordinal",
+          "modelFileId",
+          "bodyIds",
+          "material",
+          "infillPreset",
+          "quantity",
+          "fitSensitive",
+          "status",
+          "findings"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteModelFileDto": {
+        "properties": {
+          "discoveredBodyIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "format": {
+            "enum": [
+              "STL",
+              "THREE_MF",
+              "STEP"
+            ],
+            "type": "string"
+          },
+          "inspectionStatus": {
+            "enum": [
+              "PENDING",
+              "SUCCEEDED",
+              "FAILED",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelFileId",
+          "format",
+          "inspectionStatus",
+          "discoveredBodyIds"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuotePriceComponentDto": {
+        "properties": {
+          "amountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "itemOrdinal": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "ITEM_PRODUCTION",
+              "ITEM_QUANTITY",
+              "ITEM_POSTPROCESSING",
+              "ORDER_MIN_PRINT",
+              "ORDER_SMALL_SURCHARGE",
+              "SHIPMENT",
+              "EXPRESS",
+              "PAYMENT_FEE"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "ORDER",
+              "ORDER_ITEM",
+              "SHIPMENT_PLAN"
+            ],
+            "type": "string"
+          },
+          "shipmentPlanOrdinal": {
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "scope",
+          "amountMinor"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuotePriceDto": {
+        "properties": {
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuotePriceComponentDto"
+            },
+            "type": "array"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "ROUGH_ESTIMATE",
+              "BINDING"
+            ],
+            "type": "string"
+          },
+          "totalMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "currency",
+          "components"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteRiskDecisionDto": {
+        "properties": {
+          "acknowledgementKey": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "ACKNOWLEDGED",
+              "DECLINED"
+            ],
+            "type": "string"
+          },
+          "findingId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemOrdinal": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "itemOrdinal",
+          "findingId",
+          "acknowledgementKey",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteSessionCreatedDto": {
+        "properties": {
+          "bindingQuote": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuotePriceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "checkoutReady": {
+            "type": "boolean"
+          },
+          "configurationRevision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "express": {
+            "$ref": "#/components/schemas/AutomaticQuoteExpressDto"
+          },
+          "handoff": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuoteHandoffDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteItemDto"
+            },
+            "type": "array"
+          },
+          "modelFiles": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteModelFileDto"
+            },
+            "type": "array"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "INSPECTION_PENDING",
+              "CONFIGURATION_REQUIRED",
+              "REFERENCE_SLICES_PENDING",
+              "ACTION_REQUIRED",
+              "DESTINATION_REQUIRED",
+              "ELIGIBILITY_PENDING",
+              "CHECKOUT_READY",
+              "EXPIRED",
+              "HANDOFF_REQUIRED"
+            ],
+            "type": "string"
+          },
+          "publicReference": {
+            "type": "string"
+          },
+          "roughEstimate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuotePriceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "sessionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sessionToken": {
+            "description": "Session-scoped capability",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "orderId",
+          "publicReference",
+          "phase",
+          "configurationRevision",
+          "modelFiles",
+          "items",
+          "express",
+          "checkoutReady",
+          "expiresAt",
+          "sessionToken"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteSessionDto": {
+        "properties": {
+          "bindingQuote": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuotePriceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "checkoutReady": {
+            "type": "boolean"
+          },
+          "configurationRevision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "express": {
+            "$ref": "#/components/schemas/AutomaticQuoteExpressDto"
+          },
+          "handoff": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuoteHandoffDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteItemDto"
+            },
+            "type": "array"
+          },
+          "modelFiles": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteModelFileDto"
+            },
+            "type": "array"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "INSPECTION_PENDING",
+              "CONFIGURATION_REQUIRED",
+              "REFERENCE_SLICES_PENDING",
+              "ACTION_REQUIRED",
+              "DESTINATION_REQUIRED",
+              "ELIGIBILITY_PENDING",
+              "CHECKOUT_READY",
+              "EXPIRED",
+              "HANDOFF_REQUIRED"
+            ],
+            "type": "string"
+          },
+          "publicReference": {
+            "type": "string"
+          },
+          "roughEstimate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuotePriceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "sessionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "orderId",
+          "publicReference",
+          "phase",
+          "configurationRevision",
+          "modelFiles",
+          "items",
+          "express",
+          "checkoutReady",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "ConfigureAutomaticQuoteItemDto": {
+        "properties": {
+          "bodyIds": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "color": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "fitSensitive": {
+            "default": false,
+            "type": "boolean"
+          },
+          "infillPreset": {
+            "enum": [
+              "DECORATIVE",
+              "STANDARD",
+              "STRONG"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "preferredPartsPerPlate": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "modelFileId",
+          "bodyIds",
+          "printConfigRevisionId",
+          "material",
+          "infillPreset",
+          "quantity"
+        ],
+        "type": "object"
+      },
       "ConfirmedUploadResponseDto": {
         "properties": {
           "assetId": {
@@ -77,6 +659,15 @@
           "uploadedAt",
           "deleteAfter"
         ],
+        "type": "object"
+      },
+      "CreateAutomaticQuoteSessionDto": {
+        "properties": {
+          "attribution": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
         "type": "object"
       },
       "CreateQuoteRequestDto": {
@@ -1065,6 +1656,39 @@
         ],
         "type": "object"
       },
+      "SelectAutomaticQuoteDestinationDto": {
+        "properties": {
+          "address": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "endpointType": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "providerEndpointId": {
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerEndpointId",
+          "endpointType",
+          "address"
+        ],
+        "type": "object"
+      },
+      "SetAutomaticQuoteExpressDto": {
+        "properties": {
+          "requested": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requested"
+        ],
+        "type": "object"
+      },
       "SignedDownloadResponseDto": {
         "properties": {
           "downloadUrl": {
@@ -1436,6 +2060,394 @@
         "summary": "Move a new request into operator review",
         "tags": [
           "operator quote requests"
+        ]
+      }
+    },
+    "/automatic-quote-sessions": {
+      "post": {
+        "operationId": "AutomaticQuotesController_create",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAutomaticQuoteSessionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionCreatedDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Idempotency input changed"
+          }
+        },
+        "summary": "Start a resumable direct quote",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}": {
+      "get": {
+        "operationId": "AutomaticQuotesController_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Session capability is invalid"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Resume or poll one direct quote",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/delivery-destination": {
+      "put": {
+        "operationId": "AutomaticQuotesController_selectDestination",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectAutomaticQuoteDestinationDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Select a provider-verified order destination",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/express": {
+      "put": {
+        "operationId": "AutomaticQuotesController_setExpress",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAutomaticQuoteExpressDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Set the whole-order express preference",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/items/{ordinal}/configuration": {
+      "put": {
+        "operationId": "AutomaticQuotesController_configure",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ordinal",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureAutomaticQuoteItemDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Inspection is pending or configuration is frozen"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Configure one selected body group",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/model-files": {
+      "post": {
+        "operationId": "AutomaticQuotesController_attach",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachAutomaticQuoteModelFileDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Session or upload capability is invalid"
+          },
+          "410": {
+            "description": "Session or source expired"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Attach a confirmed model and request inspection",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/prepare": {
+      "post": {
+        "operationId": "AutomaticQuotesController_prepare",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Advance slicing, binding price, and eligibility preparation",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/risk-decisions": {
+      "post": {
+        "operationId": "AutomaticQuotesController_decideRisk",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomaticQuoteRiskDecisionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteSessionDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Acknowledge or decline one current preflight risk",
+        "tags": [
+          "automatic quotes"
         ]
       }
     },

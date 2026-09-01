@@ -106,6 +106,142 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/automatic-quote-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a resumable direct quote */
+        post: operations["AutomaticQuotesController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automatic-quote-sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resume or poll one direct quote */
+        get: operations["AutomaticQuotesController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automatic-quote-sessions/{sessionId}/delivery-destination": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Select a provider-verified order destination */
+        put: operations["AutomaticQuotesController_selectDestination"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automatic-quote-sessions/{sessionId}/express": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the whole-order express preference */
+        put: operations["AutomaticQuotesController_setExpress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automatic-quote-sessions/{sessionId}/items/{ordinal}/configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Configure one selected body group */
+        put: operations["AutomaticQuotesController_configure"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automatic-quote-sessions/{sessionId}/model-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Attach a confirmed model and request inspection */
+        post: operations["AutomaticQuotesController_attach"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automatic-quote-sessions/{sessionId}/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Advance slicing, binding price, and eligibility preparation */
+        post: operations["AutomaticQuotesController_prepare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automatic-quote-sessions/{sessionId}/risk-decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge or decline one current preflight risk */
+        post: operations["AutomaticQuotesController_decideRisk"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -325,6 +461,143 @@ export interface components {
             termsRevision: string;
             version: number;
         };
+        AttachAutomaticQuoteModelFileDto: {
+            /** Format: uuid */
+            modelFileId: string;
+            /** @description Capability returned for the confirmed source upload */
+            uploadToken: string;
+        };
+        AutomaticQuoteExpressDto: {
+            eligible: boolean;
+            reasons: string[];
+            requested: boolean;
+        };
+        AutomaticQuoteFindingDto: {
+            acknowledgementKey?: string | null;
+            code: string;
+            /** @enum {string|null} */
+            decision?: "ACKNOWLEDGED" | "DECLINED" | null;
+            /** Format: uuid */
+            id: string;
+            message: string;
+            /** @enum {string} */
+            severity: "INFO" | "WARNING" | "BLOCKING";
+        };
+        AutomaticQuoteHandoffDto: {
+            /** @enum {string} */
+            kind: "INDIVIDUAL_QUOTE_REQUEST";
+            reasons: string[];
+            safeContext: {
+                [key: string]: unknown;
+            };
+        };
+        AutomaticQuoteItemDto: {
+            bodyIds: string[];
+            color?: string | null;
+            findings: components["schemas"]["AutomaticQuoteFindingDto"][];
+            fitSensitive: boolean;
+            /** Format: uuid */
+            id: string;
+            infillPreset: string;
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** Format: uuid */
+            modelFileId: string;
+            ordinal: number;
+            quantity: number;
+            /** @enum {string} */
+            status: "CANONICALIZATION_PENDING" | "REFERENCE_SLICING_PENDING" | "READY";
+        };
+        AutomaticQuoteModelFileDto: {
+            discoveredBodyIds: string[];
+            /** @enum {string} */
+            format: "STL" | "THREE_MF" | "STEP";
+            /** @enum {string} */
+            inspectionStatus: "PENDING" | "SUCCEEDED" | "FAILED" | "UNSUPPORTED";
+            /** Format: uuid */
+            modelFileId: string;
+        };
+        AutomaticQuotePriceComponentDto: {
+            amountMinor: number;
+            id: string;
+            itemOrdinal?: number | null;
+            /** @enum {string} */
+            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "SHIPMENT" | "EXPRESS" | "PAYMENT_FEE";
+            /** @enum {string} */
+            scope: "ORDER" | "ORDER_ITEM" | "SHIPMENT_PLAN";
+            shipmentPlanOrdinal?: number | null;
+        };
+        AutomaticQuotePriceDto: {
+            components: components["schemas"]["AutomaticQuotePriceComponentDto"][];
+            currency: string;
+            /** @enum {string} */
+            kind: "ROUGH_ESTIMATE" | "BINDING";
+            totalMinor?: number | null;
+        };
+        AutomaticQuoteRiskDecisionDto: {
+            acknowledgementKey: string;
+            /** @enum {string} */
+            decision: "ACKNOWLEDGED" | "DECLINED";
+            /** Format: uuid */
+            findingId: string;
+            itemOrdinal: number;
+        };
+        AutomaticQuoteSessionCreatedDto: {
+            bindingQuote?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            checkoutReady: boolean;
+            configurationRevision: number;
+            /** Format: date-time */
+            expiresAt: string;
+            express: components["schemas"]["AutomaticQuoteExpressDto"];
+            handoff?: components["schemas"]["AutomaticQuoteHandoffDto"] | null;
+            items: components["schemas"]["AutomaticQuoteItemDto"][];
+            modelFiles: components["schemas"]["AutomaticQuoteModelFileDto"][];
+            /** Format: uuid */
+            orderId: string;
+            /** @enum {string} */
+            phase: "INSPECTION_PENDING" | "CONFIGURATION_REQUIRED" | "REFERENCE_SLICES_PENDING" | "ACTION_REQUIRED" | "DESTINATION_REQUIRED" | "ELIGIBILITY_PENDING" | "CHECKOUT_READY" | "EXPIRED" | "HANDOFF_REQUIRED";
+            publicReference: string;
+            roughEstimate?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            /** Format: uuid */
+            sessionId: string;
+            /** @description Session-scoped capability */
+            sessionToken: string;
+        };
+        AutomaticQuoteSessionDto: {
+            bindingQuote?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            checkoutReady: boolean;
+            configurationRevision: number;
+            /** Format: date-time */
+            expiresAt: string;
+            express: components["schemas"]["AutomaticQuoteExpressDto"];
+            handoff?: components["schemas"]["AutomaticQuoteHandoffDto"] | null;
+            items: components["schemas"]["AutomaticQuoteItemDto"][];
+            modelFiles: components["schemas"]["AutomaticQuoteModelFileDto"][];
+            /** Format: uuid */
+            orderId: string;
+            /** @enum {string} */
+            phase: "INSPECTION_PENDING" | "CONFIGURATION_REQUIRED" | "REFERENCE_SLICES_PENDING" | "ACTION_REQUIRED" | "DESTINATION_REQUIRED" | "ELIGIBILITY_PENDING" | "CHECKOUT_READY" | "EXPIRED" | "HANDOFF_REQUIRED";
+            publicReference: string;
+            roughEstimate?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            /** Format: uuid */
+            sessionId: string;
+        };
+        ConfigureAutomaticQuoteItemDto: {
+            bodyIds: string[];
+            color?: string;
+            /** @default false */
+            fitSensitive: boolean;
+            /** @enum {string} */
+            infillPreset: "DECORATIVE" | "STANDARD" | "STRONG";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** Format: uuid */
+            modelFileId: string;
+            preferredPartsPerPlate?: number;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            quantity: number;
+        };
         ConfirmedUploadResponseDto: {
             /** Format: uuid */
             assetId: string;
@@ -336,6 +609,11 @@ export interface components {
             uploadedAt: string;
             /** Format: uuid */
             uploadId: string;
+        };
+        CreateAutomaticQuoteSessionDto: {
+            attribution?: {
+                [key: string]: unknown;
+            };
         };
         CreateQuoteRequestDto: {
             attribution?: {
@@ -617,6 +895,16 @@ export interface components {
             /** @description True only when the original source is retained. Claim-recovery artifacts never satisfy this value. */
             sourceAvailable: boolean;
         };
+        SelectAutomaticQuoteDestinationDto: {
+            address: {
+                [key: string]: unknown;
+            };
+            endpointType: string;
+            providerEndpointId: string;
+        };
+        SetAutomaticQuoteExpressDto: {
+            requested: boolean;
+        };
         SignedDownloadResponseDto: {
             /** Format: uri */
             downloadUrl: string;
@@ -818,6 +1106,242 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuoteRequestStatusDto"];
+                };
+            };
+        };
+    };
+    AutomaticQuotesController_create: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAutomaticQuoteSessionDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionCreatedDto"];
+                };
+            };
+            /** @description Idempotency input changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AutomaticQuotesController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
+                };
+            };
+            /** @description Session capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AutomaticQuotesController_selectDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectAutomaticQuoteDestinationDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
+                };
+            };
+        };
+    };
+    AutomaticQuotesController_setExpress: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAutomaticQuoteExpressDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
+                };
+            };
+        };
+    };
+    AutomaticQuotesController_configure: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                ordinal: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigureAutomaticQuoteItemDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
+                };
+            };
+            /** @description Inspection is pending or configuration is frozen */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AutomaticQuotesController_attach: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachAutomaticQuoteModelFileDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
+                };
+            };
+            /** @description Session or upload capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session or source expired */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AutomaticQuotesController_prepare: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
+                };
+            };
+        };
+    };
+    AutomaticQuotesController_decideRisk: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomaticQuoteRiskDecisionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
                 };
             };
         };
