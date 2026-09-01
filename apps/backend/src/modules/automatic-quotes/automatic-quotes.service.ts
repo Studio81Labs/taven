@@ -2386,7 +2386,7 @@ export class AutomaticQuotesService {
          AND inventory.machine_id = machine.id
          AND inventory.status = 'AVAILABLE'
          AND inventory.material = ${item.material}::material
-         AND inventory.color IS NOT DISTINCT FROM ${item.color}::text
+         AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
         WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
           AND profile.material = ${item.material}::material
           AND profile.state = 'ACTIVE'
@@ -4012,6 +4012,7 @@ export class AutomaticQuotesService {
     candidateAdmissionSatisfied = false,
   ): Promise<{
     quote: AutomaticQuoteSessionDto["roughEstimate"];
+    deliveryOptions: AutomaticQuoteSessionDto["deliveryOptions"];
     express: { eligible: boolean; reasons: readonly string[] };
     reasons: readonly string[];
   } | null> {
@@ -4040,6 +4041,13 @@ export class AutomaticQuotesService {
       parseAutomaticQuotePricingParameters(priceList.parameters),
     );
     if (!pricing) return null;
+    const deliveryOptions = await this.deliveryOptions({
+      orderId,
+      configurationRevision: draft.configurationRevision,
+      expressRequested: draft.expressRequested,
+      items: pricing.items,
+      priceList,
+    });
     const itemOrdinals = new Map(
       pricing.items.map((item, index) => [
         item.id,
@@ -4089,6 +4097,7 @@ export class AutomaticQuotesService {
         ).prepared;
     return {
       quote: provisionalPriceDto(result.price, itemOrdinals),
+      deliveryOptions,
       express: result.expressEligibility,
       reasons: pricing.allReferenceSliced ? result.reasons : [],
     };
@@ -4184,10 +4193,7 @@ export class AutomaticQuotesService {
         };
       }),
     );
-    const [configurationCapabilities, deliveryOptions] = await Promise.all([
-      this.configurationCapabilities(),
-      this.deliveryOptions(),
-    ]);
+    const configurationCapabilities = await this.configurationCapabilities();
     const configurationOptions = configurationCapabilities.map(
       ({ referenceProfileId: _referenceProfileId, ...option }) => option,
     );
@@ -4345,6 +4351,8 @@ export class AutomaticQuotesService {
       itemDtos.length > 0
         ? await this.roughQuote(order.id, hasLiveReservation)
         : null;
+    const deliveryOptions =
+      rough?.deliveryOptions ?? (await this.deliveryOptions());
     const permanentRoughReasons = new Set([
       "UNSUPPORTED_FORMAT",
       "BLOCKING_PREFLIGHT_FINDING",
@@ -4365,6 +4373,14 @@ export class AutomaticQuotesService {
       !expired &&
       order.status === OrderStatus.QUOTED &&
       Boolean(active && currentPlan && currentReservation);
+    if (
+      readyItems &&
+      !checkoutReady &&
+      deliveryOptions.length === 0 &&
+      !handoffReasons.includes("SHIPMENT_INELIGIBLE")
+    ) {
+      handoffReasons.push("SHIPMENT_INELIGIBLE");
+    }
     const expressCandidatePending =
       draft.expressRequested &&
       !expired &&
@@ -4537,17 +4553,31 @@ export class AutomaticQuotesService {
     }));
   }
 
-  private async deliveryOptions() {
+  private async deliveryOptions(input?: {
+    orderId: string;
+    configurationRevision: number;
+    expressRequested: boolean;
+    items: readonly AutomaticQuotePricingItem[];
+    priceList: {
+      id: string;
+      revision: string;
+      termsRevision: string;
+      currency: string;
+      parameters: Prisma.JsonValue;
+    };
+  }) {
     const [options, priceList] = await Promise.all([
       this.deliveryCapabilities.list(),
-      this.prisma.priceList.findUnique({
-        where: {
-          currency_revision: {
-            currency: "CZK",
-            revision: AUTOMATIC_PRICE_LIST_REVISION,
-          },
-        },
-      }),
+      input
+        ? Promise.resolve(input.priceList)
+        : this.prisma.priceList.findUnique({
+            where: {
+              currency_revision: {
+                currency: "CZK",
+                revision: AUTOMATIC_PRICE_LIST_REVISION,
+              },
+            },
+          }),
     ]);
     if (!priceList) return [];
     const pricedCategories = new Set(
@@ -4555,13 +4585,49 @@ export class AutomaticQuotesService {
         priceList.parameters,
       ).shipmentCategories.map(({ id }) => id),
     );
-    return options
-      .filter((option) =>
-        option.supportedCategoryIds.some((id) => pricedCategories.has(id)),
-      )
-      .map(
-        ({ supportedCategoryIds: _supportedCategoryIds, ...option }) => option,
-      );
+    const pricedOptions = options.filter((option) =>
+      option.supportedCategoryIds.some((id) => pricedCategories.has(id)),
+    );
+    const viableOptions = input
+      ? (
+          await Promise.all(
+            pricedOptions.map(async (option) => {
+              const identity = fingerprintOf({
+                endpointType: option.endpointType,
+                providerEndpointId: option.providerEndpointId,
+              });
+              const prepared = await prepareAutomaticQuote({
+                priceList,
+                items: input.items,
+                expressRequested: input.expressRequested,
+                materialAndColorAvailable: true,
+                withinBuildLimits: true,
+                riskAcknowledgementsComplete: true,
+                hasBlockingPreflightFinding: false,
+                deliveryDestination: {
+                  id: deterministicUuid(
+                    `automatic-delivery-option:${input.orderId}:${identity}`,
+                  ),
+                  capabilitySnapshot: {
+                    supportedCategoryIds: [...option.supportedCategoryIds],
+                  },
+                },
+                shipmentPlanIdForOrdinal: (ordinal) =>
+                  deterministicUuid(
+                    `automatic-delivery-option-plan:${input.orderId}:${input.configurationRevision}:${identity}:${ordinal}`,
+                  ),
+              });
+              return prepared.prepared.kind !== "binding_quote" &&
+                prepared.prepared.reasons.includes("SHIPMENT_INELIGIBLE")
+                ? null
+                : option;
+            }),
+          )
+        ).filter((option) => option !== null)
+      : pricedOptions;
+    return viableOptions.map(
+      ({ supportedCategoryIds: _supportedCategoryIds, ...option }) => option,
+    );
   }
 
   private async quantityComparisons(

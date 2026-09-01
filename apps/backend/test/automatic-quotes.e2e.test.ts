@@ -572,6 +572,22 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       await transaction.inventory.create({
         data: {
           nodeId: compatibleMachine.nodeId,
+          machineId: compatibleMachine.id,
+          sku: `${inventory.sku}-no-color-preference`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: null,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1n,
+          status: "AVAILABLE",
+        },
+      });
+      await transaction.inventory.create({
+        data: {
+          nodeId: compatibleMachine.nodeId,
           machineId: undersizedMachineId,
           sku: `${inventory.sku}-undersized`,
           material: inventory.material,
@@ -827,7 +843,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       quantity: number,
       command: string,
       fitSensitive = false,
-      color = quoteColor,
+      color: string | null = quoteColor,
     ) =>
       api(
         `automatic-quote-sessions/${sessionId}/items/${ordinal}/configuration`,
@@ -951,6 +967,33 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       "not-in-stock",
     );
     expect(unavailableConfiguration.response.status).toBe(400);
+
+    const noColorPreference = await configure(
+      0,
+      "body-a",
+      1,
+      "configure-no-color-preference",
+      false,
+      null,
+    );
+    expect(noColorPreference.response.status).toBe(200);
+    expect(noColorPreference.body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ color: null })]),
+    );
+    expect(
+      (
+        await api(
+          `automatic-quote-sessions/${sessionId}/items/0/configuration`,
+          {
+            method: "DELETE",
+            headers: capabilityHeaders(
+              sessionToken,
+              key("remove-no-color-preference"),
+            ),
+          },
+        )
+      ).response.status,
+    ).toBe(200);
 
     const undersizedMachineConfiguration = await configure(
       0,
@@ -1533,6 +1576,54 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         },
       }),
     ).toBe(referenceDispatches.length + 1);
+
+    const deliveryEndpointsBeforeHandoff =
+      process.env.TAVEN_DELIVERY_ENDPOINTS_JSON;
+    process.env.TAVEN_DELIVERY_ENDPOINTS_JSON = JSON.stringify([
+      {
+        providerEndpointId: "test-unpriced-only",
+        endpointType: "pickup_point",
+        addressSnapshot: {
+          country: "CZ",
+          city: "Ostrava",
+          label: "Test unpriced endpoint",
+        },
+        supportedCategoryIds: ["not-a-priced-category"],
+        provider: "test",
+      },
+    ]);
+    try {
+      const noDeliveryEndpoint = await api(
+        `automatic-quote-sessions/${sessionId}`,
+        { headers: { authorization: `Bearer ${sessionToken}` } },
+      );
+      expect(noDeliveryEndpoint.response.status).toBe(200);
+      expect(noDeliveryEndpoint.body).toMatchObject({
+        phase: "HANDOFF_REQUIRED",
+        deliveryOptions: [],
+        handoff: {
+          reasons: expect.arrayContaining(["SHIPMENT_INELIGIBLE"]),
+        },
+      });
+    } finally {
+      if (deliveryEndpointsBeforeHandoff === undefined) {
+        delete process.env.TAVEN_DELIVERY_ENDPOINTS_JSON;
+      } else {
+        process.env.TAVEN_DELIVERY_ENDPOINTS_JSON =
+          deliveryEndpointsBeforeHandoff;
+      }
+    }
+    const recoveredDeliveryOptions = await api(
+      `automatic-quote-sessions/${sessionId}`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+    expect(recoveredDeliveryOptions.body).toMatchObject({
+      phase: "DESTINATION_REQUIRED",
+      handoff: null,
+      deliveryOptions: expect.arrayContaining([
+        expect.objectContaining({ providerEndpointId: "test-pickup" }),
+      ]),
+    });
 
     const expressPending = await api(
       `automatic-quote-sessions/${sessionId}/express`,
