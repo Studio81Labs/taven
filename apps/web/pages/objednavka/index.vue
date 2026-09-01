@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import { formatFileSize } from "../../utils/model-file";
+import {
+  sanitizeAssistedQuoteHandoff,
+  saveAssistedQuoteHandoff,
+  type AssistedQuoteEntrySource,
+} from "../../utils/assisted-quote-context";
+import { getSessionStorage } from "../../utils/quote-session-storage";
 
 useHead({
   htmlAttrs: { lang: "cs" },
@@ -158,6 +164,25 @@ function chooseAdditionalFile(): void {
   additionalFileInput.value?.click();
 }
 
+function openAssistedQuote(): void {
+  let source: AssistedQuoteEntrySource = "individual-file";
+  const activeQuote = quote.value;
+  if (activeQuote?.handoff) {
+    source = "automatic-quote";
+    if (import.meta.client) {
+      const storage = getSessionStorage(window);
+      const context = sanitizeAssistedQuoteHandoff(
+        activeQuote.handoff,
+        activeQuote.expiresAt,
+      );
+      if (storage && context) saveAssistedQuoteHandoff(storage, context);
+    }
+  } else if (metadata.value?.format === "3MF") {
+    source = "blocked-3mf";
+  }
+  void navigateTo({ path: "/poptavka", query: { source } });
+}
+
 function inspectionLabel(status: string | undefined): string {
   const labels: Record<string, string> = {
     FAILED: "Kontrola se nezdařila",
@@ -237,6 +262,18 @@ function inspectionLabel(status: string | undefined): string {
             <span>nebo vyberte soubor z počítače</span>
             <span class="file-limit">nejvýše 100 MiB</span>
           </label>
+          <div class="assisted-entry">
+            <p>
+              Nemáte model, potřebujete poradit nebo chcete díl vytvořit podle
+              fotografie?
+            </p>
+            <NuxtLink
+              class="text-button"
+              :to="{ path: '/poptavka', query: { source: 'no-file' } }"
+            >
+              Přejít na individuální poptávku
+            </NuxtLink>
+          </div>
         </div>
 
         <div v-else class="model-card">
@@ -417,6 +454,13 @@ function inspectionLabel(status: string | undefined): string {
             <div class="card-actions">
               <button
                 class="primary-button"
+                type="button"
+                @click="openAssistedQuote"
+              >
+                Pokračovat individuální poptávkou
+              </button>
+              <button
+                class="secondary-button"
                 type="button"
                 @click="
                   addingModel ? cancelAdditionalModel() : chooseAnotherFile()
