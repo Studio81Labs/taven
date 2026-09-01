@@ -213,6 +213,22 @@ p {
     monospace;
 }
 
+.assisted-entry {
+  padding: 20px 28px 24px;
+  border-top: 1px solid var(--rule);
+}
+
+.assisted-entry p {
+  max-width: 580px;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.assisted-entry .text-button {
+  display: inline-block;
+  margin-top: 6px;
+}
+
 .file-heading {
   display: flex;
   align-items: end;
@@ -683,6 +699,209 @@ p {
   background: var(--surface);
 }
 
+.request-card {
+  max-width: 800px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.assisted-form {
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--rule);
+  background: var(--rule);
+}
+
+.assisted-form > fieldset,
+.context-banner,
+.form-actions,
+.request-error,
+.request-progress {
+  margin: 0;
+  padding: 28px;
+  border: 0;
+  background: var(--surface);
+}
+
+.assisted-form fieldset:disabled {
+  opacity: 0.72;
+}
+
+.assisted-form legend {
+  width: 100%;
+  margin-bottom: 18px;
+  padding: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.context-banner {
+  border-left: 3px solid var(--warning);
+}
+
+.context-banner p:last-child,
+.field-guidance {
+  max-width: 660px;
+  margin-bottom: 0;
+  font-size: 14px;
+}
+
+.field-guidance {
+  margin: -8px 0 20px;
+}
+
+.form-field {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.form-field + .form-field,
+.date-field {
+  margin-top: 20px;
+}
+
+.form-field input,
+.form-field textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.form-field textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.form-field input:focus-visible,
+.form-field textarea:focus-visible,
+.consent-row input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.form-field small,
+.attachment-list small {
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+
+.dimension-grid,
+.contact-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.dimension-grid .form-field,
+.contact-grid .form-field {
+  margin-top: 0;
+}
+
+.date-field {
+  max-width: 320px;
+}
+
+.photo-picker {
+  width: fit-content;
+}
+
+.attachment-list {
+  margin: 20px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+  list-style: none;
+}
+
+.attachment-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.attachment-list li > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.attachment-list strong {
+  overflow-wrap: anywhere;
+}
+
+.attachment-list .text-button {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.inline-error {
+  margin: 16px 0 0;
+  color: var(--stop);
+  font-size: 14px;
+}
+
+.privacy-fieldset {
+  display: grid;
+  gap: 18px;
+}
+
+.consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.consent-row input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.form-actions p {
+  max-width: 420px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.request-progress {
+  border-left: 3px solid var(--accent);
+}
+
+.request-error {
+  border-left: 3px solid var(--stop);
+}
+
+.request-error p {
+  max-width: 620px;
+}
+
+.request-error .primary-button {
+  margin-top: 8px;
+}
+
+.assisted-steps li {
+  grid-template-columns: 28px 1fr auto;
+}
+
 @media (max-width: 720px) {
   .configurator-heading,
   .configurator-section-heading,
@@ -708,6 +927,16 @@ p {
 
   .price-summary .total-price {
     white-space: normal;
+  }
+
+  .dimension-grid,
+  .contact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 
@@ -878,6 +1107,11 @@ progress::-moz-progress-bar {
   }
 
   .card-actions {
+    flex-direction: column;
+  }
+
+  .attachment-list li {
+    align-items: flex-start;
     flex-direction: column;
   }
 }
