@@ -55,6 +55,13 @@ const severity = {
   blocking: PreflightSeverity.BLOCKING,
 } as const;
 
+export class PermanentSlicingResultIngestionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentSlicingResultIngestionError";
+  }
+}
+
 @Injectable()
 export class SlicingResultIngestionService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -80,7 +87,7 @@ export class SlicingResultIngestionService {
       if (existingReceipt) {
         const payload = existingReceipt.payload as Record<string, unknown>;
         if (payload.resultFingerprintSha256 !== input.resultFingerprintSha256) {
-          throw new Error(
+          throw new PermanentSlicingResultIngestionError(
             "slicing dispatch already has a different terminal result",
           );
         }
@@ -142,7 +149,7 @@ export class SlicingResultIngestionService {
       select: { id: true },
     });
     if (!source) {
-      throw new Error(
+      throw new PermanentSlicingResultIngestionError(
         "inspection result source no longer matches its persisted model file",
       );
     }
@@ -158,7 +165,9 @@ export class SlicingResultIngestionService {
     if (result.input.operation.mode === "canonicalize_selection") {
       const artifact = result.outcome.canonicalGeometry;
       if (!artifact) {
-        throw new Error("canonical inspection result has no geometry artifact");
+        throw new PermanentSlicingResultIngestionError(
+          "canonical inspection result has no geometry artifact",
+        );
       }
       const expected = {
         id: artifact.modelGeometryId,
@@ -198,14 +207,14 @@ export class SlicingResultIngestionService {
         },
       });
       if (existing.length > 1) {
-        throw new Error(
+        throw new PermanentSlicingResultIngestionError(
           "canonical geometry ID and object key belong to different rows",
         );
       }
       if (existing[0]) {
         for (const [key, value] of Object.entries(expected)) {
           if (existing[0][key as keyof (typeof existing)[0]] !== value) {
-            throw new Error(
+            throw new PermanentSlicingResultIngestionError(
               "canonical geometry conflicts with immutable persisted geometry",
             );
           }
@@ -265,7 +274,7 @@ export class SlicingResultIngestionService {
       }),
     ]);
     if (!profile || !printConfig) {
-      throw new Error(
+      throw new PermanentSlicingResultIngestionError(
         "reference result no longer matches persisted profile revisions",
       );
     }
@@ -893,7 +902,7 @@ export class SlicingResultIngestionService {
       select: { id: true },
     });
     if (!persisted) {
-      throw new Error(
+      throw new PermanentSlicingResultIngestionError(
         "slicing result geometry no longer matches persisted immutable input",
       );
     }
@@ -910,7 +919,7 @@ export class SlicingResultIngestionService {
     if (existing) {
       for (const [key, value] of Object.entries(expected)) {
         if (existing[key as keyof typeof existing] !== value) {
-          throw new Error(
+          throw new PermanentSlicingResultIngestionError(
             "slice cache key belongs to different immutable metrics",
           );
         }
@@ -968,7 +977,7 @@ export class SlicingResultIngestionService {
           JSON.stringify(existing.evidence) !==
             JSON.stringify(expected.evidence)
         ) {
-          throw new Error(
+          throw new PermanentSlicingResultIngestionError(
             "preflight finding conflicts with immutable persisted evidence",
           );
         }

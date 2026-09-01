@@ -285,9 +285,9 @@ const MachineSlicerProfileSnapshotSchema = SlicerProfileSnapshotSchema.extend({
 });
 
 export const BoundingBoxSchema = z.strictObject({
-  xMicrometers: NonnegativeInt64StringSchema,
-  yMicrometers: NonnegativeInt64StringSchema,
-  zMicrometers: NonnegativeInt64StringSchema,
+  xMicrometers: PositiveInt64StringSchema,
+  yMicrometers: PositiveInt64StringSchema,
+  zMicrometers: PositiveInt64StringSchema,
 });
 
 export const TopologyMetricsSchema = z.strictObject({
@@ -813,7 +813,7 @@ const BodyInspectionSchema = z.strictObject({
   bodyId: SafeIdentifierSchema,
   bodySha256: Sha256Schema,
   boundingBox: BoundingBoxSchema,
-  volumeCubicMicrometers: NonnegativeInt64StringSchema,
+  volumeCubicMicrometers: PositiveInt64StringSchema,
   triangleCount: boundedNonnegativeInteger(1_000_000_000),
   topology: TopologyMetricsSchema,
   hasPaintAssignments: z.boolean(),

@@ -7,7 +7,15 @@ import type { SlicingJob } from "@taven/slicer-contracts" with {
 };
 import { PrismaService } from "../../prisma/prisma.service";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
-import { SlicingResultIngestionService } from "./slicing-result-ingestion.service";
+import {
+  ResourceConflictError,
+  ResourceNotFoundError,
+  ResourceValidationError,
+} from "../resources/resource-errors";
+import {
+  PermanentSlicingResultIngestionError,
+  SlicingResultIngestionService,
+} from "./slicing-result-ingestion.service";
 import { SLICING_QUEUE } from "./slicing.tokens";
 
 const CLAIM_LEASE_MILLISECONDS = 5 * 60 * 1_000;
@@ -47,6 +55,15 @@ function safeLastError(error: unknown): string {
       "credential",
     )
     .slice(0, MAX_LAST_ERROR_LENGTH);
+}
+
+function isPermanentIngestionError(error: unknown): boolean {
+  return (
+    error instanceof PermanentSlicingResultIngestionError ||
+    error instanceof ResourceConflictError ||
+    error instanceof ResourceNotFoundError ||
+    error instanceof ResourceValidationError
+  );
 }
 
 class InvalidSlicingQueueEntryError extends Error {}
@@ -190,15 +207,23 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
         continue;
       }
       const resultFingerprintSha256 = slicingResultFingerprint(result);
-      if (result.kind === "candidate_estimate") {
-        await this.candidateEstimates.ingest({ result });
+      try {
+        if (result.kind === "candidate_estimate") {
+          await this.candidateEstimates.ingest({ result });
+        }
+        await this.results.ingest({
+          dispatchId,
+          job,
+          result,
+          resultFingerprintSha256,
+        });
+      } catch (error) {
+        if (!isPermanentIngestionError(error)) throw error;
+        await this.deadLetter(queued, dispatchId, job, error);
+        await queued.remove();
+        reconciled += 1;
+        continue;
       }
-      await this.results.ingest({
-        dispatchId,
-        job,
-        result,
-        resultFingerprintSha256,
-      });
       await queued.remove();
       reconciled += 1;
     }

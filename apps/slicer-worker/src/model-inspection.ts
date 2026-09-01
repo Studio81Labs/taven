@@ -211,11 +211,23 @@ function body(
     JSON.stringify(triangles.map((triangle) => triangle.flat())),
     "utf8",
   );
+  const dimensions = boundingBox(triangles);
+  const bodyVolume = volume(triangles);
+  if (
+    bodyVolume === "0" ||
+    dimensions.xMicrometers === "0" ||
+    dimensions.yMicrometers === "0" ||
+    dimensions.zMicrometers === "0"
+  ) {
+    invalid(
+      "Model body must have positive volume and three-dimensional bounds",
+    );
+  }
   return {
     bodyId,
     bodySha256: sha256(canonical),
-    boundingBox: boundingBox(triangles),
-    volumeCubicMicrometers: volume(triangles),
+    boundingBox: dimensions,
+    volumeCubicMicrometers: bodyVolume,
     triangleCount: triangles.length,
     topology: topology(triangles),
     hasPaintAssignments: assignment.paint,

@@ -65,16 +65,55 @@ describe("safe model inspection", () => {
         facet normal 0 0 1
           outer loop
             vertex 0 0 0
+            vertex 0 1 0
+            vertex 1 0 0
+          endloop
+        endfacet
+        facet normal 0 1 0
+          outer loop
+            vertex 0 0 0
+            vertex 1 0 0
+            vertex 0 0 1
+          endloop
+        endfacet
+        facet normal 1 1 1
+          outer loop
             vertex 1 0 0
             vertex 0 1 0
+            vertex 0 0 1
+          endloop
+        endfacet
+        facet normal 1 0 0
+          outer loop
+            vertex 0 1 0
+            vertex 0 0 0
+            vertex 0 0 1
           endloop
         endfacet
       endsolid vertex 88 88 88
     `);
 
     const inspection = inspectModel("stl", source);
-    expect(inspection.bodies[0]?.triangleCount).toBe(1);
+    expect(inspection.bodies[0]?.triangleCount).toBe(4);
     expect(inspection.boundingBox.xMicrometers).toBe("1000");
+  });
+
+  it("rejects structurally valid geometry with zero volume or bounds", () => {
+    const planar = new TextEncoder().encode(`
+      solid planar
+        facet normal 0 0 1
+          outer loop
+            vertex 0 0 0
+            vertex 1 0 0
+            vertex 0 1 0
+          endloop
+        endfacet
+      endsolid planar
+    `);
+
+    expect(() => inspectModel("stl", planar)).toThrow(
+      "positive volume and three-dimensional bounds",
+    );
   });
 
   it.each([

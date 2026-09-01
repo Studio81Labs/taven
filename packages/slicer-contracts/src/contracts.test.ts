@@ -858,6 +858,29 @@ describe("versioned slicing results", () => {
     expect(ModelInspectionResultSchema.parse(sourceInspection)).toEqual(
       sourceInspection,
     );
+    for (const zeroGeometry of [
+      {
+        ...inspectionOutcome,
+        metrics: {
+          ...inspectionOutcome.metrics,
+          boundingBox: {
+            ...inspectionOutcome.metrics.boundingBox,
+            zMicrometers: "0",
+          },
+        },
+      },
+      {
+        ...inspectionOutcome,
+        bodies: inspectionOutcome.bodies.map((body) => ({
+          ...body,
+          volumeCubicMicrometers: "0",
+        })),
+      },
+    ]) {
+      expect(() =>
+        ModelInspectionResultSchema.parse(result(inspectionJob, zeroGeometry)),
+      ).toThrow();
+    }
     expect(() =>
       ModelInspectionResultSchema.parse({
         ...sourceInspection,
