@@ -258,33 +258,83 @@ function parseBinaryStl(bytes: Uint8Array): Triangle[] | null {
 }
 
 function parseAsciiStl(bytes: Uint8Array): Triangle[] {
-  const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  if (!/^\s*solid(?:\s|$)/iu.test(source) || !/\bendsolid\b/iu.test(source)) {
+  let source: string;
+  try {
+    source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
     invalid("STL is neither canonical binary nor valid ASCII");
   }
-  const vertices = [
-    ...source.matchAll(/\bvertex\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)/giu),
-  ].map((match): Point => [
-    finiteNumber(match[1], "STL x coordinate"),
-    finiteNumber(match[2], "STL y coordinate"),
-    finiteNumber(match[3], "STL z coordinate"),
-  ]);
-  if (vertices.length < 3 || vertices.length % 3 !== 0) {
-    invalid("ASCII STL contains incomplete triangles");
+
+  const lines = source
+    .split(/\r?\n/gu)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  let cursor = 0;
+  if (!/^solid(?:\s.*)?$/iu.test(lines[cursor] ?? "")) {
+    invalid("STL is neither canonical binary nor valid ASCII");
   }
-  const count = vertices.length / 3;
-  if (count > MAX_TRIANGLES) {
-    throw new SlicingWorkerError(
-      "deterministic_invalid",
-      "RESOURCE_LIMIT_EXCEEDED",
-      "STL exceeds the triangle limit",
+  cursor += 1;
+
+  const triangles: Triangle[] = [];
+  let closed = false;
+  while (cursor < lines.length) {
+    if (/^endsolid(?:\s.*)?$/iu.test(lines[cursor]!)) {
+      cursor += 1;
+      closed = true;
+      break;
+    }
+
+    const normal = /^facet\s+normal\s+(\S+)\s+(\S+)\s+(\S+)$/iu.exec(
+      lines[cursor]!,
     );
+    if (!normal) invalid("ASCII STL contains an invalid facet");
+    finiteNumber(normal[1], "STL normal x coordinate");
+    finiteNumber(normal[2], "STL normal y coordinate");
+    finiteNumber(normal[3], "STL normal z coordinate");
+    cursor += 1;
+
+    if (!/^outer\s+loop$/iu.test(lines[cursor] ?? "")) {
+      invalid("ASCII STL facet is missing its outer loop");
+    }
+    cursor += 1;
+
+    const vertices: Point[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const vertex = /^vertex\s+(\S+)\s+(\S+)\s+(\S+)$/iu.exec(
+        lines[cursor] ?? "",
+      );
+      if (!vertex) invalid("ASCII STL facet must contain three vertices");
+      vertices.push([
+        finiteNumber(vertex[1], "STL x coordinate"),
+        finiteNumber(vertex[2], "STL y coordinate"),
+        finiteNumber(vertex[3], "STL z coordinate"),
+      ]);
+      cursor += 1;
+    }
+
+    if (!/^endloop$/iu.test(lines[cursor] ?? "")) {
+      invalid("ASCII STL facet has an invalid outer loop");
+    }
+    cursor += 1;
+    if (!/^endfacet$/iu.test(lines[cursor] ?? "")) {
+      invalid("ASCII STL facet is not closed");
+    }
+    cursor += 1;
+
+    triangles.push([vertices[0]!, vertices[1]!, vertices[2]!]);
+    if (triangles.length > MAX_TRIANGLES) {
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "RESOURCE_LIMIT_EXCEEDED",
+        "STL exceeds the triangle limit",
+      );
+    }
   }
-  return Array.from({ length: count }, (_, index) => [
-    vertices[index * 3]!,
-    vertices[index * 3 + 1]!,
-    vertices[index * 3 + 2]!,
-  ]);
+
+  if (!closed || triangles.length === 0 || cursor !== lines.length) {
+    invalid("ASCII STL contains an invalid solid structure");
+  }
+  return triangles;
 }
 
 function parseStl(bytes: Uint8Array): ParsedModel {

@@ -59,6 +59,73 @@ const cubeMesh = `
   </triangles>`;
 
 describe("safe model inspection", () => {
+  it("parses vertices only from complete ASCII STL facet blocks", () => {
+    const source = new TextEncoder().encode(`
+      solid vertex 99 99 99
+        facet normal 0 0 1
+          outer loop
+            vertex 0 0 0
+            vertex 1 0 0
+            vertex 0 1 0
+          endloop
+        endfacet
+      endsolid vertex 88 88 88
+    `);
+
+    const inspection = inspectModel("stl", source);
+    expect(inspection.bodies[0]?.triangleCount).toBe(1);
+    expect(inspection.boundingBox.xMicrometers).toBe("1000");
+  });
+
+  it.each([
+    [
+      "vertices outside facets",
+      `solid invalid
+       vertex 0 0 0
+       vertex 1 0 0
+       vertex 0 1 0
+       endsolid invalid`,
+    ],
+    [
+      "incomplete facets",
+      `solid invalid
+       facet normal 0 0 1
+       outer loop
+       vertex 0 0 0
+       vertex 1 0 0
+       endloop
+       endfacet
+       endsolid invalid`,
+    ],
+    [
+      "extra vertex coordinates",
+      `solid invalid
+       facet normal 0 0 1
+       outer loop
+       vertex 0 0 0 1
+       vertex 1 0 0
+       vertex 0 1 0
+       endloop
+       endfacet
+       endsolid invalid`,
+    ],
+    [
+      "unclosed facets",
+      `solid invalid
+       facet normal 0 0 1
+       outer loop
+       vertex 0 0 0
+       vertex 1 0 0
+       vertex 0 1 0
+       endloop
+       endsolid invalid`,
+    ],
+  ])("rejects ASCII STL with %s", (_case, source) => {
+    expect(() => inspectModel("stl", new TextEncoder().encode(source))).toThrow(
+      /ASCII STL/u,
+    );
+  });
+
   it("discovers and canonicalizes independently selected 3MF bodies", () => {
     const source = storedZip({
       "3D/3dmodel.model": `<?xml version="1.0"?>
