@@ -404,6 +404,29 @@ describe("safe model inspection", () => {
     expect(combined.sha256).not.toBe(first.sha256);
   });
 
+  it("ignores safe ZIP directory records without weakening traversal checks", () => {
+    const model = `<model xmlns="${coreNamespace}" unit="millimeter"><resources>
+      <object id="1"><mesh>${cubeMesh}</mesh></object>
+    </resources><build><item objectid="1"/></build></model>`;
+    const source = storedZip({
+      "3D/": "",
+      "3D/3dmodel.model": model,
+    });
+
+    expect(inspectModel("3mf", source).bodies).toHaveLength(1);
+    for (const unsafeDirectory of ["../", "3D/../"]) {
+      expect(() =>
+        inspectModel(
+          "3mf",
+          storedZip({
+            [unsafeDirectory]: "",
+            "3D/3dmodel.model": model,
+          }),
+        ),
+      ).toThrow("unsafe");
+    }
+  });
+
   it("parses XML structure without treating comments, CDATA, or foreign elements as geometry", () => {
     const meshWithMarkup = cubeMesh.replace(
       "</triangles>",
@@ -601,6 +624,60 @@ describe("safe model inspection", () => {
     ).toThrow("individual offer");
   });
 
+  it.each([
+    [
+      "color",
+      '<m:colorgroup id="9"><m:color color="#FFFFFFFF"/></m:colorgroup>',
+    ],
+    [
+      "texture",
+      '<m:texture2dgroup id="9"><m:tex2coord u="0" v="0"/></m:texture2dgroup>',
+    ],
+  ])(
+    "preserves a single %s appearance as paint metadata",
+    (_kind, resource) => {
+      const source = storedZip({
+        "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter" xmlns:m="${materialNamespace}"><resources>
+        ${resource}
+        <object id="1" pid="9" pindex="0"><mesh>${cubeMesh}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
+      });
+
+      const inspection = inspectModel("3mf", source);
+      expect(inspection).toMatchObject({
+        hasPaintAssignments: true,
+        materialAssignmentCount: 1,
+        bodies: [
+          {
+            hasPaintAssignments: true,
+          },
+        ],
+      });
+      expect(() =>
+        canonicalizeModel("3mf", source, ["body-0001"], 1_000_000),
+      ).toThrow("individual offer");
+    },
+  );
+
+  it("propagates appearance evidence through multiproperties", () => {
+    const source = storedZip({
+      "3D/3dmodel.model": `<model xmlns="${coreNamespace}" unit="millimeter" xmlns:m="${materialNamespace}"><resources>
+        <m:colorgroup id="9"><m:color color="#FFFFFFFF"/></m:colorgroup>
+        <m:multiproperties id="10" pids="9"><m:multi pindices="0"/></m:multiproperties>
+        <object id="1" pid="10" pindex="0"><mesh>${cubeMesh}</mesh></object>
+      </resources><build><item objectid="1"/></build></model>`,
+    });
+
+    expect(inspectModel("3mf", source)).toMatchObject({
+      hasPaintAssignments: true,
+      materialAssignmentCount: 1,
+      bodies: [{ hasPaintAssignments: true }],
+    });
+    expect(() =>
+      canonicalizeModel("3mf", source, ["body-0001"], 1_000_000),
+    ).toThrow("individual offer");
+  });
+
   it("rejects 3MFs with more assignment identities than the result contract", () => {
     const materialResources = Array.from(
       { length: 257 },
@@ -691,7 +768,10 @@ describe("safe model inspection", () => {
       </resources><build><item objectid="1"/></build></model>`,
     });
 
-    expect(inspectModel("3mf", source).materialAssignmentCount).toBe(3);
+    expect(inspectModel("3mf", source)).toMatchObject({
+      hasPaintAssignments: true,
+      materialAssignmentCount: 3,
+    });
     expect(() =>
       canonicalizeModel("3mf", source, ["body-0001"], 1_000_000),
     ).toThrow("individual offer");

@@ -511,12 +511,14 @@ function zipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
     if (nameEnd + extraLength + commentLength > eocd) {
       invalid("3MF archive entry exceeds its directory");
     }
-    const name = safeArchivePath(
-      new TextDecoder("utf-8", { fatal: true }).decode(
-        bytes.subarray(offset + 46, nameEnd),
-      ),
+    const rawName = new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(offset + 46, nameEnd),
     );
-    if (entries.has(name)) invalid("3MF archive contains duplicate entries");
+    const isDirectory = rawName.endsWith("/");
+    const name = safeArchivePath(isDirectory ? rawName.slice(0, -1) : rawName);
+    if (!isDirectory && entries.has(name)) {
+      invalid("3MF archive contains duplicate entries");
+    }
     if (
       localOffset + 30 > directoryOffset ||
       view.getUint32(localOffset, true) !== ZIP_LOCAL_FILE
@@ -542,7 +544,13 @@ function zipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
     if (contents.byteLength !== uncompressedSize) {
       invalid("3MF archive entry size does not match its directory");
     }
-    entries.set(name, contents);
+    if (isDirectory) {
+      if (contents.byteLength !== 0) {
+        invalid("3MF archive directory entry contains data");
+      }
+    } else {
+      entries.set(name, contents);
+    }
     offset = nameEnd + extraLength + commentLength;
   }
   return entries;
@@ -683,6 +691,11 @@ type PropertyResource =
       propertyResourceIds: string[];
       entries: string[][];
     };
+
+type ResolvedProperty = {
+  assignmentIds: ReadonlySet<string>;
+  hasAppearance: boolean;
+};
 
 type ComponentDefinition = {
   objectId: string;
@@ -1293,12 +1306,12 @@ function parseModelPart(
     });
   });
   if (!sawModel) invalid("3MF model element is missing");
-  const propertyCache = new Map<string, ReadonlySet<string>>();
+  const propertyCache = new Map<string, ResolvedProperty>();
   const resolveProperty = (
     resourceId: string,
     propertyIndex: string,
     stack: ReadonlySet<string>,
-  ): ReadonlySet<string> => {
+  ): ResolvedProperty => {
     const key = `${resourceId}\0${propertyIndex}`;
     const cached = propertyCache.get(key);
     if (cached) return cached;
@@ -1311,12 +1324,16 @@ function parseModelPart(
       invalid("3MF property assignment index is invalid");
     }
     const nextStack = new Set(stack).add(key);
-    const resolved = new Set<string>();
+    const assignmentIds = new Set<string>();
+    let hasAppearance = false;
     if (resource.kind === "base" || resource.kind === "appearance") {
       if (index >= resource.entryCount) {
         invalid("3MF property assignment index is out of range");
       }
-      resolved.add(`material-${partIdentity}-${resourceId}-${propertyIndex}`);
+      hasAppearance = resource.kind === "appearance";
+      assignmentIds.add(
+        `material-${partIdentity}-${resourceId}-${propertyIndex}`,
+      );
     } else if (resource.kind === "composite") {
       const base = propertyResources.get(resource.materialResourceId);
       if (base?.kind !== "base") {
@@ -1327,13 +1344,15 @@ function parseModelPart(
         invalid("3MF composite property index is out of range");
       }
       for (const constituent of constituents) {
-        for (const value of resolveProperty(
+        const resolved = resolveProperty(
           resource.materialResourceId,
           constituent,
           nextStack,
-        )) {
-          resolved.add(value);
+        );
+        for (const value of resolved.assignmentIds) {
+          assignmentIds.add(value);
         }
+        hasAppearance ||= resolved.hasAppearance;
       }
     } else {
       const indices = resource.entries[index];
@@ -1356,28 +1375,33 @@ function parseModelPart(
             invalid("3MF multiproperty references multiple material resources");
           }
         }
-        for (const value of resolveProperty(
+        const resolved = resolveProperty(
           childResourceId,
           indices[position]!,
           nextStack,
-        )) {
-          resolved.add(value);
+        );
+        for (const value of resolved.assignmentIds) {
+          assignmentIds.add(value);
         }
+        hasAppearance ||= resolved.hasAppearance;
       }
     }
+    const resolved = { assignmentIds, hasAppearance };
     propertyCache.set(key, resolved);
     return resolved;
   };
   for (const definition of objects.values()) {
     if (!definition.mesh) continue;
     for (const assignment of definition.mesh.propertyAssignments.values()) {
-      for (const value of resolveProperty(
+      const resolved = resolveProperty(
         assignment.resourceId,
         assignment.propertyIndex,
         new Set(),
-      )) {
+      );
+      for (const value of resolved.assignmentIds) {
         definition.mesh.materials.add(value);
       }
+      definition.mesh.paint ||= resolved.hasAppearance;
     }
     definition.mesh.propertyAssignments.clear();
   }
