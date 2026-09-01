@@ -60,8 +60,18 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql://taven@localhost:5432/taven_test
+      TAVEN_REDIS_URL: redis://localhost:6379
       TAVEN_S3_ENDPOINT: http://127.0.0.1:9000
       TAVEN_S3_REGION: us-east-1
       TAVEN_S3_BUCKET: taven-test

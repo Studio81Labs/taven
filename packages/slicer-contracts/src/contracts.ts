@@ -46,7 +46,7 @@ export const SLICING_MESSAGE_MAX_BYTES = 64 * 1024;
 
 const MAX_BODY_COUNT = 256;
 const MAX_FINDING_COUNT = 256;
-const MAX_PLATE_COUNT = 128;
+const MAX_PLATE_COUNT = 36;
 const MAX_QUANTITY = 100_000;
 const MAX_SIGNED_BIGINT = 9_223_372_036_854_775_807n;
 const LOWERCASE_UUID_PATTERN =
@@ -142,6 +142,12 @@ export function productionArtifactObjectKey(
   format: ProductionArtifactFormat,
 ): string {
   return `gcode/${UuidSchema.parse(acceptedJobId)}/toolpaths.${PRODUCTION_ARTIFACT_SUFFIX[ProductionArtifactFormatSchema.parse(format)]}`;
+}
+
+export function referenceArtifactObjectKey(
+  inputFingerprintSha256: string,
+): string {
+  return `reference-slices/${Sha256Schema.parse(inputFingerprintSha256)}/toolpath.gcode`;
 }
 
 const SafeIdentifierSchema = z
@@ -279,9 +285,9 @@ const MachineSlicerProfileSnapshotSchema = SlicerProfileSnapshotSchema.extend({
 });
 
 export const BoundingBoxSchema = z.strictObject({
-  xMicrometers: NonnegativeInt64StringSchema,
-  yMicrometers: NonnegativeInt64StringSchema,
-  zMicrometers: NonnegativeInt64StringSchema,
+  xMicrometers: PositiveInt64StringSchema,
+  yMicrometers: PositiveInt64StringSchema,
+  zMicrometers: PositiveInt64StringSchema,
 });
 
 export const TopologyMetricsSchema = z.strictObject({
@@ -381,14 +387,25 @@ const ModelGeometryTargetSchema = z
 
 export const ConfirmedUnitConversionSchema = z
   .strictObject({
-    sourceUnit: z.enum(["millimeter", "inch", "meter", "custom"]),
+    sourceUnit: z.enum([
+      "micron",
+      "millimeter",
+      "centimeter",
+      "inch",
+      "foot",
+      "meter",
+      "custom",
+    ]),
     targetUnit: z.literal("millimeter"),
     scaleFactorPpm: boundedPositiveInteger(1_000_000_000),
   })
   .superRefine((value, context) => {
     const canonicalScaleFactorPpm = {
+      micron: 1_000,
       millimeter: 1_000_000,
+      centimeter: 10_000_000,
       inch: 25_400_000,
+      foot: 304_800_000,
       meter: 1_000_000_000,
     } as const;
     if (
@@ -550,6 +567,33 @@ function requireRepresentablePlateCount(
   }
 }
 
+function requireExecutableCandidateArtifactPlan(
+  value: {
+    quantity: number;
+    partsPerPlate: number;
+    machineProfile: { productionArtifactFormat: ProductionArtifactFormat };
+  },
+  context: z.RefinementCtx,
+): void {
+  const format = value.machineProfile.productionArtifactFormat;
+  if (format === "bgcode") {
+    context.addIssue({
+      code: "custom",
+      path: ["machineProfile", "productionArtifactFormat"],
+      message: "is not supported by the pinned production runtime",
+    });
+  } else if (
+    format === "gcode" &&
+    Math.ceil(value.quantity / value.partsPerPlate) > 1
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["machineProfile", "productionArtifactFormat"],
+      message: "must be gcode_3mf for a multi-plate production plan",
+    });
+  }
+}
+
 const CandidateEstimateInputSchema = z
   .strictObject({
     ...MachineSliceInputShape,
@@ -569,6 +613,7 @@ const CandidateEstimateInputSchema = z
   })
   .superRefine((value, context) => {
     requireRepresentablePlateCount(value, context);
+    requireExecutableCandidateArtifactPlan(value, context);
     const expectedOccupancies = candidateOccupancies(
       value.quantity,
       value.partsPerPlate,
@@ -807,7 +852,7 @@ const BodyInspectionSchema = z.strictObject({
   bodyId: SafeIdentifierSchema,
   bodySha256: Sha256Schema,
   boundingBox: BoundingBoxSchema,
-  volumeCubicMicrometers: NonnegativeInt64StringSchema,
+  volumeCubicMicrometers: PositiveInt64StringSchema,
   triangleCount: boundedNonnegativeInteger(1_000_000_000),
   topology: TopologyMetricsSchema,
   hasPaintAssignments: z.boolean(),
@@ -819,7 +864,15 @@ const InspectionMetricsSchema = z.strictObject({
   boundingBox: BoundingBoxSchema,
   objectCount: boundedPositiveInteger(MAX_BODY_COUNT),
   bodyCount: boundedPositiveInteger(MAX_BODY_COUNT),
-  unitHint: z.enum(["millimeter", "inch", "meter", "unknown"]),
+  unitHint: z.enum([
+    "micron",
+    "millimeter",
+    "centimeter",
+    "inch",
+    "foot",
+    "meter",
+    "unknown",
+  ]),
   scaleAssessment: z.enum(["trusted", "converted", "confirmation_required"]),
   suggestedScaleFactorPpm: boundedPositiveInteger(1_000_000_000).nullable(),
   thinWallFeatureCount: boundedNonnegativeInteger(1_000_000),
@@ -964,6 +1017,26 @@ const InspectionSuccessSchema = z
         path: ["findings"],
         message:
           "painted or multimaterial inputs require a blocking inspection finding",
+      });
+    }
+    const requiresTopologyReview = value.bodies.some(
+      ({ topology }) =>
+        !topology.watertight ||
+        !topology.manifold ||
+        topology.normals !== "consistent",
+    );
+    const hasBlockingTopologyFinding = value.findings.some(
+      ({ code, severity, phase }) =>
+        code === "INVALID_TOPOLOGY" &&
+        severity === "blocking" &&
+        phase === "inspection",
+    );
+    if (requiresTopologyReview && !hasBlockingTopologyFinding) {
+      context.addIssue({
+        code: "custom",
+        path: ["findings"],
+        message:
+          "open, non-manifold, or inconsistent topology requires a blocking inspection finding",
       });
     }
   });
@@ -1315,12 +1388,12 @@ const ReferenceSliceResultBase = z
     if (
       value.outcome.status === "succeeded" &&
       value.outcome.artifact.objectKey !==
-        `reference-slices/${value.jobId}/toolpath.gcode`
+        referenceArtifactObjectKey(value.inputFingerprintSha256)
     ) {
       context.addIssue({
         code: "custom",
         path: ["outcome", "artifact", "objectKey"],
-        message: "must be the deterministic artifact key for jobId",
+        message: "must be the deterministic artifact key for immutable input",
       });
     }
   });

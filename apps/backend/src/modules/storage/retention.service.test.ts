@@ -9,6 +9,7 @@ describe("RetentionService deletion claim recovery", () => {
     const activeKey = "quarantine/00000000-0000-0000-0000-000000000098";
     const deleted: string[][] = [];
     const storage: ObjectStorage = {
+      putImmutableObject: async () => undefined,
       createUploadUrl: async () => ({
         url: "",
         method: "PUT",
@@ -96,6 +97,7 @@ describe("RetentionService deletion claim recovery", () => {
     const deleted: string[][] = [];
     let recreatedQuarantineVisible = true;
     const storage: ObjectStorage = {
+      putImmutableObject: async () => undefined,
       createUploadUrl: async () => ({
         url: "",
         method: "PUT",
@@ -232,6 +234,7 @@ describe("RetentionService deletion claim recovery", () => {
     };
     let deleteAttempts = 0;
     const storage: ObjectStorage = {
+      putImmutableObject: async () => undefined,
       createUploadUrl: async () => ({
         url: "",
         method: "PUT",

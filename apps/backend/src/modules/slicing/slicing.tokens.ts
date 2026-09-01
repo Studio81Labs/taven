@@ -1,0 +1,2 @@
+export const SLICING_QUEUE = Symbol("SLICING_QUEUE");
+export const SLICING_QUEUE_CONFIG = Symbol("SLICING_QUEUE_CONFIG");

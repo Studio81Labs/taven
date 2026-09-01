@@ -54,3 +54,5 @@ overrides:
   js-yaml@5.2.1: 5.2.3
   # CVE-2026-40345. Prisma 7 pins 7.1.5; remove when it adopts >= 8.
   "deepmerge-ts@7.1.5": 8.0.0
+  # GHSA-rgwj-5xj2-c3m3. Remove when Nuxt and Prisma resolve mysql2 >= 3.23.1.
+  "mysql2@3": ">=3.23.1 <4"

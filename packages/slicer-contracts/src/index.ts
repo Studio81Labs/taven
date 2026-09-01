@@ -35,6 +35,7 @@ export {
   geometrySelectionSha256,
   machineOccupancyCacheIdentitySha256,
   productionArtifactObjectKey,
+  referenceArtifactObjectKey,
   slicingDispatchAttemptKey,
   slicingInputFingerprint,
   slicingJobEffectFingerprint,

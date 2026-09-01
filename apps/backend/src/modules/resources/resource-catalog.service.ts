@@ -19,6 +19,7 @@ import {
   resourceRevisionDigest,
   type CanonicalJson,
 } from "./resource-identity";
+import { SlicerProfileSnapshotService } from "../slicing/slicer-profile-snapshot.service";
 
 type JsonSettings = Prisma.InputJsonObject;
 
@@ -133,7 +134,11 @@ async function databaseNow(
 
 @Injectable()
 export class ResourceCatalogService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(SlicerProfileSnapshotService)
+    private readonly snapshots: SlicerProfileSnapshotService,
+  ) {}
 
   async createReferenceProfile(input: CreateReferenceProfileInput) {
     const slicerEngine = nonBlank(input.slicerEngine, "slicerEngine");
@@ -146,6 +151,7 @@ export class ResourceCatalogService {
       slicerVersion,
     } satisfies CanonicalJson;
     const id = randomUUID();
+    await this.snapshots.provisionSettings(input.settings as Prisma.JsonValue);
     try {
       return await this.prisma.$transaction(async (transaction) => {
         await transaction.revisionIdentity.create({
@@ -182,6 +188,7 @@ export class ResourceCatalogService {
       slicerVersion,
     } satisfies CanonicalJson;
     const id = randomUUID();
+    await this.snapshots.provisionSettings(input.settings as Prisma.JsonValue);
     try {
       return await this.prisma.$transaction(async (transaction) => {
         await transaction.revisionIdentity.create({
@@ -232,6 +239,7 @@ export class ResourceCatalogService {
       xyCompensationMicrometers: input.xyCompensationMicrometers,
     } satisfies CanonicalJson;
     const id = randomUUID();
+    await this.snapshots.provisionSettings(input.settings as Prisma.JsonValue);
     try {
       return await this.prisma.$transaction(async (transaction) => {
         await transaction.revisionIdentity.create({

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
+import type { Prisma } from "@prisma/client";
 import type {
   CandidateEstimateJob,
   CandidateEstimateResult,
@@ -9,8 +10,14 @@ import { CandidateEstimateService } from "../src/modules/resources/candidate-est
 import {
   ResourceConflictError,
   ResourceNotFoundError,
+  ResourceValidationError,
 } from "../src/modules/resources/resource-errors";
 import { PrismaService } from "../src/prisma/prisma.service";
+import {
+  SlicerProfileSnapshotService,
+  slicerSettingsSnapshot,
+} from "../src/modules/slicing/slicer-profile-snapshot.service";
+import type { ObjectStorage } from "../src/modules/storage/object-storage.port";
 import { PersistenceFactory, testTimes } from "./support/persistence-factory";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -21,6 +28,7 @@ const hash = (value: string) =>
 let pool: Pool;
 let prisma: PrismaService;
 let candidates: CandidateEstimateService;
+let snapshots: SlicerProfileSnapshotService;
 let contracts: typeof import("@taven/slicer-contracts", {
   with: { "resolution-mode": "import" },
 });
@@ -33,10 +41,6 @@ type CandidateFixture = {
   success: CandidateEstimateResult;
   failure: CandidateEstimateResult;
 };
-
-function revisionDigest(id: string): string {
-  return hash(`revision:${id}`);
-}
 
 function resultFor(
   job: CandidateEstimateJob,
@@ -130,36 +134,30 @@ async function createFixture(
         geometrySha256: geometryRow.geometry_hash,
       });
     }
-    const persistedRevisions = dispatchableGeometry
-      ? await client.query<{
-          profile_digest: string;
-          calibration_digest: string;
-          config_digest: string;
-          slicer_engine: string;
-          slicer_version: string;
-        }>(
-          `SELECT profile_revision.digest AS profile_digest,
-                  calibration_revision.digest AS calibration_digest,
-                  config_revision.digest AS config_digest,
+    const persistedRevisions = await client.query<{
+      profile_settings: Prisma.JsonValue;
+      calibration_settings: Prisma.JsonValue;
+      config_settings: Prisma.JsonValue;
+      slicer_engine: string;
+      slicer_version: string;
+    }>(
+      `SELECT profile.settings AS profile_settings,
+                  calibration.settings AS calibration_settings,
+                  config.settings AS config_settings,
                   profile.slicer_engine,
                   profile.slicer_version
            FROM machine_profiles profile
-           JOIN revision_identities profile_revision
-             ON profile_revision.id = profile.id
-           JOIN revision_identities calibration_revision
-             ON calibration_revision.id = $2
-           JOIN revision_identities config_revision
-             ON config_revision.id = $3
+           JOIN machine_calibrations calibration ON calibration.id = $2
+           JOIN print_config_revisions config ON config.id = $3
            WHERE profile.id = $1`,
-          [
-            foundation.machineProfileId,
-            foundation.machineCalibrationId,
-            foundation.printConfigRevisionId,
-          ],
-        )
-      : undefined;
-    const revisions = persistedRevisions?.rows[0];
-    if (dispatchableGeometry && !revisions) {
+      [
+        foundation.machineProfileId,
+        foundation.machineCalibrationId,
+        foundation.printConfigRevisionId,
+      ],
+    );
+    const revisions = persistedRevisions.rows[0];
+    if (!revisions) {
       throw new Error("candidate fixture revisions were not persisted");
     }
     const inputBase = {
@@ -167,24 +165,21 @@ async function createFixture(
       machineId: foundation.machineId,
       machineProfile: {
         revisionId: foundation.machineProfileId,
-        contentSha256:
-          revisions?.profile_digest ??
-          revisionDigest(foundation.machineProfileId),
-        slicerEngine: revisions?.slicer_engine ?? "orca",
-        slicerVersion: revisions?.slicer_version ?? "test",
+        contentSha256: slicerSettingsSnapshot(revisions.profile_settings)
+          .contentSha256,
+        slicerEngine: revisions.slicer_engine,
+        slicerVersion: revisions.slicer_version,
         productionArtifactFormat: "gcode_3mf" as const,
       },
       machineCalibration: {
         revisionId: foundation.machineCalibrationId,
-        contentSha256:
-          revisions?.calibration_digest ??
-          revisionDigest(foundation.machineCalibrationId),
+        contentSha256: slicerSettingsSnapshot(revisions.calibration_settings)
+          .contentSha256,
       },
       printConfig: {
         revisionId: foundation.printConfigRevisionId,
-        contentSha256:
-          revisions?.config_digest ??
-          revisionDigest(foundation.printConfigRevisionId),
+        contentSha256: slicerSettingsSnapshot(revisions.config_settings)
+          .contentSha256,
       },
       partsPerPlate: 1,
       quantity: 1,
@@ -401,7 +396,10 @@ describe("candidate estimate terminal receipts", () => {
     pool = new Pool({ connectionString: databaseUrl });
     prisma = new PrismaService();
     await prisma.onModuleInit();
-    candidates = new CandidateEstimateService(prisma);
+    snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    candidates = new CandidateEstimateService(prisma, snapshots);
     contracts = await import("@taven/slicer-contracts");
   });
 
@@ -410,7 +408,7 @@ describe("candidate estimate terminal receipts", () => {
     await pool.end();
   });
 
-  it("anchors every dispatched resource revision to its persisted digest", async () => {
+  it("anchors every dispatched resource revision to its settings snapshot", async () => {
     const fixture = await createFixture("dispatch-slicer-identity", {
       persistDispatch: false,
       dispatchableGeometry: true,
@@ -643,6 +641,137 @@ describe("candidate estimate terminal receipts", () => {
         },
       ],
     });
+  });
+
+  it("derives a future capacity window when queue reconciliation supplies only a success", async () => {
+    const fixture = await createFixture("derived-capacity-window");
+    if (fixture.success.outcome.status !== "succeeded") {
+      throw new Error("candidate success fixture unexpectedly failed");
+    }
+    const successOutcome = fixture.success.outcome;
+
+    const ingested = await candidates.ingest({ result: fixture.success });
+    expect(ingested).toMatchObject({ status: "succeeded", replayed: false });
+    const rows = await pool.query<{
+      calculated_at: Date;
+      expires_at: Date;
+      starts_at: Date;
+      ends_at: Date;
+    }>(
+      `SELECT candidate.calculated_at, candidate.expires_at,
+              candidate_interval.starts_at, candidate_interval.ends_at
+       FROM candidate_resource_estimates candidate
+       JOIN candidate_capacity_intervals candidate_interval
+         ON candidate_interval.candidate_resource_estimate_id = candidate.id
+       WHERE candidate.resource_snapshot ->> 'dispatchJobId' = $1
+       ORDER BY candidate_interval.interval_index`,
+      [fixture.job.jobId],
+    );
+    expect(rows.rows).toHaveLength(successOutcome.plates.length);
+    expect(
+      rows.rows[0]!.expires_at.getTime() -
+        rows.rows[0]!.calculated_at.getTime(),
+    ).toBe(30 * 60 * 1_000);
+    rows.rows.forEach((row, index) => {
+      expect(row.starts_at.getTime()).toBeGreaterThanOrEqual(
+        row.expires_at.getTime(),
+      );
+      expect(row.ends_at.getTime() - row.starts_at.getTime()).toBe(
+        Number(
+          BigInt(successOutcome.plates[index]!.estimatedPrintSeconds) * 1_000n,
+        ),
+      );
+      if (index > 0) {
+        expect(row.starts_at.getTime()).toBeGreaterThanOrEqual(
+          rows.rows[index - 1]!.ends_at.getTime(),
+        );
+      }
+    });
+  });
+
+  it("coordinates live candidate windows for the same order phase and machine", async () => {
+    const fixture = await createFixture("coordinated-candidate-windows", {
+      dispatchableGeometry: true,
+    });
+    if (fixture.success.outcome.status !== "succeeded") {
+      throw new Error("candidate success fixture unexpectedly failed");
+    }
+    const first = await candidates.ingest({ result: fixture.success });
+    if (first.status !== "succeeded") {
+      throw new Error("first candidate ingestion unexpectedly failed");
+    }
+
+    const siblingJob = redispatch(fixture.job);
+    await candidates.dispatch({
+      nodeId: fixture.nodeId,
+      inventoryId: fixture.inventoryId,
+      job: siblingJob,
+    });
+    const sibling = await candidates.ingest({
+      result: resultFor(siblingJob, fixture.success.outcome),
+    });
+    if (sibling.status !== "succeeded") {
+      throw new Error("sibling candidate ingestion unexpectedly failed");
+    }
+
+    const rows = await pool.query<{
+      candidate_resource_estimate_id: string;
+      starts_at: Date;
+      ends_at: Date;
+    }>(
+      `SELECT candidate_interval.candidate_resource_estimate_id,
+              candidate_interval.starts_at,
+              candidate_interval.ends_at
+       FROM candidate_capacity_intervals candidate_interval
+       WHERE candidate_interval.candidate_resource_estimate_id = ANY($1::uuid[])
+       ORDER BY candidate_interval.starts_at, candidate_interval.interval_index`,
+      [
+        [
+          first.candidateResourceEstimateId,
+          sibling.candidateResourceEstimateId,
+        ],
+      ],
+    );
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows[1]!.starts_at.getTime()).toBeGreaterThanOrEqual(
+      rows.rows[0]!.ends_at.getTime(),
+    );
+  });
+
+  it("rejects caller-supplied windows that overlap live same-phase demand", async () => {
+    const fixture = await createFixture("overlapping-candidate-window", {
+      dispatchableGeometry: true,
+    });
+    if (fixture.success.outcome.status !== "succeeded") {
+      throw new Error("candidate success fixture unexpectedly failed");
+    }
+    const first = await candidates.ingest({ result: fixture.success });
+    if (first.status !== "succeeded") {
+      throw new Error("first candidate ingestion unexpectedly failed");
+    }
+    const existing = await pool.query<{ starts_at: Date; ends_at: Date }>(
+      `SELECT starts_at, ends_at
+       FROM candidate_capacity_intervals
+       WHERE candidate_resource_estimate_id = $1
+       ORDER BY interval_index`,
+      [first.candidateResourceEstimateId],
+    );
+    const siblingJob = redispatch(fixture.job);
+    await candidates.dispatch({
+      nodeId: fixture.nodeId,
+      inventoryId: fixture.inventoryId,
+      job: siblingJob,
+    });
+
+    await expect(
+      candidates.ingest({
+        result: resultFor(siblingJob, fixture.success.outcome),
+        capacityWindows: existing.rows.map((window) => ({
+          startsAt: window.starts_at,
+          endsAt: window.ends_at,
+        })),
+      }),
+    ).rejects.toBeInstanceOf(ResourceValidationError);
   });
 
   it("records a new resource snapshot after an equivalent candidate expires", async () => {

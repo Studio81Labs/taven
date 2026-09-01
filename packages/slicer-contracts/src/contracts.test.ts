@@ -12,6 +12,7 @@ import {
   ModelInspectionResultSchema,
   PreflightFindingSchema,
   ProductionArtifactFormatSchema,
+  ProductionSliceJobSchema,
   ProductionSliceResultSchema,
   ReferenceSliceJobSchema,
   ReferenceSliceResultSchema,
@@ -23,6 +24,7 @@ import {
   geometrySelectionSha256,
   machineOccupancyCacheIdentitySha256,
   productionArtifactObjectKey,
+  referenceArtifactObjectKey,
   slicingDispatchAttemptKey,
   slicingInputFingerprint,
   slicingJobEffectFingerprint,
@@ -363,6 +365,57 @@ describe("versioned slicing jobs", () => {
     );
   });
 
+  it("rejects jobs that exceed the pinned runtime plate limit", () => {
+    expect(
+      CandidateEstimateJobSchema.parse(
+        envelope("candidate_estimate", {
+          ...candidateInput,
+          quantity: 72,
+          occupancySliceTargets: candidateInput.occupancySliceTargets.slice(
+            0,
+            1,
+          ),
+        }),
+      ).input.quantity,
+    ).toBe(72);
+    expect(() =>
+      CandidateEstimateJobSchema.parse(
+        envelope("candidate_estimate", {
+          ...candidateInput,
+          quantity: 74,
+          occupancySliceTargets: candidateInput.occupancySliceTargets.slice(
+            0,
+            1,
+          ),
+        }),
+      ),
+    ).toThrow(/36 result plates/u);
+    expect(
+      ProductionSliceJobSchema.parse(
+        envelope(
+          "production_slice",
+          {
+            ...productionInput,
+            quantity: 72,
+          },
+          { jobId: ids.acceptedJob },
+        ),
+      ).input.quantity,
+    ).toBe(72);
+    expect(() =>
+      ProductionSliceJobSchema.parse(
+        envelope(
+          "production_slice",
+          {
+            ...productionInput,
+            quantity: 74,
+          },
+          { jobId: ids.acceptedJob },
+        ),
+      ),
+    ).toThrow(/36 result plates/u);
+  });
+
   it("rejects unknown versions and unknown fields at every level", () => {
     expect(() =>
       SlicingJobSchema.parse({ ...inspectionJob, contractVersion: 999 }),
@@ -454,6 +507,22 @@ describe("versioned slicing jobs", () => {
         scaleFactorPpm: 1_000_000,
       }),
     ).toThrow();
+    for (const [sourceUnit, scaleFactorPpm] of [
+      ["micron", 1_000],
+      ["millimeter", 1_000_000],
+      ["centimeter", 10_000_000],
+      ["inch", 25_400_000],
+      ["foot", 304_800_000],
+      ["meter", 1_000_000_000],
+    ] as const) {
+      expect(
+        ConfirmedUnitConversionSchema.parse({
+          sourceUnit,
+          targetUnit: "millimeter",
+          scaleFactorPpm,
+        }),
+      ).toEqual({ sourceUnit, targetUnit: "millimeter", scaleFactorPpm });
+    }
     expect(() =>
       SlicingJobSchema.parse(
         envelope("model_inspection", {
@@ -674,6 +743,47 @@ describe("versioned slicing jobs", () => {
     },
   );
 
+  it.each([
+    {
+      format: "gcode_3mf" as const,
+      quantity: 5,
+      capacity: 2,
+      accepted: true,
+    },
+    { format: "gcode" as const, quantity: 2, capacity: 2, accepted: true },
+    { format: "gcode" as const, quantity: 3, capacity: 2, accepted: false },
+    { format: "bgcode" as const, quantity: 1, capacity: 2, accepted: false },
+  ])(
+    "validates $format for a quantity $quantity production plan",
+    ({ format, quantity, capacity, accepted }) => {
+      const base = {
+        ...machineInput,
+        machineProfile: machineSlicerProfile(ids.profile, hash("d"), format),
+        partsPerPlate: capacity,
+        quantity,
+        shipmentPlanId: ids.shipment,
+      };
+      const occupancies =
+        quantity <= capacity
+          ? [quantity]
+          : quantity % capacity === 0
+            ? [capacity]
+            : [capacity, quantity % capacity];
+      const input = {
+        ...base,
+        occupancySliceTargets: occupancies.map((partsPerPlate) =>
+          occupancySliceTarget(base, partsPerPlate),
+        ),
+      };
+
+      expect(
+        CandidateEstimateJobSchema.safeParse(
+          envelope("candidate_estimate", input),
+        ).success,
+      ).toBe(accepted);
+    },
+  );
+
   it("rejects missing or misordered tail occupancy targets", () => {
     for (const occupancySliceTargets of [
       [candidateOccupancySliceTargets[0]!],
@@ -769,7 +879,9 @@ describe("versioned slicing results", () => {
       metrics: { ...sliceMetrics, plateCount: 1 },
       findings: [],
       artifact: {
-        objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+        objectKey: referenceArtifactObjectKey(
+          referenceJob.inputFingerprintSha256,
+        ),
         sha256: hash("4"),
       },
     });
@@ -803,6 +915,29 @@ describe("versioned slicing results", () => {
     expect(ModelInspectionResultSchema.parse(sourceInspection)).toEqual(
       sourceInspection,
     );
+    for (const zeroGeometry of [
+      {
+        ...inspectionOutcome,
+        metrics: {
+          ...inspectionOutcome.metrics,
+          boundingBox: {
+            ...inspectionOutcome.metrics.boundingBox,
+            zMicrometers: "0",
+          },
+        },
+      },
+      {
+        ...inspectionOutcome,
+        bodies: inspectionOutcome.bodies.map((body) => ({
+          ...body,
+          volumeCubicMicrometers: "0",
+        })),
+      },
+    ]) {
+      expect(() =>
+        ModelInspectionResultSchema.parse(result(inspectionJob, zeroGeometry)),
+      ).toThrow();
+    }
     expect(() =>
       ModelInspectionResultSchema.parse({
         ...sourceInspection,
@@ -944,6 +1079,43 @@ describe("versioned slicing results", () => {
     ).toBeDefined();
   });
 
+  it("requires a blocking inspection finding for invalid topology", () => {
+    const invalidTopologyOutcome = {
+      ...inspectionOutcome,
+      bodies: inspectionOutcome.bodies.map((body) => ({
+        ...body,
+        topology: {
+          watertight: false,
+          manifold: true,
+          normals: "unknown" as const,
+        },
+      })),
+      findings: [],
+    };
+    expect(() =>
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, invalidTopologyOutcome),
+      ),
+    ).toThrow();
+
+    expect(
+      ModelInspectionResultSchema.parse(
+        result(inspectionJob, {
+          ...invalidTopologyOutcome,
+          findings: [
+            {
+              code: "INVALID_TOPOLOGY",
+              severity: "blocking",
+              phase: "inspection",
+              message: "mesh topology requires repair or an individual offer",
+              acknowledgementKey: null,
+            },
+          ],
+        }),
+      ),
+    ).toBeDefined();
+  });
+
   it("rejects duplicate finding codes in each persistence scope", () => {
     const duplicateFindings = [
       {
@@ -977,7 +1149,9 @@ describe("versioned slicing results", () => {
           metrics: { ...sliceMetrics, plateCount: 1 },
           findings: duplicateFindings,
           artifact: {
-            objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+            objectKey: referenceArtifactObjectKey(
+              referenceJob.inputFingerprintSha256,
+            ),
             sha256: hash("4"),
           },
         }),
@@ -1043,7 +1217,9 @@ describe("versioned slicing results", () => {
       status: "succeeded" as const,
       metrics: { ...sliceMetrics, plateCount: 1 as const },
       artifact: {
-        objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+        objectKey: referenceArtifactObjectKey(
+          referenceJob.inputFingerprintSha256,
+        ),
         sha256: hash("4"),
       },
     };
@@ -1072,7 +1248,9 @@ describe("versioned slicing results", () => {
         metrics: { ...sliceMetrics, plateCount: 1 },
         findings: [],
         artifact: {
-          objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+          objectKey: referenceArtifactObjectKey(
+            referenceJob.inputFingerprintSha256,
+          ),
           sha256: hash("4"),
         },
       }),
@@ -1493,7 +1671,7 @@ describe("versioned slicing results", () => {
       metrics: { ...sliceMetrics, plateCount: 1 },
       findings: [],
       artifact: {
-        objectKey: `reference-slices/${ids.geometryB}/toolpath.gcode`,
+        objectKey: `reference-slices/${hash("f")}/toolpath.gcode`,
         sha256: hash("4"),
       },
     });
@@ -1646,7 +1824,7 @@ describe("versioned slicing results", () => {
       metrics: { ...sliceMetrics, plateCount: 1 },
       findings: [],
       artifact: {
-        objectKey: `reference-slices/${ids.job}/toolpath.gcode`,
+        objectKey: referenceArtifactObjectKey(jobA.inputFingerprintSha256),
         sha256: hash("4"),
       },
     });

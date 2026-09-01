@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Prisma } from "@prisma/client";
 import { CandidateEstimateService } from "./candidate-estimate.service";
 import { PrismaService } from "../../prisma/prisma.service";
+import type { SlicerProfileSnapshotService } from "../slicing/slicer-profile-snapshot.service";
 
 type CandidateResourceLocker = {
   lockCandidateResources(
@@ -18,6 +19,13 @@ type CandidateResourceLocker = {
     remaining_milligrams: bigint;
     reserved_milligrams: bigint;
   }>;
+};
+
+type CandidateArtifactLocker = {
+  lockCandidateArtifactKeys(
+    transaction: Prisma.TransactionClient,
+    objectKeys: readonly string[],
+  ): Promise<void>;
 };
 
 describe("CandidateEstimateService resource locks", () => {
@@ -38,7 +46,10 @@ describe("CandidateEstimateService resource locks", () => {
     const transaction = {
       $queryRaw: queryRaw,
     } as unknown as Prisma.TransactionClient;
-    const service = new CandidateEstimateService({} as PrismaService);
+    const service = new CandidateEstimateService(
+      {} as PrismaService,
+      {} as SlicerProfileSnapshotService,
+    );
 
     await expect(
       (service as unknown as CandidateResourceLocker).lockCandidateResources(
@@ -68,5 +79,27 @@ describe("CandidateEstimateService resource locks", () => {
     for (const statement of statements) {
       expect(statement).toContain("FOR UPDATE");
     }
+  });
+
+  it("locks unique candidate artifact keys in deterministic order", async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const transaction = {
+      $queryRaw: queryRaw,
+    } as unknown as Prisma.TransactionClient;
+    const service = new CandidateEstimateService(
+      {} as PrismaService,
+      {} as SlicerProfileSnapshotService,
+    ) as unknown as CandidateArtifactLocker;
+
+    await service.lockCandidateArtifactKeys(transaction, [
+      "key-z",
+      "key-a",
+      "key-a",
+    ]);
+
+    expect(queryRaw.mock.calls.map((call) => call[1])).toEqual([
+      "key-a",
+      "key-z",
+    ]);
   });
 });

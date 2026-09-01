@@ -10,9 +10,14 @@ import {
   ResourceNotFoundError,
   ResourceValidationError,
 } from "./resource-errors";
+import {
+  SlicerProfileSnapshotMismatchError,
+  SlicerProfileSnapshotService,
+} from "../slicing/slicer-profile-snapshot.service";
 
 const CANDIDATE_DISPATCH_TYPE = "slicing.candidate-estimate.requested";
 const CANDIDATE_SCHEMA_VERSION = 2;
+const CANDIDATE_TTL_MILLISECONDS = 30 * 60 * 1_000;
 
 export type CandidateEstimateDispatch = {
   nodeId: string;
@@ -27,8 +32,8 @@ export type CandidateCapacityWindow = {
 
 export type IngestCandidateEstimateInput = {
   result: CandidateEstimateResult;
-  capacityWindows: readonly CandidateCapacityWindow[];
-  expiresAt: Date;
+  capacityWindows?: readonly CandidateCapacityWindow[];
+  expiresAt?: Date;
 };
 
 export type CandidateIngestionResult =
@@ -55,6 +60,11 @@ type ObservedResourceRow = {
   observed_at: Date;
   remaining_milligrams: bigint;
   reserved_milligrams: bigint;
+};
+
+type OccupiedCapacityRow = {
+  starts_at: Date;
+  ends_at: Date;
 };
 
 type CandidateResourceLockInput = {
@@ -162,6 +172,55 @@ function validateCapacityWindows(
   }
 }
 
+function validateCapacityAvailability(
+  windows: readonly CandidateCapacityWindow[],
+  occupied: readonly OccupiedCapacityRow[],
+): void {
+  if (
+    windows.some((window) =>
+      occupied.some((reservation) =>
+        windowsOverlap(window, {
+          startsAt: reservation.starts_at,
+          endsAt: reservation.ends_at,
+        }),
+      ),
+    )
+  ) {
+    throw new ResourceValidationError(
+      "candidate capacity windows overlap existing machine demand",
+    );
+  }
+}
+
+function earliestCapacityWindows(
+  plateSeconds: readonly bigint[],
+  startsAt: Date,
+  occupied: readonly OccupiedCapacityRow[],
+): CandidateCapacityWindow[] {
+  let cursor = startsAt.getTime();
+  return plateSeconds.map((seconds) => {
+    const duration = Number(seconds * 1_000n);
+    if (!Number.isSafeInteger(duration)) {
+      throw new ResourceValidationError(
+        "candidate plate duration exceeds the scheduling range",
+      );
+    }
+    for (const reservation of occupied) {
+      const reservedStart = reservation.starts_at.getTime();
+      const reservedEnd = reservation.ends_at.getTime();
+      if (reservedEnd <= cursor) continue;
+      if (reservedStart >= cursor + duration) break;
+      cursor = Math.max(cursor, reservedEnd);
+    }
+    const window = {
+      startsAt: new Date(cursor),
+      endsAt: new Date(cursor + duration),
+    };
+    cursor += duration;
+    return window;
+  });
+}
+
 function isPrismaConflict(error: unknown): boolean {
   return Boolean(
     error &&
@@ -191,7 +250,11 @@ function constraintOf(error: unknown): string | undefined {
 
 @Injectable()
 export class CandidateEstimateService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(SlicerProfileSnapshotService)
+    private readonly snapshots: SlicerProfileSnapshotService,
+  ) {}
 
   /** Persists the exact queue dispatch before it can be published. */
   async dispatch(
@@ -206,6 +269,14 @@ export class CandidateEstimateService {
       throw new ResourceValidationError(
         `candidate estimate job is invalid: ${errorMessage(error)}`,
       );
+    }
+    try {
+      await this.snapshots.ensureJobSnapshots(job);
+    } catch (error) {
+      if (error instanceof SlicerProfileSnapshotMismatchError) {
+        throw new ResourceNotFoundError(error.message);
+      }
+      throw error;
     }
     const payload = {
       nodeId: input.nodeId,
@@ -306,16 +377,10 @@ export class CandidateEstimateService {
               ON calibration.id = ${job.input.machineCalibration.revisionId}::uuid
              AND calibration.node_id = machine.node_id
              AND calibration.machine_id = machine.id
-            JOIN revision_identities profile_revision
-              ON profile_revision.id = profile.id
-            JOIN revision_identities calibration_revision
-              ON calibration_revision.id = calibration.id
-            JOIN revision_identities config_revision
-              ON config_revision.id = ${job.input.printConfig.revisionId}::uuid
             JOIN arrangement_revisions arrangement_revision
               ON arrangement_revision.id = ${job.input.arrangementRevision.revisionId}::uuid
             JOIN print_config_revisions config
-              ON config.id = config_revision.id
+              ON config.id = ${job.input.printConfig.revisionId}::uuid
             JOIN model_geometries geometry
               ON geometry.id = ${job.input.geometry.modelGeometryId}::uuid
             JOIN model_files source
@@ -349,9 +414,6 @@ export class CandidateEstimateService {
                     geometry.id,
                     machine.machine_capability_id
                   )
-              AND profile_revision.digest = ${job.input.machineProfile.contentSha256}
-              AND calibration_revision.digest = ${job.input.machineCalibration.contentSha256}
-              AND config_revision.digest = ${job.input.printConfig.contentSha256}
               AND arrangement_revision.content_sha256 = ${job.input.arrangementRevision.contentSha256}
           ) AS exists
         `;
@@ -360,6 +422,12 @@ export class CandidateEstimateService {
             "candidate dispatch resources do not match persisted revisions",
           );
         }
+        await this.lockCandidateArtifactKeys(
+          transaction,
+          job.input.occupancySliceTargets.map(
+            ({ analysisObjectKey }) => analysisObjectKey,
+          ),
+        );
         await transaction.outboxMessage.create({
           data: {
             deduplicationKey: attemptDeduplicationKey,
@@ -394,7 +462,9 @@ export class CandidateEstimateService {
   async ingest(
     input: IngestCandidateEstimateInput,
   ): Promise<CandidateIngestionResult> {
-    assertValidDate(input.expiresAt, "expiresAt");
+    if (input.expiresAt !== undefined) {
+      assertValidDate(input.expiresAt, "expiresAt");
+    }
     let attemptDeduplicationKey: string;
     try {
       const { slicingDispatchAttemptKey } =
@@ -424,6 +494,28 @@ export class CandidateEstimateService {
             "persisted candidate estimate dispatch was not found",
           );
         }
+        await transaction.$queryRaw`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(${dispatchRow.id}, 0)
+          )::text
+        `;
+        const deadLetter = await transaction.$queryRaw<
+          Array<{ exists: boolean }>
+        >`
+          SELECT EXISTS (
+            SELECT 1
+            FROM outbox_messages dead_letter
+            WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+              AND dead_letter.aggregate_id = ${dispatchRow.id}::uuid
+              AND dead_letter.message_type = 'slicing.candidate_estimate.dead-lettered'
+          ) AS exists
+        `;
+        if (deadLetter[0]?.exists) {
+          throw new ResourceConflictError(
+            "candidate dispatch was already dead-lettered",
+            "candidate_estimate_terminal_disposition_check",
+          );
+        }
         const dispatch = await parseDispatchPayload(dispatchRow.payload);
         let result: CandidateEstimateResult;
         let resultFingerprint: string;
@@ -441,6 +533,14 @@ export class CandidateEstimateService {
         } catch (error) {
           throw new ResourceValidationError(
             `candidate result does not match its persisted dispatch: ${errorMessage(error)}`,
+          );
+        }
+        if (result.outcome.status === "succeeded") {
+          await this.lockCandidateArtifactKeys(
+            transaction,
+            result.outcome.occupancySlices.map(
+              ({ artifact }) => artifact.objectKey,
+            ),
           );
         }
 
@@ -487,14 +587,15 @@ export class CandidateEstimateService {
           };
         }
         const orderScope = await transaction.$queryRaw<
-          Array<{ order_id: string }>
+          Array<{ order_id: string; order_phase_id: string }>
         >`
-          SELECT order_id
+          SELECT order_id, order_phase_id
           FROM shipment_plans
           WHERE id = ${dispatch.job.input.shipmentPlanId}::uuid
         `;
         const orderId = orderScope[0]?.order_id;
-        if (!orderId) {
+        const orderPhaseId = orderScope[0]?.order_phase_id;
+        if (!orderId || !orderPhaseId) {
           throw new ResourceNotFoundError(
             "candidate dispatch shipment plan was not found",
           );
@@ -591,7 +692,10 @@ export class CandidateEstimateService {
           machineCalibrationId:
             dispatch.job.input.machineCalibration.revisionId,
         });
-        if (input.expiresAt <= observed.observed_at) {
+        const expiresAt =
+          input.expiresAt ??
+          new Date(observed.observed_at.getTime() + CANDIDATE_TTL_MILLISECONDS);
+        if (expiresAt <= observed.observed_at) {
           throw new ResourceValidationError(
             "candidate estimate must expire after calculation",
           );
@@ -599,11 +703,42 @@ export class CandidateEstimateService {
         const plateSeconds = result.outcome.plates.map(
           ({ estimatedPrintSeconds }) => BigInt(estimatedPrintSeconds),
         );
+        const occupied = await transaction.$queryRaw<OccupiedCapacityRow[]>`
+          SELECT occupied.starts_at, occupied.ends_at
+          FROM (
+            SELECT reservation.starts_at, reservation.ends_at
+            FROM capacity_reservations reservation
+            WHERE reservation.node_id = ${dispatch.nodeId}::uuid
+              AND reservation.machine_id = ${dispatch.job.input.machineId}::uuid
+              AND reservation.status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+              AND reservation.ends_at > ${observed.observed_at}
+            UNION ALL
+            SELECT candidate_interval.starts_at, candidate_interval.ends_at
+            FROM candidate_capacity_intervals candidate_interval
+            JOIN candidate_resource_estimates candidate
+              ON candidate.id = candidate_interval.candidate_resource_estimate_id
+             AND candidate.node_id = candidate_interval.node_id
+            JOIN shipment_plans candidate_plan
+              ON candidate_plan.id = candidate.shipment_plan_id
+            WHERE candidate.node_id = ${dispatch.nodeId}::uuid
+              AND candidate.machine_id = ${dispatch.job.input.machineId}::uuid
+              AND candidate_plan.order_phase_id = ${orderPhaseId}::uuid
+              AND candidate.expires_at > ${observed.observed_at}
+              AND candidate_interval.ends_at > ${observed.observed_at}
+          ) occupied
+          ORDER BY occupied.starts_at, occupied.ends_at
+        `;
+        const capacityWindows =
+          input.capacityWindows ??
+          earliestCapacityWindows(plateSeconds, expiresAt, occupied);
         validateCapacityWindows(
-          input.capacityWindows,
+          capacityWindows,
           plateSeconds,
           observed.observed_at,
         );
+        if (input.capacityWindows) {
+          validateCapacityAvailability(capacityWindows, occupied);
+        }
         const requiredMaterialMilligrams = result.outcome.plates.reduce(
           (total, plate) => total + BigInt(plate.estimatedMaterialMilligrams),
           0n,
@@ -705,7 +840,7 @@ export class CandidateEstimateService {
           printConfigRevisionId: dispatch.job.input.printConfig.revisionId,
           arrangementRevisionId:
             dispatch.job.input.arrangementRevision.revisionId,
-          capacityWindows: input.capacityWindows.map((window, index) => ({
+          capacityWindows: capacityWindows.map((window, index) => ({
             intervalIndex: index,
             startsAt: window.startsAt.toISOString(),
             endsAt: window.endsAt.toISOString(),
@@ -733,11 +868,11 @@ export class CandidateEstimateService {
             requiredMachineSeconds,
             resourceSnapshot,
             calculatedAt: observed.observed_at,
-            expiresAt: input.expiresAt,
+            expiresAt,
           },
         });
         await transaction.candidateCapacityInterval.createMany({
-          data: input.capacityWindows.map((window, intervalIndex) => ({
+          data: capacityWindows.map((window, intervalIndex) => ({
             nodeId: dispatch.nodeId,
             candidateResourceEstimateId: candidate.id,
             intervalIndex,
@@ -870,6 +1005,19 @@ export class CandidateEstimateService {
       );
     }
     return observed;
+  }
+
+  private async lockCandidateArtifactKeys(
+    transaction: Prisma.TransactionClient,
+    objectKeys: readonly string[],
+  ): Promise<void> {
+    for (const objectKey of [...new Set(objectKeys)].sort()) {
+      await transaction.$queryRaw`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${objectKey}, 1)
+        )::text
+      `;
+    }
   }
 
   private async hasSameDispatchEffect(

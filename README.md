@@ -43,8 +43,8 @@ three infrastructure services, applies Prisma migrations, and regenerates the
 OpenAPI artifacts. It is safe to run again after pulling changes.
 
 `pnpm dev` starts the backend, public web app, and admin app. The slicer worker
-is deliberately excluded; start its fixture consumer explicitly with
-`pnpm slicer-worker:dev`.
+is deliberately excluded; start its isolated Node worker, Orca runtime, and
+dispatcher containers explicitly with `pnpm stack:worker`.
 
 Default local ports are `3001` for the API, `3000` for the public web app, and
 `3002` for admin. PostgreSQL uses `5435`, Redis uses `6381`, and MinIO uses
