@@ -73,6 +73,7 @@ const CANONICALIZER_CONFIG_SHA256 = createHash("sha256")
   .update("taven-canonicalizer-v1")
   .digest("hex");
 const MAX_ITEM_QUANTITY = 1_000;
+const MAX_SLICING_JOB_ATTEMPTS = 100;
 const AUTOMATIC_PRICE_LIST_REVISION = "automatic-v0-czk";
 const INFILL_PERCENT = {
   DECORATIVE: 10,
@@ -90,6 +91,15 @@ type AutomaticCandidateDispatchState = {
   expiresAt: Date | null;
   deadLettered: boolean;
 };
+type PreprocessingDispatchState = {
+  attempt: number;
+  status: "succeeded" | "failed" | null;
+  failureClass: string | null;
+  retryAfterMilliseconds: number | null;
+  receiptCreatedAt: Date | null;
+  deadLettered: boolean;
+};
+type PreprocessingDispatch = { attempt: number; availableAt?: Date };
 
 @Injectable()
 export class AutomaticQuotesService {
@@ -786,12 +796,20 @@ export class AutomaticQuotesService {
     });
     const sourceInput = inspectionInput(source, { mode: "inspect_source" });
     const { slicingInputFingerprint } = await import("@taven/slicer-contracts");
+    const jobId = deterministicUuid(
+      `canonicalization:${item.id}:${item.selectionSha256}`,
+    );
+    const dispatch = await this.nextPreprocessingAttempt(
+      transaction,
+      jobId,
+      "slicing.model-inspection.requested",
+    );
+    if (!dispatch) return;
     await enqueueInspection(transaction, {
-      jobId: deterministicUuid(
-        `canonicalization:${item.id}:${item.selectionSha256}`,
-      ),
+      jobId,
       correlationId,
       source,
+      ...dispatch,
       operation: {
         mode: "canonicalize_selection",
         sourceInspectionFingerprintSha256: slicingInputFingerprint(
@@ -832,6 +850,69 @@ export class AutomaticQuotesService {
     partsPerPlate: number,
     correlationId: string,
   ): Promise<void> {
+    const initialJob = await this.referenceSliceJob(
+      transaction,
+      item,
+      geometry,
+      partsPerPlate,
+      correlationId,
+      1,
+    );
+    const dispatch = await this.nextPreprocessingAttempt(
+      transaction,
+      initialJob.jobId,
+      "slicing.reference-slice.requested",
+    );
+    if (!dispatch) return;
+    const { ReferenceSliceJobSchema, slicingDispatchAttemptKey } =
+      await import("@taven/slicer-contracts");
+    const job = ReferenceSliceJobSchema.parse({
+      ...initialJob,
+      attempt: dispatch.attempt,
+    });
+    await transaction.outboxMessage.upsert({
+      where: {
+        deduplicationKey: slicingDispatchAttemptKey(
+          job.idempotencyKey,
+          dispatch.attempt,
+        ),
+      },
+      create: {
+        deduplicationKey: slicingDispatchAttemptKey(
+          job.idempotencyKey,
+          dispatch.attempt,
+        ),
+        aggregateType: "ReferenceSliceDispatch",
+        aggregateId: job.jobId,
+        messageType: "slicing.reference-slice.requested",
+        schemaVersion: 2,
+        payload: { job } as unknown as Prisma.InputJsonObject,
+        ...(dispatch.availableAt ? { availableAt: dispatch.availableAt } : {}),
+      },
+      update: {},
+    });
+  }
+
+  private async referenceSliceJob(
+    transaction: Transaction | PrismaService,
+    item: {
+      id: string;
+      bodyIds: string[];
+      selectionSha256: string;
+      printConfigRevisionId: string;
+      referenceProfileId: string;
+    },
+    geometry: {
+      id: string;
+      sourceModelFileId: string;
+      canonicalObjectKey: string;
+      geometryHash: string;
+      sourceModelFile?: never;
+    },
+    partsPerPlate: number,
+    correlationId: string,
+    attempt: number,
+  ) {
     const [source, profile, config] = await Promise.all([
       transaction.modelFile.findUniqueOrThrow({
         where: { id: geometry.sourceModelFileId },
@@ -865,11 +946,8 @@ export class AutomaticQuotesService {
       },
       partsPerPlate,
     };
-    const {
-      ReferenceSliceJobSchema,
-      slicingDispatchAttemptKey,
-      slicingInputFingerprint,
-    } = await import("@taven/slicer-contracts");
+    const { ReferenceSliceJobSchema, slicingInputFingerprint } =
+      await import("@taven/slicer-contracts");
     const jobId = deterministicUuid(
       `reference:${item.id}:${partsPerPlate}:${fingerprintOf(input)}`,
     );
@@ -884,23 +962,164 @@ export class AutomaticQuotesService {
       correlationId,
       inputFingerprintSha256,
       idempotencyKey: `slicer:v2:reference_slice:${jobId}:${inputFingerprintSha256}`,
-      attempt: 1,
+      attempt,
       input,
     });
-    await transaction.outboxMessage.upsert({
-      where: {
-        deduplicationKey: slicingDispatchAttemptKey(job.idempotencyKey, 1),
-      },
-      create: {
-        deduplicationKey: slicingDispatchAttemptKey(job.idempotencyKey, 1),
-        aggregateType: "ReferenceSliceDispatch",
-        aggregateId: job.jobId,
-        messageType: "slicing.reference-slice.requested",
-        schemaVersion: 2,
-        payload: { job } as unknown as Prisma.InputJsonObject,
-      },
-      update: {},
-    });
+    return job;
+  }
+
+  private async nextPreprocessingAttempt(
+    transaction: Transaction,
+    jobId: string,
+    messageType:
+      | "slicing.model-inspection.requested"
+      | "slicing.reference-slice.requested",
+  ): Promise<PreprocessingDispatch | null> {
+    const latest = await this.latestPreprocessingDispatch(
+      transaction,
+      jobId,
+      messageType,
+    );
+    if (!latest) return { attempt: 1 };
+    if (latest.deadLettered || latest.status === null) return null;
+    if (
+      latest.status === "failed" &&
+      latest.failureClass === "retryable_infrastructure" &&
+      latest.attempt < MAX_SLICING_JOB_ATTEMPTS
+    ) {
+      return {
+        attempt: latest.attempt + 1,
+        ...(latest.receiptCreatedAt && latest.retryAfterMilliseconds
+          ? {
+              availableAt: new Date(
+                latest.receiptCreatedAt.getTime() +
+                  latest.retryAfterMilliseconds,
+              ),
+            }
+          : {}),
+      };
+    }
+    return null;
+  }
+
+  private async latestPreprocessingDispatch(
+    transaction: Transaction | PrismaService,
+    jobId: string,
+    messageType:
+      | "slicing.model-inspection.requested"
+      | "slicing.reference-slice.requested",
+  ): Promise<PreprocessingDispatchState | undefined> {
+    const inspection = messageType === "slicing.model-inspection.requested";
+    const aggregateType = inspection
+      ? "ModelInspectionDispatch"
+      : "ReferenceSliceDispatch";
+    const resultMessageType = inspection
+      ? "slicing.model_inspection.result-received"
+      : "slicing.reference_slice.result-received";
+    const deadLetterMessageType = inspection
+      ? "slicing.model_inspection.dead-lettered"
+      : "slicing.reference_slice.dead-lettered";
+    const states = await transaction.$queryRaw<PreprocessingDispatchState[]>`
+      SELECT
+        (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
+        terminal.status,
+        terminal.failure_class AS "failureClass",
+        terminal.retry_after_milliseconds AS "retryAfterMilliseconds",
+        terminal.created_at AS "receiptCreatedAt",
+        EXISTS (
+          SELECT 1
+          FROM outbox_messages dead_letter
+          WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+            AND dead_letter.aggregate_id = dispatch.id
+            AND dead_letter.message_type = ${deadLetterMessageType}
+        ) AS "deadLettered"
+      FROM outbox_messages dispatch
+      LEFT JOIN LATERAL (
+        SELECT
+          receipt.payload #>> '{result,outcome,status}' AS status,
+          receipt.payload #>> '{result,outcome,failureClass}' AS failure_class,
+          (receipt.payload #>> '{result,outcome,retryAfterMilliseconds}')::integer
+            AS retry_after_milliseconds,
+          receipt.created_at
+        FROM outbox_messages receipt
+        WHERE receipt.aggregate_type = 'SlicingDispatchResult'
+          AND receipt.aggregate_id = dispatch.id
+          AND receipt.message_type = ${resultMessageType}
+        ORDER BY receipt.created_at DESC, receipt.id DESC
+        LIMIT 1
+      ) terminal ON TRUE
+      WHERE dispatch.aggregate_type = ${aggregateType}
+        AND dispatch.aggregate_id = ${jobId}::uuid
+        AND dispatch.message_type = ${messageType}
+      ORDER BY (dispatch.payload #>> '{job,attempt}')::integer DESC
+      LIMIT 1
+    `;
+    return states[0];
+  }
+
+  private preprocessingDispatchRequiresHandoff(
+    dispatch: PreprocessingDispatchState | undefined,
+  ): boolean {
+    if (!dispatch) return false;
+    if (dispatch.deadLettered) return true;
+    if (dispatch.status !== "failed") return false;
+    return (
+      dispatch.failureClass !== "retryable_infrastructure" ||
+      dispatch.attempt >= MAX_SLICING_JOB_ATTEMPTS
+    );
+  }
+
+  private async preprocessingRequiresHandoff(
+    orderId: string,
+    items: ReadonlyArray<{
+      id: string;
+      bodyIds: string[];
+      selectionSha256: string;
+      targetModelGeometryId: string;
+      printConfigRevisionId: string;
+      referenceProfileId: string;
+      referencePartsPerPlate: number;
+      quantity: number;
+    }>,
+  ): Promise<boolean> {
+    for (const item of items) {
+      const geometry = await this.prisma.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      if (!geometry) {
+        const dispatch = await this.latestPreprocessingDispatch(
+          this.prisma,
+          deterministicUuid(
+            `canonicalization:${item.id}:${item.selectionSha256}`,
+          ),
+          "slicing.model-inspection.requested",
+        );
+        if (this.preprocessingDispatchRequiresHandoff(dispatch)) return true;
+        continue;
+      }
+      const missing = await this.missingReferenceSlices(
+        this.prisma,
+        item,
+        geometry,
+      );
+      for (const partsPerPlate of missing) {
+        const job = await this.referenceSliceJob(
+          this.prisma,
+          item,
+          geometry,
+          partsPerPlate,
+          orderId,
+          1,
+        );
+        const dispatch = await this.latestPreprocessingDispatch(
+          this.prisma,
+          job.jobId,
+          "slicing.reference-slice.requested",
+        );
+        if (this.preprocessingDispatchRequiresHandoff(dispatch)) return true;
+      }
+    }
+    return false;
   }
 
   private async missingReferenceSlices(
@@ -997,23 +1216,16 @@ export class AutomaticQuotesService {
     const bindingId = deterministicUuid(
       `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}`,
     );
-    const materialAndColorAvailable = await this.materialsAvailable(
+    const candidateResourcesAvailable = await this.candidateResourcesAvailable(
       transaction,
       draft.items,
-    );
-    const withinBuildLimits = await this.geometriesFitActiveMachines(
-      transaction,
-      transient.items.map((item) => ({
-        material: item.material,
-        modelGeometry: item,
-      })),
     );
     const gateResult = await prepareAutomaticQuote({
       priceList,
       items: transient.items,
       expressRequested: draft.expressRequested,
-      materialAndColorAvailable,
-      withinBuildLimits,
+      materialAndColorAvailable: candidateResourcesAvailable,
+      withinBuildLimits: candidateResourcesAvailable,
       riskAcknowledgementsComplete: true,
       hasBlockingPreflightFinding: false,
       deliveryDestination: destination,
@@ -1064,8 +1276,8 @@ export class AutomaticQuotesService {
         };
       }),
       expressRequested: draft.expressRequested,
-      materialAndColorAvailable,
-      withinBuildLimits,
+      materialAndColorAvailable: candidateResourcesAvailable,
+      withinBuildLimits: candidateResourcesAvailable,
       riskAcknowledgementsComplete: true,
       hasBlockingPreflightFinding: false,
       deliveryDestination: destination,
@@ -1240,57 +1452,53 @@ export class AutomaticQuotesService {
     return { phaseId: phase.id };
   }
 
-  private async materialsAvailable(
-    transaction: Transaction | PrismaService,
-    items: ReadonlyArray<{ material: Material; color: string | null }>,
-  ): Promise<boolean> {
-    for (const item of items) {
-      const inventory = await transaction.inventory.findFirst({
-        where: {
-          status: InventoryStatus.AVAILABLE,
-          material: item.material,
-          remainingMilligrams: { gt: 0n },
-          machine: { status: MachineStatus.ACTIVE, node: { active: true } },
-          ...(item.color ? { color: item.color } : {}),
-        },
-        select: { id: true },
-      });
-      if (!inventory) return false;
-    }
-    return true;
-  }
-
-  private async geometriesFitActiveMachines(
+  private async candidateResourcesAvailable(
     transaction: Transaction | PrismaService,
     items: ReadonlyArray<{
+      targetModelGeometryId: string;
+      printConfigRevisionId: string;
+      referenceProfileId: string;
       material: Material;
-      modelGeometry: {
-        boundsXMicrometers: bigint;
-        boundsYMicrometers: bigint;
-        boundsZMicrometers: bigint;
-      };
+      color: string | null;
     }>,
   ): Promise<boolean> {
     for (const item of items) {
-      const capability = await transaction.machineCapability.findFirst({
-        where: {
-          supportedMaterials: { has: item.material },
-          buildVolumeXMicrometers: {
-            gte: item.modelGeometry.boundsXMicrometers,
-          },
-          buildVolumeYMicrometers: {
-            gte: item.modelGeometry.boundsYMicrometers,
-          },
-          buildVolumeZMicrometers: {
-            gte: item.modelGeometry.boundsZMicrometers,
-          },
-          machines: {
-            some: { status: MachineStatus.ACTIVE, node: { active: true } },
-          },
-        },
-        select: { id: true },
-      });
-      if (!capability) return false;
+      const rows = await transaction.$queryRaw<Array<{ eligible: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1
+          FROM machine_profiles profile
+          JOIN print_config_revisions config
+            ON config.id = ${item.printConfigRevisionId}::uuid
+           AND config.quality = profile.quality
+          JOIN machines machine
+            ON machine.machine_capability_id = profile.machine_capability_id
+           AND machine.status = 'ACTIVE'
+           AND machine.installed_nozzle_micrometers =
+               profile.nozzle_diameter_micrometers
+          JOIN nodes node
+            ON node.id = machine.node_id
+           AND node.active
+          JOIN machine_calibrations calibration
+            ON calibration.node_id = machine.node_id
+           AND calibration.machine_id = machine.id
+           AND calibration.state = 'ACTIVE'
+          JOIN inventories inventory
+            ON inventory.node_id = machine.node_id
+           AND inventory.machine_id = machine.id
+           AND inventory.status = 'AVAILABLE'
+           AND inventory.remaining_milligrams > 0
+           AND inventory.material = ${item.material}::material
+           AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
+          WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
+            AND profile.material = ${item.material}::material
+            AND profile.state = 'ACTIVE'
+            AND taven_geometry_fits_machine_capability(
+              ${item.targetModelGeometryId}::uuid,
+              machine.machine_capability_id
+            )
+        ) AS eligible
+      `;
+      if (rows[0]?.eligible !== true) return false;
     }
     return true;
   }
@@ -2177,23 +2385,17 @@ export class AutomaticQuotesService {
         draft.items[index]!.ordinal,
       ]),
     );
-    const [materialAndColorAvailable, withinBuildLimits] = await Promise.all([
-      this.materialsAvailable(this.prisma, draft.items),
-      this.geometriesFitActiveMachines(
-        this.prisma,
-        pricing.items.map((item) => ({
-          material: item.material,
-          modelGeometry: item,
-        })),
-      ),
-    ]);
+    const candidateResourcesAvailable = await this.candidateResourcesAvailable(
+      this.prisma,
+      draft.items,
+    );
     const result = (
       await prepareAutomaticQuote({
         priceList,
         items: pricing.items,
         expressRequested: draft.expressRequested,
-        materialAndColorAvailable,
-        withinBuildLimits,
+        materialAndColorAvailable: candidateResourcesAvailable,
+        withinBuildLimits: candidateResourcesAvailable,
         riskAcknowledgementsComplete: true,
         hasBlockingPreflightFinding: false,
         ...(draft.selectedDeliveryDestination
@@ -2349,6 +2551,9 @@ export class AutomaticQuotesService {
       }),
     );
     const handoffReasons: string[] = [];
+    if (await this.preprocessingRequiresHandoff(order.id, draft.items)) {
+      handoffReasons.push("PREPROCESSING_FAILED");
+    }
     if (modelFiles.some((file) => file.inspectionStatus === "UNSUPPORTED")) {
       handoffReasons.push("UNSUPPORTED_FORMAT");
     }
@@ -2554,6 +2759,8 @@ async function enqueueInspection(
       storageObjectKey: string;
       contentHash: string;
     };
+    attempt?: number;
+    availableAt?: Date;
     operation: JsonRecord;
   },
 ): Promise<void> {
@@ -2567,6 +2774,7 @@ async function enqueueInspection(
     "model_inspection",
     jobInput,
   );
+  const attempt = input.attempt ?? 1;
   const job = ModelInspectionJobSchema.parse({
     contractVersion: 2,
     kind: "model_inspection",
@@ -2574,10 +2782,13 @@ async function enqueueInspection(
     correlationId: input.correlationId,
     inputFingerprintSha256,
     idempotencyKey: `slicer:v2:model_inspection:${input.jobId}:${inputFingerprintSha256}`,
-    attempt: 1,
+    attempt,
     input: jobInput,
   });
-  const deduplicationKey = slicingDispatchAttemptKey(job.idempotencyKey, 1);
+  const deduplicationKey = slicingDispatchAttemptKey(
+    job.idempotencyKey,
+    attempt,
+  );
   await transaction.outboxMessage.upsert({
     where: { deduplicationKey },
     create: {
@@ -2587,6 +2798,7 @@ async function enqueueInspection(
       messageType: "slicing.model-inspection.requested",
       schemaVersion: 2,
       payload: { job } as unknown as Prisma.InputJsonObject,
+      ...(input.availableAt ? { availableAt: input.availableAt } : {}),
     },
     update: {},
   });

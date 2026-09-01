@@ -111,6 +111,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
   it("resumes a quote through binding, complete reservation, and endpoint replacement", async () => {
     const sql = await pool.connect();
     const factory = new PersistenceFactory(sql, `${scope}:happy`);
+    const quoteColor = `red-${scope.slice(-12)}`;
     await sql.query("BEGIN");
     const foundation = await factory
       .createFoundation(
@@ -120,7 +121,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         undefined,
         undefined,
         1,
-        [{ color: "red", quantity: 1 }],
+        [{ color: quoteColor, quantity: 1 }],
       )
       .then(async (created) => {
         await sql.query("COMMIT");
@@ -409,7 +410,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
             bodyIds: [bodyId],
             printConfigRevisionId: foundation.printConfigRevisionId,
             material: "PLA",
-            color: "red",
+            color: quoteColor,
             infillPreset: "STANDARD",
             quantity,
             preferredPartsPerPlate: 1,
@@ -430,6 +431,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       draft: Awaited<ReturnType<typeof draftItem>>,
       bodyId: string,
       marker: string,
+      createSlice = true,
     ) => {
       const geometryHash = sha(`${scope}:geometry:${marker}`);
       const referenceProfile = await prisma.referenceProfile.findUniqueOrThrow({
@@ -464,22 +466,25 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         ),
         partsPerPlate: 1,
       });
-      await prisma.sliceResult.create({
-        data: {
-          kind: "REFERENCE",
-          cacheKey,
-          modelGeometryId: draft.targetModelGeometryId,
-          printConfigRevisionId: draft.printConfigRevisionId,
-          referenceProfileId: draft.referenceProfileId,
-          partsPerPlate: 1,
-          artifactObjectKey: `${scope}/reference/${marker}.json`,
-          artifactHash: sha(`${scope}:reference:${marker}`),
-          estimatedPrintSeconds: 60n,
-          estimatedMaterialMilligrams: 60n,
-          slicerEngine: referenceProfile.slicerEngine,
-          slicerVersion: referenceProfile.slicerVersion,
-        },
-      });
+      if (createSlice) {
+        await prisma.sliceResult.create({
+          data: {
+            kind: "REFERENCE",
+            cacheKey,
+            modelGeometryId: draft.targetModelGeometryId,
+            printConfigRevisionId: draft.printConfigRevisionId,
+            referenceProfileId: draft.referenceProfileId,
+            partsPerPlate: 1,
+            artifactObjectKey: `${scope}/reference/${marker}.json`,
+            artifactHash: sha(`${scope}:reference:${marker}`),
+            estimatedPrintSeconds: 60n,
+            estimatedMaterialMilligrams: 60n,
+            slicerEngine: referenceProfile.slicerEngine,
+            slicerVersion: referenceProfile.slicerVersion,
+          },
+        });
+      }
+      return { cacheKey, referenceProfile };
     };
 
     const immediateRough = await configure(0, "body-a", 1, "configure-stale");
@@ -518,9 +523,103 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       }),
     ).toBe(1);
 
+    const canonicalAttemptOne = await prisma.outboxMessage.findFirstOrThrow({
+      where: {
+        messageType: "slicing.model-inspection.requested",
+        aggregateType: "ModelInspectionDispatch",
+        payload: {
+          path: ["job", "input", "operation", "mode"],
+          equals: "canonicalize_selection",
+        },
+        AND: [
+          { payload: { path: ["job", "correlationId"], equals: orderId } },
+          { payload: { path: ["job", "attempt"], equals: 1 } },
+        ],
+      },
+    });
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `${scope}:canonical-retryable-result`,
+        aggregateType: "SlicingDispatchResult",
+        aggregateId: canonicalAttemptOne.id,
+        messageType: "slicing.model_inspection.result-received",
+        schemaVersion: 2,
+        payload: {
+          result: {
+            outcome: {
+              status: "failed",
+              failureClass: "retryable_infrastructure",
+              retryAfterMilliseconds: 1,
+            },
+          },
+        },
+      },
+    });
+    const canonicalRetryResponses = await Promise.all(
+      ["canonical-retry-a", "canonical-retry-b"].map((command) =>
+        api(`automatic-quote-sessions/${sessionId}/prepare`, {
+          method: "POST",
+          headers: capabilityHeaders(sessionToken, key(command)),
+        }),
+      ),
+    );
     expect(
-      (await configure(0, "body-b", 1, "configure-current-0")).response.status,
-    ).toBe(200);
+      canonicalRetryResponses.map(({ response }) => response.status),
+    ).toEqual([200, 200]);
+    const canonicalDispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateId: canonicalAttemptOne.aggregateId,
+        aggregateType: "ModelInspectionDispatch",
+        messageType: "slicing.model-inspection.requested",
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(canonicalDispatches).toHaveLength(2);
+    expect(
+      canonicalDispatches.map(
+        ({ payload }) => (payload as { job: { attempt: number } }).job.attempt,
+      ),
+    ).toEqual([1, 2]);
+    const canonicalAttemptTwo = canonicalDispatches[1]!;
+    expect(canonicalAttemptTwo.availableAt.getTime()).toBeGreaterThanOrEqual(
+      canonicalAttemptOne.createdAt.getTime(),
+    );
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `${scope}:canonical-deterministic-result`,
+        aggregateType: "SlicingDispatchResult",
+        aggregateId: canonicalAttemptTwo.id,
+        messageType: "slicing.model_inspection.result-received",
+        schemaVersion: 2,
+        payload: {
+          result: {
+            outcome: {
+              status: "failed",
+              failureClass: "deterministic_invalid",
+              retryAfterMilliseconds: null,
+            },
+          },
+        },
+      },
+    });
+    const canonicalFailure = await api(
+      `automatic-quote-sessions/${sessionId}`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+    expect(canonicalFailure.response.status).toBe(200);
+    expect(canonicalFailure.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(canonicalFailure.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["PREPROCESSING_FAILED"]),
+    });
+
+    const currentConfiguration = await configure(
+      0,
+      "body-b",
+      1,
+      "configure-current-0",
+    );
+    expect(currentConfiguration.response.status).toBe(200);
+    expect(currentConfiguration.body.handoff).toBeNull();
     await seedReference(staleDraft, "body-a", "stale");
     const staleResult = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
@@ -537,8 +636,123 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       (await configure(1, "body-c", 2, "configure-current-1", true)).response
         .status,
     ).toBe(200);
-    await seedReference(await draftItem(0), "body-b", "current-0");
+    const currentZeroDraft = await draftItem(0);
+    const currentZeroReference = await seedReference(
+      currentZeroDraft,
+      "body-b",
+      "current-0",
+      false,
+    );
     await seedReference(await draftItem(1), "body-c", "current-1");
+    const referenceAttemptOneResponse = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("reference-attempt-one")),
+      },
+    );
+    expect(referenceAttemptOneResponse.response.status).toBe(200);
+    const referenceAttemptOne = await prisma.outboxMessage.findFirstOrThrow({
+      where: {
+        aggregateType: "ReferenceSliceDispatch",
+        messageType: "slicing.reference-slice.requested",
+        AND: [
+          { payload: { path: ["job", "correlationId"], equals: orderId } },
+          { payload: { path: ["job", "attempt"], equals: 1 } },
+          {
+            payload: {
+              path: ["job", "input", "geometry", "modelGeometryId"],
+              equals: currentZeroDraft.targetModelGeometryId,
+            },
+          },
+        ],
+      },
+    });
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `${scope}:reference-retryable-result`,
+        aggregateType: "SlicingDispatchResult",
+        aggregateId: referenceAttemptOne.id,
+        messageType: "slicing.reference_slice.result-received",
+        schemaVersion: 2,
+        payload: {
+          result: {
+            outcome: {
+              status: "failed",
+              failureClass: "retryable_infrastructure",
+              retryAfterMilliseconds: 1,
+            },
+          },
+        },
+      },
+    });
+    const referenceRetryResponses = await Promise.all(
+      ["reference-retry-a", "reference-retry-b"].map((command) =>
+        api(`automatic-quote-sessions/${sessionId}/prepare`, {
+          method: "POST",
+          headers: capabilityHeaders(sessionToken, key(command)),
+        }),
+      ),
+    );
+    expect(
+      referenceRetryResponses.map(({ response }) => response.status),
+    ).toEqual([200, 200]);
+    const referenceDispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateId: referenceAttemptOne.aggregateId,
+        aggregateType: "ReferenceSliceDispatch",
+        messageType: "slicing.reference-slice.requested",
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(
+      referenceDispatches.map(
+        ({ payload }) => (payload as { job: { attempt: number } }).job.attempt,
+      ),
+    ).toEqual([1, 2]);
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `${scope}:reference-deterministic-result`,
+        aggregateType: "SlicingDispatchResult",
+        aggregateId: referenceDispatches[1]!.id,
+        messageType: "slicing.reference_slice.result-received",
+        schemaVersion: 2,
+        payload: {
+          result: {
+            outcome: {
+              status: "failed",
+              failureClass: "deterministic_invalid",
+              retryAfterMilliseconds: null,
+            },
+          },
+        },
+      },
+    });
+    const referenceFailure = await api(
+      `automatic-quote-sessions/${sessionId}`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+    expect(referenceFailure.response.status).toBe(200);
+    expect(referenceFailure.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(referenceFailure.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["PREPROCESSING_FAILED"]),
+    });
+    await prisma.sliceResult.create({
+      data: {
+        kind: "REFERENCE",
+        cacheKey: currentZeroReference.cacheKey,
+        modelGeometryId: currentZeroDraft.targetModelGeometryId,
+        printConfigRevisionId: currentZeroDraft.printConfigRevisionId,
+        referenceProfileId: currentZeroDraft.referenceProfileId,
+        partsPerPlate: 1,
+        artifactObjectKey: `${scope}/reference/current-0.json`,
+        artifactHash: sha(`${scope}:reference:current-0`),
+        estimatedPrintSeconds: 60n,
+        estimatedMaterialMilligrams: 60n,
+        slicerEngine: currentZeroReference.referenceProfile.slicerEngine,
+        slicerVersion: currentZeroReference.referenceProfile.slicerVersion,
+      },
+    });
 
     const fitHandoff = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
@@ -576,7 +790,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           payload: { path: ["job", "correlationId"], equals: orderId },
         },
       }),
-    ).toBe(0);
+    ).toBe(referenceDispatches.length);
 
     const expressRejected = await api(
       `automatic-quote-sessions/${sessionId}/express`,
@@ -662,6 +876,38 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     );
     expect(destination.response.status).toBe(200);
+
+    await prisma.inventory.updateMany({
+      where: {
+        machineId: compatibleMachine.id,
+        color: quoteColor,
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 0n },
+    });
+    const splitResourceGate = await api(
+      `automatic-quote-sessions/${sessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("split-resource-gate")),
+      },
+    );
+    expect(splitResourceGate.response.status).toBe(200);
+    expect(splitResourceGate.body.checkoutReady).toBe(false);
+    expect(splitResourceGate.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["BUILD_LIMIT_EXCEEDED"]),
+    });
+    expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
+      0,
+    );
+    await prisma.inventory.updateMany({
+      where: {
+        machineId: compatibleMachine.id,
+        color: quoteColor,
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 1_000_000n },
+    });
 
     const staged = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
