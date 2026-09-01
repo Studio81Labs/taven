@@ -44,6 +44,16 @@ export class ConfigureAutomaticQuoteItemDto {
   fitSensitive?: boolean;
 }
 
+export class ConfigureAutomaticQuoteDraftItemDto extends ConfigureAutomaticQuoteItemDto {
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 999 })
+  ordinal!: number;
+}
+
+export class ReplaceAutomaticQuoteConfigurationDto {
+  @ApiProperty({ type: [ConfigureAutomaticQuoteDraftItemDto], minItems: 1 })
+  items!: ConfigureAutomaticQuoteDraftItemDto[];
+}
+
 export class AutomaticQuoteRiskDecisionDto {
   @ApiProperty({ type: "integer", minimum: 0 })
   itemOrdinal!: number;

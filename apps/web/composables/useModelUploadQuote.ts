@@ -24,7 +24,8 @@ type CreatedQuoteSession =
   components["schemas"]["AutomaticQuoteSessionCreatedDto"];
 type ConfirmedUpload = components["schemas"]["ConfirmedUploadResponseDto"];
 type UploadIntent = components["schemas"]["UploadIntentResponseDto"];
-type ConfigureItem = components["schemas"]["ConfigureAutomaticQuoteItemDto"];
+type ReplaceConfiguration =
+  components["schemas"]["ReplaceAutomaticQuoteConfigurationDto"];
 type RiskDecision = components["schemas"]["AutomaticQuoteRiskDecisionDto"];
 type DeliveryDestination =
   components["schemas"]["SelectAutomaticQuoteDestinationDto"];
@@ -455,24 +456,20 @@ export function useModelUploadQuote() {
     }
   }
 
-  function configureItem(
-    ordinal: number,
-    configuration: ConfigureItem,
+  function replaceConfiguration(
+    items: ReplaceConfiguration["items"],
   ): Promise<boolean> {
-    const input = { configuration, ordinal };
-    return runQuoteCommand("configure-item", input, (signal, key) =>
-      $api.PUT(
-        "/automatic-quote-sessions/{sessionId}/items/{ordinal}/configuration",
-        {
-          body: configuration,
-          headers: { Authorization: `Bearer ${sessionToken.value}` },
-          params: {
-            header: { "Idempotency-Key": key },
-            path: { ordinal, sessionId: quote.value!.sessionId },
-          },
-          signal,
+    const input = { items };
+    return runQuoteCommand("replace-configuration", input, (signal, key) =>
+      $api.PUT("/automatic-quote-sessions/{sessionId}/configuration", {
+        body: input,
+        headers: { Authorization: `Bearer ${sessionToken.value}` },
+        params: {
+          header: { "Idempotency-Key": key },
+          path: { sessionId: quote.value!.sessionId },
         },
-      ),
+        signal,
+      }),
     );
   }
 
@@ -764,7 +761,6 @@ export function useModelUploadQuote() {
     cancelUpload,
     commandError,
     commandPending,
-    configureItem,
     decideRisk,
     errorMessage,
     filename,
@@ -775,6 +771,7 @@ export function useModelUploadQuote() {
     previewMessage,
     prepareQuote,
     quote,
+    replaceConfiguration,
     removeItem,
     resetState,
     retry,

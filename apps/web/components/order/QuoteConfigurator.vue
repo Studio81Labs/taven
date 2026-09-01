@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
 import {
+  canAddBodyGroup,
   configurationValues,
   formatMoney,
   groupsFromAssignments,
@@ -25,13 +26,11 @@ const props = defineProps<{
   commandError?: string;
   pending: boolean;
   quote: QuoteSession;
-  onConfigureItem: (
-    ordinal: number,
-    configuration: ConfigureItem,
+  onReplaceConfiguration: (
+    items: Array<ConfigureItem & { ordinal: number }>,
   ) => Promise<boolean>;
   onDecideRisk: (decision: RiskDecision) => Promise<boolean>;
   onPrepare: () => Promise<boolean>;
-  onRemoveItem: (ordinal: number) => Promise<boolean>;
   onSelectDestination: (destination: DeliveryDestination) => Promise<boolean>;
   onSetExpress: (requested: boolean) => Promise<boolean>;
 }>();
@@ -162,7 +161,9 @@ function initializeDrafts(): void {
 }
 
 function addGroup(): void {
-  groupCount.value += 1;
+  if (canAddBodyGroup(bodyIds.value.length, groupCount.value)) {
+    groupCount.value += 1;
+  }
 }
 
 function assignBody(bodyId: string, event: Event): void {
@@ -244,6 +245,7 @@ async function saveConfiguration(): Promise<void> {
     const draft = draftFor(group.ordinal);
     return draft
       ? {
+          ordinal: group.ordinal,
           bodyIds: [...group.bodyIds],
           color: draft.option.color ?? undefined,
           fitSensitive: draft.fitSensitive,
@@ -261,26 +263,8 @@ async function saveConfiguration(): Promise<void> {
   }
   saving.value = true;
   try {
-    const groupingChanged =
-      groups.value.length !== props.quote.items.length ||
-      groups.value.some((group) => {
-        const current = props.quote.items.find(
-          (item) => item.ordinal === group.ordinal,
-        );
-        return (
-          !current ||
-          current.bodyIds.length !== group.bodyIds.length ||
-          current.bodyIds.some((bodyId) => !group.bodyIds.includes(bodyId))
-        );
-      });
-    if (groupingChanged) {
-      for (const item of props.quote.items) {
-        if (!(await props.onRemoveItem(item.ordinal))) return;
-      }
-    }
-    for (const [ordinal, command] of commands.entries()) {
-      if (!command || !(await props.onConfigureItem(ordinal, command))) return;
-    }
+    const configuration = commands.filter((command) => command !== undefined);
+    if (!(await props.onReplaceConfiguration(configuration))) return;
     await props.onPrepare();
   } finally {
     saving.value = false;
@@ -410,7 +394,7 @@ function quantityPrice(choice: {
             <h3 id="grouping-title">Co se má tisknout společně?</h3>
           </div>
           <button
-            v-if="hasUnconfiguredBodies && bodyIds.length > 1"
+            v-if="canAddBodyGroup(bodyIds.length, groupCount)"
             class="secondary-button compact-button"
             type="button"
             @click="addGroup"

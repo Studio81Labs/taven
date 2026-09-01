@@ -791,6 +791,31 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           }),
         },
       );
+    const replaceConfiguration = (
+      items: Array<{
+        ordinal: number;
+        bodyId: string;
+        color: string;
+      }>,
+      command: string,
+    ) =>
+      api(`automatic-quote-sessions/${sessionId}/configuration`, {
+        method: "PUT",
+        headers: capabilityHeaders(sessionToken, key(command)),
+        body: JSON.stringify({
+          items: items.map(({ ordinal, bodyId, color }) => ({
+            ordinal,
+            modelFileId: modelFile.id,
+            bodyIds: [bodyId],
+            printConfigRevisionId: foundation.printConfigRevisionId,
+            material: "PLA",
+            color,
+            infillPreset: "STANDARD",
+            quantity: 1,
+            fitSensitive: false,
+          })),
+        }),
+      });
     const draftItem = (ordinal: number) =>
       prisma.automaticQuoteItemDraft.findFirstOrThrow({
         where: {
@@ -922,6 +947,60 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     ).toBe(200);
     await prisma.inventory.update({
       where: { id: foundation.inventoryId },
+      data: { remainingMilligrams: 1_000_000n },
+    });
+    await prisma.inventory.updateMany({
+      where: {
+        color: { in: [quoteColor, splitNodeColor] },
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 3_000n },
+    });
+
+    const initialTwoColorDraft = await replaceConfiguration(
+      [
+        { ordinal: 0, bodyId: "body-a", color: quoteColor },
+        { ordinal: 1, bodyId: "body-b", color: splitNodeColor },
+      ],
+      "replace-two-color-draft",
+    );
+    expect(initialTwoColorDraft.response.status).toBe(200);
+    const swappedTwoColorDraft = await replaceConfiguration(
+      [
+        { ordinal: 0, bodyId: "body-a", color: splitNodeColor },
+        { ordinal: 1, bodyId: "body-b", color: quoteColor },
+      ],
+      "replace-swapped-two-color-draft",
+    );
+    expect(swappedTwoColorDraft.response.status).toBe(200);
+    expect(swappedTwoColorDraft.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ordinal: 0, color: splitNodeColor }),
+        expect.objectContaining({ ordinal: 1, color: quoteColor }),
+      ]),
+    );
+    const clearedSwappedDraft = await Promise.all(
+      [0, 1].map((ordinal) =>
+        api(
+          `automatic-quote-sessions/${sessionId}/items/${ordinal}/configuration`,
+          {
+            method: "DELETE",
+            headers: capabilityHeaders(
+              sessionToken,
+              key(`remove-swapped-${ordinal}`),
+            ),
+          },
+        ),
+      ),
+    );
+    expect(
+      clearedSwappedDraft.every(({ response }) => response.status === 200),
+    ).toBe(true);
+    await prisma.inventory.updateMany({
+      where: {
+        color: { in: [quoteColor, splitNodeColor] },
+        status: "AVAILABLE",
+      },
       data: { remainingMilligrams: 1_000_000n },
     });
 

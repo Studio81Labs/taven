@@ -60,6 +60,7 @@ import type {
   AutomaticQuoteRiskDecisionDto,
   ConfigureAutomaticQuoteItemDto,
   CreateAutomaticQuoteSessionDto,
+  ReplaceAutomaticQuoteConfigurationDto,
   SelectAutomaticQuoteDestinationDto,
 } from "./automatic-quotes.dto";
 import {
@@ -165,6 +166,10 @@ type AutomaticQuoteCandidateDraftItem = {
   referencePartsPerPlate: number | null;
   referenceProbeLowerBound: number;
   referenceProbeUpperBound: number;
+};
+type ProposedAutomaticQuoteDraftItem = AutomaticQuoteCandidateDraftItem & {
+  fitSensitive: boolean;
+  configurationFingerprint: string;
 };
 type ReferenceOccupancyResolution =
   | { kind: "resolved"; partsPerPlate: number }
@@ -585,6 +590,243 @@ export class AutomaticQuotesService {
             referenceProbeUpperBound: configuration.quantity + 1,
             configurationFingerprint,
           },
+        });
+        await transaction.automaticQuoteDraft.update({
+          where: { orderId: origin.orderId },
+          data: { configurationRevision: { increment: 1 } },
+        });
+      },
+    );
+    return this.getSession(sessionId, authorization);
+  }
+
+  async replaceConfiguration(
+    sessionId: string,
+    input: ReplaceAutomaticQuoteConfigurationDto,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteSessionDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    if (
+      !Array.isArray(input?.items) ||
+      input.items.length === 0 ||
+      input.items.length > 256
+    ) {
+      throw new BadRequestException("items must contain 1 through 256 groups");
+    }
+    const configurations = await Promise.all(
+      input.items.map(async (item) => ({
+        ordinal: nonnegativeInteger(item?.ordinal, "ordinal", 999),
+        configuration: await this.validateConfiguration(item),
+      })),
+    );
+    if (
+      new Set(configurations.map(({ ordinal }) => ordinal)).size !==
+      configurations.length
+    ) {
+      throw new BadRequestException("item ordinals must be unique");
+    }
+    const selectedBodies = configurations.flatMap(({ configuration }) =>
+      configuration.bodyIds.map(
+        (bodyId) => `${configuration.modelFileId}\0${bodyId}`,
+      ),
+    );
+    if (new Set(selectedBodies).size !== selectedBodies.length) {
+      throw new BadRequestException(
+        "selected bodies cannot appear in more than one item",
+      );
+    }
+    configurations.sort((left, right) => left.ordinal - right.ordinal);
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const fingerprint = fingerprintOf({ sessionId, configurations });
+    const { geometrySelectionSha256 } = await import("@taven/slicer-contracts");
+
+    await this.idempotentEffect(
+      "automatic-quote.replace-configuration",
+      commandKey,
+      fingerprint,
+      async (transaction) => {
+        const session = await lockedSession(transaction, sessionId);
+        assertOpenSession(session, sessionCapability);
+        const origin = await transaction.automaticOrderOrigin.findUnique({
+          where: { quoteSessionId: sessionId },
+        });
+        if (!origin) throw new ConflictException("Automatic order is missing");
+        if (
+          (await transaction.orderItem.count({
+            where: { orderId: origin.orderId },
+          })) > 0
+        ) {
+          throw new ConflictException(
+            "Configuration is frozen after quote preparation starts",
+          );
+        }
+        const currentItems = await transaction.automaticQuoteItemDraft.findMany(
+          {
+            where: { orderId: origin.orderId },
+          },
+        );
+        const currentByOrdinal = new Map(
+          currentItems.map((item) => [item.ordinal, item]),
+        );
+        const capabilities = await this.configurationCapabilities(transaction);
+        const proposedItems: ProposedAutomaticQuoteDraftItem[] = [];
+        for (const { ordinal, configuration } of configurations) {
+          const attached = await transaction.automaticQuoteModelFile.findUnique(
+            {
+              where: {
+                orderId_modelFileId: {
+                  orderId: origin.orderId,
+                  modelFileId: configuration.modelFileId,
+                },
+              },
+            },
+          );
+          if (!attached) {
+            throw new BadRequestException("Model file is not attached");
+          }
+          const inspection = await terminalResultForJob(
+            transaction,
+            attached.inspectionJobId,
+            "model_inspection",
+          );
+          const discoveredBodyIds = successfulInspectionBodies(inspection);
+          if (
+            discoveredBodyIds.length === 0 ||
+            configuration.bodyIds.some(
+              (bodyId) => !discoveredBodyIds.includes(bodyId),
+            )
+          ) {
+            throw new ConflictException(
+              "Selected bodies are not available in the completed inspection",
+            );
+          }
+          const printConfig = await transaction.printConfigRevision.findUnique({
+            where: { id: configuration.printConfigRevisionId },
+          });
+          if (
+            !printConfig ||
+            printConfig.infillPercent !==
+              INFILL_PERCENT[configuration.infillPreset]
+          ) {
+            throw new BadRequestException(
+              "Print configuration does not match the named infill preset",
+            );
+          }
+          const selectedOption = capabilities.find(
+            (option) =>
+              option.printConfigRevisionId ===
+                configuration.printConfigRevisionId &&
+              option.material === configuration.material &&
+              option.color === configuration.color &&
+              option.quality === printConfig.quality &&
+              option.infillPreset === configuration.infillPreset,
+          );
+          if (!selectedOption) {
+            throw new BadRequestException(
+              "Selected automatic quote configuration is unavailable",
+            );
+          }
+          const selectionSha256 = geometrySelectionSha256(
+            configuration.bodyIds,
+          );
+          const targetModelGeometryId = deterministicUuid(
+            `automatic-geometry:${configuration.modelFileId}:${selectionSha256}`,
+          );
+          const configurationFingerprint = fingerprintOf({
+            ...configuration,
+            referenceProfileId: selectedOption.referenceProfileId,
+            selectionSha256,
+            targetModelGeometryId,
+          });
+          proposedItems.push({
+            id:
+              currentByOrdinal.get(ordinal)?.id ??
+              deterministicUuid(`automatic-draft:${origin.orderId}:${ordinal}`),
+            ordinal,
+            sourceModelFileId: configuration.modelFileId,
+            bodyIds: configuration.bodyIds,
+            selectionSha256,
+            targetModelGeometryId,
+            printConfigRevisionId: configuration.printConfigRevisionId,
+            referenceProfileId: selectedOption.referenceProfileId,
+            material: configuration.material,
+            color: configuration.color,
+            infillPreset: configuration.infillPreset,
+            quantity: configuration.quantity,
+            fitSensitive: configuration.fitSensitive,
+            referencePartsPerPlate: null,
+            referenceProbeLowerBound: 0,
+            referenceProbeUpperBound: configuration.quantity + 1,
+            configurationFingerprint,
+          });
+        }
+        const priceList = await transaction.priceList.findUnique({
+          where: {
+            currency_revision: {
+              currency: "CZK",
+              revision: AUTOMATIC_PRICE_LIST_REVISION,
+            },
+          },
+        });
+        if (!priceList) {
+          throw new ConflictException("Automatic quote pricing is unavailable");
+        }
+        const proposedPricing = await this.pricingItemsFromDraft(
+          transaction,
+          origin.orderId,
+          proposedItems,
+          parseAutomaticQuotePricingParameters(priceList.parameters),
+        );
+        if (
+          !proposedPricing ||
+          !(await this.draftInventoryAvailable(
+            transaction,
+            proposedItems,
+            proposedPricing.items,
+          ))
+        ) {
+          throw new BadRequestException(
+            "Selected automatic quote configuration lacks sufficient inventory",
+          );
+        }
+        const unchanged =
+          currentItems.length === proposedItems.length &&
+          proposedItems.every(
+            (item) =>
+              currentByOrdinal.get(item.ordinal)?.configurationFingerprint ===
+              item.configurationFingerprint,
+          );
+        if (unchanged) return;
+
+        await transaction.automaticQuoteRiskDecisionRecord.deleteMany({
+          where: { orderId: origin.orderId },
+        });
+        await transaction.automaticQuoteItemDraft.deleteMany({
+          where: { orderId: origin.orderId },
+        });
+        await transaction.automaticQuoteItemDraft.createMany({
+          data: proposedItems.map((item) => ({
+            id: item.id,
+            orderId: origin.orderId,
+            ordinal: item.ordinal,
+            sourceModelFileId: item.sourceModelFileId,
+            bodyIds: item.bodyIds,
+            selectionSha256: item.selectionSha256,
+            targetModelGeometryId: item.targetModelGeometryId,
+            printConfigRevisionId: item.printConfigRevisionId,
+            referenceProfileId: item.referenceProfileId,
+            material: item.material,
+            color: item.color,
+            infillPreset: item.infillPreset,
+            quantity: item.quantity,
+            fitSensitive: item.fitSensitive,
+            referencePartsPerPlate: item.referencePartsPerPlate,
+            referenceProbeLowerBound: item.referenceProbeLowerBound,
+            referenceProbeUpperBound: item.referenceProbeUpperBound,
+            configurationFingerprint: item.configurationFingerprint,
+          })),
         });
         await transaction.automaticQuoteDraft.update({
           where: { orderId: origin.orderId },

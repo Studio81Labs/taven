@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canAddBodyGroup,
   configurationValues,
   groupsFromAssignments,
   initialBodyAssignments,
@@ -70,6 +71,12 @@ describe("body grouping", () => {
       lid: -1,
       pin: -1,
     });
+  });
+
+  it("allows a fully assigned saved item to be split into another group", () => {
+    expect(canAddBodyGroup(3, 1)).toBe(true);
+    expect(canAddBodyGroup(3, 3)).toBe(false);
+    expect(canAddBodyGroup(1, 1)).toBe(false);
   });
 });
 

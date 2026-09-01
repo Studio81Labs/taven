@@ -18,7 +18,6 @@ const {
   cancelUpload,
   commandError,
   commandPending,
-  configureItem,
   decideRisk,
   errorMessage,
   filename,
@@ -29,7 +28,7 @@ const {
   previewMessage,
   prepareQuote,
   quote,
-  removeItem,
+  replaceConfiguration,
   resetState,
   retry,
   selectDestination,
@@ -348,10 +347,9 @@ function inspectionLabel(status: string | undefined): string {
           <OrderQuoteConfigurator
             v-if="showConfigurator && quote"
             :command-error="commandError"
-            :on-configure-item="configureItem"
             :on-decide-risk="decideRisk"
             :on-prepare="prepareQuote"
-            :on-remove-item="removeItem"
+            :on-replace-configuration="replaceConfiguration"
             :on-select-destination="selectDestination"
             :on-set-express="setExpress"
             :pending="commandPending"

@@ -31,6 +31,7 @@ import {
   AutomaticQuoteSessionDto,
   ConfigureAutomaticQuoteItemDto,
   CreateAutomaticQuoteSessionDto,
+  ReplaceAutomaticQuoteConfigurationDto,
   SelectAutomaticQuoteDestinationDto,
   SetAutomaticQuoteExpressDto,
 } from "./automatic-quotes.dto";
@@ -135,6 +136,30 @@ export class AutomaticQuotesController {
     return this.automaticQuotes.configureItem(
       sessionId,
       ordinal,
+      body,
+      authorization,
+      idempotencyKey,
+    );
+  }
+
+  @Put(":sessionId/configuration")
+  @ApiBearerAuth()
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({ summary: "Atomically replace all selected body groups" })
+  @ApiParam(SESSION_ID_PARAM)
+  @ApiBody({ type: ReplaceAutomaticQuoteConfigurationDto })
+  @ApiOkResponse({ type: AutomaticQuoteSessionDto })
+  @ApiConflictResponse({
+    description: "Inspection is pending or configuration is frozen",
+  })
+  replaceConfiguration(
+    @Param("sessionId") sessionId: string,
+    @Body() body: ReplaceAutomaticQuoteConfigurationDto,
+    @Headers("authorization") authorization?: string,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<AutomaticQuoteSessionDto> {
+    return this.automaticQuotes.replaceConfiguration(
+      sessionId,
       body,
       authorization,
       idempotencyKey,

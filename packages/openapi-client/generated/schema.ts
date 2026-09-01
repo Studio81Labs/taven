@@ -140,6 +140,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/automatic-quote-sessions/{sessionId}/configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Atomically replace all selected body groups */
+        put: operations["AutomaticQuotesController_replaceConfiguration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/automatic-quote-sessions/{sessionId}/delivery-destination": {
         parameters: {
             query?: never;
@@ -619,6 +636,22 @@ export interface components {
             /** Format: uuid */
             sessionId: string;
         };
+        ConfigureAutomaticQuoteDraftItemDto: {
+            bodyIds: string[];
+            color?: string;
+            /** @default false */
+            fitSensitive: boolean;
+            /** @enum {string} */
+            infillPreset: "DECORATIVE" | "STANDARD" | "STRONG";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** Format: uuid */
+            modelFileId: string;
+            ordinal: number;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            quantity: number;
+        };
         ConfigureAutomaticQuoteItemDto: {
             bodyIds: string[];
             color?: string;
@@ -931,6 +964,9 @@ export interface components {
             /** @description True only when the original source is retained. Claim-recovery artifacts never satisfy this value. */
             sourceAvailable: boolean;
         };
+        ReplaceAutomaticQuoteConfigurationDto: {
+            items: components["schemas"]["ConfigureAutomaticQuoteDraftItemDto"][];
+        };
         SelectAutomaticQuoteDestinationDto: {
             endpointType: string;
             providerEndpointId: string;
@@ -1204,6 +1240,41 @@ export interface operations {
             };
             /** @description Session capability is invalid */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AutomaticQuotesController_replaceConfiguration: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceAutomaticQuoteConfigurationDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
+                };
+            };
+            /** @description Inspection is pending or configuration is frozen */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -14,6 +14,13 @@ export type BodyGroup = Readonly<{
   bodyIds: readonly string[];
 }>;
 
+export function canAddBodyGroup(
+  bodyCount: number,
+  groupCount: number,
+): boolean {
+  return bodyCount > 1 && groupCount < bodyCount;
+}
+
 export function initialBodyGroups(
   bodyIds: readonly string[],
   items: readonly Pick<QuoteItem, "bodyIds" | "ordinal">[],
