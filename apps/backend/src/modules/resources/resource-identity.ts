@@ -7,7 +7,7 @@ export type CanonicalJson =
   | readonly CanonicalJson[]
   | { readonly [key: string]: CanonicalJson };
 
-function canonicalJson(value: CanonicalJson): string {
+export function canonicalJson(value: CanonicalJson): string {
   if (value === null || typeof value === "boolean") {
     return JSON.stringify(value);
   }

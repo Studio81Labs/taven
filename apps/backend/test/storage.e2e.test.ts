@@ -70,6 +70,34 @@ describe("secure object storage and retention", () => {
     });
   });
 
+  it("creates immutable profile snapshots idempotently on S3-compatible storage", async () => {
+    const bytes = new TextEncoder().encode('{"layer_height":"0.2"}');
+    const contentHash = createHash("sha256").update(bytes).digest("hex");
+    const objectKey = `slicer-revisions/${contentHash}/settings.json`;
+    cleanupKeys.add(objectKey);
+
+    await objects.putImmutableObject({
+      objectKey,
+      contentType: "application/json",
+      contentHash,
+      bytes,
+    });
+    await objects.putImmutableObject({
+      objectKey,
+      contentType: "application/json",
+      contentHash,
+      bytes,
+    });
+
+    await expect(objects.headObject(objectKey)).resolves.toMatchObject({
+      contentType: "application/json",
+      contentLength: bytes.byteLength,
+    });
+    await expect(
+      objects.readObjectRange(objectKey, 0, bytes.byteLength),
+    ).resolves.toEqual(bytes);
+  });
+
   afterAll(async () => {
     if (cleanupKeys.size > 0) {
       await objects.deleteObjects([...cleanupKeys]);
@@ -1140,6 +1168,7 @@ describe("secure object storage and retention", () => {
     });
     let failFirstDelete = true;
     const flakyStorage: ObjectStorage = {
+      putImmutableObject: (input) => objects.putImmutableObject(input),
       createUploadUrl: (input) => objects.createUploadUrl(input),
       createDownloadUrl: (input) => objects.createDownloadUrl(input),
       headObject: (key) => objects.headObject(key),

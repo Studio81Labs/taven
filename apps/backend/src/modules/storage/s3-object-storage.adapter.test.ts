@@ -7,6 +7,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { createHash } from "node:crypto";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { S3ObjectStorageAdapter } from "./s3-object-storage.adapter";
@@ -35,8 +36,66 @@ describe("S3ObjectStorageAdapter", () => {
 
   beforeEach(() => {
     send = vi.spyOn(client, "send");
+    send.mockReset();
     vi.mocked(getSignedUrl).mockClear();
     vi.mocked(getSignedUrl).mockResolvedValue("https://signed.example/object");
+  });
+
+  it("creates immutable checksum-addressed objects idempotently", async () => {
+    const bytes = new TextEncoder().encode('{"profile":"standard"}');
+    const contentHash = createHash("sha256").update(bytes).digest("hex");
+    send.mockResolvedValueOnce({});
+    const storage = new S3ObjectStorageAdapter(config, client);
+    const key = `slicer-revisions/${contentHash}/settings.json`;
+
+    await expect(
+      storage.putImmutableObject({
+        objectKey: key,
+        contentType: "application/json",
+        contentHash,
+        bytes,
+      }),
+    ).resolves.toBeUndefined();
+    const put = send.mock.calls[0]?.[0] as PutObjectCommand;
+    expect(put.input).toMatchObject({
+      Key: key,
+      ContentLength: bytes.byteLength,
+      IfNoneMatch: "*",
+      ChecksumSHA256: Buffer.from(contentHash, "hex").toString("base64"),
+    });
+
+    send.mockRejectedValueOnce({ name: "PreconditionFailed" });
+    send.mockResolvedValueOnce({
+      ContentType: "application/json",
+      ContentLength: bytes.byteLength,
+    });
+    send.mockResolvedValueOnce({
+      ContentLength: bytes.byteLength,
+      Body: (async function* () {
+        yield bytes;
+      })(),
+    });
+    await expect(
+      storage.putImmutableObject({
+        objectKey: key,
+        contentType: "application/json",
+        contentHash,
+        bytes,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects immutable writes whose bytes do not match their hash", async () => {
+    const storage = new S3ObjectStorageAdapter(config, client);
+    await expect(
+      storage.putImmutableObject({
+        objectKey: `slicer-revisions/${hash}/settings.json`,
+        contentType: "application/json",
+        contentHash: hash,
+        bytes: new TextEncoder().encode("{}"),
+      }),
+    ).rejects.toThrow("do not match contentHash");
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("binds size and SHA-256 checksum into a signed upload", async () => {

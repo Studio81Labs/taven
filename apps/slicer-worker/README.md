@@ -35,7 +35,9 @@ All worker services remain opt-in.
 
 Profile and configuration revisions are provider-neutral immutable S3 objects
 at `slicer-revisions/<content-sha256>/settings.json`. Their bytes must hash to
-the revision digest carried by the v2 job. Orca preset JSON objects with
+the settings-snapshot digest carried by the v2 job; this is intentionally
+separate from the database revision-identity digest. The backend provisions
+every persisted snapshot at startup and before dispatch. Orca preset JSON objects with
 `type: "filament"` (or a `filament_settings_id`) are loaded through Orca's
 filament-preset option; machine, process, and override objects use its settings
 option. This distinction is required for reliable sliced-3MF packaging.

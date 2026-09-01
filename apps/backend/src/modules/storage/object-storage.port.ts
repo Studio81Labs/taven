@@ -37,6 +37,13 @@ export interface StoredObjectMetadata {
   contentHash: string | null;
 }
 
+export interface ImmutableObjectWrite {
+  objectKey: string;
+  contentType: string;
+  contentHash: string;
+  bytes: Uint8Array;
+}
+
 export interface ObjectStorageListRequest {
   prefix: string;
   startAfter?: string;
@@ -54,6 +61,7 @@ export interface ObjectStorageListPage {
 }
 
 export interface ObjectStorage {
+  putImmutableObject(input: ImmutableObjectWrite): Promise<void>;
   createUploadUrl(input: ObjectStorageUploadRequest): Promise<SignedObjectUrl>;
   createDownloadUrl(
     input: ObjectStorageDownloadRequest,

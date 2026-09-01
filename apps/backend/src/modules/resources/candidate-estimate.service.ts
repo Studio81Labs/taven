@@ -10,6 +10,10 @@ import {
   ResourceNotFoundError,
   ResourceValidationError,
 } from "./resource-errors";
+import {
+  SlicerProfileSnapshotMismatchError,
+  SlicerProfileSnapshotService,
+} from "../slicing/slicer-profile-snapshot.service";
 
 const CANDIDATE_DISPATCH_TYPE = "slicing.candidate-estimate.requested";
 const CANDIDATE_SCHEMA_VERSION = 2;
@@ -246,7 +250,11 @@ function constraintOf(error: unknown): string | undefined {
 
 @Injectable()
 export class CandidateEstimateService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(SlicerProfileSnapshotService)
+    private readonly snapshots: SlicerProfileSnapshotService,
+  ) {}
 
   /** Persists the exact queue dispatch before it can be published. */
   async dispatch(
@@ -261,6 +269,14 @@ export class CandidateEstimateService {
       throw new ResourceValidationError(
         `candidate estimate job is invalid: ${errorMessage(error)}`,
       );
+    }
+    try {
+      await this.snapshots.ensureJobSnapshots(job);
+    } catch (error) {
+      if (error instanceof SlicerProfileSnapshotMismatchError) {
+        throw new ResourceNotFoundError(error.message);
+      }
+      throw error;
     }
     const payload = {
       nodeId: input.nodeId,
@@ -361,16 +377,10 @@ export class CandidateEstimateService {
               ON calibration.id = ${job.input.machineCalibration.revisionId}::uuid
              AND calibration.node_id = machine.node_id
              AND calibration.machine_id = machine.id
-            JOIN revision_identities profile_revision
-              ON profile_revision.id = profile.id
-            JOIN revision_identities calibration_revision
-              ON calibration_revision.id = calibration.id
-            JOIN revision_identities config_revision
-              ON config_revision.id = ${job.input.printConfig.revisionId}::uuid
             JOIN arrangement_revisions arrangement_revision
               ON arrangement_revision.id = ${job.input.arrangementRevision.revisionId}::uuid
             JOIN print_config_revisions config
-              ON config.id = config_revision.id
+              ON config.id = ${job.input.printConfig.revisionId}::uuid
             JOIN model_geometries geometry
               ON geometry.id = ${job.input.geometry.modelGeometryId}::uuid
             JOIN model_files source
@@ -404,9 +414,6 @@ export class CandidateEstimateService {
                     geometry.id,
                     machine.machine_capability_id
                   )
-              AND profile_revision.digest = ${job.input.machineProfile.contentSha256}
-              AND calibration_revision.digest = ${job.input.machineCalibration.contentSha256}
-              AND config_revision.digest = ${job.input.printConfig.contentSha256}
               AND arrangement_revision.content_sha256 = ${job.input.arrangementRevision.contentSha256}
           ) AS exists
         `;

@@ -17,6 +17,7 @@ import {
   SlicingResultIngestionService,
 } from "./slicing-result-ingestion.service";
 import { SLICING_QUEUE } from "./slicing.tokens";
+import { SlicerProfileSnapshotService } from "./slicer-profile-snapshot.service";
 
 const CLAIM_LEASE_MILLISECONDS = 5 * 60 * 1_000;
 const MAX_LAST_ERROR_LENGTH = 1_000;
@@ -108,6 +109,8 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
     private readonly candidateEstimates: CandidateEstimateService,
     @Inject(SlicingResultIngestionService)
     private readonly results: SlicingResultIngestionService,
+    @Inject(SlicerProfileSnapshotService)
+    private readonly snapshots: SlicerProfileSnapshotService,
   ) {}
 
   async publishPending(limit: number): Promise<number> {
@@ -124,6 +127,7 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
         if (job.kind === "production_slice") {
           await this.assertProductionSliceAuthorized(job);
         }
+        await this.snapshots.ensureJobSnapshots(job);
         await this.queue.add(job.kind, job, {
           jobId: queueJobId(job),
           attempts: 3,
@@ -334,17 +338,12 @@ export class SlicingQueuePublisher implements OnModuleDestroy {
                 },
               },
             },
-            printConfigRevision: {
-              revision: { digest: input.printConfig.contentSha256 },
-            },
+            printConfigRevision: { id: input.printConfig.revisionId },
             machineProfile: {
               slicerEngine: input.machineProfile.slicerEngine,
               slicerVersion: input.machineProfile.slicerVersion,
-              revision: { digest: input.machineProfile.contentSha256 },
             },
-            machineCalibration: {
-              revision: { digest: input.machineCalibration.contentSha256 },
-            },
+            machineCalibration: { id: input.machineCalibration.revisionId },
           },
         },
       },

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   CopyObjectCommand,
   DeleteObjectsCommand,
@@ -10,6 +11,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
   ObjectStorageDeadlineError,
+  type ImmutableObjectWrite,
   type ObjectStorage,
   type ObjectStorageDownloadRequest,
   type ObjectStorageListPage,
@@ -104,6 +106,57 @@ export class S3ObjectStorageAdapter implements ObjectStorage {
               secretAccessKey: config.secretAccessKey,
             },
           }));
+  }
+
+  async putImmutableObject(input: ImmutableObjectWrite): Promise<void> {
+    assertStorageObjectKey(input.objectKey);
+    if (input.bytes.byteLength < 1) {
+      throw new Error("immutable object bytes must not be empty");
+    }
+    const actualHash = createHash("sha256").update(input.bytes).digest("hex");
+    if (actualHash !== input.contentHash) {
+      throw new Error("immutable object bytes do not match contentHash");
+    }
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: input.objectKey,
+          Body: input.bytes,
+          ContentType: input.contentType,
+          ContentLength: input.bytes.byteLength,
+          ChecksumAlgorithm: "SHA256",
+          ChecksumSHA256: base64ChecksumFromHex(input.contentHash),
+          IfNoneMatch: "*",
+        }),
+      );
+      return;
+    } catch (error) {
+      if (!isPreconditionConflict(error)) throw error;
+    }
+
+    const existing = await this.headObject(input.objectKey);
+    if (
+      !existing ||
+      existing.contentType !== input.contentType ||
+      existing.contentLength !== input.bytes.byteLength
+    ) {
+      throw new Error("immutable object key already contains different data");
+    }
+    const existingHash =
+      existing.contentHash ??
+      createHash("sha256")
+        .update(
+          await this.readObjectRange(
+            input.objectKey,
+            0,
+            existing.contentLength,
+          ),
+        )
+        .digest("hex");
+    if (existingHash !== input.contentHash) {
+      throw new Error("immutable object key already contains different data");
+    }
   }
 
   async createUploadUrl(
@@ -361,6 +414,20 @@ function isNotFound(error: unknown): boolean {
     metadata.name === "NotFound" ||
     metadata.name === "NoSuchKey" ||
     metadata.$metadata?.httpStatusCode === 404
+  );
+}
+
+function isPreconditionConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const metadata = error as {
+    name?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  return (
+    metadata.name === "PreconditionFailed" ||
+    metadata.name === "ConditionalRequestConflict" ||
+    metadata.$metadata?.httpStatusCode === 409 ||
+    metadata.$metadata?.httpStatusCode === 412
   );
 }
 

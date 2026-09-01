@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
+import type { Prisma } from "@prisma/client";
 import type {
   CandidateEstimateJob,
   CandidateEstimateResult,
@@ -12,6 +13,11 @@ import {
   ResourceValidationError,
 } from "../src/modules/resources/resource-errors";
 import { PrismaService } from "../src/prisma/prisma.service";
+import {
+  SlicerProfileSnapshotService,
+  slicerSettingsSnapshot,
+} from "../src/modules/slicing/slicer-profile-snapshot.service";
+import type { ObjectStorage } from "../src/modules/storage/object-storage.port";
 import { PersistenceFactory, testTimes } from "./support/persistence-factory";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -22,6 +28,7 @@ const hash = (value: string) =>
 let pool: Pool;
 let prisma: PrismaService;
 let candidates: CandidateEstimateService;
+let snapshots: SlicerProfileSnapshotService;
 let contracts: typeof import("@taven/slicer-contracts", {
   with: { "resolution-mode": "import" },
 });
@@ -34,10 +41,6 @@ type CandidateFixture = {
   success: CandidateEstimateResult;
   failure: CandidateEstimateResult;
 };
-
-function revisionDigest(id: string): string {
-  return hash(`revision:${id}`);
-}
 
 function resultFor(
   job: CandidateEstimateJob,
@@ -131,36 +134,30 @@ async function createFixture(
         geometrySha256: geometryRow.geometry_hash,
       });
     }
-    const persistedRevisions = dispatchableGeometry
-      ? await client.query<{
-          profile_digest: string;
-          calibration_digest: string;
-          config_digest: string;
-          slicer_engine: string;
-          slicer_version: string;
-        }>(
-          `SELECT profile_revision.digest AS profile_digest,
-                  calibration_revision.digest AS calibration_digest,
-                  config_revision.digest AS config_digest,
+    const persistedRevisions = await client.query<{
+      profile_settings: Prisma.JsonValue;
+      calibration_settings: Prisma.JsonValue;
+      config_settings: Prisma.JsonValue;
+      slicer_engine: string;
+      slicer_version: string;
+    }>(
+      `SELECT profile.settings AS profile_settings,
+                  calibration.settings AS calibration_settings,
+                  config.settings AS config_settings,
                   profile.slicer_engine,
                   profile.slicer_version
            FROM machine_profiles profile
-           JOIN revision_identities profile_revision
-             ON profile_revision.id = profile.id
-           JOIN revision_identities calibration_revision
-             ON calibration_revision.id = $2
-           JOIN revision_identities config_revision
-             ON config_revision.id = $3
+           JOIN machine_calibrations calibration ON calibration.id = $2
+           JOIN print_config_revisions config ON config.id = $3
            WHERE profile.id = $1`,
-          [
-            foundation.machineProfileId,
-            foundation.machineCalibrationId,
-            foundation.printConfigRevisionId,
-          ],
-        )
-      : undefined;
-    const revisions = persistedRevisions?.rows[0];
-    if (dispatchableGeometry && !revisions) {
+      [
+        foundation.machineProfileId,
+        foundation.machineCalibrationId,
+        foundation.printConfigRevisionId,
+      ],
+    );
+    const revisions = persistedRevisions.rows[0];
+    if (!revisions) {
       throw new Error("candidate fixture revisions were not persisted");
     }
     const inputBase = {
@@ -168,24 +165,21 @@ async function createFixture(
       machineId: foundation.machineId,
       machineProfile: {
         revisionId: foundation.machineProfileId,
-        contentSha256:
-          revisions?.profile_digest ??
-          revisionDigest(foundation.machineProfileId),
-        slicerEngine: revisions?.slicer_engine ?? "orca",
-        slicerVersion: revisions?.slicer_version ?? "test",
+        contentSha256: slicerSettingsSnapshot(revisions.profile_settings)
+          .contentSha256,
+        slicerEngine: revisions.slicer_engine,
+        slicerVersion: revisions.slicer_version,
         productionArtifactFormat: "gcode_3mf" as const,
       },
       machineCalibration: {
         revisionId: foundation.machineCalibrationId,
-        contentSha256:
-          revisions?.calibration_digest ??
-          revisionDigest(foundation.machineCalibrationId),
+        contentSha256: slicerSettingsSnapshot(revisions.calibration_settings)
+          .contentSha256,
       },
       printConfig: {
         revisionId: foundation.printConfigRevisionId,
-        contentSha256:
-          revisions?.config_digest ??
-          revisionDigest(foundation.printConfigRevisionId),
+        contentSha256: slicerSettingsSnapshot(revisions.config_settings)
+          .contentSha256,
       },
       partsPerPlate: 1,
       quantity: 1,
@@ -402,7 +396,10 @@ describe("candidate estimate terminal receipts", () => {
     pool = new Pool({ connectionString: databaseUrl });
     prisma = new PrismaService();
     await prisma.onModuleInit();
-    candidates = new CandidateEstimateService(prisma);
+    snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    candidates = new CandidateEstimateService(prisma, snapshots);
     contracts = await import("@taven/slicer-contracts");
   });
 
@@ -411,7 +408,7 @@ describe("candidate estimate terminal receipts", () => {
     await pool.end();
   });
 
-  it("anchors every dispatched resource revision to its persisted digest", async () => {
+  it("anchors every dispatched resource revision to its settings snapshot", async () => {
     const fixture = await createFixture("dispatch-slicer-identity", {
       persistDispatch: false,
       dispatchableGeometry: true,

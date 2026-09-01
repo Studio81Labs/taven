@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Queue, Worker } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
+import type { Prisma } from "@prisma/client";
 import type { SlicingJob, SlicingResult } from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
@@ -13,6 +14,11 @@ import { readSlicingQueueConfig } from "../src/modules/slicing/slicing.config";
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
 import { SlicingResultIngestionService } from "../src/modules/slicing/slicing-result-ingestion.service";
 import { PrismaService } from "../src/prisma/prisma.service";
+import {
+  SlicerProfileSnapshotService,
+  slicerSettingsSnapshot,
+} from "../src/modules/slicing/slicer-profile-snapshot.service";
+import type { ObjectStorage } from "../src/modules/storage/object-storage.port";
 import { PersistenceFactory } from "./support/persistence-factory";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -217,13 +223,13 @@ async function productionFixture(name: string): Promise<{
       canonical_object_key: string;
       geometry_sha256: string;
       machine_profile_id: string;
-      machine_profile_sha256: string;
+      machine_profile_settings: Prisma.JsonValue;
       slicer_engine: string;
       slicer_version: string;
       machine_calibration_id: string;
-      machine_calibration_sha256: string;
+      machine_calibration_settings: Prisma.JsonValue;
       print_config_revision_id: string;
-      print_config_sha256: string;
+      print_config_settings: Prisma.JsonValue;
       arrangement_revision_id: string;
       arrangement_sha256: string;
       quantity: number;
@@ -239,13 +245,13 @@ async function productionFixture(name: string): Promise<{
               geometry.canonical_object_key,
               geometry.geometry_hash AS geometry_sha256,
               production.machine_profile_id,
-              profile_revision.digest AS machine_profile_sha256,
+              profile.settings AS machine_profile_settings,
               profile.slicer_engine,
               profile.slicer_version,
               production.machine_calibration_id,
-              calibration_revision.digest AS machine_calibration_sha256,
+              calibration.settings AS machine_calibration_settings,
               production.print_config_revision_id,
-              config_revision.digest AS print_config_sha256,
+              config.settings AS print_config_settings,
               candidate.arrangement_revision_id,
               arrangement.content_sha256 AS arrangement_sha256,
               candidate.quantity,
@@ -262,11 +268,10 @@ async function productionFixture(name: string): Promise<{
        JOIN model_geometries geometry ON geometry.id = candidate.model_geometry_id
        JOIN model_files source ON source.id = geometry.source_model_file_id
        JOIN machine_profiles profile ON profile.id = production.machine_profile_id
-       JOIN revision_identities profile_revision ON profile_revision.id = profile.id
-       JOIN revision_identities calibration_revision
-         ON calibration_revision.id = production.machine_calibration_id
-       JOIN revision_identities config_revision
-         ON config_revision.id = production.print_config_revision_id
+       JOIN machine_calibrations calibration
+         ON calibration.id = production.machine_calibration_id
+       JOIN print_config_revisions config
+         ON config.id = production.print_config_revision_id
        JOIN arrangement_revisions arrangement
          ON arrangement.id = candidate.arrangement_revision_id
        WHERE production.id = $1`,
@@ -290,18 +295,21 @@ async function productionFixture(name: string): Promise<{
       machineId: row.machine_id,
       machineProfile: {
         revisionId: row.machine_profile_id,
-        contentSha256: row.machine_profile_sha256,
+        contentSha256: slicerSettingsSnapshot(row.machine_profile_settings)
+          .contentSha256,
         slicerEngine: row.slicer_engine,
         slicerVersion: row.slicer_version,
         productionArtifactFormat: "gcode_3mf" as const,
       },
       machineCalibration: {
         revisionId: row.machine_calibration_id,
-        contentSha256: row.machine_calibration_sha256,
+        contentSha256: slicerSettingsSnapshot(row.machine_calibration_settings)
+          .contentSha256,
       },
       printConfig: {
         revisionId: row.print_config_revision_id,
-        contentSha256: row.print_config_sha256,
+        contentSha256: slicerSettingsSnapshot(row.print_config_settings)
+          .contentSha256,
       },
       partsPerPlate: row.parts_per_plate,
       quantity: row.quantity,
@@ -463,11 +471,15 @@ describe("slicing outbox queue bridge", () => {
       { connection, prefix },
     );
     await worker.waitUntilReady();
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
     publisher = new SlicingQueuePublisher(
       prisma,
       queue,
-      new CandidateEstimateService(prisma),
+      new CandidateEstimateService(prisma, snapshots),
       new SlicingResultIngestionService(prisma),
+      snapshots,
     );
   });
 

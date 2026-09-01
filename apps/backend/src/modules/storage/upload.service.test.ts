@@ -366,6 +366,7 @@ function downloadService(
 
 function storageWith(overrides: Partial<ObjectStorage>): ObjectStorage {
   return {
+    putImmutableObject: async () => undefined,
     createUploadUrl: async () => ({
       url: "",
       method: "PUT",

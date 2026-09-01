@@ -259,16 +259,12 @@ export class SlicingResultIngestionService {
           state: "ACTIVE",
           slicerEngine: result.input.referenceProfile.slicerEngine,
           slicerVersion: result.input.referenceProfile.slicerVersion,
-          revision: {
-            digest: result.input.referenceProfile.contentSha256,
-          },
         },
         select: { id: true },
       }),
       transaction.printConfigRevision.findFirst({
         where: {
           id: result.input.printConfig.revisionId,
-          revision: { digest: result.input.printConfig.contentSha256 },
         },
         select: { id: true },
       }),

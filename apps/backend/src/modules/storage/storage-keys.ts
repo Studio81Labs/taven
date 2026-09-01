@@ -2,7 +2,7 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const GENERATED_OBJECT_KEY_PATTERN =
-  /^(?:quarantine|models|photos|qc|quote-reference|geometries|canonical|reference-slices|slices|gcode|reproduction-artifacts)\/[a-z0-9][a-z0-9:-]*(?:\/[a-z0-9][a-z0-9._:-]*)*$/;
+  /^(?:quarantine|models|photos|qc|quote-reference|geometries|canonical|reference-slices|slices|gcode|reproduction-artifacts|slicer-revisions)\/[a-z0-9][a-z0-9:-]*(?:\/[a-z0-9][a-z0-9._:-]*)*$/;
 
 function assertUuid(id: string, name: string): void {
   if (!UUID_PATTERN.test(id))
@@ -67,4 +67,13 @@ export function gcodeObjectKey(jobId: string): string {
 
 export function reproductionArtifactObjectKey(artifactId: string): string {
   return key("reproduction-artifacts", artifactId, "canonical");
+}
+
+export function slicerRevisionObjectKey(contentHash: string): string {
+  if (!/^[0-9a-f]{64}$/.test(contentHash)) {
+    throw new Error("slicer revision hash must be a lowercase SHA-256 digest");
+  }
+  const objectKey = `slicer-revisions/${contentHash}/settings.json`;
+  assertStorageObjectKey(objectKey);
+  return objectKey;
 }

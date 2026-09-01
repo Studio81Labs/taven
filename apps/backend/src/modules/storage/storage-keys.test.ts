@@ -5,6 +5,7 @@ import {
   modelSourceObjectKey,
   photoThumbnailObjectKey,
   quarantineObjectKey,
+  slicerRevisionObjectKey,
 } from "./storage-keys";
 
 const id = "123e4567-e89b-42d3-a456-426614174000";
@@ -15,6 +16,9 @@ describe("storage object keys", () => {
     expect(modelSourceObjectKey(id)).toBe(`models/${id}/source`);
     expect(photoThumbnailObjectKey(id)).toBe(`photos/${id}/thumbnail`);
     expect(canonicalGeometryObjectKey(id)).toBe(`geometries/${id}/canonical`);
+    expect(slicerRevisionObjectKey("a".repeat(64))).toBe(
+      `slicer-revisions/${"a".repeat(64)}/settings.json`,
+    );
   });
 
   it("rejects traversal and non-generated keys", () => {

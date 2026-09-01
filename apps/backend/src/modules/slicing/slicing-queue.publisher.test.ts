@@ -10,6 +10,7 @@ import {
   PermanentSlicingResultIngestionError,
   SlicingResultIngestionService,
 } from "./slicing-result-ingestion.service";
+import type { SlicerProfileSnapshotService } from "./slicer-profile-snapshot.service";
 
 type ProductionAuthorizer = {
   assertProductionSliceAuthorized(
@@ -142,6 +143,7 @@ describe("SlicingQueuePublisher production authorization", () => {
       {} as Queue,
       {} as CandidateEstimateService,
       {} as SlicingResultIngestionService,
+      {} as SlicerProfileSnapshotService,
     );
     const job = {
       input: {
@@ -200,6 +202,7 @@ describe("SlicingQueuePublisher production authorization", () => {
       {} as Queue,
       {} as CandidateEstimateService,
       {} as SlicingResultIngestionService,
+      {} as SlicerProfileSnapshotService,
     ) as unknown as RetryableResultReader;
     const result = { outcome: { failureClass: "retryable_infrastructure" } };
     expect(
@@ -302,6 +305,7 @@ describe("SlicingQueuePublisher production authorization", () => {
       queue as unknown as Queue,
       {} as CandidateEstimateService,
       {} as SlicingResultIngestionService,
+      {} as SlicerProfileSnapshotService,
     );
 
     await expect(publisher.reconcileCompleted(1)).rejects.toThrow(
@@ -333,6 +337,7 @@ describe("SlicingQueuePublisher production authorization", () => {
       queue as unknown as Queue,
       {} as CandidateEstimateService,
       { ingest } as unknown as SlicingResultIngestionService,
+      {} as SlicerProfileSnapshotService,
     );
 
     await expect(publisher.reconcileCompleted(2)).resolves.toBe(2);
@@ -364,6 +369,7 @@ describe("SlicingQueuePublisher production authorization", () => {
       {
         ingest: vi.fn().mockRejectedValue(new Error("database unavailable")),
       } as unknown as SlicingResultIngestionService,
+      {} as SlicerProfileSnapshotService,
     );
 
     await expect(publisher.reconcileCompleted(1)).rejects.toThrow(
