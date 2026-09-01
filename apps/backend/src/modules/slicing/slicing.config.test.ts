@@ -36,4 +36,15 @@ describe("slicing queue configuration", () => {
       }),
     ).toThrow("root Redis URL");
   });
+
+  it("rejects dispatch claim limits outside the publisher bound", () => {
+    expect(() =>
+      readSlicingQueueConfig({
+        TAVEN_REDIS_URL: "redis://localhost:6379",
+        TAVEN_SLICING_DISPATCH_CLAIM_LIMIT: "101",
+      }),
+    ).toThrow(
+      "TAVEN_SLICING_DISPATCH_CLAIM_LIMIT must be an integer from 1 through 100",
+    );
+  });
 });

@@ -720,7 +720,7 @@ export class SlicingResultIngestionService {
           FROM refund_transactions refund
           JOIN payments payment ON payment.id = refund.payment_id
           WHERE payment.order_id = target_order.id
-            AND refund.status = 'PENDING'
+            AND refund.status IN ('PENDING', 'SUSPENDED')
         )
       ) AS safe
       FROM orders target_order

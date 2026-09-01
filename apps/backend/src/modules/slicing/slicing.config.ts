@@ -15,11 +15,20 @@ function positiveInteger(
   value: string | undefined,
   fallback: number,
   name: string,
+  maximum?: number,
 ): number {
   if (!value?.trim()) return fallback;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`${name} must be a positive integer`);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < 1 ||
+    (maximum !== undefined && parsed > maximum)
+  ) {
+    throw new Error(
+      maximum === undefined
+        ? `${name} must be a positive integer`
+        : `${name} must be an integer from 1 through ${maximum}`,
+    );
   }
   return parsed;
 }
@@ -69,6 +78,7 @@ export function readSlicingQueueConfig(
       env.TAVEN_SLICING_DISPATCH_CLAIM_LIMIT,
       25,
       "TAVEN_SLICING_DISPATCH_CLAIM_LIMIT",
+      100,
     ),
   };
 }
