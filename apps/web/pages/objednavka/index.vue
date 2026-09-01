@@ -2,6 +2,7 @@
 import { formatFileSize } from "../../utils/model-file";
 
 useHead({
+  htmlAttrs: { lang: "cs" },
   title: "Nahrát model — Taven",
   meta: [
     {

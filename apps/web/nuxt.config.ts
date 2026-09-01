@@ -18,7 +18,7 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      htmlAttrs: { lang: "cs" },
+      htmlAttrs: { lang: "en" },
       title: "Taven",
       meta: [
         {

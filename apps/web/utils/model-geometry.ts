@@ -240,7 +240,10 @@ function requiredNumber(source: string, name: string): number {
 
 const identityTransform: Transform = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
 
-function parseTransform(value: string | undefined): Transform {
+function parseTransform(
+  value: string | undefined,
+  translationScale: number,
+): Transform {
   if (!value) return identityTransform;
   const parts = value.trim().split(/\s+/u).map(Number);
   if (parts.length !== 12 || parts.some((part) => !Number.isFinite(part))) {
@@ -249,6 +252,9 @@ function parseTransform(value: string | undefined): Transform {
       "3MF obsahuje neplatnou transformaci objektu.",
     );
   }
+  parts[9] = parts[9]! * translationScale;
+  parts[10] = parts[10]! * translationScale;
+  parts[11] = parts[11]! * translationScale;
   return parts as unknown as Transform;
 }
 
@@ -394,7 +400,7 @@ function parseMeshObjects(xml: string, scale: number): Map<string, MeshObject> {
       if (objectId) {
         components.push({
           objectId,
-          transform: parseTransform(attribute(attrs, "transform")),
+          transform: parseTransform(attribute(attrs, "transform"), scale),
         });
       }
     }
@@ -412,7 +418,8 @@ function parseMeshObjects(xml: string, scale: number): Map<string, MeshObject> {
 
 function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
   assertSingleMaterial3mf(xml);
-  const objects = parseMeshObjects(xml, unitScale(xml));
+  const scale = unitScale(xml);
+  const objects = parseMeshObjects(xml, scale);
   if (objects.size === 0) {
     throw new ModelGeometryError(
       "INVALID_GEOMETRY",
@@ -438,7 +445,7 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
     if (objectId) {
       buildItems.push({
         objectId,
-        transform: parseTransform(attribute(attrs, "transform")),
+        transform: parseTransform(attribute(attrs, "transform"), scale),
       });
     }
   }

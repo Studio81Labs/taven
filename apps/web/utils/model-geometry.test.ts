@@ -119,6 +119,17 @@ describe("3MF geometry", () => {
     expect(geometry.volumeMm3).toBeCloseTo(1_000 / 6, 5);
   });
 
+  it("scales build translations using the model unit", async () => {
+    const twoInstances = tetrahedron3mf.replace(
+      '<item objectid="1" transform="1 0 0 0 1 0 0 0 1 5 6 7"/>',
+      '<item objectid="1"/><item objectid="1" transform="1 0 0 0 1 0 0 0 1 2 0 0"/>',
+    );
+    const geometry = await parseModelGeometry("3MF", threeMf(twoInstances));
+
+    expect(geometry.objectCount).toBe(2);
+    expect(geometry.dimensions).toEqual({ width: 30, depth: 10, height: 10 });
+  });
+
   it("blocks painted or multimaterial 3MF instead of flattening it", async () => {
     const painted = tetrahedron3mf.replace(
       "<resources>",

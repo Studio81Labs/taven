@@ -19,6 +19,10 @@ import {
 import { UploadFailure, uploadFile } from "../utils/upload-file";
 
 type QuoteSession = components["schemas"]["AutomaticQuoteSessionDto"];
+type CreatedQuoteSession =
+  components["schemas"]["AutomaticQuoteSessionCreatedDto"];
+type ConfirmedUpload = components["schemas"]["ConfirmedUploadResponseDto"];
+type UploadIntent = components["schemas"]["UploadIntentResponseDto"];
 
 const backgroundQuotePhases: ReadonlySet<QuoteSession["phase"]> = new Set([
   "INSPECTION_PENDING",
@@ -44,6 +48,22 @@ export type UploadWorkflowPhase =
 
 function idempotencyKey(scope: string): string {
   return `${scope}-${crypto.randomUUID()}`;
+}
+
+export function createUploadCommandKeys(
+  createKey: (scope: string) => string = idempotencyKey,
+) {
+  let attachModel: string | undefined;
+  let createSession: string | undefined;
+
+  return {
+    attachModel: () => (attachModel ??= createKey("attach-model")),
+    createSession: () => (createSession ??= createKey("create-session")),
+    reset: () => {
+      attachModel = undefined;
+      createSession = undefined;
+    },
+  };
 }
 
 function requestMessage(
@@ -82,6 +102,12 @@ export function useModelUploadQuote() {
   let selectionRevision = 0;
   let uploadController: AbortController | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let pollController: AbortController | undefined;
+  let disposed = false;
+  let uploadIntent: UploadIntent | undefined;
+  let confirmedUpload: ConfirmedUpload | undefined;
+  let createdSession: CreatedQuoteSession | undefined;
+  const commandKeys = createUploadCommandKeys();
 
   const filename = computed(
     () => selectedFile.value?.name ?? restoredFilename.value,
@@ -94,6 +120,17 @@ export function useModelUploadQuote() {
   function stopPolling(): void {
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = undefined;
+    pollController?.abort();
+    pollController = undefined;
+  }
+
+  function scheduleQuoteRefresh(delay: number): void {
+    if (disposed) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(() => {
+      pollTimer = undefined;
+      if (!disposed) void refreshQuote();
+    }, delay);
   }
 
   function resetState(clearStoredSession = true): void {
@@ -113,6 +150,10 @@ export function useModelUploadQuote() {
     quote.value = undefined;
     sessionToken.value = undefined;
     restoredFilename.value = undefined;
+    uploadIntent = undefined;
+    confirmedUpload = undefined;
+    createdSession = undefined;
+    commandKeys.reset();
     if (clearStoredSession && import.meta.client) {
       clearQuoteSession(sessionStorage);
     }
@@ -203,14 +244,19 @@ export function useModelUploadQuote() {
   }
 
   async function refreshQuote(): Promise<void> {
+    if (disposed) return;
     const id = quote.value?.sessionId;
     const token = sessionToken.value;
     if (!id || !token) return;
+    const controller = new AbortController();
+    pollController = controller;
     try {
       const result = await $api.GET("/automatic-quote-sessions/{sessionId}", {
         params: { path: { sessionId: id } },
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
       });
+      if (disposed || controller.signal.aborted) return;
       if (!result.response.ok || !result.data) {
         if (result.response.status === 401) {
           errorMessage.value = requestMessage(401, "session");
@@ -218,15 +264,19 @@ export function useModelUploadQuote() {
           stopPolling();
           if (import.meta.client) clearQuoteSession(sessionStorage);
         } else {
-          pollTimer = setTimeout(() => void refreshQuote(), 3_000);
+          scheduleQuoteRefresh(3_000);
         }
         return;
       }
       if (!applyQuote(result.data)) {
-        pollTimer = setTimeout(() => void refreshQuote(), 1_500);
+        scheduleQuoteRefresh(1_500);
       }
     } catch {
-      pollTimer = setTimeout(() => void refreshQuote(), 3_000);
+      if (!disposed && !controller.signal.aborted) {
+        scheduleQuoteRefresh(3_000);
+      }
+    } finally {
+      if (pollController === controller) pollController = undefined;
     }
   }
 
@@ -243,69 +293,80 @@ export function useModelUploadQuote() {
     const signal = uploadController.signal;
 
     try {
-      const intent = await $api.POST("/storage/uploads/model-files", {
-        body: {
-          contentType: valid.contentType,
-          format: valid.format,
-          originalFilename: valid.originalFilename,
-          sha256: hash,
-          sizeBytes: valid.sizeBytes,
-        },
-        signal,
-      });
-      if (!intent.response.ok || !intent.data) {
-        throw new Error(requestMessage(intent.response.status, "intent"));
-      }
-
-      await uploadFile({
-        file,
-        onProgress: (progress) => {
-          uploadProgress.value = progress;
-        },
-        requiredHeaders: intent.data.requiredHeaders,
-        signal,
-        uploadUrl: intent.data.uploadUrl,
-      });
-      uploadProgress.value = 100;
-
-      const confirmation = await $api.POST(
-        "/storage/uploads/{uploadId}/confirm",
-        {
-          params: { path: { uploadId: intent.data.uploadId } },
-          headers: { Authorization: `Bearer ${intent.data.accessToken}` },
+      if (!uploadIntent) {
+        const intent = await $api.POST("/storage/uploads/model-files", {
+          body: {
+            contentType: valid.contentType,
+            format: valid.format,
+            originalFilename: valid.originalFilename,
+            sha256: hash,
+            sizeBytes: valid.sizeBytes,
+          },
           signal,
-        },
-      );
-      if (!confirmation.response.ok || !confirmation.data) {
-        throw new Error(
-          requestMessage(confirmation.response.status, "confirm"),
-        );
+        });
+        if (!intent.response.ok || !intent.data) {
+          throw new Error(requestMessage(intent.response.status, "intent"));
+        }
+        uploadIntent = intent.data;
       }
 
-      const created = await $api.POST("/automatic-quote-sessions", {
-        body: { attribution: { channel: "web-upload" } },
-        params: {
-          header: { "Idempotency-Key": idempotencyKey("create-session") },
-        },
-        signal,
-      });
-      if (!created.response.ok || !created.data) {
-        throw new Error(requestMessage(created.response.status, "session"));
+      if (!confirmedUpload) {
+        await uploadFile({
+          file,
+          onProgress: (progress) => {
+            uploadProgress.value = progress;
+          },
+          requiredHeaders: uploadIntent.requiredHeaders,
+          signal,
+          uploadUrl: uploadIntent.uploadUrl,
+        });
+        uploadProgress.value = 100;
+
+        const confirmation = await $api.POST(
+          "/storage/uploads/{uploadId}/confirm",
+          {
+            params: { path: { uploadId: uploadIntent.uploadId } },
+            headers: {
+              Authorization: `Bearer ${uploadIntent.accessToken}`,
+            },
+            signal,
+          },
+        );
+        if (!confirmation.response.ok || !confirmation.data) {
+          throw new Error(
+            requestMessage(confirmation.response.status, "confirm"),
+          );
+        }
+        confirmedUpload = confirmation.data;
+      }
+
+      if (!createdSession) {
+        const created = await $api.POST("/automatic-quote-sessions", {
+          body: { attribution: { channel: "web-upload" } },
+          params: {
+            header: { "Idempotency-Key": commandKeys.createSession() },
+          },
+          signal,
+        });
+        if (!created.response.ok || !created.data) {
+          throw new Error(requestMessage(created.response.status, "session"));
+        }
+        createdSession = created.data;
       }
 
       const attached = await $api.POST(
         "/automatic-quote-sessions/{sessionId}/model-files",
         {
           body: {
-            modelFileId: confirmation.data.assetId,
-            uploadToken: intent.data.accessToken,
+            modelFileId: confirmedUpload.assetId,
+            uploadToken: uploadIntent.accessToken,
           },
           headers: {
-            Authorization: `Bearer ${created.data.sessionToken}`,
+            Authorization: `Bearer ${createdSession.sessionToken}`,
           },
           params: {
-            header: { "Idempotency-Key": idempotencyKey("attach-model") },
-            path: { sessionId: created.data.sessionId },
+            header: { "Idempotency-Key": commandKeys.attachModel() },
+            path: { sessionId: createdSession.sessionId },
           },
           signal,
         },
@@ -314,7 +375,7 @@ export function useModelUploadQuote() {
         throw new Error(requestMessage(attached.response.status, "attach"));
       }
 
-      sessionToken.value = created.data.sessionToken;
+      sessionToken.value = createdSession.sessionToken;
       restoredFilename.value = file.name;
       selectedFile.value = undefined;
       sha256.value = undefined;
@@ -324,7 +385,7 @@ export function useModelUploadQuote() {
           filename: file.name,
           publicReference: attached.data.publicReference,
           sessionId: attached.data.sessionId,
-          sessionToken: created.data.sessionToken,
+          sessionToken: createdSession.sessionToken,
         });
       }
       if (!applyQuote(attached.data)) {
@@ -390,8 +451,12 @@ export function useModelUploadQuote() {
     await refreshQuote();
   }
 
-  onMounted(() => void restoreSession());
+  onMounted(() => {
+    disposed = false;
+    void restoreSession();
+  });
   onBeforeUnmount(() => {
+    disposed = true;
     uploadController?.abort();
     stopPolling();
   });
