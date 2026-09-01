@@ -693,7 +693,7 @@ function quantityPrice(choice: {
       <h3>Vyberte ověřené místo doručení.</h3>
       <label class="wide-field">
         <span>Způsob a místo</span>
-        <select v-model="selectedDestination">
+        <select v-model="selectedDestination" :disabled="configurationLocked">
           <option
             v-for="option in quote.deliveryOptions"
             :key="deliveryIdentity(option)"
@@ -704,7 +704,11 @@ function quantityPrice(choice: {
         </select>
       </label>
       <label v-if="isExpressVisible(quote)" class="fit-sensitive">
-        <input v-model="expressRequested" type="checkbox" />
+        <input
+          v-model="expressRequested"
+          :disabled="configurationLocked"
+          type="checkbox"
+        />
         <span>Expresní výroba pro celou objednávku</span>
       </label>
       <button
