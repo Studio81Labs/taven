@@ -115,6 +115,41 @@ function invalidProductionArtifact(message: string): never {
   );
 }
 
+function validateCompleteOrcaProgram(bytes: Uint8Array): void {
+  let source: string;
+  try {
+    source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    invalidProductionArtifact("Production G-code is not valid UTF-8");
+  }
+  const lines = source!.split(/\r?\n/u);
+  const executableStart = lines.findIndex(
+    (line) => line.trim() === "; EXECUTABLE_BLOCK_START",
+  );
+  const firstLayer = lines.findIndex(
+    (line, index) =>
+      index > executableStart &&
+      /^;\s*(?:CHANGE_LAYER|LAYER_CHANGE)\s*$/u.test(line),
+  );
+  const executableEnd = lines.findIndex(
+    (line, index) =>
+      index > firstLayer && line.trim() === "; EXECUTABLE_BLOCK_END",
+  );
+  const hasStartupCommand = lines
+    .slice(executableStart + 1, firstLayer)
+    .some((line) => /^\s*[GMT]\d+(?:\.\d+)?(?:\s|$)/iu.test(line));
+  if (
+    executableStart < 0 ||
+    firstLayer < 0 ||
+    executableEnd < 0 ||
+    !hasStartupCommand
+  ) {
+    invalidProductionArtifact(
+      "Production G-code is missing a complete executable program",
+    );
+  }
+}
+
 export function validateProductionArtifact(
   bytes: Uint8Array,
   format: OrcaSliceRequest["artifactFormat"],
@@ -124,6 +159,7 @@ export function validateProductionArtifact(
 ): void {
   if (format === "gcode") {
     parseOrcaArtifact(bytes, expectedVersion);
+    validateCompleteOrcaProgram(bytes);
     return;
   }
   if (format !== "gcode_3mf") {
@@ -182,6 +218,7 @@ export function validateProductionArtifact(
       );
     }
     parseOrcaArtifact(gcode, expectedVersion);
+    validateCompleteOrcaProgram(gcode);
   }
 }
 
