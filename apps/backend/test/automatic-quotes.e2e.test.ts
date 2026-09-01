@@ -354,6 +354,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const sql = await pool.connect();
     const factory = new PersistenceFactory(sql, `${scope}:happy`);
     const quoteColor = `red-${scope.slice(-12)}`;
+    const sharedNodeColor = `green-${scope.slice(-12)}`;
     const splitNodeColor = `blue-${scope.slice(-12)}`;
     const undersizedMachineColor = `small-${scope.slice(-12)}`;
     await sql.query("BEGIN");
@@ -572,6 +573,22 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       await transaction.inventory.create({
         data: {
           nodeId: compatibleMachine.nodeId,
+          machineId: compatibleMachine.id,
+          sku: `${inventory.sku}-shared-node`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: sharedNodeColor,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1_000_000n,
+          status: "AVAILABLE",
+        },
+      });
+      await transaction.inventory.create({
+        data: {
+          nodeId: compatibleMachine.nodeId,
           machineId: undersizedMachineId,
           sku: `${inventory.sku}-undersized`,
           material: inventory.material,
@@ -635,6 +652,22 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           material: inventory.material,
           vendor: inventory.vendor,
           color: splitNodeColor,
+          lotCode: inventory.lotCode,
+          priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+          currency: inventory.currency,
+          remainingMilligrams: 1_000_000n,
+          status: "AVAILABLE",
+        },
+      });
+      await transaction.inventory.create({
+        data: {
+          nodeId: splitNodeId,
+          machineId: splitMachineId,
+          sku: `${inventory.sku}-shared-split-node`,
+          material: inventory.material,
+          vendor: inventory.vendor,
+          color: sharedNodeColor,
           lotCode: inventory.lotCode,
           priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
           priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
@@ -1084,7 +1117,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     });
     await prisma.inventory.updateMany({
       where: {
-        color: { in: [quoteColor, splitNodeColor] },
+        color: { in: [quoteColor, sharedNodeColor] },
         status: "AVAILABLE",
       },
       data: { remainingMilligrams: 3_000n },
@@ -1093,14 +1126,14 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const initialTwoColorDraft = await replaceConfiguration(
       [
         { ordinal: 0, bodyId: "body-a", color: quoteColor },
-        { ordinal: 1, bodyId: "body-b", color: splitNodeColor },
+        { ordinal: 1, bodyId: "body-b", color: sharedNodeColor },
       ],
       "replace-two-color-draft",
     );
     expect(initialTwoColorDraft.response.status).toBe(200);
     const swappedTwoColorDraft = await replaceConfiguration(
       [
-        { ordinal: 0, bodyId: "body-a", color: splitNodeColor },
+        { ordinal: 0, bodyId: "body-a", color: sharedNodeColor },
         { ordinal: 1, bodyId: "body-b", color: quoteColor },
       ],
       "replace-swapped-two-color-draft",
@@ -1108,7 +1141,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(swappedTwoColorDraft.response.status).toBe(200);
     expect(swappedTwoColorDraft.body.items).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ ordinal: 0, color: splitNodeColor }),
+        expect.objectContaining({ ordinal: 0, color: sharedNodeColor }),
         expect.objectContaining({ ordinal: 1, color: quoteColor }),
       ]),
     );
@@ -1131,7 +1164,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     ).toBe(true);
     await prisma.inventory.updateMany({
       where: {
-        color: { in: [quoteColor, splitNodeColor] },
+        color: { in: [quoteColor, sharedNodeColor] },
         status: "AVAILABLE",
       },
       data: { remainingMilligrams: 1_000_000n },
@@ -1792,7 +1825,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         color: quoteColor,
         status: "AVAILABLE",
       },
-      data: { remainingMilligrams: 100n },
+      data: { remainingMilligrams: 1n },
     });
     const splitResourceGate = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
@@ -1818,18 +1851,44 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       data: { remainingMilligrams: 1_000_000n },
     });
 
+    const splitNodeConfiguration = await configure(
+      1,
+      "body-c",
+      1,
+      "configure-split-node",
+      false,
+      splitNodeColor,
+    );
+    expect(splitNodeConfiguration.response.status).toBe(400);
+    const splitNodeReplacement = await replaceConfiguration(
+      [
+        { ordinal: 0, bodyId: "body-b", color: quoteColor },
+        { ordinal: 1, bodyId: "body-c", color: splitNodeColor },
+      ],
+      "replace-split-node",
+    );
+    expect(splitNodeReplacement.response.status).toBe(400);
+    await expect(draftItem(1)).resolves.toMatchObject({ color: quoteColor });
     expect(
       (
         await configure(
           1,
           "body-c",
           1,
-          "configure-split-node",
+          "configure-shared-node-drift",
           false,
-          splitNodeColor,
+          sharedNodeColor,
         )
       ).response.status,
     ).toBe(200);
+    await prisma.inventory.updateMany({
+      where: {
+        machineId: compatibleMachine.id,
+        color: sharedNodeColor,
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 1n },
+    });
     const splitNodeGate = await api(
       `automatic-quote-sessions/${sessionId}/prepare`,
       {
@@ -1845,6 +1904,14 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
       0,
     );
+    await prisma.inventory.updateMany({
+      where: {
+        machineId: compatibleMachine.id,
+        color: sharedNodeColor,
+        status: "AVAILABLE",
+      },
+      data: { remainingMilligrams: 1_000_000n },
+    });
     expect(
       (
         await configure(

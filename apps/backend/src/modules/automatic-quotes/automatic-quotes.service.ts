@@ -2340,12 +2340,20 @@ export class AutomaticQuotesService {
     if (items.length !== pricingItems.length || items.length === 0) {
       return false;
     }
-    const demands = [];
+    const resourcesByItemId = new Map<
+      string,
+      Map<string, Array<{ inventoryId: string; available: bigint }>>
+    >();
+    const demands: Array<{
+      itemId: string;
+      requiredMaterialMilligrams: bigint;
+    }> = [];
     for (const [index, item] of items.entries()) {
       const pricingItem = pricingItems[index];
       if (!pricingItem) return false;
       const rows = await transaction.$queryRaw<
         Array<{
+          nodeId: string;
           inventoryId: string;
           availableMilligrams: bigint;
           buildVolumeXMicrometers: bigint;
@@ -2354,6 +2362,7 @@ export class AutomaticQuotesService {
         }>
       >`
         SELECT DISTINCT
+          node.id AS "nodeId",
           inventory.id AS "inventoryId",
           inventory.remaining_milligrams - inventory.reserved_milligrams
             AS "availableMilligrams",
@@ -2385,6 +2394,7 @@ export class AutomaticQuotesService {
           ON inventory.node_id = machine.node_id
          AND inventory.machine_id = machine.id
          AND inventory.status = 'AVAILABLE'
+         AND inventory.remaining_milligrams > inventory.reserved_milligrams
          AND inventory.material = ${item.material}::material
          AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
         WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
@@ -2392,17 +2402,44 @@ export class AutomaticQuotesService {
           AND profile.state = 'ACTIVE'
           AND profile.production_artifact_format <> 'bgcode'
       `;
-      demands.push({
-        requiredMaterialMilligrams: totalEstimatedMaterial(pricingItem),
-        options: rows
-          .filter((row) => geometryFitsCapability(pricingItem, row))
-          .map((row) => ({
+      const byNode = new Map<
+        string,
+        Array<{ inventoryId: string; available: bigint }>
+      >();
+      for (const row of rows.filter((candidate) =>
+        geometryFitsCapability(pricingItem, candidate),
+      )) {
+        const options = byNode.get(row.nodeId) ?? [];
+        if (
+          !options.some(({ inventoryId }) => inventoryId === row.inventoryId)
+        ) {
+          options.push({
             inventoryId: row.inventoryId,
             available: row.availableMilligrams,
-          })),
+          });
+        }
+        byNode.set(row.nodeId, options);
+      }
+      if (byNode.size === 0) return false;
+      resourcesByItemId.set(pricingItem.id, byNode);
+      demands.push({
+        itemId: pricingItem.id,
+        requiredMaterialMilligrams: totalEstimatedMaterial(pricingItem),
       });
     }
-    return hasUsableInventoryAssignment(demands);
+    const commonNodeIds = [
+      ...(resourcesByItemId.get(demands[0]!.itemId)?.keys() ?? []),
+    ].filter((nodeId) =>
+      demands.every(({ itemId }) => resourcesByItemId.get(itemId)?.has(nodeId)),
+    );
+    return commonNodeIds.some((nodeId) =>
+      hasUsableInventoryAssignment(
+        demands.map(({ itemId, requiredMaterialMilligrams }) => ({
+          requiredMaterialMilligrams,
+          options: resourcesByItemId.get(itemId)?.get(nodeId) ?? [],
+        })),
+      ),
+    );
   }
 
   private async candidateResourcesAvailable(
