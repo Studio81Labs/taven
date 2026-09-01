@@ -9,6 +9,8 @@ const materialNamespace =
   "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
 const packageRelationshipsNamespace =
   "http://schemas.openxmlformats.org/package/2006/relationships";
+const productionNamespace =
+  "http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
 
 const tetrahedron: Triangle[] = [
   [
@@ -247,6 +249,37 @@ describe("3MF geometry", () => {
           "_rels/.rels": encode(
             `<Relationships xmlns="${packageRelationshipsNamespace}"><Relationship Target="/Models/first.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/><Relationship Target="/Models/second.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`,
           ),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_GEOMETRY" });
+  });
+
+  it("defers production cross-part components without making an eligibility decision", async () => {
+    const encode = (value: string) => new TextEncoder().encode(value);
+    const rootModel = tetrahedron3mf
+      .replace(
+        '<model unit="centimeter"',
+        `<model unit="centimeter" xmlns:p="${productionNamespace}"`,
+      )
+      .replace(
+        '<triangle v1="0" v2="2" v3="1"/>',
+        '<triangle v1="0" v2="2" v3="1" paint_color="#ff0000"/>',
+      )
+      .replace(
+        "</resources>",
+        '<object id="2"><components><component objectid="1" p:path="/3D/part.model"/></components></object></resources>',
+      )
+      .replace('<item objectid="1"', '<item objectid="2"');
+
+    await expect(
+      parseModelGeometry(
+        "3MF",
+        threeMfArchive({
+          "3D/3dmodel.model": encode(rootModel),
+          "3D/_rels/3dmodel.model.rels": encode(
+            `<Relationships xmlns="${packageRelationshipsNamespace}"><Relationship Target="/3D/part.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`,
+          ),
+          "3D/part.model": encode(tetrahedron3mf),
         }),
       ),
     ).rejects.toMatchObject({ code: "INVALID_GEOMETRY" });

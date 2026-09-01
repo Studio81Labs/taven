@@ -22,6 +22,8 @@ const CORE_3MF_NAMESPACE =
   "http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
 const MATERIAL_3MF_NAMESPACE =
   "http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
+const PRODUCTION_3MF_NAMESPACE =
+  "http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
 const SLIC3R_3MF_NAMESPACE = "http://schemas.slic3r.org/3mf/2017/06";
 
 type Point = readonly [number, number, number];
@@ -1415,7 +1417,21 @@ async function structuralModelXml(xml: string): Promise<string> {
   );
   parser.on("error", () => invalid3mfPackage("Model 3MF není platné XML."));
   parser.on("opentag", (tag) => {
-    const attributes = Object.values(tag.attributes)
+    const tagAttributes = Object.values(tag.attributes);
+    if (
+      tag.uri === CORE_3MF_NAMESPACE &&
+      (tag.local === "component" || tag.local === "item") &&
+      tagAttributes.some(
+        (candidate: SaxesAttributeNS) =>
+          candidate.uri === PRODUCTION_3MF_NAMESPACE &&
+          candidate.local === "path",
+      )
+    ) {
+      return invalid3mfPackage(
+        "Náhled 3MF s odkazy mezi částmi dokončíme po nahrání.",
+      );
+    }
+    const attributes = tagAttributes
       .filter(
         (candidate: SaxesAttributeNS) =>
           candidate.uri === "" || candidate.uri === SLIC3R_3MF_NAMESPACE,
