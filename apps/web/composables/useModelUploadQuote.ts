@@ -40,6 +40,14 @@ export function isBackgroundQuotePhase(phase: QuoteSession["phase"]): boolean {
   return backgroundQuotePhases.has(phase);
 }
 
+export function requiresPreparationAdvance(
+  phase: QuoteSession["phase"],
+): boolean {
+  return (
+    phase === "REFERENCE_SLICES_PENDING" || phase === "ELIGIBILITY_PENDING"
+  );
+}
+
 export type UploadWorkflowPhase =
   | "cancelled"
   | "complete"
@@ -390,7 +398,11 @@ export function useModelUploadQuote() {
         return;
       }
       if (!applyQuote(result.data)) {
-        scheduleQuoteRefresh(1_500);
+        if (requiresPreparationAdvance(result.data.phase)) {
+          if (!(await prepareQuote())) scheduleQuoteRefresh(3_000);
+        } else {
+          scheduleQuoteRefresh(1_500);
+        }
       }
     } catch {
       if (!disposed && !controller.signal.aborted) {

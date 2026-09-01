@@ -7,6 +7,7 @@ import {
   isBackgroundQuotePhase,
   isTerminalAttachmentStatus,
   isTerminalUploadConfirmationStatus,
+  requiresPreparationAdvance,
 } from "./useModelUploadQuote";
 
 describe("automatic quote polling", () => {
@@ -27,6 +28,27 @@ describe("automatic quote polling", () => {
     "HANDOFF_REQUIRED",
   ] as const)("waits for user action in %s", (phase) => {
     expect(isBackgroundQuotePhase(phase)).toBe(false);
+  });
+});
+
+describe("automatic quote preparation advancement", () => {
+  it.each(["REFERENCE_SLICES_PENDING", "ELIGIBILITY_PENDING"] as const)(
+    "automatically advances %s",
+    (phase) => {
+      expect(requiresPreparationAdvance(phase)).toBe(true);
+    },
+  );
+
+  it.each([
+    "INSPECTION_PENDING",
+    "CONFIGURATION_REQUIRED",
+    "ACTION_REQUIRED",
+    "DESTINATION_REQUIRED",
+    "CHECKOUT_READY",
+    "EXPIRED",
+    "HANDOFF_REQUIRED",
+  ] as const)("does not automatically advance %s", (phase) => {
+    expect(requiresPreparationAdvance(phase)).toBe(false);
   });
 });
 
