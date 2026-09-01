@@ -738,7 +738,7 @@ function parseStl(bytes: Uint8Array): ModelGeometry {
 function attribute(source: string, name: string): string | undefined {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   const match = new RegExp(
-    `(?:^|\\s)(?:[\\w.-]+:)?${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
+    `(?:^|\\s)${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
     "iu",
   ).exec(source);
   return match?.[1] ?? match?.[2];

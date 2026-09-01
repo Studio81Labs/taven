@@ -443,6 +443,25 @@ describe("3MF geometry", () => {
     );
   });
 
+  it("does not treat Slic3r extension attributes as core build attributes", async () => {
+    const extensionPrintable = tetrahedron3mf
+      .replace(
+        '<model unit="centimeter"',
+        '<model unit="centimeter" xmlns:slic3r="http://schemas.slic3r.org/3mf/2017/06"',
+      )
+      .replace('<item objectid="1"', '<item objectid="1" slic3r:printable="0"');
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(extensionPrintable)),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        dimensions: { width: 10, depth: 10, height: 10 },
+        objectCount: 1,
+        volumeMm3: expect.closeTo(1_000 / 6, 5),
+      }),
+    );
+  });
+
   it("blocks explicit paint markers on printable geometry", async () => {
     const painted = tetrahedron3mf.replace(
       '<triangle v1="0" v2="2" v3="1"/>',
