@@ -103,6 +103,14 @@ export function isEditableAttachmentFailure(
   );
 }
 
+export function shouldUnlockAfterAttachmentPreparationFailure(input: {
+  aborted: boolean;
+  hasCreatedRequest: boolean;
+  hasPreparedPhotos: boolean;
+}): boolean {
+  return !input.aborted && !input.hasCreatedRequest && !input.hasPreparedPhotos;
+}
+
 export function useAssistedQuoteRequest() {
   const { $api } = useNuxtApp();
   const phase = ref<AssistedQuoteRequestPhase>("editing");
@@ -306,6 +314,18 @@ export function useAssistedQuoteRequest() {
       uploadProgress.value = 100;
       phase.value = "success";
     } catch (error) {
+      if (
+        shouldUnlockAfterAttachmentPreparationFailure({
+          aborted: signal.aborted,
+          hasCreatedRequest: Boolean(created.value),
+          hasPreparedPhotos: preparedPhotos !== undefined,
+        })
+      ) {
+        lockedSubmission = undefined;
+        photoCheckpoints.clear();
+        submitted.value = false;
+      }
+
       if (signal.aborted) {
         errorMessage.value = created.value
           ? "Nahrávání bylo pozastavené. Poptávka je uložená a fotografie můžete odeslat znovu."
