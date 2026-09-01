@@ -61,6 +61,67 @@
         ],
         "type": "object"
       },
+      "AutomaticQuoteConfigurationOptionDto": {
+        "properties": {
+          "color": {
+            "nullable": true,
+            "type": "string"
+          },
+          "infillPreset": {
+            "enum": [
+              "DECORATIVE",
+              "STANDARD",
+              "STRONG"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "printConfigRevisionId",
+          "material",
+          "quality",
+          "infillPreset"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteDeliveryOptionDto": {
+        "properties": {
+          "endpointType": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "providerEndpointId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerEndpointId",
+          "endpointType",
+          "label"
+        ],
+        "type": "object"
+      },
       "AutomaticQuoteExpressDto": {
         "properties": {
           "eligible": {
@@ -193,6 +254,18 @@
             "minimum": 0,
             "type": "integer"
           },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          },
           "quantity": {
             "minimum": 1,
             "type": "integer"
@@ -211,8 +284,10 @@
           "ordinal",
           "modelFileId",
           "bodyIds",
+          "printConfigRevisionId",
           "material",
           "infillPreset",
+          "quality",
           "quantity",
           "fitSensitive",
           "status",
@@ -340,6 +415,40 @@
         ],
         "type": "object"
       },
+      "AutomaticQuoteQuantityComparisonDto": {
+        "properties": {
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "itemOrdinal": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "orderTotalMinor": {
+            "description": "Rough whole-order total with only this item's quantity changed",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity": {
+            "enum": [
+              1,
+              5,
+              20
+            ],
+            "type": "integer"
+          }
+        },
+        "required": [
+          "itemOrdinal",
+          "quantity",
+          "currency",
+          "orderTotalMinor"
+        ],
+        "type": "object"
+      },
       "AutomaticQuoteRiskDecisionDto": {
         "properties": {
           "acknowledgementKey": {
@@ -383,9 +492,24 @@
           "checkoutReady": {
             "type": "boolean"
           },
+          "configurationEditable": {
+            "type": "boolean"
+          },
+          "configurationOptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteConfigurationOptionDto"
+            },
+            "type": "array"
+          },
           "configurationRevision": {
             "minimum": 1,
             "type": "integer"
+          },
+          "deliveryOptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteDeliveryOptionDto"
+            },
+            "type": "array"
           },
           "expiresAt": {
             "format": "date-time",
@@ -435,6 +559,12 @@
           },
           "publicReference": {
             "type": "string"
+          },
+          "quantityComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteQuantityComparisonDto"
+            },
+            "type": "array"
           },
           "roughEstimate": {
             "allOf": [
@@ -460,8 +590,12 @@
           "publicReference",
           "phase",
           "configurationRevision",
+          "configurationEditable",
           "modelFiles",
           "items",
+          "configurationOptions",
+          "deliveryOptions",
+          "quantityComparisons",
           "express",
           "checkoutReady",
           "expiresAt",
@@ -483,9 +617,24 @@
           "checkoutReady": {
             "type": "boolean"
           },
+          "configurationEditable": {
+            "type": "boolean"
+          },
+          "configurationOptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteConfigurationOptionDto"
+            },
+            "type": "array"
+          },
           "configurationRevision": {
             "minimum": 1,
             "type": "integer"
+          },
+          "deliveryOptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteDeliveryOptionDto"
+            },
+            "type": "array"
           },
           "expiresAt": {
             "format": "date-time",
@@ -536,6 +685,12 @@
           "publicReference": {
             "type": "string"
           },
+          "quantityComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteQuantityComparisonDto"
+            },
+            "type": "array"
+          },
           "roughEstimate": {
             "allOf": [
               {
@@ -556,8 +711,12 @@
           "publicReference",
           "phase",
           "configurationRevision",
+          "configurationEditable",
           "modelFiles",
           "items",
+          "configurationOptions",
+          "deliveryOptions",
+          "quantityComparisons",
           "express",
           "checkoutReady",
           "expiresAt"

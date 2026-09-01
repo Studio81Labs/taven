@@ -639,6 +639,33 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       body: JSON.stringify({ attribution: { campaign: "e2e" } }),
     });
     expect(created.response.status).toBe(201);
+    expect(created.body.configurationOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          color: quoteColor,
+          infillPreset: "STANDARD",
+          material: "PLA",
+          printConfigRevisionId: foundation.printConfigRevisionId,
+          quality: printConfig.quality,
+        }),
+      ]),
+    );
+    expect(created.body.configurationEditable).toBe(true);
+    expect(created.body.deliveryOptions).toEqual(
+      expect.arrayContaining([
+        {
+          endpointType: "pickup_point",
+          label: "Test pickup",
+          providerEndpointId: "test-pickup",
+        },
+      ]),
+    );
+    expect(created.body.deliveryOptions).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ providerEndpointId: "test-incompatible" }),
+      ]),
+    );
+    expect(created.body.quantityComparisons).toEqual([]);
     const sessionId = string(created.body.sessionId);
     const sessionToken = string(created.body.sessionToken);
     const orderId = string(created.body.orderId);
@@ -834,14 +861,45 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       return { cacheKey, referenceProfile };
     };
 
+    const unavailableConfiguration = await configure(
+      0,
+      "body-a",
+      1,
+      "configure-unavailable",
+      false,
+      "not-in-stock",
+    );
+    expect(unavailableConfiguration.response.status).toBe(400);
+
     const immediateRough = await configure(0, "body-a", 1, "configure-stale");
     expect(immediateRough.response.status).toBe(200);
+    expect(immediateRough.body.configurationEditable).toBe(true);
     expect(immediateRough.body.phase).toBe("REFERENCE_SLICES_PENDING");
     expect(immediateRough.body.roughEstimate).toMatchObject({
       kind: "ROUGH_ESTIMATE",
       currency: "CZK",
     });
     expect(immediateRough.body.bindingQuote).toBeNull();
+    expect(immediateRough.body.quantityComparisons).toEqual(
+      expect.arrayContaining(
+        [1, 5, 20].map((quantity) =>
+          expect.objectContaining({
+            currency: "CZK",
+            itemOrdinal: 0,
+            orderTotalMinor: expect.any(Number),
+            quantity,
+          }),
+        ),
+      ),
+    );
+    expect(immediateRough.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          printConfigRevisionId: foundation.printConfigRevisionId,
+          quality: printConfig.quality,
+        }),
+      ]),
+    );
     const staleDraft = await draftItem(0);
     for (const command of ["stale-dispatch", "stale-dispatch-replay"]) {
       expect(
@@ -1302,9 +1360,8 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(incompatible.response.status).toBe(200);
     expect(incompatible.body.checkoutReady).toBe(false);
     expect(incompatible.body.bindingQuote).toBeNull();
-    expect(incompatible.body.handoff).toMatchObject({
-      reasons: expect.arrayContaining(["SHIPMENT_INELIGIBLE"]),
-    });
+    expect(incompatible.body.phase).toBe("DESTINATION_REQUIRED");
+    expect(incompatible.body.handoff).toBeNull();
     expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
       0,
     );

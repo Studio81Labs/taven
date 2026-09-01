@@ -467,6 +467,22 @@ export interface components {
             /** @description Capability returned for the confirmed source upload */
             uploadToken: string;
         };
+        AutomaticQuoteConfigurationOptionDto: {
+            color?: string | null;
+            /** @enum {string} */
+            infillPreset: "DECORATIVE" | "STANDARD" | "STRONG";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
+        };
+        AutomaticQuoteDeliveryOptionDto: {
+            endpointType: string;
+            label: string;
+            providerEndpointId: string;
+        };
         AutomaticQuoteExpressDto: {
             eligible: boolean;
             reasons: string[];
@@ -504,6 +520,10 @@ export interface components {
             /** Format: uuid */
             modelFileId: string;
             ordinal: number;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
             quantity: number;
             /** @enum {string} */
             status: "CANONICALIZATION_PENDING" | "REFERENCE_SLICING_PENDING" | "READY";
@@ -534,6 +554,14 @@ export interface components {
             kind: "ROUGH_ESTIMATE" | "BINDING";
             totalMinor?: number | null;
         };
+        AutomaticQuoteQuantityComparisonDto: {
+            currency: string;
+            itemOrdinal: number;
+            /** @description Rough whole-order total with only this item's quantity changed */
+            orderTotalMinor: number;
+            /** @enum {integer} */
+            quantity: 1 | 5 | 20;
+        };
         AutomaticQuoteRiskDecisionDto: {
             acknowledgementKey: string;
             /** @enum {string} */
@@ -545,7 +573,10 @@ export interface components {
         AutomaticQuoteSessionCreatedDto: {
             bindingQuote?: components["schemas"]["AutomaticQuotePriceDto"] | null;
             checkoutReady: boolean;
+            configurationEditable: boolean;
+            configurationOptions: components["schemas"]["AutomaticQuoteConfigurationOptionDto"][];
             configurationRevision: number;
+            deliveryOptions: components["schemas"]["AutomaticQuoteDeliveryOptionDto"][];
             /** Format: date-time */
             expiresAt: string;
             express: components["schemas"]["AutomaticQuoteExpressDto"];
@@ -557,6 +588,7 @@ export interface components {
             /** @enum {string} */
             phase: "INSPECTION_PENDING" | "CONFIGURATION_REQUIRED" | "REFERENCE_SLICES_PENDING" | "ACTION_REQUIRED" | "DESTINATION_REQUIRED" | "ELIGIBILITY_PENDING" | "CHECKOUT_READY" | "EXPIRED" | "HANDOFF_REQUIRED";
             publicReference: string;
+            quantityComparisons: components["schemas"]["AutomaticQuoteQuantityComparisonDto"][];
             roughEstimate?: components["schemas"]["AutomaticQuotePriceDto"] | null;
             /** Format: uuid */
             sessionId: string;
@@ -566,7 +598,10 @@ export interface components {
         AutomaticQuoteSessionDto: {
             bindingQuote?: components["schemas"]["AutomaticQuotePriceDto"] | null;
             checkoutReady: boolean;
+            configurationEditable: boolean;
+            configurationOptions: components["schemas"]["AutomaticQuoteConfigurationOptionDto"][];
             configurationRevision: number;
+            deliveryOptions: components["schemas"]["AutomaticQuoteDeliveryOptionDto"][];
             /** Format: date-time */
             expiresAt: string;
             express: components["schemas"]["AutomaticQuoteExpressDto"];
@@ -578,6 +613,7 @@ export interface components {
             /** @enum {string} */
             phase: "INSPECTION_PENDING" | "CONFIGURATION_REQUIRED" | "REFERENCE_SLICES_PENDING" | "ACTION_REQUIRED" | "DESTINATION_REQUIRED" | "ELIGIBILITY_PENDING" | "CHECKOUT_READY" | "EXPIRED" | "HANDOFF_REQUIRED";
             publicReference: string;
+            quantityComparisons: components["schemas"]["AutomaticQuoteQuantityComparisonDto"][];
             roughEstimate?: components["schemas"]["AutomaticQuotePriceDto"] | null;
             /** Format: uuid */
             sessionId: string;

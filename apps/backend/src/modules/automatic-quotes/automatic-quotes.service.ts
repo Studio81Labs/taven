@@ -459,17 +459,20 @@ export class AutomaticQuotesService {
             "Print configuration does not match the named infill preset",
           );
         }
-        const referenceProfile = await transaction.referenceProfile.findFirst({
-          where: {
-            state: RevisionState.ACTIVE,
-            material: configuration.material,
-            quality: printConfig.quality,
-          },
-          orderBy: [{ activatedAt: "desc" }, { id: "asc" }],
-        });
-        if (!referenceProfile) {
+        const selectedOption = (
+          await this.configurationOptions(transaction)
+        ).find(
+          (option) =>
+            option.printConfigRevisionId ===
+              configuration.printConfigRevisionId &&
+            option.material === configuration.material &&
+            option.color === configuration.color &&
+            option.quality === printConfig.quality &&
+            option.infillPreset === configuration.infillPreset,
+        );
+        if (!selectedOption) {
           throw new BadRequestException(
-            "No active reference profile supports this configuration",
+            "Selected automatic quote configuration is unavailable",
           );
         }
         const { geometrySelectionSha256 } =
@@ -480,7 +483,7 @@ export class AutomaticQuotesService {
         );
         const configurationFingerprint = fingerprintOf({
           ...configuration,
-          referenceProfileId: referenceProfile.id,
+          referenceProfileId: selectedOption.referenceProfileId,
           selectionSha256,
           targetModelGeometryId,
         });
@@ -500,7 +503,7 @@ export class AutomaticQuotesService {
             selectionSha256,
             targetModelGeometryId,
             printConfigRevisionId: configuration.printConfigRevisionId,
-            referenceProfileId: referenceProfile.id,
+            referenceProfileId: selectedOption.referenceProfileId,
             material: configuration.material,
             color: configuration.color,
             infillPreset: configuration.infillPreset,
@@ -517,7 +520,7 @@ export class AutomaticQuotesService {
             selectionSha256,
             targetModelGeometryId,
             printConfigRevisionId: configuration.printConfigRevisionId,
-            referenceProfileId: referenceProfile.id,
+            referenceProfileId: selectedOption.referenceProfileId,
             material: configuration.material,
             color: configuration.color,
             infillPreset: configuration.infillPreset,
@@ -3687,7 +3690,10 @@ export class AutomaticQuotesService {
                       orderBy: { createdAt: "asc" },
                     },
                     items: {
-                      include: { riskDecisions: true },
+                      include: {
+                        printConfigRevision: true,
+                        riskDecisions: true,
+                      },
                       orderBy: { ordinal: "asc" },
                     },
                   },
@@ -3758,6 +3764,13 @@ export class AutomaticQuotesService {
         };
       }),
     );
+    const [configurationCapabilities, deliveryOptions] = await Promise.all([
+      this.configurationOptions(),
+      this.deliveryOptions(),
+    ]);
+    const configurationOptions = configurationCapabilities.map(
+      ({ referenceProfileId: _referenceProfileId, ...option }) => option,
+    );
     const itemDtos = await Promise.all(
       draft.items.map(async (item) => {
         const geometry = await this.prisma.modelGeometry.findUnique({
@@ -3799,9 +3812,11 @@ export class AutomaticQuotesService {
           ordinal: item.ordinal,
           modelFileId: item.sourceModelFileId,
           bodyIds: item.bodyIds,
+          printConfigRevisionId: item.printConfigRevisionId,
           material: item.material,
           color: item.color,
           infillPreset: item.infillPreset,
+          quality: item.printConfigRevision.quality,
           quantity: item.quantity,
           fitSensitive: item.fitSensitive,
           status: !geometry
@@ -3834,6 +3849,14 @@ export class AutomaticQuotesService {
     }
     if (modelFiles.some((file) => file.inspectionStatus === "FAILED")) {
       handoffReasons.push("INSPECTION_FAILED");
+    }
+    if (
+      modelFiles.length > 0 &&
+      modelFiles.every((file) => file.inspectionStatus === "SUCCEEDED") &&
+      itemDtos.length === 0 &&
+      configurationOptions.length === 0
+    ) {
+      handoffReasons.push("NO_CONFIGURATION_AVAILABLE");
     }
     if (
       itemDtos.some((item) =>
@@ -3908,7 +3931,6 @@ export class AutomaticQuotesService {
       "AUTOMATIC_QUANTITY_LIMIT_EXCEEDED",
       "AUTOMATIC_AMOUNT_LIMIT_EXCEEDED",
       "BUILD_LIMIT_EXCEEDED",
-      "SHIPMENT_INELIGIBLE",
       "EXPRESS_INELIGIBLE",
     ]);
     for (const reason of rough?.reasons ?? []) {
@@ -3937,6 +3959,10 @@ export class AutomaticQuotesService {
             "BINDING",
           )
         : null;
+    const shipmentIneligible =
+      rough?.reasons.includes("SHIPMENT_INELIGIBLE") ?? false;
+    const quantityComparisons =
+      itemDtos.length > 0 ? await this.quantityComparisons(order.id) : [];
     const phase = expired
       ? "EXPIRED"
       : handoffReasons.length > 0
@@ -3950,7 +3976,7 @@ export class AutomaticQuotesService {
               ? "REFERENCE_SLICES_PENDING"
               : acknowledgementIncomplete
                 ? "ACTION_REQUIRED"
-                : !draft.selectedDeliveryDestinationId
+                : !draft.selectedDeliveryDestinationId || shipmentIneligible
                   ? "DESTINATION_REQUIRED"
                   : checkoutReady
                     ? "CHECKOUT_READY"
@@ -3961,8 +3987,12 @@ export class AutomaticQuotesService {
       publicReference: order.publicReference,
       phase,
       configurationRevision: draft.configurationRevision,
+      configurationEditable: !expired && order.items.length === 0,
       modelFiles,
       items: itemDtos,
+      configurationOptions,
+      deliveryOptions: [...deliveryOptions],
+      quantityComparisons,
       roughEstimate: rough?.quote ?? null,
       bindingQuote,
       express: {
@@ -4000,6 +4030,203 @@ export class AutomaticQuotesService {
       expiresAt: session.expiresAt.toISOString(),
     };
   }
+
+  private async configurationOptions(
+    client: Transaction | PrismaService = this.prisma,
+  ) {
+    const rows = await client.$queryRaw<
+      Array<{
+        referenceProfileId: string;
+        referenceActivatedAt: Date | null;
+        printConfigRevisionId: string;
+        material: "PLA" | "PETG";
+        color: string | null;
+        quality: "DRAFT" | "STANDARD" | "FINE";
+        infillPercent: number;
+      }>
+    >`
+      SELECT DISTINCT
+        reference.id AS "referenceProfileId",
+        reference.activated_at AS "referenceActivatedAt",
+        config.id AS "printConfigRevisionId",
+        profile.material::text AS material,
+        inventory.color,
+        config.quality::text AS quality,
+        config.infill_percent AS "infillPercent"
+      FROM reference_profiles reference
+      JOIN machine_profiles profile
+        ON profile.reference_profile_id = reference.id
+       AND profile.material = reference.material
+       AND profile.quality = reference.quality
+       AND profile.state = 'ACTIVE'
+       AND profile.production_artifact_format <> 'bgcode'
+      JOIN print_config_revisions config
+        ON config.quality = profile.quality
+       AND config.infill_percent IN (10, 20, 40)
+       AND NOT config.supports_enabled
+       AND NOT config.brim_enabled
+      JOIN machines machine
+        ON machine.machine_capability_id = profile.machine_capability_id
+       AND machine.status = 'ACTIVE'
+       AND machine.installed_nozzle_micrometers =
+           profile.nozzle_diameter_micrometers
+      JOIN nodes node
+        ON node.id = machine.node_id
+       AND node.active
+      JOIN machine_calibrations calibration
+        ON calibration.node_id = machine.node_id
+       AND calibration.machine_id = machine.id
+       AND calibration.state = 'ACTIVE'
+      JOIN inventories inventory
+        ON inventory.node_id = machine.node_id
+       AND inventory.machine_id = machine.id
+       AND inventory.status = 'AVAILABLE'
+       AND inventory.remaining_milligrams > inventory.reserved_milligrams
+       AND inventory.material = profile.material
+      WHERE reference.state = 'ACTIVE'
+      ORDER BY
+        profile.material::text,
+        inventory.color NULLS FIRST,
+        config.quality::text,
+        config.infill_percent,
+        config.id,
+        reference.activated_at DESC NULLS LAST,
+        reference.id
+    `;
+    const options = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const key = JSON.stringify([
+        row.printConfigRevisionId,
+        row.material,
+        row.color,
+        row.quality,
+        row.infillPercent,
+      ]);
+      if (!options.has(key)) options.set(key, row);
+    }
+    return [...options.values()].map((row) => ({
+      referenceProfileId: row.referenceProfileId,
+      printConfigRevisionId: row.printConfigRevisionId,
+      material: row.material,
+      color: row.color,
+      quality: row.quality,
+      infillPreset: infillPreset(row.infillPercent),
+    }));
+  }
+
+  private async deliveryOptions() {
+    const [options, priceList] = await Promise.all([
+      this.deliveryCapabilities.list(),
+      this.prisma.priceList.findUnique({
+        where: {
+          currency_revision: {
+            currency: "CZK",
+            revision: AUTOMATIC_PRICE_LIST_REVISION,
+          },
+        },
+      }),
+    ]);
+    if (!priceList) return [];
+    const pricedCategories = new Set(
+      parseAutomaticQuotePricingParameters(
+        priceList.parameters,
+      ).shipmentCategories.map(({ id }) => id),
+    );
+    return options
+      .filter((option) =>
+        option.supportedCategoryIds.some((id) => pricedCategories.has(id)),
+      )
+      .map(
+        ({ supportedCategoryIds: _supportedCategoryIds, ...option }) => option,
+      );
+  }
+
+  private async quantityComparisons(
+    orderId: string,
+  ): Promise<AutomaticQuoteSessionDto["quantityComparisons"]> {
+    const [draft, priceList] = await Promise.all([
+      this.prisma.automaticQuoteDraft.findUnique({
+        where: { orderId },
+        include: {
+          selectedDeliveryDestination: true,
+          items: { orderBy: { ordinal: "asc" } },
+        },
+      }),
+      this.prisma.priceList.findUnique({
+        where: {
+          currency_revision: {
+            currency: "CZK",
+            revision: AUTOMATIC_PRICE_LIST_REVISION,
+          },
+        },
+      }),
+    ]);
+    if (!draft || !priceList || draft.items.length === 0) return [];
+    const parameters = parseAutomaticQuotePricingParameters(
+      priceList.parameters,
+    );
+    const comparisons = await Promise.all(
+      draft.items.flatMap((activeItem) =>
+        ([1, 5, 20] as const).map(async (quantity) => {
+          const comparisonItems = draft.items.map((item) =>
+            item.id === activeItem.id
+              ? { ...item, quantity, referencePartsPerPlate: null }
+              : item,
+          );
+          const pricing = await this.pricingItemsFromDraft(
+            this.prisma,
+            orderId,
+            comparisonItems,
+            parameters,
+          );
+          if (!pricing) return null;
+          const prepared = await prepareAutomaticQuote({
+            priceList,
+            items: pricing.items,
+            expressRequested: draft.expressRequested,
+            materialAndColorAvailable: true,
+            withinBuildLimits: true,
+            riskAcknowledgementsComplete: true,
+            hasBlockingPreflightFinding: false,
+            ...(draft.selectedDeliveryDestination
+              ? {
+                  deliveryDestination: draft.selectedDeliveryDestination,
+                  shipmentPlanIdForOrdinal: (ordinal: number) =>
+                    deterministicUuid(
+                      `automatic-quantity-comparison:${orderId}:${draft.configurationRevision}:${activeItem.ordinal}:${quantity}:${ordinal}`,
+                    ),
+                }
+              : {}),
+          });
+          return {
+            itemOrdinal: activeItem.ordinal,
+            quantity,
+            currency: priceList.currency,
+            orderTotalMinor: safeNumber(
+              prepared.prepared.price.kind === "binding"
+                ? prepared.prepared.price.contractTotal.minorUnits
+                : prepared.prepared.price.breakdown.subtotal.minorUnits,
+            ),
+          };
+        }),
+      ),
+    );
+    return comparisons.filter(
+      (
+        comparison,
+      ): comparison is AutomaticQuoteSessionDto["quantityComparisons"][number] =>
+        comparison !== null,
+    );
+  }
+}
+
+function infillPreset(
+  infillPercent: number,
+): "DECORATIVE" | "STANDARD" | "STRONG" {
+  if (infillPercent === INFILL_PERCENT.DECORATIVE) return "DECORATIVE";
+  if (infillPercent === INFILL_PERCENT.STANDARD) return "STANDARD";
+  if (infillPercent === INFILL_PERCENT.STRONG) return "STRONG";
+  throw new Error(`Unsupported named infill percent: ${infillPercent}`);
 }
 
 function referenceOccupancies(

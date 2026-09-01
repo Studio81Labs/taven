@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  createLatestResponseGuard,
+  createQuoteCommandKeys,
   createUploadCommandKeys,
   createUploadTransferCheckpoint,
   isBackgroundQuotePhase,
@@ -89,4 +91,31 @@ describe("upload command idempotency", () => {
       expect(isTerminalAttachmentStatus(status)).toBe(false);
     },
   );
+});
+
+describe("configurator concurrency", () => {
+  it("rejects a slicing response after a newer option change begins", () => {
+    const guard = createLatestResponseGuard();
+    const slicingResponse = guard.begin();
+    const optionChange = guard.begin();
+
+    expect(guard.isCurrent(slicingResponse)).toBe(false);
+    expect(guard.isCurrent(optionChange)).toBe(true);
+  });
+
+  it("reuses an idempotency key only while the same command is retrying", () => {
+    let sequence = 0;
+    const keys = createQuoteCommandKeys(
+      (scope) => `${scope}-${(sequence += 1)}`,
+    );
+    const input = { material: "PLA", quantity: 5 };
+
+    expect(keys.get("configure", input)).toBe("configure-1");
+    expect(keys.get("configure", input)).toBe("configure-1");
+    expect(keys.get("configure", { ...input, quantity: 20 })).toBe(
+      "configure-2",
+    );
+    keys.complete("configure", input);
+    expect(keys.get("configure", input)).toBe("configure-3");
+  });
 });
