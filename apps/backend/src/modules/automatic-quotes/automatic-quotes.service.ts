@@ -17,6 +17,7 @@ import {
   OrderPhaseKind,
   OrderPhaseStatus,
   OrderStatus,
+  OutboxStatus,
   PaymentRole,
   PreflightSeverity,
   Prisma,
@@ -76,6 +77,8 @@ const CANONICALIZER_CONFIG_SHA256 = createHash("sha256")
 const MAX_ITEM_QUANTITY = 1_000;
 const MAX_SLICING_JOB_ATTEMPTS = 100;
 const AUTOMATIC_PRICE_LIST_REVISION = "automatic-v0-czk";
+const CANDIDATE_UNUSABLE_DISPOSITION_TYPE =
+  "automatic_quote.candidate-estimation.unusable";
 const INFILL_PERCENT = {
   DECORATIVE: 10,
   STANDARD: 20,
@@ -93,6 +96,39 @@ type AutomaticCandidateDispatchState = {
   receiptCreatedAt: Date | null;
   expiresAt: Date | null;
   deadLettered: boolean;
+};
+type AutomaticCandidateFrontierRow = {
+  shipmentPlanId: string;
+  orderItemId: string;
+  dispatchId: string | null;
+  inputFingerprint: string | null;
+  inventoryId: string | null;
+  inventoryRemainingMilligrams: bigint | null;
+  inventoryReservedMilligrams: bigint | null;
+  inventoryStatus: string | null;
+  inventoryUpdatedAt: Date | null;
+  nodeId: string | null;
+  attempt: number | null;
+  outcome: "SUCCEEDED" | "FAILED" | null;
+  failureClass: string | null;
+  candidateId: string | null;
+  expiresAt: Date | null;
+  deadLettered: boolean | null;
+};
+type AutomaticCandidateCapacityFrontierRow = {
+  id: string;
+  nodeId: string;
+  machineId: string;
+  startsAt: Date;
+  endsAt: Date;
+  status: string;
+  expiresAt: Date;
+};
+type AutomaticCandidateFrontier = {
+  hash: string;
+  quiescent: boolean;
+  allFailedRequirement: boolean;
+  successNodeIds: string[];
 };
 type PreprocessingDispatchState = {
   attempt: number;
@@ -2064,18 +2100,16 @@ export class AutomaticQuotesService {
       where: { orderId },
     });
     if (!phase) return;
-    const candidates = await this.prisma.candidateResourceEstimate.findMany({
-      where: {
-        shipmentPlan: { orderPriceBindingId: bindingId },
-        expiresAt: { gt: new Date() },
-      },
-      select: { nodeId: true },
-      distinct: ["nodeId"],
-      orderBy: { nodeId: "asc" },
-    });
-    for (const { nodeId } of candidates) {
+    const observedAt = await databaseNow(this.prisma);
+    const evaluationFrontier = await this.automaticCandidateFrontier(
+      this.prisma,
+      bindingId,
+      observedAt,
+    );
+    const definitiveNoPlanNodeIds = new Set<string>();
+    for (const nodeId of evaluationFrontier.successNodeIds) {
       try {
-        const observedAt = new Date();
+        const planningObservedAt = new Date();
         const latestPlan = await this.prisma.phaseResourcePlan.findFirst({
           where: {
             nodeId,
@@ -2094,8 +2128,8 @@ export class AutomaticQuotesService {
         const liveReservation = latestPlan?.reservationSets.find(
           (reservation) =>
             reservation.status === "RESERVED" &&
-            reservation.expiresAt > observedAt &&
-            latestPlan.expiresAt > observedAt,
+            reservation.expiresAt > planningObservedAt &&
+            latestPlan.expiresAt > planningObservedAt,
         );
         const liveReservationCapacityFits =
           !latestPlan || !liveReservation || !expressCapacityWindowSeconds
@@ -2104,7 +2138,7 @@ export class AutomaticQuotesService {
                 this.prisma,
                 latestPlan.id,
                 latestPlan.nodeId,
-                observedAt,
+                planningObservedAt,
                 expressCapacityWindowSeconds,
               );
         if (latestPlan && liveReservation && liveReservationCapacityFits) {
@@ -2129,7 +2163,7 @@ export class AutomaticQuotesService {
         }
         const needsSuccessor = Boolean(
           latestPlan &&
-          (latestPlan.expiresAt <= observedAt ||
+          (latestPlan.expiresAt <= planningObservedAt ||
             latestPlan.reservationSets.length > 0),
         );
         const planKey =
@@ -2175,6 +2209,13 @@ export class AutomaticQuotesService {
         );
       } catch (error) {
         if (
+          error instanceof ResourceConflictError &&
+          error.constraint === "complete_phase_resource_plan_required"
+        ) {
+          definitiveNoPlanNodeIds.add(nodeId);
+          continue;
+        }
+        if (
           error instanceof ResourceConflictError ||
           error instanceof ResourceNotFoundError
         ) {
@@ -2182,6 +2223,14 @@ export class AutomaticQuotesService {
         }
         throw error;
       }
+    }
+    if (!expressCapacityWindowSeconds && definitiveNoPlanNodeIds.size > 0) {
+      await this.recordCandidateEstimationHandoff({
+        orderId,
+        bindingId,
+        evaluationFrontierHash: evaluationFrontier.hash,
+        definitiveNoPlanNodeIds,
+      });
     }
   }
 
@@ -2514,10 +2563,12 @@ export class AutomaticQuotesService {
     return null;
   }
 
-  private async candidateEstimationRequiresHandoff(
-    orderId: string,
-  ): Promise<boolean> {
-    const rows = await this.prisma.$queryRaw<Array<{ allTerminal: boolean }>>`
+  private async automaticCandidateFrontier(
+    transaction: Transaction | PrismaService,
+    bindingId: string,
+    observedAt: Date,
+  ): Promise<AutomaticCandidateFrontier> {
+    const rows = await transaction.$queryRaw<AutomaticCandidateFrontierRow[]>`
       WITH item_requirements AS (
         SELECT
           shipment_plan.id AS shipment_plan_id,
@@ -2527,10 +2578,7 @@ export class AutomaticQuotesService {
           item.material::text AS material,
           item.color,
           count(*)::integer AS quantity
-        FROM order_active_price_bindings active_binding
-        JOIN order_price_bindings binding
-          ON binding.id = active_binding.order_price_binding_id
-         AND binding.invalidated_at IS NULL
+        FROM order_price_bindings binding
         JOIN shipment_plans shipment_plan
           ON shipment_plan.order_price_binding_id = binding.id
         JOIN shipment_plan_fulfilment_slots allocation
@@ -2538,11 +2586,12 @@ export class AutomaticQuotesService {
          AND allocation.order_price_binding_id = binding.id
         JOIN fulfilment_slots slot
           ON slot.id = allocation.fulfilment_slot_id
-         AND slot.order_id = active_binding.order_id
+         AND slot.order_id = binding.order_id
         JOIN order_items item
           ON item.id = slot.order_item_id
          AND item.order_id = slot.order_id
-        WHERE active_binding.order_id = ${orderId}::uuid
+        WHERE binding.id = ${bindingId}::uuid
+          AND binding.invalidated_at IS NULL
         GROUP BY
           shipment_plan.id,
           item.id,
@@ -2554,12 +2603,20 @@ export class AutomaticQuotesService {
         SELECT
           requirement.shipment_plan_id,
           requirement.order_item_id,
+          dispatch.id AS dispatch_id,
           dispatch.payload #>> '{job,inputFingerprintSha256}'
             AS input_fingerprint,
           dispatch.payload #>> '{inventoryId}' AS inventory_id,
+          inventory.remaining_milligrams,
+          inventory.reserved_milligrams,
+          inventory.status::text AS inventory_status,
+          inventory.updated_at AS inventory_updated_at,
+          dispatch.payload #>> '{nodeId}' AS node_id,
           (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
           terminal.outcome::text AS outcome,
           terminal.failure_class,
+          terminal.candidate_resource_estimate_id AS candidate_id,
+          candidate.expires_at,
           EXISTS (
             SELECT 1
             FROM outbox_messages dead_letter
@@ -2596,33 +2653,311 @@ export class AutomaticQuotesService {
          AND (requirement.color IS NULL OR inventory.color = requirement.color)
         LEFT JOIN candidate_estimate_terminal_results terminal
           ON terminal.outbox_message_id = dispatch.id
-      ), grouped_dispatches AS (
-        SELECT
-          shipment_plan_id,
-          order_item_id,
-          bool_and(
-            dead_lettered
-            OR COALESCE(
-              (
-                outcome = 'FAILED'
-                AND (
-                  failure_class <> 'retryable_infrastructure'
-                  OR attempt >= ${MAX_SLICING_JOB_ATTEMPTS}
-                )
-              ),
-              false
-            )
-          ) AS all_terminal
-        FROM ranked_dispatches
-        WHERE dispatch_rank = 1
-        GROUP BY shipment_plan_id, order_item_id
+        LEFT JOIN candidate_resource_estimates candidate
+          ON candidate.id = terminal.candidate_resource_estimate_id
       )
-      SELECT all_terminal AS "allTerminal"
-      FROM grouped_dispatches
-      WHERE all_terminal
-      LIMIT 1
+      SELECT
+        requirement.shipment_plan_id AS "shipmentPlanId",
+        requirement.order_item_id AS "orderItemId",
+        ranked.dispatch_id AS "dispatchId",
+        ranked.input_fingerprint AS "inputFingerprint",
+        ranked.inventory_id AS "inventoryId",
+        ranked.remaining_milligrams AS "inventoryRemainingMilligrams",
+        ranked.reserved_milligrams AS "inventoryReservedMilligrams",
+        ranked.inventory_status AS "inventoryStatus",
+        ranked.inventory_updated_at AS "inventoryUpdatedAt",
+        ranked.node_id AS "nodeId",
+        ranked.attempt,
+        ranked.outcome,
+        ranked.failure_class AS "failureClass",
+        ranked.candidate_id AS "candidateId",
+        ranked.expires_at AS "expiresAt",
+        ranked.dead_lettered AS "deadLettered"
+      FROM item_requirements requirement
+      LEFT JOIN ranked_dispatches ranked
+        ON ranked.shipment_plan_id = requirement.shipment_plan_id
+       AND ranked.order_item_id = requirement.order_item_id
+       AND ranked.dispatch_rank = 1
+      ORDER BY
+        requirement.shipment_plan_id,
+        requirement.order_item_id,
+        ranked.input_fingerprint,
+        ranked.inventory_id,
+        ranked.dispatch_id
     `;
-    return rows[0]?.allTerminal === true;
+    const capacityFrontier = await transaction.$queryRaw<
+      AutomaticCandidateCapacityFrontierRow[]
+    >`
+      SELECT DISTINCT
+        reservation.id,
+        reservation.node_id AS "nodeId",
+        reservation.machine_id AS "machineId",
+        reservation.starts_at AS "startsAt",
+        reservation.ends_at AS "endsAt",
+        reservation.status::text,
+        reservation.expires_at AS "expiresAt"
+      FROM capacity_reservations reservation
+      JOIN candidate_resource_estimates candidate
+        ON candidate.node_id = reservation.node_id
+       AND candidate.machine_id = reservation.machine_id
+      JOIN shipment_plans shipment_plan
+        ON shipment_plan.id = candidate.shipment_plan_id
+       AND shipment_plan.order_price_binding_id = ${bindingId}::uuid
+      JOIN candidate_capacity_intervals candidate_interval
+        ON candidate_interval.candidate_resource_estimate_id = candidate.id
+       AND candidate_interval.node_id = candidate.node_id
+       AND reservation.starts_at < candidate_interval.ends_at
+       AND reservation.ends_at > candidate_interval.starts_at
+      ORDER BY
+        reservation.node_id,
+        reservation.machine_id,
+        reservation.starts_at,
+        reservation.ends_at,
+        reservation.id
+    `;
+    const requirements = new Map<string, AutomaticCandidateFrontierRow[]>();
+    for (const row of rows) {
+      const key = `${row.shipmentPlanId}:${row.orderItemId}`;
+      const grouped = requirements.get(key) ?? [];
+      grouped.push(row);
+      requirements.set(key, grouped);
+    }
+    const optionsFor = (group: AutomaticCandidateFrontierRow[]) =>
+      group.filter((row) => row.dispatchId !== null);
+    const permanentlyFailed = (row: AutomaticCandidateFrontierRow) =>
+      row.deadLettered === true ||
+      (row.outcome === "FAILED" &&
+        (row.failureClass !== "retryable_infrastructure" ||
+          (row.attempt ?? 0) >= MAX_SLICING_JOB_ATTEMPTS));
+    const settled = (row: AutomaticCandidateFrontierRow) =>
+      permanentlyFailed(row) ||
+      (row.outcome === "SUCCEEDED" &&
+        row.deadLettered !== true &&
+        row.candidateId !== null &&
+        row.expiresAt !== null &&
+        row.expiresAt > observedAt);
+    const groups = [...requirements.values()];
+    const successNodeIds = [
+      ...new Set(
+        rows
+          .filter(
+            (row) =>
+              row.outcome === "SUCCEEDED" &&
+              row.deadLettered !== true &&
+              row.candidateId !== null &&
+              row.expiresAt !== null &&
+              row.expiresAt > observedAt &&
+              row.nodeId !== null,
+          )
+          .map((row) => row.nodeId!),
+      ),
+    ].sort();
+    return {
+      hash: fingerprintOf({
+        candidates: rows.map((row) => ({
+          shipmentPlanId: row.shipmentPlanId,
+          orderItemId: row.orderItemId,
+          dispatchId: row.dispatchId,
+          inputFingerprint: row.inputFingerprint,
+          inventoryId: row.inventoryId,
+          inventoryRemainingMilligrams:
+            row.inventoryRemainingMilligrams?.toString() ?? null,
+          inventoryReservedMilligrams:
+            row.inventoryReservedMilligrams?.toString() ?? null,
+          inventoryStatus: row.inventoryStatus,
+          inventoryUpdatedAt: row.inventoryUpdatedAt?.toISOString() ?? null,
+          nodeId: row.nodeId,
+          attempt: row.attempt,
+          outcome: row.outcome,
+          failureClass: row.failureClass,
+          candidateId: row.candidateId,
+          expiresAt: row.expiresAt?.toISOString() ?? null,
+          deadLettered: row.deadLettered,
+        })),
+        capacityReservations: capacityFrontier.map((reservation) => ({
+          id: reservation.id,
+          nodeId: reservation.nodeId,
+          machineId: reservation.machineId,
+          startsAt: reservation.startsAt.toISOString(),
+          endsAt: reservation.endsAt.toISOString(),
+          status: reservation.status,
+          expiresAt: reservation.expiresAt.toISOString(),
+        })),
+      }),
+      quiescent:
+        groups.length > 0 &&
+        groups.every((group) => {
+          const options = optionsFor(group);
+          return options.length > 0 && options.every(settled);
+        }),
+      allFailedRequirement: groups.some((group) => {
+        const options = optionsFor(group);
+        return options.length > 0 && options.every(permanentlyFailed);
+      }),
+      successNodeIds,
+    };
+  }
+
+  private async hasLiveCandidatePlan(
+    transaction: Transaction | PrismaService,
+    bindingId: string,
+    observedAt: Date,
+  ): Promise<boolean> {
+    const plan = await transaction.phaseResourcePlan.findFirst({
+      where: {
+        expiresAt: { gt: observedAt },
+        jobs: {
+          some: {
+            candidateResourceEstimate: {
+              shipmentPlan: { orderPriceBindingId: bindingId },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+    return plan !== null;
+  }
+
+  private async recordCandidateEstimationHandoff(input: {
+    orderId: string;
+    bindingId: string;
+    evaluationFrontierHash: string;
+    definitiveNoPlanNodeIds: ReadonlySet<string>;
+  }): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`
+        SELECT taven_lock_automatic_order_session(${input.orderId}::uuid)::text
+      `;
+      const observedAt = await databaseNow(transaction);
+      const active = await transaction.orderActivePriceBinding.findUnique({
+        where: { orderId: input.orderId },
+        include: {
+          order: { include: { automaticQuoteDraft: true } },
+          orderPriceBinding: { include: { priceSnapshot: true } },
+        },
+      });
+      const draft = active?.order.automaticQuoteDraft;
+      if (
+        !active ||
+        active.orderPriceBindingId !== input.bindingId ||
+        active.orderPriceBinding.invalidatedAt ||
+        !draft ||
+        !bindingMatchesAutomaticDraft(active.orderPriceBinding, draft) ||
+        automaticBindingExpressRequested(
+          active.orderPriceBinding.priceSnapshot.inputSnapshot,
+        ) ||
+        (await this.hasLiveCandidatePlan(
+          transaction,
+          input.bindingId,
+          observedAt,
+        ))
+      ) {
+        return;
+      }
+      const frontier = await this.automaticCandidateFrontier(
+        transaction,
+        input.bindingId,
+        observedAt,
+      );
+      if (
+        frontier.hash !== input.evaluationFrontierHash ||
+        !frontier.quiescent ||
+        frontier.successNodeIds.length === 0 ||
+        frontier.successNodeIds.length !== input.definitiveNoPlanNodeIds.size ||
+        frontier.successNodeIds.some(
+          (nodeId) => !input.definitiveNoPlanNodeIds.has(nodeId),
+        )
+      ) {
+        return;
+      }
+      const deduplicationKey = candidateUnusableDispositionKey(
+        input.bindingId,
+        frontier.hash,
+      );
+      await transaction.outboxMessage.upsert({
+        where: { deduplicationKey },
+        create: {
+          deduplicationKey,
+          aggregateType: "AutomaticQuoteEligibilityDisposition",
+          aggregateId: input.bindingId,
+          messageType: CANDIDATE_UNUSABLE_DISPOSITION_TYPE,
+          schemaVersion: 1,
+          payload: jsonSafe({
+            orderId: input.orderId,
+            bindingId: input.bindingId,
+            frontierSha256: frontier.hash,
+            nodeIds: frontier.successNodeIds,
+            reason: "NO_COMPLETE_RESOURCE_PLAN",
+            observedAt: observedAt.toISOString(),
+          }),
+          status: OutboxStatus.DELIVERED,
+          deliveredAt: observedAt,
+        },
+        update: {},
+      });
+    });
+  }
+
+  private async candidateEstimationRequiresHandoff(
+    orderId: string,
+  ): Promise<boolean> {
+    const active = await this.prisma.orderActivePriceBinding.findUnique({
+      where: { orderId },
+      include: {
+        order: { include: { automaticQuoteDraft: true } },
+        orderPriceBinding: { include: { priceSnapshot: true } },
+      },
+    });
+    const draft = active?.order.automaticQuoteDraft;
+    if (
+      !active ||
+      active.orderPriceBinding.invalidatedAt ||
+      !draft ||
+      !bindingMatchesAutomaticDraft(active.orderPriceBinding, draft)
+    ) {
+      return false;
+    }
+    const observedAt = await databaseNow(this.prisma);
+    if (
+      await this.hasLiveCandidatePlan(
+        this.prisma,
+        active.orderPriceBindingId,
+        observedAt,
+      )
+    ) {
+      return false;
+    }
+    const frontier = await this.automaticCandidateFrontier(
+      this.prisma,
+      active.orderPriceBindingId,
+      observedAt,
+    );
+    if (frontier.allFailedRequirement) return true;
+    if (!frontier.quiescent || frontier.successNodeIds.length === 0) {
+      return false;
+    }
+    const marker = await this.prisma.outboxMessage.findUnique({
+      where: {
+        deduplicationKey: candidateUnusableDispositionKey(
+          active.orderPriceBindingId,
+          frontier.hash,
+        ),
+      },
+      select: {
+        aggregateType: true,
+        aggregateId: true,
+        messageType: true,
+        status: true,
+      },
+    });
+    return Boolean(
+      marker &&
+      marker.aggregateType === "AutomaticQuoteEligibilityDisposition" &&
+      marker.aggregateId === active.orderPriceBindingId &&
+      marker.messageType === CANDIDATE_UNUSABLE_DISPOSITION_TYPE &&
+      marker.status === OutboxStatus.DELIVERED,
+    );
   }
 
   private async finalizeAutomaticQuote(input: {
@@ -4111,6 +4446,13 @@ function hashToken(value: string): string {
 
 function fingerprintOf(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+function candidateUnusableDispositionKey(
+  bindingId: string,
+  frontierSha256: string,
+): string {
+  return `automatic-eligibility-unusable:v1:${bindingId}:${frontierSha256}`;
 }
 
 function canonicalJson(value: unknown): string {

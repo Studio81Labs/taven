@@ -1584,13 +1584,65 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         lateCapacityEndsAt.getTime() + (index + 1) * 120_000,
       );
       await candidates.ingest({
-        result: successfulCandidateResult(candidateJob(dispatch.payload)),
+        result: successfulCandidateResult(
+          candidateJob(dispatch.payload),
+          "60",
+          "400000",
+        ),
         capacityWindows: [
           { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
         ],
         expiresAt: new Date(Date.now() + 28 * 60 * 60 * 1_000),
       });
     }
+    const candidateMaterialHandoff = await api(
+      `automatic-quote-sessions/${recoverySessionId}/prepare`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          recoverySessionToken,
+          key("capacity-recovery-candidate-material-handoff"),
+        ),
+      },
+    );
+    expect(candidateMaterialHandoff.response.status).toBe(200);
+    expect(candidateMaterialHandoff.body.phase).toBe("HANDOFF_REQUIRED");
+    expect(candidateMaterialHandoff.body.checkoutReady).toBe(false);
+    expect(candidateMaterialHandoff.body.handoff).toMatchObject({
+      reasons: expect.arrayContaining(["CANDIDATE_ESTIMATION_FAILED"]),
+    });
+    await expect(
+      prisma.outboxMessage.findFirstOrThrow({
+        where: {
+          aggregateType: "AutomaticQuoteEligibilityDisposition",
+          aggregateId: standardRecoveryBinding.orderPriceBindingId,
+          messageType: "automatic_quote.candidate-estimation.unusable",
+          status: "DELIVERED",
+        },
+      }),
+    ).resolves.toMatchObject({
+      payload: expect.objectContaining({
+        reason: "NO_COMPLETE_RESOURCE_PLAN",
+      }),
+    });
+    const standardRecoveryInventoryIds = [
+      ...new Set(
+        standardRecoveryDispatches.map(
+          ({ payload }) => (payload as { inventoryId: string }).inventoryId,
+        ),
+      ),
+    ];
+    await prisma.inventory.updateMany({
+      where: { id: { in: standardRecoveryInventoryIds } },
+      data: { remainingMilligrams: 1_000_000n },
+    });
+    const recoveredCandidateFrontier = await api(
+      `automatic-quote-sessions/${recoverySessionId}`,
+      { headers: { authorization: `Bearer ${recoverySessionToken}` } },
+    );
+    expect(recoveredCandidateFrontier.response.status).toBe(200);
+    expect(recoveredCandidateFrontier.body.phase).toBe("ELIGIBILITY_PENDING");
+    expect(recoveredCandidateFrontier.body.handoff).toBeNull();
     const standardRecoveryReady = await api(
       `automatic-quote-sessions/${recoverySessionId}/prepare`,
       {
@@ -2504,6 +2556,7 @@ function retryableCandidateResult(
 function successfulCandidateResult(
   job: CandidateEstimateJob,
   estimatedPrintSeconds = "60",
+  estimatedMaterialMilligrams = "60",
 ): CandidateEstimateResult {
   const plateCount = Math.ceil(job.input.quantity / job.input.partsPerPlate);
   const plateOccupancies = Array.from({ length: plateCount }, (_, index) =>
@@ -2536,20 +2589,22 @@ function successfulCandidateResult(
         estimatedPrintSeconds: (
           BigInt(estimatedPrintSeconds) * BigInt(plateCount)
         ).toString(),
-        estimatedMaterialMilligrams: (60n * BigInt(plateCount)).toString(),
+        estimatedMaterialMilligrams: (
+          BigInt(estimatedMaterialMilligrams) * BigInt(plateCount)
+        ).toString(),
         plateCount,
       },
       plates: plateOccupancies.map((partsOnPlate, index) => ({
         plateOrdinal: index + 1,
         partsOnPlate,
         estimatedPrintSeconds,
-        estimatedMaterialMilligrams: "60",
+        estimatedMaterialMilligrams,
       })),
       occupancySlices: job.input.occupancySliceTargets.map((target) => ({
         partsPerPlate: target.partsPerPlate,
         cacheIdentitySha256: target.cacheIdentitySha256,
         estimatedPrintSeconds,
-        estimatedMaterialMilligrams: "60",
+        estimatedMaterialMilligrams,
         artifact: {
           objectKey: target.analysisObjectKey,
           sha256: sha(target.analysisObjectKey),
