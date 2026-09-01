@@ -12,6 +12,7 @@ const MAX_3MF_COMPONENT_DEPTH = 64;
 const MAX_3MF_EXPANDED_OBJECTS = 25_000;
 
 type Point = readonly [number, number, number];
+type TrianglePoints = readonly [Point, Point, Point];
 type Transform = readonly [
   number,
   number,
@@ -79,30 +80,34 @@ class GeometryAccumulator {
   ];
   readonly previewTriangles: number[] = [];
   triangleCount = 0;
-  signedVolume = 0;
+  volumeMm3 = 0;
 
-  addTriangle(a: Point, b: Point, c: Point): void {
-    if (this.triangleCount >= MAX_LOCAL_TRIANGLES) {
-      throw new ModelGeometryError(
-        "PREVIEW_LIMIT_EXCEEDED",
-        "Model je příliš složitý pro rychlý náhled v prohlížeči.",
-      );
-    }
-    for (const point of [a, b, c]) {
-      for (let axis = 0; axis < 3; axis += 1) {
-        this.minimum[axis] = Math.min(this.minimum[axis]!, point[axis]!);
-        this.maximum[axis] = Math.max(this.maximum[axis]!, point[axis]!);
+  addBody(triangles: readonly TrianglePoints[]): void {
+    let signedVolume = 0;
+    for (const [a, b, c] of triangles) {
+      if (this.triangleCount >= MAX_LOCAL_TRIANGLES) {
+        throw new ModelGeometryError(
+          "PREVIEW_LIMIT_EXCEEDED",
+          "Model je příliš složitý pro rychlý náhled v prohlížeči.",
+        );
+      }
+      for (const point of [a, b, c]) {
+        for (let axis = 0; axis < 3; axis += 1) {
+          this.minimum[axis] = Math.min(this.minimum[axis]!, point[axis]!);
+          this.maximum[axis] = Math.max(this.maximum[axis]!, point[axis]!);
+        }
+      }
+      signedVolume +=
+        (a[0] * (b[1] * c[2] - b[2] * c[1]) -
+          a[1] * (b[0] * c[2] - b[2] * c[0]) +
+          a[2] * (b[0] * c[1] - b[1] * c[0])) /
+        6;
+      this.triangleCount += 1;
+      if (this.triangleCount <= MAX_PREVIEW_TRIANGLES) {
+        this.previewTriangles.push(...a, ...b, ...c);
       }
     }
-    this.signedVolume +=
-      (a[0] * (b[1] * c[2] - b[2] * c[1]) -
-        a[1] * (b[0] * c[2] - b[2] * c[0]) +
-        a[2] * (b[0] * c[1] - b[1] * c[0])) /
-      6;
-    this.triangleCount += 1;
-    if (this.triangleCount <= MAX_PREVIEW_TRIANGLES) {
-      this.previewTriangles.push(...a, ...b, ...c);
-    }
+    this.volumeMm3 += Math.abs(signedVolume);
   }
 
   finish(): Pick<
@@ -123,8 +128,66 @@ class GeometryAccumulator {
       },
       previewTriangles: this.previewTriangles,
       triangleCount: this.triangleCount,
-      volumeMm3: Math.abs(this.signedVolume),
+      volumeMm3: this.volumeMm3,
     };
+  }
+}
+
+function pointKey(point: Point): string {
+  return `${point[0]},${point[1]},${point[2]}`;
+}
+
+function connectedTriangleBodies(
+  triangles: readonly TrianglePoints[],
+): TrianglePoints[][] {
+  const parents = triangles.map((_, index) => index);
+  const edgeOwners = new Map<string, number>();
+  const find = (index: number): number => {
+    let root = index;
+    while (parents[root] !== root) root = parents[root]!;
+    while (parents[index] !== index) {
+      const next = parents[index]!;
+      parents[index] = root;
+      index = next;
+    }
+    return root;
+  };
+  const unite = (left: number, right: number): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+  };
+
+  triangles.forEach((triangle, triangleIndex) => {
+    const keys = triangle.map(pointKey);
+    for (const [left, right] of [
+      [keys[0]!, keys[1]!],
+      [keys[1]!, keys[2]!],
+      [keys[2]!, keys[0]!],
+    ] as const) {
+      const edge = left < right ? `${left}|${right}` : `${right}|${left}`;
+      const owner = edgeOwners.get(edge);
+      if (owner === undefined) edgeOwners.set(edge, triangleIndex);
+      else unite(triangleIndex, owner);
+    }
+  });
+
+  const bodies = new Map<number, TrianglePoints[]>();
+  triangles.forEach((triangle, triangleIndex) => {
+    const root = find(triangleIndex);
+    const body = bodies.get(root) ?? [];
+    body.push(triangle);
+    bodies.set(root, body);
+  });
+  return [...bodies.values()];
+}
+
+function addConnectedBodies(
+  geometry: GeometryAccumulator,
+  triangles: readonly TrianglePoints[],
+): void {
+  for (const body of connectedTriangleBodies(triangles)) {
+    geometry.addBody(body);
   }
 }
 
@@ -143,8 +206,15 @@ function parseBinaryStl(bytes: Uint8Array): ModelGeometry | undefined {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const triangleCount = view.getUint32(80, true);
   if (84 + triangleCount * 50 !== bytes.byteLength) return undefined;
+  if (triangleCount > MAX_LOCAL_TRIANGLES) {
+    throw new ModelGeometryError(
+      "PREVIEW_LIMIT_EXCEEDED",
+      "Model je příliš složitý pro rychlý náhled v prohlížeči.",
+    );
+  }
 
   const geometry = new GeometryAccumulator();
+  const triangles: TrianglePoints[] = [];
   for (let triangle = 0; triangle < triangleCount; triangle += 1) {
     const offset = 84 + triangle * 50 + 12;
     const points = [0, 1, 2].map((vertex) => {
@@ -155,8 +225,9 @@ function parseBinaryStl(bytes: Uint8Array): ModelGeometry | undefined {
         view.getFloat32(vertexOffset + 8, true),
       );
     });
-    geometry.addTriangle(points[0]!, points[1]!, points[2]!);
+    triangles.push([points[0]!, points[1]!, points[2]!]);
   }
+  addConnectedBodies(geometry, triangles);
 
   return {
     ...geometry.finish(),
@@ -186,6 +257,7 @@ function parseAsciiStl(bytes: Uint8Array): ModelGeometry {
 
   const geometry = new GeometryAccumulator();
   const vertices: Point[] = [];
+  const triangles: TrianglePoints[] = [];
   const vertexPattern =
     /\bvertex\s+([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s+([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s+([-+]?\d*\.?\d+(?:e[-+]?\d+)?)/giu;
   for (const match of source.matchAll(vertexPattern)) {
@@ -193,7 +265,13 @@ function parseAsciiStl(bytes: Uint8Array): ModelGeometry {
       finitePoint(Number(match[1]), Number(match[2]), Number(match[3])),
     );
     if (vertices.length === 3) {
-      geometry.addTriangle(vertices[0]!, vertices[1]!, vertices[2]!);
+      if (triangles.length >= MAX_LOCAL_TRIANGLES) {
+        throw new ModelGeometryError(
+          "PREVIEW_LIMIT_EXCEEDED",
+          "Model je příliš složitý pro rychlý náhled v prohlížeči.",
+        );
+      }
+      triangles.push([vertices[0]!, vertices[1]!, vertices[2]!]);
       vertices.length = 0;
     }
   }
@@ -203,6 +281,7 @@ function parseAsciiStl(bytes: Uint8Array): ModelGeometry {
       "Textový STL soubor obsahuje neúplnou plochu.",
     );
   }
+  addConnectedBodies(geometry, triangles);
 
   return {
     ...geometry.finish(),
@@ -503,13 +582,14 @@ function parse3mfXml(xml: string): Omit<ModelGeometry, "parseDurationMs"> {
     if (object.triangles.length > 0) {
       bodyNames.push(object.name?.trim() || `Těleso ${bodyNames.length + 1}`);
     }
-    for (const [a, b, c] of object.triangles) {
-      geometry.addTriangle(
+    addConnectedBodies(
+      geometry,
+      object.triangles.map(([a, b, c]) => [
         applyTransforms(object.vertices[a]!, transforms),
         applyTransforms(object.vertices[b]!, transforms),
         applyTransforms(object.vertices[c]!, transforms),
-      );
-    }
+      ]),
+    );
     for (const component of object.components) {
       expand(
         component.objectId,

@@ -73,6 +73,10 @@ export function isTerminalUploadConfirmationStatus(status: number): boolean {
   return status === 401 || status === 409 || status === 410;
 }
 
+export function isTerminalAttachmentStatus(status: number): boolean {
+  return status === 401 || status === 409 || status === 410;
+}
+
 function requestMessage(
   status: number,
   stage: "attach" | "confirm" | "intent" | "session",
@@ -144,6 +148,14 @@ export function useModelUploadQuote() {
     uploadIntent = undefined;
     confirmedUpload = undefined;
     commandKeys.resetAttachModel();
+    uploadProgress.value = 0;
+  }
+
+  function discardAttachmentCheckpoint(): void {
+    uploadIntent = undefined;
+    confirmedUpload = undefined;
+    createdSession = undefined;
+    commandKeys.reset();
     uploadProgress.value = 0;
   }
 
@@ -391,6 +403,9 @@ export function useModelUploadQuote() {
         },
       );
       if (!attached.response.ok || !attached.data) {
+        if (isTerminalAttachmentStatus(attached.response.status)) {
+          discardAttachmentCheckpoint();
+        }
         throw new Error(requestMessage(attached.response.status, "attach"));
       }
 

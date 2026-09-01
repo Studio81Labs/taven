@@ -50,6 +50,14 @@ function binaryStlWithTriangleCount(triangleCount: number): ArrayBuffer {
   return buffer;
 }
 
+function translatedReversedTetrahedron(offsetX: number): Triangle[] {
+  return tetrahedron.map(([a, b, c]) => [
+    [c[0] + offsetX, c[1], c[2]],
+    [b[0] + offsetX, b[1], b[2]],
+    [a[0] + offsetX, a[1], a[2]],
+  ]);
+}
+
 function threeMf(model: string): ArrayBuffer {
   const archive = zipSync({
     "3D/3dmodel.model": new TextEncoder().encode(model),
@@ -108,6 +116,17 @@ endsolid part`).buffer;
       parseModelGeometry("STL", binaryStlWithTriangleCount(100_001)),
     ).rejects.toMatchObject({ code: "PREVIEW_LIMIT_EXCEEDED" });
   });
+
+  it("sums disconnected body volumes regardless of winding", async () => {
+    const geometry = await parseModelGeometry(
+      "STL",
+      binaryStl([...tetrahedron, ...translatedReversedTetrahedron(2)]),
+    );
+
+    expect(geometry.dimensions).toEqual({ width: 3, depth: 1, height: 1 });
+    expect(geometry.triangleCount).toBe(8);
+    expect(geometry.volumeMm3).toBeCloseTo(2 / 6, 6);
+  });
 });
 
 describe("3MF geometry", () => {
@@ -128,6 +147,17 @@ describe("3MF geometry", () => {
 
     expect(geometry.objectCount).toBe(2);
     expect(geometry.dimensions).toEqual({ width: 30, depth: 10, height: 10 });
+  });
+
+  it("sums mirrored instance volumes instead of cancelling them", async () => {
+    const mirroredInstance = tetrahedron3mf.replace(
+      '<item objectid="1" transform="1 0 0 0 1 0 0 0 1 5 6 7"/>',
+      '<item objectid="1"/><item objectid="1" transform="-1 0 0 0 1 0 0 0 1 2 0 0"/>',
+    );
+    const geometry = await parseModelGeometry("3MF", threeMf(mirroredInstance));
+
+    expect(geometry.objectCount).toBe(2);
+    expect(geometry.volumeMm3).toBeCloseTo(2_000 / 6, 5);
   });
 
   it("blocks painted or multimaterial 3MF instead of flattening it", async () => {

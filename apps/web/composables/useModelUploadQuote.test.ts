@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createUploadCommandKeys,
   isBackgroundQuotePhase,
+  isTerminalAttachmentStatus,
   isTerminalUploadConfirmationStatus,
 } from "./useModelUploadQuote";
 
@@ -60,6 +61,20 @@ describe("upload command idempotency", () => {
     "retains an upload checkpoint after retryable confirmation status %s",
     (status) => {
       expect(isTerminalUploadConfirmationStatus(status)).toBe(false);
+    },
+  );
+
+  it.each([401, 409, 410])(
+    "restarts the workflow after terminal attachment status %s",
+    (status) => {
+      expect(isTerminalAttachmentStatus(status)).toBe(true);
+    },
+  );
+
+  it.each([429, 500, 503])(
+    "retains attachment checkpoints after retryable status %s",
+    (status) => {
+      expect(isTerminalAttachmentStatus(status)).toBe(false);
     },
   );
 });
