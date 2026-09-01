@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createUploadCommandKeys,
+  createUploadTransferCheckpoint,
   isBackgroundQuotePhase,
   isTerminalAttachmentStatus,
   isTerminalUploadConfirmationStatus,
@@ -48,6 +49,17 @@ describe("upload command idempotency", () => {
 
     expect(keys.createSession()).toBe("create-session-4");
     expect(keys.attachModel()).toBe("attach-model-5");
+  });
+
+  it("does not repeat a completed PUT while confirmation is retried", () => {
+    const checkpoint = createUploadTransferCheckpoint();
+
+    expect(checkpoint.needsPut()).toBe(true);
+    checkpoint.markPutCompleted();
+    expect(checkpoint.needsPut()).toBe(false);
+
+    checkpoint.reset();
+    expect(checkpoint.needsPut()).toBe(true);
   });
 
   it.each([401, 409, 410])(

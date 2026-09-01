@@ -70,6 +70,20 @@ export function createUploadCommandKeys(
   };
 }
 
+export function createUploadTransferCheckpoint() {
+  let putCompleted = false;
+
+  return {
+    markPutCompleted: () => {
+      putCompleted = true;
+    },
+    needsPut: () => !putCompleted,
+    reset: () => {
+      putCompleted = false;
+    },
+  };
+}
+
 export function isTerminalUploadConfirmationStatus(status: number): boolean {
   return status === 401 || status === 409 || status === 410;
 }
@@ -120,6 +134,7 @@ export function useModelUploadQuote() {
   let confirmedUpload: ConfirmedUpload | undefined;
   let createdSession: CreatedQuoteSession | undefined;
   const commandKeys = createUploadCommandKeys();
+  const transferCheckpoint = createUploadTransferCheckpoint();
 
   const filename = computed(
     () => selectedFile.value?.name ?? restoredFilename.value,
@@ -148,6 +163,7 @@ export function useModelUploadQuote() {
   function discardUploadCheckpoint(): void {
     uploadIntent = undefined;
     confirmedUpload = undefined;
+    transferCheckpoint.reset();
     commandKeys.resetAttachModel();
     uploadProgress.value = 0;
   }
@@ -156,6 +172,7 @@ export function useModelUploadQuote() {
     uploadIntent = undefined;
     confirmedUpload = undefined;
     createdSession = undefined;
+    transferCheckpoint.reset();
     commandKeys.reset();
     uploadProgress.value = 0;
   }
@@ -180,6 +197,7 @@ export function useModelUploadQuote() {
     uploadIntent = undefined;
     confirmedUpload = undefined;
     createdSession = undefined;
+    transferCheckpoint.reset();
     commandKeys.reset();
     if (clearStoredSession && import.meta.client) {
       const storage = getSessionStorage(window);
@@ -345,15 +363,18 @@ export function useModelUploadQuote() {
       }
 
       if (!confirmedUpload) {
-        await uploadFile({
-          file,
-          onProgress: (progress) => {
-            uploadProgress.value = progress;
-          },
-          requiredHeaders: uploadIntent.requiredHeaders,
-          signal,
-          uploadUrl: uploadIntent.uploadUrl,
-        });
+        if (transferCheckpoint.needsPut()) {
+          await uploadFile({
+            file,
+            onProgress: (progress) => {
+              uploadProgress.value = progress;
+            },
+            requiredHeaders: uploadIntent.requiredHeaders,
+            signal,
+            uploadUrl: uploadIntent.uploadUrl,
+          });
+          transferCheckpoint.markPutCompleted();
+        }
         uploadProgress.value = 100;
 
         const confirmation = await $api.POST(
