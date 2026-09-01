@@ -318,13 +318,24 @@ describe("3MF geometry", () => {
     ).resolves.toMatchObject({ objectCount: 1 });
   });
 
+  it("ignores painted triangle markup in comments and CDATA", async () => {
+    const commentedPaint = tetrahedron3mf.replace(
+      "</triangles>",
+      '<!-- <triangle paint_color="#ff0000"/> --><![CDATA[<triangle paint_color="#00ff00"/>]]></triangles>',
+    );
+
+    await expect(
+      parseModelGeometry("3MF", threeMf(commentedPaint)),
+    ).resolves.toMatchObject({ objectCount: 1 });
+  });
+
   it("excludes non-printable build items from preview eligibility and geometry", async () => {
     const object = /<object id="1"[\s\S]*?<\/object>/u.exec(
       tetrahedron3mf,
     )?.[0];
     expect(object).toBeDefined();
     const disabledObject = object!
-      .replace('id="1"', 'id="2" pid="8" pindex="0" name="Pomocné těleso"')
+      .replace('id="1"', 'id="2" pid="8" pindex="0"')
       .replace(
         '<triangle v1="0" v2="2" v3="1"/>',
         '<triangle v1="0" v2="2" v3="1" slic3r:mmu_segmentation="4"/>',

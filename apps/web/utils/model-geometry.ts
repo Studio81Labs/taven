@@ -1378,6 +1378,42 @@ function relationshipAttribute(
   )?.value;
 }
 
+function xmlAttributeValue(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;");
+}
+
+async function structuralModelXml(xml: string): Promise<string> {
+  const { SaxesParser } = await import("saxes");
+  const structural: string[] = [];
+  const parser = new SaxesParser({ xmlns: true, position: false });
+  parser.on("doctype", () =>
+    invalid3mfPackage("3MF obsahuje nepodporovanou XML deklaraci."),
+  );
+  parser.on("error", () => invalid3mfPackage("Model 3MF není platné XML."));
+  parser.on("opentag", (tag) => {
+    const attributes = Object.values(tag.attributes)
+      .map(
+        (candidate: SaxesAttributeNS) =>
+          ` ${candidate.name}="${xmlAttributeValue(candidate.value)}"`,
+      )
+      .join("");
+    structural.push(`<${tag.name}${attributes}>`);
+  });
+  parser.on("closetag", (tag) => {
+    structural.push(`</${tag.name}>`);
+  });
+  try {
+    parser.write(xml).close();
+  } catch (error) {
+    if (error instanceof ModelGeometryError) throw error;
+    return invalid3mfPackage("Model 3MF není platné XML.");
+  }
+  return structural.join("");
+}
+
 async function packageModelRoots(
   files: Readonly<Record<string, Uint8Array>>,
   archiveParts: ReadonlySet<string>,
@@ -1526,7 +1562,8 @@ async function parse3mf(bytes: Uint8Array): Promise<ModelGeometry> {
       "Model v archivu 3MF není platný textový soubor.",
     );
   }
-  return { ...parse3mfXml(xml), parseDurationMs: 0 };
+  const structuralXml = await structuralModelXml(xml);
+  return { ...parse3mfXml(structuralXml), parseDurationMs: 0 };
 }
 
 export async function parseModelGeometry(
