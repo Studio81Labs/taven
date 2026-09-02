@@ -28,6 +28,13 @@ Thumbs.db
 pnpm-debug.log*
 coverage/
 
+# Python
+# scripts/ci/ holds self-testing checks that CI runs directly, so
+# importing or running one leaves __pycache__ in a tracked directory.
+# Ported from tarmoto and sidekick, which already ignore it.
+__pycache__/
+*.py[cod]
+
 # Generated Prisma client
 apps/backend/src/generated/
 
