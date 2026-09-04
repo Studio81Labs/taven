@@ -53,6 +53,12 @@ describe("public site launch boundaries", () => {
     expect(Object.keys(legalDocuments)).toEqual(legalDocumentKeys);
     expect(Object.keys(legalDrafts)).toEqual(legalDocumentKeys);
 
+    for (const [key, document] of Object.entries(legalDocuments)) {
+      expect(
+        legalDrafts[key as keyof typeof legalDrafts].sourceDocumentId,
+      ).toBe(document.id);
+    }
+
     for (const document of Object.values(legalDocuments)) {
       expect(document.id).toMatch(/-pending$/);
       expect(indexablePublicRoutes).not.toContain(document.path);
@@ -100,24 +106,75 @@ describe("public site launch boundaries", () => {
 
     expect(allDrafts).not.toContain("Výrobce");
     expect(allDrafts).not.toContain("výrobní sítě");
+    expect(terms).toContain("nenabízí katalog modelů");
+    expect(terms).toContain("ani automatické generování modelů");
     expect(terms).toContain("výslovně potvrdit");
     expect(claims).toContain("věrnost");
     expect(claims).toContain("lícování");
   });
 
+  it("keeps categorical safety bans and shipment remedies explicit", () => {
+    const prohibitedContent = JSON.stringify(
+      legalDrafts.prohibitedContent.sections,
+    );
+    const claims = JSON.stringify(legalDrafts.claims.sections);
+
+    expect(prohibitedContent).toContain(
+      "střelné zbraně a jejich části, bez ohledu",
+    );
+    expect(prohibitedContent).toContain(
+      "zdravotnické prostředky určené pro styk s tělem",
+    );
+    expect(prohibitedContent).toContain("ve verzi v0 zakázané");
+    expect(claims).toContain("ztracené nebo vrácené zásilky");
+    expect(claims).toContain("náhradní výrobě nebo zásilce");
+    expect(claims).toContain("finančně vypořádanému zrušení");
+  });
+
+  it("documents full and staged payment settlement", () => {
+    const payments = legalDrafts.terms.sections.find(
+      (section) => section.title === "4. Cena a platba",
+    );
+    const content = JSON.stringify(payments);
+
+    expect(content).toContain("automatické nabídce se hradí v plné výši");
+    expect(content).toContain("zálohu a doplatek");
+    expect(content).toContain("konkrétní zachycené platbě");
+    expect(content).toContain("objednávku neobnoví");
+  });
+
   it("separates source-file, physical-item, and photo retention", () => {
+    const completedOrders = legalDrafts.retention.sections.find(
+      (section) =>
+        section.title === "3. Dokončené objednávky a reklamační podklad",
+    );
     const unfinishedUploads = legalDrafts.retention.sections.find(
       (section) => section.title === "4. Nedokončené uploady a objednávky",
     );
     const abandonedPhysicalItems = legalDrafts.retention.sections.find(
       (section) => section.title === "5. Opuštěné fyzické výrobky",
     );
+    const operationalPhotos = legalDrafts.retention.sections.find(
+      (section) => section.title === "8. Fotografie",
+    );
     const photoConsent = JSON.stringify(legalDrafts.photoConsent.sections);
 
+    expect(JSON.stringify(completedOrders)).toContain(
+      "alespoň do konce příslušné reklamační lhůty",
+    );
+    expect(JSON.stringify(completedOrders)).toContain(
+      "nikoli jako skrytá dlouhodobá archivace",
+    );
     expect(unfinishedUploads?.note).toContain("90 dní");
     expect(unfinishedUploads?.note).not.toContain("30 dní");
     expect(abandonedPhysicalItems?.note).toContain("30 dní");
     expect(abandonedPhysicalItems?.note).toContain("fyzický výrobek");
+    expect(JSON.stringify(operationalPhotos)).toContain(
+      "konečné plánované datum odstranění",
+    );
+    expect(operationalPhotos?.note).toContain("NENÍ SCHVÁLENO");
+    expect(operationalPhotos?.note).toContain("ukládání");
+    expect(operationalPhotos?.note).toContain("vypnuté");
     expect(photoConsent).toContain("neprodlužuje retenční lhůtu");
     expect(photoConsent).toContain("nejpozději při uplynutí lhůty");
   });

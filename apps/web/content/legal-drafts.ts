@@ -1,4 +1,4 @@
-export const LEGAL_DRAFT_STATUS = "DRAFT / NEÚČINNÉ";
+export const LEGAL_DRAFT_STATUS = "NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI";
 
 export type LegalDraftSection = Readonly<{
   title: string;
@@ -23,14 +23,14 @@ type LegalDraftKey =
 
 export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
   terms: {
-    sourceDocumentId: "terms-of-service",
+    sourceDocumentId: "terms-pending",
     status: LEGAL_DRAFT_STATUS,
     sections: [
       {
         title: "1. Provozovatel",
         paragraphs: [
           "Službu Taven provozuje Studio81 Labs, s.r.o., IČ 29508291, DIČ CZ29508291, se sídlem Nové sady 988/2, 602 00 Brno, Česká republika. Zápis v obchodním rejstříku bude doplněn po právní revizi. Elektronický kontakt je uveden v identifikační části této stránky (dále jen „Provozovatel“).",
-          "Taven je služba umožňující zákazníkům objednat výrobu fyzických výrobků zejména metodou 3D tisku na základě zákazníkem dodaného nebo prostřednictvím služby získaného digitálního modelu.",
+          "Taven je služba umožňující zákazníkům objednat výrobu fyzických výrobků zejména metodou 3D tisku na základě digitálního modelu dodaného zákazníkem nebo vytvořeného konkrétně pro něj v rámci individuální modelářské práce. Verze v0 nenabízí katalog modelů ani automatické generování modelů z textu nebo fotografií.",
           "Provozovatel vystupuje vůči zákazníkovi jako poskytovatel služby a smluvní strana zákazníka.",
           "Výrobu ve verzi v0 technicky zajišťuje Provozovatel na vlastním zařízení.",
         ],
@@ -70,6 +70,10 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         paragraphs: [
           "Cena je zákazníkovi zobrazena před dokončením objednávky.",
           "Cena může zahrnovat zejména cenu materiálu, výrobní čas, přípravu výroby, dokončovací práce, balení, dopravu a další zvolené služby.",
+          "Objednávka založená na automatické nabídce se hradí v plné výši předem.",
+          "U individuální nabídky nebo modelářské práce může přijatá nabídka rozdělit cenu na zálohu a doplatek. Zákazník uhradí zálohu podle podmínek nabídky a doplatek před odesláním výrobku.",
+          "Každá plná platba, záloha a doplatek se evidují jako samostatná platební transakce. Případné částečné nebo úplné vrácení peněz se přiřadí ke konkrétní zachycené platbě, aby bylo zřejmé, jaká část ceny byla uhrazena, vrácena a zbývá k finančnímu vypořádání.",
+          "Platba zachycená až po uzavření příslušného platebního okna nebo po zrušení objednávky sama o sobě objednávku neobnoví a bude v plné výši vrácena.",
           "Platby mohou být zpracovávány prostřednictvím externího poskytovatele platebních služeb.",
           "Provozovatel neuchovává kompletní údaje platebních karet, pokud jejich zpracování zajišťuje poskytovatel platebních služeb.",
         ],
@@ -153,13 +157,13 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
     ],
   },
   claims: {
-    sourceDocumentId: "complaints-policy",
+    sourceDocumentId: "claims-pending",
     status: LEGAL_DRAFT_STATUS,
     sections: [
       {
         title: "1. Účel",
         paragraphs: [
-          "Tento reklamační řád stanoví postup při uplatnění práv z vadného plnění u výrobků objednaných prostřednictvím Taven.",
+          "Tento reklamační řád stanoví postup při uplatnění práv z vadného plnění u výrobků objednaných prostřednictvím Taven a při řešení ztracené nebo vrácené zásilky.",
           "Reklamace vyřizuje Studio81 Labs, s.r.o. jako Provozovatel a smluvní strana zákazníka.",
         ],
       },
@@ -174,6 +178,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "výrobní vadu",
           "nesoulad s potvrzenými parametry objednávky",
           "poškození vzniklé před předáním zákazníkovi",
+          "zásilku, kterou dopravce označil jako ztracenou nebo vrácenou před řádným doručením",
         ],
       },
       {
@@ -201,6 +206,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         title: "5. Vyřízení reklamace",
         paragraphs: [
           "Podle povahy vady a zákonných práv zákazníka může být reklamace vyřízena zejména:",
+          "Incident ztracené nebo vrácené zásilky lze řešit již před jinak očekávaným dokončením objednávky. Podle stavu zakázky může vést k náhradní výrobě nebo zásilce, anebo k finančně vypořádanému zrušení a odpovídajícímu vrácení peněz. Každý výsledek se samostatně eviduje a nemění zpětně již dosažený stav původního plnění.",
         ],
         items: [
           "odstraněním vady",
@@ -221,13 +227,15 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         title: "7. Lhůta",
         paragraphs: [
           "Reklamace spotřebitele bude vyřízena v zákonné lhůtě, není-li se zákazníkem v souladu se zákonem dohodnuta lhůta delší.",
+          "Při přijetí objednávky se uloží verze reklamačních pravidel, kterou zákazník přijal. Pro každou doručenou položku nebo samostatně doručenou část objednávky se podle ní stanoví konkrétní lhůta pro standardní uplatnění reklamace.",
+          "Požadavek podaný po této lhůtě bude předán k individuálnímu právnímu posouzení; tím nejsou dotčeny zákonné nebo smluvní výjimky ani práva, která nelze omezit.",
         ],
         note: "[FINÁLNÍ PROCES A LHŮTY OVĚŘIT PRÁVNÍKEM]",
       },
     ],
   },
   privacy: {
-    sourceDocumentId: "privacy-policy",
+    sourceDocumentId: "privacy-pending",
     status: LEGAL_DRAFT_STATUS,
     sections: [
       {
@@ -342,7 +350,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
     ],
   },
   prohibitedContent: {
-    sourceDocumentId: "prohibited-content-policy",
+    sourceDocumentId: "prohibited-content-pending",
     status: LEGAL_DRAFT_STATUS,
     sections: [
       {
@@ -357,7 +365,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         paragraphs: ["Provozovatel může odmítnout zejména zakázky zahrnující:"],
         items: [
           "předměty, jejichž výroba nebo distribuce je protiprávní",
-          "nelegální zbraně nebo regulované součásti zbraní",
+          "střelné zbraně a jejich části, bez ohledu na to, zda konkrétní část sama podléhá zvláštní regulaci",
           "předměty zjevně určené k výrobě, úpravě nebo zvýšení účinnosti zbraní",
           "výbušniny nebo komponenty zjevně určené k jejich výrobě",
           "předměty určené k neoprávněnému překonávání fyzických nebo technických bezpečnostních mechanismů",
@@ -374,10 +382,10 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
       {
         title: "3. Regulované a bezpečnostně kritické použití",
         paragraphs: [
-          "Taven není bez předchozího individuálního schválení určen k výrobě komponent, u kterých může jejich selhání přímo způsobit újmu na zdraví, životě nebo významnou škodu na majetku. To se může týkat zejména:",
+          "Taven není bez předchozího individuálního schválení určen k výrobě komponent, u kterých může jejich selhání přímo způsobit újmu na zdraví, životě nebo významnou škodu na majetku. Individuální schválení se ve verzi v0 nevztahuje na zdravotnické prostředky určené pro styk s tělem ani na jinou kategorii výslovně zakázanou těmito pravidly. Zvýšené riziko se může týkat zejména:",
         ],
         items: [
-          "zdravotnických prostředků",
+          "zdravotnických prostředků určených pro styk s tělem, které jsou ve verzi v0 zakázané",
           "ochranných prostředků",
           "kritických automobilových nebo motocyklových součástí",
           "leteckých komponent",
@@ -465,7 +473,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
     ],
   },
   retention: {
-    sourceDocumentId: "retention-policy",
+    sourceDocumentId: "retention-pending",
     status: LEGAL_DRAFT_STATUS,
     sections: [
       {
@@ -489,20 +497,17 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "řešení reklamace",
           "jinému účelu souvisejícímu s objednávkou",
         ],
-        note: "Pro každý úspěšně nahraný zdrojový model se stanoví plánované datum odstranění. Základní lhůta činí 90 dní od úspěšného nahrání; vytvoření platné nabídky ji může prodloužit a aktivní objednávka, reklamace nebo právní důvod mohou odstranění pozastavit. Po skončení takového důvodu se datum odstranění znovu určí podle retenčních pravidel. [ČEKÁ NA PRÁVNÍ REVIZI — 90 DNÍ]",
+        note: "Pro každý úspěšně nahraný zdrojový model se stanoví plánované datum odstranění. Základní lhůta činí 90 dní od úspěšného nahrání; vytvoření platné nabídky ji může prodloužit, aktivní objednávka odstranění dočasně pozastaví a výslovný právní hold může lhůtu dále prodloužit. Po skončení aktivní objednávky nebo právního holdu se datum odstranění znovu určí podle retenčních pravidel. [ČEKÁ NA PRÁVNÍ REVIZI — 90 DNÍ]",
       },
       {
-        title: "3. Dokončené objednávky",
+        title: "3. Dokončené objednávky a reklamační podklad",
         paragraphs: [
-          "Výrobní soubory související s dokončenou objednávkou budou podle návrhu odstraněny nejpozději po 90 dnech od dokončení objednávky, pokud není jejich další uchování nezbytné například z důvodu:",
+          "Plánované datum odstranění zdrojových uploadů a jejich odvozených pracovních souborů se při ukončení objednávky nastaví nejméně na 90 dní od jejího ukončení. Výslovný právní hold může odstranění dále odložit, nikdy však uspíšit.",
+          "Nezávisle na zdrojových souborech uchovává Provozovatel u přijaté objednávky oddělený šifrovaný reprodukční podklad potřebný k posouzení nebo nápravě dodaného výrobku. U doručeného výrobku zůstane tento podklad zachován alespoň do konce příslušné reklamační lhůty; běžící reklamace, incident zásilky nebo právní hold mohou jeho odstranění dále odložit.",
+          "Reprodukční podklad smí být použit pouze k posouzení a nápravě původní objednávky, nikoli jako skrytá dlouhodobá archivace pro novou objednávku. Po uplynutí jeho lhůty a skončení všech oprávněných překážek se odstraní rekonstruovatelné podklady a zůstanou jen nereverzibilní kontrolní otisky a auditní metadata.",
+          "U objednávky ukončené bez doručení se navrhuje samostatná devadesátidenní lhůta reprodukčního podkladu od ukončení objednávky; aktivní incident, reklamace nebo právní hold ji mohou prodloužit.",
         ],
-        items: [
-          "probíhající reklamace",
-          "právního sporu",
-          "bezpečnostního incidentu",
-          "zákonné povinnosti",
-        ],
-        note: "[ČEKÁ NA PRÁVNÍ REVIZI — 90 DNÍ] Tato lhůta se vztahuje na výrobní podklady, nikoli automaticky na účetní a transakční dokumentaci.",
+        note: "[ČEKÁ NA PRÁVNÍ REVIZI — 90 DNÍ PRO ZDROJOVÉ SOUBORY] [NÁVRH — 90 DNÍ PRO NEDORUČENÝ REPRODUKČNÍ PODKLAD NENÍ SCHVÁLENO] Tyto lhůty se nevztahují automaticky na účetní a transakční dokumentaci.",
       },
       {
         title: "4. Nedokončené uploady a objednávky",
@@ -540,15 +545,21 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
       {
         title: "7. Reklamace",
         paragraphs: [
-          "Pokud je k objednávce zahájena reklamace, mohou být související výrobní soubory a fotografie uchovány po dobu jejího řešení a následně po dobu nezbytnou pro ochranu právních nároků Provozovatele nebo zákazníka.",
+          "Pokud je k objednávce zahájena reklamace, může být po dobu jejího řešení uchován oddělený reprodukční podklad a fotografie v rozsahu potřebném pro posouzení nebo nápravu reklamovaného výrobku.",
+          "Reklamace sama o sobě automaticky neprodlužuje uchování původního zdrojového uploadu; ten se nadále řídí vlastní lhůtou, ledaže je na něj z konkrétního právního důvodu uplatněn výslovný právní hold.",
+          "Po vyřešení reklamace se plánovaná data odstranění přepočítají. Další uchování může odůvodnit pouze trvající ochrana konkrétního právního nároku nebo jiný výslovný právní hold.",
         ],
       },
       {
         title: "8. Fotografie",
         paragraphs: [
-          "Fotografie výrobků pořízené v rámci kontroly kvality, dokumentace reklamace, manuální kontroly nebo komunikace se zákazníkem jsou provozní dokumentací a mohou být uchovávány po dobu nezbytnou pro příslušný účel.",
+          "Fotografie výrobků pořízené v rámci kontroly kvality, dokumentace reklamace, manuální kontroly nebo komunikace se zákazníkem jsou provozní dokumentací.",
+          "Každá uložená provozní fotografie musí už při úspěšném nahrání dostat datum nahrání a konečné plánované datum odstranění. Bez stanoveného data odstranění se nesmí v produkci trvale uložit originál, náhled ani odvozená kopie.",
+          "Platná nabídka může datum odstranění prodloužit pouze o schválenou omezenou dobu. Aktivní objednávka jej může dočasně pozastavit; při ukončení objednávky se datum přepočítá nejméně do příslušné reklamační lhůty.",
+          "Po ukončení objednávky smí odstranění dále odložit pouze probíhající reklamace v odpovídajícím rozsahu nebo výslovný právní hold. Po jejich skončení se odstraní originál, transformace, náhledy i vložená metadata a zůstane pouze nereverzibilní kontrolní otisk a auditní metadata.",
           "Použití fotografie pro marketing, portfolio nebo veřejnou prezentaci se řídí samostatným souhlasem.",
         ],
+        note: "[NÁVRH — 90 DNÍ NENÍ SCHVÁLENO] Do schválení konkrétní lhůty zůstává produkční ukládání referenčních fotografií zákazníka vypnuté.",
       },
       {
         title: "9. Účetní a transakční údaje",
@@ -589,7 +600,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
     ],
   },
   photoConsent: {
-    sourceDocumentId: "photo-consent-and-confidentiality",
+    sourceDocumentId: "photo-consent-pending",
     status: LEGAL_DRAFT_STATUS,
     sections: [
       {
