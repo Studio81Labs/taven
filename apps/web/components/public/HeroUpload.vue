@@ -10,11 +10,13 @@ const {
   handoffMessage,
   metadata,
   phase,
+  persistCurrentSession,
   previewMessage,
   quote,
   resetState,
   retry,
   selectFile,
+  sessionPersisted,
   startUpload,
   uploadProgress,
 } = useModelUploadQuote({ restoreSession: false });
@@ -26,18 +28,22 @@ const isBusy = computed(
 );
 let leaving = false;
 
-watch([quote, phase], ([currentQuote, currentPhase]) => {
-  if (
-    leaving ||
-    !currentQuote?.sessionId ||
-    !["complete", "handoff", "inspecting"].includes(currentPhase)
-  ) {
-    return;
-  }
+watch(
+  [quote, phase, sessionPersisted],
+  ([currentQuote, currentPhase, stored]) => {
+    if (
+      leaving ||
+      !stored ||
+      !currentQuote?.sessionId ||
+      !["complete", "handoff", "inspecting"].includes(currentPhase)
+    ) {
+      return;
+    }
 
-  leaving = true;
-  void navigateTo("/objednavka");
-});
+    leaving = true;
+    void navigateTo("/objednavka");
+  },
+);
 
 async function acceptFile(file: File | null): Promise<void> {
   if (!file || isBusy.value) return;
@@ -66,6 +72,10 @@ function chooseAnotherFile(): void {
 
 function millimeters(value: number): string {
   return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 1 }).format(value)} mm`;
+}
+
+function cubicCentimeters(value: number): string {
+  return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 1 }).format(value / 1_000)} cm³`;
 }
 </script>
 
@@ -153,12 +163,40 @@ function millimeters(value: number): string {
       <p v-if="metadata" class="mt-2 font-mono text-sm text-[#66675f]">
         {{ metadata.format }} · {{ formatFileSize(metadata.sizeBytes) }}
       </p>
-      <p v-if="geometry" class="mt-4 text-[#54554c]">
-        Rozměry
-        {{ millimeters(geometry.dimensions.width) }} ×
-        {{ millimeters(geometry.dimensions.depth) }} ×
-        {{ millimeters(geometry.dimensions.height) }}
-      </p>
+      <template v-if="geometry">
+        <div class="mt-5 overflow-hidden border border-[#d9d9d2] bg-[#f7f7f3]">
+          <ClientOnly>
+            <LazyOrderModelPreview :geometry="geometry" />
+            <template #fallback>
+              <div class="grid min-h-64 place-items-center text-[#54554c]">
+                Připravujeme náhled modelu.
+              </div>
+            </template>
+          </ClientOnly>
+        </div>
+        <dl class="mt-4 grid gap-px bg-[#d9d9d2] sm:grid-cols-3">
+          <div class="bg-[#efefea] p-3">
+            <dt class="text-xs text-[#66675f]">Rozměry X × Y × Z</dt>
+            <dd class="mt-1 font-mono text-xs">
+              {{ millimeters(geometry.dimensions.width) }} ×
+              {{ millimeters(geometry.dimensions.depth) }} ×
+              {{ millimeters(geometry.dimensions.height) }}
+            </dd>
+          </div>
+          <div class="bg-[#efefea] p-3">
+            <dt class="text-xs text-[#66675f]">Objekty</dt>
+            <dd class="mt-1 font-mono text-xs">
+              {{ geometry.objectCount }}
+            </dd>
+          </div>
+          <div class="bg-[#efefea] p-3">
+            <dt class="text-xs text-[#66675f]">Objem modelu</dt>
+            <dd class="mt-1 font-mono text-xs">
+              ≈ {{ cubicCentimeters(geometry.volumeMm3) }}
+            </dd>
+          </div>
+        </dl>
+      </template>
       <p v-else-if="previewMessage" class="mt-4 text-[#54554c]">
         {{ previewMessage }}
       </p>
@@ -179,6 +217,30 @@ function millimeters(value: number): string {
           Jiný soubor
         </button>
       </div>
+    </div>
+
+    <div
+      v-else-if="quote?.sessionId && !sessionPersisted"
+      class="flex min-h-64 flex-col justify-center bg-white p-6"
+      role="alert"
+    >
+      <p class="font-mono text-xs tracking-wider text-[#1b44e8] uppercase">
+        Pokračování pozastaveno
+      </p>
+      <h2 class="mt-4 text-2xl font-semibold">
+        Nahrání je uložené, ale prohlížeč zablokoval dočasnou relaci.
+      </h2>
+      <p class="mt-3 text-[#54554c]">
+        Zůstaňte na této stránce, povolte úložiště relace pro tento web a zkuste
+        pokračovat znovu.
+      </p>
+      <button
+        class="mt-7 self-start font-semibold underline decoration-[#1b44e8] decoration-2 underline-offset-4"
+        type="button"
+        @click="persistCurrentSession"
+      >
+        Zkusit pokračovat
+      </button>
     </div>
 
     <div

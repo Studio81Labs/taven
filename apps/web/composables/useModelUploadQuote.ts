@@ -205,6 +205,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   const addingModel = ref(false);
   const quote = shallowRef<QuoteSession>();
   const sessionToken = ref<string>();
+  const sessionPersisted = ref(false);
   const restoredFilename = ref<string>();
   let selectionRevision = 0;
   let uploadController: AbortController | undefined;
@@ -283,6 +284,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     uploadProgress.value = 0;
     quote.value = undefined;
     sessionToken.value = undefined;
+    sessionPersisted.value = false;
     restoredFilename.value = undefined;
     uploadIntent = undefined;
     confirmedUpload = undefined;
@@ -759,21 +761,10 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       selectedFile.value = undefined;
       sha256.value = undefined;
       addingModel.value = false;
-      if (import.meta.client) {
-        const storage = getSessionStorage(window);
-        if (storage) {
-          saveQuoteSession(storage, {
-            expiresAt: attached.data.expiresAt,
-            filename: file.name,
-            publicReference: attached.data.publicReference,
-            sessionId: attached.data.sessionId,
-            sessionToken: attachmentSession.sessionToken,
-          });
-        }
-      }
       if (!applyQuote(attached.data)) {
         void refreshQuote();
       }
+      persistCurrentSession();
     } catch (error) {
       if (error instanceof UploadFailure && error.code === "REJECTED") {
         discardUploadCheckpoint();
@@ -843,6 +834,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     const stored = loadQuoteSession(storage);
     if (!stored) return;
 
+    sessionPersisted.value = true;
     restoredFilename.value = stored.filename;
     sessionToken.value = stored.sessionToken;
     quote.value = {
@@ -866,6 +858,29 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     };
     phase.value = "inspecting";
     await refreshQuote();
+  }
+
+  function persistCurrentSession(): boolean {
+    const activeQuote = quote.value;
+    const token = sessionToken.value;
+    const activeFilename = filename.value;
+    if (!import.meta.client || !activeQuote || !token || !activeFilename) {
+      sessionPersisted.value = false;
+      return false;
+    }
+
+    const storage = getSessionStorage(window);
+    sessionPersisted.value = Boolean(
+      storage &&
+      saveQuoteSession(storage, {
+        expiresAt: activeQuote.expiresAt,
+        filename: activeFilename,
+        publicReference: activeQuote.publicReference,
+        sessionId: activeQuote.sessionId,
+        sessionToken: token,
+      }),
+    );
+    return sessionPersisted.value;
   }
 
   onMounted(() => {
@@ -894,6 +909,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     metadata,
     phase,
     previewMessage,
+    persistCurrentSession,
     prepareQuote,
     quote,
     replaceConfiguration,
@@ -903,6 +919,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     selectDestination,
     selectAdditionalFile,
     selectFile,
+    sessionPersisted,
     setExpress,
     startUpload,
     uploadProgress,
