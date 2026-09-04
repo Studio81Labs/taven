@@ -24,6 +24,7 @@ describe("public site launch boundaries", () => {
 
   it("keeps both customer journeys available from the public shell", () => {
     expect(publicNavigation).toContainEqual({
+      index: "04",
       label: "Potřebuji model",
       to: "/poptavka",
     });

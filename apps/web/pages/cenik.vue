@@ -22,9 +22,9 @@ usePublicPageMeta({
       Cena podle skutečného tisku
     </h1>
     <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">
-      Veřejná cena „od“ ještě nebyla schválena. Po výběru modelu ale hned uvidíš
-      nezávazný rozsah pro výchozí konfiguraci a potom přesnou výrobní cenu ze
-      slicingu.
+      Veřejná cena „od“ ani vstupy pro hrubý cenový odhad ještě nebyly
+      schváleny. Přesnou výrobní cenu určí referenční slicing konkrétní
+      konfigurace.
     </p>
 
     <dl
@@ -57,8 +57,8 @@ usePublicPageMeta({
       <h2 class="text-xl font-semibold">Hodnoty čekající na schválení</h2>
       <p class="mt-3 leading-7 text-[#54554c]">
         Cena „od“ a standardní dodací lhůta budou doplněny z jednoho
-        konfigurovatelného zdroje. Hrubý rozsah u konkrétního modelu je
-        samostatný nezávazný výpočet, ne veřejný příslib minimální ceny.
+        konfigurovatelného zdroje. Stejná schvalovací hranice platí pro vstupy
+        hrubého odhadu.
       </p>
     </aside>
 

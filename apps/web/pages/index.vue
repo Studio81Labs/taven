@@ -49,8 +49,8 @@ usePublicPageMeta({
           <h3 class="text-xl font-semibold">Nahraješ model</h3>
           <p class="mt-3 leading-7 text-[#54554c]">
             Přijímáme <span class="font-mono">STL</span> a podporované
-            <span class="font-mono">3MF</span>. Před nahráním uvidíš rozměry,
-            hrubý cenový rozsah a základní kontrolu souboru.
+            <span class="font-mono">3MF</span>. Před nahráním uvidíš rozměry a
+            základní kontrolu souboru.
           </p>
         </article>
         <article class="border-t border-[#d9d9d2] py-8">
@@ -120,9 +120,8 @@ usePublicPageMeta({
         </h2>
         <p class="mt-5 leading-7 text-[#54554c]">
           Veřejná cena „od“ ani standardní dodací lhůta zatím nejsou schválené.
-          Rychlý rozsah proto počítáme vždy z konkrétního modelu a jasně ho
-          označujeme jako nezávazný. Přesnou výrobní cenu určí až aktuální
-          slice.
+          Hrubý odhad doplníme až ze schválených cenových vstupů. Přesnou
+          výrobní cenu určí až aktuální slice.
         </p>
         <NuxtLink
           class="mt-6 inline-block font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"

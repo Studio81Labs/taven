@@ -35,10 +35,10 @@ export const publicSite = {
 } as const;
 
 export const publicNavigation = [
-  { label: "Jak to funguje", to: "/jak-to-funguje" },
-  { label: "Ceník", to: "/cenik" },
-  { label: "Ukázky", to: "/ukazky" },
-  { label: "Potřebuji model", to: "/poptavka" },
+  { index: "01", label: "Jak to funguje", to: "/jak-to-funguje" },
+  { index: "02", label: "Ceník", to: "/cenik" },
+  { index: "03", label: "Ukázky", to: "/ukazky" },
+  { index: "04", label: "Potřebuji model", to: "/poptavka" },
 ] as const;
 
 export const publicFooterNavigation = [

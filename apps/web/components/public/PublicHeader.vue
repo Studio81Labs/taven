@@ -25,6 +25,7 @@ const route = useRoute();
               :to="item.to"
               :aria-current="route.path === item.to ? 'page' : undefined"
             >
+              <span class="font-mono text-xs">{{ item.index }}</span>
               {{ item.label }}
             </NuxtLink>
           </li>

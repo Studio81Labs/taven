@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { formatFileSize } from "../../utils/model-file";
-import { clientRoughPriceEstimate } from "../../utils/rough-price-estimate";
 
 const {
   canUpload,
@@ -29,9 +28,6 @@ const fileInput = ref<HTMLInputElement>();
 const isDragging = ref(false);
 const isBusy = computed(
   () => phase.value === "preparing" || phase.value === "uploading",
-);
-const roughPriceEstimate = computed(() =>
-  geometry.value ? clientRoughPriceEstimate(geometry.value.volumeMm3) : null,
 );
 let leaving = false;
 
@@ -83,13 +79,6 @@ function millimeters(value: number): string {
 
 function cubicCentimeters(value: number): string {
   return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 1 }).format(value / 1_000)} cm³`;
-}
-function money(valueMinor: number): string {
-  return new Intl.NumberFormat("cs-CZ", {
-    currency: "CZK",
-    maximumFractionDigits: 0,
-    style: "currency",
-  }).format(valueMinor / 100);
 }
 </script>
 
@@ -210,24 +199,6 @@ function money(valueMinor: number): string {
             </dd>
           </div>
         </dl>
-        <div
-          v-if="roughPriceEstimate"
-          class="mt-4 border-l-4 border-[#1a1a16] bg-[#efefea] p-4"
-        >
-          <p class="text-sm font-semibold">Rychlý orientační odhad</p>
-          <p class="mt-2 font-mono text-2xl font-semibold">
-            {{ money(roughPriceEstimate.lowerMinor) }}–{{
-              money(roughPriceEstimate.upperMinor)
-            }}
-          </p>
-          <p class="mt-2 text-sm leading-6 text-[#54554c]">
-            Pro <span class="font-mono">1</span> kus z PLA s běžnou výplní, bez
-            dopravy. Rozsah je nezávazný.
-          </p>
-          <p class="mt-2 text-sm font-semibold" role="status">
-            Přesnou cenu spočítáme ze slicingu po nahrání.
-          </p>
-        </div>
       </template>
       <p v-else-if="previewMessage" class="mt-4 text-[#54554c]">
         {{ previewMessage }}
@@ -239,7 +210,7 @@ function money(valueMinor: number): string {
           type="button"
           @click="startUpload"
         >
-          Nahrát a spočítat cenu
+          Nahrát a pokračovat ke konfiguraci
         </button>
         <button
           class="font-semibold underline decoration-[#1b44e8] decoration-2 underline-offset-4"
@@ -332,6 +303,10 @@ function money(valueMinor: number): string {
     <p class="mt-6 text-sm leading-6 text-[#54554c]">
       Výběrem souboru spustíš jeho místní kontrolu. Bezpečné nahrání potvrdíš po
       ověření formátu a rozměrů.
+    </p>
+    <p class="mt-2 text-sm leading-6 text-[#54554c]">
+      Hrubý cenový odhad zveřejníme až ze schválených cenových vstupů. Přesnou
+      výrobní cenu určí referenční slicing.
     </p>
     <NuxtLink
       class="mt-4 inline-block font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
