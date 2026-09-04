@@ -1,8 +1,8 @@
 export const tavenTheme = {
   color: {
-    ink: "#181512",
-    paper: "#f7f3ec",
-    accent: "#d85d35",
+    ink: "#1a1a16",
+    paper: "#efefea",
+    accent: "#1b44e8",
     success: "#25705a",
   },
   radius: {

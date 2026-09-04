@@ -7,16 +7,14 @@ import {
 } from "../../utils/assisted-quote-context";
 import { getSessionStorage } from "../../utils/quote-session-storage";
 
-useHead({
-  htmlAttrs: { lang: "cs" },
-  title: "Nahrát model — Taven",
-  meta: [
-    {
-      name: "description",
-      content:
-        "Bezpečné nahrání STL nebo 3MF pro kontrolu a nacenění 3D tisku.",
-    },
-  ],
+definePageMeta({ middleware: "automatic-pricing-gate" });
+
+usePublicPageMeta({
+  path: "/objednavka",
+  title: "Nahrát model",
+  description:
+    "Bezpečné nahrání STL nebo 3MF pro kontrolu a nacenění 3D tisku.",
+  noindex: true,
 });
 
 const {
@@ -197,7 +195,7 @@ function inspectionLabel(status: string | undefined): string {
   <div class="application-page">
     <header class="application-header">
       <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
-        TAVEN.
+        <PublicBrandMark />
       </NuxtLink>
       <nav aria-label="Průběh objednávky" class="process-nav">
         <ol>
@@ -565,3 +563,5 @@ function inspectionLabel(status: string | undefined): string {
     </main>
   </div>
 </template>
+
+<style src="../../assets/css/application.css"></style>

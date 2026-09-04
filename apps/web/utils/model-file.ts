@@ -61,7 +61,7 @@ export function validateModelFile(
   if (!Number.isSafeInteger(file.size) || file.size <= 0) {
     throw new ModelFileValidationError(
       "EMPTY_FILE",
-      "Soubor je prázdný. Vyberte prosím jiný model.",
+      "Soubor je prázdný. Vyber prosím jiný model.",
     );
   }
   if (file.size > MAX_MODEL_FILE_BYTES) {
@@ -75,13 +75,13 @@ export function validateModelFile(
   if (extension === "step" || extension === "stp") {
     throw new ModelFileValidationError(
       "INDIVIDUAL_QUOTE_REQUIRED",
-      "STEP zatím přímá kalkulace nepodporuje. Exportujte model jako STL nebo nebarvený 3MF.",
+      "STEP zatím přímá kalkulace nepodporuje. Exportuj model jako STL nebo nebarvený 3MF.",
     );
   }
   if (extension === "obj") {
     throw new ModelFileValidationError(
       "UNSUPPORTED_FORMAT",
-      "Formát OBJ nepodporujeme. Použijte STL nebo 3MF.",
+      "Formát OBJ nepodporujeme. Použij STL nebo 3MF.",
     );
   }
   if (extension === "stl") {
@@ -103,7 +103,7 @@ export function validateModelFile(
 
   throw new ModelFileValidationError(
     "UNSUPPORTED_FORMAT",
-    "Tento formát nepodporujeme. Použijte STL nebo 3MF.",
+    "Tento formát nepodporujeme. Použij STL nebo 3MF.",
   );
 }
 

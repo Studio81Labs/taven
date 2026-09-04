@@ -1,3 +1,6 @@
+import tailwindcss from "@tailwindcss/vite";
+import { publicSite } from "./content/public-site";
+
 export default defineNuxtConfig({
   compatibilityDate: "2026-08-26",
   devtools: { enabled: false },
@@ -7,23 +10,27 @@ export default defineNuxtConfig({
     "@fontsource/ibm-plex-mono/400.css",
     "@fontsource/ibm-plex-mono/600.css",
     "@taven/ui-web/tokens.css",
-    "~/assets/css/application.css",
+    "~/assets/css/tailwind.css",
   ],
+  vite: { plugins: [tailwindcss()] },
+  nitro: { compressPublicAssets: true },
   build: { transpile: ["@taven/ui-web", "@taven/openapi-client"] },
   runtimeConfig: {
     apiBaseUrl: "http://localhost:3001",
     public: {
       apiBaseUrl: "http://localhost:3001",
+      siteUrl: "http://localhost:3000",
     },
   },
   app: {
     head: {
-      htmlAttrs: { lang: "en" },
-      title: "Taven",
+      htmlAttrs: { lang: "cs" },
+      title: publicSite.brand.name,
       meta: [
         {
           name: "description",
-          content: "Local 3D printing with a transparent production path.",
+          content:
+            "Zakázkový 3D tisk s cenou vypočtenou ze skutečných tiskových dat.",
         },
       ],
     },

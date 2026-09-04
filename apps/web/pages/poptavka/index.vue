@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
+import { publicSite } from "../../content/public-site";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -16,16 +17,12 @@ import { getSessionStorage } from "../../utils/quote-session-storage";
 
 type CreateQuoteRequest = components["schemas"]["CreateQuoteRequestDto"];
 
-useHead({
-  htmlAttrs: { lang: "cs" },
-  title: "Individuální poptávka — Taven",
-  meta: [
-    {
-      name: "description",
-      content:
-        "Poptávka individuálního 3D tisku s bezpečnými referenčními fotografiemi a odpovědí do 24 pracovních hodin.",
-    },
-  ],
+usePublicPageMeta({
+  path: "/poptavka",
+  title: "Individuální poptávka",
+  description:
+    "Poptávka individuálního 3D tisku s bezpečnými referenčními fotografiemi a odpovědí do 24 pracovních hodin.",
+  noindex: true,
 });
 
 const route = useRoute();
@@ -214,7 +211,7 @@ function isPositiveDimension(value: number | ""): value is number {
   <div class="application-page">
     <header class="application-header">
       <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
-        TAVEN.
+        <PublicBrandMark />
       </NuxtLink>
       <nav aria-label="Cesta individuální poptávky" class="process-nav">
         <ol>
@@ -248,9 +245,16 @@ function isPositiveDimension(value: number | ""): value is number {
             <p class="reference mono">
               Reference {{ created.publicReference }}
             </p>
-            <NuxtLink class="secondary-button" to="/objednavka">
+            <NuxtLink
+              v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
+              class="secondary-button"
+              to="/objednavka"
+            >
               Zpět k přímé kalkulaci
             </NuxtLink>
+            <span v-else class="secondary-button" aria-disabled="true">
+              Přímá kalkulace čeká na schválení
+            </span>
           </div>
         </div>
 
@@ -540,3 +544,5 @@ function isPositiveDimension(value: number | ""): value is number {
     </main>
   </div>
 </template>
+
+<style src="../../assets/css/application.css"></style>
