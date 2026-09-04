@@ -1,5 +1,3 @@
-import { legalDrafts } from "./legal-drafts";
-
 export const LEGAL_PLACEHOLDER_BANNER =
   "NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI";
 
@@ -58,14 +56,12 @@ export const legalDocuments = {
     path: "/vop",
     title: "Všeobecné obchodní podmínky",
     summary: "Schválené všeobecné obchodní podmínky zatím nejsou k dispozici.",
-    draft: legalDrafts.terms,
   },
   claims: {
     id: "claims-pending",
     path: "/reklamace",
     title: "Reklamační řád",
     summary: "Schválený reklamační řád zatím není k dispozici.",
-    draft: legalDrafts.claims,
   },
   privacy: {
     id: "privacy-pending",
@@ -73,7 +69,6 @@ export const legalDocuments = {
     title: "Zásady zpracování osobních údajů",
     summary:
       "Schválené zásady zpracování osobních údajů zatím nejsou k dispozici.",
-    draft: legalDrafts.privacy,
   },
   prohibitedContent: {
     id: "prohibited-content-pending",
@@ -81,7 +76,6 @@ export const legalDocuments = {
     title: "Pravidla zakázaného obsahu a manuální kontroly",
     summary:
       "Schválená pravidla zakázaného obsahu a manuální kontroly zatím nejsou k dispozici.",
-    draft: legalDrafts.prohibitedContent,
   },
   retention: {
     id: "retention-pending",
@@ -89,7 +83,6 @@ export const legalDocuments = {
     title: "Pravidla uchování dat a opuštěných položek",
     summary:
       "Schválená pravidla uchování dat a opuštěných položek zatím nejsou k dispozici.",
-    draft: legalDrafts.retention,
   },
   photoConsent: {
     id: "photo-consent-pending",
@@ -97,7 +90,6 @@ export const legalDocuments = {
     title: "Souhlas s fotografováním a důvěrnost zakázky",
     summary:
       "Schválená pravidla fotografování a důvěrnosti zatím nejsou k dispozici.",
-    draft: legalDrafts.photoConsent,
   },
 } as const;
 

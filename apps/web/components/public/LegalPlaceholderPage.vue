@@ -4,9 +4,11 @@ import {
   publicSite,
   type LegalDocument,
 } from "../../content/public-site";
+import type { LegalDraft } from "../../content/legal-drafts";
 
 defineProps<{
   document: LegalDocument;
+  draft: LegalDraft;
   contact?: {
     label: string;
     email: string;
@@ -67,7 +69,7 @@ defineProps<{
     >
       <div class="border border-[#d9d9d2] bg-[#efefea] p-5">
         <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-          {{ document.draft.status }} · {{ document.draft.sourceDocumentId }}
+          {{ draft.status }} · {{ draft.sourceDocumentId }}
         </p>
         <h2 id="legal-draft-heading" class="mt-3 text-2xl font-semibold">
           Pracovní návrh textu
@@ -80,7 +82,7 @@ defineProps<{
       </div>
 
       <section
-        v-for="section in document.draft.sections"
+        v-for="section in draft.sections"
         :key="section.title"
         class="border-b border-[#d9d9d2] py-8 last:border-b-0"
       >

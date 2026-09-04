@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEGAL_DRAFT_STATUS } from "./legal-drafts";
+import { LEGAL_DRAFT_STATUS, legalDrafts } from "./legal-drafts";
 import {
   LEGAL_PLACEHOLDER_BANNER,
   indexablePublicRoutes,
@@ -41,24 +41,31 @@ describe("public site launch boundaries", () => {
       "NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI",
     );
 
-    expect(Object.keys(legalDocuments)).toEqual([
+    const legalDocumentKeys = [
       "terms",
       "claims",
       "privacy",
       "prohibitedContent",
       "retention",
       "photoConsent",
-    ]);
+    ];
+
+    expect(Object.keys(legalDocuments)).toEqual(legalDocumentKeys);
+    expect(Object.keys(legalDrafts)).toEqual(legalDocumentKeys);
 
     for (const document of Object.values(legalDocuments)) {
       expect(document.id).toMatch(/-pending$/);
       expect(indexablePublicRoutes).not.toContain(document.path);
       expect(document).not.toHaveProperty("effectiveDate");
-      expect(document.draft.status).toBe(LEGAL_DRAFT_STATUS);
-      expect(document.draft.sections.length).toBeGreaterThan(0);
-      expect(document.draft).not.toHaveProperty("effectiveDate");
+      expect(document).not.toHaveProperty("draft");
+    }
 
-      for (const section of document.draft.sections) {
+    for (const draft of Object.values(legalDrafts)) {
+      expect(draft.status).toBe(LEGAL_DRAFT_STATUS);
+      expect(draft.sections.length).toBeGreaterThan(0);
+      expect(draft).not.toHaveProperty("effectiveDate");
+
+      for (const section of draft.sections) {
         expect(section.title).not.toHaveLength(0);
         expect(
           (section.paragraphs?.length ?? 0) +
