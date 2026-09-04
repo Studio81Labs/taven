@@ -16,6 +16,8 @@ import {
 import type { ObjectStorageConfig } from "./storage.config";
 import { UploadService } from "./upload.service";
 
+process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED ??= "true";
+
 const config: ObjectStorageConfig = {
   endpoint: "http://127.0.0.1:9010/",
   publicEndpoint: "http://127.0.0.1:9010/",

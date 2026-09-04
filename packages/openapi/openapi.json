@@ -2229,6 +2229,9 @@
           },
           "409": {
             "description": "Request is not in review"
+          },
+          "503": {
+            "description": "Binding offer flows await launch approval"
           }
         },
         "security": [
@@ -2782,6 +2785,9 @@
               }
             },
             "description": ""
+          },
+          "503": {
+            "description": "Binding quote flows await launch approval"
           }
         },
         "security": [
@@ -2972,6 +2978,9 @@
           },
           "410": {
             "description": "Offer is closed or expired"
+          },
+          "503": {
+            "description": "Binding offer flows await launch approval"
           }
         },
         "security": [
@@ -3298,6 +3307,9 @@
           },
           "410": {
             "description": "Upload intent or signed URL expired"
+          },
+          "503": {
+            "description": "Quote-photo promotion awaits launch approval; model uploads are unaffected"
           }
         },
         "security": [
@@ -3370,6 +3382,9 @@
               }
             },
             "description": ""
+          },
+          "503": {
+            "description": "Quote-photo retention policy awaits launch approval"
           }
         },
         "security": [

@@ -70,6 +70,10 @@ long-running service is healthy. The public app is available at
 `http://localhost:3000`, the API at `http://localhost:3001`, the admin app at
 `http://localhost:3002`, and MinIO at `http://localhost:9010`. All published
 ports bind to loopback and every credential in the Compose file is local-only.
+Binding quote/offer flows and quote-photo uploads are fail-closed while launch
+inputs remain unapproved. Set `TAVEN_BINDING_QUOTE_FLOWS_ENABLED=true` and/or
+`TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED=true` only when intentionally exercising
+those flows in a local environment.
 
 Follow logs or stop the stack with `pnpm stack:logs` and `pnpm stack:down`.
 `pnpm stack:reset` also deletes the local PostgreSQL, Redis, MinIO, and Garage

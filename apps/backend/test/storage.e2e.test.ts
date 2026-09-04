@@ -36,6 +36,8 @@ const uploadClientHashKey =
   "test-only-upload-client-hash-key-32";
 process.env.TAVEN_QUOTE_CAPABILITY_KEY =
   "test-quote-capability-key-with-at-least-32-characters";
+process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED ??= "true";
+process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED ??= "true";
 
 describe("secure object storage and retention", () => {
   let app: INestApplication;
@@ -450,6 +452,90 @@ describe("secure object storage and retention", () => {
       storageObjectKey: photoOriginalObjectKey(initiated.body.assetId),
       mediaType: "image/png",
     });
+  });
+
+  it("fails closed before issuing or promoting a quote photo", async () => {
+    const bytes = png();
+    const scopeId = randomUUID();
+    const quoteSessionToken = randomBytes(32).toString("base64url");
+    const quoteSession = await prisma.quoteSession.create({
+      data: {
+        publicTokenHash: sha256(Buffer.from(quoteSessionToken)),
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    await prisma.quoteRequest.create({
+      data: { id: scopeId, quoteSessionId: quoteSession.id },
+    });
+    const request = {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...bearer(quoteSessionToken),
+      },
+      body: JSON.stringify({
+        kind: "QUOTE_REFERENCE",
+        scopeKind: "QUOTE_REQUEST",
+        scopeId,
+        originalFilename: "launch-gated.png",
+        contentType: "image/png",
+        sizeBytes: bytes.byteLength,
+        sha256: sha256(bytes),
+      }),
+    };
+    const configured = process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED;
+    process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED = "false";
+    try {
+      const refused = await apiJson("storage/uploads/photos", request);
+      expect(refused.response.status).toBe(503);
+      expect(refused.body).toMatchObject({
+        code: "LAUNCH_APPROVAL_REQUIRED",
+      });
+      expect(
+        await prisma.uploadIntent.count({
+          where: { photoScopeId: scopeId },
+        }),
+      ).toBe(0);
+    } finally {
+      process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED = configured ?? "true";
+    }
+
+    const initiated = await apiJson<{
+      uploadId: string;
+      assetId: string;
+      accessToken: string;
+      uploadUrl: string;
+      requiredHeaders: Record<string, string>;
+    }>("storage/uploads/photos", request);
+    expect(initiated.response.status).toBe(201);
+    cleanupKeys.add(quarantineObjectKey(initiated.body.uploadId));
+    cleanupKeys.add(photoOriginalObjectKey(initiated.body.assetId));
+    await putSigned(initiated.body, bytes);
+
+    process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED = "false";
+    try {
+      const refused = await apiJson(
+        `storage/uploads/${initiated.body.uploadId}/confirm`,
+        {
+          method: "POST",
+          headers: bearer(initiated.body.accessToken),
+        },
+      );
+      expect(refused.response.status).toBe(503);
+      expect(refused.body).toMatchObject({
+        code: "LAUNCH_APPROVAL_REQUIRED",
+      });
+      expect(
+        await prisma.photoAsset.findUnique({
+          where: { id: initiated.body.assetId },
+        }),
+      ).toBeNull();
+      await expect(
+        objects.headObject(photoOriginalObjectKey(initiated.body.assetId)),
+      ).resolves.toBeNull();
+    } finally {
+      process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED = configured ?? "true";
+    }
   });
 
   it("rejects quote-reference confirmation after the request becomes terminal", async () => {

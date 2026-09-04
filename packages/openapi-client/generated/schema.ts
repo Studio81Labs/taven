@@ -1153,6 +1153,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Binding offer flows await launch approval */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     OperatorQuoteRequestsController_review: {
@@ -1470,6 +1477,13 @@ export interface operations {
                     "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
                 };
             };
+            /** @description Binding quote flows await launch approval */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     AutomaticQuotesController_decideRisk: {
@@ -1596,6 +1610,13 @@ export interface operations {
             };
             /** @description Offer is closed or expired */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Binding offer flows await launch approval */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1851,6 +1872,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Quote-photo promotion awaits launch approval; model uploads are unaffected */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     StorageController_initiateModelUpload: {
@@ -1903,6 +1931,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UploadIntentResponseDto"];
                 };
+            };
+            /** @description Quote-photo retention policy awaits launch approval */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
