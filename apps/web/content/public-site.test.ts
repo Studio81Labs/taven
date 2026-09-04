@@ -117,12 +117,19 @@ describe("public site launch boundaries", () => {
   });
 
   it("keeps categorical safety bans and shipment remedies explicit", () => {
+    const prohibitedOrders = legalDrafts.prohibitedContent.sections.find(
+      (section) => section.title === "2. Zakázané zakázky",
+    );
+    const prohibitedOrdersContent = JSON.stringify(prohibitedOrders);
     const prohibitedContent = JSON.stringify(
       legalDrafts.prohibitedContent.sections,
     );
     const claims = JSON.stringify(legalDrafts.claims.sections);
 
-    expect(prohibitedContent).toContain(
+    expect(prohibitedOrders?.paragraphs).toContain(
+      "Ve verzi v0 jsou zakázány zejména zakázky zahrnující:",
+    );
+    expect(prohibitedOrdersContent).toContain(
       "střelné zbraně a jejich části, bez ohledu",
     );
     expect(prohibitedContent).toContain(

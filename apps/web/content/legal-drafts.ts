@@ -363,7 +363,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
       },
       {
         title: "2. Zakázané zakázky",
-        paragraphs: ["Provozovatel může odmítnout zejména zakázky zahrnující:"],
+        paragraphs: ["Ve verzi v0 jsou zakázány zejména zakázky zahrnující:"],
         items: [
           "předměty, jejichž výroba nebo distribuce je protiprávní",
           "střelné zbraně a jejich části, bez ohledu na to, zda konkrétní část sama podléhá zvláštní regulaci",
@@ -378,7 +378,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "předměty, jejichž výroba by představovala nepřijatelné bezpečnostní riziko",
           "jiné předměty, jejichž výrobu Provozovatel nesmí nebo nechce z právních či bezpečnostních důvodů prostřednictvím Taven zajišťovat",
         ],
-        note: "Tento seznam není vyčerpávající.",
+        note: "Tento seznam není vyčerpávající. Provozovatel takovou zakázku nepřijme nebo ji odmítne.",
       },
       {
         title: "3. Regulované a bezpečnostně kritické použití",
