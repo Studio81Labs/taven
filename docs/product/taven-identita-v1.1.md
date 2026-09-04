@@ -35,15 +35,16 @@ označení služby; prodávajícím a odpovědným provozovatelem je Studio81 La
 s.r.o. Konkrétní maker, stroj a neveřejné místo výroby jsou interní výrobní
 detail.
 
-Ve veřejné právní identifikaci se používají tyto vlastníkem dodané údaje:
+Vlastník dodal tyto identifikační údaje; položka označená jako čekající se před
+zveřejněním ještě ověří:
 
-| Údaj | Hodnota |
-|---|---|
-| Obchodní firma | Studio81 Labs, s.r.o. |
-| Sídlo | Nové sady 988/2, 602 00 Brno |
-| Stát | Česká republika |
-| IČ | 29508291 |
-| DIČ | CZ29508291 |
+| Údaj | Hodnota | Stav |
+|---|---|---|
+| Obchodní firma | Studio81 Labs, s.r.o. | připraveno pro veřejnou identifikaci |
+| Sídlo | Nové sady 988/2, 602 00 Brno | připraveno pro veřejnou identifikaci |
+| Stát | Česká republika | připraveno pro veřejnou identifikaci |
+| IČ | 29508291 | připraveno pro veřejnou identifikaci |
+| DIČ | CZ29508291 | dodáno vlastníkem; účetní/daňové ověření před zveřejněním čeká |
 
 Sídlo právnické osoby se může zobrazovat v trust sekci, footeru, VOP,
 dokladech a kontaktech. Není tím zveřejněna adresa dílny: **soukromé místo
