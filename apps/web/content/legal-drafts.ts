@@ -413,7 +413,8 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
       {
         title: "6. Manuální kontrola",
         paragraphs: [
-          "Objednávka může být předána k manuální kontrole zejména pokud:",
+          "Ve verzi v0 prochází manuální kontrolou náhledu každá objednávka.",
+          "Rozšířenou manuální kontrolu mohou vyžadovat zejména případy, kdy:",
         ],
         items: [
           "ji označí automatický systém",
@@ -477,6 +478,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         title: "2. Nahrané modely",
         paragraphs: [
           "Digitální model nahraný zákazníkem může být uchováván po dobu potřebnou k:",
+          "Zdrojová CAD data jsou citlivější než běžný export STL. Retenční a mazací pravidla se však nevážou na příponu souboru: vztahují se na všechny podporované zdrojové formáty, včetně STL, 3MF a STEP, a na jejich odvozené soubory.",
         ],
         items: [
           "vytvoření nabídky",
@@ -647,6 +649,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         title: "6. Důvěrnost zákaznických modelů",
         paragraphs: [
           "Digitální model dodaný zákazníkem je považován za neveřejný, pokud zákazník výslovně neurčí jinak.",
+          "Zdrojová CAD data jsou citlivější než běžný export STL. Stejná pravidla důvěrnosti a retence se bez ohledu na příponu vztahují na všechny podporované zdrojové formáty, včetně STL, 3MF a STEP, i na jejich odvozené soubory.",
           "Provozovatel jej neposkytne jiným zákazníkům ani jej nepoužije k výrobě pro třetí osoby bez odpovídajícího právního důvodu.",
           "Přístup k modelu mohou získat pouze osoby, které jej potřebují pro:",
         ],

@@ -75,4 +75,21 @@ describe("public site launch boundaries", () => {
       }
     }
   });
+
+  it("keeps manual review and sensitive source formats explicit in the drafts", () => {
+    const manualReview = legalDrafts.prohibitedContent.sections.find(
+      (section) => section.title === "6. Manuální kontrola",
+    );
+    expect(manualReview?.paragraphs).toContain(
+      "Ve verzi v0 prochází manuální kontrolou náhledu každá objednávka.",
+    );
+
+    for (const draft of [legalDrafts.retention, legalDrafts.photoConsent]) {
+      const content = JSON.stringify(draft.sections);
+      expect(content).toContain("Zdrojová CAD data jsou citlivější");
+      expect(content).toContain("STL");
+      expect(content).toContain("3MF");
+      expect(content).toContain("STEP");
+    }
+  });
 });
