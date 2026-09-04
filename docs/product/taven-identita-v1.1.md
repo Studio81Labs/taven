@@ -5,9 +5,11 @@
 **Status:** identita a hlavní vizuální systém odsouhlaseny z aktuální sady mockupů.
 **Datum:** 2026-08-28
 
-**Poslední potvrzení:** 2026-09-04 — právní identita provozovatele a konstrukce varianty TEČKA.
+**Poslední potvrzení:** 2026-09-04 — právní identita provozovatele, konstrukce varianty TEČKA a `taven.cz` jako finální doména.
 
-> Jméno je stále **podmíněno clearance** (specifikace §13.1). Do jejího dokončení se neregistrují domény, profily ani se netiskne nic fyzického.
+> Vlastník potvrdil `TAVEN.`, `TV.` a `taven.cz` jako finální veřejnou identitu.
+> Doména dosud není registrovaná a registrace ani právní clearance tímto
+> záznamem nejsou provedeny.
 
 ---
 

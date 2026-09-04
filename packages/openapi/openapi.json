@@ -356,7 +356,8 @@
               "ORDER_SMALL_SURCHARGE",
               "SHIPMENT",
               "EXPRESS",
-              "PAYMENT_FEE"
+              "PAYMENT_FEE",
+              "VAT"
             ],
             "type": "string"
           },
@@ -401,16 +402,42 @@
             ],
             "type": "string"
           },
+          "netAmountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "taxRegime": {
+            "enum": [
+              "NON_VAT_PAYER",
+              "VAT_PAYER"
+            ],
+            "type": "string"
+          },
           "totalMinor": {
             "maximum": 9007199254740991,
             "minimum": 0,
             "nullable": true,
+            "type": "integer"
+          },
+          "vatAmountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vatRateBasisPoints": {
+            "maximum": 10000,
+            "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
           "kind",
           "currency",
+          "taxRegime",
+          "vatRateBasisPoints",
+          "netAmountMinor",
+          "vatAmountMinor",
           "components"
         ],
         "type": "object"
@@ -1080,6 +1107,11 @@
             "minItems": 1,
             "type": "array"
           },
+          "netAmountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "paymentPolicy": {
             "$ref": "#/components/schemas/OfferPaymentPolicyDto"
           },
@@ -1104,9 +1136,26 @@
             "pattern": "^\\s*\\S[\\s\\S]{1,}\\S\\s*$",
             "type": "string"
           },
+          "taxRegime": {
+            "enum": [
+              "NON_VAT_PAYER",
+              "VAT_PAYER"
+            ],
+            "type": "string"
+          },
           "termsSnapshot": {
             "additionalProperties": true,
             "type": "object"
+          },
+          "vatAmountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vatRateBasisPoints": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -1114,6 +1163,10 @@
           "expiresAt",
           "priceListId",
           "contractTotalMinor",
+          "taxRegime",
+          "vatRateBasisPoints",
+          "netAmountMinor",
+          "vatAmountMinor",
           "depositMinor",
           "termsSnapshot",
           "inputSnapshot",
@@ -1352,6 +1405,11 @@
             },
             "type": "array"
           },
+          "netAmountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "paymentSchedules": {
             "items": {
               "$ref": "#/components/schemas/OfferPaymentScheduleDto"
@@ -1376,12 +1434,29 @@
           "summary": {
             "type": "string"
           },
+          "taxRegime": {
+            "enum": [
+              "NON_VAT_PAYER",
+              "VAT_PAYER"
+            ],
+            "type": "string"
+          },
           "termsRevision": {
             "type": "string"
           },
           "termsSnapshot": {
             "additionalProperties": true,
             "type": "object"
+          },
+          "vatAmountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vatRateBasisPoints": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
           },
           "version": {
             "maximum": 2147483647,
@@ -1397,6 +1472,10 @@
           "termsSnapshot",
           "currency",
           "contractTotalMinor",
+          "taxRegime",
+          "vatRateBasisPoints",
+          "netAmountMinor",
+          "vatAmountMinor",
           "items",
           "deliveryDestination",
           "shipmentPlans",
@@ -1500,7 +1579,8 @@
               "ORDER_SMALL_SURCHARGE",
               "SHIPMENT",
               "EXPRESS",
-              "PAYMENT_FEE"
+              "PAYMENT_FEE",
+              "VAT"
             ],
             "type": "string"
           },

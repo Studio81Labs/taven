@@ -200,7 +200,13 @@ Platforma je **prodávající**, ne zprostředkovatel. Zákazník uzavírá smlo
 
 Neplátce. Do obratu vstupuje **celá hodnota objednávky**, ne marže. Limity a strop v objednávkách viz parametry §14, **sledovat měsíčně od první objednávky**.
 
-Přechod na plátcovství není úprava parametru — v ten den buď zdražíš o 21 %, nebo si o 21 % seškrábeš marži. Neplátcovství je výhoda v B2C a nevýhoda v B2B; cílení na opakované B2B dávky s ním nejde dohromady.
+Přechod na plátcovství není pouhý prezentační přepínač — vyžaduje obchodní
+rozhodnutí, novou verzovanou revizi ceníku a schválenou sazbu. Systém jej ale
+nesmí podmiňovat přepisem cenového kódu: nová revize přepne výpočet a snapshot
+na cenu bez DPH + DPH = konečná cena, zatímco staré nabídky zůstanou beze změny.
+V ten den se zároveň rozhodne, zda zákaznická cena vzroste, nebo se daň promítne
+do marže. Neplátcovství je výhoda v B2C a nevýhoda v B2B; cílení na opakované
+B2B dávky s ním nejde dohromady.
 
 ### 3.3 Platby
 

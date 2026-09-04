@@ -595,6 +595,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
       version: 1,
       termsRevision: issued.body.termsRevision,
       contractTotalMinor: 110_000,
+      taxRegime: "NON_VAT_PAYER",
+      vatRateBasisPoints: 0,
+      netAmountMinor: 110_000,
+      vatAmountMinor: 0,
     });
     expect(preview.body.items).toEqual([
       {
@@ -816,6 +820,103 @@ describe("QuoteRequest and tokenized individual offers", () => {
         status: "ACCEPTED",
       }),
     );
+  });
+
+  it("issues and previews an immutable VAT-payer price split", async () => {
+    const created = await quotes.createRequest(
+      requestInput("vat-payer-offer"),
+      "198.51.100.81",
+      key("vat-payer-offer-create"),
+    );
+    await quotes.beginReview(created.requestId, key("vat-payer-offer-review"));
+    const priceList = await prisma.priceList.create({
+      data: {
+        revision: `vat-payer-${randomUUID()}`,
+        termsRevision: "terms-v1",
+        currency: "CZK",
+        parameters: {
+          sellerTaxPolicy: {
+            regime: "VAT_PAYER",
+            vatRateBasisPoints: 2_100,
+          },
+          balance_payment_days: 7,
+          balance_timeout_earned_component_kinds: [
+            "ITEM_PRODUCTION",
+            "ITEM_QUANTITY",
+            "ITEM_POSTPROCESSING",
+            "VAT",
+          ],
+        },
+      },
+    });
+    const issued = await issueOffer(
+      created.requestId,
+      key("vat-payer-offer-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      defaultItems(),
+      priceList.id,
+      {
+        contractTotalMinor: 133_100,
+        depositMinor: 39_930,
+        taxRegime: "VAT_PAYER",
+        vatRateBasisPoints: 2_100,
+        netAmountMinor: 110_000,
+        vatAmountMinor: 23_100,
+      },
+    );
+    expect(issued.response.status).toBe(201);
+
+    const preview = await apiJson<{
+      contractTotalMinor: number;
+      taxRegime: string;
+      vatRateBasisPoints: number;
+      netAmountMinor: number;
+      vatAmountMinor: number;
+      components: Array<{ kind: string; amountMinor: number }>;
+    }>(`offers/${issued.body.quoteId}`, {
+      headers: bearer(issued.body.offerToken),
+    });
+    expect(preview.body).toMatchObject({
+      contractTotalMinor: 133_100,
+      taxRegime: "VAT_PAYER",
+      vatRateBasisPoints: 2_100,
+      netAmountMinor: 110_000,
+      vatAmountMinor: 23_100,
+    });
+    expect(
+      preview.body.components.find((component) => component.kind === "VAT"),
+    ).toEqual({
+      kind: "VAT",
+      scope: "ORDER",
+      quoteItemOrdinal: null,
+      shipmentPlanOrdinal: null,
+      amountMinor: 23_100,
+      allocation: null,
+    });
+
+    const snapshot = await prisma.priceSnapshot.findFirstOrThrow({
+      where: { quoteBinding: { quoteId: issued.body.quoteId } },
+    });
+    expect(snapshot).toMatchObject({
+      contractTotalMinor: 133_100n,
+      taxRegime: "VAT_PAYER",
+      vatRateBasisPoints: 2_100,
+      netAmountMinor: 110_000n,
+      vatAmountMinor: 23_100n,
+    });
+    await expect(
+      prisma.priceSnapshot.update({
+        where: { id: snapshot.id },
+        data: { vatAmountMinor: 0n },
+      }),
+    ).rejects.toBeDefined();
+
+    const accepted = await acceptOffer(
+      issued.body,
+      key("vat-payer-offer-accept"),
+    );
+    expect(accepted.response.status).toBe(200);
   });
 
   it("accepts and canonicalizes uppercase UUIDs allowed by the API contract", async () => {
@@ -1523,12 +1624,22 @@ describe("QuoteRequest and tokenized individual offers", () => {
       {
         scope: "missing-deadline",
         parameters: {
+          sellerTaxPolicy: {
+            regime: "NON_VAT_PAYER",
+            vatRateBasisPoints: 0,
+          },
           balance_timeout_earned_component_kinds: ["ITEM_PRODUCTION"],
         },
       },
       {
         scope: "missing-earned-components",
-        parameters: { balance_payment_days: 7 },
+        parameters: {
+          sellerTaxPolicy: {
+            regime: "NON_VAT_PAYER",
+            vatRateBasisPoints: 0,
+          },
+          balance_payment_days: 7,
+        },
       },
     ];
     for (const invalid of invalidPolicies) {
@@ -1900,6 +2011,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
       deliveryDestination?: ReturnType<typeof defaultDeliveryDestination>;
       shipmentPlans?: ReturnType<typeof defaultShipmentPlans>;
       paymentPolicy?: ReturnType<typeof defaultPaymentPolicy>;
+      taxRegime?: "NON_VAT_PAYER" | "VAT_PAYER";
+      vatRateBasisPoints?: number;
+      netAmountMinor?: number;
+      vatAmountMinor?: number;
     } = {},
   ) {
     return apiJson<{
@@ -1922,6 +2037,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
         promisedDate: "2026-10-01",
         priceListId: selectedPriceListId,
         contractTotalMinor: options.contractTotalMinor ?? 110_000,
+        taxRegime: options.taxRegime ?? "NON_VAT_PAYER",
+        vatRateBasisPoints: options.vatRateBasisPoints ?? 0,
+        netAmountMinor:
+          options.netAmountMinor ?? options.contractTotalMinor ?? 110_000,
+        vatAmountMinor: options.vatAmountMinor ?? 0,
         depositMinor: options.depositMinor ?? 33_000,
         termsSnapshot: { revisionAcceptedByOffer: true },
         inputSnapshot: { operatorEstimate: "manual-v0" },

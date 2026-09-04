@@ -493,3 +493,95 @@ it("upgrades sealed legacy individual FULL contracts and outstanding quotes with
     await admin.end();
   }
 }, 30_000);
+
+it("backfills existing price snapshots and price lists as non-VAT-payer records", async () => {
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is required for migration upgrade tests");
+  }
+
+  const sourceUrl = new URL(databaseUrl);
+  const databaseName = `taven_tax_upgrade_${randomUUID().replaceAll("-", "")}`;
+  const targetUrl = new URL(sourceUrl);
+  targetUrl.pathname = `/${databaseName}`;
+  targetUrl.searchParams.delete("schema");
+  const adminUrl = new URL(sourceUrl);
+  adminUrl.pathname = "/postgres";
+  adminUrl.searchParams.delete("schema");
+  const admin = new Client({ connectionString: adminUrl.toString() });
+  let target: Client | undefined;
+
+  await admin.connect();
+  try {
+    await admin.query(`CREATE DATABASE ${databaseIdentifier(databaseName)}`);
+    target = new Client({ connectionString: targetUrl.toString() });
+    await target.connect();
+    const migrationsRoot = join(process.cwd(), "prisma/migrations");
+    const taxMigration = "20260904213100_vat_aware_pricing";
+    const migrations = (await readdir(migrationsRoot))
+      .filter((name) => /^20/.test(name))
+      .sort();
+    for (const migration of migrations.filter((name) => name < taxMigration)) {
+      await target.query(
+        await readFile(
+          join(migrationsRoot, migration, "migration.sql"),
+          "utf8",
+        ),
+      );
+    }
+
+    await target.query(`
+      SET session_replication_role = 'replica';
+      INSERT INTO price_snapshots
+        (id, price_list_id, currency, contract_total_minor, pricing_revision,
+         input_snapshot, snapshot_hash, created_at)
+      VALUES (
+        '81000000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000019',
+        'CZK', 12345, 'legacy-v0-czk', '{}'::jsonb, repeat('8', 64),
+        clock_timestamp()
+      );
+      SET session_replication_role = 'origin';
+    `);
+    await target.query(
+      await readFile(
+        join(migrationsRoot, taxMigration, "migration.sql"),
+        "utf8",
+      ),
+    );
+
+    expect(
+      (
+        await target.query<{
+          tax_regime: string;
+          vat_rate_basis_points: number;
+          net_amount_minor: string;
+          vat_amount_minor: string;
+          policy: unknown;
+        }>(`
+          SELECT snapshot.tax_regime::text,
+                 snapshot.vat_rate_basis_points,
+                 snapshot.net_amount_minor::text,
+                 snapshot.vat_amount_minor::text,
+                 list.parameters -> 'sellerTaxPolicy' AS policy
+          FROM price_snapshots snapshot
+          JOIN price_lists list ON list.id = snapshot.price_list_id
+          WHERE snapshot.id = '81000000-0000-4000-8000-000000000001'
+        `)
+      ).rows,
+    ).toEqual([
+      {
+        tax_regime: "NON_VAT_PAYER",
+        vat_rate_basis_points: 0,
+        net_amount_minor: "12345",
+        vat_amount_minor: "0",
+        policy: { regime: "NON_VAT_PAYER", vatRateBasisPoints: 0 },
+      },
+    ]);
+  } finally {
+    await target?.end().catch(() => undefined);
+    await admin.query(
+      `DROP DATABASE IF EXISTS ${databaseIdentifier(databaseName)} WITH (FORCE)`,
+    );
+    await admin.end();
+  }
+}, 30_000);

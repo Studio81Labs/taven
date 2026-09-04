@@ -1,6 +1,6 @@
 # Taven — launch approvals v0.1
 
-**Status:** částečně vyplněno — **nejde o schválení veřejného spuštění**
+**Status:** vývojové vstupy potvrzeny — **nejde o schválení veřejného spuštění**
 
 **Datum záznamu:** 2026-09-04
 
@@ -43,7 +43,9 @@ Vlastník 2026-09-04 výslovně vybral směr **02 — TEČKA**:
 | Compact mark | `TV.` se stejnou typografickou a barevnou konstrukcí | schváleno vlastníkem |
 | Jednobarevná varianta | celý wordmark včetně tečky černě nebo bíle podle podkladu | dříve schváleno v identitě v1.1 |
 
-Výběr potvrzuje podobu značek, nikoli právní clearance názvu nebo známky.
+Vlastník následně potvrdil `TAVEN.`, `TV.` a `taven.cz` jako finální veřejnou
+identitu. Toto produktové rozhodnutí samo neprovádí registraci domény ani právní
+clearance názvu nebo známky.
 Referenční screenshot a HTML jsou designovým podkladem; jejich popisné texty,
 inline layout a editorové `data-*` atributy nejsou požadavky na výsledný kód.
 
@@ -86,12 +88,13 @@ a veřejným spuštěním zůstávají povinné všechny čtyři kroky ze specif
 |---|---|---|
 | Český trh a subjekty v relevantních oborech | čeká | datovaný výsledek hledání Taven/Taviro a fonetických sousedů |
 | TMview/ÚPV/EUIPO, třídy 40 a 42 a sousední 35, 7, 20 | čeká | datované dotazy včetně `tav*`, `*aven` a fonetických variant |
-| `taven.cz` a sociální handles | čeká | kontrola a společná registrace až po finálním souhlasu |
+| `taven.cz` a sociální handles | doména finální; registrace čeká | registrovat `taven.cz`; sociální handles ověřit před použitím |
 | Telefonní test | čeká | zaznamenaný výsledek a rozhodnutí vlastníka |
 
-`taven.cz` je zamýšlená, dosud neregistrovaná doména. Dřívější RDAP kontrola
-bez nalezeného záznamu je jen bodový signál dostupnosti, nikoli rezervace nebo
-clearance. Finální veřejné jméno proto zatím není schválené.
+`taven.cz` je finální, dosud neregistrovaná doména. Dřívější RDAP kontrola bez
+nalezeného záznamu je jen bodový signál dostupnosti, nikoli rezervace nebo
+clearance. Vlastník 2026-09-04 výslovně potvrdil, že nevyřízená registrace a
+externí clearance neblokují vývoj pod touto identitou; zůstávají launch akcemi.
 
 ## 5. Závazné obchodní vstupy
 
@@ -121,12 +124,19 @@ vydání individuální nabídky a její přijetí a
 Pouze přesná hodnota `true` tok povolí; chybějící, prázdná nebo jiná hodnota jej
 blokuje. Expirace, odmítnutí nabídek a retenční úklid zůstávají dostupné.
 
+Studio81 Labs, s.r.o. aktuálně není plátcem DPH. Ve v0 se proto zákazníkovi
+účtuje konečná cena bez vyčíslené DPH; zveřejněné DIČ samo o sobě neznamená
+registraci k DPH. Cenový systém ukládá daňový režim do verzovaného ceníku a do
+každého závazného cenového snapshotu. Budoucí přechod na plátcovství vyžaduje
+novou revizi ceníku s výslovnou sazbou; nové nabídky pak zobrazí cenu bez DPH,
+DPH a konečnou cenu, zatímco dříve vydané nabídky se nezmění.
+
 ## 6. Stav acceptance criteria issue #38
 
 | Kritérium | Stav | Co chybí |
 |---|---|---|
-| `TAVEN.`/`TV.` a Studio81 Labs jako seller/operator | částečně splněno | značky, subjekt, DIČ a elektronické kontakty potvrzeny; name clearance čeká |
-| Clearance a finální veřejné jméno/doména | blokováno | čtyři kroky clearance a finální souhlas |
+| `TAVEN.`/`TV.` a Studio81 Labs jako seller/operator | splněno | vlastník potvrdil značky i odpovědný subjekt |
+| Clearance a finální veřejné jméno/doména | splněno pro rozhodnutí | `TAVEN.`/`TV.`/`taven.cz` jsou finální; registrace a externí clearance zůstávají launch akcemi |
 | Verzované účinné právní texty | blokováno | counsel-approved text, verze a data účinnosti |
 | Přijaté závazné v0 hodnoty nebo direct-flow blok | splněno přímým blokem | všechny neschválené ⚠ hodnoty zůstávají vypnuté do samostatného schválení |
 | Nekopírovat právní prózu třetích stran | splněno pro tento záznam | zachovat při přípravě finálních textů |

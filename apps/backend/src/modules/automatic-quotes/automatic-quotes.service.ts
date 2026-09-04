@@ -86,7 +86,8 @@ const CANONICALIZER_CONFIG_SHA256 = createHash("sha256")
   .digest("hex");
 const MAX_ITEM_QUANTITY = 1_000;
 const MAX_SLICING_JOB_ATTEMPTS = 100;
-const AUTOMATIC_PRICE_LIST_REVISION = "automatic-v0-czk";
+const AUTOMATIC_PRICE_LIST_REVISION =
+  process.env.TAVEN_AUTOMATIC_PRICE_LIST_REVISION?.trim() || "automatic-v0-czk";
 const CANDIDATE_UNUSABLE_DISPOSITION_TYPE =
   "automatic_quote.candidate-estimation.unusable";
 const INFILL_PERCENT = {
@@ -2597,6 +2598,7 @@ export class AutomaticQuotesService {
         },
         shipmentPlan: jsonSafe(input.prepared.shipmentPlan),
         breakdown: jsonSafe(input.prepared.price.breakdown),
+        tax: jsonSafe(input.prepared.price.tax),
       },
     });
     await transaction.priceSnapshot.create({
@@ -2605,6 +2607,10 @@ export class AutomaticQuotesService {
         priceListId: input.priceList.id,
         currency: input.priceList.currency,
         contractTotalMinor: input.prepared.price.contractTotal.minorUnits,
+        taxRegime: input.prepared.price.tax.regime,
+        vatRateBasisPoints: input.prepared.price.tax.vatRateBasisPoints,
+        netAmountMinor: input.prepared.price.tax.net.minorUnits,
+        vatAmountMinor: input.prepared.price.tax.vat.minorUnits,
         pricingRevision: input.priceList.revision,
         inputSnapshot: snapshotInput,
         snapshotHash: fingerprintOf(snapshotInput),
@@ -4810,9 +4816,7 @@ export class AutomaticQuotesService {
           quantity,
           currency: priceList.currency,
           orderTotalMinor: safeNumber(
-            prepared.prepared.price.kind === "binding"
-              ? prepared.prepared.price.contractTotal.minorUnits
-              : prepared.prepared.price.breakdown.subtotal.minorUnits,
+            prepared.prepared.price.customerTotal.minorUnits,
           ),
         });
       }
@@ -5296,6 +5300,10 @@ function priceDto(
   snapshot: {
     currency: string;
     contractTotalMinor: bigint;
+    taxRegime: "NON_VAT_PAYER" | "VAT_PAYER";
+    vatRateBasisPoints: number;
+    netAmountMinor: bigint;
+    vatAmountMinor: bigint;
     components: Array<{
       id: string;
       kind: string;
@@ -5318,6 +5326,10 @@ function priceDto(
   return {
     kind,
     currency: snapshot.currency,
+    taxRegime: snapshot.taxRegime,
+    vatRateBasisPoints: snapshot.vatRateBasisPoints,
+    netAmountMinor: safeNumber(snapshot.netAmountMinor),
+    vatAmountMinor: safeNumber(snapshot.vatAmountMinor),
     totalMinor: safeNumber(snapshot.contractTotalMinor),
     components: snapshot.components.map((component) => ({
       id: component.id,
@@ -5344,6 +5356,13 @@ function provisionalPriceDto(
     | {
         kind: "provisional";
         breakdown: { subtotal: { minorUnits: bigint; currency: string } };
+        customerTotal: { minorUnits: bigint };
+        tax: {
+          regime: "NON_VAT_PAYER" | "VAT_PAYER";
+          vatRateBasisPoints: number;
+          net: { minorUnits: bigint };
+          vat: { minorUnits: bigint };
+        };
         components: ReadonlyArray<{
           componentId: string;
           kind: string;
@@ -5354,6 +5373,13 @@ function provisionalPriceDto(
     | {
         kind: "binding";
         breakdown: { subtotal: { minorUnits: bigint; currency: string } };
+        customerTotal: { minorUnits: bigint };
+        tax: {
+          regime: "NON_VAT_PAYER" | "VAT_PAYER";
+          vatRateBasisPoints: number;
+          net: { minorUnits: bigint };
+          vat: { minorUnits: bigint };
+        };
         contractTotal: { minorUnits: bigint };
         components: ReadonlyArray<{
           componentId: string;
@@ -5367,11 +5393,11 @@ function provisionalPriceDto(
   return {
     kind: "ROUGH_ESTIMATE",
     currency: price.breakdown.subtotal.currency,
-    totalMinor: safeNumber(
-      price.kind === "binding"
-        ? price.contractTotal.minorUnits
-        : price.breakdown.subtotal.minorUnits,
-    ),
+    taxRegime: price.tax.regime,
+    vatRateBasisPoints: price.tax.vatRateBasisPoints,
+    netAmountMinor: safeNumber(price.tax.net.minorUnits),
+    vatAmountMinor: safeNumber(price.tax.vat.minorUnits),
+    totalMinor: safeNumber(price.customerTotal.minorUnits),
     components: price.components.map((component) => ({
       id: component.componentId,
       kind: component.kind,

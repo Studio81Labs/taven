@@ -22503,7 +22503,9 @@ describe("commerce persistence foundations", () => {
         await client.query(
           `INSERT INTO price_lists
            (id, revision, terms_revision, currency, parameters, created_at)
-         VALUES ($1,'split-capture-v1','terms-v1','EUR','{}'::jsonb,clock_timestamp())`,
+         VALUES ($1,'split-capture-v1','terms-v1','EUR',
+                 '{"sellerTaxPolicy":{"regime":"NON_VAT_PAYER","vatRateBasisPoints":0}}'::jsonb,
+                 clock_timestamp())`,
           [splitPriceListId],
         );
         await client.query(
@@ -22601,7 +22603,9 @@ describe("commerce persistence foundations", () => {
         await client.query(
           `INSERT INTO price_lists
            (id, revision, terms_revision, currency, parameters, created_at)
-         VALUES ($1,'split-capture-invalid-v1','terms-v1','EUR','{}'::jsonb,clock_timestamp())`,
+         VALUES ($1,'split-capture-invalid-v1','terms-v1','EUR',
+                 '{"sellerTaxPolicy":{"regime":"NON_VAT_PAYER","vatRateBasisPoints":0}}'::jsonb,
+                 clock_timestamp())`,
           [invalidPriceListId],
         );
         await client.query(
@@ -22680,7 +22684,17 @@ describe("commerce persistence foundations", () => {
               `INSERT INTO price_lists
                  (id, revision, terms_revision, currency, parameters, created_at)
                VALUES ($1,$2,'terms-v1','EUR',$3::jsonb,clock_timestamp())`,
-              [fixtures.id(`${name}:price-list`), revision, parameters],
+              [
+                fixtures.id(`${name}:price-list`),
+                revision,
+                {
+                  ...parameters,
+                  sellerTaxPolicy: {
+                    regime: "NON_VAT_PAYER",
+                    vatRateBasisPoints: 0,
+                  },
+                },
+              ],
             );
             await fixtures.createFoundation(
               name,

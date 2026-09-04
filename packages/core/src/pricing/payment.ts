@@ -1,6 +1,11 @@
 import { DomainError } from "../primitives/errors.js";
 import { Money } from "../primitives/money.js";
 import { ceilDivide } from "./arithmetic.js";
+import {
+  taxBreakdownFromGross,
+  validateSellerTaxPolicy,
+  type SellerTaxPolicy,
+} from "./tax.js";
 import type {
   GrossedUpPaymentCapture,
   PaymentScheduleCapture,
@@ -8,6 +13,7 @@ import type {
 } from "./types.js";
 
 const SHARE_BASIS_POINTS = 10_000;
+const MAX_EXACT_GROSS_UP_CANDIDATES = 10_000n;
 
 interface GrossCaptureMinor {
   readonly definition: PaymentScheduleCapture;
@@ -168,40 +174,133 @@ function satisfies(
   subtotalMinor: bigint,
   total: bigint,
   captures: readonly PaymentScheduleCapture[],
+  taxPolicy: SellerTaxPolicy,
+  currency: string,
 ): boolean {
   const evaluated = evaluateTotal(total, captures);
   if (evaluated.some((capture) => capture.grossMinor <= 0n)) return false;
   const fees = evaluated.reduce((sum, capture) => sum + capture.feeMinor, 0n);
-  return total >= fees && total - fees >= subtotalMinor;
+  const tax = taxBreakdownFromGross(Money.of(total, currency), taxPolicy);
+  return (
+    tax.net.minorUnits >= fees && tax.net.minorUnits - fees >= subtotalMinor
+  );
 }
 
-/**
- * Returns the least gross total that covers the subtotal after each planned
- * payment capture's percentage and fixed fee. The predicate is monotone, so a
- * bigint binary search avoids any floating-point or one-fee approximation.
- */
-export function grossUpPaymentSchedule(
-  subtotal: Money,
+function candidateRange(
+  subtotalMinor: bigint,
   captures: readonly PaymentScheduleCapture[],
-): PaymentScheduleGrossUp {
-  validateSchedule(subtotal, captures);
+  taxPolicy: SellerTaxPolicy,
+): { readonly firstPossible: bigint; readonly guaranteed: bigint } {
+  const basis = BigInt(SHARE_BASIS_POINTS);
+  const taxDenominator = basis + BigInt(taxPolicy.vatRateBasisPoints);
+  const weightedFeeRates = captures.reduce(
+    (sum, capture) =>
+      sum +
+      BigInt(capture.shareBasisPoints) * BigInt(capture.feeRateBasisPoints),
+    0n,
+  );
+  const slopeNumerator =
+    basis * basis * basis - taxDenominator * weightedFeeRates;
+  if (slopeNumerator <= 0n) {
+    throw new DomainError(
+      "INVALID_ARGUMENT",
+      "combined tax and payment fee rates leave no sustainable net proceeds",
+    );
+  }
 
+  const slopeDenominator = taxDenominator * basis * basis;
+  const twiceBasis = 2n * basis;
   const fixedFees = captures.reduce(
     (sum, capture) => sum + capture.feeFixed.minorUnits,
     0n,
   );
-  let upper = subtotal.minorUnits + fixedFees + BigInt(captures.length);
-  if (upper === 0n) upper = 1n;
-  while (!satisfies(subtotal.minorUnits, upper, captures)) upper *= 2n;
+  const feeRates = captures.reduce(
+    (sum, capture) => sum + BigInt(capture.feeRateBasisPoints),
+    0n,
+  );
 
-  let lower = 0n;
-  while (lower < upper) {
-    const middle = (lower + upper) / 2n;
-    if (satisfies(subtotal.minorUnits, middle, captures)) upper = middle;
-    else lower = middle + 1n;
+  // VAT contributes at most half a minor unit of rounding error. Each capture
+  // can differ from its ideal share by less than one minor unit, followed by
+  // less than one minor unit of fee-ceiling error. These rational envelopes
+  // bound the only interval where the exact rounded result can first succeed.
+  const upperErrorScaled = basis + 2n * feeRates;
+  const lowerErrorScaled =
+    basis + 2n * BigInt(captures.length) * basis + 2n * feeRates;
+  const targetScaled = (subtotalMinor + fixedFees) * twiceBasis;
+  const firstPossibleTarget = targetScaled - upperErrorScaled;
+  const firstPossible =
+    firstPossibleTarget <= 0n
+      ? 0n
+      : ceilDivide(
+          slopeDenominator * firstPossibleTarget,
+          slopeNumerator * twiceBasis,
+        );
+  const guaranteedByMargin = ceilDivide(
+    slopeDenominator * (targetScaled + lowerErrorScaled),
+    slopeNumerator * twiceBasis,
+  );
+  const guaranteedPositiveCaptures = captures.reduce(
+    (minimum, capture) =>
+      minimum > ceilDivide(basis, BigInt(capture.shareBasisPoints))
+        ? minimum
+        : ceilDivide(basis, BigInt(capture.shareBasisPoints)),
+    1n,
+  );
+  return {
+    firstPossible,
+    guaranteed:
+      guaranteedByMargin > guaranteedPositiveCaptures
+        ? guaranteedByMargin
+        : guaranteedPositiveCaptures,
+  };
+}
+
+/**
+ * Returns the least tax-inclusive total that covers the pre-tax subtotal after
+ * each planned payment capture's percentage and fixed fee. A rational error
+ * envelope narrows the exact bigint search without assuming that independently
+ * rounded VAT and fees form a monotone predicate.
+ */
+export function grossUpPaymentSchedule(
+  subtotal: Money,
+  captures: readonly PaymentScheduleCapture[],
+  taxPolicy: SellerTaxPolicy,
+): PaymentScheduleGrossUp {
+  validateSchedule(subtotal, captures);
+  validateSellerTaxPolicy(taxPolicy);
+
+  const range = candidateRange(subtotal.minorUnits, captures, taxPolicy);
+  if (
+    range.guaranteed - range.firstPossible + 1n >
+    MAX_EXACT_GROSS_UP_CANDIDATES
+  ) {
+    throw new DomainError(
+      "INVALID_ARGUMENT",
+      "combined tax and payment fee rates exceed the safe exact-search bound",
+    );
+  }
+  let total = range.firstPossible;
+  while (total <= range.guaranteed) {
+    if (
+      satisfies(
+        subtotal.minorUnits,
+        total,
+        captures,
+        taxPolicy,
+        subtotal.currency,
+      )
+    )
+      break;
+    total += 1n;
+  }
+  if (total > range.guaranteed) {
+    throw new DomainError(
+      "INVALID_ARGUMENT",
+      "payment schedule cannot cover the requested subtotal",
+    );
   }
 
-  const evaluated = evaluateTotal(lower, captures);
+  const evaluated = evaluateTotal(total, captures);
   const grossedCaptures: readonly GrossedUpPaymentCapture[] = [...evaluated]
     .sort((left, right) => compareCaptureTie(left.definition, right.definition))
     .map((capture) => ({
@@ -215,9 +314,11 @@ export function grossUpPaymentSchedule(
     (sum, capture) => sum + capture.feeMinor,
     0n,
   );
+  const contractTotal = Money.of(total, subtotal.currency);
   return {
-    contractTotal: Money.of(lower, subtotal.currency),
+    contractTotal,
     paymentFee: Money.of(feeMinor, subtotal.currency),
+    tax: taxBreakdownFromGross(contractTotal, taxPolicy),
     captures: grossedCaptures,
   };
 }

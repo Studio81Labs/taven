@@ -19,6 +19,7 @@ import {
   QuoteRequestStatus,
   QuoteSessionStatus,
   RetentionHold,
+  SellerTaxRegime,
   SliceKind,
 } from "@prisma/client";
 import type { QuoteRequestStatus as DomainQuoteRequestStatus } from "@taven/core" with {
@@ -32,6 +33,7 @@ import {
 } from "node:crypto";
 import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
+import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
   AcceptOfferDto,
@@ -82,6 +84,7 @@ const OFFER_COMPONENT_ORDER = [
   PriceComponentKind.SHIPMENT,
   PriceComponentKind.EXPRESS,
   PriceComponentKind.PAYMENT_FEE,
+  PriceComponentKind.VAT,
 ] as const;
 
 type Transaction = Prisma.TransactionClient;
@@ -422,6 +425,22 @@ export class QuotesService {
         if (priceList.currency !== "CZK") {
           throw new BadRequestException("Individual v0 offers must use CZK");
         }
+        let configuredTaxPolicy;
+        try {
+          configuredTaxPolicy = parseSellerTaxPolicy(priceList.parameters);
+        } catch {
+          throw new BadRequestException(
+            "priceListId has no valid seller tax policy",
+          );
+        }
+        if (
+          configuredTaxPolicy.regime !== offer.taxRegime ||
+          configuredTaxPolicy.vatRateBasisPoints !== offer.vatRateBasisPoints
+        ) {
+          throw new BadRequestException(
+            "Offer tax treatment must match the selected price list",
+          );
+        }
         if (
           !(await individualSplitPaymentPolicyIsValid(
             transaction,
@@ -469,6 +488,10 @@ export class QuotesService {
           items: offer.fingerprint.items,
           components: offer.fingerprint.components,
           contractTotalMinor: offer.contractTotalMinor,
+          taxRegime: offer.taxRegime,
+          vatRateBasisPoints: offer.vatRateBasisPoints,
+          netAmountMinor: offer.netAmountMinor,
+          vatAmountMinor: offer.vatAmountMinor,
           depositMinor: offer.depositMinor,
         });
 
@@ -539,6 +562,10 @@ export class QuotesService {
             priceListId: priceList.id,
             currency: priceList.currency,
             contractTotalMinor: BigInt(offer.contractTotalMinor),
+            taxRegime: offer.taxRegime,
+            vatRateBasisPoints: offer.vatRateBasisPoints,
+            netAmountMinor: BigInt(offer.netAmountMinor),
+            vatAmountMinor: BigInt(offer.vatAmountMinor),
             pricingRevision: priceList.revision,
             inputSnapshot: jsonInput({
               ...offer.inputSnapshot,
@@ -764,7 +791,8 @@ export class QuotesService {
           !ITEM_COMPONENTS.has(component.kind) &&
           !ORDER_COMPONENTS.has(component.kind) &&
           component.kind !== PriceComponentKind.SHIPMENT &&
-          component.kind !== PriceComponentKind.PAYMENT_FEE
+          component.kind !== PriceComponentKind.PAYMENT_FEE &&
+          component.kind !== PriceComponentKind.VAT
         ) {
           throw new ConflictException("Offer price component kind is invalid");
         }
@@ -823,6 +851,10 @@ export class QuotesService {
       termsSnapshot: jsonObject(quote.termsSnapshot),
       currency: snapshot.currency,
       contractTotalMinor: safeNumber(snapshot.contractTotalMinor),
+      taxRegime: snapshot.taxRegime,
+      vatRateBasisPoints: snapshot.vatRateBasisPoints,
+      netAmountMinor: safeNumber(snapshot.netAmountMinor),
+      vatAmountMinor: safeNumber(snapshot.vatAmountMinor),
       items: quote.items.map((item) => ({
         ordinal: item.ordinal,
         kind: "MODEL" as const,
@@ -1877,6 +1909,7 @@ function validateOffer(input: IssueOfferDto) {
     input.contractTotalMinor,
     "contractTotalMinor",
   );
+  const tax = validateOfferTax(input, contractTotalMinor);
   const depositMinor = money(input.depositMinor, "depositMinor");
   if (
     contractTotalMinor < 2 ||
@@ -1989,7 +2022,7 @@ function validateOffer(input: IssueOfferDto) {
             allocation: undefined,
           },
         ];
-  const components = [
+  const netComponents = [
     ...suppliedComponents.map((component) => ({
       ...component,
       quoteShipmentPlanOrdinal: undefined,
@@ -1997,15 +2030,29 @@ function validateOffer(input: IssueOfferDto) {
     ...shipmentComponents,
     ...paymentFeeComponents,
   ];
-  const componentTotal = components.reduce(
+  const netComponentTotal = netComponents.reduce(
     (total, component) => total + BigInt(component.amountMinor),
     BigInt(0),
   );
-  if (componentTotal !== BigInt(contractTotalMinor)) {
+  if (netComponentTotal !== BigInt(tax.netAmountMinor)) {
     throw new BadRequestException(
-      "Price components must sum to contractTotalMinor",
+      "Price components before VAT must sum to netAmountMinor",
     );
   }
+  const components = [
+    ...netComponents,
+    ...(tax.vatAmountMinor === 0
+      ? []
+      : [
+          {
+            kind: PriceComponentKind.VAT,
+            amountMinor: tax.vatAmountMinor,
+            quoteItemOrdinal: undefined,
+            quoteShipmentPlanOrdinal: undefined,
+            allocation: undefined,
+          },
+        ]),
+  ];
   const expiresAt = requiredInstant(input.expiresAt, "expiresAt");
   const promisedDate = optionalDate(input.promisedDate, "promisedDate");
   const termsSnapshot = requiredObject(input.termsSnapshot, "termsSnapshot");
@@ -2017,6 +2064,7 @@ function validateOffer(input: IssueOfferDto) {
     promisedDate,
     priceListId,
     contractTotalMinor,
+    ...tax,
     depositMinor,
     termsSnapshot,
     inputSnapshot,
@@ -2031,6 +2079,7 @@ function validateOffer(input: IssueOfferDto) {
       promisedDate: dateOnly(promisedDate),
       priceListId,
       contractTotalMinor,
+      ...tax,
       depositMinor,
       termsSnapshot,
       inputSnapshot,
@@ -2040,6 +2089,69 @@ function validateOffer(input: IssueOfferDto) {
       items: items.map(serializableItem),
       components,
     },
+  };
+}
+
+function validateOfferTax(
+  input: IssueOfferDto,
+  contractTotalMinor: number,
+): {
+  taxRegime: SellerTaxRegime;
+  vatRateBasisPoints: number;
+  netAmountMinor: number;
+  vatAmountMinor: number;
+} {
+  if (
+    input.taxRegime !== SellerTaxRegime.NON_VAT_PAYER &&
+    input.taxRegime !== SellerTaxRegime.VAT_PAYER
+  ) {
+    throw new BadRequestException("taxRegime is invalid");
+  }
+  const vatRateBasisPoints = money(
+    input.vatRateBasisPoints,
+    "vatRateBasisPoints",
+    true,
+  );
+  if (vatRateBasisPoints > 10_000) {
+    throw new BadRequestException("vatRateBasisPoints must not exceed 10000");
+  }
+  const netAmountMinor = money(input.netAmountMinor, "netAmountMinor", true);
+  const vatAmountMinor = money(input.vatAmountMinor, "vatAmountMinor", true);
+  if (netAmountMinor + vatAmountMinor !== contractTotalMinor) {
+    throw new BadRequestException(
+      "netAmountMinor plus vatAmountMinor must equal contractTotalMinor",
+    );
+  }
+  if (
+    input.taxRegime === SellerTaxRegime.NON_VAT_PAYER &&
+    (vatRateBasisPoints !== 0 || vatAmountMinor !== 0)
+  ) {
+    throw new BadRequestException(
+      "NON_VAT_PAYER offers must use zero VAT rate and amount",
+    );
+  }
+  if (input.taxRegime === SellerTaxRegime.VAT_PAYER) {
+    if (vatRateBasisPoints === 0) {
+      throw new BadRequestException(
+        "VAT_PAYER offers require a positive VAT rate",
+      );
+    }
+    const numerator = BigInt(contractTotalMinor) * BigInt(vatRateBasisPoints);
+    const denominator = BigInt(10_000 + vatRateBasisPoints);
+    const expectedVat = Number(
+      (2n * numerator + denominator) / (2n * denominator),
+    );
+    if (vatAmountMinor !== expectedVat) {
+      throw new BadRequestException(
+        "vatAmountMinor must be the half-up VAT extraction from contractTotalMinor",
+      );
+    }
+  }
+  return {
+    taxRegime: input.taxRegime,
+    vatRateBasisPoints,
+    netAmountMinor,
+    vatAmountMinor,
   };
 }
 
@@ -2646,7 +2758,7 @@ async function individualSplitPaymentPolicyIsValid(
           WHERE policy_kind."kind" NOT IN (
             'ITEM_PRODUCTION', 'ITEM_QUANTITY', 'ITEM_POSTPROCESSING',
             'ORDER_MIN_PRINT', 'ORDER_SMALL_SURCHARGE', 'SHIPMENT',
-            'EXPRESS', 'PAYMENT_FEE'
+            'EXPRESS', 'PAYMENT_FEE', 'VAT'
           )
         )
         AND NOT EXISTS (

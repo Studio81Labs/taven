@@ -17,6 +17,7 @@ export * from "./pricing/payment.js";
 export * from "./pricing/prepare.js";
 export * from "./pricing/quote.js";
 export * from "./pricing/shipment-plan.js";
+export * from "./pricing/tax.js";
 export * from "./pricing/types.js";
 export * from "./projections/financial.js";
 export * from "./projections/fulfilment.js";

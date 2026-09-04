@@ -7,7 +7,7 @@ export const publicSite = {
     name: "Taven",
     wordmark: "TAVEN.",
     compactMark: "TV.",
-    status: "working-name" as const,
+    status: "final" as const,
   },
   seller: {
     legalName: "Studio81 Labs, s.r.o.",

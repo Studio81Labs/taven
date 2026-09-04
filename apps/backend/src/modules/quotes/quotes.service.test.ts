@@ -113,6 +113,10 @@ describe("quote capability expiry clock", () => {
             priceSnapshot: {
               currency: "CZK",
               contractTotalMinor: 1_000n,
+              taxRegime: "NON_VAT_PAYER",
+              vatRateBasisPoints: 0,
+              netAmountMinor: 1_000n,
+              vatAmountMinor: 0n,
               components: [],
               paymentSchedules: [],
             },
@@ -130,6 +134,9 @@ describe("quote capability expiry clock", () => {
     ).resolves.toMatchObject({
       quoteId: "22222222-2222-4222-8222-222222222222",
       contractTotalMinor: 1_000,
+      taxRegime: "NON_VAT_PAYER",
+      netAmountMinor: 1_000,
+      vatAmountMinor: 0,
     });
   });
 });

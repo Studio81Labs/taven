@@ -244,8 +244,16 @@ enum PriceComponentKind {
   SHIPMENT
   EXPRESS
   PAYMENT_FEE
+  VAT
 
   @@map("price_component_kind")
+}
+
+enum SellerTaxRegime {
+  NON_VAT_PAYER
+  VAT_PAYER
+
+  @@map("seller_tax_regime")
 }
 
 enum PriceComponentScope {
@@ -1429,6 +1437,10 @@ model PriceSnapshot {
   priceListId        String    @map("price_list_id") @db.Uuid
   currency           String    @db.Char(3)
   contractTotalMinor BigInt    @map("contract_total_minor")
+  taxRegime          SellerTaxRegime @map("tax_regime")
+  vatRateBasisPoints Int       @map("vat_rate_basis_points")
+  netAmountMinor     BigInt     @map("net_amount_minor")
+  vatAmountMinor     BigInt     @map("vat_amount_minor")
   pricingRevision    String    @map("pricing_revision") @db.VarChar(100)
   inputSnapshot      Json      @map("input_snapshot") @db.JsonB
   snapshotHash       String    @unique @map("snapshot_hash") @db.VarChar(64)

@@ -1,4 +1,5 @@
 import type { Money } from "../primitives/money.js";
+import type { CustomerTaxBreakdown } from "./tax.js";
 
 /** A non-negative rational number represented without floating point. */
 export interface Rational {
@@ -32,6 +33,7 @@ export interface GrossedUpPaymentCapture {
 export interface PaymentScheduleGrossUp {
   readonly contractTotal: Money;
   readonly paymentFee: Money;
+  readonly tax: CustomerTaxBreakdown;
   readonly captures: readonly GrossedUpPaymentCapture[];
 }
 

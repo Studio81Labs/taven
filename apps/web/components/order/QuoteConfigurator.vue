@@ -887,6 +887,27 @@ function quantityPrice(choice: {
           }}
         </strong>
       </header>
+      <dl v-if="currentPrice.taxRegime === 'VAT_PAYER'" class="my-4 grid gap-1">
+        <div class="flex justify-between gap-4">
+          <dt>Cena bez DPH</dt>
+          <dd class="mono m-0">
+            {{
+              formatMoney(currentPrice.netAmountMinor, currentPrice.currency)
+            }}
+          </dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt>DPH {{ currentPrice.vatRateBasisPoints / 100 }} %</dt>
+          <dd class="mono m-0">
+            {{
+              formatMoney(currentPrice.vatAmountMinor, currentPrice.currency)
+            }}
+          </dd>
+        </div>
+      </dl>
+      <p v-else class="my-4 text-sm">
+        Konečná cena. Provozovatel není plátcem DPH.
+      </p>
       <details>
         <summary>Rozpis ceny</summary>
         <ul class="price-list">

@@ -17,6 +17,12 @@ objects, then records success or a retryable failure. OpenAPI export uses an
 explicit offline mode and does not connect to PostgreSQL or object storage. Do
 not expose Prisma models through shared packages or frontend code.
 
+Automatic quotes select an immutable database price-list revision through
+`TAVEN_AUTOMATIC_PRICE_LIST_REVISION` (default `automatic-v0-czk`). A future VAT
+transition is deployed by creating a new validated revision with its
+`sellerTaxPolicy`, then switching this runtime value; already persisted price
+snapshots are never recalculated.
+
 ```bash
 pnpm -C apps/backend dev
 pnpm -C apps/backend test

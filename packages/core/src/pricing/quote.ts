@@ -7,6 +7,11 @@ import {
   sumMoney,
 } from "./arithmetic.js";
 import { grossUpPaymentSchedule } from "./payment.js";
+import {
+  taxBreakdownFromNet,
+  type CustomerTaxBreakdown,
+  type SellerTaxPolicy,
+} from "./tax.js";
 import type {
   AllocationTarget,
   GrossedUpPaymentCapture,
@@ -56,6 +61,7 @@ export interface PriceListCalculationInput {
   readonly revision: string;
   readonly termsRevision: string;
   readonly currency: string;
+  readonly taxPolicy: SellerTaxPolicy;
   readonly machineRateMinorPerSecond: Rational;
   readonly laborRateMinorPerSecond: Rational;
   readonly amortizationRateMinorPerSecond: Rational;
@@ -94,7 +100,8 @@ export type CalculatedPriceComponentKind =
   | "ORDER_SMALL_SURCHARGE"
   | "SHIPMENT"
   | "EXPRESS"
-  | "PAYMENT_FEE";
+  | "PAYMENT_FEE"
+  | "VAT";
 
 export interface CalculatedPriceComponent {
   readonly componentId: string;
@@ -133,6 +140,8 @@ export type OrderPriceCalculation =
       readonly termsRevision: string;
       readonly profileRevisionIds: readonly string[];
       readonly breakdown: OrderPriceBreakdown;
+      readonly customerTotal: Money;
+      readonly tax: CustomerTaxBreakdown;
       readonly components: readonly CalculatedPriceComponent[];
     }
   | {
@@ -144,6 +153,8 @@ export type OrderPriceCalculation =
       readonly deliveryDestinationId: string;
       readonly deliveryCapabilitySnapshotId: string;
       readonly breakdown: OrderPriceBreakdown;
+      readonly customerTotal: Money;
+      readonly tax: CustomerTaxBreakdown;
       readonly contractTotal: Money;
       readonly paymentFee: Money;
       readonly captures: readonly GrossedUpPaymentCapture[];
@@ -731,10 +742,26 @@ export function calculateOrderPrice(
   } as const;
 
   if (input.shipment === undefined) {
-    return { kind: "provisional", ...common, components };
+    const tax = taxBreakdownFromNet(subtotal, priceList.taxPolicy);
+    if (tax.vat.minorUnits > 0n) {
+      components.push(
+        allocatedComponent("order:vat", "VAT", tax.vat, allPackingUnits),
+      );
+    }
+    return {
+      kind: "provisional",
+      ...common,
+      customerTotal: tax.gross,
+      tax,
+      components,
+    };
   }
 
-  const grossedUp = grossUpPaymentSchedule(subtotal, input.paymentSchedule);
+  const grossedUp = grossUpPaymentSchedule(
+    subtotal,
+    input.paymentSchedule,
+    priceList.taxPolicy,
+  );
   components.push(
     allocatedComponent(
       "order:payment-fee",
@@ -743,6 +770,16 @@ export function calculateOrderPrice(
       allPackingUnits,
     ),
   );
+  if (grossedUp.tax.vat.minorUnits > 0n) {
+    components.push(
+      allocatedComponent(
+        "order:vat",
+        "VAT",
+        grossedUp.tax.vat,
+        allPackingUnits,
+      ),
+    );
+  }
   return {
     kind: "binding",
     ...common,
@@ -751,6 +788,8 @@ export function calculateOrderPrice(
     ),
     deliveryDestinationId: input.shipment.deliveryDestinationId,
     deliveryCapabilitySnapshotId: input.shipment.deliveryCapabilitySnapshotId,
+    customerTotal: grossedUp.contractTotal,
+    tax: grossedUp.tax,
     contractTotal: grossedUp.contractTotal,
     paymentFee: grossedUp.paymentFee,
     captures: grossedUp.captures,
