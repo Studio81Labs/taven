@@ -38,7 +38,7 @@ export const publicNavigation = [
   { label: "Jak to funguje", to: "/jak-to-funguje" },
   { label: "Ceník", to: "/cenik" },
   { label: "Ukázky", to: "/ukazky" },
-  { label: "Kontakt", to: "/kontakt" },
+  { label: "Potřebuji model", to: "/poptavka" },
 ] as const;
 
 export const indexablePublicRoutes = [

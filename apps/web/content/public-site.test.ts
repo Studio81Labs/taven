@@ -3,6 +3,7 @@ import {
   LEGAL_PLACEHOLDER_BANNER,
   indexablePublicRoutes,
   legalDocuments,
+  publicNavigation,
   publicSite,
 } from "./public-site";
 
@@ -18,6 +19,13 @@ describe("public site launch boundaries", () => {
     expect(publicSite.contact.phone).toBeNull();
     expect(publicSite.portfolio.items).toHaveLength(0);
     expect(publicSite.analytics.provider).toBeNull();
+  });
+
+  it("keeps both customer journeys available from the public shell", () => {
+    expect(publicNavigation).toContainEqual({
+      label: "Potřebuji model",
+      to: "/poptavka",
+    });
   });
 
   it("keeps every legal draft visibly non-production and out of the sitemap", () => {
