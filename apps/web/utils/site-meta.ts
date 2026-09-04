@@ -8,16 +8,18 @@ export function canonicalTitle(
 }
 
 export function normalizeSiteOrigin(value: string | undefined): string {
-  if (!value) return LOCAL_SITE_ORIGIN;
+  if (value === undefined) return LOCAL_SITE_ORIGIN;
 
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return LOCAL_SITE_ORIGIN;
+      throw new TypeError();
     }
     return url.origin;
-  } catch {
-    return LOCAL_SITE_ORIGIN;
+  } catch (error) {
+    throw new TypeError("NUXT_PUBLIC_SITE_URL must be a valid HTTP(S) URL.", {
+      cause: error,
+    });
   }
 }
 

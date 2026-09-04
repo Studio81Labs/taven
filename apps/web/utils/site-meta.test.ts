@@ -18,10 +18,19 @@ describe("normalizeSiteOrigin", () => {
     );
   });
 
-  it("falls back safely for missing or unsupported URLs", () => {
+  it("uses the local development origin when no value is configured", () => {
     expect(normalizeSiteOrigin(undefined)).toBe("http://localhost:3000");
-    expect(normalizeSiteOrigin("javascript:alert(1)")).toBe(
-      "http://localhost:3000",
+  });
+
+  it("rejects a configured malformed or unsupported origin", () => {
+    expect(() => normalizeSiteOrigin("")).toThrow(
+      "NUXT_PUBLIC_SITE_URL must be a valid HTTP(S) URL.",
+    );
+    expect(() => normalizeSiteOrigin("not a URL")).toThrow(
+      "NUXT_PUBLIC_SITE_URL must be a valid HTTP(S) URL.",
+    );
+    expect(() => normalizeSiteOrigin("javascript:alert(1)")).toThrow(
+      "NUXT_PUBLIC_SITE_URL must be a valid HTTP(S) URL.",
     );
   });
 });

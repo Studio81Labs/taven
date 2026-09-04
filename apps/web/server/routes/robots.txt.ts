@@ -9,9 +9,6 @@ export default defineEventHandler((event) => {
     "Allow: /",
     "Disallow: /objednavka",
     "Disallow: /poptavka",
-    "Disallow: /vop",
-    "Disallow: /reklamace",
-    "Disallow: /ochrana-soukromi",
     `Sitemap: ${canonicalUrl(config.public.siteUrl, "/sitemap.xml")}`,
     "",
   ].join("\n");
