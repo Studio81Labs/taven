@@ -70,6 +70,27 @@ export const legalDocuments = {
     summary:
       "Schválené zásady zpracování osobních údajů zatím nejsou k dispozici.",
   },
+  prohibitedContent: {
+    id: "prohibited-content-pending",
+    path: "/zakazany-obsah",
+    title: "Pravidla zakázaného obsahu a manuální kontroly",
+    summary:
+      "Schválená pravidla zakázaného obsahu a manuální kontroly zatím nejsou k dispozici.",
+  },
+  retention: {
+    id: "retention-pending",
+    path: "/uchovani-dat",
+    title: "Pravidla uchování dat a opuštěných položek",
+    summary:
+      "Schválená pravidla uchování dat a opuštěných položek zatím nejsou k dispozici.",
+  },
+  photoConsent: {
+    id: "photo-consent-pending",
+    path: "/fotografie-a-duvernost",
+    title: "Souhlas s fotografováním a důvěrnost zakázky",
+    summary:
+      "Schválená pravidla fotografování a důvěrnosti zatím nejsou k dispozici.",
+  },
 } as const;
 
 export type LegalDocument =

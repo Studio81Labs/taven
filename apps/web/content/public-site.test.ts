@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LEGAL_DRAFT_STATUS, legalDrafts } from "./legal-drafts";
 import {
   LEGAL_PLACEHOLDER_BANNER,
   indexablePublicRoutes,
@@ -40,10 +41,151 @@ describe("public site launch boundaries", () => {
       "NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI",
     );
 
+    const legalDocumentKeys = [
+      "terms",
+      "claims",
+      "privacy",
+      "prohibitedContent",
+      "retention",
+      "photoConsent",
+    ];
+
+    expect(Object.keys(legalDocuments)).toEqual(legalDocumentKeys);
+    expect(Object.keys(legalDrafts)).toEqual(legalDocumentKeys);
+
+    for (const [key, document] of Object.entries(legalDocuments)) {
+      expect(
+        legalDrafts[key as keyof typeof legalDrafts].sourceDocumentId,
+      ).toBe(document.id);
+    }
+
     for (const document of Object.values(legalDocuments)) {
       expect(document.id).toMatch(/-pending$/);
       expect(indexablePublicRoutes).not.toContain(document.path);
       expect(document).not.toHaveProperty("effectiveDate");
+      expect(document).not.toHaveProperty("draft");
     }
+
+    for (const draft of Object.values(legalDrafts)) {
+      expect(draft.status).toBe(LEGAL_DRAFT_STATUS);
+      expect(draft.sections.length).toBeGreaterThan(0);
+      expect(draft).not.toHaveProperty("effectiveDate");
+
+      for (const section of draft.sections) {
+        expect(section.title).not.toHaveLength(0);
+        expect(
+          (section.paragraphs?.length ?? 0) +
+            (section.items?.length ?? 0) +
+            (section.note ? 1 : 0),
+        ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("keeps manual review and sensitive source formats explicit in the drafts", () => {
+    const manualReview = legalDrafts.prohibitedContent.sections.find(
+      (section) => section.title === "6. Manuální kontrola",
+    );
+    expect(manualReview?.paragraphs).toContain(
+      "Ve verzi v0 prochází manuální kontrolou náhledu každá objednávka.",
+    );
+
+    for (const draft of [legalDrafts.retention, legalDrafts.photoConsent]) {
+      const content = JSON.stringify(draft.sections);
+      expect(content).toContain("Zdrojová CAD data jsou citlivější");
+      expect(content).toContain("STL");
+      expect(content).toContain("3MF");
+      expect(content).toContain("STEP");
+    }
+  });
+
+  it("keeps legal drafts aligned with the owner-operated v0 service", () => {
+    const allDrafts = JSON.stringify(legalDrafts);
+    const terms = JSON.stringify(legalDrafts.terms.sections);
+    const claims = JSON.stringify(legalDrafts.claims.sections);
+
+    expect(allDrafts).not.toContain("Výrobce");
+    expect(allDrafts).not.toContain("výrobní sítě");
+    expect(terms).toContain("jako prodávající");
+    expect(terms).toContain("není Provozovatel plátcem DPH");
+    expect(terms).toContain("znovu ověřen");
+    expect(terms).toContain("nenabízí katalog modelů");
+    expect(terms).toContain("ani automatické generování modelů");
+    expect(terms).toContain("výslovně potvrdit");
+    expect(claims).toContain("věrnost");
+    expect(claims).toContain("lícování");
+  });
+
+  it("keeps categorical safety bans and shipment remedies explicit", () => {
+    const prohibitedOrders = legalDrafts.prohibitedContent.sections.find(
+      (section) => section.title === "2. Zakázané zakázky",
+    );
+    const prohibitedOrdersContent = JSON.stringify(prohibitedOrders);
+    const prohibitedContent = JSON.stringify(
+      legalDrafts.prohibitedContent.sections,
+    );
+    const claims = JSON.stringify(legalDrafts.claims.sections);
+
+    expect(prohibitedOrders?.paragraphs).toContain(
+      "Ve verzi v0 jsou zakázány zejména zakázky zahrnující:",
+    );
+    expect(prohibitedOrdersContent).toContain(
+      "střelné zbraně a jejich části, bez ohledu",
+    );
+    expect(prohibitedContent).toContain(
+      "zdravotnické prostředky určené pro styk s tělem",
+    );
+    expect(prohibitedContent).toContain("ve verzi v0 zakázané");
+    expect(claims).toContain("ztracené nebo vrácené zásilky");
+    expect(claims).toContain("náhradní výrobě nebo zásilce");
+    expect(claims).toContain("finančně vypořádanému zrušení");
+  });
+
+  it("documents full and staged payment settlement", () => {
+    const payments = legalDrafts.terms.sections.find(
+      (section) => section.title === "4. Cena a platba",
+    );
+    const content = JSON.stringify(payments);
+
+    expect(content).toContain("automatické nabídce se hradí v plné výši");
+    expect(content).toContain("zálohu a doplatek");
+    expect(content).toContain("konkrétní zachycené platbě");
+    expect(content).toContain("objednávku neobnoví");
+  });
+
+  it("separates source-file, physical-item, and photo retention", () => {
+    const completedOrders = legalDrafts.retention.sections.find(
+      (section) =>
+        section.title === "3. Dokončené objednávky a reklamační podklad",
+    );
+    const unfinishedUploads = legalDrafts.retention.sections.find(
+      (section) => section.title === "4. Nedokončené uploady a objednávky",
+    );
+    const abandonedPhysicalItems = legalDrafts.retention.sections.find(
+      (section) => section.title === "5. Opuštěné fyzické výrobky",
+    );
+    const operationalPhotos = legalDrafts.retention.sections.find(
+      (section) => section.title === "8. Fotografie",
+    );
+    const photoConsent = JSON.stringify(legalDrafts.photoConsent.sections);
+
+    expect(JSON.stringify(completedOrders)).toContain(
+      "alespoň do konce příslušné reklamační lhůty",
+    );
+    expect(JSON.stringify(completedOrders)).toContain(
+      "nikoli jako skrytá dlouhodobá archivace",
+    );
+    expect(unfinishedUploads?.note).toContain("90 dní");
+    expect(unfinishedUploads?.note).not.toContain("30 dní");
+    expect(abandonedPhysicalItems?.note).toContain("30 dní");
+    expect(abandonedPhysicalItems?.note).toContain("fyzický výrobek");
+    expect(JSON.stringify(operationalPhotos)).toContain(
+      "konečné plánované datum odstranění",
+    );
+    expect(operationalPhotos?.note).toContain("NENÍ SCHVÁLENO");
+    expect(operationalPhotos?.note).toContain("ukládání");
+    expect(operationalPhotos?.note).toContain("vypnuté");
+    expect(photoConsent).toContain("neprodlužuje retenční lhůtu");
+    expect(photoConsent).toContain("nejpozději při uplynutí lhůty");
   });
 });

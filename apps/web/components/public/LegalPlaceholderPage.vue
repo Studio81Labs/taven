@@ -4,9 +4,11 @@ import {
   publicSite,
   type LegalDocument,
 } from "../../content/public-site";
+import type { LegalDraft } from "../../content/legal-drafts";
 
 defineProps<{
   document: LegalDocument;
+  draft: LegalDraft;
   contact?: {
     label: string;
     email: string;
@@ -60,6 +62,56 @@ defineProps<{
         :href="contact.href"
         >{{ contact.email }}</a
       >
+    </section>
+    <section
+      class="mt-12 border-t-2 border-[#1a1a16] pt-10"
+      aria-labelledby="legal-draft-heading"
+    >
+      <div class="border border-[#d9d9d2] bg-[#efefea] p-5">
+        <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
+          {{ draft.status }} · {{ draft.sourceDocumentId }}
+        </p>
+        <h2 id="legal-draft-heading" class="mt-3 text-2xl font-semibold">
+          Pracovní návrh textu
+        </h2>
+        <p class="mt-3 leading-7 text-[#54554c]">
+          Následující text slouží pouze k vývoji a připomínkování. Nemá datum
+          účinnosti, nelze jej přijmout a nesmí být použit při produkční
+          objednávce.
+        </p>
+      </div>
+
+      <section
+        v-for="section in draft.sections"
+        :key="section.title"
+        class="border-b border-[#d9d9d2] py-8 last:border-b-0"
+      >
+        <h3 class="text-xl font-semibold">{{ section.title }}</h3>
+        <p
+          v-for="(paragraph, index) in section.paragraphs ?? []"
+          :key="`${section.title}-paragraph-${index}`"
+          class="mt-4 leading-7 text-[#3f4039]"
+        >
+          {{ paragraph }}
+        </p>
+        <ul
+          v-if="section.items?.length"
+          class="mt-4 list-disc space-y-2 pl-6 leading-7 text-[#3f4039] marker:text-[#1b44e8]"
+        >
+          <li
+            v-for="(item, index) in section.items"
+            :key="`${section.title}-item-${index}`"
+          >
+            {{ item }}
+          </li>
+        </ul>
+        <p
+          v-if="section.note"
+          class="mt-4 border-l-2 border-[#1b44e8] pl-4 leading-7 text-[#54554c]"
+        >
+          {{ section.note }}
+        </p>
+      </section>
     </section>
   </article>
 </template>

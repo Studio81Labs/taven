@@ -4,8 +4,8 @@ import { legalDocuments } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
 
-const document = legalDocuments.privacy;
-const draft = legalDrafts.privacy;
+const document = legalDocuments.prohibitedContent;
+const draft = legalDrafts.prohibitedContent;
 const contacts = usePublicContacts();
 
 usePublicPageMeta({
@@ -21,7 +21,7 @@ usePublicPageMeta({
     :document="document"
     :draft="draft"
     :contact="{
-      label: 'Kontakt správce osobních údajů',
+      label: 'Kontakt pro oznámení problematického obsahu',
       email: contacts.dataController.email,
       href: contacts.dataController.href,
     }"

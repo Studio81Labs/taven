@@ -4,8 +4,8 @@ import { legalDocuments } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
 
-const document = legalDocuments.privacy;
-const draft = legalDrafts.privacy;
+const document = legalDocuments.retention;
+const draft = legalDrafts.retention;
 const contacts = usePublicContacts();
 
 usePublicPageMeta({

@@ -9,9 +9,9 @@ rendered without an API dependency.
 The public landing and static pages use basic Tailwind utilities. The final
 visual design is intentionally deferred. Approved identity, seller details,
 navigation, legal placeholders, and unset launch values live in
-`content/public-site.ts` so they can be replaced without restructuring pages.
-Approved public contacts use Nuxt runtime configuration so deployments can
-change them without rebuilding the image:
+`content/public-site.ts`; owner-supplied non-effective legal draft text lives in
+`content/legal-drafts.ts`. Approved public contacts use Nuxt runtime
+configuration so deployments can change them without rebuilding the image:
 
 - `NUXT_PUBLIC_CUSTOMER_CONTACT_EMAIL` defaults to `zakaznici@taven.cz`;
 - `NUXT_PUBLIC_DATA_CONTROLLER_EMAIL` defaults to `legal@taven.cz`.
@@ -21,9 +21,10 @@ customer phone number and uses electronic contact channels.
 
 Until launch approvals are complete:
 
-- legal routes are visibly marked as non-production placeholders, carry no
-  effective date or acceptance control, are `noindex`, and are excluded from the
-  sitemap;
+- all six legal routes are visibly marked as non-production placeholders, carry
+  no effective date or acceptance control, are `noindex`, and are excluded from
+  the sitemap; their escaped static draft text is for development and legal
+  review only;
 - public price-from, lead-time, and portfolio values remain unset;
 - analytics is disabled. No analytics provider or script may be added until a
   consent boundary and approved privacy text are implemented;

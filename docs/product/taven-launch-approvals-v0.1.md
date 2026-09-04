@@ -64,6 +64,12 @@ veřejné spuštění.
 | Retence, mazání a opuštěné výrobky | `retention-pending` | — | vlastník + český právní poradce | blokující |
 | Souhlas s fotografiemi a NDA hranice | `photo-consent-pending` | — | vlastník + český právní poradce | blokující |
 
+Vlastník 2026-09-04 dodal pracovní návrhy všech šesti oblastí. Web je zobrazuje
+pro vývoj a právní připomínkování pod rezervovanými `*-pending` ID, s trvalým
+varováním a bez data účinnosti nebo možnosti přijetí. Kontaktní placeholdery
+využívají schválené runtime měnitelné elektronické kontakty. Návrhové retenční
+lhůty zůstávají výslovně neschválené a produkční toky zůstávají blokované.
+
 Právní kontrola musí pokrýt také roli prodávajícího, DPH, capture/refund a
 settlement, výjimku z odstoupení u zboží na míru, hranici model versus výtisk,
 záruku a reklamace, delivery promise a individuální zálohu/doplatek. Texty
@@ -101,9 +107,12 @@ zákaznický slib, zůstávají návrhy. Patří sem zejména:
 - 90denní retence fotografií a nedoručeného reprodukčního artefaktu,
 - hodnotový a kusový strop automatu a všechny nedopočítané cenové vstupy.
 
-Dokud nejsou příslušná čísla přijata vlastníkem a tam, kde je třeba, právním
-poradcem, musí být dotčený direct flow blokovaný. Placeholder právního textu
-není souhlas s těmito hodnotami.
+Vlastník 2026-09-04 výslovně rozhodl, že všechny dosud neschválené ⚠ hodnoty
+zůstanou vypnuté, dokud nebude každá z nich samostatně schválena. Do té doby
+musí být každý dotčený direct flow blokovaný. Jde o explicitní direct-flow
+block pro acceptance criterion issue #38; není to schválení žádné z návrhových
+hodnot. Placeholder ani pracovní návrh právního textu není souhlas s těmito
+hodnotami.
 
 Backend proto používá dva nezávislé, výchozím stavem vypnuté přepínače:
 `TAVEN_BINDING_QUOTE_FLOWS_ENABLED` pro vytvoření závazné automatické ceny,
@@ -119,7 +128,7 @@ blokuje. Expirace, odmítnutí nabídek a retenční úklid zůstávají dostupn
 | `TAVEN.`/`TV.` a Studio81 Labs jako seller/operator | částečně splněno | značky, subjekt, DIČ a elektronické kontakty potvrzeny; name clearance čeká |
 | Clearance a finální veřejné jméno/doména | blokováno | čtyři kroky clearance a finální souhlas |
 | Verzované účinné právní texty | blokováno | counsel-approved text, verze a data účinnosti |
-| Přijaté závazné v0 hodnoty nebo direct-flow blok | blokováno | audit všech ⚠ hodnot a explicitní rozhodnutí |
+| Přijaté závazné v0 hodnoty nebo direct-flow blok | splněno přímým blokem | všechny neschválené ⚠ hodnoty zůstávají vypnuté do samostatného schválení |
 | Nekopírovat právní prózu třetích stran | splněno pro tento záznam | zachovat při přípravě finálních textů |
 
 Issue #38 zůstává otevřená a tento dokument sám o sobě neautorizuje registraci
