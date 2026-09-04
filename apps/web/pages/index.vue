@@ -85,12 +85,20 @@ usePublicPageMeta({
             bezpečný přechod do individuální poptávky.
           </p>
           <NuxtLink
+            v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
             class="mt-6 inline-flex min-h-11 items-center bg-[#1b44e8] px-5 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
             to="/objednavka"
             no-prefetch
           >
             Nahrát model
           </NuxtLink>
+          <span
+            v-else
+            class="mt-6 inline-flex min-h-11 cursor-not-allowed items-center border border-[#9b9c93] px-5 font-semibold text-[#66675f]"
+            aria-disabled="true"
+          >
+            Kalkulace čeká na schválení
+          </span>
         </article>
         <article class="bg-[#efefea] px-5 py-12 sm:px-8">
           <h2 class="text-2xl font-semibold">

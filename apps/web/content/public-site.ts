@@ -20,6 +20,7 @@ export const publicSite = {
     status: "pending-approval" as const,
   },
   commercial: {
+    automaticQuotePubliclyEnabled: false,
     fromPrice: null,
     standardLeadTime: null,
     status: "pending-approval" as const,

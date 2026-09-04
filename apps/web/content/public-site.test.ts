@@ -14,6 +14,7 @@ describe("public site launch boundaries", () => {
   });
 
   it("does not invent unapproved commercial or contact values", () => {
+    expect(publicSite.commercial.automaticQuotePubliclyEnabled).toBe(false);
     expect(publicSite.commercial.fromPrice).toBeNull();
     expect(publicSite.commercial.standardLeadTime).toBeNull();
     expect(publicSite.contact.email).toBeNull();

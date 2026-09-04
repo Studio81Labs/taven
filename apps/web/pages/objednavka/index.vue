@@ -7,6 +7,8 @@ import {
 } from "../../utils/assisted-quote-context";
 import { getSessionStorage } from "../../utils/quote-session-storage";
 
+definePageMeta({ middleware: "automatic-pricing-gate" });
+
 usePublicPageMeta({
   path: "/objednavka",
   title: "Nahrát model",

@@ -31,12 +31,21 @@ const route = useRoute();
           </li>
           <li>
             <NuxtLink
+              v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
               class="inline-flex min-h-11 items-center bg-[#1b44e8] px-4 font-semibold text-white hover:bg-[#1536b8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
               to="/objednavka"
               no-prefetch
             >
               Nahrát model
             </NuxtLink>
+            <span
+              v-else
+              class="inline-flex min-h-11 cursor-not-allowed items-center border border-[#9b9c93] px-4 font-semibold text-[#66675f]"
+              aria-disabled="true"
+              title="Automatická kalkulace čeká na schválené cenové vstupy"
+            >
+              Kalkulace čeká
+            </span>
           </li>
         </ul>
       </nav>

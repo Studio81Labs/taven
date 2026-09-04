@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { publicSite } from "../../content/public-site";
 import { formatFileSize } from "../../utils/model-file";
 
 const {
@@ -206,11 +207,17 @@ function cubicCentimeters(value: number): string {
       <div class="mt-7 flex flex-wrap items-center gap-5">
         <button
           class="inline-flex min-h-12 items-center bg-[#1b44e8] px-6 font-semibold text-white hover:bg-[#1536b8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16] disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="!canUpload"
+          :disabled="
+            !canUpload || !publicSite.commercial.automaticQuotePubliclyEnabled
+          "
           type="button"
           @click="startUpload"
         >
-          Nahrát a pokračovat ke konfiguraci
+          {{
+            publicSite.commercial.automaticQuotePubliclyEnabled
+              ? "Nahrát a pokračovat ke konfiguraci"
+              : "Kalkulace čeká na schválení"
+          }}
         </button>
         <button
           class="font-semibold underline decoration-[#1b44e8] decoration-2 underline-offset-4"
@@ -305,8 +312,8 @@ function cubicCentimeters(value: number): string {
       ověření formátu a rozměrů.
     </p>
     <p class="mt-2 text-sm leading-6 text-[#54554c]">
-      Hrubý cenový odhad zveřejníme až ze schválených cenových vstupů. Přesnou
-      výrobní cenu určí referenční slicing.
+      Automatickou kalkulaci i hrubý odhad zveřejníme až ze schválených cenových
+      vstupů. Soubor zatím můžeš bezpečně zkontrolovat jen v prohlížeči.
     </p>
     <NuxtLink
       class="mt-4 inline-block font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
