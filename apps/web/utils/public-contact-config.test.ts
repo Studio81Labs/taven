@@ -20,6 +20,24 @@ describe("resolvePublicContacts", () => {
     });
   });
 
+  it("encodes URI-reserved characters in the recipient address", () => {
+    expect(
+      resolvePublicContacts({
+        customerContactEmail: "support#eu@example.cz",
+        dataControllerEmail: "legal+privacy@example.cz",
+      }),
+    ).toEqual({
+      customer: {
+        email: "support#eu@example.cz",
+        href: "mailto:support%23eu@example.cz",
+      },
+      dataController: {
+        email: "legal+privacy@example.cz",
+        href: "mailto:legal%2Bprivacy@example.cz",
+      },
+    });
+  });
+
   it.each([
     ["customerContactEmail", ""],
     ["customerContactEmail", "customer@example"],

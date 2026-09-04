@@ -27,7 +27,9 @@ function resolvePublicEmail(value: unknown, environmentName: string): string {
 }
 
 function emailContact(email: string): PublicEmailContact {
-  return { email, href: `mailto:${email}` };
+  const encodedAddress = encodeURIComponent(email).replace(/%40/gi, "@");
+
+  return { email, href: `mailto:${encodedAddress}` };
 }
 
 export function resolvePublicContacts(
