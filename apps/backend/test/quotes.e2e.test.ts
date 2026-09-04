@@ -911,6 +911,12 @@ describe("QuoteRequest and tokenized individual offers", () => {
         data: { vatAmountMinor: 0n },
       }),
     ).rejects.toBeDefined();
+
+    const accepted = await acceptOffer(
+      issued.body,
+      key("vat-payer-offer-accept"),
+    );
+    expect(accepted.response.status).toBe(200);
   });
 
   it("accepts and canonicalizes uppercase UUIDs allowed by the API contract", async () => {

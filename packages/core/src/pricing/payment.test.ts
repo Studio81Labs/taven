@@ -121,6 +121,46 @@ describe("payment schedule gross-up", () => {
     }
   });
 
+  it("returns the least total across VAT and fee rounding dips", () => {
+    const result = grossUpPaymentSchedule(
+      czk(33_889n),
+      [
+        {
+          id: "full",
+          sequence: 0,
+          role: "FULL",
+          shareBasisPoints: 10_000,
+          feeRateBasisPoints: 150,
+          feeFixed: czk(300n),
+        },
+      ],
+      { regime: "VAT_PAYER", vatRateBasisPoints: 2_100 },
+    );
+    expect(result.contractTotal).toEqual(czk(42_133n));
+    expect(result.tax.net.minorUnits - result.paymentFee.minorUnits).toBe(
+      33_889n,
+    );
+  });
+
+  it("rejects tax and fee rates with no sustainable net proceeds", () => {
+    expect(() =>
+      grossUpPaymentSchedule(
+        czk(10_000n),
+        [
+          {
+            id: "full",
+            sequence: 0,
+            role: "FULL",
+            shareBasisPoints: 10_000,
+            feeRateBasisPoints: 9_999,
+            feeFixed: czk(0n),
+          },
+        ],
+        { regime: "VAT_PAYER", vatRateBasisPoints: 10_000 },
+      ),
+    ).toThrow(/sustainable net proceeds/);
+  });
+
   it("uses canonical sequence as the stable share-rounding tie-break", () => {
     const result = grossUpPaymentSchedule(
       czk(1n),

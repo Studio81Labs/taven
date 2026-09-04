@@ -189,7 +189,7 @@ CREATE TRIGGER "price_snapshots_default_non_vat_tax"
 BEFORE INSERT ON "price_snapshots"
 FOR EACH ROW EXECUTE FUNCTION taven_default_non_vat_price_snapshot_tax();
 
-CREATE OR REPLACE FUNCTION taven_valid_balance_timeout_policy(target_snapshot_id uuid)
+CREATE OR REPLACE FUNCTION taven_price_snapshot_balance_earned_policy_is_valid(target_snapshot_id uuid)
 RETURNS boolean
 LANGUAGE sql
 STABLE
