@@ -7,6 +7,11 @@ import {
 
 defineProps<{
   document: LegalDocument;
+  contact?: {
+    label: string;
+    email: string;
+    href: string;
+  };
 }>();
 </script>
 
@@ -44,8 +49,17 @@ defineProps<{
         <template v-for="line in publicSite.seller.address" :key="line">
           {{ line }}<br />
         </template>
-        IČ {{ publicSite.seller.companyId }}
+        IČ {{ publicSite.seller.companyId }}<br />
+        DIČ {{ publicSite.seller.vatId }}
       </p>
+    </section>
+    <section v-if="contact" class="mt-10 border-t border-[#d9d9d2] pt-8">
+      <h2 class="text-xl font-semibold">{{ contact.label }}</h2>
+      <a
+        class="mt-3 inline-block font-mono underline decoration-[#6e6f66] underline-offset-4 hover:decoration-[#1b44e8] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
+        :href="contact.href"
+        >{{ contact.email }}</a
+      >
     </section>
   </article>
 </template>

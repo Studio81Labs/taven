@@ -13,11 +13,7 @@ export const publicSite = {
     legalName: "Studio81 Labs, s.r.o.",
     address: ["Nové sady 988/2", "602 00 Brno", "Česká republika"],
     companyId: "29508291",
-  },
-  contact: {
-    email: null,
-    phone: null,
-    status: "pending-approval" as const,
+    vatId: "CZ29508291",
   },
   commercial: {
     automaticQuotePubliclyEnabled: false,

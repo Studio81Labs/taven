@@ -10,13 +10,21 @@ The public landing and static pages use basic Tailwind utilities. The final
 visual design is intentionally deferred. Approved identity, seller details,
 navigation, legal placeholders, and unset launch values live in
 `content/public-site.ts` so they can be replaced without restructuring pages.
+Approved public contacts use Nuxt runtime configuration so deployments can
+change them without rebuilding the image:
+
+- `NUXT_PUBLIC_CUSTOMER_CONTACT_EMAIL` defaults to `zakaznici@taven.cz`;
+- `NUXT_PUBLIC_DATA_CONTROLLER_EMAIL` defaults to `legal@taven.cz`.
+
+Both values must be valid email addresses. Taven intentionally publishes no
+customer phone number and uses electronic contact channels.
 
 Until launch approvals are complete:
 
 - legal routes are visibly marked as non-production placeholders, carry no
   effective date or acceptance control, are `noindex`, and are excluded from the
   sitemap;
-- public price-from, lead-time, email, phone, and portfolio values remain unset;
+- public price-from, lead-time, and portfolio values remain unset;
 - analytics is disabled. No analytics provider or script may be added until a
   consent boundary and approved privacy text are implemented;
 - production must set `NUXT_PUBLIC_SITE_URL` to the cleared canonical origin.
