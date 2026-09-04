@@ -11,36 +11,25 @@ usePublicPageMeta({
 <template>
   <div>
     <section class="border-b border-[#d9d9d2] bg-white">
-      <div class="mx-auto max-w-6xl px-5 py-16 sm:px-8 sm:py-24">
-        <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-          Zakázkový 3D tisk
-        </p>
-        <h1
-          class="mt-4 max-w-4xl text-4xl leading-tight font-semibold tracking-tight sm:text-6xl"
-        >
-          Nahrajte model. Cenu spočítáme ze skutečných tiskových dat.
-        </h1>
-        <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">
-          Hotový STL nebo 3MF projde kontrolou geometrie a referenčním
-          slicingem. Bez e-mailového kolečka a bez ručně odhadované výrobní
-          ceny.
-        </p>
-        <div class="mt-9 flex flex-wrap items-center gap-5">
-          <NuxtLink
-            class="inline-flex min-h-12 items-center bg-[#1b44e8] px-6 font-semibold text-white hover:bg-[#1536b8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
-            to="/objednavka"
-            no-prefetch
+      <div
+        class="mx-auto grid max-w-6xl items-center gap-10 px-5 py-12 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,0.85fr)_minmax(28rem,1.15fr)] lg:gap-14"
+      >
+        <div>
+          <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
+            Zakázkový 3D tisk
+          </p>
+          <h1
+            class="mt-4 text-4xl leading-tight font-semibold tracking-tight sm:text-5xl"
           >
-            Mám soubor — nahrát model
-          </NuxtLink>
-          <NuxtLink
-            class="font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
-            to="/poptavka"
-            no-prefetch
-          >
-            Nemám soubor nebo potřebuji poradit
-          </NuxtLink>
+            Nahrajte model. Cenu spočítáme ze skutečných tiskových dat.
+          </h1>
+          <p class="mt-6 text-lg leading-8 text-[#54554c]">
+            Hotový STL nebo 3MF projde kontrolou geometrie a referenčním
+            slicingem. Bez e-mailového kolečka a bez ručně odhadované výrobní
+            ceny.
+          </p>
         </div>
+        <PublicHeroUpload />
       </div>
     </section>
 

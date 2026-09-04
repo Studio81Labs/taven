@@ -17,7 +17,7 @@ const route = useRoute();
         <PublicBrandMark />
       </NuxtLink>
 
-      <nav aria-label="Hlavní navigace">
+      <nav class="w-full min-w-0 sm:w-auto" aria-label="Hlavní navigace">
         <ul class="flex flex-wrap items-center gap-x-5 gap-y-3 text-sm">
           <li v-for="item in publicNavigation" :key="item.to">
             <NuxtLink

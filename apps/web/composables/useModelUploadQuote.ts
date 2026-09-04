@@ -185,7 +185,11 @@ function requestMessage(
   return "Požadavek se nepodařilo dokončit. Zkontrolujte připojení a zkuste to znovu.";
 }
 
-export function useModelUploadQuote() {
+export interface UseModelUploadQuoteOptions {
+  restoreSession?: boolean;
+}
+
+export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   const { $api } = useNuxtApp();
   const phase = ref<UploadWorkflowPhase>("idle");
   const selectedFile = shallowRef<File>();
@@ -866,7 +870,7 @@ export function useModelUploadQuote() {
 
   onMounted(() => {
     disposed = false;
-    void restoreSession();
+    if (options.restoreSession !== false) void restoreSession();
   });
   onBeforeUnmount(() => {
     disposed = true;
