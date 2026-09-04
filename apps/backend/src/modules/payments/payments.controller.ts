@@ -34,6 +34,11 @@ const IDEMPOTENCY_HEADER = {
   name: "Idempotency-Key",
   required: true,
   description: "Stable client command identity (8-255 characters)",
+  schema: {
+    type: "string",
+    minLength: 8,
+    pattern: "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+  },
 };
 
 @ApiTags("payments")
