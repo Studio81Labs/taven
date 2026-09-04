@@ -199,8 +199,53 @@ CREATE TRIGGER "payments_checkout_identity_protected"
 BEFORE INSERT OR UPDATE ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_checkout_identity();
 
+-- Checkout transitions share this canonical lower-rank lock envelope with
+-- refund dispatch: Order, ordered phases, ordered refunds, then Payment.
+-- The first Payment read resolves immutable identity only and takes no lock.
+CREATE FUNCTION taven_lock_checkout_payment_envelope(target_payment_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+BEGIN
+    SELECT payment."order_id" INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = target_payment_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'checkout Payment does not exist'
+            USING ERRCODE = '23503', CONSTRAINT = 'payments_pkey';
+    END IF;
+
+    PERFORM 1 FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    PERFORM 1 FROM "order_phases" phase
+    WHERE phase."order_id" = target_order_id
+    ORDER BY phase."id"
+    FOR UPDATE;
+
+    PERFORM 1 FROM "refund_transactions" refund
+    WHERE refund."payment_id" = target_payment_id
+    ORDER BY refund."id"
+    FOR UPDATE;
+
+    PERFORM 1 FROM "payments" payment
+    WHERE payment."id" = target_payment_id
+      AND payment."order_id" = target_order_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'checkout Payment identity changed during lock acquisition'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_order_binding_immutable_check';
+    END IF;
+END;
+$$;
+
 -- Close one initial checkout attempt and all still-reversible fulfilment work.
--- The order row and Payment row are the serialization fence shared with the
+-- The canonical checkout envelope is the serialization fence shared with the
 -- provider-event transition below, so timeout, customer cancellation, and
 -- capture have exactly one winner.
 CREATE FUNCTION taven_close_initial_checkout_payment(
@@ -213,7 +258,6 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     target_payment "payments"%ROWTYPE;
-    target_order_status "order_status";
     closed_at timestamptz := coalesce(close_observed_at, clock_timestamp());
     terminal_order_status "order_status";
 BEGIN
@@ -224,6 +268,8 @@ BEGIN
             USING ERRCODE = '22023', CONSTRAINT = 'checkout_payment_close_reason_check';
     END IF;
 
+    PERFORM taven_lock_checkout_payment_envelope(target_payment_id);
+
     SELECT * INTO target_payment
     FROM "payments"
     WHERE "id" = target_payment_id
@@ -233,11 +279,6 @@ BEGIN
         RAISE EXCEPTION 'checkout Payment does not exist'
             USING ERRCODE = '23503', CONSTRAINT = 'payments_pkey';
     END IF;
-
-    SELECT "status" INTO target_order_status
-    FROM "orders"
-    WHERE "id" = target_payment."order_id"
-    FOR UPDATE;
 
     IF target_payment."status" NOT IN ('CREATED', 'PENDING') THEN
         RETURN target_payment."status";
@@ -394,6 +435,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     candidate_id uuid;
+    candidate_status "payment_status";
 BEGIN
     IF batch_limit < 1 OR batch_limit > 1000 THEN
         RAISE EXCEPTION 'checkout deadline batch limit is invalid'
@@ -407,14 +449,21 @@ BEGIN
           AND payment."status" IN ('CREATED', 'PENDING')
           AND payment."checkout_capture_expires_at" <= clock_timestamp()
         ORDER BY payment."checkout_capture_expires_at", payment."id"
-        FOR UPDATE SKIP LOCKED
         LIMIT batch_limit
     LOOP
-        PERFORM taven_close_initial_checkout_payment(
-            candidate_id, 'CHECKOUT_EXPIRED'
-        );
-        payment_id := candidate_id;
-        RETURN NEXT;
+        PERFORM taven_lock_checkout_payment_envelope(candidate_id);
+        SELECT payment."status" INTO candidate_status
+        FROM "payments" payment
+        WHERE payment."id" = candidate_id
+          AND payment."status" IN ('CREATED', 'PENDING')
+          AND payment."checkout_capture_expires_at" <= clock_timestamp();
+        IF FOUND THEN
+            PERFORM taven_close_initial_checkout_payment(
+                candidate_id, 'CHECKOUT_EXPIRED'
+            );
+            payment_id := candidate_id;
+            RETURN NEXT;
+        END IF;
     END LOOP;
 END;
 $$;
@@ -438,6 +487,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     target_payment "payments"%ROWTYPE;
+    matched_payment_id uuid;
     existing_event "payment_provider_events"%ROWTYPE;
     target_phase_id uuid;
     active_set_id uuid;
@@ -494,11 +544,44 @@ BEGIN
                     AND command."payload" ->> 'action' = 'void_payment'
               )
           )
-      )
-    FOR UPDATE OF payment;
+      );
     IF NOT FOUND THEN
         RAISE EXCEPTION 'provider transaction does not match a Payment'
             USING ERRCODE = '23503', CONSTRAINT = 'payments_provider_provider_intent_id_key';
+    END IF;
+
+    matched_payment_id := target_payment."id";
+    PERFORM taven_lock_checkout_payment_envelope(matched_payment_id);
+
+    -- Revalidate the provider locator after acquiring the complete canonical
+    -- lock envelope. The initial lookup above intentionally took no row lock.
+    SELECT payment.* INTO target_payment
+    FROM "payments" payment
+    WHERE payment."id" = matched_payment_id
+      AND payment."provider" = event_provider
+      AND (
+          payment."provider_intent_id" = event_transaction_id
+          OR (
+              event_kind = 'PAYMENT_CAPTURED'
+              AND payment."provider_intent_id" IS NULL
+              AND payment."status" = 'VOIDED'
+              AND EXISTS (
+                  SELECT 1
+                  FROM "outbox_messages" command
+                  WHERE command."aggregate_type" = 'Payment'
+                    AND command."aggregate_id" = payment."id"
+                    AND command."message_type" = 'void_payment'
+                    AND command."payload" ->> 'paymentId' = payment."id"::text
+                    AND command."payload" ->> 'provider' = event_provider
+                    AND command."payload" ->> 'providerIntentId' = event_transaction_id
+                    AND command."payload" ->> 'action' = 'void_payment'
+              )
+          )
+      )
+    FOR UPDATE OF payment;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'provider transaction no longer matches its Payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
     END IF;
 
     -- A duplicate can arrive while the first request owns the Payment lock.
@@ -797,19 +880,32 @@ AS $$
 DECLARE
     target_refund "refund_transactions"%ROWTYPE;
     target_payment "payments"%ROWTYPE;
+    target_payment_id uuid;
     existing_event "payment_provider_events"%ROWTYPE;
     receipt_id uuid := gen_random_uuid();
     verified_at timestamptz := clock_timestamp();
     receipt_payload jsonb;
 BEGIN
-    SELECT * INTO target_refund FROM "refund_transactions"
-    WHERE "id" = target_refund_id FOR UPDATE;
+    SELECT refund."payment_id" INTO target_payment_id
+    FROM "refund_transactions" refund
+    WHERE refund."id" = target_refund_id;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'refund transaction does not exist'
             USING ERRCODE = '23503', CONSTRAINT = 'refund_transactions_pkey';
     END IF;
+
+    PERFORM taven_lock_checkout_payment_envelope(target_payment_id);
+
+    SELECT * INTO target_refund FROM "refund_transactions"
+    WHERE "id" = target_refund_id
+      AND "payment_id" = target_payment_id
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'refund transaction identity changed during lock acquisition'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_transactions_payment_binding_immutable_check';
+    END IF;
     SELECT * INTO target_payment FROM "payments"
-    WHERE "id" = target_refund."payment_id" FOR UPDATE;
+    WHERE "id" = target_payment_id FOR UPDATE;
 
     IF target_refund."status" = 'SUCCEEDED' THEN
         RETURN false;

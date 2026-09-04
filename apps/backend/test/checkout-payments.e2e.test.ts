@@ -189,6 +189,23 @@ async function eventEvidence(
   return row;
 }
 
+async function waitForDatabaseLock(applicationName: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const waiting = await pool.query<{ waiting: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_stat_activity
+         WHERE application_name = $1
+           AND state = 'active'
+           AND wait_event_type = 'Lock'
+       ) AS waiting`,
+      [applicationName],
+    );
+    if (waiting.rows[0]?.waiting) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("concurrent checkout event did not reach its lock wait");
+}
+
 describe("checkout payment capture protocol", () => {
   beforeAll(() => {
     if (!databaseUrl)
@@ -918,28 +935,31 @@ describe("checkout payment capture protocol", () => {
       await expect(replayResponse.json()).resolves.toEqual(created);
 
       providerAvailable = false;
-      const outageResponse = await fetch(
-        new URL(
-          `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/payments`,
-          baseUrl,
-        ),
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${outageToken}`,
-            "content-type": "application/json",
-            "idempotency-key": "sandbox-http-outage-1",
+      const outageIdempotencyKey = "sandbox-http-outage-1";
+      const createOutagePayment = () =>
+        fetch(
+          new URL(
+            `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/payments`,
+            baseUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${outageToken}`,
+              "content-type": "application/json",
+              "idempotency-key": outageIdempotencyKey,
+            },
+            body: JSON.stringify({
+              email: outageCustomerEmail,
+              fullName: "Outage Customer",
+              method: "BANK_TRANSFER",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              acknowledgeWithdrawalException: true,
+            }),
           },
-          body: JSON.stringify({
-            email: outageCustomerEmail,
-            fullName: "Outage Customer",
-            method: "BANK_TRANSFER",
-            acceptTerms: true,
-            acceptClaimPolicy: true,
-            acknowledgeWithdrawalException: true,
-          }),
-        },
-      );
+        );
+      const outageResponse = await createOutagePayment();
       expect(outageResponse.status).toBe(502);
       await expect(
         prisma.payment.findFirstOrThrow({
@@ -953,6 +973,43 @@ describe("checkout payment capture protocol", () => {
         status: "FAILED",
         intentCreationFailureResultId: expect.any(String),
       });
+
+      const firstOutageRecord = await prisma.idempotencyRecord.findFirstOrThrow(
+        {
+          where: {
+            namespace: `checkout-payment:${outageFoundation.quoteSessionId}`,
+            idempotencyKey: outageIdempotencyKey,
+          },
+          orderBy: { generation: "desc" },
+        },
+      );
+      await prisma.idempotencyRecord.update({
+        where: { id: firstOutageRecord.id },
+        data: {
+          expiresAt: new Date(firstOutageRecord.createdAt.getTime() + 1),
+        },
+      });
+
+      const retriedOutageResponse = await createOutagePayment();
+      expect(retriedOutageResponse.status).toBe(502);
+      await expect(
+        prisma.idempotencyRecord.findMany({
+          where: {
+            namespace: `checkout-payment:${outageFoundation.quoteSessionId}`,
+            idempotencyKey: outageIdempotencyKey,
+          },
+          orderBy: { generation: "asc" },
+          select: { generation: true, status: true },
+        }),
+      ).resolves.toEqual([
+        { generation: 1, status: "COMPLETED" },
+        { generation: 2, status: "COMPLETED" },
+      ]);
+      await expect(
+        prisma.payment.count({
+          where: { orderId: outageFoundation.orderId, status: "FAILED" },
+        }),
+      ).resolves.toBe(2);
     } finally {
       await app?.close();
       restoreEnvironment(
@@ -1113,6 +1170,100 @@ describe("checkout payment capture protocol", () => {
         refund_count: 1,
         active_set_count: 0,
       });
+    }
+  });
+
+  it("uses the refund-dispatch lock order for subsequent provider events", async () => {
+    const name = `refund-lock-order-${randomUUID().slice(0, 8)}`;
+    const setupClient = await pool.connect();
+    let foundation: PersistenceFoundation;
+    let providerIntentId: string;
+    let amountMinor: string;
+    let currency: string;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(setupClient, `${scope}:${name}`, {
+        publicTokenHash: createHash("sha256")
+          .update(`${scope}:${name}:checkout-token`)
+          .digest("hex"),
+      });
+      ({ foundation, providerIntentId } = await preparePayment(
+        setupClient,
+        fixtures,
+        name,
+      ));
+      const evidence = await eventEvidence(setupClient, foundation);
+      amountMinor = evidence.amount_minor;
+      currency = evidence.currency;
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    await pool.query(
+      `SELECT taven_close_initial_checkout_payment(
+         $1, 'CUSTOMER_CANCELLED'
+       )`,
+      [foundation.paymentId],
+    );
+    await pool.query(
+      `SELECT taven_apply_checkout_payment_event(
+         'sandbox', $1, $2, 'PAYMENT_CAPTURED', $3, $4,
+         clock_timestamp(), '{}'::jsonb
+       )`,
+      [`${name}-capture`, providerIntentId, amountMinor, currency],
+    );
+    const refundId = (
+      await pool.query<{ id: string }>(
+        `SELECT id FROM refund_transactions WHERE payment_id = $1`,
+        [foundation.paymentId],
+      )
+    ).rows[0]!.id;
+
+    const orderLocker = await pool.connect();
+    const eventClient = await pool.connect();
+    const applicationName = `checkout-lock-${randomUUID()}`;
+    try {
+      await orderLocker.query("BEGIN");
+      await orderLocker.query("SET LOCAL statement_timeout = '5s'");
+      await orderLocker.query(
+        `SELECT id FROM orders WHERE id = $1 FOR UPDATE`,
+        [foundation.orderId],
+      );
+      await eventClient.query(
+        `SELECT set_config('application_name', $1, false)`,
+        [applicationName],
+      );
+      await eventClient.query(`SET statement_timeout = '5s'`);
+      const eventResultPromise = eventClient.query<{ outcome: string }>(
+        `SELECT taven_apply_checkout_payment_event(
+           'sandbox', $1, $2, 'PAYMENT_PENDING', $3, $4,
+           clock_timestamp(), '{}'::jsonb
+         ) AS outcome`,
+        [`${name}-subsequent`, providerIntentId, amountMinor, currency],
+      );
+      await waitForDatabaseLock(applicationName);
+
+      const claim = await orderLocker.query<{ claimed_at: Date | null }>(
+        `SELECT taven_claim_refund_dispatch($1) AS claimed_at`,
+        [refundId],
+      );
+      expect(claim.rows[0]?.claimed_at).toBeInstanceOf(Date);
+      await orderLocker.query("COMMIT");
+
+      await expect(eventResultPromise).resolves.toMatchObject({
+        rows: [{ outcome: "IGNORED_TERMINAL" }],
+      });
+    } catch (error) {
+      await orderLocker.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      orderLocker.release();
+      eventClient.release();
     }
   });
 });

@@ -68,10 +68,10 @@ export class PaymentsService {
     const initial = await this.loadContext(sessionId);
     assertSessionCapability(initial, token);
     const fingerprint = fingerprintOf({ sessionId, ...input });
-    const initialReplay = await this.prisma.$transaction(
+    const initialIdempotency = await this.prisma.$transaction(
       async (transaction) => {
         await lockIdempotencyKey(transaction, sessionId, idempotencyKey);
-        return existingIdempotency(
+        return checkoutIdempotencyAfterLock(
           transaction,
           sessionId,
           idempotencyKey,
@@ -79,7 +79,7 @@ export class PaymentsService {
         );
       },
     );
-    if (initialReplay) return initialReplay;
+    if (initialIdempotency.replay) return initialIdempotency.replay;
 
     const capabilities = await this.provider.capabilities();
     if (!capabilities.methods.includes(input.method)) {
@@ -96,13 +96,13 @@ export class PaymentsService {
 
     const staged = await this.prisma.$transaction(async (transaction) => {
       await lockIdempotencyKey(transaction, sessionId, idempotencyKey);
-      const replay = await existingIdempotency(
+      const idempotency = await checkoutIdempotencyAfterLock(
         transaction,
         sessionId,
         idempotencyKey,
         fingerprint,
       );
-      if (replay) return { replay } as const;
+      if (idempotency.replay) return { replay: idempotency.replay } as const;
 
       const context = await this.loadContext(sessionId, transaction, true);
       assertCheckoutContext(context, token);
@@ -130,8 +130,9 @@ export class PaymentsService {
         data: {
           namespace: checkoutNamespace(sessionId),
           idempotencyKey,
+          generation: idempotency.nextGeneration,
           requestFingerprint: fingerprint,
-          expiresAt: addDays(await databaseNow(transaction), IDEMPOTENCY_DAYS),
+          expiresAt: addDays(idempotency.observedAt, IDEMPOTENCY_DAYS),
         },
       });
       if (active) {
@@ -236,7 +237,7 @@ export class PaymentsService {
       await this.recordIntentFailure(
         staged.payment.id,
         staged.idempotencyRecordId,
-        `${checkoutNamespace(sessionId)}:${idempotencyKey}`,
+        staged.idempotencyRecordId,
       );
       throw new BadGatewayException("Payment provider is unavailable");
     }
@@ -524,8 +525,10 @@ export class PaymentsService {
     providerIntentId: string,
   ): Promise<CheckoutPaymentDto | null> {
     return this.prisma.$transaction(async (transaction) => {
-      await lockPayment(transaction, paymentId);
-      const payment = await transaction.payment.findUniqueOrThrow({
+      await transaction.$queryRaw`
+        SELECT taven_lock_checkout_payment_envelope(${paymentId}::uuid)
+      `;
+      let payment = await transaction.payment.findUniqueOrThrow({
         where: { id: paymentId },
       });
       if (payment.status === PaymentStatus.CREATED) {
@@ -534,6 +537,9 @@ export class PaymentsService {
             ${paymentId}::uuid, 'CUSTOMER_CANCELLED'
           )::text
         `;
+        payment = await transaction.payment.findUniqueOrThrow({
+          where: { id: paymentId },
+        });
       } else if (payment.status !== PaymentStatus.VOIDED) {
         return null;
       }
@@ -777,17 +783,28 @@ function paymentDto(payment: {
   };
 }
 
-async function existingIdempotency(
+async function checkoutIdempotencyAfterLock(
   transaction: Transaction,
   sessionId: string,
   idempotencyKey: string,
   fingerprint: string,
-): Promise<CheckoutPaymentDto | null> {
+): Promise<{
+  replay: CheckoutPaymentDto | null;
+  nextGeneration: number;
+  observedAt: Date;
+}> {
+  const observedAt = await databaseNow(transaction);
   const existing = await transaction.idempotencyRecord.findFirst({
     where: { namespace: checkoutNamespace(sessionId), idempotencyKey },
     orderBy: { generation: "desc" },
   });
-  if (!existing || existing.expiresAt.getTime() <= Date.now()) return null;
+  if (!existing || existing.expiresAt.getTime() <= observedAt.getTime()) {
+    return {
+      replay: null,
+      nextGeneration: (existing?.generation ?? 0) + 1,
+      observedAt,
+    };
+  }
   if (existing.requestFingerprint !== fingerprint) {
     throw new ConflictException(
       "Idempotency key was used with different input",
@@ -803,7 +820,11 @@ async function existingIdempotency(
   if (response.status === "FAILED") {
     throw new BadGatewayException("Payment provider is unavailable");
   }
-  return response as unknown as CheckoutPaymentDto;
+  return {
+    replay: response as unknown as CheckoutPaymentDto,
+    nextGeneration: existing.generation,
+    observedAt,
+  };
 }
 
 async function completeIdempotency(
