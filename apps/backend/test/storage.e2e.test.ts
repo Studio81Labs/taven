@@ -36,8 +36,8 @@ const uploadClientHashKey =
   "test-only-upload-client-hash-key-32";
 process.env.TAVEN_QUOTE_CAPABILITY_KEY =
   "test-quote-capability-key-with-at-least-32-characters";
-process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED ??= "true";
-process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED ??= "true";
+process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = "true";
+process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED = "true";
 
 describe("secure object storage and retention", () => {
   let app: INestApplication;
