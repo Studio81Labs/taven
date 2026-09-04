@@ -186,7 +186,14 @@ function requestMessage(
 }
 
 export interface UseModelUploadQuoteOptions {
+  preserveStoredSessionOnSelection?: boolean;
   restoreSession?: boolean;
+}
+
+export function clearsStoredSessionOnSelection(
+  options: UseModelUploadQuoteOptions,
+): boolean {
+  return options.preserveStoredSessionOnSelection !== true;
 }
 
 export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
@@ -351,7 +358,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   }
 
   function selectFile(file: File): Promise<void> {
-    resetState();
+    resetState(clearsStoredSessionOnSelection(options));
     return inspectSelectedFile(file);
   }
 

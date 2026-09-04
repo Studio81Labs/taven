@@ -14,7 +14,7 @@ usePublicPageMeta({
     <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
       Proces
     </p>
-    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">
+    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-[38px]">
       Jak to funguje
     </h1>
     <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">
@@ -28,7 +28,8 @@ usePublicPageMeta({
         <div>
           <h2 class="text-2xl font-semibold">Soubor a kontrola</h2>
           <p class="mt-3 leading-7 text-[#54554c]">
-            Vyberete STL nebo podporované 3MF. Prohlížeč zobrazí základní
+            Vybereš <span class="font-mono">STL</span> nebo podporované
+            <span class="font-mono">3MF</span>. Prohlížeč zobrazí základní
             geometrii a server ověří, zda lze model bezpečně zpracovat.
           </p>
         </div>
@@ -38,7 +39,7 @@ usePublicPageMeta({
         <div>
           <h2 class="text-2xl font-semibold">Konfigurace a slicing</h2>
           <p class="mt-3 leading-7 text-[#54554c]">
-            Nastavíte materiál, dostupnou barvu, kvalitu, výplň a množství.
+            Nastavíš materiál, dostupnou barvu, kvalitu, výplň a množství.
             Referenční slicing spočítá spotřebu a výrobní čas pro tuto volbu.
           </p>
         </div>
@@ -59,7 +60,7 @@ usePublicPageMeta({
     <section class="mt-12 border-l-4 border-[#1b44e8] bg-white p-6 sm:p-8">
       <h2 class="text-2xl font-semibold">Kdy použít individuální poptávku</h2>
       <p class="mt-3 leading-7 text-[#54554c]">
-        Když nemáte model, potřebujete díl překreslit, řešíte lícované rozměry,
+        Když nemáš model, potřebuješ díl překreslit, řešíš lícované rozměry,
         nestandardní materiál nebo jinou konfiguraci, kterou automatická cesta
         nepodporuje.
       </p>

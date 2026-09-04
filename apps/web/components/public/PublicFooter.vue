@@ -15,13 +15,13 @@ import {
         <NuxtLink
           class="text-xl text-[#efefea] outline-offset-4 focus-visible:outline-2 focus-visible:outline-[#5c7cff]"
           to="/"
-          aria-label="Taven, úvodní stránka"
+          :aria-label="`${publicSite.brand.name}, úvodní stránka`"
         >
           <PublicBrandMark inverse />
         </NuxtLink>
         <p class="mt-4 max-w-xs text-sm leading-6 text-[#c9c9c1]">
-          Zakázkový 3D tisk s přímou cestou pro hotový model a samostatnou
-          cestou pro individuální zadání.
+          Zakázkový <span class="font-mono">3D</span> tisk s přímou cestou pro
+          hotový model a samostatnou cestou pro individuální zadání.
         </p>
       </div>
 
@@ -29,7 +29,7 @@ import {
         <h2 class="font-mono text-xs tracking-wider text-[#a9aaa1] uppercase">
           Provozovatel
         </h2>
-        <address class="mt-3 not-italic">
+        <address class="mt-3 font-mono not-italic">
           <strong class="font-semibold">{{
             publicSite.seller.legalName
           }}</strong

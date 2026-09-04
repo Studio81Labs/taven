@@ -3,7 +3,7 @@ import { canonicalTitle, canonicalUrl, normalizeSiteOrigin } from "./site-meta";
 
 describe("canonicalTitle", () => {
   it("uses the product name as the canonical suffix", () => {
-    expect(canonicalTitle("Quote")).toBe("Quote · Taven");
+    expect(canonicalTitle("Quote", "Taven")).toBe("Quote · Taven");
   });
 
   it("supports a replaceable working name", () => {

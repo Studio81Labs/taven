@@ -39,7 +39,7 @@ defineProps<{
       <h2 class="text-xl font-semibold">
         Identifikace budoucího provozovatele
       </h2>
-      <p class="mt-3 leading-7 text-[#54554c]">
+      <p class="mt-3 font-mono leading-7 text-[#54554c]">
         {{ publicSite.seller.legalName }}<br />
         <template v-for="line in publicSite.seller.address" :key="line">
           {{ line }}<br />

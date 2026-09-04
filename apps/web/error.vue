@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { publicSite } from "./content/public-site";
+
 defineOptions({ name: "ApplicationError" });
 
 const props = defineProps<{
@@ -11,7 +13,7 @@ const statusCode = computed(() => props.error.statusCode ?? 500);
 const isNotFound = computed(() => statusCode.value === 404);
 
 useSeoMeta({
-  title: "Stránku se nepodařilo otevřít · Taven",
+  title: "Stránku se nepodařilo otevřít · " + publicSite.brand.name,
   robots: "noindex, nofollow",
 });
 </script>
@@ -21,14 +23,14 @@ useSeoMeta({
     <PublicHeader />
     <main class="mx-auto max-w-3xl px-5 py-20 sm:px-8 sm:py-28">
       <p class="font-mono text-sm text-[#1b44e8]">{{ statusCode }}</p>
-      <h1 class="mt-4 text-4xl font-semibold tracking-tight sm:text-5xl">
+      <h1 class="mt-4 text-4xl font-semibold tracking-tight sm:text-[38px]">
         {{ isNotFound ? "Tato stránka neexistuje." : "Něco se nepodařilo." }}
       </h1>
       <p class="mt-5 max-w-xl text-lg leading-8 text-[#54554c]">
         {{
           isNotFound
-            ? "Zkontrolujte adresu nebo se vraťte na úvodní stránku."
-            : "Zkuste stránku načíst znovu. Pokud jste offline, připojte se před nahráním souboru nebo odesláním formuláře."
+            ? "Zkontroluj adresu nebo se vrať na úvodní stránku."
+            : "Zkus stránku načíst znovu. Pokud jsi offline, připoj se před nahráním souboru nebo odesláním formuláře."
         }}
       </p>
       <button

@@ -1,11 +1,15 @@
 <script setup lang="ts">
+import { publicSite } from "../content/public-site";
+
 definePageMeta({ layout: "public" });
 
 usePublicPageMeta({
   path: "/ukazky",
   title: "Ukázky",
   description:
-    "Portfolio vlastních a schválených ukázek zakázkového 3D tisku Taven.",
+    "Portfolio vlastních a schválených ukázek zakázkového 3D tisku " +
+    publicSite.brand.name +
+    ".",
 });
 </script>
 
@@ -14,7 +18,7 @@ usePublicPageMeta({
     <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
       Portfolio
     </p>
-    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">
+    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-[38px]">
       Ukázky vlastních výtisků
     </h1>
     <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">

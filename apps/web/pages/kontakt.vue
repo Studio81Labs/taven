@@ -7,7 +7,9 @@ usePublicPageMeta({
   path: "/kontakt",
   title: "Kontakt",
   description:
-    "Kontakt a identifikace provozovatele služby zakázkového 3D tisku Taven.",
+    "Kontakt a identifikace provozovatele služby zakázkového 3D tisku " +
+    publicSite.brand.name +
+    ".",
 });
 </script>
 
@@ -16,7 +18,7 @@ usePublicPageMeta({
     <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
       Kontakt
     </p>
-    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">
+    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-[38px]">
       Popište nám svůj díl
     </h1>
     <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">
@@ -34,7 +36,7 @@ usePublicPageMeta({
 
     <section class="mt-14 border-t border-[#d9d9d2] pt-10">
       <h2 class="text-2xl font-semibold">Provozovatel služby</h2>
-      <address class="mt-4 leading-7 text-[#54554c] not-italic">
+      <address class="mt-4 font-mono leading-7 text-[#54554c] not-italic">
         <strong class="font-semibold text-[#1a1a16]">
           {{ publicSite.seller.legalName }} </strong
         ><br />

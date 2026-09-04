@@ -1,11 +1,15 @@
 <script setup lang="ts">
+import { publicSite } from "../content/public-site";
+
 definePageMeta({ layout: "public" });
 
 usePublicPageMeta({
   path: "/cenik",
   title: "Ceník",
   description:
-    "Jak Taven počítá cenu zakázkového 3D tisku a kdy vznikne závazný celkový součet.",
+    "Jak " +
+    publicSite.brand.name +
+    " počítá cenu zakázkového 3D tisku a kdy vznikne závazný celkový součet.",
 });
 </script>
 
@@ -14,12 +18,13 @@ usePublicPageMeta({
     <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
       Ceník
     </p>
-    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">
+    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-[38px]">
       Cena podle skutečného tisku
     </h1>
     <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">
-      Veřejná cena „od“ ještě nebyla schválena. Místo nezávazného čísla
-      popisujeme, kdy a z čeho konfigurátor cenu sestaví.
+      Veřejná cena „od“ ještě nebyla schválena. Po výběru modelu ale hned uvidíš
+      nezávazný rozsah pro výchozí konfiguraci a potom přesnou výrobní cenu ze
+      slicingu.
     </p>
 
     <dl
@@ -52,7 +57,8 @@ usePublicPageMeta({
       <h2 class="text-xl font-semibold">Hodnoty čekající na schválení</h2>
       <p class="mt-3 leading-7 text-[#54554c]">
         Cena „od“ a standardní dodací lhůta budou doplněny z jednoho
-        konfigurovatelného zdroje. Do té doby je stránka záměrně neuvádí.
+        konfigurovatelného zdroje. Hrubý rozsah u konkrétního modelu je
+        samostatný nezávazný výpočet, ne veřejný příslib minimální ceny.
       </p>
     </aside>
 

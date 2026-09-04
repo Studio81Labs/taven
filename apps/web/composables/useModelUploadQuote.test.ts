@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearsStoredSessionOnSelection,
   createLatestResponseGuard,
   createQuoteCommandKeys,
   createUploadCommandKeys,
@@ -11,6 +12,21 @@ import {
   requiresPreparationAdvance,
   resolveUploadSession,
 } from "./useModelUploadQuote";
+
+describe("model selection persistence", () => {
+  it("preserves an existing quote while the landing validates its replacement", () => {
+    expect(
+      clearsStoredSessionOnSelection({
+        preserveStoredSessionOnSelection: true,
+        restoreSession: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("clears the current quote for the primary configurator by default", () => {
+    expect(clearsStoredSessionOnSelection({})).toBe(true);
+  });
+});
 
 describe("automatic quote polling", () => {
   it.each([

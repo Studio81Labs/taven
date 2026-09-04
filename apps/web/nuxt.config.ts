@@ -1,4 +1,5 @@
 import tailwindcss from "@tailwindcss/vite";
+import { publicSite } from "./content/public-site";
 
 export default defineNuxtConfig({
   compatibilityDate: "2026-08-26",
@@ -24,7 +25,7 @@ export default defineNuxtConfig({
   app: {
     head: {
       htmlAttrs: { lang: "cs" },
-      title: "Taven",
+      title: publicSite.brand.name,
       meta: [
         {
           name: "description",

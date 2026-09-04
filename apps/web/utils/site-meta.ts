@@ -2,7 +2,7 @@ const LOCAL_SITE_ORIGIN = "http://localhost:3000";
 
 export function canonicalTitle(
   page: string | undefined,
-  brand = "Taven",
+  brand: string,
 ): string {
   return page ? `${page} · ${brand}` : brand;
 }
