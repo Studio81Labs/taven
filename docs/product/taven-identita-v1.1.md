@@ -5,6 +5,8 @@
 **Status:** identita a hlavní vizuální systém odsouhlaseny z aktuální sady mockupů.
 **Datum:** 2026-08-28
 
+**Poslední potvrzení:** 2026-09-04 — právní identita provozovatele a konstrukce varianty TEČKA.
+
 > Jméno je stále **podmíněno clearance** (specifikace §13.1). Do jejího dokončení se neregistrují domény, profily ani se netiskne nic fyzického.
 
 ---
@@ -28,9 +30,25 @@ Kořen `tav-` odkazuje na tavení — na fyzický proces, ne na technologii. Če
 | startup | „early access", waitlist, odpočty, growth jazyk |
 | mezinárodní projekt | angličtina, zahraniční města |
 
-**Zákazník nikdy nevidí, kdo a na čem konkrétně tiskne.** Prodávajícím a odpovědným subjektem je Taven provozovaný Studio81 Labs. Konkrétní maker, stroj a neveřejné místo výroby jsou interní výrobní detail.
+**Zákazník nikdy nevidí, kdo a na čem konkrétně tiskne.** Taven je obchodní
+označení služby; prodávajícím a odpovědným provozovatelem je Studio81 Labs,
+s.r.o. Konkrétní maker, stroj a neveřejné místo výroby jsou interní výrobní
+detail.
 
-Studio81 Labs se může zobrazovat jako právní/provozní subjekt v trust sekci, footeru, VOP, dokladech a kontaktech. **Soukromá adresa dílny se nepublikuje.**
+Ve veřejné právní identifikaci se používají tyto vlastníkem dodané údaje:
+
+| Údaj | Hodnota |
+|---|---|
+| Obchodní firma | Studio81 Labs, s.r.o. |
+| Sídlo | Nové sady 988/2, 602 00 Brno |
+| Stát | Česká republika |
+| IČ | 29508291 |
+| DIČ | CZ29508291 |
+
+Sídlo právnické osoby se může zobrazovat v trust sekci, footeru, VOP,
+dokladech a kontaktech. Není tím zveřejněna adresa dílny: **soukromé místo
+výroby se nepublikuje.** Veřejný zákaznický e-mail a telefon zatím nejsou
+schválené a nesmějí se nahradit vývojovým kontaktem z metadat repozitáře.
 
 ## 3. Tón
 
@@ -95,11 +113,20 @@ Nadpisy nejsou obří — 38 px je strop. Velikostní kontrast se dělá rastrem
 
 **`TAVEN.`**
 
-Slovní značka v IBM Plex Sans 600 zakončená akcentní tečkou. Tečka představuje konec rozhodování: **platí / potvrzeno / hotovo**. Stejnou významovou logiku používá akcentní modrá v rozhraní.
+Schválená varianta **TEČKA** je slovní značka v IBM Plex Mono 600 zakončená
+akcentní tečkou. Tečka představuje konec rozhodování: **platí / potvrzeno /
+hotovo**. Stejnou významovou logiku používá akcentní modrá v rozhraní.
+
+Na světlém podkladu jsou písmena v `--ink` (`#1A1A16`) a tečka v `--accent`
+(`#1B44E8`). Inverzní varianta na `--ink` používá písmena v `--paper`
+(`#EFEFEA`) a světlejší modrou tečku `#5C7CFF`. Referenční HTML a mockup určují
+vizuální směr; jejich inline styly, rozměry karty a `data-*` atributy nejsou
+implementačním kontraktem.
 
 ### Compact mark
 
-**`TV.`** — favicon a prostory, kde celý wordmark není čitelný.
+**`TV.`** — stejná konstrukce a barevná pravidla pro favicon a prostory, kde
+celý wordmark není čitelný.
 
 ### Jednobarevná varianta
 
