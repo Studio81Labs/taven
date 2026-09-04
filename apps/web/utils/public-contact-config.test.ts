@@ -41,6 +41,9 @@ describe("resolvePublicContacts", () => {
   it.each([
     ["customerContactEmail", ""],
     ["customerContactEmail", "customer@example"],
+    ["customerContactEmail", ".customer@example.cz"],
+    ["customerContactEmail", "customer.@example.cz"],
+    ["customerContactEmail", "customer..eu@example.cz"],
     ["customerContactEmail", "customer@example.cz\r\nBcc:other@example.cz"],
     ["dataControllerEmail", undefined],
     ["dataControllerEmail", "legal @example.cz"],

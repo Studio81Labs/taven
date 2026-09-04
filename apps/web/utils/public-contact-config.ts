@@ -18,8 +18,14 @@ export interface PublicContacts {
 
 function resolvePublicEmail(value: unknown, environmentName: string): string {
   const email = typeof value === "string" ? value.trim() : "";
+  const localPart = email.slice(0, email.lastIndexOf("@"));
 
-  if (!PUBLIC_EMAIL_PATTERN.test(email)) {
+  if (
+    !PUBLIC_EMAIL_PATTERN.test(email) ||
+    localPart.startsWith(".") ||
+    localPart.endsWith(".") ||
+    localPart.includes("..")
+  ) {
     throw new TypeError(`${environmentName} must be a valid email address.`);
   }
 
