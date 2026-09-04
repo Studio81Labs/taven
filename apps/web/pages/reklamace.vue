@@ -4,6 +4,7 @@ import { legalDocuments } from "../content/public-site";
 definePageMeta({ layout: "public" });
 
 const document = legalDocuments.claims;
+const contacts = usePublicContacts();
 
 usePublicPageMeta({
   path: document.path,
@@ -14,5 +15,12 @@ usePublicPageMeta({
 </script>
 
 <template>
-  <PublicLegalPlaceholderPage :document="document" />
+  <PublicLegalPlaceholderPage
+    :document="document"
+    :contact="{
+      label: 'Kontakt pro reklamace',
+      email: contacts.customer.email,
+      href: contacts.customer.href,
+    }"
+  />
 </template>

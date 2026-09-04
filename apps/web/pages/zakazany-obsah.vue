@@ -3,7 +3,7 @@ import { legalDocuments } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
 
-const document = legalDocuments.terms;
+const document = legalDocuments.prohibitedContent;
 const contacts = usePublicContacts();
 
 usePublicPageMeta({
@@ -18,9 +18,9 @@ usePublicPageMeta({
   <PublicLegalPlaceholderPage
     :document="document"
     :contact="{
-      label: 'Zákaznický kontakt',
-      email: contacts.customer.email,
-      href: contacts.customer.href,
+      label: 'Kontakt pro oznámení problematického obsahu',
+      email: contacts.dataController.email,
+      href: contacts.dataController.href,
     }"
   />
 </template>

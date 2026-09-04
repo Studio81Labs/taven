@@ -64,6 +64,12 @@ veřejné spuštění.
 | Retence, mazání a opuštěné výrobky | `retention-pending` | — | vlastník + český právní poradce | blokující |
 | Souhlas s fotografiemi a NDA hranice | `photo-consent-pending` | — | vlastník + český právní poradce | blokující |
 
+Vlastník 2026-09-04 dodal pracovní návrhy všech šesti oblastí. Web je zobrazuje
+pro vývoj a právní připomínkování pod rezervovanými `*-pending` ID, s trvalým
+varováním a bez data účinnosti nebo možnosti přijetí. Kontaktní placeholdery
+využívají schválené runtime měnitelné elektronické kontakty. Návrhové retenční
+lhůty zůstávají výslovně neschválené a produkční toky zůstávají blokované.
+
 Právní kontrola musí pokrýt také roli prodávajícího, DPH, capture/refund a
 settlement, výjimku z odstoupení u zboží na míru, hranici model versus výtisk,
 záruku a reklamace, delivery promise a individuální zálohu/doplatek. Texty
