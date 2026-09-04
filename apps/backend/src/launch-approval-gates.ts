@@ -4,12 +4,17 @@ export const BINDING_QUOTE_FLOWS_ENV =
   "TAVEN_BINDING_QUOTE_FLOWS_ENABLED" as const;
 export const QUOTE_PHOTO_UPLOADS_ENV =
   "TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED" as const;
+export const CHECKOUT_PAYMENT_FLOWS_ENV =
+  "TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED" as const;
 
 const LAUNCH_APPROVAL_REQUIRED = "LAUNCH_APPROVAL_REQUIRED";
 
 function isExplicitlyEnabled(
   env: NodeJS.ProcessEnv,
-  name: typeof BINDING_QUOTE_FLOWS_ENV | typeof QUOTE_PHOTO_UPLOADS_ENV,
+  name:
+    | typeof BINDING_QUOTE_FLOWS_ENV
+    | typeof QUOTE_PHOTO_UPLOADS_ENV
+    | typeof CHECKOUT_PAYMENT_FLOWS_ENV,
 ): boolean {
   return env[name] === "true";
 }
@@ -37,6 +42,16 @@ export function assertQuotePhotoUploadsEnabled(
   if (!isExplicitlyEnabled(env, QUOTE_PHOTO_UPLOADS_ENV)) {
     throw launchApprovalRequired(
       "Quote photo uploads are unavailable until their retention policy is approved",
+    );
+  }
+}
+
+export function assertCheckoutPaymentFlowsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!isExplicitlyEnabled(env, CHECKOUT_PAYMENT_FLOWS_ENV)) {
+    throw launchApprovalRequired(
+      "Checkout payment flows are unavailable until legal documents and provider launch inputs are approved",
     );
   }
 }

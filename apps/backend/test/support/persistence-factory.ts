@@ -69,6 +69,12 @@ export type ProductionReservationFixture = {
   requiredMachineSeconds: number;
 };
 
+export type AutomaticCheckoutFixtureOptions = Readonly<{
+  publicTokenHash: string;
+  configurationRevision?: number;
+  expressRequested?: boolean;
+}>;
+
 type CapacityInterval = { startsAt: Date; endsAt: Date };
 export type SourceRetention = {
   uploadedAt?: Date;
@@ -160,6 +166,7 @@ export class PersistenceFactory {
   constructor(
     private readonly sql: Sql,
     private readonly scope: string,
+    private readonly automaticCheckout?: AutomaticCheckoutFixtureOptions,
   ) {}
 
   id(name: string): string {
@@ -645,6 +652,9 @@ export class PersistenceFactory {
       paymentScheduleKind:
         paymentScheduleKind ??
         (orderOrigin === "INDIVIDUAL" ? "DEPOSIT_BALANCE" : "FULL"),
+      ...(this.automaticCheckout
+        ? { automaticCheckout: this.automaticCheckout }
+        : {}),
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -690,6 +700,7 @@ export class PersistenceFactory {
     customerOwned: boolean;
     includeShipments: boolean;
     paymentScheduleKind: "FULL" | "DEPOSIT_BALANCE";
+    automaticCheckout?: AutomaticCheckoutFixtureOptions;
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
@@ -740,7 +751,8 @@ export class PersistenceFactory {
       [
         input.quoteSessionId,
         input.customerOwned ? input.customerId : null,
-        this.hash(`${input.name}:token`),
+        input.automaticCheckout?.publicTokenHash ??
+          this.hash(`${input.name}:token`),
         input.quoteSessionExpiresAt,
         t,
       ],
@@ -797,7 +809,18 @@ export class PersistenceFactory {
         "EUR",
         contractTotal,
         priceListRevision,
-        JSON.stringify({}),
+        JSON.stringify(
+          input.automaticCheckout
+            ? {
+                automaticQuote: {
+                  configurationRevision:
+                    input.automaticCheckout.configurationRevision ?? 1,
+                  expressRequested:
+                    input.automaticCheckout.expressRequested ?? false,
+                },
+              }
+            : {},
+        ),
         this.hash(`${input.name}:snapshot`),
         t,
       ],
@@ -835,6 +858,24 @@ export class PersistenceFactory {
         t,
       ],
     );
+    if (input.automaticCheckout) {
+      if (input.orderOrigin !== "AUTOMATIC") {
+        throw new Error("automatic checkout fixture requires automatic origin");
+      }
+      await this.sql.query(
+        `INSERT INTO automatic_quote_drafts
+           (order_id, selected_delivery_destination_id, express_requested,
+            configuration_revision, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          input.orderId,
+          input.deliveryDestinationId,
+          input.automaticCheckout.expressRequested ?? false,
+          input.automaticCheckout.configurationRevision ?? 1,
+          t,
+        ],
+      );
+    }
     for (const [index, item] of input.resolvedItems.entries()) {
       await this.sql.query(
         "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, reference_slice_result_id, tail_reference_slice_result_id, reference_parts_per_plate, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'PLA',$10,$11,$12)",
@@ -1169,6 +1210,12 @@ export class PersistenceFactory {
           JSON.stringify({}),
           t,
         ],
+      );
+    }
+    if (input.automaticCheckout) {
+      await this.sql.query(
+        "UPDATE quote_sessions SET status = 'CONVERTED', updated_at = $2 WHERE id = $1",
+        [input.quoteSessionId, t],
       );
     }
   }

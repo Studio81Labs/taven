@@ -750,6 +750,67 @@
         ],
         "type": "object"
       },
+      "CheckoutPaymentDto": {
+        "properties": {
+          "amountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "checkoutUrl": {
+            "format": "uri",
+            "nullable": true,
+            "type": "string"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "CARD",
+              "BANK_TRANSFER"
+            ],
+            "type": "string"
+          },
+          "paymentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "CREATED",
+              "PENDING",
+              "CAPTURED",
+              "FAILED",
+              "VOIDED",
+              "REFUND_PENDING",
+              "PARTIALLY_REFUNDED",
+              "REFUNDED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "paymentId",
+          "provider",
+          "method",
+          "status",
+          "amountMinor",
+          "currency",
+          "checkoutUrl",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
       "ConfigureAutomaticQuoteDraftItemDto": {
         "properties": {
           "bodyIds": {
@@ -912,6 +973,44 @@
             "type": "object"
           }
         },
+        "type": "object"
+      },
+      "CreateCheckoutPaymentDto": {
+        "properties": {
+          "acceptClaimPolicy": {
+            "type": "boolean"
+          },
+          "acceptTerms": {
+            "type": "boolean"
+          },
+          "acknowledgeWithdrawalException": {
+            "type": "boolean"
+          },
+          "email": {
+            "format": "email",
+            "maxLength": 320,
+            "type": "string"
+          },
+          "fullName": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "CARD",
+              "BANK_TRANSFER"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "fullName",
+          "method",
+          "acceptTerms",
+          "acceptClaimPolicy",
+          "acknowledgeWithdrawalException"
+        ],
         "type": "object"
       },
       "CreateQuoteRequestDto": {
@@ -1721,6 +1820,39 @@
         ],
         "type": "object"
       },
+      "PaymentCapabilitiesDto": {
+        "properties": {
+          "methods": {
+            "items": {
+              "enum": [
+                "CARD",
+                "BANK_TRANSFER"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "methods"
+        ],
+        "type": "object"
+      },
+      "PaymentWebhookAcceptedDto": {
+        "properties": {
+          "outcome": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
       "QuoteAttachmentDto": {
         "properties": {
           "deleteAfter": {
@@ -2463,6 +2595,143 @@
         ]
       }
     },
+    "/automatic-quote-sessions/{sessionId}/checkout/payment": {
+      "delete": {
+        "operationId": "PaymentsController_cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutPaymentDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel an open checkout payment",
+        "tags": [
+          "payments"
+        ]
+      },
+      "get": {
+        "operationId": "PaymentsController_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutPaymentDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read the current checkout payment state",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/checkout/payments": {
+      "post": {
+        "operationId": "PaymentsController_create",
+        "parameters": [
+          {
+            "description": "Stable client command identity (8-255 characters)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCheckoutPaymentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutPaymentDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Session capability is invalid"
+          },
+          "409": {
+            "description": "Checkout topology or input changed"
+          },
+          "503": {
+            "description": "Checkout awaits launch approval or provider recovery"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create the initial checkout payment intent",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
     "/automatic-quote-sessions/{sessionId}/configuration": {
       "put": {
         "operationId": "AutomaticQuotesController_replaceConfiguration",
@@ -3135,6 +3404,76 @@
         "summary": "Reject an individual offer",
         "tags": [
           "individual offers"
+        ]
+      }
+    },
+    "/payments/capabilities": {
+      "get": {
+        "operationId": "PaymentsController_capabilities",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentCapabilitiesDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "List checkout methods offered by the active provider",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/payments/webhooks/{provider}": {
+      "post": {
+        "operationId": "PaymentsController_webhook",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentWebhookAcceptedDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "Consume an authenticated payment-provider event",
+        "tags": [
+          "payments"
         ]
       }
     },

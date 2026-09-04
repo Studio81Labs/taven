@@ -19,6 +19,6 @@ import {
       useExisting: ConfiguredDeliveryCapabilityAdapter,
     },
   ],
-  exports: [AutomaticQuotesService],
+  exports: [AutomaticQuotesService, DELIVERY_CAPABILITY],
 })
 export class AutomaticQuotesModule {}

@@ -2,8 +2,10 @@ import { ServiceUnavailableException } from "@nestjs/common";
 import { describe, expect, it } from "vitest";
 import {
   assertBindingQuoteFlowsEnabled,
+  assertCheckoutPaymentFlowsEnabled,
   assertQuotePhotoUploadsEnabled,
   BINDING_QUOTE_FLOWS_ENV,
+  CHECKOUT_PAYMENT_FLOWS_ENV,
   QUOTE_PHOTO_UPLOADS_ENV,
 } from "./launch-approval-gates";
 
@@ -53,5 +55,24 @@ describe("launch approval gates", () => {
       message:
         "Quote photo uploads are unavailable until their retention policy is approved",
     });
+  });
+
+  it.each([undefined, "", "false", "TRUE", " true ", "approved"])(
+    "keeps checkout payments disabled for %s",
+    (value) => {
+      expect(() =>
+        assertCheckoutPaymentFlowsEnabled({
+          [CHECKOUT_PAYMENT_FLOWS_ENV]: value,
+        }),
+      ).toThrowError(ServiceUnavailableException);
+    },
+  );
+
+  it("enables checkout payments only with an explicit true", () => {
+    expect(() =>
+      assertCheckoutPaymentFlowsEnabled({
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+      }),
+    ).not.toThrow();
   });
 });

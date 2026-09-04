@@ -140,6 +140,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/automatic-quote-sessions/{sessionId}/checkout/payment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current checkout payment state */
+        get: operations["PaymentsController_status"];
+        put?: never;
+        post?: never;
+        /** Cancel an open checkout payment */
+        delete: operations["PaymentsController_cancel"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/automatic-quote-sessions/{sessionId}/checkout/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create the initial checkout payment intent */
+        post: operations["PaymentsController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/automatic-quote-sessions/{sessionId}/configuration": {
         parameters: {
             query?: never;
@@ -322,6 +357,40 @@ export interface paths {
         put?: never;
         /** Reject an individual offer */
         post: operations["OffersController_reject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/payments/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List checkout methods offered by the active provider */
+        get: operations["PaymentsController_capabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/payments/webhooks/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consume an authenticated payment-provider event */
+        post: operations["PaymentsController_webhook"];
         delete?: never;
         options?: never;
         head?: never;
@@ -641,6 +710,21 @@ export interface components {
             /** Format: uuid */
             sessionId: string;
         };
+        CheckoutPaymentDto: {
+            amountMinor: number;
+            /** Format: uri */
+            checkoutUrl: string | null;
+            currency: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** @enum {string} */
+            method: "CARD" | "BANK_TRANSFER";
+            /** Format: uuid */
+            paymentId: string;
+            provider: string;
+            /** @enum {string} */
+            status: "CREATED" | "PENDING" | "CAPTURED" | "FAILED" | "VOIDED" | "REFUND_PENDING" | "PARTIALLY_REFUNDED" | "REFUNDED";
+        };
         ConfigureAutomaticQuoteDraftItemDto: {
             bodyIds: string[];
             color?: string;
@@ -688,6 +772,16 @@ export interface components {
             attribution?: {
                 [key: string]: unknown;
             };
+        };
+        CreateCheckoutPaymentDto: {
+            acceptClaimPolicy: boolean;
+            acceptTerms: boolean;
+            acknowledgeWithdrawalException: boolean;
+            /** Format: email */
+            email: string;
+            fullName: string;
+            /** @enum {string} */
+            method: "CARD" | "BANK_TRANSFER";
         };
         CreateQuoteRequestDto: {
             attribution?: {
@@ -911,6 +1005,13 @@ export interface components {
             plannedVolumeCubicMm: number;
             plannedWeightMilligrams: number;
             shippingAmountMinor: number;
+        };
+        PaymentCapabilitiesDto: {
+            methods: ("CARD" | "BANK_TRANSFER")[];
+            provider: string;
+        };
+        PaymentWebhookAcceptedDto: {
+            outcome: string;
         };
         QuoteAttachmentDto: {
             /** Format: date-time */
@@ -1262,6 +1363,97 @@ export interface operations {
             };
             /** @description Session capability is invalid */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    PaymentsController_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutPaymentDto"];
+                };
+            };
+        };
+    };
+    PaymentsController_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutPaymentDto"];
+                };
+            };
+        };
+    };
+    PaymentsController_create: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable client command identity (8-255 characters) */
+                "Idempotency-Key": string;
+            };
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCheckoutPaymentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutPaymentDto"];
+                };
+            };
+            /** @description Session capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Checkout topology or input changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Checkout awaits launch approval or provider recovery */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1678,6 +1870,55 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    PaymentsController_capabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentCapabilitiesDto"];
+                };
+            };
+        };
+    };
+    PaymentsController_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "application/x-www-form-urlencoded": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentWebhookAcceptedDto"];
+                };
             };
         };
     };

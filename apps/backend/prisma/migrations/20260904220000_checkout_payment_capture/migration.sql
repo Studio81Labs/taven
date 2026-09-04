@@ -1,0 +1,804 @@
+ALTER TYPE "payment_provider_event_kind" ADD VALUE 'PAYMENT_PENDING';
+
+BEGIN;
+
+ALTER TABLE "payment_provider_events"
+  DROP CONSTRAINT "payment_provider_events_scope_check",
+  ADD CONSTRAINT "payment_provider_events_scope_check" CHECK (
+    ("kind" IN ('PAYMENT_PENDING', 'PAYMENT_CAPTURED', 'PAYMENT_FAILED')
+      AND "refund_transaction_id" IS NULL)
+    OR ("kind" IN ('REFUND_SUCCEEDED', 'REFUND_FAILED')
+      AND "refund_transaction_id" IS NOT NULL)
+  );
+
+CREATE OR REPLACE FUNCTION taven_validate_payment_provider_event_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_provider varchar(100);
+    target_payment_status "payment_status";
+    target_requested_amount bigint;
+    target_currency char(3);
+    target_provider_intent_id varchar(255);
+    target_provider_capture_id varchar(255);
+    target_payment_created_at timestamptz;
+    target_refund_payment_id uuid;
+    target_refund_status "refund_status";
+    target_refund_amount bigint;
+    target_provider_refund_id varchar(255);
+    target_refund_requested_at timestamptz;
+BEGIN
+    SELECT payment."order_id"
+    INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = NEW."payment_id";
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Payment provider event parent Payment does not exist'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+    END IF;
+
+    PERFORM 1
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "order_phases" phase
+    WHERE phase."order_id" = target_order_id
+    ORDER BY phase."id"
+    FOR UPDATE;
+
+    IF NEW."kind" IN ('REFUND_SUCCEEDED', 'REFUND_FAILED') THEN
+        SELECT refund."payment_id", refund."status", refund."amount_minor",
+               refund."provider_refund_id", refund."requested_at"
+        INTO target_refund_payment_id, target_refund_status, target_refund_amount,
+             target_provider_refund_id, target_refund_requested_at
+        FROM "refund_transactions" refund
+        WHERE refund."id" = NEW."refund_transaction_id"
+        FOR UPDATE;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Payment provider event parent RefundTransaction does not exist'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
+    END IF;
+
+    SELECT payment."provider", payment."status", payment."requested_amount_minor",
+           payment."currency", payment."provider_intent_id",
+           payment."provider_capture_id", payment."created_at"
+    INTO target_provider, target_payment_status, target_requested_amount,
+         target_currency, target_provider_intent_id,
+         target_provider_capture_id, target_payment_created_at
+    FROM "payments" payment
+    WHERE payment."id" = NEW."payment_id"
+    FOR UPDATE;
+
+    IF NOT FOUND
+       OR NEW."provider" IS DISTINCT FROM target_provider
+       OR NEW."occurred_at" < target_payment_created_at - interval '5 seconds' THEN
+        RAISE EXCEPTION 'Payment provider event does not match its exact Payment parent'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+    END IF;
+
+    IF NEW."kind" IN (
+        'PAYMENT_PENDING', 'PAYMENT_CAPTURED', 'PAYMENT_FAILED'
+    ) THEN
+        IF NEW."amount_minor" IS DISTINCT FROM target_requested_amount
+           OR NEW."currency" IS DISTINCT FROM target_currency
+           OR (NEW."kind" = 'PAYMENT_PENDING' AND (
+               target_payment_status NOT IN (
+                   'PENDING', 'FAILED', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
+                   'PARTIALLY_REFUNDED', 'REFUNDED'
+               )
+               OR target_provider_intent_id IS NULL
+               OR target_provider_intent_id !~ '[^[:space:]]'
+               OR NEW."provider_transaction_id" IS DISTINCT FROM target_provider_intent_id
+           ))
+           OR (NEW."kind" = 'PAYMENT_CAPTURED' AND (
+               target_payment_status NOT IN (
+                   'PENDING', 'FAILED', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
+                   'PARTIALLY_REFUNDED', 'REFUNDED'
+               )
+               OR (target_payment_status = 'FAILED' AND (
+                   target_provider_intent_id IS NULL
+                   OR target_provider_intent_id !~ '[^[:space:]]'
+               ))
+               OR (target_provider_capture_id IS NOT NULL
+                   AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_capture_id)
+           ))
+           OR (NEW."kind" = 'PAYMENT_FAILED' AND (
+               target_payment_status NOT IN (
+                   'PENDING', 'FAILED', 'VOIDED', 'CAPTURED',
+                   'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'
+               )
+               OR target_provider_intent_id IS NULL
+               OR target_provider_intent_id !~ '[^[:space:]]'
+               OR NEW."provider_transaction_id" IS DISTINCT FROM target_provider_intent_id
+           )) THEN
+            RAISE EXCEPTION 'Payment provider event does not match its exact Payment outcome scope'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
+    ELSE
+        IF target_refund_payment_id IS DISTINCT FROM NEW."payment_id"
+           OR NEW."amount_minor" IS DISTINCT FROM target_refund_amount
+           OR NEW."currency" IS DISTINCT FROM target_currency
+           OR NEW."occurred_at" < target_refund_requested_at - interval '5 seconds'
+           OR (target_provider_refund_id IS NOT NULL
+               AND NEW."provider_transaction_id" IS DISTINCT FROM target_provider_refund_id)
+           OR target_refund_status NOT IN (
+               'PENDING', 'FAILED', 'SUCCEEDED', 'SUSPENDED'
+           ) THEN
+            RAISE EXCEPTION 'Payment provider event does not match its exact RefundTransaction outcome scope'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+ALTER TABLE "payments"
+  ADD COLUMN "checkout_method" varchar(50) NOT NULL DEFAULT 'ALL',
+  ADD COLUMN "provider_checkout_url" text;
+
+ALTER TABLE "payments"
+  ADD CONSTRAINT "payments_checkout_method_check"
+  CHECK ("checkout_method" IN ('ALL', 'CARD', 'BANK_TRANSFER'));
+
+-- A provider intent can return after checkout cancellation already won the
+-- Payment lock. Its durable void command remains the authoritative intent
+-- locator; a later authenticated capture records provider_capture_id before
+-- entering compensation even though provider_intent_id was never assigned.
+ALTER TABLE "payments"
+  DROP CONSTRAINT "payments_provider_intent_identity_check";
+ALTER TABLE "payments"
+  ADD CONSTRAINT "payments_provider_intent_identity_check" CHECK (
+      ("provider_intent_id" IS NOT NULL
+       AND "provider_intent_id" ~ '[^[:space:]]'
+       AND "status" <> 'CREATED')
+      OR ("provider_intent_id" IS NULL
+          AND (
+              "status" IN ('CREATED', 'FAILED', 'VOIDED')
+              OR ("status" = 'REFUND_PENDING'
+                  AND "provider_capture_id" IS NOT NULL)
+          ))
+  );
+
+CREATE FUNCTION taven_protect_payment_checkout_identity()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."provider_checkout_url" IS NOT NULL THEN
+            RAISE EXCEPTION 'new Payment cannot already contain a provider checkout URL'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_checkout_identity_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF NEW."checkout_method" IS DISTINCT FROM OLD."checkout_method"
+       OR (OLD."provider_checkout_url" IS NOT NULL
+           AND NEW."provider_checkout_url" IS DISTINCT FROM OLD."provider_checkout_url")
+       OR (OLD."provider_checkout_url" IS NULL
+           AND NEW."provider_checkout_url" IS NOT NULL
+           AND NOT (OLD."status" = 'CREATED' AND NEW."status" = 'PENDING'))
+       OR (NEW."provider_checkout_url" IS NOT NULL
+           AND NEW."provider_checkout_url" !~ '^https?://[^[:space:]]+$') THEN
+        RAISE EXCEPTION 'Payment checkout identity is immutable and assigned only with its provider intent'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_checkout_identity_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "payments_checkout_identity_protected"
+BEFORE INSERT OR UPDATE ON "payments"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_checkout_identity();
+
+-- Close one initial checkout attempt and all still-reversible fulfilment work.
+-- The order row and Payment row are the serialization fence shared with the
+-- provider-event transition below, so timeout, customer cancellation, and
+-- capture have exactly one winner.
+CREATE FUNCTION taven_close_initial_checkout_payment(
+    target_payment_id uuid,
+    close_reason text,
+    close_observed_at timestamptz DEFAULT NULL
+)
+RETURNS "payment_status"
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_payment "payments"%ROWTYPE;
+    target_order_status "order_status";
+    closed_at timestamptz := coalesce(close_observed_at, clock_timestamp());
+    terminal_order_status "order_status";
+BEGIN
+    IF close_reason NOT IN ('CUSTOMER_CANCELLED', 'CHECKOUT_EXPIRED') THEN
+        RAISE EXCEPTION 'checkout close reason is invalid'
+            USING ERRCODE = '22023', CONSTRAINT = 'checkout_payment_close_reason_check';
+    END IF;
+
+    SELECT * INTO target_payment
+    FROM "payments"
+    WHERE "id" = target_payment_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'checkout Payment does not exist'
+            USING ERRCODE = '23503', CONSTRAINT = 'payments_pkey';
+    END IF;
+
+    SELECT "status" INTO target_order_status
+    FROM "orders"
+    WHERE "id" = target_payment."order_id"
+    FOR UPDATE;
+
+    IF target_payment."status" NOT IN ('CREATED', 'PENDING') THEN
+        RETURN target_payment."status";
+    END IF;
+
+    IF close_reason = 'CHECKOUT_EXPIRED' THEN
+        IF target_payment."checkout_capture_expires_at" IS NULL
+           OR target_payment."checkout_capture_expires_at" > closed_at THEN
+            RAISE EXCEPTION 'checkout Payment deadline has not elapsed'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+        END IF;
+        closed_at := target_payment."checkout_capture_expires_at";
+        terminal_order_status := 'EXPIRED';
+    ELSE
+        terminal_order_status := 'CANCELLED';
+    END IF;
+
+    UPDATE "payments"
+    SET "status" = 'VOIDED', "capture_authorized" = false,
+        "capture_cutoff_at" = closed_at, "updated_at" = closed_at
+    WHERE "id" = target_payment_id
+      AND "status" IN ('CREATED', 'PENDING');
+
+    UPDATE "inventory_reservations" inventory_reservation
+    SET "status" = 'RELEASED', "updated_at" = closed_at
+    FROM "production_reservations" production,
+         "phase_resource_plans" resource_plan,
+         "order_phases" phase
+    WHERE inventory_reservation."production_reservation_id" = production."id"
+      AND inventory_reservation."node_id" = production."node_id"
+      AND production."phase_resource_plan_id" = resource_plan."id"
+      AND production."node_id" = resource_plan."node_id"
+      AND resource_plan."order_phase_id" = phase."id"
+      AND phase."order_id" = target_payment."order_id"
+      AND inventory_reservation."status" IN ('RESERVED', 'HELD', 'ALLOCATED');
+
+    UPDATE "capacity_reservations" capacity_reservation
+    SET "status" = 'RELEASED', "updated_at" = closed_at
+    FROM "production_reservations" production,
+         "phase_resource_plans" resource_plan,
+         "order_phases" phase
+    WHERE capacity_reservation."production_reservation_id" = production."id"
+      AND capacity_reservation."node_id" = production."node_id"
+      AND production."phase_resource_plan_id" = resource_plan."id"
+      AND production."node_id" = resource_plan."node_id"
+      AND resource_plan."order_phase_id" = phase."id"
+      AND phase."order_id" = target_payment."order_id"
+      AND capacity_reservation."status" IN ('RESERVED', 'HELD', 'SCHEDULED');
+
+    UPDATE "production_reservations" production
+    SET "status" = 'RELEASED', "updated_at" = closed_at
+    FROM "phase_resource_plans" resource_plan,
+         "order_phases" phase
+    WHERE production."phase_resource_plan_id" = resource_plan."id"
+      AND production."node_id" = resource_plan."node_id"
+      AND resource_plan."order_phase_id" = phase."id"
+      AND phase."order_id" = target_payment."order_id"
+      AND production."status" IN ('RESERVED', 'HELD', 'SCHEDULED');
+
+    UPDATE "phase_reservation_sets" reservation_set
+    SET "status" = 'RELEASED', "updated_at" = closed_at
+    FROM "phase_resource_plans" resource_plan,
+         "order_phases" phase
+    WHERE reservation_set."phase_resource_plan_id" = resource_plan."id"
+      AND reservation_set."node_id" = resource_plan."node_id"
+      AND resource_plan."order_phase_id" = phase."id"
+      AND phase."order_id" = target_payment."order_id"
+      AND reservation_set."status" IN ('BUILDING', 'RESERVED', 'HELD');
+
+    UPDATE "jobs"
+    SET "status" = 'CANCELLED', "cancelled_at" = closed_at,
+        "cancellation_reason" = 'ORDER_CANCELLED', "updated_at" = closed_at
+    WHERE "order_id" = target_payment."order_id"
+      AND "status" NOT IN ('CANCELLED', 'FAILED', 'QC_REJECTED');
+
+    UPDATE "shipments"
+    SET "status" = 'CANCELLED', "cancelled_at" = closed_at,
+        "updated_at" = closed_at
+    WHERE "order_id" = target_payment."order_id"
+      AND "status" = 'PLANNED';
+
+    UPDATE "fulfilment_slots"
+    SET "outcome" = 'CANCELLED', "updated_at" = closed_at
+    WHERE "order_id" = target_payment."order_id"
+      AND "outcome" = 'PENDING';
+
+    UPDATE "order_phases"
+    SET "status" = 'CANCELLED', "cancelled_at" = closed_at,
+        "updated_at" = closed_at
+    WHERE "order_id" = target_payment."order_id"
+      AND "status" = 'QUOTED';
+
+    UPDATE "orders"
+    SET "status" = terminal_order_status, "updated_at" = closed_at
+    WHERE "id" = target_payment."order_id"
+      AND "status" = 'QUOTED';
+
+    INSERT INTO "audit_events" (
+        "id", "order_id", "payment_id", "event_type", "actor_kind", "payload",
+        "created_at"
+    ) VALUES (
+        gen_random_uuid(), target_payment."order_id", target_payment_id,
+        'checkout.payment_closed', 'SYSTEM',
+        jsonb_build_object('reason', close_reason), closed_at
+    );
+
+    IF target_payment."provider_intent_id" IS NOT NULL THEN
+        INSERT INTO "outbox_messages" (
+            "id", "deduplication_key", "aggregate_type", "aggregate_id",
+            "message_type", "schema_version", "payload", "status", "attempts",
+            "available_at", "created_at", "updated_at"
+        ) VALUES (
+            gen_random_uuid(),
+            'void_payment:v1:' || target_payment."id"::text,
+            'Payment', target_payment."id", 'void_payment', 1,
+            jsonb_build_object(
+                'paymentId', target_payment."id"::text,
+                'provider', target_payment."provider",
+                'providerIntentId', target_payment."provider_intent_id",
+                'action', 'void_payment'
+            ), 'PENDING', 0, closed_at, closed_at, closed_at
+        ) ON CONFLICT ("deduplication_key") DO NOTHING;
+    END IF;
+
+    RETURN 'VOIDED';
+END;
+$$;
+
+CREATE FUNCTION taven_close_expired_checkout_payments(batch_limit integer)
+RETURNS TABLE (payment_id uuid)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    candidate_id uuid;
+BEGIN
+    IF batch_limit < 1 OR batch_limit > 1000 THEN
+        RAISE EXCEPTION 'checkout deadline batch limit is invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    FOR candidate_id IN
+        SELECT payment."id"
+        FROM "payments" payment
+        WHERE payment."role" IN ('FULL', 'DEPOSIT')
+          AND payment."status" IN ('CREATED', 'PENDING')
+          AND payment."checkout_capture_expires_at" <= clock_timestamp()
+        ORDER BY payment."checkout_capture_expires_at", payment."id"
+        FOR UPDATE SKIP LOCKED
+        LIMIT batch_limit
+    LOOP
+        PERFORM taven_close_initial_checkout_payment(
+            candidate_id, 'CHECKOUT_EXPIRED'
+        );
+        payment_id := candidate_id;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$;
+
+-- Consume one authenticated, normalized provider result. The caller never
+-- chooses the Payment: its provider transaction identity does. Duplicates are
+-- checked against the immutable receipt and otherwise become a no-op.
+CREATE FUNCTION taven_apply_checkout_payment_event(
+    event_provider text,
+    event_id text,
+    event_transaction_id text,
+    event_kind "payment_provider_event_kind",
+    event_amount_minor bigint,
+    event_currency char(3),
+    event_occurred_at timestamptz,
+    event_evidence jsonb,
+    event_capture_context_valid boolean DEFAULT true
+)
+RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_payment "payments"%ROWTYPE;
+    existing_event "payment_provider_events"%ROWTYPE;
+    target_phase_id uuid;
+    active_set_id uuid;
+    active_set_expires_at timestamptz;
+    verified_at timestamptz := clock_timestamp();
+    receipt_id uuid := gen_random_uuid();
+    receipt_payload jsonb;
+    created_job_id uuid;
+    production_row record;
+    refund_id uuid;
+    refund_key text;
+BEGIN
+    IF event_kind NOT IN (
+        'PAYMENT_PENDING', 'PAYMENT_CAPTURED', 'PAYMENT_FAILED'
+    ) THEN
+        RAISE EXCEPTION 'checkout provider event kind is invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT * INTO existing_event
+    FROM "payment_provider_events"
+    WHERE "provider" = event_provider
+      AND "provider_event_id" = event_id;
+    IF FOUND THEN
+        IF existing_event."provider_transaction_id" IS DISTINCT FROM event_transaction_id
+           OR existing_event."kind" IS DISTINCT FROM event_kind
+           OR existing_event."amount_minor" IS DISTINCT FROM event_amount_minor
+           OR existing_event."currency" IS DISTINCT FROM event_currency THEN
+            RAISE EXCEPTION 'provider event identity was reused with different evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
+        RETURN 'DUPLICATE';
+    END IF;
+
+    SELECT payment.* INTO target_payment
+    FROM "payments" payment
+    WHERE payment."provider" = event_provider
+      AND (
+          payment."provider_intent_id" = event_transaction_id
+          OR (
+              event_kind = 'PAYMENT_CAPTURED'
+              AND payment."provider_intent_id" IS NULL
+              AND payment."status" = 'VOIDED'
+              AND EXISTS (
+                  SELECT 1
+                  FROM "outbox_messages" command
+                  WHERE command."aggregate_type" = 'Payment'
+                    AND command."aggregate_id" = payment."id"
+                    AND command."message_type" = 'void_payment'
+                    AND command."payload" ->> 'paymentId' = payment."id"::text
+                    AND command."payload" ->> 'provider' = event_provider
+                    AND command."payload" ->> 'providerIntentId' = event_transaction_id
+                    AND command."payload" ->> 'action' = 'void_payment'
+              )
+          )
+      )
+    FOR UPDATE OF payment;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'provider transaction does not match a Payment'
+            USING ERRCODE = '23503', CONSTRAINT = 'payments_provider_provider_intent_id_key';
+    END IF;
+
+    -- A duplicate can arrive while the first request owns the Payment lock.
+    -- Recheck after that lock so concurrent duplicates return the same result
+    -- instead of racing the provider-event uniqueness constraint.
+    SELECT * INTO existing_event
+    FROM "payment_provider_events"
+    WHERE "provider" = event_provider
+      AND "provider_event_id" = event_id;
+    IF FOUND THEN
+        IF existing_event."provider_transaction_id" IS DISTINCT FROM event_transaction_id
+           OR existing_event."kind" IS DISTINCT FROM event_kind
+           OR existing_event."amount_minor" IS DISTINCT FROM event_amount_minor
+           OR existing_event."currency" IS DISTINCT FROM event_currency THEN
+            RAISE EXCEPTION 'provider event identity was reused with different evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
+        RETURN 'DUPLICATE';
+    END IF;
+
+    PERFORM 1 FROM "orders"
+    WHERE "id" = target_payment."order_id" FOR UPDATE;
+
+    IF target_payment."requested_amount_minor" IS DISTINCT FROM event_amount_minor
+       OR target_payment."currency" IS DISTINCT FROM event_currency THEN
+        RAISE EXCEPTION 'provider amount or currency does not match the Payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+    END IF;
+
+    receipt_payload := jsonb_build_object(
+        'paymentId', target_payment."id"::text,
+        'providerEventId', event_id,
+        'providerTransactionId', event_transaction_id,
+        'kind', event_kind::text,
+        'amountMinor', event_amount_minor::text,
+        'currency', event_currency,
+        'evidence', coalesce(event_evidence, '{}'::jsonb)
+    );
+    INSERT INTO "payment_provider_events" (
+        "id", "payment_id", "refund_transaction_id", "provider",
+        "provider_event_id", "provider_transaction_id", "kind",
+        "amount_minor", "currency", "payload", "payload_hash",
+        "occurred_at", "authenticated_at", "verified_at", "created_at"
+    ) VALUES (
+        receipt_id, target_payment."id", NULL, event_provider,
+        event_id, event_transaction_id, event_kind,
+        event_amount_minor, event_currency, receipt_payload,
+        encode(sha256(convert_to(receipt_payload::text, 'UTF8')), 'hex'),
+        event_occurred_at, verified_at, verified_at, verified_at
+    );
+
+    IF event_kind = 'PAYMENT_PENDING' THEN
+        RETURN CASE WHEN target_payment."status" = 'PENDING'
+                    THEN 'PENDING' ELSE 'IGNORED_TERMINAL' END;
+    END IF;
+
+    IF event_kind = 'PAYMENT_FAILED' THEN
+        IF target_payment."status" = 'PENDING' THEN
+            UPDATE "payments"
+            SET "status" = 'FAILED', "capture_authorized" = false,
+                "capture_cutoff_at" = verified_at, "updated_at" = verified_at
+            WHERE "id" = target_payment."id";
+            RETURN 'FAILED';
+        END IF;
+        RETURN 'IGNORED_TERMINAL';
+    END IF;
+
+    SELECT phase."id" INTO target_phase_id
+    FROM "order_phases" phase
+    WHERE phase."order_id" = target_payment."order_id"
+      AND phase."kind" = 'SINGLE'
+    FOR UPDATE;
+
+    SELECT reservation_set."id", reservation_set."expires_at"
+    INTO active_set_id, active_set_expires_at
+    FROM "phase_reservation_sets" reservation_set
+    JOIN "phase_resource_plans" resource_plan
+      ON resource_plan."id" = reservation_set."phase_resource_plan_id"
+     AND resource_plan."node_id" = reservation_set."node_id"
+    WHERE resource_plan."order_phase_id" = target_phase_id
+      AND reservation_set."status" = 'RESERVED'
+    ORDER BY reservation_set."created_at" DESC, reservation_set."id" DESC
+    LIMIT 1
+    FOR UPDATE OF reservation_set;
+
+    IF target_payment."status" = 'PENDING'
+       AND target_payment."capture_authorized"
+       AND target_payment."capture_cutoff_at" IS NULL
+       AND target_payment."checkout_capture_expires_at" > verified_at
+       AND event_capture_context_valid
+       AND active_set_id IS NOT NULL
+       AND active_set_expires_at > verified_at
+       AND EXISTS (
+           SELECT 1
+           FROM "orders" target_order
+           JOIN "order_active_price_bindings" active_binding
+             ON active_binding."order_id" = target_order."id"
+           JOIN "order_price_bindings" binding
+             ON binding."id" = active_binding."order_price_binding_id"
+            AND binding."order_id" = target_order."id"
+           JOIN "automatic_quote_drafts" draft
+             ON draft."order_id" = target_order."id"
+           WHERE target_order."id" = target_payment."order_id"
+             AND target_order."status" = 'QUOTED'
+             AND binding."id" = target_payment."order_price_binding_id"
+             AND binding."price_snapshot_id" = target_payment."price_snapshot_id"
+             AND binding."invalidated_at" IS NULL
+             AND binding."delivery_destination_id" =
+                 draft."selected_delivery_destination_id"
+       ) THEN
+        UPDATE "payments"
+        SET "status" = 'CAPTURED',
+            "captured_amount_minor" = "requested_amount_minor",
+            "provider_capture_id" = event_transaction_id,
+            "captured_at" = verified_at, "updated_at" = verified_at
+        WHERE "id" = target_payment."id";
+
+        UPDATE "inventory_reservations" inventory_reservation
+        SET "status" = 'HELD', "updated_at" = verified_at
+        FROM "production_reservations" production
+        WHERE production."phase_reservation_set_id" = active_set_id
+          AND inventory_reservation."production_reservation_id" = production."id"
+          AND inventory_reservation."node_id" = production."node_id"
+          AND inventory_reservation."status" = 'RESERVED';
+
+        UPDATE "capacity_reservations" capacity_reservation
+        SET "status" = 'HELD', "updated_at" = verified_at
+        FROM "production_reservations" production
+        WHERE production."phase_reservation_set_id" = active_set_id
+          AND capacity_reservation."production_reservation_id" = production."id"
+          AND capacity_reservation."node_id" = production."node_id"
+          AND capacity_reservation."status" = 'RESERVED';
+
+        FOR production_row IN
+            SELECT production."id" AS production_id,
+                   production."node_id", production."phase_resource_plan_job_id",
+                   candidate."shipment_plan_id"
+            FROM "production_reservations" production
+            JOIN "phase_resource_plan_jobs" plan_job
+              ON plan_job."id" = production."phase_resource_plan_job_id"
+             AND plan_job."node_id" = production."node_id"
+            JOIN "candidate_resource_estimates" candidate
+              ON candidate."id" = plan_job."candidate_resource_estimate_id"
+             AND candidate."node_id" = plan_job."node_id"
+            WHERE production."phase_reservation_set_id" = active_set_id
+              AND production."status" = 'RESERVED'
+            ORDER BY production."id"
+        LOOP
+            created_job_id := gen_random_uuid();
+            INSERT INTO "jobs" (
+                "id", "node_id", "order_id", "order_phase_id",
+                "shipment_plan_id", "phase_resource_plan_job_id", "status",
+                "created_at", "updated_at"
+            ) VALUES (
+                created_job_id, production_row."node_id", target_payment."order_id",
+                target_phase_id, production_row."shipment_plan_id",
+                production_row."phase_resource_plan_job_id", 'CREATED',
+                verified_at, verified_at
+            );
+            UPDATE "production_reservations"
+            SET "status" = 'HELD', "job_id" = created_job_id,
+                "updated_at" = verified_at
+            WHERE "id" = production_row."production_id";
+        END LOOP;
+
+        UPDATE "phase_reservation_sets"
+        SET "status" = 'HELD', "updated_at" = verified_at
+        WHERE "id" = active_set_id;
+        UPDATE "orders"
+        SET "status" = 'CONFIRMED', "confirmed_at" = verified_at,
+            "updated_at" = verified_at
+        WHERE "id" = target_payment."order_id";
+        UPDATE "order_phases"
+        SET "status" = 'ACTIVE', "activated_at" = verified_at,
+            "updated_at" = verified_at
+        WHERE "id" = target_phase_id;
+        RETURN 'CAPTURED';
+    END IF;
+
+    -- A verified capture after any terminal winner is real money and must be
+    -- compensated exactly once. Close still-open order work before recording
+    -- the capture so no Job can be activated from the late event.
+    IF target_payment."status" = 'PENDING' THEN
+        PERFORM taven_close_initial_checkout_payment(
+            target_payment."id",
+            CASE WHEN target_payment."checkout_capture_expires_at" <= verified_at
+                 THEN 'CHECKOUT_EXPIRED' ELSE 'CUSTOMER_CANCELLED' END,
+            verified_at
+        );
+        SELECT * INTO target_payment FROM "payments"
+        WHERE "id" = target_payment."id" FOR UPDATE;
+    END IF;
+
+    IF target_payment."status" IN ('FAILED', 'VOIDED') THEN
+        UPDATE "payments"
+        SET "status" = 'REFUND_PENDING',
+            "captured_amount_minor" = "requested_amount_minor",
+            "provider_capture_id" = event_transaction_id,
+            "captured_at" = verified_at, "updated_at" = verified_at
+        WHERE "id" = target_payment."id";
+
+        refund_id := gen_random_uuid();
+        refund_key := 'late_initial_capture:' || encode(
+            sha256(convert_to(event_provider || ':' || event_id, 'UTF8')),
+            'hex'
+        );
+        INSERT INTO "refund_transactions" (
+            "id", "payment_id", "idempotency_key", "provider",
+            "amount_minor", "reason", "status", "requested_at",
+            "created_at", "updated_at"
+        ) VALUES (
+            refund_id, target_payment."id",
+            refund_key, event_provider,
+            event_amount_minor, 'LATE_CAPTURE_COMPENSATION', 'PENDING',
+            verified_at, verified_at, verified_at
+        ) ON CONFLICT ("payment_id", "idempotency_key") DO NOTHING;
+
+        INSERT INTO "outbox_messages" (
+            "id", "deduplication_key", "aggregate_type", "aggregate_id",
+            "message_type", "schema_version", "payload", "status", "attempts",
+            "available_at", "created_at", "updated_at"
+        ) VALUES (
+            gen_random_uuid(), 'refund_payment:v1:' || refund_id::text,
+            'RefundTransaction', refund_id, 'refund_payment', 1,
+            jsonb_build_object(
+                'refundTransactionId', refund_id::text,
+                'paymentId', target_payment."id"::text,
+                'provider', event_provider,
+                'providerIntentId', event_transaction_id,
+                'amountMinor', event_amount_minor::text,
+                'currency', event_currency,
+                'idempotencyKey', refund_key,
+                'action', 'refund_payment'
+            ), 'PENDING', 0, verified_at, verified_at, verified_at
+        ) ON CONFLICT ("deduplication_key") DO NOTHING;
+        RETURN 'REFUND_PENDING';
+    END IF;
+
+    RETURN 'IGNORED_TERMINAL';
+END;
+$$;
+
+CREATE FUNCTION taven_apply_checkout_refund_success(
+    target_refund_id uuid,
+    refund_provider_id text,
+    refund_event_id text,
+    refund_occurred_at timestamptz,
+    refund_evidence jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_refund "refund_transactions"%ROWTYPE;
+    target_payment "payments"%ROWTYPE;
+    existing_event "payment_provider_events"%ROWTYPE;
+    receipt_id uuid := gen_random_uuid();
+    verified_at timestamptz := clock_timestamp();
+    receipt_payload jsonb;
+BEGIN
+    SELECT * INTO target_refund FROM "refund_transactions"
+    WHERE "id" = target_refund_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'refund transaction does not exist'
+            USING ERRCODE = '23503', CONSTRAINT = 'refund_transactions_pkey';
+    END IF;
+    SELECT * INTO target_payment FROM "payments"
+    WHERE "id" = target_refund."payment_id" FOR UPDATE;
+
+    IF target_refund."status" = 'SUCCEEDED' THEN
+        RETURN false;
+    END IF;
+
+    SELECT * INTO existing_event
+    FROM "payment_provider_events"
+    WHERE "provider" = target_payment."provider"
+      AND "provider_event_id" = refund_event_id;
+    IF FOUND THEN
+        IF existing_event."payment_id" IS DISTINCT FROM target_payment."id"
+           OR existing_event."refund_transaction_id" IS DISTINCT FROM target_refund."id"
+           OR existing_event."provider_transaction_id" IS DISTINCT FROM refund_provider_id
+           OR existing_event."kind" IS DISTINCT FROM 'REFUND_SUCCEEDED'::"payment_provider_event_kind"
+           OR existing_event."amount_minor" IS DISTINCT FROM target_refund."amount_minor"
+           OR existing_event."currency" IS DISTINCT FROM target_payment."currency" THEN
+            RAISE EXCEPTION 'refund provider event identity was reused with different evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+        END IF;
+        receipt_id := existing_event."id";
+        verified_at := existing_event."verified_at";
+    END IF;
+
+    receipt_payload := jsonb_build_object(
+        'paymentId', target_payment."id"::text,
+        'refundTransactionId', target_refund."id"::text,
+        'providerEventId', refund_event_id,
+        'providerTransactionId', refund_provider_id,
+        'kind', 'REFUND_SUCCEEDED',
+        'amountMinor', target_refund."amount_minor"::text,
+        'currency', target_payment."currency",
+        'evidence', coalesce(refund_evidence, '{}'::jsonb)
+    );
+    INSERT INTO "payment_provider_events" (
+        "id", "payment_id", "refund_transaction_id", "provider",
+        "provider_event_id", "provider_transaction_id", "kind",
+        "amount_minor", "currency", "payload", "payload_hash",
+        "occurred_at", "authenticated_at", "verified_at", "created_at"
+    )
+    SELECT receipt_id, target_payment."id", target_refund."id",
+        target_payment."provider", refund_event_id, refund_provider_id,
+        'REFUND_SUCCEEDED', target_refund."amount_minor", target_payment."currency",
+        receipt_payload,
+        encode(sha256(convert_to(receipt_payload::text, 'UTF8')), 'hex'),
+        refund_occurred_at, verified_at, verified_at, verified_at
+    WHERE existing_event."id" IS NULL;
+
+    UPDATE "refund_transactions"
+    SET "status" = 'SUCCEEDED', "provider_refund_id" = refund_provider_id,
+        "provider_result_event_id" = receipt_id, "completed_at" = verified_at,
+        "updated_at" = verified_at
+    WHERE "id" = target_refund."id";
+    UPDATE "payments"
+    SET "status" = 'REFUNDED', "updated_at" = verified_at
+    WHERE "id" = target_payment."id";
+    RETURN true;
+END;
+$$;
+
+COMMIT;

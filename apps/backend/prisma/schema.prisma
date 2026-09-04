@@ -346,6 +346,7 @@ enum ShipmentProviderEventKind {
 }
 
 enum PaymentProviderEventKind {
+  PAYMENT_PENDING
   PAYMENT_CAPTURED
   PAYMENT_FAILED
   REFUND_SUCCEEDED
@@ -2131,7 +2132,9 @@ model Payment {
   paymentScheduleId             String        @map("payment_schedule_id") @db.Uuid
   role                          PaymentRole
   provider                      String        @db.VarChar(100)
+  checkoutMethod                String        @default("ALL") @map("checkout_method") @db.VarChar(50)
   providerIntentId              String?       @map("provider_intent_id") @db.VarChar(255)
+  providerCheckoutUrl           String?       @map("provider_checkout_url") @db.Text
   providerCaptureId             String?       @map("provider_capture_id") @db.VarChar(255)
   intentCreationFailureResultId String?       @unique @map("intent_creation_failure_result_id") @db.Uuid
   requestedAmountMinor          BigInt        @map("requested_amount_minor")

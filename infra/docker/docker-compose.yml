@@ -15,7 +15,17 @@ x-backend-environment: &backend-environment
   TAVEN_OPERATOR_API_TOKEN: ${TAVEN_OPERATOR_API_TOKEN:-local-only-operator-api-token-32}
   TAVEN_BINDING_QUOTE_FLOWS_ENABLED: ${TAVEN_BINDING_QUOTE_FLOWS_ENABLED:-false}
   TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED: ${TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED:-false}
+  TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED: ${TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED:-false}
   TAVEN_AUTOMATIC_PRICE_LIST_REVISION: ${TAVEN_AUTOMATIC_PRICE_LIST_REVISION:-automatic-v0-czk}
+  TAVEN_PAYMENT_PROVIDER: ${TAVEN_PAYMENT_PROVIDER:-sandbox}
+  TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: ${TAVEN_PAYMENT_SANDBOX_PUBLIC_URL:-http://localhost:3001}
+  TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET: ${TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET:-local-only-payment-sandbox-secret-32}
+  TAVEN_PUBLIC_SITE_URL: ${TAVEN_PUBLIC_SITE_URL:-http://localhost:3000}
+  TAVEN_CLAIM_POLICY_REVISION: ${TAVEN_CLAIM_POLICY_REVISION:-claim-policy-draft-v0}
+  TAVEN_COMGATE_MERCHANT_ID: ${TAVEN_COMGATE_MERCHANT_ID:-}
+  TAVEN_COMGATE_SECRET: ${TAVEN_COMGATE_SECRET:-}
+  TAVEN_COMGATE_TEST_MODE: ${TAVEN_COMGATE_TEST_MODE:-true}
+  TAVEN_COMGATE_API_BASE_URL: ${TAVEN_COMGATE_API_BASE_URL:-https://payments.comgate.cz/v2.0}
 
 x-backend-build: &backend-build
   context: ../..
@@ -348,6 +358,27 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+
+  checkout-payment-worker:
+    profiles: ["app", "worker"]
+    image: taven/backend:local
+    build:
+      <<: *backend-build
+      target: runtime
+    init: true
+    restart: unless-stopped
+    command: ["node", "dist/checkout-payment-worker.js"]
+    environment:
+      <<: *backend-environment
+      TAVEN_S3_ENDPOINT: http://minio:9000
+      TAVEN_S3_PUBLIC_ENDPOINT: http://minio:9000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
 
   storage-contract-minio:
     <<: *storage-contract
