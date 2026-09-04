@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { get } from "node:http";
 
 const port = 4173;
 const origin = `http://127.0.0.1:${port}`;
@@ -56,17 +57,26 @@ async function waitForPreview() {
     if (preview.exitCode !== null) {
       throw new Error(`Nuxt preview exited early.\n${previewError}`);
     }
-    try {
-      const response = await fetch(origin);
-      if (response.ok) return;
-    } catch {
-      // The server is still starting.
-    }
+    if (await previewIsReady()) return;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(
     `Nuxt preview did not start within 30 seconds.\n${previewError}`,
   );
+}
+
+function previewIsReady() {
+  return new Promise((resolve) => {
+    const request = get(origin, (response) => {
+      response.resume();
+      resolve(response.statusCode !== undefined && response.statusCode < 500);
+    });
+    request.setTimeout(250, () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.once("error", () => resolve(false));
+  });
 }
 
 async function runLighthouse(mode) {
