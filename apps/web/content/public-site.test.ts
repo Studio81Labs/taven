@@ -106,6 +106,9 @@ describe("public site launch boundaries", () => {
 
     expect(allDrafts).not.toContain("Výrobce");
     expect(allDrafts).not.toContain("výrobní sítě");
+    expect(terms).toContain("jako prodávající");
+    expect(terms).toContain("není Provozovatel plátcem DPH");
+    expect(terms).toContain("znovu ověřen");
     expect(terms).toContain("nenabízí katalog modelů");
     expect(terms).toContain("ani automatické generování modelů");
     expect(terms).toContain("výslovně potvrdit");

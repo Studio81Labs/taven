@@ -31,7 +31,8 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         paragraphs: [
           "Službu Taven provozuje Studio81 Labs, s.r.o., IČ 29508291, DIČ CZ29508291, se sídlem Nové sady 988/2, 602 00 Brno, Česká republika. Zápis v obchodním rejstříku bude doplněn po právní revizi. Elektronický kontakt je uveden v identifikační části této stránky (dále jen „Provozovatel“).",
           "Taven je služba umožňující zákazníkům objednat výrobu fyzických výrobků zejména metodou 3D tisku na základě digitálního modelu dodaného zákazníkem nebo vytvořeného konkrétně pro něj v rámci individuální modelářské práce. Verze v0 nenabízí katalog modelů ani automatické generování modelů z textu nebo fotografií.",
-          "Provozovatel vystupuje vůči zákazníkovi jako poskytovatel služby a smluvní strana zákazníka.",
+          "Provozovatel vystupuje vůči zákazníkovi jako prodávající a smluvní strana zákazníka. Vystavuje doklady k objednávce, odpovídá za sjednanou kvalitu výrobku a vyřizuje reklamace.",
+          "Podle aktuálních podkladů pro verzi v0 není Provozovatel plátcem DPH; zveřejnění DIČ samo o sobě neznamená registraci k DPH. Tento status musí být znovu ověřen bezprostředně před právním schválením a zveřejněním účinného znění.",
           "Výrobu ve verzi v0 technicky zajišťuje Provozovatel na vlastním zařízení.",
         ],
       },
