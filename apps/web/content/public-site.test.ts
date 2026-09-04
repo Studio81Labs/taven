@@ -92,4 +92,33 @@ describe("public site launch boundaries", () => {
       expect(content).toContain("STEP");
     }
   });
+
+  it("keeps legal drafts aligned with the owner-operated v0 service", () => {
+    const allDrafts = JSON.stringify(legalDrafts);
+    const terms = JSON.stringify(legalDrafts.terms.sections);
+    const claims = JSON.stringify(legalDrafts.claims.sections);
+
+    expect(allDrafts).not.toContain("Výrobce");
+    expect(allDrafts).not.toContain("výrobní sítě");
+    expect(terms).toContain("výslovně potvrdit");
+    expect(claims).toContain("věrnost");
+    expect(claims).toContain("lícování");
+  });
+
+  it("separates source-file, physical-item, and photo retention", () => {
+    const unfinishedUploads = legalDrafts.retention.sections.find(
+      (section) => section.title === "4. Nedokončené uploady a objednávky",
+    );
+    const abandonedPhysicalItems = legalDrafts.retention.sections.find(
+      (section) => section.title === "5. Opuštěné fyzické výrobky",
+    );
+    const photoConsent = JSON.stringify(legalDrafts.photoConsent.sections);
+
+    expect(unfinishedUploads?.note).toContain("90 dní");
+    expect(unfinishedUploads?.note).not.toContain("30 dní");
+    expect(abandonedPhysicalItems?.note).toContain("30 dní");
+    expect(abandonedPhysicalItems?.note).toContain("fyzický výrobek");
+    expect(photoConsent).toContain("neprodlužuje retenční lhůtu");
+    expect(photoConsent).toContain("nejpozději při uplynutí lhůty");
+  });
 });

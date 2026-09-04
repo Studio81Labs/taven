@@ -32,7 +32,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "Službu Taven provozuje Studio81 Labs, s.r.o., IČ 29508291, DIČ CZ29508291, se sídlem Nové sady 988/2, 602 00 Brno, Česká republika. Zápis v obchodním rejstříku bude doplněn po právní revizi. Elektronický kontakt je uveden v identifikační části této stránky (dále jen „Provozovatel“).",
           "Taven je služba umožňující zákazníkům objednat výrobu fyzických výrobků zejména metodou 3D tisku na základě zákazníkem dodaného nebo prostřednictvím služby získaného digitálního modelu.",
           "Provozovatel vystupuje vůči zákazníkovi jako poskytovatel služby a smluvní strana zákazníka.",
-          "Výroba může být technicky zajištěna Provozovatelem nebo třetími osobami zapojenými do výrobní sítě Taven („Výrobci“). Zákazník nevstupuje uzavřením objednávky do samostatného smluvního vztahu s Výrobcem.",
+          "Výrobu ve verzi v0 technicky zajišťuje Provozovatel na vlastním zařízení.",
         ],
       },
       {
@@ -88,6 +88,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         paragraphs: [
           "Významná část výrobků poskytovaných prostřednictvím Taven je vyráběna podle specifikace zákazníka nebo přizpůsobena jeho požadavkům.",
           "Na takové výrobky se může vztahovat zákonná výjimka z práva spotřebitele odstoupit od smlouvy ve 14denní lhůtě.",
+          "Pokud se výjimka na konkrétní objednávku vztahuje, musí být zákazník před objednáním srozumitelně informován a její použití výslovně potvrdit.",
           "Toto omezení nemá vliv na práva zákazníka z vadného plnění.",
         ],
       },
@@ -159,7 +160,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         title: "1. Účel",
         paragraphs: [
           "Tento reklamační řád stanoví postup při uplatnění práv z vadného plnění u výrobků objednaných prostřednictvím Taven.",
-          "Reklamace vyřizuje Studio81 Labs, s.r.o., bez ohledu na to, který Výrobce fyzicky realizoval výrobu.",
+          "Reklamace vyřizuje Studio81 Labs, s.r.o. jako Provozovatel a smluvní strana zákazníka.",
         ],
       },
       {
@@ -180,6 +181,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         paragraphs: [
           "Za vadu se zpravidla nepovažují technologicky běžné vlastnosti 3D tisku, které nemají podstatný vliv na sjednané vlastnosti výrobku, například viditelnost jednotlivých vrstev nebo drobné stopy po odstranění podpůrných struktur.",
           "Konkrétní posouzení vždy závisí na objednaných parametrech a účelu výrobku, který byl mezi stranami sjednán.",
+          "Provozovatel odpovídá za věrnost výtisku potvrzenému modelu, nikoli bez dalšího za vhodnost nebo lícování modelu pro konkrétní použití. Model laděný na jiné tiskárně může obsahovat vlastní rozměrové kompenzace; odlišné lícování výtisku, který jinak věrně odpovídá dodanému modelu, proto samo o sobě není vadou tisku.",
         ],
       },
       {
@@ -285,7 +287,6 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "Údaje mohou být v nezbytném rozsahu zpřístupněny zejména:",
         ],
         items: [
-          "Výrobcům realizujícím konkrétní zakázku",
           "poskytovatelům platebních služeb",
           "dopravcům",
           "poskytovatelům hostingových a cloudových služeb",
@@ -293,13 +294,13 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "účetním, daňovým nebo právním poradcům",
           "orgánům veřejné moci, pokud to vyžaduje zákon",
         ],
-        note: "Výrobce obdrží pouze údaje nezbytné pro realizaci konkrétní zakázky. Rozsah předávaných údajů bude minimalizován podle technického a logistického procesu Taven.",
+        note: "Každý příjemce obdrží pouze údaje nezbytné pro svůj konkrétní účel. Rozsah předávaných údajů bude minimalizován podle technického a logistického procesu Taven.",
       },
       {
         title: "6. Digitální modely",
         paragraphs: [
           "Nahrané digitální modely jsou zpracovávány za účelem kontroly, přípravy a realizace výroby.",
-          "Přístup k modelu mohou získat pracovníci Provozovatele a Výrobce, pokud je to nezbytné pro realizaci zakázky nebo manuální kontrolu.",
+          "Přístup k modelu mohou získat pouze pověřené osoby Provozovatele, pokud je to nezbytné pro realizaci zakázky nebo manuální kontrolu.",
           "Model nebude bez dalšího právního důvodu používán k výrobě pro jiné zákazníky.",
         ],
       },
@@ -418,7 +419,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         ],
         items: [
           "ji označí automatický systém",
-          "Výrobce upozorní na potenciální problém",
+          "oprávněná osoba při přípravě výroby upozorní na potenciální problém",
           "charakter modelu není jednoznačný",
           "vznikne podezření na porušení práv třetí osoby",
           "vznikne bezpečnostní nebo právní pochybnost",
@@ -488,35 +489,42 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "řešení reklamace",
           "jinému účelu souvisejícímu s objednávkou",
         ],
-        note: "Pokud zákazník model pouze nahraje, ale objednávku nedokončí, vztahují se na něj pravidla pro opuštěné položky.",
+        note: "Pro každý úspěšně nahraný zdrojový model se stanoví plánované datum odstranění. Základní lhůta činí 90 dní od úspěšného nahrání; vytvoření platné nabídky ji může prodloužit a aktivní objednávka, reklamace nebo právní důvod mohou odstranění pozastavit. Po skončení takového důvodu se datum odstranění znovu určí podle retenčních pravidel. [ČEKÁ NA PRÁVNÍ REVIZI — 90 DNÍ]",
       },
       {
         title: "3. Dokončené objednávky",
         paragraphs: [
-          "Výrobní soubory související s dokončenou objednávkou budou podle dosud neschváleného návrhu odstraněny po 90 dnech od dokončení objednávky, pokud není jejich další uchování nezbytné například z důvodu:",
+          "Výrobní soubory související s dokončenou objednávkou budou podle návrhu odstraněny nejpozději po 90 dnech od dokončení objednávky, pokud není jejich další uchování nezbytné například z důvodu:",
         ],
         items: [
           "probíhající reklamace",
           "právního sporu",
           "bezpečnostního incidentu",
           "zákonné povinnosti",
-          "výslovného požadavku zákazníka v rámci funkce služby umožňující dlouhodobé uložení",
         ],
-        note: "[NÁVRH — 90 DNÍ NENÍ SCHVÁLENO] Tato lhůta se vztahuje na výrobní podklady, nikoli automaticky na účetní a transakční dokumentaci.",
+        note: "[ČEKÁ NA PRÁVNÍ REVIZI — 90 DNÍ] Tato lhůta se vztahuje na výrobní podklady, nikoli automaticky na účetní a transakční dokumentaci.",
       },
       {
-        title: "4. Opuštěné položky",
-        paragraphs: ["Za opuštěnou položku se považuje zejména:"],
+        title: "4. Nedokončené uploady a objednávky",
+        paragraphs: ["Za nedokončený zákaznický postup se považuje zejména:"],
         items: [
           "nahraný model bez dokončené objednávky",
           "nedokončená kalkulace",
           "nedokončený košík",
           "rozpracovaná objednávka, která nebyla potvrzena nebo zaplacena",
         ],
-        note: "[NÁVRH — 30 DNÍ NENÍ SCHVÁLENO] Taková data mohou být automaticky odstraněna po 30 dnech od poslední aktivity, není-li technicky nebo právně potřebné jejich kratší či delší uchování.",
+        note: "Výrobní zdrojové soubory z nedokončeného postupu se řídí plánovaným datem odstranění stanoveným při úspěšném nahrání, jehož základní lhůta činí 90 dní. Platná nabídka může tuto lhůtu prodloužit; samotná neaktivita nesmí bez dalšího převést soubor do odlišné třicetidenní kategorie. [ČEKÁ NA PRÁVNÍ REVIZI — 90 DNÍ]",
       },
       {
-        title: "5. Zamítnuté objednávky",
+        title: "5. Opuštěné fyzické výrobky",
+        paragraphs: [
+          "Pokud již vyrobený výrobek zůstane po finančně vypořádaném zrušení objednávky u Provozovatele, může být po skončení retenční lhůty bezpečně recyklován nebo zničen.",
+          "Odstranění fyzického výrobku musí být evidováno tak, aby bylo možné doložit datum a způsob naložení s výrobkem.",
+        ],
+        note: "[NÁVRH — 30 DNÍ NENÍ SCHVÁLENO] Navrhovaná lhůta pro opuštěný fyzický výrobek je 30 dní od finančního vypořádání zrušené objednávky. Toto pravidlo se nevztahuje na nahrané digitální modely.",
+      },
+      {
+        title: "6. Zamítnuté objednávky",
         paragraphs: [
           "Modely související se zamítnutou objednávkou budou odstraněny bez zbytečného odkladu poté, co přestanou být potřebné pro:",
         ],
@@ -530,27 +538,27 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         note: "Je-li nutné uchovat informaci o bezpečnostním incidentu, Provozovatel se může pokusit uchovat pouze minimální informace potřebné k danému účelu namísto původního výrobního souboru.",
       },
       {
-        title: "6. Reklamace",
+        title: "7. Reklamace",
         paragraphs: [
           "Pokud je k objednávce zahájena reklamace, mohou být související výrobní soubory a fotografie uchovány po dobu jejího řešení a následně po dobu nezbytnou pro ochranu právních nároků Provozovatele nebo zákazníka.",
         ],
       },
       {
-        title: "7. Fotografie",
+        title: "8. Fotografie",
         paragraphs: [
           "Fotografie výrobků pořízené v rámci kontroly kvality, dokumentace reklamace, manuální kontroly nebo komunikace se zákazníkem jsou provozní dokumentací a mohou být uchovávány po dobu nezbytnou pro příslušný účel.",
           "Použití fotografie pro marketing, portfolio nebo veřejnou prezentaci se řídí samostatným souhlasem.",
         ],
       },
       {
-        title: "8. Účetní a transakční údaje",
+        title: "9. Účetní a transakční údaje",
         paragraphs: [
           "Daňové doklady, účetní záznamy, údaje o platbách a další dokumentace podléhající zákonným archivačním povinnostem mohou být uchovávány déle než výrobní soubory.",
           "Jejich uchování se řídí příslušnými právními předpisy.",
         ],
       },
       {
-        title: "9. Zálohy",
+        title: "10. Zálohy",
         paragraphs: [
           "Odstraněná data mohou po omezenou dobu přetrvávat v technických zálohách.",
           "Data v zálohách nejsou po odstranění z produkčního systému běžně dostupná a budou odstraněna v rámci standardního cyklu rotace záloh.",
@@ -558,14 +566,14 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         note: "[DOBU UCHOVÁNÍ ZÁLOH DOPLNIT PODLE KONFIGURACE COOLIFY/R2]",
       },
       {
-        title: "10. Požadavek na výmaz",
+        title: "11. Požadavek na výmaz",
         paragraphs: [
           "Zákazník může požádat o výmaz osobních údajů podle podmínek GDPR prostřednictvím elektronického kontaktu správce uvedeného v identifikační části této stránky.",
           "Právo na výmaz není absolutní. Některé údaje může být Provozovatel povinen nebo oprávněn dále uchovávat například kvůli právním, účetním nebo bezpečnostním povinnostem.",
         ],
       },
       {
-        title: "11. Technická implementace",
+        title: "12. Technická implementace",
         paragraphs: ["Produkční systém by měl evidovat minimálně:"],
         items: [
           "typ uloženého objektu",
@@ -587,7 +595,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
       {
         title: "1. Provozní fotografie",
         paragraphs: [
-          "Provozovatel nebo Výrobce může v přiměřeném rozsahu pořizovat fotografie výrobku, pokud je to potřebné pro:",
+          "Provozovatel může v přiměřeném rozsahu pořizovat fotografie výrobku, pokud je to potřebné pro:",
         ],
         items: [
           "kontrolu kvality",
@@ -641,7 +649,8 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         paragraphs: [
           "Zákazník může souhlas s budoucím používáním fotografie odvolat prostřednictvím elektronického kontaktu správce uvedeného v identifikační části této stránky.",
           "Odvolání souhlasu nemá vliv na zákonnost zpracování provedeného před jeho odvoláním.",
-          "Po odvolání Provozovatel přestane fotografii používat pro nové marketingové účely a odstraní ji z míst pod svou přímou kontrolou, pokud je to přiměřeně možné.",
+          "Po odvolání Provozovatel okamžitě přestane fotografii používat pro nové marketingové účely a odstraní ji z míst pod svou přímou kontrolou.",
+          "Marketingový souhlas neprodlužuje retenční lhůtu provozní zdrojové fotografie. Veřejná nebo marketingová kopie musí být odstraněna nejpozději při uplynutí lhůty zdrojové fotografie, i když souhlas nebyl odvolán, nebo okamžitě po odvolání souhlasu.",
         ],
         note: "[PRÁVNÍ REVIZE POTŘEBNÁ PRO JIŽ VYDANÉ NEBO DISTRIBUOVANÉ MATERIÁLY]",
       },
@@ -665,31 +674,15 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         ],
       },
       {
-        title: "7. Výrobci",
-        paragraphs: [
-          "Pokud výrobu realizuje Výrobce zapojený do sítě Taven, může mu Provozovatel zpřístupnit výrobní podklady potřebné k realizaci konkrétní zakázky.",
-          "Výrobce nesmí zákaznický model:",
-        ],
-        items: [
-          "používat pro vlastní potřebu",
-          "poskytovat třetím osobám",
-          "veřejně publikovat",
-          "prodávat",
-          "používat k výrobě dalších kusů mimo přidělenou zakázku",
-          "uchovávat déle, než je potřebné podle pravidel Taven",
-        ],
-        note: "Tyto povinnosti musí být odpovídajícím způsobem zahrnuty také ve smluvním vztahu mezi Provozovatelem a Výrobcem.",
-      },
-      {
-        title: "8. Důvěrné zakázky",
+        title: "7. Důvěrné zakázky",
         paragraphs: [
           "Taven může umožnit označení objednávky jako důvěrné zakázky.",
           "Důvěrná zakázka je určena zejména pro neveřejné prototypy, vývojové díly, obchodně citlivé návrhy a jiné modely, u kterých zákazník požaduje zvýšenou ochranu výrobních podkladů a informací o zakázce.",
-          "Označení zakázky jako důvěrné samo o sobě nepřevádí na Provozovatele ani Výrobce žádná práva duševního vlastnictví k modelu.",
+          "Označení zakázky jako důvěrné samo o sobě nepřevádí na Provozovatele žádná práva duševního vlastnictví k modelu.",
         ],
       },
       {
-        title: "8.1 Přístup k důvěrné zakázce",
+        title: "7.1 Přístup k důvěrné zakázce",
         paragraphs: [
           "Přístup k důvěrné zakázce bude omezen pouze na osoby, které jej potřebují pro její zpracování, zejména za účelem:",
         ],
@@ -702,12 +695,12 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "zákaznické podpory nebo reklamace",
           "bezpečnostní nebo právní kontroly, je-li nezbytná",
         ],
-        note: "Výrobci bude zpřístupněn pouze rozsah informací potřebný k realizaci konkrétní zakázky. Pokud výrobní nebo logistický proces nevyžaduje znalost identity zákazníka, nemusí být Výrobci tato informace zpřístupněna.",
+        note: "Každé pověřené osobě bude zpřístupněn pouze rozsah informací potřebný k realizaci konkrétní zakázky. Pokud výrobní nebo logistický proces nevyžaduje znalost identity zákazníka, tato informace se pověřené osobě nezpřístupní.",
       },
       {
-        title: "8.2 Povinnosti Výrobce",
+        title: "7.2 Povinnosti pověřených osob",
         paragraphs: [
-          "Výrobce, kterému je důvěrná zakázka přidělena, je povinen zachovávat mlčenlivost o jejím obsahu a nesmí zejména:",
+          "Pověřená osoba, která zpracovává důvěrnou zakázku, je povinna zachovávat mlčenlivost o jejím obsahu a nesmí zejména:",
         ],
         items: [
           "pořizovat fotografie nebo video výrobku, s výjimkou případů nezbytných pro výrobu, kontrolu kvality nebo řešení problému",
@@ -719,10 +712,10 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
           "předat model nebo informace o zakázce jiné osobě bez oprávnění Provozovatele",
           "použít výrobek, model nebo informace o něm ve svém portfoliu, na sociálních sítích nebo v jiné veřejné prezentaci",
         ],
-        note: "Tyto povinnosti musí být odpovídajícím způsobem zahrnuty ve smluvním vztahu mezi Provozovatelem a Výrobcem.",
+        note: "Tyto povinnosti musí být odpovídajícím způsobem zahrnuty v pracovním, dodavatelském nebo jiném smluvním vztahu pověřené osoby k Provozovateli.",
       },
       {
-        title: "8.3 Fotografie a dokumentace",
+        title: "7.3 Fotografie a dokumentace",
         paragraphs: [
           "U důvěrné zakázky se standardně nepředpokládá pořizování fotografií pro marketingové nebo prezentační účely.",
           "Je-li fotografie nezbytná pro kontrolu kvality, reklamaci nebo řešení výrobního problému, může být pořízena a zpracována pouze pro tento provozní účel.",
@@ -730,15 +723,15 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         ],
       },
       {
-        title: "8.4 Uchování výrobních podkladů",
+        title: "7.4 Uchování výrobních podkladů",
         paragraphs: [
           "Výrobní podklady důvěrné zakázky budou uchovávány pouze po dobu nezbytnou pro její realizaci a následné splnění oprávněných provozních nebo právních účelů.",
           "Pokud není jejich další uchování potřebné například z důvodu reklamace, právního sporu nebo zákonné povinnosti, budou odstraněny podle retenčních pravidel Taven.",
-          "Výrobce je povinen po dokončení zakázky odstranit lokální kopie výrobních podkladů, pokud jejich další uchování není výslovně povoleno Provozovatelem.",
+          "Pověřené osoby jsou po dokončení zakázky povinny odstranit lokální kopie výrobních podkladů, pokud jejich další uchování není výslovně povoleno Provozovatelem.",
         ],
       },
       {
-        title: "8.5 Důvěrnost ze strany Provozovatele",
+        title: "7.5 Důvěrnost ze strany Provozovatele",
         paragraphs: [
           "Provozovatel nebude bez právního důvodu zveřejňovat ani poskytovat třetím osobám:",
         ],
@@ -752,7 +745,7 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         note: "Tím není dotčeno zpřístupnění informací osobám nezbytným pro realizaci služby, právním nebo odborným poradcům vázaným odpovídající povinností důvěrnosti nebo orgánům veřejné moci, pokud jejich poskytnutí vyžadují právní předpisy.",
       },
       {
-        title: "8.6 Individuální NDA",
+        title: "7.6 Individuální NDA",
         paragraphs: [
           "Vyžaduje-li zákazník vyšší úroveň smluvní ochrany, může být před předáním výrobních podkladů sjednána samostatná dohoda o mlčenlivosti (NDA).",
           "Samotné označení objednávky jako důvěrné zakázky nenahrazuje individuálně sjednanou NDA, pokud ji zákazník vyžaduje.",
@@ -760,14 +753,14 @@ export const legalDrafts: Record<LegalDraftKey, LegalDraft> = {
         ],
       },
       {
-        title: "8.7 Bezpečnostní a právní kontrola",
+        title: "7.7 Bezpečnostní a právní kontrola",
         paragraphs: [
           "Režim důvěrné zakázky nevylučuje kontrolu podle Pravidel zakázaného obsahu a manuální kontroly.",
           "Pokud je kontrola nezbytná pro splnění právních povinností nebo ochranu bezpečnosti služby, může být důvěrný model zpřístupněn oprávněné osobě v minimálním rozsahu potřebném pro posouzení.",
         ],
       },
       {
-        title: "8.8 Omezení ochrany",
+        title: "7.8 Omezení ochrany",
         paragraphs: [
           "Provozovatel přijme přiměřená technická a organizační opatření k ochraně důvěrných zakázek, nemůže však bez individuální dohody garantovat konkrétní stupeň informační bezpečnosti, certifikaci nebo režim odpovídající zvláštním regulatorním požadavkům.",
           "Zákazník by proto prostřednictvím standardní služby neměl předávat informace podléhající zvláštním bezpečnostním režimům, utajované informace nebo jiné údaje, pro jejichž zpracování jsou vyžadována specifická zákonná či smluvní bezpečnostní opatření, pokud jejich zpracování nebylo s Provozovatelem předem individuálně dohodnuto.",
