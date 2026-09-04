@@ -4,6 +4,8 @@ import {
   publicFooterNavigation,
   publicSite,
 } from "../../content/public-site";
+
+const contacts = usePublicContacts();
 </script>
 
 <template>
@@ -43,7 +45,13 @@ import {
             <template v-for="line in publicSite.seller.address" :key="line">
               {{ line }}<br />
             </template>
-            IČ {{ publicSite.seller.companyId }}
+            IČ {{ publicSite.seller.companyId }}<br />
+            DIČ {{ publicSite.seller.vatId }}<br />
+            <a
+              class="underline decoration-[#6e6f66] underline-offset-4 hover:decoration-[#1b44e8] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
+              :href="contacts.customer.href"
+              >{{ contacts.customer.email }}</a
+            >
           </address>
         </section>
 

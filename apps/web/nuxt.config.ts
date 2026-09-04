@@ -20,6 +20,8 @@ export default defineNuxtConfig({
     public: {
       apiBaseUrl: "http://localhost:3001",
       siteUrl: "http://localhost:3000",
+      customerContactEmail: "zakaznici@taven.cz",
+      dataControllerEmail: "legal@taven.cz",
     },
   },
   app: {

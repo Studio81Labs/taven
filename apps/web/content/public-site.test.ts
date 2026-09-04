@@ -13,12 +13,12 @@ describe("public site launch boundaries", () => {
     expect(publicSite.contentRevision).toBe("launch-approvals-v0.1");
   });
 
-  it("does not invent unapproved commercial or contact values", () => {
+  it("does not invent unapproved commercial values", () => {
     expect(publicSite.commercial.automaticQuotePubliclyEnabled).toBe(false);
     expect(publicSite.commercial.fromPrice).toBeNull();
     expect(publicSite.commercial.standardLeadTime).toBeNull();
-    expect(publicSite.contact.email).toBeNull();
-    expect(publicSite.contact.phone).toBeNull();
+    expect(publicSite.seller.vatId).toBe("CZ29508291");
+    expect(publicSite).not.toHaveProperty("contact");
     expect(publicSite.portfolio.items).toHaveLength(0);
     expect(publicSite.analytics.provider).toBeNull();
   });

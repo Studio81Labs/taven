@@ -22,10 +22,10 @@ Vlastník dodal pro veřejnou právní identifikaci služby tyto údaje:
 | Role | jediný prodávající a odpovědný provozovatel Tavenu | schváleno vlastníkem; odpovídá rozhodnutí #174 |
 | Sídlo | Nové sady 988/2, 602 00 Brno, Česká republika | dodáno vlastníkem; standardizovaná adresa ověřena v ARES 2026-09-04 |
 | IČ | 29508291 | dodáno vlastníkem; ověřeno v ARES 2026-09-04 |
-| DIČ | CZ29508291 | dodáno vlastníkem; účetní/daňové ověření před publikací zůstává součástí launch kontroly |
-| Veřejný zákaznický e-mail | — | čeká na vlastníka; `dev@studio81.cz` je pouze vývojové metadata |
-| Veřejný zákaznický telefon | — | čeká na vlastníka |
-| Kontakt správce osobních údajů | — | čeká na vlastníka a právní kontrolu privacy notice |
+| DIČ | CZ29508291 | dodáno vlastníkem a schváleno k publikaci 2026-09-04 |
+| Veřejný zákaznický e-mail | `zakaznici@taven.cz` | schváleno vlastníkem 2026-09-04; měnitelné runtime konfigurací |
+| Veřejný zákaznický telefon | nezveřejňovat | vlastník zvolil pouze elektronické veřejné kontakty |
+| Kontakt správce osobních údajů | `legal@taven.cz` | schváleno vlastníkem 2026-09-04; měnitelné runtime konfigurací; právní text stále čeká na kontrolu |
 
 Zdroj externího ověření firmy, IČ a sídla:
 [ARES — ekonomický subjekt 29508291](https://ares.gov.cz/ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty/29508291).
@@ -49,7 +49,8 @@ inline layout a editorové `data-*` atributy nejsou požadavky na výsledný kó
 
 ## 3. Právní texty — pouze placeholdery
 
-Vlastník povolil dočasné dummy texty nebo placeholdery. Každý takový artefakt
+Vlastník povolil dočasné dummy texty nebo placeholdery a může dodat jejich
+pracovní návrhy během přípravy systému. Každý takový artefakt
 musí být viditelně označen `NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI`, nesmí mít
 datum účinnosti a nesmí být přijatelnou verzí pro API snapshot, checkout ani
 veřejné spuštění.
@@ -108,9 +109,9 @@ není souhlas s těmito hodnotami.
 
 | Kritérium | Stav | Co chybí |
 |---|---|---|
-| `TAVEN.`/`TV.` a Studio81 Labs jako seller/operator | částečně splněno | značky a subjekt potvrzeny; name clearance a veřejné kontakty čekají |
+| `TAVEN.`/`TV.` a Studio81 Labs jako seller/operator | částečně splněno | značky, subjekt, DIČ a elektronické kontakty potvrzeny; name clearance čeká |
 | Clearance a finální veřejné jméno/doména | blokováno | čtyři kroky clearance a finální souhlas |
-| Verzované účinné právní texty | blokováno | counsel-approved text, verze, data účinnosti a kontakty |
+| Verzované účinné právní texty | blokováno | counsel-approved text, verze a data účinnosti |
 | Přijaté závazné v0 hodnoty nebo direct-flow blok | blokováno | audit všech ⚠ hodnot a explicitní rozhodnutí |
 | Nekopírovat právní prózu třetích stran | splněno pro tento záznam | zachovat při přípravě finálních textů |
 

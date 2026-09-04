@@ -44,12 +44,15 @@ zveřejněním ještě ověří:
 | Sídlo | Nové sady 988/2, 602 00 Brno | připraveno pro veřejnou identifikaci |
 | Stát | Česká republika | připraveno pro veřejnou identifikaci |
 | IČ | 29508291 | připraveno pro veřejnou identifikaci |
-| DIČ | CZ29508291 | dodáno vlastníkem; účetní/daňové ověření před zveřejněním čeká |
+| DIČ | CZ29508291 | schváleno vlastníkem k publikaci |
+| Zákaznický e-mail | zakaznici@taven.cz | schváleno; měnitelné runtime konfigurací |
+| Kontakt správce osobních údajů | legal@taven.cz | schváleno; měnitelné runtime konfigurací |
+| Veřejný telefon | nezveřejňovat | komunikace pouze elektronicky |
 
 Sídlo právnické osoby se může zobrazovat v trust sekci, footeru, VOP,
 dokladech a kontaktech. Není tím zveřejněna adresa dílny: **soukromé místo
-výroby se nepublikuje.** Veřejný zákaznický e-mail a telefon zatím nejsou
-schválené a nesmějí se nahradit vývojovým kontaktem z metadat repozitáře.
+výroby se nepublikuje.** Veřejné kontakty jsou elektronické; Taven nezveřejňuje
+zákaznický telefon a nepoužívá vývojový kontakt z metadat repozitáře.
 
 ## 3. Tón
 
