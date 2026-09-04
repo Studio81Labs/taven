@@ -27,6 +27,8 @@ process.env.TAVEN_S3_ACCESS_KEY_ID ??= "taven";
 process.env.TAVEN_S3_SECRET_ACCESS_KEY ??= "taven-local-only";
 process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
 process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??= uploadClientHashKey;
+process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED ??= "true";
+process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED ??= "true";
 
 describe("QuoteRequest and tokenized individual offers", () => {
   let app: NestExpressApplication;
@@ -60,6 +62,66 @@ describe("QuoteRequest and tokenized individual offers", () => {
 
   afterAll(async () => {
     await app?.close();
+  });
+
+  it("fails closed before issuing or accepting a binding offer", async () => {
+    const created = await quotes.createRequest(
+      requestInput("launch-gate"),
+      "198.51.100.38",
+      key("launch-gate-create"),
+    );
+    const reviewed = await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("launch-gate-review"),
+    );
+    expect(reviewed.response.status).toBe(200);
+
+    const configured = process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED;
+    process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = "false";
+    try {
+      const refused = await issueOffer(
+        created.requestId,
+        key("launch-gate-refused-issue"),
+        new Date(Date.now() + 60 * 60 * 1_000),
+      );
+      expect(refused.response.status).toBe(503);
+      expect(refused.body).toMatchObject({
+        code: "LAUNCH_APPROVAL_REQUIRED",
+      });
+      expect(
+        await prisma.quote.count({
+          where: { quoteRequestId: created.requestId },
+        }),
+      ).toBe(0);
+    } finally {
+      process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = configured ?? "true";
+    }
+
+    const issued = await issueOffer(
+      created.requestId,
+      key("launch-gate-enabled-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
+    expect(issued.response.status).toBe(201);
+
+    process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = "false";
+    try {
+      const refused = await acceptOffer(
+        issued.body,
+        key("launch-gate-refused-accept"),
+      );
+      expect(refused.response.status).toBe(503);
+      expect(refused.body).toMatchObject({
+        code: "LAUNCH_APPROVAL_REQUIRED",
+      });
+      expect(
+        await prisma.individualOrderOrigin.count({
+          where: { quoteId: issued.body.quoteId },
+        }),
+      ).toBe(0);
+    } finally {
+      process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = configured ?? "true";
+    }
   });
 
   it("rejects a null quote-request body as invalid client input", async () => {

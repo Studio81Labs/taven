@@ -28,6 +28,7 @@ import {
 import { PassThrough, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createInflateRaw, crc32 } from "node:zlib";
+import { assertQuotePhotoUploadsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import type {
   ConfirmedUploadResponseDto,
@@ -213,6 +214,7 @@ export class UploadService {
       ) {
         throw new UnauthorizedException("Quote-session capability is invalid");
       }
+      assertQuotePhotoUploadsEnabled();
       const subjectHash = anonymousUploadSubject(
         this.storageConfig.uploadClientHashKey,
         "quote-photo-upload",
@@ -275,6 +277,9 @@ export class UploadService {
     if (intent.expiresAt.getTime() <= Date.now()) {
       await this.expirePendingIntent(intent.id);
       throw new GoneException("Upload intent expired");
+    }
+    if (intent.assetKind === UploadAssetKind.PHOTO_ASSET) {
+      assertQuotePhotoUploadsEnabled();
     }
 
     try {

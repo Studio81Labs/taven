@@ -68,6 +68,7 @@ process.env.TAVEN_S3_SECRET_ACCESS_KEY ??= "taven-local-only";
 process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
 process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??=
   "test-automatic-upload-client-hash-key-at-least-32";
+process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED ??= "true";
 
 const databaseUrl = process.env.DATABASE_URL;
 const scope = `automatic-quotes-${randomUUID()}`;
@@ -116,6 +117,44 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     await prisma.anonymousQuoteLimit.deleteMany({
       where: { subjectHash: localAutomaticQuoteSubjectHash },
     });
+  });
+
+  it("fails closed before preparing a binding quote", async () => {
+    const created = await automaticQuotes.createSession(
+      {},
+      "198.51.100.38",
+      key("launch-gate-create"),
+    );
+    const configured = process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED;
+    process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = "false";
+    try {
+      const response = await api(
+        `automatic-quote-sessions/${created.sessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(
+            created.sessionToken,
+            key("launch-gate-prepare"),
+          ),
+        },
+      );
+
+      expect(response.response.status).toBe(503);
+      expect(response.body).toMatchObject({
+        code: "LAUNCH_APPROVAL_REQUIRED",
+      });
+      expect(
+        await prisma.orderPriceBinding.count({
+          where: { orderId: created.orderId },
+        }),
+      ).toBe(0);
+    } finally {
+      if (configured === undefined) {
+        delete process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED;
+      } else {
+        process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = configured;
+      }
+    }
   });
 
   it("loads the v0 automatic pricing and carrier constraints", async () => {

@@ -22,6 +22,7 @@ import {
   ApiOperation,
   ApiParam,
   ApiQuery,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
@@ -121,6 +122,9 @@ export class OffersController {
   @ApiUnauthorizedResponse({ description: "Offer capability is invalid" })
   @ApiGoneResponse({ description: "Offer is closed or expired" })
   @ApiConflictResponse({ description: "Offer version or terms changed" })
+  @ApiServiceUnavailableResponse({
+    description: "Binding offer flows await launch approval",
+  })
   accept(
     @Param("quoteId") quoteId: string,
     @Body() body: AcceptOfferDto,
@@ -232,6 +236,9 @@ export class OperatorQuoteRequestsController {
   @ApiBody({ type: IssueOfferDto })
   @ApiCreatedResponse({ type: OfferIssuedDto })
   @ApiConflictResponse({ description: "Request is not in review" })
+  @ApiServiceUnavailableResponse({
+    description: "Binding offer flows await launch approval",
+  })
   issue(
     @Param("requestId") requestId: string,
     @Body() body: IssueOfferDto,

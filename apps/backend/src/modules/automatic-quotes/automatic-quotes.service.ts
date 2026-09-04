@@ -34,6 +34,7 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
+import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
 import { EligibilityPlanService } from "../resources/eligibility-plan.service";
@@ -1118,6 +1119,7 @@ export class AutomaticQuotesService {
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const session = await this.loadSession(sessionId);
     assertSessionCapability(session, sessionCapability);
+    assertBindingQuoteFlowsEnabled();
     await this.idempotentEffect(
       "automatic-quote.prepare",
       commandKey,

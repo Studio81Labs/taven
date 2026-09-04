@@ -30,6 +30,7 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
+import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
@@ -377,6 +378,7 @@ export class QuotesService {
     input: IssueOfferDto,
     idempotencyKey: string | undefined,
   ): Promise<OfferIssuedDto> {
+    assertBindingQuoteFlowsEnabled();
     requestId = normalizedUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const offer = validateOffer(input);
@@ -870,6 +872,7 @@ export class QuotesService {
     const expected = validateExpectedOffer(input);
     const commandKey = requireIdempotencyKey(idempotencyKey);
     await this.offerForToken(quoteId, token);
+    assertBindingQuoteFlowsEnabled();
     const result = await this.idempotent<ExpiringResult<AcceptedOfferDto>>(
       "quote-offer.accept",
       commandKey,

@@ -105,6 +105,13 @@ Dokud nejsou příslušná čísla přijata vlastníkem a tam, kde je třeba, pr
 poradcem, musí být dotčený direct flow blokovaný. Placeholder právního textu
 není souhlas s těmito hodnotami.
 
+Backend proto používá dva nezávislé, výchozím stavem vypnuté přepínače:
+`TAVEN_BINDING_QUOTE_FLOWS_ENABLED` pro vytvoření závazné automatické ceny,
+vydání individuální nabídky a její přijetí a
+`TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED` pro založení a dokončení uploadu fotografie.
+Pouze přesná hodnota `true` tok povolí; chybějící, prázdná nebo jiná hodnota jej
+blokuje. Expirace, odmítnutí nabídek a retenční úklid zůstávají dostupné.
+
 ## 6. Stav acceptance criteria issue #38
 
 | Kritérium | Stav | Co chybí |

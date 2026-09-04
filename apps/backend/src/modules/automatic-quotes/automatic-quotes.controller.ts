@@ -20,6 +20,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
@@ -263,6 +264,9 @@ export class AutomaticQuotesController {
     summary: "Advance slicing, binding price, and eligibility preparation",
   })
   @ApiOkResponse({ type: AutomaticQuoteSessionDto })
+  @ApiServiceUnavailableResponse({
+    description: "Binding quote flows await launch approval",
+  })
   prepare(
     @Param("sessionId") sessionId: string,
     @Headers("authorization") authorization?: string,

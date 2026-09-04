@@ -13,6 +13,8 @@ x-backend-environment: &backend-environment
   TAVEN_QUOTE_CAPABILITY_KEY: ${TAVEN_QUOTE_CAPABILITY_KEY:-local-only-quote-capability-key-32}
   TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS: "[]"
   TAVEN_OPERATOR_API_TOKEN: ${TAVEN_OPERATOR_API_TOKEN:-local-only-operator-api-token-32}
+  TAVEN_BINDING_QUOTE_FLOWS_ENABLED: ${TAVEN_BINDING_QUOTE_FLOWS_ENABLED:-false}
+  TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED: ${TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED:-false}
 
 x-backend-build: &backend-build
   context: ../..

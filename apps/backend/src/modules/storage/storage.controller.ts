@@ -18,6 +18,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
@@ -58,6 +59,9 @@ export class StorageController {
   })
   @ApiBody({ type: InitiatePhotoUploadDto })
   @ApiCreatedResponse({ type: UploadIntentResponseDto })
+  @ApiServiceUnavailableResponse({
+    description: "Quote-photo retention policy awaits launch approval",
+  })
   initiatePhotoUpload(
     @Body() body: InitiatePhotoUploadDto,
     @Headers("authorization") authorization?: string,
@@ -75,6 +79,10 @@ export class StorageController {
   @ApiGoneResponse({ description: "Upload intent or signed URL expired" })
   @ApiConflictResponse({
     description: "Stored bytes do not match the declared upload contract",
+  })
+  @ApiServiceUnavailableResponse({
+    description:
+      "Quote-photo promotion awaits launch approval; model uploads are unaffected",
   })
   confirmUpload(
     @Param("uploadId") uploadId: string,
