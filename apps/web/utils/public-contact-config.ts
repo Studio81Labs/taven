@@ -22,6 +22,8 @@ function resolvePublicEmail(value: unknown, environmentName: string): string {
 
   if (
     !PUBLIC_EMAIL_PATTERN.test(email) ||
+    localPart.length > 64 ||
+    email.length > 254 ||
     localPart.startsWith(".") ||
     localPart.endsWith(".") ||
     localPart.includes("..")

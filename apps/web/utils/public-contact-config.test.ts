@@ -38,6 +38,35 @@ describe("resolvePublicContacts", () => {
     });
   });
 
+  it("enforces mailbox length limits", () => {
+    const validLocalPart = "a".repeat(64);
+    const overlengthLocalPart = "a".repeat(65);
+    const overlengthDomain = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`;
+
+    expect(
+      resolvePublicContacts({
+        customerContactEmail: `${validLocalPart}@example.cz`,
+        dataControllerEmail: "legal@taven.cz",
+      }).customer.email,
+    ).toBe(`${validLocalPart}@example.cz`);
+    expect(() =>
+      resolvePublicContacts({
+        customerContactEmail: `${overlengthLocalPart}@example.cz`,
+        dataControllerEmail: "legal@taven.cz",
+      }),
+    ).toThrow(
+      "NUXT_PUBLIC_CUSTOMER_CONTACT_EMAIL must be a valid email address.",
+    );
+    expect(() =>
+      resolvePublicContacts({
+        customerContactEmail: `a@${overlengthDomain}`,
+        dataControllerEmail: "legal@taven.cz",
+      }),
+    ).toThrow(
+      "NUXT_PUBLIC_CUSTOMER_CONTACT_EMAIL must be a valid email address.",
+    );
+  });
+
   it.each([
     ["customerContactEmail", ""],
     ["customerContactEmail", "customer@example"],
