@@ -16,16 +16,12 @@ import { getSessionStorage } from "../../utils/quote-session-storage";
 
 type CreateQuoteRequest = components["schemas"]["CreateQuoteRequestDto"];
 
-useHead({
-  htmlAttrs: { lang: "cs" },
-  title: "Individuální poptávka — Taven",
-  meta: [
-    {
-      name: "description",
-      content:
-        "Poptávka individuálního 3D tisku s bezpečnými referenčními fotografiemi a odpovědí do 24 pracovních hodin.",
-    },
-  ],
+usePublicPageMeta({
+  path: "/poptavka",
+  title: "Individuální poptávka",
+  description:
+    "Poptávka individuálního 3D tisku s bezpečnými referenčními fotografiemi a odpovědí do 24 pracovních hodin.",
+  noindex: true,
 });
 
 const route = useRoute();
@@ -214,7 +210,7 @@ function isPositiveDimension(value: number | ""): value is number {
   <div class="application-page">
     <header class="application-header">
       <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
-        TAVEN.
+        <PublicBrandMark />
       </NuxtLink>
       <nav aria-label="Cesta individuální poptávky" class="process-nav">
         <ol>
@@ -540,3 +536,5 @@ function isPositiveDimension(value: number | ""): value is number {
     </main>
   </div>
 </template>
+
+<style src="../../assets/css/application.css"></style>

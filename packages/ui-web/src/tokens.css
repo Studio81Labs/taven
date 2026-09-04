@@ -1,12 +1,13 @@
 :root {
   color-scheme: light;
-  --taven-color-ink: #181512;
-  --taven-color-paper: #f7f3ec;
+  --taven-color-ink: #1a1a16;
+  --taven-color-paper: #efefea;
   --taven-color-surface: #ffffff;
-  --taven-color-accent: #d85d35;
+  --taven-color-accent: #1b44e8;
   --taven-color-success: #25705a;
   --taven-radius-panel: 16px;
-  --taven-font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --taven-font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --taven-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
 * {

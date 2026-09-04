@@ -1,0 +1,67 @@
+<script setup lang="ts">
+definePageMeta({ layout: "public" });
+
+usePublicPageMeta({
+  path: "/cenik",
+  title: "Ceník",
+  description:
+    "Jak Taven počítá cenu zakázkového 3D tisku a kdy vznikne závazný celkový součet.",
+});
+</script>
+
+<template>
+  <article class="mx-auto max-w-4xl px-5 py-14 sm:px-8 sm:py-20">
+    <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
+      Ceník
+    </p>
+    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">
+      Cena podle skutečného tisku
+    </h1>
+    <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">
+      Veřejná cena „od“ ještě nebyla schválena. Místo nezávazného čísla
+      popisujeme, kdy a z čeho konfigurátor cenu sestaví.
+    </p>
+
+    <dl
+      class="mt-12 divide-y divide-[#d9d9d2] border-y border-[#d9d9d2] bg-white"
+    >
+      <div class="grid gap-2 p-6 sm:grid-cols-[13rem_1fr] sm:p-8">
+        <dt class="font-semibold">Model a konfigurace</dt>
+        <dd class="leading-7 text-[#54554c]">
+          Geometrie, materiál, kvalita, výplň a počet kusů určují referenční
+          tisková data.
+        </dd>
+      </div>
+      <div class="grid gap-2 p-6 sm:grid-cols-[13rem_1fr] sm:p-8">
+        <dt class="font-semibold">Výrobní náklady</dt>
+        <dd class="leading-7 text-[#54554c]">
+          Cena vychází ze spotřeby materiálu, času stroje, práce, přípravy a
+          souvisejících nákladů podle aktuálního ceníku.
+        </dd>
+      </div>
+      <div class="grid gap-2 p-6 sm:grid-cols-[13rem_1fr] sm:p-8">
+        <dt class="font-semibold">Doručení a dostupnost</dt>
+        <dd class="leading-7 text-[#54554c]">
+          Doprava a celkový součet jsou konečné až po volbě podporovaného místa
+          doručení a opětovném ověření dostupnosti před platbou.
+        </dd>
+      </div>
+    </dl>
+
+    <aside class="mt-10 border border-[#d9d9d2] bg-white p-6 sm:p-8">
+      <h2 class="text-xl font-semibold">Hodnoty čekající na schválení</h2>
+      <p class="mt-3 leading-7 text-[#54554c]">
+        Cena „od“ a standardní dodací lhůta budou doplněny z jednoho
+        konfigurovatelného zdroje. Do té doby je stránka záměrně neuvádí.
+      </p>
+    </aside>
+
+    <NuxtLink
+      class="mt-8 inline-flex min-h-12 items-center bg-[#1b44e8] px-6 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
+      to="/objednavka"
+      no-prefetch
+    >
+      Nahrát model a zjistit cenu
+    </NuxtLink>
+  </article>
+</template>

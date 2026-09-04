@@ -27,17 +27,6 @@ body {
   margin: 0;
   color: var(--ink);
   background-color: var(--paper);
-  background-image:
-    linear-gradient(to right, rgba(84, 85, 76, 0.055) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(84, 85, 76, 0.055) 1px, transparent 1px),
-    linear-gradient(to right, rgba(84, 85, 76, 0.08) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(84, 85, 76, 0.08) 1px, transparent 1px);
-  background-position: center top;
-  background-size:
-    16px 16px,
-    16px 16px,
-    80px 80px,
-    80px 80px;
 }
 
 button,
@@ -67,14 +56,10 @@ a {
 
 .wordmark {
   color: var(--ink);
+  font-family: "IBM Plex Mono", monospace;
   font-size: 23px;
   font-weight: 600;
-  letter-spacing: -0.045em;
   text-decoration: none;
-}
-
-.wordmark::first-letter {
-  letter-spacing: -0.05em;
 }
 
 .process-nav ol {
@@ -128,13 +113,13 @@ a {
   letter-spacing: 0.04em;
 }
 
-h1,
-h2,
-p {
+.application-page h1,
+.application-page h2,
+.application-page p {
   margin-top: 0;
 }
 
-h1 {
+.application-page h1 {
   max-width: 700px;
   margin-bottom: 16px;
   font-size: clamp(32px, 4vw, 38px);
@@ -142,14 +127,14 @@ h1 {
   letter-spacing: -0.035em;
 }
 
-h2 {
+.application-page h2 {
   margin-bottom: 8px;
   font-size: 21px;
   line-height: 1.2;
   letter-spacing: -0.02em;
 }
 
-p {
+.application-page p {
   color: var(--ink-2);
   line-height: 1.6;
 }
@@ -956,7 +941,7 @@ p {
   margin-bottom: 12px;
 }
 
-progress {
+.application-page progress {
   width: 100%;
   height: 6px;
   overflow: hidden;
@@ -966,15 +951,15 @@ progress {
   color: var(--accent);
 }
 
-progress::-webkit-progress-bar {
+.application-page progress::-webkit-progress-bar {
   background: var(--rule);
 }
 
-progress::-webkit-progress-value {
+.application-page progress::-webkit-progress-value {
   background: var(--accent);
 }
 
-progress::-moz-progress-bar {
+.application-page progress::-moz-progress-bar {
   background: var(--accent);
 }
 
