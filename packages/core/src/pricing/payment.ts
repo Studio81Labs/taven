@@ -13,6 +13,7 @@ import type {
 } from "./types.js";
 
 const SHARE_BASIS_POINTS = 10_000;
+const MAX_EXACT_GROSS_UP_CANDIDATES = 10_000n;
 
 interface GrossCaptureMinor {
   readonly definition: PaymentScheduleCapture;
@@ -269,6 +270,15 @@ export function grossUpPaymentSchedule(
   validateSellerTaxPolicy(taxPolicy);
 
   const range = candidateRange(subtotal.minorUnits, captures, taxPolicy);
+  if (
+    range.guaranteed - range.firstPossible + 1n >
+    MAX_EXACT_GROSS_UP_CANDIDATES
+  ) {
+    throw new DomainError(
+      "INVALID_ARGUMENT",
+      "combined tax and payment fee rates exceed the safe exact-search bound",
+    );
+  }
   let total = range.firstPossible;
   while (total <= range.guaranteed) {
     if (

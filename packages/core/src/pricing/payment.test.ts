@@ -161,6 +161,33 @@ describe("payment schedule gross-up", () => {
     ).toThrow(/sustainable net proceeds/);
   });
 
+  it("rejects a near-zero proceeds margin before an impractical exact scan", () => {
+    expect(() =>
+      grossUpPaymentSchedule(
+        czk(100n),
+        [
+          {
+            id: "deposit",
+            sequence: 0,
+            role: "DEPOSIT",
+            shareBasisPoints: 1,
+            feeRateBasisPoints: 9_999,
+            feeFixed: czk(0n),
+          },
+          {
+            id: "balance",
+            sequence: 1,
+            role: "BALANCE",
+            shareBasisPoints: 9_999,
+            feeRateBasisPoints: 9_900,
+            feeFixed: czk(0n),
+          },
+        ],
+        { regime: "VAT_PAYER", vatRateBasisPoints: 101 },
+      ),
+    ).toThrow(/safe exact-search bound/);
+  });
+
   it("uses canonical sequence as the stable share-rounding tie-break", () => {
     const result = grossUpPaymentSchedule(
       czk(1n),
