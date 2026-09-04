@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
+import { publicSite } from "../../content/public-site";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -244,9 +245,16 @@ function isPositiveDimension(value: number | ""): value is number {
             <p class="reference mono">
               Reference {{ created.publicReference }}
             </p>
-            <NuxtLink class="secondary-button" to="/objednavka">
+            <NuxtLink
+              v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
+              class="secondary-button"
+              to="/objednavka"
+            >
               Zpět k přímé kalkulaci
             </NuxtLink>
+            <span v-else class="secondary-button" aria-disabled="true">
+              Přímá kalkulace čeká na schválení
+            </span>
           </div>
         </div>
 

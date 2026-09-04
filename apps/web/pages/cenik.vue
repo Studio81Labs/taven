@@ -3,6 +3,11 @@ import { publicSite } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
 
+const route = useRoute();
+const redirectedFromAutomaticQuote = computed(
+  () => route.query.stav === "ceka-na-schvaleni-cen",
+);
+
 usePublicPageMeta({
   path: "/cenik",
   title: "Ceník",
@@ -25,6 +30,14 @@ usePublicPageMeta({
       Veřejná cena „od“ ani vstupy pro hrubý cenový odhad ještě nebyly
       schváleny. Přesnou výrobní cenu určí referenční slicing konkrétní
       konfigurace.
+    </p>
+    <p
+      v-if="redirectedFromAutomaticQuote"
+      class="mt-6 max-w-2xl border-l-4 border-[#925b10] bg-white p-4 leading-7"
+      role="status"
+    >
+      Automatická kalkulace zatím není veřejně dostupná. Čeká na schválené
+      cenové vstupy.
     </p>
 
     <dl
@@ -63,11 +76,19 @@ usePublicPageMeta({
     </aside>
 
     <NuxtLink
+      v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
       class="mt-8 inline-flex min-h-12 items-center bg-[#1b44e8] px-6 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
       to="/objednavka"
       no-prefetch
     >
       Nahrát model a zjistit cenu
     </NuxtLink>
+    <span
+      v-else
+      class="mt-8 inline-flex min-h-12 cursor-not-allowed items-center border border-[#9b9c93] px-6 font-semibold text-[#66675f]"
+      aria-disabled="true"
+    >
+      Kalkulace čeká na schválení
+    </span>
   </article>
 </template>

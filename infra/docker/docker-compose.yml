@@ -192,7 +192,7 @@ services:
     environment:
       NUXT_API_BASE_URL: http://backend:3001
       NUXT_PUBLIC_API_BASE_URL: ${NUXT_PUBLIC_API_BASE_URL:-http://localhost:3001}
-      NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL-http://localhost:3000}
     depends_on:
       backend:
         condition: service_healthy
