@@ -41,6 +41,10 @@ export const publicNavigation = [
   { label: "Potřebuji model", to: "/poptavka" },
 ] as const;
 
+export const publicFooterNavigation = [
+  { label: "Kontakt", to: "/kontakt" },
+] as const;
+
 export const indexablePublicRoutes = [
   "/",
   "/jak-to-funguje",

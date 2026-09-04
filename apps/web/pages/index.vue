@@ -42,33 +42,28 @@ usePublicPageMeta({
           Od souboru k objednávce ve třech krocích
         </h2>
       </div>
-      <ol
-        class="mt-10 grid gap-px border border-[#d9d9d2] bg-[#d9d9d2] md:grid-cols-3"
-      >
-        <li class="bg-white p-6 sm:p-8">
-          <span class="font-mono text-sm text-[#1b44e8]">01</span>
-          <h3 class="mt-5 text-xl font-semibold">Nahrajete model</h3>
+      <div class="mt-10 max-w-3xl border-l-4 border-[#1b44e8] pl-6 sm:pl-8">
+        <article class="pb-8">
+          <h3 class="text-xl font-semibold">Nahrajete model</h3>
           <p class="mt-3 leading-7 text-[#54554c]">
             Přijímáme STL a podporované 3MF. Před nahráním ukážeme rozměry a
             základní kontrolu souboru.
           </p>
-        </li>
-        <li class="bg-white p-6 sm:p-8">
-          <span class="font-mono text-sm text-[#1b44e8]">02</span>
-          <h3 class="mt-5 text-xl font-semibold">Zvolíte parametry</h3>
+        </article>
+        <article class="border-t border-[#d9d9d2] py-8">
+          <h3 class="text-xl font-semibold">Zvolíte parametry</h3>
           <p class="mt-3 leading-7 text-[#54554c]">
             Vyberete materiál, dostupnou barvu, kvalitu, výplň a počet kusů.
           </p>
-        </li>
-        <li class="bg-white p-6 sm:p-8">
-          <span class="font-mono text-sm text-[#1b44e8]">03</span>
-          <h3 class="mt-5 text-xl font-semibold">Potvrdíte aktuální cenu</h3>
+        </article>
+        <article class="border-t border-[#d9d9d2] pt-8">
+          <h3 class="text-xl font-semibold">Potvrdíte aktuální cenu</h3>
           <p class="mt-3 leading-7 text-[#54554c]">
             Výrobní cenu určí slicing. Závazný celkový součet vznikne až po
             volbě doručení a nové kontrole dostupnosti.
           </p>
-        </li>
-      </ol>
+        </article>
+      </div>
       <NuxtLink
         class="mt-7 inline-block font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
         to="/jak-to-funguje"

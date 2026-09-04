@@ -3,6 +3,7 @@ import {
   LEGAL_PLACEHOLDER_BANNER,
   indexablePublicRoutes,
   legalDocuments,
+  publicFooterNavigation,
   publicNavigation,
   publicSite,
 } from "./public-site";
@@ -25,6 +26,10 @@ describe("public site launch boundaries", () => {
     expect(publicNavigation).toContainEqual({
       label: "Potřebuji model",
       to: "/poptavka",
+    });
+    expect(publicFooterNavigation).toContainEqual({
+      label: "Kontakt",
+      to: "/kontakt",
     });
   });
 
