@@ -314,12 +314,15 @@ describe("order price breakdown", () => {
       component("minimum-duplicate", "ORDER_MIN_PRINT"),
       component("surcharge-1", "ORDER_SMALL_SURCHARGE"),
       component("surcharge-duplicate", "ORDER_SMALL_SURCHARGE"),
+      component("vat-1", "VAT"),
+      component("vat-duplicate", "VAT"),
     ]);
     expect(visible.map(({ id }) => id)).toEqual([
       "shipment-1",
       "shipment-2",
       "minimum-1",
       "surcharge-1",
+      "vat-1",
     ]);
   });
 });

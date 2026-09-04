@@ -229,6 +229,7 @@ export class AutomaticQuotePriceComponentDto {
       "SHIPMENT",
       "EXPRESS",
       "PAYMENT_FEE",
+      "VAT",
     ],
   })
   kind!: string;
@@ -252,6 +253,18 @@ export class AutomaticQuotePriceDto {
 
   @ApiProperty({ type: String, minLength: 3, maxLength: 3 })
   currency!: string;
+
+  @ApiProperty({ type: String, enum: ["NON_VAT_PAYER", "VAT_PAYER"] })
+  taxRegime!: "NON_VAT_PAYER" | "VAT_PAYER";
+
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 10_000 })
+  vatRateBasisPoints!: number;
+
+  @ApiProperty({ type: "integer", minimum: 0, maximum: MAX_SAFE_INTEGER })
+  netAmountMinor!: number;
+
+  @ApiProperty({ type: "integer", minimum: 0, maximum: MAX_SAFE_INTEGER })
+  vatAmountMinor!: number;
 
   @ApiPropertyOptional({
     type: "integer",

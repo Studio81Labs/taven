@@ -12,6 +12,7 @@ function input(): PrepareOrderQuoteInput {
         revision: "prices-v1",
         termsRevision: "terms-v1",
         currency: "CZK",
+        taxPolicy: { regime: "NON_VAT_PAYER", vatRateBasisPoints: 0 },
         machineRateMinorPerSecond: zero,
         laborRateMinorPerSecond: zero,
         amortizationRateMinorPerSecond: zero,

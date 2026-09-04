@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { prepareAutomaticQuote } from "./automatic-quote-pricing";
 
 const parameters = {
+  sellerTaxPolicy: { regime: "NON_VAT_PAYER", vatRateBasisPoints: 0 },
   automaticQuote: {
     machineRateMinorPerSecond: { numerator: "1", denominator: "2" },
     laborRateMinorPerSecond: { numerator: "1", denominator: "1" },
@@ -225,6 +226,7 @@ describe("automatic quote pricing preparation", () => {
       priceList: {
         ...baselineInput.priceList,
         parameters: {
+          sellerTaxPolicy: parameters.sellerTaxPolicy,
           automaticQuote: {
             ...parameters.automaticQuote,
             maximumAutomaticAmountMinor: maximumAutomaticAmountMinor.toString(),
@@ -240,5 +242,39 @@ describe("automatic quote pricing preparation", () => {
 
     const atLimit = await prepareAutomaticQuote(withCap(contractTotal));
     expect(atLimit.prepared.kind).toBe("binding_quote");
+  });
+
+  it("uses the configured VAT regime for the final customer total", async () => {
+    const configured = structuredClone(parameters);
+    configured.sellerTaxPolicy = {
+      regime: "VAT_PAYER",
+      vatRateBasisPoints: 2_100,
+    } as typeof configured.sellerTaxPolicy;
+    const prepared = await prepareAutomaticQuote({
+      ...input({
+        deliveryDestination: {
+          id: "destination",
+          capabilitySnapshot: { supportedCategoryIds: ["box"] },
+        },
+      }),
+      priceList: {
+        ...input().priceList,
+        parameters: configured,
+      },
+      shipmentPlanIdForOrdinal: (ordinal: number) => `plan-${ordinal}`,
+    });
+    expect(prepared.prepared.kind).toBe("binding_quote");
+    if (prepared.prepared.kind !== "binding_quote") return;
+    expect(prepared.prepared.price.tax.regime).toBe("VAT_PAYER");
+    expect(prepared.prepared.price.tax.vatRateBasisPoints).toBe(2_100);
+    expect(prepared.prepared.price.tax.vat.minorUnits).toBeGreaterThan(0n);
+    expect(prepared.prepared.price.customerTotal).toEqual(
+      prepared.prepared.price.contractTotal,
+    );
+    expect(
+      prepared.prepared.price.components.some(
+        (component) => component.kind === "VAT",
+      ),
+    ).toBe(true);
   });
 });

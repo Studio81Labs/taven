@@ -2,10 +2,15 @@ import type { Material, Prisma } from "@prisma/client";
 import type { PreparedOrderQuote } from "@taven/core" with {
   "resolution-mode": "import",
 };
+import type { SellerTaxPolicy } from "@taven/core" with {
+  "resolution-mode": "import",
+};
+import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
 
 type JsonRecord = Record<string, unknown>;
 
 export type AutomaticQuotePricingParameters = Readonly<{
+  taxPolicy: SellerTaxPolicy;
   machineRateMinorPerSecond: RationalValue;
   laborRateMinorPerSecond: RationalValue;
   amortizationRateMinorPerSecond: RationalValue;
@@ -131,6 +136,7 @@ export async function prepareAutomaticQuote(
       revision: input.priceList.revision,
       termsRevision: input.priceList.termsRevision,
       currency: input.priceList.currency,
+      taxPolicy: parameters.taxPolicy,
       machineRateMinorPerSecond: parameters.machineRateMinorPerSecond,
       laborRateMinorPerSecond: parameters.laborRateMinorPerSecond,
       amortizationRateMinorPerSecond: parameters.amortizationRateMinorPerSecond,
@@ -216,7 +222,7 @@ export async function prepareAutomaticQuote(
       packagingBufferSeconds: parameters.expressPackagingBufferSeconds,
     },
   });
-  const provisionalAmount = provisional.price.breakdown.subtotal.minorUnits;
+  const provisionalAmount = provisional.price.customerTotal.minorUnits;
   const common = {
     pricing: provisionalPricing,
     automaticQuoteFacts: {
@@ -448,6 +454,7 @@ export function parseAutomaticQuotePricingParameters(
   });
   if (categories.length === 0) throw new Error("shipmentCategories is empty");
   return {
+    taxPolicy: parseSellerTaxPolicy(value),
     machineRateMinorPerSecond: rational(
       automatic.machineRateMinorPerSecond,
       "machineRateMinorPerSecond",

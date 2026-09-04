@@ -560,7 +560,7 @@ export interface components {
             id: string;
             itemOrdinal?: number | null;
             /** @enum {string} */
-            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "SHIPMENT" | "EXPRESS" | "PAYMENT_FEE";
+            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "SHIPMENT" | "EXPRESS" | "PAYMENT_FEE" | "VAT";
             /** @enum {string} */
             scope: "ORDER" | "ORDER_ITEM" | "SHIPMENT_PLAN";
             shipmentPlanOrdinal?: number | null;
@@ -570,7 +570,12 @@ export interface components {
             currency: string;
             /** @enum {string} */
             kind: "ROUGH_ESTIMATE" | "BINDING";
+            netAmountMinor: number;
+            /** @enum {string} */
+            taxRegime: "NON_VAT_PAYER" | "VAT_PAYER";
             totalMinor?: number | null;
+            vatAmountMinor: number;
+            vatRateBasisPoints: number;
         };
         AutomaticQuoteQuantityComparisonDto: {
             currency: string;
@@ -751,6 +756,7 @@ export interface components {
                 [key: string]: unknown;
             };
             items: components["schemas"]["ModelOfferItemDto"][];
+            netAmountMinor: number;
             paymentPolicy: components["schemas"]["OfferPaymentPolicyDto"];
             /** Format: uuid */
             priceListId: string;
@@ -758,9 +764,13 @@ export interface components {
             promisedDate?: string;
             shipmentPlans: components["schemas"]["OfferShipmentPlanDto"][];
             summary: string;
+            /** @enum {string} */
+            taxRegime: "NON_VAT_PAYER" | "VAT_PAYER";
             termsSnapshot: {
                 [key: string]: unknown;
             };
+            vatAmountMinor: number;
+            vatRateBasisPoints: number;
         };
         ModelOfferItemDto: {
             color?: string;
@@ -827,6 +837,7 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
             items: components["schemas"]["OfferPreviewItemDto"][];
+            netAmountMinor: number;
             paymentSchedules: components["schemas"]["OfferPaymentScheduleDto"][];
             /** Format: date */
             promisedDate?: string | null;
@@ -834,10 +845,14 @@ export interface components {
             quoteId: string;
             shipmentPlans: components["schemas"]["OfferShipmentPlanDto"][];
             summary: string;
+            /** @enum {string} */
+            taxRegime: "NON_VAT_PAYER" | "VAT_PAYER";
             termsRevision: string;
             termsSnapshot: {
                 [key: string]: unknown;
             };
+            vatAmountMinor: number;
+            vatRateBasisPoints: number;
             version: number;
         };
         OfferPreviewItemDto: {
@@ -866,7 +881,7 @@ export interface components {
             } | null;
             amountMinor: number;
             /** @enum {string} */
-            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "SHIPMENT" | "EXPRESS" | "PAYMENT_FEE";
+            kind: "ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "SHIPMENT" | "EXPRESS" | "PAYMENT_FEE" | "VAT";
             quoteItemOrdinal: number | null;
             /** @enum {string} */
             scope: "ORDER" | "QUOTE_ITEM" | "QUOTE_SHIPMENT_PLAN";

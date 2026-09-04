@@ -166,18 +166,23 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         },
       },
     });
-    const automaticQuote = (
-      priceList.parameters as {
-        automaticQuote: {
-          laborRateMinorPerSecond: unknown;
-          amortizationRateMinorPerSecond: unknown;
-          roughMaterialVolumeRatioByInfillPreset: unknown;
-          shippingTripPricingDivisor: string;
-          packingPaddingMicrometers: string;
-          shipmentCategories: unknown[];
-        };
-      }
-    ).automaticQuote;
+    const configuredParameters = priceList.parameters as {
+      sellerTaxPolicy: unknown;
+      automaticQuote: {
+        laborRateMinorPerSecond: unknown;
+        amortizationRateMinorPerSecond: unknown;
+        roughMaterialVolumeRatioByInfillPreset: unknown;
+        shippingTripPricingDivisor: string;
+        packingPaddingMicrometers: string;
+        shipmentCategories: unknown[];
+      };
+    };
+    const automaticQuote = configuredParameters.automaticQuote;
+
+    expect(configuredParameters.sellerTaxPolicy).toEqual({
+      regime: "NON_VAT_PAYER",
+      vatRateBasisPoints: 0,
+    });
 
     expect(automaticQuote).toMatchObject({
       laborRateMinorPerSecond: { numerator: "25", denominator: "3" },
@@ -1337,6 +1342,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(immediateRough.body.roughEstimate).toMatchObject({
       kind: "ROUGH_ESTIMATE",
       currency: "CZK",
+      taxRegime: "NON_VAT_PAYER",
+      vatRateBasisPoints: 0,
+      vatAmountMinor: 0,
     });
     expect(immediateRough.body.bindingQuote).toBeNull();
     expect(immediateRough.body.quantityComparisons).toEqual(
@@ -1733,6 +1741,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(rough.body.roughEstimate).toMatchObject({
       kind: "ROUGH_ESTIMATE",
       currency: "CZK",
+      taxRegime: "NON_VAT_PAYER",
+      vatRateBasisPoints: 0,
+      vatAmountMinor: 0,
     });
     const provisionalPrice = rough.body.roughEstimate as {
       totalMinor: number;
@@ -3313,6 +3324,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(refreshedReady.body.bindingQuote).toMatchObject({
       kind: "BINDING",
       currency: "CZK",
+      taxRegime: "NON_VAT_PAYER",
+      vatRateBasisPoints: 0,
+      vatAmountMinor: 0,
     });
     expect(refreshedReady.body.configurationEditable).toBe(false);
     const binding = refreshedReady.body.bindingQuote as {

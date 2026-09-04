@@ -189,6 +189,7 @@ const ORDER_SINGLETON_KINDS = new Set([
   "ORDER_SMALL_SURCHARGE",
   "EXPRESS",
   "PAYMENT_FEE",
+  "VAT",
 ]);
 
 export function visiblePriceComponents(
@@ -255,6 +256,7 @@ export function priceLabel(component: PriceComponent): string {
     ORDER_SMALL_SURCHARGE: "Příplatek za zakázku pod 100 g",
     PAYMENT_FEE: "Platební poplatek",
     SHIPMENT: "Doprava",
+    VAT: "DPH",
   };
   return labels[component.kind] ?? component.kind;
 }

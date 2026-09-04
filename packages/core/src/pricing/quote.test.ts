@@ -18,6 +18,7 @@ function priceList(
     revision: "price-list-v1",
     termsRevision: "terms-v1",
     currency: "CZK",
+    taxPolicy: { regime: "NON_VAT_PAYER", vatRateBasisPoints: 0 },
     machineRateMinorPerSecond: zeroRate,
     laborRateMinorPerSecond: zeroRate,
     amortizationRateMinorPerSecond: zeroRate,
@@ -131,6 +132,13 @@ describe("calculateOrderPrice", () => {
     expect(minor(regular.breakdown.smallOrderSurcharge)).toBe(0n);
     expect(minor(regular.breakdown.subtotal)).toBe(33_500n);
     expect(minor(regular.contractTotal)).toBe(34_315n);
+    expect(regular.tax).toEqual({
+      regime: "NON_VAT_PAYER",
+      vatRateBasisPoints: 0,
+      net: Money.of(34_315n, "CZK"),
+      vat: Money.zero("CZK"),
+      gross: Money.of(34_315n, "CZK"),
+    });
 
     const small = calculateOrderPrice(bindingInput(item("small", 99_999n)));
     expect(small.kind).toBe("binding");
@@ -170,6 +178,33 @@ describe("calculateOrderPrice", () => {
     ]);
     expect(minor(result.paymentFee)).toBe(1_120n);
     expect(minor(result.contractTotal)).toBe(34_620n);
+  });
+
+  it("applies VAT to the complete customer consideration without reducing the pricing subtotal", () => {
+    const result = calculateOrderPrice(
+      bindingInput(item("vat", 150_000n), {
+        priceList: priceList({
+          taxPolicy: { regime: "VAT_PAYER", vatRateBasisPoints: 2_100 },
+        }),
+      }),
+    );
+    expect(result.kind).toBe("binding");
+    if (result.kind !== "binding") return;
+    expect(result.tax.regime).toBe("VAT_PAYER");
+    expect(result.tax.vatRateBasisPoints).toBe(2_100);
+    expect(result.tax.net.add(result.tax.vat)).toEqual(result.contractTotal);
+    expect(result.tax.net.minorUnits - result.paymentFee.minorUnits).toBe(
+      result.breakdown.subtotal.minorUnits,
+    );
+    expect(
+      result.components.find(({ kind }) => kind === "VAT")?.amount,
+    ).toEqual(result.tax.vat);
+    expect(
+      result.components.reduce(
+        (sum, component) => sum + component.amount.minorUnits,
+        0n,
+      ),
+    ).toBe(result.contractTotal.minorUnits);
   });
 
   it("applies express once to the whole-order base print price", () => {
@@ -364,6 +399,7 @@ describe("calculateOrderPrice", () => {
     expect(result.kind).toBe("provisional");
     expect(result).not.toHaveProperty("contractTotal");
     expect(result).not.toHaveProperty("captures");
+    expect(result.customerTotal).toEqual(result.breakdown.subtotal);
     expect(result.components.some(({ kind }) => kind === "SHIPMENT")).toBe(
       false,
     );

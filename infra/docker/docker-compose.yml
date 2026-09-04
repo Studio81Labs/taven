@@ -15,6 +15,7 @@ x-backend-environment: &backend-environment
   TAVEN_OPERATOR_API_TOKEN: ${TAVEN_OPERATOR_API_TOKEN:-local-only-operator-api-token-32}
   TAVEN_BINDING_QUOTE_FLOWS_ENABLED: ${TAVEN_BINDING_QUOTE_FLOWS_ENABLED:-false}
   TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED: ${TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED:-false}
+  TAVEN_AUTOMATIC_PRICE_LIST_REVISION: ${TAVEN_AUTOMATIC_PRICE_LIST_REVISION:-automatic-v0-czk}
 
 x-backend-build: &backend-build
   context: ../..

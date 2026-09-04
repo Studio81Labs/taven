@@ -1,6 +1,11 @@
 import { DomainError } from "../primitives/errors.js";
 import { Money } from "../primitives/money.js";
 import { ceilDivide } from "./arithmetic.js";
+import {
+  taxBreakdownFromGross,
+  validateSellerTaxPolicy,
+  type SellerTaxPolicy,
+} from "./tax.js";
 import type {
   GrossedUpPaymentCapture,
   PaymentScheduleCapture,
@@ -168,23 +173,31 @@ function satisfies(
   subtotalMinor: bigint,
   total: bigint,
   captures: readonly PaymentScheduleCapture[],
+  taxPolicy: SellerTaxPolicy,
+  currency: string,
 ): boolean {
   const evaluated = evaluateTotal(total, captures);
   if (evaluated.some((capture) => capture.grossMinor <= 0n)) return false;
   const fees = evaluated.reduce((sum, capture) => sum + capture.feeMinor, 0n);
-  return total >= fees && total - fees >= subtotalMinor;
+  const tax = taxBreakdownFromGross(Money.of(total, currency), taxPolicy);
+  return (
+    tax.net.minorUnits >= fees && tax.net.minorUnits - fees >= subtotalMinor
+  );
 }
 
 /**
- * Returns the least gross total that covers the subtotal after each planned
- * payment capture's percentage and fixed fee. The predicate is monotone, so a
- * bigint binary search avoids any floating-point or one-fee approximation.
+ * Returns the least tax-inclusive total that covers the pre-tax subtotal after
+ * each planned payment capture's percentage and fixed fee. The predicate is
+ * monotone, so a bigint binary search avoids floating-point, tax-rounding, or
+ * one-fee approximations.
  */
 export function grossUpPaymentSchedule(
   subtotal: Money,
   captures: readonly PaymentScheduleCapture[],
+  taxPolicy: SellerTaxPolicy,
 ): PaymentScheduleGrossUp {
   validateSchedule(subtotal, captures);
+  validateSellerTaxPolicy(taxPolicy);
 
   const fixedFees = captures.reduce(
     (sum, capture) => sum + capture.feeFixed.minorUnits,
@@ -192,12 +205,30 @@ export function grossUpPaymentSchedule(
   );
   let upper = subtotal.minorUnits + fixedFees + BigInt(captures.length);
   if (upper === 0n) upper = 1n;
-  while (!satisfies(subtotal.minorUnits, upper, captures)) upper *= 2n;
+  while (
+    !satisfies(
+      subtotal.minorUnits,
+      upper,
+      captures,
+      taxPolicy,
+      subtotal.currency,
+    )
+  )
+    upper *= 2n;
 
   let lower = 0n;
   while (lower < upper) {
     const middle = (lower + upper) / 2n;
-    if (satisfies(subtotal.minorUnits, middle, captures)) upper = middle;
+    if (
+      satisfies(
+        subtotal.minorUnits,
+        middle,
+        captures,
+        taxPolicy,
+        subtotal.currency,
+      )
+    )
+      upper = middle;
     else lower = middle + 1n;
   }
 
@@ -215,9 +246,11 @@ export function grossUpPaymentSchedule(
     (sum, capture) => sum + capture.feeMinor,
     0n,
   );
+  const contractTotal = Money.of(lower, subtotal.currency);
   return {
-    contractTotal: Money.of(lower, subtotal.currency),
+    contractTotal,
     paymentFee: Money.of(feeMinor, subtotal.currency),
+    tax: taxBreakdownFromGross(contractTotal, taxPolicy),
     captures: grossedCaptures,
   };
 }

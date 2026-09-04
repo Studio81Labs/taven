@@ -348,6 +348,26 @@ export class IssueOfferDto {
   })
   contractTotalMinor!: number;
 
+  @ApiProperty({ type: String, enum: ["NON_VAT_PAYER", "VAT_PAYER"] })
+  taxRegime!: "NON_VAT_PAYER" | "VAT_PAYER";
+
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 10_000 })
+  vatRateBasisPoints!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  netAmountMinor!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  vatAmountMinor!: number;
+
   @ApiProperty({
     type: "integer",
     minimum: 1,
@@ -454,6 +474,7 @@ export class OfferPreviewPriceComponentDto {
       "SHIPMENT",
       "EXPRESS",
       "PAYMENT_FEE",
+      "VAT",
     ],
   })
   kind!:
@@ -464,7 +485,8 @@ export class OfferPreviewPriceComponentDto {
     | "ORDER_SMALL_SURCHARGE"
     | "SHIPMENT"
     | "EXPRESS"
-    | "PAYMENT_FEE";
+    | "PAYMENT_FEE"
+    | "VAT";
 
   @ApiProperty({
     type: String,
@@ -543,6 +565,26 @@ export class OfferPreviewDto {
     maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
   })
   contractTotalMinor!: number;
+
+  @ApiProperty({ type: String, enum: ["NON_VAT_PAYER", "VAT_PAYER"] })
+  taxRegime!: "NON_VAT_PAYER" | "VAT_PAYER";
+
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 10_000 })
+  vatRateBasisPoints!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  netAmountMinor!: number;
+
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: JAVASCRIPT_SAFE_INTEGER_MAX,
+  })
+  vatAmountMinor!: number;
 
   @ApiProperty({ type: [OfferPreviewItemDto] })
   items!: OfferPreviewItemDto[];
