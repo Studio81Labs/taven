@@ -4,7 +4,9 @@ import {
   assertBindingQuoteFlowsEnabled,
   assertCheckoutPaymentFlowsEnabled,
   assertQuotePhotoUploadsEnabled,
+  approvedCheckoutClaimPolicyRevision,
   BINDING_QUOTE_FLOWS_ENV,
+  CHECKOUT_CLAIM_POLICY_REVISION_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
   QUOTE_PHOTO_UPLOADS_ENV,
 } from "./launch-approval-gates";
@@ -72,7 +74,28 @@ describe("launch approval gates", () => {
     expect(() =>
       assertCheckoutPaymentFlowsEnabled({
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
       }),
     ).not.toThrow();
+  });
+
+  it.each([undefined, "", "claim-policy-draft-v0", "claims-pending"])(
+    "rejects unapproved checkout claim policy %s",
+    (revision) => {
+      expect(() =>
+        assertCheckoutPaymentFlowsEnabled({
+          [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+          [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: revision,
+        }),
+      ).toThrowError(ServiceUnavailableException);
+    },
+  );
+
+  it("returns the trimmed approved claim-policy revision", () => {
+    expect(
+      approvedCheckoutClaimPolicyRevision({
+        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: " claims-v1-approved ",
+      }),
+    ).toBe("claims-v1-approved");
   });
 });

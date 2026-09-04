@@ -217,7 +217,9 @@ DECLARE
     closed_at timestamptz := coalesce(close_observed_at, clock_timestamp());
     terminal_order_status "order_status";
 BEGIN
-    IF close_reason NOT IN ('CUSTOMER_CANCELLED', 'CHECKOUT_EXPIRED') THEN
+    IF close_reason NOT IN (
+        'CUSTOMER_CANCELLED', 'CHECKOUT_EXPIRED', 'CAPACITY_UNAVAILABLE'
+    ) THEN
         RAISE EXCEPTION 'checkout close reason is invalid'
             USING ERRCODE = '22023', CONSTRAINT = 'checkout_payment_close_reason_check';
     END IF;
@@ -249,6 +251,28 @@ BEGIN
         END IF;
         closed_at := target_payment."checkout_capture_expires_at";
         terminal_order_status := 'EXPIRED';
+    ELSIF close_reason = 'CAPACITY_UNAVAILABLE' THEN
+        IF target_payment."checkout_capture_expires_at" IS NULL
+           OR target_payment."checkout_capture_expires_at" <= closed_at THEN
+            RAISE EXCEPTION 'checkout capacity failure must precede the capture deadline'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+        END IF;
+        IF EXISTS (
+            SELECT 1
+            FROM "phase_reservation_sets" reservation_set
+            JOIN "phase_resource_plans" resource_plan
+              ON resource_plan."id" = reservation_set."phase_resource_plan_id"
+             AND resource_plan."node_id" = reservation_set."node_id"
+            JOIN "order_phases" phase
+              ON phase."id" = resource_plan."order_phase_id"
+            WHERE phase."order_id" = target_payment."order_id"
+              AND reservation_set."status" = 'RESERVED'
+              AND reservation_set."expires_at" > closed_at
+        ) THEN
+            RAISE EXCEPTION 'checkout capacity failure cannot close a live reservation'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_resource_check';
+        END IF;
+        terminal_order_status := 'CANCELLED';
     ELSE
         terminal_order_status := 'CANCELLED';
     END IF;
@@ -425,6 +449,7 @@ DECLARE
     production_row record;
     refund_id uuid;
     refund_key text;
+    compensation_kind text;
 BEGIN
     IF event_kind NOT IN (
         'PAYMENT_PENDING', 'PAYMENT_CAPTURED', 'PAYMENT_FAILED'
@@ -660,7 +685,12 @@ BEGIN
         PERFORM taven_close_initial_checkout_payment(
             target_payment."id",
             CASE WHEN target_payment."checkout_capture_expires_at" <= verified_at
-                 THEN 'CHECKOUT_EXPIRED' ELSE 'CUSTOMER_CANCELLED' END,
+                 THEN 'CHECKOUT_EXPIRED'
+                 WHEN event_capture_context_valid
+                      AND (active_set_id IS NULL
+                           OR active_set_expires_at <= verified_at)
+                 THEN 'CAPACITY_UNAVAILABLE'
+                 ELSE 'CUSTOMER_CANCELLED' END,
             verified_at
         );
         SELECT * INTO target_payment FROM "payments"
@@ -668,6 +698,27 @@ BEGIN
     END IF;
 
     IF target_payment."status" IN ('FAILED', 'VOIDED') THEN
+        SELECT CASE audit_event."payload" ->> 'reason'
+                   WHEN 'CHECKOUT_EXPIRED' THEN 'initial_checkout_expired'
+                   WHEN 'CAPACITY_UNAVAILABLE' THEN 'initial_checkout_capacity'
+                   ELSE 'initial_checkout_cancelled'
+               END
+        INTO compensation_kind
+        FROM "audit_events" audit_event
+        WHERE audit_event."payment_id" = target_payment."id"
+          AND audit_event."event_type" = 'checkout.payment_closed'
+        ORDER BY audit_event."created_at" DESC, audit_event."id" DESC
+        LIMIT 1;
+        compensation_kind := coalesce(
+            compensation_kind,
+            CASE
+                WHEN target_payment."checkout_capture_expires_at" <=
+                     target_payment."capture_cutoff_at"
+                THEN 'initial_checkout_expired'
+                ELSE 'initial_checkout_cancelled'
+            END
+        );
+
         UPDATE "payments"
         SET "status" = 'REFUND_PENDING',
             "captured_amount_minor" = "requested_amount_minor",
@@ -691,6 +742,22 @@ BEGIN
             verified_at, verified_at, verified_at
         ) ON CONFLICT ("payment_id", "idempotency_key") DO NOTHING;
 
+        INSERT INTO "audit_events" (
+            "id", "order_id", "payment_id", "refund_transaction_id",
+            "event_type", "actor_kind", "idempotency_key", "payload",
+            "created_at"
+        ) VALUES (
+            gen_random_uuid(), target_payment."order_id", target_payment."id",
+            refund_id, 'checkout.late_capture_compensation_created', 'SYSTEM',
+            refund_key, jsonb_build_object(
+                'kind', compensation_kind,
+                'providerEventId', event_id,
+                'providerTransactionId', event_transaction_id,
+                'amountMinor', event_amount_minor::text,
+                'currency', event_currency
+            ), verified_at
+        );
+
         INSERT INTO "outbox_messages" (
             "id", "deduplication_key", "aggregate_type", "aggregate_id",
             "message_type", "schema_version", "payload", "status", "attempts",
@@ -706,6 +773,7 @@ BEGIN
                 'amountMinor', event_amount_minor::text,
                 'currency', event_currency,
                 'idempotencyKey', refund_key,
+                'compensationKind', compensation_kind,
                 'action', 'refund_payment'
             ), 'PENDING', 0, verified_at, verified_at, verified_at
         ) ON CONFLICT ("deduplication_key") DO NOTHING;

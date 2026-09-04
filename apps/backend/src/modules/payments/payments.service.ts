@@ -32,7 +32,6 @@ import {
 
 const CHECKOUT_CAPTURE_MILLISECONDS = 60 * 60 * 1_000;
 const IDEMPOTENCY_DAYS = 7;
-const CLAIM_POLICY_REVISION = "claim-policy-draft-v0";
 type Transaction = Prisma.TransactionClient;
 
 type CheckoutContext = Awaited<ReturnType<PaymentsService["loadContext"]>>;
@@ -61,7 +60,7 @@ export class PaymentsService {
     authorization?: string,
     idempotencyKeyInput?: string,
   ): Promise<CheckoutPaymentDto> {
-    assertCheckoutPaymentFlowsEnabled();
+    const claimPolicyRevision = assertCheckoutPaymentFlowsEnabled();
     const sessionId = normalizedUuid(sessionIdInput, "sessionId");
     const token = bearerCapability(authorization);
     const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
@@ -182,9 +181,7 @@ export class PaymentsService {
           ...(context.order.acceptedClaimPolicyRevision
             ? {}
             : {
-                acceptedClaimPolicyRevision:
-                  process.env.TAVEN_CLAIM_POLICY_REVISION?.trim() ||
-                  CLAIM_POLICY_REVISION,
+                acceptedClaimPolicyRevision: claimPolicyRevision,
               }),
           ...(context.order.withdrawalExceptionAcknowledgedAt
             ? {}

@@ -472,6 +472,70 @@ describe("checkout payment capture protocol", () => {
     });
   });
 
+  it("persists the capacity cause when capture cannot reacquire resources", async () => {
+    await rollback("capacity-compensation", async (client, fixtures) => {
+      const { foundation, providerIntentId } = await preparePayment(
+        client,
+        fixtures,
+        "capacity-compensation",
+      );
+      const evidence = await eventEvidence(client, foundation);
+      await client.query(
+        `SELECT taven_release_phase_reservation_set($1::uuid)`,
+        [foundation.phaseReservationSetId],
+      );
+
+      const capture = await client.query<{ outcome: string }>(
+        `SELECT taven_apply_checkout_payment_event(
+           'sandbox', 'capacity-compensation-capture', $1,
+           'PAYMENT_CAPTURED', $2, $3, clock_timestamp(), '{}'::jsonb, true
+         ) AS outcome`,
+        [providerIntentId, evidence.amount_minor, evidence.currency],
+      );
+      expect(capture.rows).toEqual([{ outcome: "REFUND_PENDING" }]);
+
+      expect(
+        (
+          await client.query(
+            `SELECT target_order.status::text AS order_status,
+                    payment.status::text AS payment_status,
+                    refund.reason::text AS refund_reason,
+                    closed.payload ->> 'reason' AS close_reason,
+                    compensation.payload ->> 'kind' AS compensation_kind,
+                    command.payload ->> 'compensationKind' AS command_kind,
+                    (SELECT count(*)::int FROM jobs
+                     WHERE order_id = target_order.id) AS job_count
+             FROM orders target_order
+             JOIN payments payment ON payment.order_id = target_order.id
+             JOIN refund_transactions refund ON refund.payment_id = payment.id
+             JOIN audit_events closed
+               ON closed.payment_id = payment.id
+              AND closed.event_type = 'checkout.payment_closed'
+             JOIN audit_events compensation
+               ON compensation.refund_transaction_id = refund.id
+              AND compensation.event_type =
+                  'checkout.late_capture_compensation_created'
+             JOIN outbox_messages command
+               ON command.aggregate_id = refund.id
+              AND command.message_type = 'refund_payment'
+             WHERE target_order.id = $1`,
+            [foundation.orderId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          order_status: "CANCELLED",
+          payment_status: "REFUND_PENDING",
+          refund_reason: "LATE_CAPTURE_COMPENSATION",
+          close_reason: "CAPACITY_UNAVAILABLE",
+          compensation_kind: "initial_checkout_capacity",
+          command_kind: "initial_checkout_capacity",
+          job_count: 0,
+        },
+      ]);
+    });
+  });
+
   it("matches and compensates a returned intent after cancellation won persistence", async () => {
     await rollback("returned-intent-race", async (client, fixtures) => {
       const foundation = await prepareReservedFoundation(
@@ -675,6 +739,7 @@ describe("checkout payment capture protocol", () => {
 
     const previousEnvironment = {
       gate: process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED,
+      claimPolicyRevision: process.env.TAVEN_CLAIM_POLICY_REVISION,
       provider: process.env.TAVEN_PAYMENT_PROVIDER,
       secret: process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET,
       providerUrl: process.env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL,
@@ -682,6 +747,7 @@ describe("checkout payment capture protocol", () => {
     };
     const signingSecret = "e2e-sandbox-payment-signing-secret-32";
     process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
+    process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v1-approved";
     process.env.TAVEN_PAYMENT_PROVIDER = "sandbox";
     process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET = signingSecret;
     process.env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL = "http://sandbox.local";
@@ -892,6 +958,10 @@ describe("checkout payment capture protocol", () => {
       restoreEnvironment(
         "TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED",
         previousEnvironment.gate,
+      );
+      restoreEnvironment(
+        "TAVEN_CLAIM_POLICY_REVISION",
+        previousEnvironment.claimPolicyRevision,
       );
       restoreEnvironment(
         "TAVEN_PAYMENT_PROVIDER",
