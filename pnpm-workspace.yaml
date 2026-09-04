@@ -56,3 +56,6 @@ overrides:
   "deepmerge-ts@7.1.5": 8.0.0
   # GHSA-rgwj-5xj2-c3m3. Remove when Nuxt and Prisma resolve mysql2 >= 3.23.1.
   "mysql2@3": ">=3.23.1 <4"
+  # GHSA-4mjr-xmp4-gh2g and GHSA-x5fp-wj9c-mxmx. Express and body-parser pin
+  # 6.15.3; remove when both parents adopt qs >= 6.16.0.
+  "qs@6": ">=6.16.0 <7"
