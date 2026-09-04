@@ -14,11 +14,12 @@ import {
 import { PAYMENT_PROVIDER } from "./payment-provider.port";
 import { PaymentsController } from "./payments.controller";
 import { PaymentsService } from "./payments.service";
+import { SandboxCheckoutController } from "./sandbox-checkout.controller";
 import { SandboxPaymentProviderAdapter } from "./sandbox-payment-provider.adapter";
 
 @Module({
   imports: [PrismaModule, AutomaticQuotesModule, ResourcesModule],
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, SandboxCheckoutController],
   providers: [
     {
       provide: PAYMENT_PROVIDER_CONFIG,

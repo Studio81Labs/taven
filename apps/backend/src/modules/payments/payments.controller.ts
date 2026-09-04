@@ -51,7 +51,7 @@ export class PaymentsController {
     summary: "List checkout methods offered by the active provider",
   })
   @ApiOkResponse({ type: PaymentCapabilitiesDto })
-  capabilities(): PaymentCapabilitiesDto {
+  capabilities(): Promise<PaymentCapabilitiesDto> {
     return this.payments.capabilities();
   }
 

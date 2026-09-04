@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { Prisma } from "@prisma/client";
@@ -692,13 +692,22 @@ describe("checkout payment capture protocol", () => {
       webhookSigningSecret: signingSecret,
     });
     let providerAvailable = true;
+    let sandboxCheckoutBaseUrl = "http://sandbox.local";
     const provider: PaymentProviderPort = {
+      providerName: () => sandbox.providerName(),
       capabilities: () => sandbox.capabilities(),
       refundRetrySafety: () => sandbox.refundRetrySafety(),
-      createIntent: (input) =>
-        providerAvailable
-          ? sandbox.createIntent(input)
-          : Promise.reject(new Error("simulated provider outage")),
+      createIntent: async (input) => {
+        if (!providerAvailable) throw new Error("simulated provider outage");
+        const intent = await sandbox.createIntent(input);
+        return {
+          ...intent,
+          checkoutUrl: new URL(
+            `/payments/sandbox/${encodeURIComponent(intent.providerIntentId)}`,
+            sandboxCheckoutBaseUrl,
+          ).toString(),
+        };
+      },
       verifyEvent: (input) => sandbox.verifyEvent(input),
       cancelIntent: (providerIntentId) =>
         sandbox.cancelIntent(providerIntentId),
@@ -726,29 +735,32 @@ describe("checkout payment capture protocol", () => {
       app = moduleRef.createNestApplication();
       await app.listen(0, "127.0.0.1");
       const baseUrl = new URL(await app.getUrl());
+      sandboxCheckoutBaseUrl = baseUrl.origin;
 
-      const createdResponse = await fetch(
-        new URL(
-          `/automatic-quote-sessions/${foundation.quoteSessionId}/checkout/payments`,
-          baseUrl,
-        ),
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${token}`,
-            "content-type": "application/json",
-            "idempotency-key": "sandbox-http-create-1",
+      const createPayment = () =>
+        fetch(
+          new URL(
+            `/automatic-quote-sessions/${foundation.quoteSessionId}/checkout/payments`,
+            baseUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${token}`,
+              "content-type": "application/json",
+              "idempotency-key": "sandbox-http-create-1",
+            },
+            body: JSON.stringify({
+              email: customerEmail,
+              fullName: "Sandbox Customer",
+              method: "CARD",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              acknowledgeWithdrawalException: true,
+            }),
           },
-          body: JSON.stringify({
-            email: customerEmail,
-            fullName: "Sandbox Customer",
-            method: "CARD",
-            acceptTerms: true,
-            acceptClaimPolicy: true,
-            acknowledgeWithdrawalException: true,
-          }),
-        },
-      );
+        );
+      const createdResponse = await createPayment();
       expect(createdResponse.status).toBe(200);
       const created = (await createdResponse.json()) as {
         paymentId: string;
@@ -760,8 +772,14 @@ describe("checkout payment capture protocol", () => {
       expect(created).toMatchObject({
         status: "PENDING",
         currency: "EUR",
-        checkoutUrl: `http://sandbox.local/payments/sandbox/sandbox-${created.paymentId}`,
+        checkoutUrl: `${baseUrl.origin}/payments/sandbox/sandbox-${created.paymentId}`,
       });
+
+      const checkoutPageResponse = await fetch(created.checkoutUrl);
+      expect(checkoutPageResponse.status).toBe(200);
+      expect(await checkoutPageResponse.text()).toContain(
+        "TAVEN. sandbox checkout",
+      );
 
       const prisma = app.get(PrismaService);
       await prisma.$queryRaw`
@@ -791,28 +809,18 @@ describe("checkout payment capture protocol", () => {
       );
       expect(unsignedResponse.status).toBe(401);
 
-      const signature = createHmac("sha256", signingSecret)
-        .update(canonicalJson(event))
-        .digest("hex");
-      const sendEvent = () =>
-        fetch(new URL("/payments/webhooks/sandbox", baseUrl), {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-taven-sandbox-signature": `sha256=${signature}`,
-          },
-          body: JSON.stringify(event),
-        });
-      const capturedResponse = await sendEvent();
+      const sendSandboxOutcome = (outcome: string) =>
+        fetch(`${created.checkoutUrl}/${outcome}`, { method: "POST" });
+      const capturedResponse = await sendSandboxOutcome("capture");
       expect(capturedResponse.status).toBe(200);
-      await expect(capturedResponse.json()).resolves.toEqual({
-        outcome: "CAPTURED",
-      });
-      const duplicateResponse = await sendEvent();
+      expect(await capturedResponse.text()).toContain(
+        "Webhook outcome: <strong>CAPTURED</strong>",
+      );
+      const duplicateResponse = await sendSandboxOutcome("capture");
       expect(duplicateResponse.status).toBe(200);
-      await expect(duplicateResponse.json()).resolves.toEqual({
-        outcome: "DUPLICATE",
-      });
+      expect(await duplicateResponse.text()).toContain(
+        "Webhook outcome: <strong>DUPLICATE</strong>",
+      );
 
       await expect(
         prisma.order.findUniqueOrThrow({
@@ -838,6 +846,10 @@ describe("checkout payment capture protocol", () => {
           select: { status: true },
         }),
       ).resolves.toEqual([{ status: "RELEASED" }, { status: "HELD" }]);
+
+      const replayResponse = await createPayment();
+      expect(replayResponse.status).toBe(200);
+      await expect(replayResponse.json()).resolves.toEqual(created);
 
       providerAvailable = false;
       const outageResponse = await fetch(
@@ -1034,17 +1046,6 @@ describe("checkout payment capture protocol", () => {
     }
   });
 });
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
 
 function restoreEnvironment(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];

@@ -14,7 +14,11 @@ type SandboxConfig = Extract<PaymentProviderConfig, { provider: "sandbox" }>;
 export class SandboxPaymentProviderAdapter implements PaymentProviderPort {
   constructor(private readonly config: SandboxConfig) {}
 
-  capabilities() {
+  providerName() {
+    return "sandbox";
+  }
+
+  async capabilities() {
     return {
       provider: "sandbox",
       methods: ["CARD", "BANK_TRANSFER"] as const,
@@ -41,9 +45,10 @@ export class SandboxPaymentProviderAdapter implements PaymentProviderPort {
   }): Promise<VerifiedPaymentEvent> {
     const body = eventBody(input.body);
     const signature = firstHeader(input.headers["x-taven-sandbox-signature"]);
-    const expected = createHmac("sha256", this.config.webhookSigningSecret)
-      .update(canonicalJson(body))
-      .digest("hex");
+    const expected = sandboxEventSignature(
+      body,
+      this.config.webhookSigningSecret,
+    ).replace(/^sha256=/, "");
     const actualBytes = Buffer.from(signature.replace(/^sha256=/, ""), "hex");
     const expectedBytes = Buffer.from(expected, "hex");
     if (
@@ -142,12 +147,23 @@ function timestamp(value: unknown): Date {
   return parsed;
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+export function sandboxEventSignature(body: unknown, secret: string): string {
+  return `sha256=${createHmac("sha256", secret)
+    .update(canonicalSandboxJson(body))
+    .digest("hex")}`;
+}
+
+export function canonicalSandboxJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalSandboxJson).join(",")}]`;
+  }
   if (value && typeof value === "object") {
     return `{${Object.entries(value as Record<string, unknown>)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
+      .map(
+        ([key, nested]) =>
+          `${JSON.stringify(key)}:${canonicalSandboxJson(nested)}`,
+      )
       .join(",")}}`;
   }
   return JSON.stringify(value);

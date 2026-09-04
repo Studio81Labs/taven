@@ -1,0 +1,23 @@
+x-local-payment-environment: &local-payment-environment
+  TAVEN_PAYMENT_PROVIDER: ${TAVEN_PAYMENT_PROVIDER:-sandbox}
+  TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: ${TAVEN_PAYMENT_SANDBOX_PUBLIC_URL:-http://localhost:3001}
+  TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET: ${TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET:-local-only-payment-sandbox-secret-32}
+  TAVEN_PUBLIC_SITE_URL: ${TAVEN_PUBLIC_SITE_URL:-http://localhost:3000}
+  TAVEN_COMGATE_TEST_MODE: ${TAVEN_COMGATE_TEST_MODE:-true}
+  TAVEN_COMGATE_API_BASE_URL: ${TAVEN_COMGATE_API_BASE_URL:-https://payments.comgate.cz/v2.0}
+
+services:
+  backend:
+    environment: *local-payment-environment
+
+  slicing-dispatcher:
+    environment: *local-payment-environment
+
+  checkout-payment-worker:
+    environment: *local-payment-environment
+
+  storage-contract-minio:
+    environment: *local-payment-environment
+
+  storage-contract-garage:
+    environment: *local-payment-environment

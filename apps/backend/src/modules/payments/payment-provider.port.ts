@@ -48,7 +48,9 @@ export type ProviderRefundResult = Readonly<{
 }>;
 
 export interface PaymentProviderPort {
-  capabilities(): PaymentProviderCapabilities;
+  providerName(): string;
+
+  capabilities(): Promise<PaymentProviderCapabilities>;
 
   refundRetrySafety(): RefundRetrySafety;
 

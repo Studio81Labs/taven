@@ -1,6 +1,8 @@
-import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { SandboxPaymentProviderAdapter } from "./sandbox-payment-provider.adapter";
+import {
+  SandboxPaymentProviderAdapter,
+  sandboxEventSignature,
+} from "./sandbox-payment-provider.adapter";
 
 const secret = "test-sandbox-webhook-signing-secret-32";
 
@@ -12,7 +14,7 @@ describe("SandboxPaymentProviderAdapter", () => {
   });
 
   it("creates a deterministic provider intent with both checkout methods", async () => {
-    expect(adapter.capabilities()).toEqual({
+    await expect(adapter.capabilities()).resolves.toEqual({
       provider: "sandbox",
       methods: ["CARD", "BANK_TRANSFER"],
     });
@@ -48,12 +50,10 @@ describe("SandboxPaymentProviderAdapter", () => {
       currency: "CZK",
       occurredAt: "2026-09-04T10:00:00.000Z",
     };
-    const signature = createHmac("sha256", secret)
-      .update(canonicalJson(body))
-      .digest("hex");
+    const signature = sandboxEventSignature(body, secret);
     await expect(
       adapter.verifyEvent({
-        headers: { "x-taven-sandbox-signature": `sha256=${signature}` },
+        headers: { "x-taven-sandbox-signature": signature },
         body,
       }),
     ).resolves.toMatchObject({
@@ -70,14 +70,3 @@ describe("SandboxPaymentProviderAdapter", () => {
     ).rejects.toThrow("signature is invalid");
   });
 });
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalJson(nested)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}

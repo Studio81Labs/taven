@@ -50,8 +50,8 @@ export class PaymentsService {
     private readonly reservations: ResourceReservationService,
   ) {}
 
-  capabilities() {
-    const value = this.provider.capabilities();
+  async capabilities() {
+    const value = await this.provider.capabilities();
     return { provider: value.provider, methods: [...value.methods] };
   }
 
@@ -66,12 +66,26 @@ export class PaymentsService {
     const token = bearerCapability(authorization);
     const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
     const input = checkoutInput(bodyInput);
-    const capabilities = this.provider.capabilities();
+    const initial = await this.loadContext(sessionId);
+    assertSessionCapability(initial, token);
+    const fingerprint = fingerprintOf({ sessionId, ...input });
+    const initialReplay = await this.prisma.$transaction(
+      async (transaction) => {
+        await lockIdempotencyKey(transaction, sessionId, idempotencyKey);
+        return existingIdempotency(
+          transaction,
+          sessionId,
+          idempotencyKey,
+          fingerprint,
+        );
+      },
+    );
+    if (initialReplay) return initialReplay;
+
+    const capabilities = await this.provider.capabilities();
     if (!capabilities.methods.includes(input.method)) {
       throw new BadRequestException("Payment method is unavailable");
     }
-
-    const initial = await this.loadContext(sessionId);
     assertCheckoutContext(initial, token);
     const destination =
       initial.order.automaticQuoteDraft!.selectedDeliveryDestination!;
@@ -81,7 +95,6 @@ export class PaymentsService {
     });
     assertDestinationStillCurrent(initial, resolvedDestination);
 
-    const fingerprint = fingerprintOf({ sessionId, ...input });
     const staged = await this.prisma.$transaction(async (transaction) => {
       await lockIdempotencyKey(transaction, sessionId, idempotencyKey);
       const replay = await existingIdempotency(
@@ -318,7 +331,7 @@ export class PaymentsService {
     headers: Readonly<Record<string, string | string[] | undefined>>,
     body: unknown,
   ): Promise<{ outcome: string }> {
-    if (provider !== this.provider.capabilities().provider) {
+    if (provider !== this.provider.providerName()) {
       throw new NotFoundException("Payment provider webhook is unavailable");
     }
     const event = await this.provider.verifyEvent({ headers, body });

@@ -158,7 +158,7 @@ export class PaymentOutboxDispatcherService {
   }
 
   private assertProvider(provider: string): void {
-    if (provider !== this.provider.capabilities().provider) {
+    if (provider !== this.provider.providerName()) {
       throw new Error("payment command targets an inactive provider");
     }
   }

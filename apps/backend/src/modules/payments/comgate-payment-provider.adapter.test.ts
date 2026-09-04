@@ -12,6 +12,35 @@ const adapter = new ComgatePaymentProviderAdapter({
 describe("ComgatePaymentProviderAdapter", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("discovers and caches the merchant's enabled CZK checkout methods", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 0,
+          message: "OK",
+          methods: [
+            { id: "CARD_CZ_CSOB_2", group: "CARD" },
+            { id: "BANK_CZ_RB", group: "BANK" },
+            { id: "LATER_CZ_TWISTO", group: "LATER" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await expect(adapter.capabilities()).resolves.toEqual({
+      provider: "comgate",
+      methods: ["CARD", "BANK_TRANSFER"],
+    });
+    await adapter.capabilities();
+
+    expect(adapter.providerName()).toBe("comgate");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://payments.comgate.cz/v2.0/method.json?lang=cs&curr=CZK&country=CZ",
+    );
+  });
+
   it("maps the neutral card method and preserves Comgate's redirect URL", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

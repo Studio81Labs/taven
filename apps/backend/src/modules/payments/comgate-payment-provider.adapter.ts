@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { BadGatewayException, UnauthorizedException } from "@nestjs/common";
 import type { PaymentProviderConfig } from "./payment-provider.config";
 import type {
+  CheckoutPaymentMethod,
   CreatePaymentIntentInput,
   CreatedPaymentIntent,
   PaymentProviderPort,
@@ -11,14 +12,41 @@ import type {
 
 type ComgateConfig = Extract<PaymentProviderConfig, { provider: "comgate" }>;
 
+const CAPABILITY_CACHE_MILLISECONDS = 5 * 60 * 1_000;
+
 export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
+  private capabilityCache?: Readonly<{
+    expiresAt: number;
+    value: Readonly<{
+      provider: "comgate";
+      methods: readonly CheckoutPaymentMethod[];
+    }>;
+  }>;
+
   constructor(private readonly config: ComgateConfig) {}
 
-  capabilities() {
-    return {
-      provider: "comgate",
-      methods: ["CARD", "BANK_TRANSFER"] as const,
+  providerName() {
+    return "comgate";
+  }
+
+  async capabilities() {
+    if (this.capabilityCache && this.capabilityCache.expiresAt > Date.now()) {
+      return this.capabilityCache.value;
+    }
+    const response = await this.request(
+      "/method.json?lang=cs&curr=CZK&country=CZ",
+      { method: "GET" },
+    );
+    const supported = supportedCheckoutMethods(response);
+    const value = {
+      provider: "comgate" as const,
+      methods: supported,
     };
+    this.capabilityCache = {
+      expiresAt: Date.now() + CAPABILITY_CACHE_MILLISECONDS,
+      value,
+    };
+    return value;
   }
 
   refundRetrySafety() {
@@ -270,4 +298,32 @@ function createProviderEventHash(
   return createHash("sha256")
     .update(`${transactionId}:${providerStatus}`, "utf8")
     .digest("hex");
+}
+
+function supportedCheckoutMethods(
+  response: Record<string, unknown>,
+): readonly CheckoutPaymentMethod[] {
+  if (!Array.isArray(response.methods)) {
+    throw new BadGatewayException("Payment provider omitted allowed methods");
+  }
+  const identifiers = response.methods.flatMap((method) => {
+    if (!method || typeof method !== "object" || Array.isArray(method)) {
+      throw new BadGatewayException(
+        "Payment provider returned invalid methods",
+      );
+    }
+    const record = method as Record<string, unknown>;
+    return [record.id, record.group]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim().toUpperCase())
+      .filter(Boolean);
+  });
+  const methods: CheckoutPaymentMethod[] = [];
+  if (identifiers.some((value) => /^CARD(?:_|$)/.test(value))) {
+    methods.push("CARD");
+  }
+  if (identifiers.some((value) => /^BANK(?:_|$)/.test(value))) {
+    methods.push("BANK_TRANSFER");
+  }
+  return methods;
 }

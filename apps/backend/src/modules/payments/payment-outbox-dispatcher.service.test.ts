@@ -35,7 +35,8 @@ describe("PaymentOutboxDispatcherService", () => {
         outboxMessage: { updateMany },
       } as never,
       {
-        capabilities: () => ({ provider: "comgate", methods: ["CARD"] }),
+        providerName: () => "comgate",
+        capabilities: async () => ({ provider: "comgate", methods: ["CARD"] }),
         refundRetrySafety: () => "MANUAL_RECONCILIATION",
         createIntent: vi.fn(),
         verifyEvent: vi.fn(),
@@ -106,7 +107,8 @@ describe("PaymentOutboxDispatcherService", () => {
         evidence: { source: "sandbox" },
       });
     const service = new PaymentOutboxDispatcherService(prisma as never, {
-      capabilities: () => ({ provider: "sandbox", methods: ["CARD"] }),
+      providerName: () => "sandbox",
+      capabilities: async () => ({ provider: "sandbox", methods: ["CARD"] }),
       refundRetrySafety: () => "IDEMPOTENT",
       createIntent: vi.fn(),
       verifyEvent: vi.fn(),
@@ -179,7 +181,8 @@ describe("PaymentOutboxDispatcherService", () => {
     };
     const refund = vi.fn();
     const service = new PaymentOutboxDispatcherService(prisma as never, {
-      capabilities: () => ({ provider: "comgate", methods: ["CARD"] }),
+      providerName: () => "comgate",
+      capabilities: async () => ({ provider: "comgate", methods: ["CARD"] }),
       refundRetrySafety: () => "MANUAL_RECONCILIATION",
       createIntent: vi.fn(),
       verifyEvent: vi.fn(),
