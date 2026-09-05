@@ -30,6 +30,12 @@ Until launch approvals are complete:
   consent boundary and approved privacy text are implemented;
 - production must set `NUXT_PUBLIC_SITE_URL` to the cleared canonical origin.
 
+The automatic checkout renders only the backend's binding price and selected
+delivery endpoint. It remains disabled until the API exposes the same approved
+terms and claim-policy revisions as `content/public-site.ts`. Recoverable
+contact and billing input plus the exact idempotency/payment handoff are kept in
+the current tab's session storage; card data is never collected by Taven.
+
 ## Performance and accessibility budget
 
 The server-rendered landing page must score at least 90 in each Lighthouse

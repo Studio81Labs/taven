@@ -34,6 +34,7 @@ const props = defineProps<{
   ) => Promise<boolean>;
   onDecideRisk: (decision: RiskDecision) => Promise<boolean>;
   onPrepare: () => Promise<boolean>;
+  onRefresh: () => Promise<void>;
   onSelectDestination: (destination: DeliveryDestination) => Promise<boolean>;
   onSetExpress: (requested: boolean) => Promise<boolean>;
 }>();
@@ -117,6 +118,14 @@ const selectedDeliveryOption = computed(() =>
     (option) => deliveryIdentity(option) === selectedDestination.value,
   ),
 );
+const selectedDestinationChanged = computed(
+  () =>
+    Boolean(selectedDeliveryOption.value) &&
+    selectedDestination.value !==
+      (props.quote.selectedDeliveryDestination
+        ? deliveryIdentity(props.quote.selectedDeliveryDestination)
+        : ""),
+);
 
 watch(
   () =>
@@ -192,9 +201,11 @@ function initializeDrafts(): void {
   }
   draftByOrdinal.value = nextDrafts;
   expressRequested.value = props.quote.express.requested;
-  selectedDestination.value = props.quote.deliveryOptions[0]
-    ? deliveryIdentity(props.quote.deliveryOptions[0])
-    : "";
+  selectedDestination.value = props.quote.selectedDeliveryDestination
+    ? deliveryIdentity(props.quote.selectedDeliveryDestination)
+    : props.quote.deliveryOptions[0]
+      ? deliveryIdentity(props.quote.deliveryOptions[0])
+      : "";
 }
 
 function addGroup(modelFileId: string): void {
@@ -822,11 +833,24 @@ function quantityPrice(choice: {
     </section>
 
     <section
-      v-if="quote.phase === 'DESTINATION_REQUIRED'"
+      v-if="
+        quote.phase === 'DESTINATION_REQUIRED' ||
+        quote.phase === 'CHECKOUT_READY'
+      "
       class="configurator-section"
     >
       <p class="eyebrow">03 / DOPRAVA</p>
-      <h3>Vyberte ověřené místo doručení.</h3>
+      <h3>
+        {{
+          quote.phase === "CHECKOUT_READY"
+            ? "Změnit místo doručení"
+            : "Vyberte ověřené místo doručení."
+        }}
+      </h3>
+      <p v-if="quote.phase === 'CHECKOUT_READY'">
+        Změna místa zruší současnou závaznou cenu a rezervaci. Novou cenu před
+        platbou znovu výslovně zkontrolujete.
+      </p>
       <label class="wide-field">
         <span>Způsob a místo</span>
         <select v-model="selectedDestination" :disabled="configurationLocked">
@@ -850,18 +874,27 @@ function quantityPrice(choice: {
       <button
         class="primary-button"
         type="button"
-        :disabled="!selectedDeliveryOption || pending || saving"
+        :disabled="
+          !selectedDeliveryOption ||
+          pending ||
+          saving ||
+          (quote.phase === 'CHECKOUT_READY' && !selectedDestinationChanged)
+        "
         @click="submitDestination"
       >
-        Ověřit dopravu a závaznou cenu
+        {{
+          quote.phase === "CHECKOUT_READY"
+            ? "Přepočítat s jiným místem"
+            : "Ověřit dopravu a závaznou cenu"
+        }}
       </button>
     </section>
 
-    <section v-if="quote.phase === 'CHECKOUT_READY'" class="binding-ready">
-      <p class="eyebrow">ZÁVAZNÁ CENA</p>
-      <h3>Objednávka je připravená k platbě.</h3>
-      <p>Platební krok navazuje v další části objednávky.</p>
-    </section>
+    <OrderCheckoutPanel
+      v-if="quote.phase === 'CHECKOUT_READY'"
+      :on-refresh="onRefresh"
+      :quote="quote"
+    />
 
     <section
       v-if="currentPrice"

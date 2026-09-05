@@ -602,6 +602,15 @@
             "nullable": true,
             "type": "object"
           },
+          "selectedDeliveryDestination": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuoteDeliveryOptionDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
           "sessionId": {
             "format": "uuid",
             "type": "string"
@@ -727,6 +736,15 @@
             "nullable": true,
             "type": "object"
           },
+          "selectedDeliveryDestination": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuoteDeliveryOptionDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
           "sessionId": {
             "format": "uuid",
             "type": "string"
@@ -747,6 +765,84 @@
           "express",
           "checkoutReady",
           "expiresAt"
+        ],
+        "type": "object"
+      },
+      "CheckoutBillingDto": {
+        "properties": {
+          "addressLine1": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "addressLine2": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "city": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "companyId": {
+            "maxLength": 50,
+            "type": "string"
+          },
+          "companyName": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "countryCode": {
+            "maxLength": 2,
+            "minLength": 2,
+            "pattern": "^[A-Z]{2}$",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "postalCode": {
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "vatId": {
+            "maxLength": 50,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "addressLine1",
+          "city",
+          "postalCode",
+          "countryCode"
+        ],
+        "type": "object"
+      },
+      "CheckoutLegalDocumentsDto": {
+        "properties": {
+          "claimPolicyRevision": {
+            "type": "string"
+          },
+          "photoConsentRevision": {
+            "nullable": true,
+            "type": "string"
+          },
+          "termsRevision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "termsRevision",
+          "claimPolicyRevision",
+          "photoConsentRevision"
         ],
         "type": "object"
       },
@@ -986,6 +1082,9 @@
           "acknowledgeWithdrawalException": {
             "type": "boolean"
           },
+          "billing": {
+            "$ref": "#/components/schemas/CheckoutBillingDto"
+          },
           "claimPolicyRevision": {
             "maxLength": 100,
             "minLength": 1,
@@ -1010,6 +1109,14 @@
             ],
             "type": "string"
           },
+          "photoConsentRevision": {
+            "maxLength": 100,
+            "nullable": true,
+            "type": "string"
+          },
+          "photoPublicationConsent": {
+            "type": "boolean"
+          },
           "termsRevision": {
             "maxLength": 100,
             "minLength": 1,
@@ -1020,12 +1127,14 @@
         "required": [
           "email",
           "fullName",
+          "billing",
           "method",
           "acceptTerms",
           "acceptClaimPolicy",
           "termsRevision",
           "claimPolicyRevision",
-          "acknowledgeWithdrawalException"
+          "acknowledgeWithdrawalException",
+          "photoPublicationConsent"
         ],
         "type": "object"
       },
@@ -1838,6 +1947,18 @@
       },
       "PaymentCapabilitiesDto": {
         "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "legalDocuments": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CheckoutLegalDocumentsDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
           "methods": {
             "items": {
               "enum": [
@@ -1853,8 +1974,10 @@
           }
         },
         "required": [
+          "available",
           "provider",
-          "methods"
+          "methods",
+          "legalDocuments"
         ],
         "type": "object"
       },

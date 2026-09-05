@@ -6,10 +6,15 @@ import {
   type StoredQuoteSession,
 } from "../../utils/quote-session-storage";
 import {
+  loadCheckoutSession,
+  redactCheckoutCustomerInput,
+} from "../../utils/checkout-session-storage";
+import {
   initialPaymentReturnPresentation,
   paymentReturnPresentation,
   type PaymentReturnKind,
 } from "../../utils/payment-return";
+import { paymentReturnMatchesHandoff } from "../../utils/checkout-flow";
 
 type CheckoutPayment = components["schemas"]["CheckoutPaymentDto"];
 
@@ -20,6 +25,7 @@ const contacts = usePublicContacts();
 const payment = shallowRef<CheckoutPayment>();
 const session = shallowRef<StoredQuoteSession>();
 const loading = ref(true);
+const cancelling = ref(false);
 const errorMessage = ref<string>();
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 let requestController: AbortController | undefined;
@@ -65,7 +71,12 @@ async function refreshPayment(): Promise<void> {
   errorMessage.value = undefined;
   try {
     const storage = getSessionStorage(window);
-    const stored = storage ? loadPaymentReturnSession(storage) : undefined;
+    if (!storage) {
+      throw new Error(
+        "Uložená relace objednávky není v tomto prohlížeči dostupná.",
+      );
+    }
+    const stored = loadPaymentReturnSession(storage);
     if (!stored) {
       throw new Error(
         "Uložená relace objednávky není v tomto prohlížeči dostupná.",
@@ -78,6 +89,15 @@ async function refreshPayment(): Promise<void> {
     const requestedPaymentId = queryValue(route.query.paymentId);
     if (!requestedPaymentId) {
       throw new Error("Návrat neobsahuje identifikátor platby.");
+    }
+    const checkout = loadCheckoutSession(storage, stored.sessionId);
+    if (
+      !paymentReturnMatchesHandoff(
+        checkout?.command?.paymentId,
+        requestedPaymentId,
+      )
+    ) {
+      throw new Error("Návrat neodpovídá uloženému platebnímu pokusu.");
     }
     session.value = stored;
     const response = await $api.GET(
@@ -96,6 +116,9 @@ async function refreshPayment(): Promise<void> {
       throw new Error("Ověřený stav platby se nepodařilo načíst.");
     }
     payment.value = response.data;
+    if (payment.value.status === "CAPTURED") {
+      redactCheckoutCustomerInput(storage, stored.sessionId);
+    }
     if (
       payment.value.status === "CREATED" ||
       payment.value.status === "PENDING"
@@ -111,6 +134,43 @@ async function refreshPayment(): Promise<void> {
   } finally {
     if (requestController === controller) requestController = undefined;
     if (!disposed && !controller.signal.aborted) loading.value = false;
+  }
+}
+
+async function cancelPayment(): Promise<void> {
+  const stored = session.value;
+  const activePayment = payment.value;
+  if (
+    !stored ||
+    !activePayment ||
+    (activePayment.status !== "CREATED" && activePayment.status !== "PENDING")
+  ) {
+    return;
+  }
+  cancelling.value = true;
+  errorMessage.value = undefined;
+  try {
+    const response = await $api.DELETE(
+      "/automatic-quote-sessions/{sessionId}/checkout/payment",
+      {
+        params: {
+          path: { sessionId: stored.sessionId },
+          query: { paymentId: activePayment.paymentId },
+        },
+        headers: { Authorization: `Bearer ${stored.sessionToken}` },
+      },
+    );
+    if (!response.data) {
+      throw new Error("Platební pokus se nepodařilo zrušit.");
+    }
+    payment.value = response.data;
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error
+        ? error.message
+        : "Platební pokus se nepodařilo zrušit.";
+  } finally {
+    cancelling.value = false;
   }
 }
 
@@ -152,6 +212,18 @@ function queryValue(value: unknown): string | undefined {
           @click="refreshPayment"
         >
           {{ loading ? "Načítáme…" : "Načíst aktuální stav" }}
+        </button>
+        <button
+          v-if="
+            returnKind === 'cancelled' &&
+            (payment?.status === 'CREATED' || payment?.status === 'PENDING')
+          "
+          class="inline-flex min-h-12 items-center border border-[#1a1a16] px-6 font-semibold disabled:cursor-wait disabled:opacity-60"
+          type="button"
+          :disabled="cancelling"
+          @click="cancelPayment"
+        >
+          {{ cancelling ? "Rušíme…" : "Opravdu zrušit platební pokus" }}
         </button>
         <NuxtLink
           v-if="presentation.restartable"

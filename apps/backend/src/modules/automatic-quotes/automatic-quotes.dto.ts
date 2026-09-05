@@ -344,6 +344,12 @@ export class AutomaticQuoteSessionDto {
   @ApiProperty({ type: [AutomaticQuoteDeliveryOptionDto] })
   deliveryOptions!: AutomaticQuoteDeliveryOptionDto[];
 
+  @ApiPropertyOptional({
+    type: AutomaticQuoteDeliveryOptionDto,
+    nullable: true,
+  })
+  selectedDeliveryDestination!: AutomaticQuoteDeliveryOptionDto | null;
+
   @ApiProperty({ type: [AutomaticQuoteQuantityComparisonDto] })
   quantityComparisons!: AutomaticQuoteQuantityComparisonDto[];
 

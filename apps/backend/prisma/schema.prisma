@@ -1576,6 +1576,8 @@ model Order {
   acceptedClaimPolicyRevision       String?     @map("accepted_claim_policy_revision") @db.VarChar(100)
   withdrawalExceptionAcknowledgedAt DateTime?   @map("withdrawal_exception_acknowledged_at") @db.Timestamptz(3)
   checkoutContactSnapshot           Json?       @map("checkout_contact_snapshot") @db.JsonB
+  photoPublicationConsentGrantedAt  DateTime?   @map("photo_publication_consent_granted_at") @db.Timestamptz(3)
+  photoPublicationConsentRevision   String?     @map("photo_publication_consent_revision") @db.VarChar(100)
   createdAt                         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 

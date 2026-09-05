@@ -43,6 +43,16 @@ const databaseUrl = process.env.DATABASE_URL;
 const scope = `checkout-payments-${randomUUID()}`;
 let pool: Pool;
 
+function checkoutBilling(name: string) {
+  return {
+    name,
+    addressLine1: "Nová 12",
+    city: "Brno",
+    postalCode: "602 00",
+    countryCode: "CZ",
+  };
+}
+
 type InteractiveTransaction = (
   work: (transaction: Prisma.TransactionClient) => Promise<unknown>,
 ) => Promise<unknown>;
@@ -1950,6 +1960,7 @@ describe("checkout payment capture protocol", () => {
       gate: process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED,
       claimPolicyRevision: process.env.TAVEN_CLAIM_POLICY_REVISION,
       termsRevision: process.env.TAVEN_TERMS_REVISION,
+      photoConsentRevision: process.env.TAVEN_PHOTO_CONSENT_REVISION,
       provider: process.env.TAVEN_PAYMENT_PROVIDER,
       secret: process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET,
       providerUrl: process.env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL,
@@ -1959,6 +1970,7 @@ describe("checkout payment capture protocol", () => {
     process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
     process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
     process.env.TAVEN_TERMS_REVISION = "terms-v1";
+    process.env.TAVEN_PHOTO_CONSENT_REVISION = "photos-v1";
     process.env.TAVEN_PAYMENT_PROVIDER = "sandbox";
     process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET = signingSecret;
     process.env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL = "http://sandbox.local";
@@ -2181,12 +2193,14 @@ describe("checkout payment capture protocol", () => {
             body: JSON.stringify({
               email: outageCustomerEmail,
               fullName: "Outage Customer",
+              billing: checkoutBilling("Outage Customer"),
               method: "BANK_TRANSFER",
               acceptTerms: true,
               acceptClaimPolicy: true,
               termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
+              photoPublicationConsent: false,
             }),
           },
         );
@@ -2206,12 +2220,14 @@ describe("checkout payment capture protocol", () => {
             body: JSON.stringify({
               email: ambiguousCaptureCustomerEmail,
               fullName: "Ambiguous Capture Customer",
+              billing: checkoutBilling("Ambiguous Capture Customer"),
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
               termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
+              photoPublicationConsent: false,
             }),
           },
         );
@@ -2231,12 +2247,15 @@ describe("checkout payment capture protocol", () => {
             body: JSON.stringify({
               email: returnedIntentCustomerEmail,
               fullName: "Returned Intent Customer",
+              billing: checkoutBilling("Returned Intent Customer"),
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
               termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
+              photoPublicationConsent: true,
+              photoConsentRevision: "photos-v1",
             }),
           },
         );
@@ -2266,6 +2285,9 @@ describe("checkout payment capture protocol", () => {
           fullName: string;
           method: "CARD" | "BANK_TRANSFER";
           termsRevision: string;
+          billing: ReturnType<typeof checkoutBilling>;
+          photoPublicationConsent: boolean;
+          photoConsentRevision: string | null;
         }> = {},
       ) =>
         fetch(
@@ -2283,12 +2305,15 @@ describe("checkout payment capture protocol", () => {
             body: JSON.stringify({
               email: customerEmail,
               fullName: "Sandbox Customer",
+              billing: checkoutBilling("Sandbox Customer"),
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
               termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
+              photoPublicationConsent: false,
+              photoConsentRevision: null,
               ...overrides,
             }),
           },
@@ -2309,12 +2334,14 @@ describe("checkout payment capture protocol", () => {
             body: JSON.stringify({
               email: callbackCustomerEmail,
               fullName: "Callback Customer",
+              billing: checkoutBilling("Callback Customer"),
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
               termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
+              photoPublicationConsent: false,
             }),
           },
         );
@@ -2334,12 +2361,14 @@ describe("checkout payment capture protocol", () => {
             body: JSON.stringify({
               email: inFlightCallbackCustomerEmail,
               fullName: "In-flight Callback Customer",
+              billing: checkoutBilling("In-flight Callback Customer"),
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
               termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
+              photoPublicationConsent: false,
             }),
           },
         );
@@ -2359,12 +2388,14 @@ describe("checkout payment capture protocol", () => {
             body: JSON.stringify({
               email: ambiguousCallbackCustomerEmail,
               fullName: "Ambiguous Callback Customer",
+              billing: checkoutBilling("Ambiguous Callback Customer"),
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
               termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
+              photoPublicationConsent: false,
             }),
           },
         );
@@ -2510,6 +2541,24 @@ describe("checkout payment capture protocol", () => {
         providerCheckoutUrl: null,
         checkoutCommand: { status: "COMPLETED" },
       });
+      await expect(
+        prisma.order.findUniqueOrThrow({
+          where: { id: returnedIntentFoundation.orderId },
+          select: {
+            photoPublicationConsentGrantedAt: true,
+            photoPublicationConsentRevision: true,
+          },
+        }),
+      ).resolves.toEqual({
+        photoPublicationConsentGrantedAt: expect.any(Date),
+        photoPublicationConsentRevision: "photos-v1",
+      });
+      await expect(
+        prisma.order.update({
+          where: { id: returnedIntentFoundation.orderId },
+          data: { photoPublicationConsentRevision: "photos-v2" },
+        }),
+      ).rejects.toThrow("checkout evidence is immutable acceptance evidence");
       await expect(
         prisma.outboxMessage.findFirstOrThrow({
           where: {
@@ -2724,7 +2773,12 @@ describe("checkout payment capture protocol", () => {
           }),
           prisma.order.findUniqueOrThrow({
             where: { id: foundation.orderId },
-            select: { customerId: true, checkoutContactSnapshot: true },
+            select: {
+              customerId: true,
+              checkoutContactSnapshot: true,
+              photoPublicationConsentGrantedAt: true,
+              photoPublicationConsentRevision: true,
+            },
           }),
         ]),
       ).resolves.toEqual([
@@ -2732,9 +2786,13 @@ describe("checkout payment capture protocol", () => {
         {
           customerId: foundation.customerId,
           checkoutContactSnapshot: {
+            version: 2,
             email: customerEmail,
             fullName: "Sandbox Customer",
+            billing: checkoutBilling("Sandbox Customer"),
           },
+          photoPublicationConsentGrantedAt: null,
+          photoPublicationConsentRevision: null,
         },
       ]);
       await expect(
@@ -2747,9 +2805,7 @@ describe("checkout payment capture protocol", () => {
             },
           },
         }),
-      ).rejects.toThrow(
-        "checkout contact snapshot is immutable acceptance evidence",
-      );
+      ).rejects.toThrow("checkout evidence is immutable acceptance evidence");
       const callsAfterInitialPayment = providerCreateCalls;
       process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
       const changedActivePolicyResponse = await createPayment(
@@ -2762,6 +2818,17 @@ describe("checkout payment capture protocol", () => {
         ["sandbox-http-changed-method", { method: "BANK_TRANSFER" }],
         ["sandbox-http-changed-name", { fullName: "Changed Name" }],
         ["sandbox-http-changed-email", { email: "other@example.test" }],
+        [
+          "sandbox-http-changed-billing",
+          { billing: checkoutBilling("Different invoice recipient") },
+        ],
+        [
+          "sandbox-http-changed-photo-consent",
+          {
+            photoPublicationConsent: true,
+            photoConsentRevision: "photos-v1",
+          },
+        ],
       ] as const) {
         const changedResponse = await createPayment(idempotencyKey, overrides);
         expect(changedResponse.status).toBe(409);
@@ -3480,6 +3547,10 @@ describe("checkout payment capture protocol", () => {
       restoreEnvironment(
         "TAVEN_TERMS_REVISION",
         previousEnvironment.termsRevision,
+      );
+      restoreEnvironment(
+        "TAVEN_PHOTO_CONSENT_REVISION",
+        previousEnvironment.photoConsentRevision,
       );
       restoreEnvironment(
         "TAVEN_PAYMENT_PROVIDER",

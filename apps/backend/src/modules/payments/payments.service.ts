@@ -15,8 +15,9 @@ import {
   assertCheckoutClaimPolicyRevisionCurrent,
   assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
+  assertCheckoutPhotoConsentRevisionCurrent,
   assertCheckoutTermsRevisionCurrent,
-  checkoutPaymentLaunchInputsApproved,
+  checkoutPaymentLegalDocuments,
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
@@ -67,17 +68,33 @@ export class PaymentsService {
   ) {}
 
   async capabilities(env: NodeJS.ProcessEnv = process.env) {
-    if (!checkoutPaymentLaunchInputsApproved(env)) {
-      return { provider: "disabled", methods: [] };
+    const legalDocuments = checkoutPaymentLegalDocuments(env);
+    if (!legalDocuments) {
+      return {
+        available: false,
+        provider: "disabled",
+        methods: [],
+        legalDocuments: null,
+      };
     }
     const value = await this.provider.capabilities();
     if (
       !value.methods.includes("CARD") ||
       !value.methods.includes("BANK_TRANSFER")
     ) {
-      return { provider: "disabled", methods: [] };
+      return {
+        available: false,
+        provider: "disabled",
+        methods: [],
+        legalDocuments: null,
+      };
     }
-    return { provider: value.provider, methods: [...value.methods] };
+    return {
+      available: true,
+      provider: value.provider,
+      methods: [...value.methods],
+      legalDocuments,
+    };
   }
 
   async createCheckoutPayment(
@@ -118,6 +135,9 @@ export class PaymentsService {
       input.claimPolicyRevision,
       initialLegalRevisions.claimPolicyRevision,
     );
+    if (input.photoPublicationConsent) {
+      assertCheckoutPhotoConsentRevisionCurrent(input.photoConsentRevision!);
+    }
     assertCheckoutAcceptanceRevisionsCurrent(
       {
         termsRevision: initial.order.acceptedTermsRevision,
@@ -125,6 +145,7 @@ export class PaymentsService {
       },
       initialLegalRevisions,
     );
+    assertCheckoutEvidenceMatches(initial.order, input);
 
     const capabilities = await this.provider.capabilities();
     assertCheckoutPaymentMethodsAvailable(capabilities.methods);
@@ -166,6 +187,9 @@ export class PaymentsService {
         input.claimPolicyRevision,
         legalRevisions.claimPolicyRevision,
       );
+      if (input.photoPublicationConsent) {
+        assertCheckoutPhotoConsentRevisionCurrent(input.photoConsentRevision!);
+      }
       assertCheckoutAcceptanceRevisionsCurrent(
         {
           termsRevision: context.order.acceptedTermsRevision,
@@ -173,6 +197,7 @@ export class PaymentsService {
         },
         legalRevisions,
       );
+      assertCheckoutEvidenceMatches(context.order, input);
       const schedule = binding.priceSnapshot.paymentSchedules.find(
         ({ role }) => role === "FULL",
       );
@@ -225,10 +250,6 @@ export class PaymentsService {
         return { replay: response } as const;
       }
 
-      assertCheckoutContactMatches(
-        context.order.checkoutContactSnapshot,
-        input,
-      );
       const customer = await transaction.customer.upsert({
         where: { email: input.email },
         create: {
@@ -261,8 +282,10 @@ export class PaymentsService {
             ? {}
             : {
                 checkoutContactSnapshot: jsonInput({
+                  version: 2,
                   email: input.email,
                   fullName: input.fullName,
+                  billing: input.billing,
                 }),
               }),
           ...(context.order.acceptedOrderPriceBindingId
@@ -281,6 +304,13 @@ export class PaymentsService {
           ...(context.order.withdrawalExceptionAcknowledgedAt
             ? {}
             : { withdrawalExceptionAcknowledgedAt: observedAt }),
+          ...(input.photoPublicationConsent &&
+          !context.order.photoPublicationConsentGrantedAt
+            ? {
+                photoPublicationConsentGrantedAt: observedAt,
+                photoPublicationConsentRevision: input.photoConsentRevision,
+              }
+            : {}),
         },
       });
       const paymentId = randomUUID();
@@ -1137,9 +1167,55 @@ function checkoutInput(value: CreateCheckoutPaymentDto) {
       "Required checkout acknowledgements are missing",
     );
   }
+  const billing = asRecord(value.billing);
+  if (!billing) {
+    throw new BadRequestException("billing is invalid");
+  }
+  const countryCode = requiredText(
+    billing.countryCode,
+    "billing.countryCode",
+    2,
+  ).toUpperCase();
+  if (!/^[A-Z]{2}$/.test(countryCode)) {
+    throw new BadRequestException("billing.countryCode is invalid");
+  }
+  const photoPublicationConsent = value.photoPublicationConsent === true;
+  if (
+    value.photoPublicationConsent !== true &&
+    value.photoPublicationConsent !== false
+  ) {
+    throw new BadRequestException("photoPublicationConsent is invalid");
+  }
+  const addressLine2 = optionalText(
+    billing.addressLine2,
+    "billing.addressLine2",
+    200,
+  );
+  const companyName = optionalText(
+    billing.companyName,
+    "billing.companyName",
+    200,
+  );
+  const companyId = optionalText(billing.companyId, "billing.companyId", 50);
+  const vatId = optionalText(billing.vatId, "billing.vatId", 50);
   return {
     email,
     fullName: requiredText(value.fullName, "fullName", 200),
+    billing: {
+      name: requiredText(billing.name, "billing.name", 200),
+      addressLine1: requiredText(
+        billing.addressLine1,
+        "billing.addressLine1",
+        200,
+      ),
+      ...(addressLine2 ? { addressLine2 } : {}),
+      city: requiredText(billing.city, "billing.city", 100),
+      postalCode: requiredText(billing.postalCode, "billing.postalCode", 20),
+      countryCode,
+      ...(companyName ? { companyName } : {}),
+      ...(companyId ? { companyId } : {}),
+      ...(vatId ? { vatId } : {}),
+    },
     method: method as CheckoutPaymentMethod,
     acceptTerms: true,
     acceptClaimPolicy: true,
@@ -1150,16 +1226,51 @@ function checkoutInput(value: CreateCheckoutPaymentDto) {
       100,
     ),
     acknowledgeWithdrawalException: true,
+    photoPublicationConsent,
+    photoConsentRevision: photoPublicationConsent
+      ? requiredText(value.photoConsentRevision, "photoConsentRevision", 100)
+      : null,
   } as const;
+}
+
+function assertCheckoutEvidenceMatches(
+  order: Readonly<{
+    acceptedOrderPriceBindingId: string | null;
+    checkoutContactSnapshot: Prisma.JsonValue | null;
+    photoPublicationConsentGrantedAt: Date | null;
+    photoPublicationConsentRevision: string | null;
+  }>,
+  input: ReturnType<typeof checkoutInput>,
+): void {
+  assertCheckoutContactMatches(order.checkoutContactSnapshot, input);
+  if (!order.acceptedOrderPriceBindingId) return;
+  const consentWasGranted = order.photoPublicationConsentGrantedAt !== null;
+  if (
+    consentWasGranted !== input.photoPublicationConsent ||
+    (consentWasGranted &&
+      order.photoPublicationConsentRevision !== input.photoConsentRevision)
+  ) {
+    throw new ConflictException(
+      "Photo-publication consent differs from accepted order evidence",
+    );
+  }
 }
 
 function assertCheckoutContactMatches(
   snapshot: Prisma.JsonValue | null,
-  input: Readonly<{ email: string; fullName: string }>,
+  input: Readonly<{
+    email: string;
+    fullName: string;
+    billing: unknown;
+  }>,
 ): void {
   if (snapshot === null) return;
   const contact = asRecord(snapshot);
-  if (contact?.email !== input.email || contact.fullName !== input.fullName) {
+  if (
+    contact?.email !== input.email ||
+    contact.fullName !== input.fullName ||
+    canonicalJson(contact.billing) !== canonicalJson(input.billing)
+  ) {
     throw new ConflictException(
       "Checkout contact differs from accepted order contact",
     );
@@ -1494,6 +1605,15 @@ function requiredText(value: unknown, name: string, maximum: number): string {
     throw new BadRequestException(`${name} is invalid`);
   }
   return value.trim();
+}
+
+function optionalText(
+  value: unknown,
+  name: string,
+  maximum: number,
+): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  return requiredText(value, name, maximum);
 }
 
 export function publicSiteUrl(env: NodeJS.ProcessEnv = process.env): string {
