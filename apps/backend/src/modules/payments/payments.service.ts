@@ -317,6 +317,7 @@ export class PaymentsService {
         method: input.method,
         email: input.email,
         fullName: input.fullName,
+        observedAt: staged.payment.createdAt,
         expiresAt: staged.payment.checkoutCaptureExpiresAt!,
         returnUrls: checkoutReturnUrls(siteUrl, sessionId, staged.payment.id),
       });
@@ -476,7 +477,15 @@ export class PaymentsService {
     }
     const locator = this.provider.locateEvent({ headers, body });
     await this.prefilterProviderEvent(provider, locator, clientAddress);
-    const event = await this.provider.verifyEvent({ headers, body });
+    const authenticatedEvent = await this.provider.verifyEvent({
+      headers,
+      body,
+    });
+    const event: VerifiedPaymentEvent = {
+      ...authenticatedEvent,
+      occurredAt:
+        authenticatedEvent.occurredAt ?? (await databaseNow(this.prisma)),
+    };
     if (
       event.provider !== provider ||
       event.providerTransactionId !== locator.providerTransactionId ||

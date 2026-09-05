@@ -581,7 +581,7 @@ describe("checkout payment capture protocol", () => {
         (
           await client.query<{ applied: boolean }>(
             `SELECT taven_apply_checkout_refund_success(
-               $1, 'sandbox-refund-1', 'refund-success-1', clock_timestamp(),
+               $1, 'sandbox-refund-1', 'refund-success-1', NULL,
                '{"source":"e2e"}'::jsonb
              ) AS applied`,
             [refund.id],
@@ -592,14 +592,24 @@ describe("checkout payment capture protocol", () => {
         (
           await client.query(
             `SELECT payment.status::text AS payment_status,
-                    refund.status::text AS refund_status
+                    refund.status::text AS refund_status,
+                    event.occurred_at = event.verified_at
+                      AS provider_time_defaulted
              FROM payments payment
              JOIN refund_transactions refund ON refund.payment_id = payment.id
+             JOIN payment_provider_events event
+               ON event.id = refund.provider_result_event_id
              WHERE refund.id = $1`,
             [refund.id],
           )
         ).rows,
-      ).toEqual([{ payment_status: "REFUNDED", refund_status: "SUCCEEDED" }]);
+      ).toEqual([
+        {
+          payment_status: "REFUNDED",
+          refund_status: "SUCCEEDED",
+          provider_time_defaulted: true,
+        },
+      ]);
     });
   });
 

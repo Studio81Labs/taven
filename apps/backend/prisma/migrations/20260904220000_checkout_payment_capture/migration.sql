@@ -1934,7 +1934,8 @@ BEGIN
         'REFUND_SUCCEEDED', target_refund."amount_minor", target_payment."currency",
         receipt_payload,
         encode(sha256(convert_to(receipt_payload::text, 'UTF8')), 'hex'),
-        refund_occurred_at, verified_at, verified_at, verified_at
+        coalesce(refund_occurred_at, verified_at), verified_at, verified_at,
+        verified_at
     WHERE existing_event."id" IS NULL;
 
     UPDATE "refund_transactions"

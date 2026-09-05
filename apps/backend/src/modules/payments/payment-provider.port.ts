@@ -18,6 +18,7 @@ export type CreatePaymentIntentInput = Readonly<{
   method: CheckoutPaymentMethod;
   email: string;
   fullName: string;
+  observedAt: Date;
   expiresAt: Date;
   returnUrls: Readonly<{
     success: string;
@@ -43,6 +44,12 @@ export type VerifiedPaymentEvent = Readonly<{
   evidence: Readonly<Record<string, string | number | boolean | null>>;
 }>;
 
+export type AuthenticatedPaymentEvent = Omit<
+  VerifiedPaymentEvent,
+  "occurredAt"
+> &
+  Readonly<{ occurredAt: Date | null }>;
+
 export type PaymentEventLocator = Readonly<{
   providerTransactionId: string;
   merchantReference: string;
@@ -66,7 +73,7 @@ export class PaymentIntentCreationError extends Error {
 
 export type ProviderRefundResult = Readonly<{
   providerRefundId: string;
-  occurredAt: Date;
+  occurredAt: Date | null;
   evidence: Readonly<Record<string, string | number | boolean | null>>;
 }>;
 
@@ -88,7 +95,7 @@ export interface PaymentProviderPort {
   verifyEvent(input: {
     headers: Readonly<Record<string, string | string[] | undefined>>;
     body: unknown;
-  }): Promise<VerifiedPaymentEvent>;
+  }): Promise<AuthenticatedPaymentEvent>;
 
   cancelIntent(providerIntentId: string): Promise<void>;
 

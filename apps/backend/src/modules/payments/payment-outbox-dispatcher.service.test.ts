@@ -253,7 +253,7 @@ describe("PaymentOutboxDispatcherService", () => {
     };
     const refund = vi.fn().mockResolvedValue({
       providerRefundId: "comgate-refund-1",
-      occurredAt: new Date("2026-09-04T12:00:00Z"),
+      occurredAt: null,
       evidence: { source: "comgate" },
     });
     const service = new PaymentOutboxDispatcherService(prisma as never, {
@@ -270,6 +270,7 @@ describe("PaymentOutboxDispatcherService", () => {
     await expect(service.runOnce()).resolves.toBe(1);
     expect(refund).toHaveBeenCalledTimes(1);
     expect(queryRaw).toHaveBeenCalledTimes(3);
+    expect(queryRaw.mock.calls[1]?.[4]).toBeNull();
     expect(updateMany).toHaveBeenCalledTimes(1);
     expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({

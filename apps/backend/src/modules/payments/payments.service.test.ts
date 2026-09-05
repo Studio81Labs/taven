@@ -32,6 +32,62 @@ describe("payment capabilities", () => {
   });
 });
 
+describe("provider event verification time", () => {
+  it("uses database time when the provider has no occurrence timestamp", async () => {
+    const observedAt = new Date("2026-09-04T12:00:00Z");
+    const queryRaw = vi
+      .fn()
+      .mockResolvedValueOnce([{ observed_at: observedAt }])
+      .mockResolvedValueOnce([{ outcome: "PENDING" }]);
+    const service = new PaymentsService(
+      {
+        $transaction: vi.fn(
+          async (
+            work: (transaction: {
+              payment: { findFirst: () => Promise<{ id: string }> };
+            }) => unknown,
+          ) =>
+            work({
+              payment: {
+                findFirst: async () => ({
+                  id: "00000000-0000-4000-8000-000000000001",
+                }),
+              },
+            }),
+        ),
+        $queryRaw: queryRaw,
+      } as never,
+      {
+        providerName: () => "comgate",
+        locateEvent: () => ({
+          providerTransactionId: "comgate-payment-1",
+          merchantReference: "00000000-0000-4000-8000-000000000001",
+        }),
+        verifyEvent: vi.fn().mockResolvedValue({
+          provider: "comgate",
+          providerEventId: "comgate:event-1",
+          providerTransactionId: "comgate-payment-1",
+          merchantReference: "00000000-0000-4000-8000-000000000001",
+          status: "PENDING",
+          amountMinor: 12_300n,
+          currency: "CZK",
+          occurredAt: null,
+          evidence: { source: "authenticated-status-api" },
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.consumeProviderEvent("comgate", {}, {}),
+    ).resolves.toEqual({ outcome: "PENDING" });
+    expect(queryRaw).toHaveBeenCalledTimes(2);
+    expect(queryRaw.mock.calls[1]?.[7]).toBe(observedAt);
+  });
+});
+
 describe("payment return site URL", () => {
   it("requires an explicitly configured HTTPS origin in production", () => {
     expect(() => publicSiteUrl({ NODE_ENV: "production" })).toThrow(

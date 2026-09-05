@@ -90,6 +90,10 @@ describe("ComgatePaymentProviderAdapter", () => {
   });
 
   it("maps the neutral card method and preserves Comgate's redirect URL", async () => {
+    const observedAt = new Date("2026-09-04T12:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(
+      observedAt.getTime() + 30 * 60 * 1_000,
+    );
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -111,7 +115,8 @@ describe("ComgatePaymentProviderAdapter", () => {
       method: "CARD",
       email: "customer@example.test",
       fullName: "Customer",
-      expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+      observedAt,
+      expiresAt: new Date(observedAt.getTime() + 60 * 60 * 1_000),
       returnUrls: {
         success: "https://taven.cz/success",
         cancelled: "https://taven.cz/cancelled",
@@ -175,6 +180,7 @@ describe("ComgatePaymentProviderAdapter", () => {
       merchantReference: "00000000-0000-4000-8000-000000000001",
       amountMinor: 12_300n,
       currency: "CZK",
+      occurredAt: null,
       evidence: { source: "authenticated-status-api" },
     });
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
@@ -286,6 +292,7 @@ describe("ComgatePaymentProviderAdapter", () => {
         method: "BANK_TRANSFER",
         email: "customer@example.test",
         fullName: "Customer",
+        observedAt: new Date(),
         expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
         returnUrls: {
           success: "https://taven.cz/success",
@@ -318,6 +325,7 @@ describe("ComgatePaymentProviderAdapter", () => {
         method: "CARD",
         email: "customer@example.test",
         fullName: "Customer",
+        observedAt: new Date(),
         expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
         returnUrls: {
           success: "https://taven.cz/success",
@@ -346,6 +354,7 @@ describe("ComgatePaymentProviderAdapter", () => {
         method: "CARD",
         email: "customer@example.test",
         fullName: "Customer",
+        observedAt: new Date(),
         expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
         returnUrls: {
           success: "https://taven.cz/success",
@@ -374,6 +383,7 @@ describe("ComgatePaymentProviderAdapter", () => {
         method: "CARD",
         email: "customer@example.test",
         fullName: "Customer",
+        observedAt: new Date(),
         expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
         returnUrls: {
           success: "https://taven.cz/success",

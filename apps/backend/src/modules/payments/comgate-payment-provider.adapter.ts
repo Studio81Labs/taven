@@ -6,11 +6,11 @@ import type {
   CheckoutPaymentMethod,
   CreatePaymentIntentInput,
   CreatedPaymentIntent,
+  AuthenticatedPaymentEvent,
   PaymentProviderPort,
   PaymentProviderCapabilities,
   PaymentEventLocator,
   ProviderRefundResult,
-  VerifiedPaymentEvent,
 } from "./payment-provider.port";
 
 type ComgateConfig = Extract<PaymentProviderConfig, { provider: "comgate" }>;
@@ -92,7 +92,10 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
             delivery: "HOME_DELIVERY",
             category: "PHYSICAL_GOODS_ONLY",
             lang: "cs",
-            expirationTime: `${expirationMinutes(input.expiresAt)}m`,
+            expirationTime: `${expirationMinutes(
+              input.expiresAt,
+              input.observedAt,
+            )}m`,
             dynamicExpiration: true,
             url_paid: input.returnUrls.success,
             url_cancelled: input.returnUrls.cancelled,
@@ -133,7 +136,7 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
   async verifyEvent(input: {
     headers: Readonly<Record<string, string | string[] | undefined>>;
     body: unknown;
-  }): Promise<VerifiedPaymentEvent> {
+  }): Promise<AuthenticatedPaymentEvent> {
     const locator = this.locateEvent(input);
     // A callback URL is not proof of payment. Always ask Comgate for current
     // authenticated state before returning a normalized event.
@@ -163,7 +166,6 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
         "Payment callback reference does not match provider status",
       );
     }
-    const occurredAt = new Date();
     return {
       provider: "comgate",
       providerEventId: `comgate:${createProviderEventHash(
@@ -175,7 +177,7 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
       status: normalizedStatus,
       amountMinor,
       currency,
-      occurredAt,
+      occurredAt: null,
       evidence: {
         source: "authenticated-status-api",
         providerStatus,
@@ -243,7 +245,7 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
     return {
       providerRefundId:
         optionalResponseText(result, "refundId") ?? input.idempotencyKey,
-      occurredAt: new Date(),
+      occurredAt: null,
       evidence: { source: "authenticated-refund-api" },
     };
   }
@@ -343,12 +345,12 @@ function providerAmount(value: bigint): number {
   return amount;
 }
 
-function expirationMinutes(expiresAt: Date): number {
+function expirationMinutes(expiresAt: Date, observedAt: Date): number {
   return Math.max(
     30,
     Math.min(
       7 * 24 * 60,
-      Math.ceil((expiresAt.getTime() - Date.now()) / 60_000),
+      Math.ceil((expiresAt.getTime() - observedAt.getTime()) / 60_000),
     ),
   );
 }

@@ -28,6 +28,7 @@ describe("SandboxPaymentProviderAdapter", () => {
         method: "CARD",
         email: "customer@example.test",
         fullName: "Customer",
+        observedAt: new Date("2026-09-04T11:00:00Z"),
         expiresAt: new Date("2026-09-04T12:00:00Z"),
         returnUrls: {
           success: "https://taven.cz/success",
