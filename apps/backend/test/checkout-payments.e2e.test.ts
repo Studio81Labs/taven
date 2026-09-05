@@ -231,6 +231,34 @@ async function waitForDatabaseLock(applicationName: string): Promise<void> {
   throw new Error("concurrent checkout event did not reach its lock wait");
 }
 
+const captureResourceInvalidations = [
+  ["inactive node", `UPDATE nodes SET active = false WHERE id = $1`, "nodeId"],
+  [
+    "maintenance machine",
+    `UPDATE machines SET status = 'MAINTENANCE' WHERE id = $1`,
+    "machineId",
+  ],
+  [
+    "retired inventory",
+    `UPDATE inventories SET status = 'RETIRED' WHERE id = $1`,
+    "inventoryId",
+  ],
+  [
+    "retired machine profile",
+    `UPDATE machine_profiles
+     SET state = 'RETIRED', retired_at = clock_timestamp()
+     WHERE id = $1`,
+    "machineProfileId",
+  ],
+  [
+    "retired machine calibration",
+    `UPDATE machine_calibrations
+     SET state = 'RETIRED', retired_at = clock_timestamp()
+     WHERE id = $1`,
+    "machineCalibrationId",
+  ],
+] as const;
+
 describe("checkout payment capture protocol", () => {
   beforeAll(() => {
     if (!databaseUrl)
@@ -297,6 +325,88 @@ describe("checkout payment capture protocol", () => {
       ]);
     });
   });
+
+  it.each(captureResourceInvalidations)(
+    "revalidates and compensates after %s invalidates a live reservation",
+    async (resourceName, invalidationSql, resourceIdKey) => {
+      await rollback(`stale-${resourceIdKey}`, async (client, fixtures) => {
+        const { foundation, providerIntentId } = await preparePayment(
+          client,
+          fixtures,
+          `stale-${resourceIdKey}`,
+        );
+        const evidence = await eventEvidence(client, foundation);
+        await client.query(invalidationSql, [foundation[resourceIdKey]]);
+
+        const eventId = `stale-${resourceIdKey}-capture`;
+        const capture = await client.query<{ outcome: string }>(
+          `SELECT taven_apply_checkout_payment_event(
+             'sandbox', $1, $2, 'PAYMENT_CAPTURED', $3, $4,
+             clock_timestamp(), '{"source":"live-revalidation-e2e"}'::jsonb
+           ) AS outcome`,
+          [eventId, providerIntentId, evidence.amount_minor, evidence.currency],
+        );
+        expect(capture.rows).toEqual([{ outcome: "REFUND_PENDING" }]);
+
+        const duplicate = await client.query<{ outcome: string }>(
+          `SELECT taven_apply_checkout_payment_event(
+             'sandbox', $1, $2, 'PAYMENT_CAPTURED', $3, $4,
+             clock_timestamp(), '{"source":"live-revalidation-e2e"}'::jsonb
+           ) AS outcome`,
+          [eventId, providerIntentId, evidence.amount_minor, evidence.currency],
+        );
+        expect(duplicate.rows).toEqual([{ outcome: "DUPLICATE" }]);
+
+        expect(
+          (
+            await client.query(
+              `SELECT target_order.status::text AS order_status,
+                      payment.status::text AS payment_status,
+                      reservation_set.status::text AS set_status,
+                      closed.payload ->> 'reason' AS close_reason,
+                      compensation.payload ->> 'kind' AS compensation_kind,
+                      (SELECT count(*)::int FROM jobs
+                       WHERE order_id = target_order.id) AS job_count,
+                      (SELECT count(*)::int FROM payment_provider_events
+                       WHERE payment_id = payment.id) AS event_count,
+                      (SELECT count(*)::int FROM refund_transactions
+                       WHERE payment_id = payment.id) AS refund_count,
+                      (SELECT count(*)::int FROM outbox_messages
+                       WHERE aggregate_id = refund.id
+                         AND message_type = 'refund_payment') AS refund_commands
+               FROM orders target_order
+               JOIN payments payment ON payment.order_id = target_order.id
+               JOIN phase_reservation_sets reservation_set
+                 ON reservation_set.id = $2
+               JOIN refund_transactions refund
+                 ON refund.payment_id = payment.id
+               JOIN audit_events closed
+                 ON closed.payment_id = payment.id
+                AND closed.event_type = 'checkout.payment_closed'
+               JOIN audit_events compensation
+                 ON compensation.refund_transaction_id = refund.id
+                AND compensation.event_type =
+                    'checkout.late_capture_compensation_created'
+               WHERE target_order.id = $1`,
+              [foundation.orderId, foundation.phaseReservationSetId],
+            )
+          ).rows,
+        ).toEqual([
+          {
+            order_status: "CANCELLED",
+            payment_status: "REFUND_PENDING",
+            set_status: "RELEASED",
+            close_reason: "CAPACITY_UNAVAILABLE",
+            compensation_kind: "initial_checkout_capacity",
+            job_count: 0,
+            event_count: 1,
+            refund_count: 1,
+            refund_commands: 1,
+          },
+        ]);
+      });
+    },
+  );
 
   it("records decline once and makes duplicate or out-of-order events harmless", async () => {
     await rollback("decline", async (client, fixtures) => {
@@ -1924,6 +2034,96 @@ describe("checkout payment capture protocol", () => {
         refund_count: 1,
         active_set_count: 0,
       });
+    }
+  });
+
+  it("waits for a concurrent resource change and revalidates before capture", async () => {
+    const name = `resource-revalidation-race-${randomUUID().slice(0, 8)}`;
+    const setupClient = await pool.connect();
+    let foundation: PersistenceFoundation;
+    let providerIntentId: string;
+    let amountMinor: string;
+    let currency: string;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(setupClient, `${scope}:${name}`, {
+        publicTokenHash: createHash("sha256")
+          .update(`${scope}:${name}:checkout-token`)
+          .digest("hex"),
+      });
+      ({ foundation, providerIntentId } = await preparePayment(
+        setupClient,
+        fixtures,
+        name,
+      ));
+      const evidence = await eventEvidence(setupClient, foundation);
+      amountMinor = evidence.amount_minor;
+      currency = evidence.currency;
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const resourceUpdater = await pool.connect();
+    const captureClient = await pool.connect();
+    const applicationName = `capture-resource-lock-${randomUUID()}`;
+    try {
+      await resourceUpdater.query("BEGIN");
+      await resourceUpdater.query(
+        `UPDATE machines SET status = 'MAINTENANCE' WHERE id = $1`,
+        [foundation.machineId],
+      );
+      await captureClient.query(
+        `SELECT set_config('application_name', $1, false)`,
+        [applicationName],
+      );
+      await captureClient.query(`SET statement_timeout = '5s'`);
+      const capturePromise = captureClient.query<{ outcome: string }>(
+        `SELECT taven_apply_checkout_payment_event(
+           'sandbox', $1, $2, 'PAYMENT_CAPTURED', $3, $4,
+           clock_timestamp(), '{"source":"resource-race-e2e"}'::jsonb
+         ) AS outcome`,
+        [`${name}-capture`, providerIntentId, amountMinor, currency],
+      );
+      await waitForDatabaseLock(applicationName);
+      await resourceUpdater.query("COMMIT");
+
+      await expect(capturePromise).resolves.toMatchObject({
+        rows: [{ outcome: "REFUND_PENDING" }],
+      });
+      expect(
+        (
+          await captureClient.query(
+            `SELECT payment.status::text AS payment_status,
+                    target_order.status::text AS order_status,
+                    (SELECT count(*)::int FROM jobs
+                     WHERE order_id = target_order.id) AS job_count,
+                    (SELECT count(*)::int FROM refund_transactions
+                     WHERE payment_id = payment.id) AS refund_count
+             FROM payments payment
+             JOIN orders target_order ON target_order.id = payment.order_id
+             WHERE payment.id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          payment_status: "REFUND_PENDING",
+          order_status: "CANCELLED",
+          job_count: 0,
+          refund_count: 1,
+        },
+      ]);
+    } catch (error) {
+      await resourceUpdater.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      resourceUpdater.release();
+      captureClient.release();
     }
   });
 

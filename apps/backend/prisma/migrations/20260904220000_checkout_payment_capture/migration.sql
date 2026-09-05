@@ -498,6 +498,135 @@ BEGIN
 END;
 $$;
 
+-- Capture must make its current-resource decision while holding every mutable
+-- row that can invalidate a reserved production assignment. The reservation
+-- set lock serializes the supported release/expiry paths; these child locks
+-- also make the validation safe against direct lifecycle updates.
+CREATE FUNCTION taven_lock_phase_reservation_set_for_capture(target_set_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM inventory_reservation."id"
+    FROM "inventory_reservations" inventory_reservation
+    JOIN "production_reservations" production
+      ON production."id" = inventory_reservation."production_reservation_id"
+    WHERE production."phase_reservation_set_id" = target_set_id
+    ORDER BY inventory_reservation."id"
+    FOR UPDATE OF inventory_reservation;
+
+    PERFORM capacity_reservation."id"
+    FROM "capacity_reservations" capacity_reservation
+    JOIN "production_reservations" production
+      ON production."id" = capacity_reservation."production_reservation_id"
+    WHERE production."phase_reservation_set_id" = target_set_id
+    ORDER BY capacity_reservation."id"
+    FOR UPDATE OF capacity_reservation;
+
+    PERFORM production."id"
+    FROM "production_reservations" production
+    WHERE production."phase_reservation_set_id" = target_set_id
+    ORDER BY production."id"
+    FOR UPDATE;
+
+    PERFORM node."id"
+    FROM "nodes" node
+    WHERE node."id" IN (
+        SELECT production."node_id"
+        FROM "production_reservations" production
+        WHERE production."phase_reservation_set_id" = target_set_id
+    )
+    ORDER BY node."id"
+    FOR SHARE OF node;
+
+    PERFORM source."id"
+    FROM "model_files" source
+    WHERE source."id" IN (
+        SELECT geometry."source_model_file_id"
+        FROM "production_reservations" production
+        JOIN "slice_results" slice_result
+          ON slice_result."id" = production."slice_result_id"
+        JOIN "model_geometries" geometry
+          ON geometry."id" = slice_result."model_geometry_id"
+        WHERE production."phase_reservation_set_id" = target_set_id
+    )
+    ORDER BY source."id"
+    FOR SHARE OF source;
+
+    PERFORM geometry."id"
+    FROM "model_geometries" geometry
+    WHERE geometry."id" IN (
+        SELECT slice_result."model_geometry_id"
+        FROM "production_reservations" production
+        JOIN "slice_results" slice_result
+          ON slice_result."id" = production."slice_result_id"
+        WHERE production."phase_reservation_set_id" = target_set_id
+    )
+    ORDER BY geometry."id"
+    FOR SHARE OF geometry;
+
+    PERFORM profile."id"
+    FROM "machine_profiles" profile
+    WHERE profile."id" IN (
+        SELECT production."machine_profile_id"
+        FROM "production_reservations" production
+        WHERE production."phase_reservation_set_id" = target_set_id
+    )
+    ORDER BY profile."id"
+    FOR UPDATE OF profile;
+
+    PERFORM machine."id"
+    FROM "machines" machine
+    WHERE (machine."node_id", machine."id") IN (
+        SELECT production."node_id", production."machine_id"
+        FROM "production_reservations" production
+        WHERE production."phase_reservation_set_id" = target_set_id
+    )
+    ORDER BY machine."node_id", machine."id"
+    FOR UPDATE OF machine;
+
+    PERFORM calibration."id"
+    FROM "machine_calibrations" calibration
+    WHERE calibration."id" IN (
+        SELECT production."machine_calibration_id"
+        FROM "production_reservations" production
+        WHERE production."phase_reservation_set_id" = target_set_id
+    )
+    ORDER BY calibration."id"
+    FOR UPDATE OF calibration;
+
+    PERFORM inventory."id"
+    FROM "inventories" inventory
+    WHERE (inventory."node_id", inventory."id") IN (
+        SELECT production."node_id", production."inventory_id"
+        FROM "production_reservations" production
+        WHERE production."phase_reservation_set_id" = target_set_id
+    )
+    ORDER BY inventory."node_id", inventory."id"
+    FOR UPDATE OF inventory;
+END;
+$$;
+
+-- Reuse the canonical reservation-set validator so capture cannot drift from
+-- the eligibility, retention, capacity-window, or completeness invariants.
+-- Expected invalidation is a business outcome: return false so the authenticated
+-- provider event can be committed together with its compensation record.
+CREATE FUNCTION taven_phase_reservation_set_is_capture_eligible(target_set_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM taven_lock_phase_reservation_set_for_capture(target_set_id);
+    BEGIN
+        PERFORM taven_validate_phase_reservation_set(target_set_id);
+    EXCEPTION
+        WHEN check_violation THEN
+            RETURN false;
+    END;
+    RETURN true;
+END;
+$$;
+
 -- Consume one authenticated, normalized provider result. The caller never
 -- chooses the Payment: its provider transaction identity does. Duplicates are
 -- checked against the immutable receipt and otherwise become a no-op.
@@ -523,6 +652,7 @@ DECLARE
     target_phase_id uuid;
     active_set_id uuid;
     active_set_expires_at timestamptz;
+    active_set_capture_eligible boolean := false;
     verified_at timestamptz := clock_timestamp();
     receipt_id uuid := gen_random_uuid();
     receipt_payload jsonb;
@@ -738,6 +868,12 @@ BEGIN
     LIMIT 1
     FOR UPDATE OF reservation_set;
 
+    IF active_set_id IS NOT NULL
+       AND active_set_expires_at > verified_at THEN
+        active_set_capture_eligible :=
+            taven_phase_reservation_set_is_capture_eligible(active_set_id);
+    END IF;
+
     IF target_payment."status" = 'PENDING'
        AND target_payment."capture_authorized"
        AND target_payment."capture_cutoff_at" IS NULL
@@ -745,6 +881,7 @@ BEGIN
        AND event_capture_context_valid
        AND active_set_id IS NOT NULL
        AND active_set_expires_at > verified_at
+       AND active_set_capture_eligible
        AND EXISTS (
            SELECT 1
            FROM "orders" target_order
@@ -836,13 +973,23 @@ BEGIN
     -- compensated exactly once. Close still-open order work before recording
     -- the capture so no Job can be activated from the late event.
     IF target_payment."status" = 'PENDING' THEN
+        -- CAPACITY_UNAVAILABLE normally means no live reservation exists. A
+        -- set that failed the locked eligibility check is still live by status,
+        -- so release it first and let the common close path finish the order.
+        IF event_capture_context_valid
+           AND active_set_id IS NOT NULL
+           AND active_set_expires_at > verified_at
+           AND NOT active_set_capture_eligible THEN
+            PERFORM taven_release_phase_reservation_set(active_set_id);
+        END IF;
         PERFORM taven_close_initial_checkout_payment(
             target_payment."id",
             CASE WHEN target_payment."checkout_capture_expires_at" <= verified_at
                  THEN 'CHECKOUT_EXPIRED'
                  WHEN event_capture_context_valid
                       AND (active_set_id IS NULL
-                           OR active_set_expires_at <= verified_at)
+                           OR active_set_expires_at <= verified_at
+                           OR NOT active_set_capture_eligible)
                  THEN 'CAPACITY_UNAVAILABLE'
                  ELSE 'CUSTOMER_CANCELLED' END,
             verified_at
