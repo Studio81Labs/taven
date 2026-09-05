@@ -2677,8 +2677,22 @@ describe("checkout payment capture protocol", () => {
       process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
 
       providerFailure = "DEFINITIVE";
+      let definitiveFailureTransactionCount = 0;
+      const definitiveFailureTransactionSpy = vi
+        .spyOn(transactions, "$transaction")
+        .mockImplementation(async (work) => {
+          definitiveFailureTransactionCount += 1;
+          if (definitiveFailureTransactionCount === 3) {
+            throw new Error(
+              "simulated definitive-failure reconciliation rollback",
+            );
+          }
+          return originalTransaction(work);
+        });
       const outageResponse = await createOutagePayment();
+      definitiveFailureTransactionSpy.mockRestore();
       expect(outageResponse.status).toBe(502);
+      expect(definitiveFailureTransactionCount).toBe(4);
       const firstFailedPayment = await prisma.payment.findFirstOrThrow({
         where: { orderId: outageFoundation.orderId },
         select: {

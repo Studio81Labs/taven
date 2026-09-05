@@ -46,7 +46,7 @@ import { reservePaymentWebhookVerification } from "./payment-webhook-limit";
 const CHECKOUT_CAPTURE_MILLISECONDS = 60 * 60 * 1_000;
 const REACQUISITION_RESERVATION_MILLISECONDS = 15 * 60 * 1_000;
 const MAX_REACQUISITION_PLAN_GENERATIONS = 8;
-const RETURNED_INTENT_CLOSE_ATTEMPTS = 3;
+const INTENT_RECONCILIATION_ATTEMPTS = 3;
 const IDEMPOTENCY_DAYS = 7;
 type Transaction = Prisma.TransactionClient;
 
@@ -788,37 +788,46 @@ export class PaymentsService {
     idempotencyRecordId: string,
     attemptKey: string,
   ): Promise<void> {
-    await this.prisma.$transaction(async (transaction) => {
-      await lockPaymentEnvelope(transaction, paymentId);
-      const payment = await transaction.payment.findUniqueOrThrow({
-        where: { id: paymentId },
-      });
-      if (payment.status !== PaymentStatus.CREATED) return;
-      const failedAt = await databaseNow(transaction);
-      const failure = await transaction.paymentIntentCreationFailure.create({
-        data: {
-          paymentId,
-          provider: payment.provider,
-          attemptKey: `checkout-intent:${createHash("sha256")
-            .update(attemptKey, "utf8")
-            .digest("hex")}`,
-          failedAt,
-        },
-      });
-      await transaction.payment.update({
-        where: { id: paymentId },
-        data: {
-          status: PaymentStatus.FAILED,
-          captureAuthorized: false,
-          captureCutoffAt: failedAt,
-          intentCreationFailureResultId: failure.id,
-        },
-      });
-      await completeIdempotency(transaction, idempotencyRecordId, {
-        paymentId,
-        status: "FAILED",
-      });
-    });
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await this.prisma.$transaction(async (transaction) => {
+          await lockPaymentEnvelope(transaction, paymentId);
+          const payment = await transaction.payment.findUniqueOrThrow({
+            where: { id: paymentId },
+          });
+          if (payment.status !== PaymentStatus.CREATED) return;
+          const failedAt = await databaseNow(transaction);
+          const failure = await transaction.paymentIntentCreationFailure.create(
+            {
+              data: {
+                paymentId,
+                provider: payment.provider,
+                attemptKey: `checkout-intent:${createHash("sha256")
+                  .update(attemptKey, "utf8")
+                  .digest("hex")}`,
+                failedAt,
+              },
+            },
+          );
+          await transaction.payment.update({
+            where: { id: paymentId },
+            data: {
+              status: PaymentStatus.FAILED,
+              captureAuthorized: false,
+              captureCutoffAt: failedAt,
+              intentCreationFailureResultId: failure.id,
+            },
+          });
+          await completeIdempotency(transaction, idempotencyRecordId, {
+            paymentId,
+            status: "FAILED",
+          });
+        });
+        return;
+      } catch (error) {
+        if (attempt >= INTENT_RECONCILIATION_ATTEMPTS) throw error;
+      }
+    }
   }
 
   private async recordIntentAmbiguity(
@@ -891,7 +900,7 @@ export class PaymentsService {
           );
         });
       } catch (error) {
-        if (attempt >= RETURNED_INTENT_CLOSE_ATTEMPTS) throw error;
+        if (attempt >= INTENT_RECONCILIATION_ATTEMPTS) throw error;
       }
     }
   }

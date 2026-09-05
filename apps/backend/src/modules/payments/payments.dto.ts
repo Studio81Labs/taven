@@ -14,7 +14,12 @@ export class CreateCheckoutPaymentDto {
   @ApiProperty({ type: String, format: "email", maxLength: 320 })
   email!: string;
 
-  @ApiProperty({ type: String, maxLength: 200 })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   fullName!: string;
 
   @ApiProperty({ type: String, enum: ["CARD", "BANK_TRANSFER"] })
