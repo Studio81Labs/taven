@@ -450,6 +450,45 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(
       reservations[1]?.phaseResourcePlanJob.candidateResourceEstimateId,
     ).toBe(candidateResourceEstimateId);
+
+    const replacementJobId = jobs[1]!.id;
+    await orders.acceptJob(orderId, replacementJobId, "replacement-job-accept");
+    await makeGcodeReady(replacementJobId);
+    await orders.startPrinting(
+      orderId,
+      replacementJobId,
+      "replacement-job-printing",
+    );
+    await orders.finishPrinting(
+      orderId,
+      replacementJobId,
+      { actualMaterialMilligrams: "50" },
+      "replacement-job-printed",
+    );
+    await orders.submitQc(
+      orderId,
+      replacementJobId,
+      { omissionReason: "replacement passed v0 visual inspection" },
+      "replacement-job-qc-submit",
+    );
+    await orders.approveQc(
+      orderId,
+      replacementJobId,
+      "replacement-job-qc-approve",
+    );
+
+    await expect(
+      prisma.job.findUniqueOrThrow({ where: { id: replacementJobId } }),
+    ).resolves.toMatchObject({ status: "QC_APPROVED" });
+    await expect(
+      prisma.productionReservation.findFirstOrThrow({
+        where: { jobId: replacementJobId },
+        include: { phaseReservationSet: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "CONSUMED",
+      phaseReservationSet: { status: "SETTLED" },
+    });
   });
 
   it("records a QC rejection without invalid failure metadata", async () => {

@@ -2840,11 +2840,32 @@ BEGIN
               OR request."id" IS NULL
               OR request."status" <> 'JOB_CREATED'
               OR request."phase_reservation_set_id" <> reservation_set."id"
-              OR reservation_set."status" <> 'HELD'
-              OR production."status" <> 'HELD'
+              OR production."id" IS NULL
+              OR reservation_set."id" IS NULL
+              OR NOT (
+                  (replacement."status" IN ('CREATED', 'ACCEPTED', 'GCODE_READY')
+                   AND reservation_set."status" = 'HELD'
+                   AND production."status" = 'HELD')
+                  OR (replacement."status" = 'PRINTING'
+                      AND reservation_set."status" = 'HELD'
+                      AND production."status" = 'PRINTING')
+                  OR (replacement."status" IN (
+                          'PRINTED', 'PHOTO_SUBMITTED', 'QC_APPROVED',
+                          'PACKED', 'HANDED_OVER', 'SETTLED'
+                      )
+                      AND reservation_set."status" = 'SETTLED'
+                      AND production."status" = 'CONSUMED')
+                  OR (replacement."status" IN ('FAILED', 'QC_REJECTED', 'CANCELLED')
+                      AND (
+                          (reservation_set."status" = 'RELEASED'
+                           AND production."status" = 'RELEASED')
+                          OR (reservation_set."status" = 'SETTLED'
+                              AND production."status" = 'CONSUMED')
+                      ))
+              )
           )
     ) THEN
-        RAISE EXCEPTION 'replacement Job requires a terminal predecessor and a fresh held reservation'
+        RAISE EXCEPTION 'replacement Job requires a terminal predecessor and a valid reservation lifecycle'
             USING ERRCODE = '23514', CONSTRAINT = 'job_replacement_reservation_check';
     END IF;
     RETURN NULL;
