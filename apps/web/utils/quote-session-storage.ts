@@ -1,6 +1,7 @@
 const STORAGE_KEY = "taven:automatic-quote-session:v1";
 
 export interface StoredQuoteSession {
+  capturedPaymentId?: string;
   expiresAt: string;
   filename: string;
   publicReference: string;
@@ -27,13 +28,20 @@ export function getSessionStorage(host: {
 function isStoredQuoteSession(value: unknown): value is StoredQuoteSession {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  return [
-    "expiresAt",
-    "filename",
-    "publicReference",
-    "sessionId",
-    "sessionToken",
-  ].every((key) => typeof record[key] === "string" && record[key].length > 0);
+  return (
+    [
+      "expiresAt",
+      "filename",
+      "publicReference",
+      "sessionId",
+      "sessionToken",
+    ].every(
+      (key) => typeof record[key] === "string" && record[key].length > 0,
+    ) &&
+    (record.capturedPaymentId === undefined ||
+      (typeof record.capturedPaymentId === "string" &&
+        record.capturedPaymentId.length > 0))
+  );
 }
 
 export function loadQuoteSession(
@@ -42,6 +50,7 @@ export function loadQuoteSession(
 ): StoredQuoteSession | undefined {
   const parsed = readStoredQuoteSession(storage);
   if (!parsed) return undefined;
+  if (parsed.capturedPaymentId) return undefined;
   const expiresAt = Date.parse(parsed.expiresAt);
   if (!Number.isFinite(expiresAt) || expiresAt <= now) {
     clearQuoteSession(storage);
@@ -85,6 +94,20 @@ export function saveQuoteSession(
   } catch {
     return false;
   }
+}
+
+export function markQuoteSessionCaptured(
+  storage: StorageLike,
+  sessionId: string,
+  paymentId: string,
+): boolean {
+  if (!paymentId) return false;
+  const current = readStoredQuoteSession(storage);
+  if (!current || current.sessionId !== sessionId) return false;
+  return saveQuoteSession(storage, {
+    ...current,
+    capturedPaymentId: paymentId,
+  });
 }
 
 export function clearQuoteSession(storage: StorageLike): boolean {

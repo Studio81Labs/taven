@@ -6,6 +6,7 @@ import {
   assertCheckoutClaimPolicyRevisionCurrent,
   assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
+  assertCheckoutPhotoConsentRevisionCurrent,
   assertCheckoutTermsRevisionCurrent,
   assertQuotePhotoUploadsEnabled,
   approvedCheckoutClaimPolicyRevision,
@@ -13,6 +14,7 @@ import {
   BINDING_QUOTE_FLOWS_ENV,
   CHECKOUT_CLAIM_POLICY_REVISION_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
+  CHECKOUT_PHOTO_CONSENT_REVISION_ENV,
   CHECKOUT_TERMS_REVISION_ENV,
   QUOTE_PHOTO_UPLOADS_ENV,
 } from "./launch-approval-gates";
@@ -188,6 +190,24 @@ describe("launch approval gates", () => {
         "terms-v1-approved",
         "terms-v1-approved",
       ),
+    ).not.toThrow();
+  });
+
+  it("requires opt-in publication consent to bind an approved revision", () => {
+    expect(() =>
+      assertCheckoutPhotoConsentRevisionCurrent("photos-v1-approved", {
+        [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photo-consent-pending",
+      }),
+    ).toThrowError(ServiceUnavailableException);
+    expect(() =>
+      assertCheckoutPhotoConsentRevisionCurrent("photos-v0", {
+        [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photos-v1-approved",
+      }),
+    ).toThrowError(ServiceUnavailableException);
+    expect(() =>
+      assertCheckoutPhotoConsentRevisionCurrent("photos-v1-approved", {
+        [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photos-v1-approved",
+      }),
     ).not.toThrow();
   });
 

@@ -332,6 +332,9 @@ export class AutomaticQuoteSessionDto {
   @ApiProperty({ type: Boolean })
   configurationEditable!: boolean;
 
+  @ApiProperty({ type: Boolean })
+  checkoutEvidenceAccepted!: boolean;
+
   @ApiProperty({ type: [AutomaticQuoteModelFileDto] })
   modelFiles!: AutomaticQuoteModelFileDto[];
 
@@ -343,6 +346,12 @@ export class AutomaticQuoteSessionDto {
 
   @ApiProperty({ type: [AutomaticQuoteDeliveryOptionDto] })
   deliveryOptions!: AutomaticQuoteDeliveryOptionDto[];
+
+  @ApiPropertyOptional({
+    type: AutomaticQuoteDeliveryOptionDto,
+    nullable: true,
+  })
+  selectedDeliveryDestination!: AutomaticQuoteDeliveryOptionDto | null;
 
   @ApiProperty({ type: [AutomaticQuoteQuantityComparisonDto] })
   quantityComparisons!: AutomaticQuoteQuantityComparisonDto[];

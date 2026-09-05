@@ -2,9 +2,48 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CHECKOUT_CLAIM_POLICY_REVISION_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
+  CHECKOUT_PHOTO_CONSENT_REVISION_ENV,
   CHECKOUT_TERMS_REVISION_ENV,
 } from "../../launch-approval-gates";
-import { PaymentsService, publicSiteUrl } from "./payments.service";
+import {
+  checkoutContactSnapshotMatches,
+  PaymentsService,
+  publicSiteUrl,
+} from "./payments.service";
+
+describe("checkout contact snapshot compatibility", () => {
+  const input = {
+    email: "ada@example.test",
+    fullName: "Ada Lovelace",
+    billing: {
+      name: "Ada Lovelace",
+      addressLine1: "Nová 12",
+      city: "Brno",
+      postalCode: "602 00",
+      countryCode: "CZ",
+    },
+  };
+
+  it("preserves pre-migration contact-only checkout retries", () => {
+    expect(
+      checkoutContactSnapshotMatches(
+        { email: input.email, fullName: input.fullName },
+        input,
+      ),
+    ).toBe(true);
+  });
+
+  it("requires exact billing evidence for version 2 snapshots", () => {
+    const snapshot = { version: 2, ...input };
+    expect(checkoutContactSnapshotMatches(snapshot, input)).toBe(true);
+    expect(
+      checkoutContactSnapshotMatches(snapshot, {
+        ...input,
+        billing: { ...input.billing, city: "Praha" },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("payment capabilities", () => {
   it("hides provider methods while checkout is disabled", async () => {
@@ -21,8 +60,10 @@ describe("payment capabilities", () => {
     );
 
     await expect(service.capabilities({})).resolves.toEqual({
+      available: false,
       provider: "disabled",
       methods: [],
+      legalDocuments: null,
     });
     expect(capabilities).not.toHaveBeenCalled();
 
@@ -40,8 +81,10 @@ describe("payment capabilities", () => {
       },
     ]) {
       await expect(service.capabilities(env)).resolves.toEqual({
+        available: false,
         provider: "disabled",
         methods: [],
+        legalDocuments: null,
       });
     }
     expect(capabilities).not.toHaveBeenCalled();
@@ -53,8 +96,14 @@ describe("payment capabilities", () => {
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
       }),
     ).resolves.toEqual({
+      available: true,
       provider: "comgate",
       methods: ["CARD", "BANK_TRANSFER"],
+      legalDocuments: {
+        claimPolicyRevision: "claims-v1-approved",
+        photoConsentRevision: null,
+        termsRevision: "terms-v1-approved",
+      },
     });
     expect(capabilities).toHaveBeenCalledTimes(1);
   });
@@ -78,7 +127,38 @@ describe("payment capabilities", () => {
         [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
       }),
-    ).resolves.toEqual({ provider: "disabled", methods: [] });
+    ).resolves.toEqual({
+      available: false,
+      provider: "disabled",
+      methods: [],
+      legalDocuments: null,
+    });
+  });
+
+  it("publishes an optional approved photo-consent revision", async () => {
+    const service = new PaymentsService(
+      {} as never,
+      {
+        capabilities: vi.fn().mockResolvedValue({
+          provider: "comgate",
+          methods: ["CARD", "BANK_TRANSFER"],
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.capabilities({
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
+        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photos-v1-approved",
+      }),
+    ).resolves.toMatchObject({
+      legalDocuments: { photoConsentRevision: "photos-v1-approved" },
+    });
   });
 });
 

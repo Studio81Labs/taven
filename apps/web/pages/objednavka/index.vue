@@ -34,6 +34,7 @@ const {
   previewMessage,
   prepareQuote,
   quote,
+  refreshQuote,
   replaceConfiguration,
   resetState,
   retry,
@@ -412,7 +413,9 @@ function inspectionLabel(status: string | undefined): string {
             :command-error="commandError"
             :on-decide-risk="decideRisk"
             :on-prepare="prepareQuote"
+            :on-refresh="refreshQuote"
             :on-replace-configuration="replaceConfiguration"
+            :on-restart="chooseAnotherFile"
             :on-select-destination="selectDestination"
             :on-set-express="setExpress"
             :pending="commandPending"

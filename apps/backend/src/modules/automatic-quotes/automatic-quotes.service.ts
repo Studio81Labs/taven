@@ -1023,7 +1023,10 @@ export class AutomaticQuotesService {
         if (!origin) throw new ConflictException("Automatic order is missing");
         const draft = await transaction.automaticQuoteDraft.findUniqueOrThrow({
           where: { orderId: origin.orderId },
-          include: { selectedDeliveryDestination: true },
+          include: {
+            order: { select: { acceptedOrderPriceBindingId: true } },
+            selectedDeliveryDestination: true,
+          },
         });
         const current = draft.selectedDeliveryDestination;
         if (
@@ -1036,6 +1039,11 @@ export class AutomaticQuotesService {
             fingerprintOf(resolved.capabilitySnapshot)
         ) {
           return;
+        }
+        if (draft.order.acceptedOrderPriceBindingId) {
+          throw new ConflictException(
+            "Delivery destination is immutable after checkout acceptance",
+          );
         }
         const destination = await transaction.deliveryDestination.create({
           data: {
@@ -4407,6 +4415,17 @@ export class AutomaticQuotesService {
         : null;
     const deliveryOptions =
       rough?.deliveryOptions ?? (await this.deliveryOptions());
+    const selectedDeliveryDestination = draft.selectedDeliveryDestination
+      ? {
+          providerEndpointId:
+            draft.selectedDeliveryDestination.providerEndpointId,
+          endpointType: draft.selectedDeliveryDestination.endpointType,
+          label: selectedDestinationLabel(
+            draft.selectedDeliveryDestination.addressSnapshot,
+            draft.selectedDeliveryDestination.providerEndpointId,
+          ),
+        }
+      : null;
     const permanentRoughReasons = new Set([
       "UNSUPPORTED_FORMAT",
       "BLOCKING_PREFLIGHT_FINDING",
@@ -4478,10 +4497,12 @@ export class AutomaticQuotesService {
       phase,
       configurationRevision: draft.configurationRevision,
       configurationEditable: !expired && order.items.length === 0,
+      checkoutEvidenceAccepted: Boolean(order.acceptedOrderPriceBindingId),
       modelFiles,
       items: itemDtos,
       configurationOptions,
       deliveryOptions: [...deliveryOptions],
+      selectedDeliveryDestination,
       quantityComparisons,
       roughEstimate: rough?.quote ?? null,
       bindingQuote,
@@ -5849,6 +5870,11 @@ function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonRecord)
     : null;
+}
+
+function selectedDestinationLabel(snapshot: unknown, fallback: string): string {
+  const label = asRecord(snapshot)?.label;
+  return typeof label === "string" && label.trim() ? label.trim() : fallback;
 }
 
 function addDays(value: Date, days: number): Date {

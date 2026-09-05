@@ -17,6 +17,7 @@ import {
   loadQuoteSession,
   saveQuoteSession,
 } from "../utils/quote-session-storage";
+import { clearCheckoutSession } from "../utils/checkout-session-storage";
 import { canRecoverWithStandardProduction } from "../utils/automatic-quote-configurator";
 import { UploadFailure, uploadFile } from "../utils/upload-file";
 
@@ -301,7 +302,10 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     quoteCommandKeys.reset();
     if (clearStoredSession && import.meta.client) {
       const storage = getSessionStorage(window);
-      if (storage) clearQuoteSession(storage);
+      if (storage) {
+        clearQuoteSession(storage);
+        clearCheckoutSession(storage);
+      }
     }
   }
 
@@ -850,7 +854,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       configurationEditable: false,
       configurationOptions: [],
       configurationRevision: 0,
+      checkoutEvidenceAccepted: false,
       deliveryOptions: [],
+      selectedDeliveryDestination: null,
       quantityComparisons: [],
       expiresAt: stored.expiresAt,
       express: { eligible: false, reasons: [], requested: false },
@@ -919,6 +925,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     persistCurrentSession,
     prepareQuote,
     quote,
+    refreshQuote,
     replaceConfiguration,
     removeItem,
     resetState,

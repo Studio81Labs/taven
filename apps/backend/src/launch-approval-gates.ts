@@ -9,6 +9,8 @@ export const CHECKOUT_PAYMENT_FLOWS_ENV =
 export const CHECKOUT_CLAIM_POLICY_REVISION_ENV =
   "TAVEN_CLAIM_POLICY_REVISION" as const;
 export const CHECKOUT_TERMS_REVISION_ENV = "TAVEN_TERMS_REVISION" as const;
+export const CHECKOUT_PHOTO_CONSENT_REVISION_ENV =
+  "TAVEN_PHOTO_CONSENT_REVISION" as const;
 
 const LAUNCH_APPROVAL_REQUIRED = "LAUNCH_APPROVAL_REQUIRED";
 
@@ -135,6 +137,37 @@ export function checkoutPaymentLaunchInputsApproved(
     approvedCheckoutRevision(env[CHECKOUT_TERMS_REVISION_ENV]) !== null &&
     approvedCheckoutRevision(env[CHECKOUT_CLAIM_POLICY_REVISION_ENV]) !== null
   );
+}
+
+export function checkoutPaymentLegalDocuments(
+  env: NodeJS.ProcessEnv = process.env,
+): Readonly<{
+  termsRevision: string;
+  claimPolicyRevision: string;
+  photoConsentRevision: string | null;
+}> | null {
+  if (!checkoutPaymentLaunchInputsApproved(env)) return null;
+  return {
+    termsRevision: approvedCheckoutTermsRevision(env),
+    claimPolicyRevision: approvedCheckoutClaimPolicyRevision(env),
+    photoConsentRevision: approvedCheckoutRevision(
+      env[CHECKOUT_PHOTO_CONSENT_REVISION_ENV],
+    ),
+  };
+}
+
+export function assertCheckoutPhotoConsentRevisionCurrent(
+  requestedRevision: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const approvedRevision = approvedCheckoutRevision(
+    env[CHECKOUT_PHOTO_CONSENT_REVISION_ENV],
+  );
+  if (!approvedRevision || requestedRevision !== approvedRevision) {
+    throw launchApprovalRequired(
+      "Checkout request does not use the currently approved photo-consent revision",
+    );
+  }
 }
 
 export function approvedCheckoutTermsRevision(

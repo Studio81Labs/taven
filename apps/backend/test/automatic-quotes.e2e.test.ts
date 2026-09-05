@@ -3405,7 +3405,13 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(ownReservationRead.body).toMatchObject({
       phase: "CHECKOUT_READY",
       checkoutReady: true,
+      checkoutEvidenceAccepted: false,
       handoff: null,
+      selectedDeliveryDestination: {
+        providerEndpointId: "test-pickup",
+        endpointType: "pickup_point",
+        label: "Test pickup",
+      },
     });
 
     const replay = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
@@ -3566,6 +3572,11 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(changed.response.status).toBe(200);
     expect(changed.body.checkoutReady).toBe(false);
     expect(changed.body.bindingQuote).toBeNull();
+    expect(changed.body.selectedDeliveryDestination).toEqual({
+      providerEndpointId: "test-zbox",
+      endpointType: "pickup_point",
+      label: "Test Z-BOX",
+    });
     await expect(
       prisma.phaseReservationSet.findUniqueOrThrow({
         where: { id: successorReservation!.id },

@@ -664,6 +664,7 @@ export interface components {
         };
         AutomaticQuoteSessionCreatedDto: {
             bindingQuote?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            checkoutEvidenceAccepted: boolean;
             checkoutReady: boolean;
             configurationEditable: boolean;
             configurationOptions: components["schemas"]["AutomaticQuoteConfigurationOptionDto"][];
@@ -682,6 +683,7 @@ export interface components {
             publicReference: string;
             quantityComparisons: components["schemas"]["AutomaticQuoteQuantityComparisonDto"][];
             roughEstimate?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            selectedDeliveryDestination?: components["schemas"]["AutomaticQuoteDeliveryOptionDto"] | null;
             /** Format: uuid */
             sessionId: string;
             /** @description Session-scoped capability */
@@ -689,6 +691,7 @@ export interface components {
         };
         AutomaticQuoteSessionDto: {
             bindingQuote?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            checkoutEvidenceAccepted: boolean;
             checkoutReady: boolean;
             configurationEditable: boolean;
             configurationOptions: components["schemas"]["AutomaticQuoteConfigurationOptionDto"][];
@@ -707,8 +710,25 @@ export interface components {
             publicReference: string;
             quantityComparisons: components["schemas"]["AutomaticQuoteQuantityComparisonDto"][];
             roughEstimate?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            selectedDeliveryDestination?: components["schemas"]["AutomaticQuoteDeliveryOptionDto"] | null;
             /** Format: uuid */
             sessionId: string;
+        };
+        CheckoutBillingDto: {
+            addressLine1: string;
+            addressLine2?: string;
+            city: string;
+            companyId?: string;
+            companyName?: string;
+            countryCode: string;
+            name: string;
+            postalCode: string;
+            vatId?: string;
+        };
+        CheckoutLegalDocumentsDto: {
+            claimPolicyRevision: string;
+            photoConsentRevision: string | null;
+            termsRevision: string;
         };
         CheckoutPaymentDto: {
             amountMinor: number;
@@ -777,12 +797,15 @@ export interface components {
             acceptClaimPolicy: boolean;
             acceptTerms: boolean;
             acknowledgeWithdrawalException: boolean;
+            billing: components["schemas"]["CheckoutBillingDto"];
             claimPolicyRevision: string;
             /** Format: email */
             email: string;
             fullName: string;
             /** @enum {string} */
             method: "CARD" | "BANK_TRANSFER";
+            photoConsentRevision?: string | null;
+            photoPublicationConsent: boolean;
             termsRevision: string;
         };
         CreateQuoteRequestDto: {
@@ -1009,6 +1032,8 @@ export interface components {
             shippingAmountMinor: number;
         };
         PaymentCapabilitiesDto: {
+            available: boolean;
+            legalDocuments: components["schemas"]["CheckoutLegalDocumentsDto"] | null;
             methods: ("CARD" | "BANK_TRANSFER")[];
             provider: string;
         };

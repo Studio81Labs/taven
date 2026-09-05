@@ -205,9 +205,12 @@ export function visiblePriceComponents(
 }
 
 export function isExpressVisible(
-  quote: Pick<QuoteSession, "express">,
+  quote: Pick<QuoteSession, "express" | "phase">,
 ): boolean {
-  return quote.express.eligible || quote.express.requested;
+  return (
+    quote.phase !== "CHECKOUT_READY" &&
+    (quote.express.eligible || quote.express.requested)
+  );
 }
 
 export function canRecoverWithStandardProduction(

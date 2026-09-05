@@ -192,6 +192,13 @@ describe("quote boundary states", () => {
           reasons: ["EXPRESS_INELIGIBLE"],
           requested: false,
         },
+        phase: "DESTINATION_REQUIRED",
+      }),
+    ).toBe(false);
+    expect(
+      isExpressVisible({
+        express: { eligible: true, reasons: [], requested: true },
+        phase: "CHECKOUT_READY",
       }),
     ).toBe(false);
   });
