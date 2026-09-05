@@ -16,7 +16,7 @@ describe("PaymentOutboxDispatcherService", () => {
       },
     };
     const claim = vi.fn().mockResolvedValue([message]);
-    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const executeRaw = vi.fn().mockResolvedValue(1);
     const cancelIntent = vi.fn().mockResolvedValue(undefined);
     const service = new PaymentOutboxDispatcherService(
       {
@@ -32,7 +32,7 @@ describe("PaymentOutboxDispatcherService", () => {
             providerIntentId: null,
           }),
         },
-        outboxMessage: { updateMany },
+        $executeRaw: executeRaw,
       } as never,
       {
         providerName: () => "comgate",
@@ -48,6 +48,10 @@ describe("PaymentOutboxDispatcherService", () => {
 
     await expect(service.runOnce()).resolves.toBe(1);
     expect(cancelIntent).toHaveBeenCalledWith("returned-intent-1");
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    expect(sqlText(executeRaw.mock.calls[0])).toContain(
+      "delivered_at = clock_timestamp()",
+    );
   });
 
   it("retries the same claimed refund after a provider outage", async () => {
@@ -76,7 +80,7 @@ describe("PaymentOutboxDispatcherService", () => {
       .mockResolvedValueOnce([{ claimed_at: new Date() }])
       .mockResolvedValueOnce([{ claimed_at: null }])
       .mockResolvedValueOnce([]);
-    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const executeRaw = vi.fn().mockResolvedValue(1);
     const prisma = {
       $transaction: vi.fn(
         async (work: (transaction: { $queryRaw: typeof claim }) => unknown) =>
@@ -97,7 +101,7 @@ describe("PaymentOutboxDispatcherService", () => {
           },
         }),
       },
-      outboxMessage: { updateMany },
+      $executeRaw: executeRaw,
     };
     const refund = vi
       .fn()
@@ -119,10 +123,13 @@ describe("PaymentOutboxDispatcherService", () => {
     });
 
     await expect(service.runOnce()).resolves.toBe(0);
-    expect(updateMany.mock.calls[0]?.[0].data).toMatchObject({
-      status: "FAILED",
-      lockedAt: null,
-    });
+    expect(sqlText(executeRaw.mock.calls[0])).toContain(
+      "available_at = clock_timestamp()",
+    );
+    expect(sqlText(executeRaw.mock.calls[0])).toContain("make_interval");
+    expect(sqlText(claim.mock.calls[0])).toContain(
+      "locked_at < clock_timestamp()",
+    );
 
     await expect(service.runOnce()).resolves.toBe(1);
     expect(refund).toHaveBeenCalledTimes(2);
@@ -133,11 +140,9 @@ describe("PaymentOutboxDispatcherService", () => {
       "late_initial_capture:event-1",
     );
     expect(queryRaw).toHaveBeenCalledTimes(3);
-    expect(updateMany.mock.calls[1]?.[0].data).toMatchObject({
-      status: "DELIVERED",
-      lockedAt: null,
-      lastError: null,
-    });
+    expect(sqlText(executeRaw.mock.calls[1])).toContain(
+      "delivered_at = clock_timestamp()",
+    );
   });
 
   it("does not replay an ambiguous non-idempotent refund", async () => {
@@ -158,7 +163,7 @@ describe("PaymentOutboxDispatcherService", () => {
       },
     };
     const claim = vi.fn().mockResolvedValue([message]);
-    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const executeRaw = vi.fn().mockResolvedValue(1);
     const prisma = {
       $transaction: vi.fn(
         async (work: (transaction: { $queryRaw: typeof claim }) => unknown) =>
@@ -179,7 +184,7 @@ describe("PaymentOutboxDispatcherService", () => {
           },
         }),
       },
-      outboxMessage: { updateMany },
+      $executeRaw: executeRaw,
     };
     const refund = vi.fn();
     const service = new PaymentOutboxDispatcherService(prisma as never, {
@@ -195,13 +200,8 @@ describe("PaymentOutboxDispatcherService", () => {
 
     await expect(service.runOnce()).resolves.toBe(0);
     expect(refund).not.toHaveBeenCalled();
-    expect(updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          status: "FAILED",
-          lastError: expect.stringContaining("manual provider reconciliation"),
-        }),
-      }),
+    expect(executeRaw.mock.calls[0]?.[2]).toContain(
+      "manual provider reconciliation",
     );
   });
 
@@ -228,7 +228,7 @@ describe("PaymentOutboxDispatcherService", () => {
       .mockResolvedValueOnce([{ claimed_at: new Date() }])
       .mockRejectedValueOnce(new Error("database temporarily unavailable"))
       .mockResolvedValueOnce([]);
-    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const executeRaw = vi.fn().mockResolvedValue(1);
     const prisma = {
       $transaction: vi.fn(
         async (work: (transaction: { $queryRaw: typeof claim }) => unknown) =>
@@ -249,7 +249,7 @@ describe("PaymentOutboxDispatcherService", () => {
           },
         }),
       },
-      outboxMessage: { updateMany },
+      $executeRaw: executeRaw,
     };
     const refund = vi.fn().mockResolvedValue({
       providerRefundId: "comgate-refund-1",
@@ -271,15 +271,14 @@ describe("PaymentOutboxDispatcherService", () => {
     expect(refund).toHaveBeenCalledTimes(1);
     expect(queryRaw).toHaveBeenCalledTimes(3);
     expect(queryRaw.mock.calls[1]?.[4]).toBeNull();
-    expect(updateMany).toHaveBeenCalledTimes(1);
-    expect(updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          status: "DELIVERED",
-          lockedAt: null,
-          lastError: null,
-        }),
-      }),
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    expect(sqlText(executeRaw.mock.calls[0])).toContain(
+      "delivered_at = clock_timestamp()",
     );
   });
 });
+
+function sqlText(call: unknown[] | undefined): string {
+  const strings = call?.[0];
+  return Array.isArray(strings) ? strings.join(" ") : "";
+}

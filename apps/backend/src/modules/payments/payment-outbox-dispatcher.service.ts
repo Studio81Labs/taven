@@ -7,7 +7,7 @@ import {
   type PaymentProviderPort,
 } from "./payment-provider.port";
 
-const CLAIM_LEASE_MILLISECONDS = 5 * 60 * 1_000;
+const CLAIM_LEASE_SECONDS = 5 * 60;
 const MAX_LAST_ERROR_LENGTH = 1_000;
 const REFUND_RESULT_PERSISTENCE_ATTEMPTS = 3;
 
@@ -43,20 +43,16 @@ export class PaymentOutboxDispatcherService {
         } else {
           await this.refundPayment(message);
         }
-        const updated = await this.prisma.outboxMessage.updateMany({
-          where: {
-            id: message.id,
-            status: "PROCESSING",
-            attempts: message.attempts,
-          },
-          data: {
-            status: "DELIVERED",
-            deliveredAt: new Date(),
-            lockedAt: null,
-            lastError: null,
-          },
-        });
-        if (updated.count !== 1) {
+        const updated = await this.prisma.$executeRaw`
+          UPDATE outbox_messages
+          SET status = 'DELIVERED', delivered_at = clock_timestamp(),
+              locked_at = NULL, last_error = NULL,
+              updated_at = clock_timestamp()
+          WHERE id = ${message.id}::uuid
+            AND status = 'PROCESSING'
+            AND attempts = ${message.attempts}
+        `;
+        if (updated !== 1) {
           throw new Error("payment outbox claim was lost after dispatch");
         }
         delivered += 1;
@@ -176,7 +172,6 @@ export class PaymentOutboxDispatcherService {
   }
 
   private claim(limit: number): Promise<ClaimedMessage[]> {
-    const staleBefore = new Date(Date.now() - CLAIM_LEASE_MILLISECONDS);
     return this.prisma.$transaction(
       (transaction) =>
         transaction.$queryRaw<ClaimedMessage[]>`
@@ -186,7 +181,11 @@ export class PaymentOutboxDispatcherService {
           WHERE message_type IN ('void_payment', 'refund_payment')
             AND (
               (status IN ('PENDING', 'FAILED') AND available_at <= clock_timestamp())
-              OR (status = 'PROCESSING' AND locked_at < ${staleBefore})
+              OR (
+                status = 'PROCESSING'
+                AND locked_at < clock_timestamp()
+                  - make_interval(secs => ${CLAIM_LEASE_SECONDS})
+              )
             )
           ORDER BY available_at, created_at, id
           FOR UPDATE SKIP LOCKED
@@ -206,19 +205,17 @@ export class PaymentOutboxDispatcherService {
 
   private async fail(message: ClaimedMessage, error: unknown): Promise<void> {
     const delaySeconds = Math.min(300, 2 ** Math.min(message.attempts, 8));
-    await this.prisma.outboxMessage.updateMany({
-      where: {
-        id: message.id,
-        status: "PROCESSING",
-        attempts: message.attempts,
-      },
-      data: {
-        status: "FAILED",
-        lockedAt: null,
-        availableAt: new Date(Date.now() + delaySeconds * 1_000),
-        lastError: safeLastError(error),
-      },
-    });
+    await this.prisma.$executeRaw`
+      UPDATE outbox_messages
+      SET status = 'FAILED', locked_at = NULL,
+          available_at = clock_timestamp()
+            + make_interval(secs => ${delaySeconds}),
+          last_error = ${safeLastError(error)},
+          updated_at = clock_timestamp()
+      WHERE id = ${message.id}::uuid
+        AND status = 'PROCESSING'
+        AND attempts = ${message.attempts}
+    `;
   }
 }
 
