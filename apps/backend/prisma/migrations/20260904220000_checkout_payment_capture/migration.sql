@@ -181,6 +181,93 @@ BEGIN
 END;
 $$;
 
+ALTER TABLE "orders"
+  ADD COLUMN "checkout_contact_snapshot" jsonb,
+  ADD CONSTRAINT "orders_checkout_contact_snapshot_values_check" CHECK (
+      "checkout_contact_snapshot" IS NULL
+      OR (
+          jsonb_typeof("checkout_contact_snapshot") = 'object'
+          AND jsonb_typeof("checkout_contact_snapshot" -> 'email') = 'string'
+          AND jsonb_typeof("checkout_contact_snapshot" -> 'fullName') = 'string'
+          AND "checkout_contact_snapshot" ->> 'email' =
+              lower(btrim("checkout_contact_snapshot" ->> 'email'))
+          AND "checkout_contact_snapshot" ->> 'email' ~
+              '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
+          AND char_length("checkout_contact_snapshot" ->> 'email') <= 320
+          AND "checkout_contact_snapshot" ->> 'fullName' =
+              btrim("checkout_contact_snapshot" ->> 'fullName')
+          AND "checkout_contact_snapshot" ->> 'fullName' ~ '[^[:space:]]'
+          AND char_length("checkout_contact_snapshot" ->> 'fullName') <= 200
+      )
+  );
+
+CREATE FUNCTION taven_protect_order_checkout_contact_snapshot()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."checkout_contact_snapshot" IS NOT NULL THEN
+            RAISE EXCEPTION 'checkout contact cannot predate the quoted order'
+                USING ERRCODE = '23514',
+                      CONSTRAINT = 'order_checkout_contact_snapshot_immutable_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF NEW."checkout_contact_snapshot" IS NOT DISTINCT FROM
+       OLD."checkout_contact_snapshot" THEN
+        IF OLD."accepted_order_price_binding_id" IS NULL
+           AND OLD."accepted_terms_revision" IS NULL
+           AND OLD."accepted_claim_policy_revision" IS NULL
+           AND OLD."withdrawal_exception_acknowledged_at" IS NULL
+           AND (
+               NEW."accepted_order_price_binding_id" IS NOT NULL
+               OR NEW."accepted_terms_revision" IS NOT NULL
+               OR NEW."accepted_claim_policy_revision" IS NOT NULL
+               OR NEW."withdrawal_exception_acknowledged_at" IS NOT NULL
+           )
+           AND NEW."checkout_contact_snapshot" IS NULL THEN
+            RAISE EXCEPTION 'checkout acceptance requires its contact snapshot'
+                USING ERRCODE = '23514',
+                      CONSTRAINT = 'order_checkout_contact_snapshot_immutable_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF OLD."checkout_contact_snapshot" IS NOT NULL
+       OR NEW."checkout_contact_snapshot" IS NULL
+       OR OLD."accepted_order_price_binding_id" IS NOT NULL
+       OR OLD."accepted_terms_revision" IS NOT NULL
+       OR OLD."accepted_claim_policy_revision" IS NOT NULL
+       OR OLD."withdrawal_exception_acknowledged_at" IS NOT NULL
+       OR NEW."accepted_order_price_binding_id" IS NULL
+       OR NEW."accepted_terms_revision" IS NULL
+       OR NEW."accepted_claim_policy_revision" IS NULL
+       OR NEW."withdrawal_exception_acknowledged_at" IS NULL
+       OR OLD."status" <> 'QUOTED'
+       OR NEW."status" <> 'QUOTED'
+       OR EXISTS (
+           SELECT 1 FROM "payments" payment
+           WHERE payment."order_id" = OLD."id"
+       ) THEN
+        RAISE EXCEPTION 'checkout contact snapshot is immutable acceptance evidence'
+            USING ERRCODE = '23514',
+                  CONSTRAINT = 'order_checkout_contact_snapshot_immutable_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "orders_checkout_contact_snapshot_protected"
+BEFORE INSERT OR UPDATE OF
+  "accepted_order_price_binding_id", "accepted_terms_revision",
+  "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at",
+  "checkout_contact_snapshot"
+ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_order_checkout_contact_snapshot();
+
 ALTER TABLE "payments"
   ADD COLUMN "checkout_method" varchar(50) NOT NULL DEFAULT 'ALL',
   ADD COLUMN "merchant_reference" varchar(255),

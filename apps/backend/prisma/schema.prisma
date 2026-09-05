@@ -1575,6 +1575,7 @@ model Order {
   acceptedTermsRevision             String?     @map("accepted_terms_revision") @db.VarChar(100)
   acceptedClaimPolicyRevision       String?     @map("accepted_claim_policy_revision") @db.VarChar(100)
   withdrawalExceptionAcknowledgedAt DateTime?   @map("withdrawal_exception_acknowledged_at") @db.Timestamptz(3)
+  checkoutContactSnapshot           Json?       @map("checkout_contact_snapshot") @db.JsonB
   createdAt                         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 

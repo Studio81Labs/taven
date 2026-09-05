@@ -12,6 +12,7 @@ import {
 import { IdempotencyStatus, PaymentStatus, Prisma } from "@prisma/client";
 import {
   assertCheckoutAcceptanceRevisionsCurrent,
+  assertCheckoutClaimPolicyRevisionCurrent,
   assertCheckoutPaymentFlowsEnabled,
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -97,6 +98,10 @@ export class PaymentsService {
       initial.order.activePriceBinding!.orderPriceBinding.priceSnapshot
         .priceList.termsRevision,
     );
+    assertCheckoutClaimPolicyRevisionCurrent(
+      input.claimPolicyRevision,
+      initialLegalRevisions.claimPolicyRevision,
+    );
     assertCheckoutAcceptanceRevisionsCurrent(
       {
         termsRevision: initial.order.acceptedTermsRevision,
@@ -134,6 +139,10 @@ export class PaymentsService {
       const binding = context.order.activePriceBinding!.orderPriceBinding;
       const legalRevisions = assertCheckoutPaymentFlowsEnabled(
         binding.priceSnapshot.priceList.termsRevision,
+      );
+      assertCheckoutClaimPolicyRevisionCurrent(
+        input.claimPolicyRevision,
+        legalRevisions.claimPolicyRevision,
       );
       assertCheckoutAcceptanceRevisionsCurrent(
         {
@@ -195,6 +204,10 @@ export class PaymentsService {
       }
 
       const observedAt = await databaseNow(transaction);
+      assertCheckoutContactMatches(
+        context.order.checkoutContactSnapshot,
+        input,
+      );
       const customer = await transaction.customer.upsert({
         where: { email: input.email },
         create: {
@@ -223,6 +236,14 @@ export class PaymentsService {
         where: { id: context.order.id },
         data: {
           customerId: customer.id,
+          ...(context.order.checkoutContactSnapshot
+            ? {}
+            : {
+                checkoutContactSnapshot: jsonInput({
+                  email: input.email,
+                  fullName: input.fullName,
+                }),
+              }),
           ...(context.order.acceptedOrderPriceBindingId
             ? {}
             : { acceptedOrderPriceBindingId: binding.id }),
@@ -1054,8 +1075,26 @@ function checkoutInput(value: CreateCheckoutPaymentDto) {
     method: method as CheckoutPaymentMethod,
     acceptTerms: true,
     acceptClaimPolicy: true,
+    claimPolicyRevision: requiredText(
+      value.claimPolicyRevision,
+      "claimPolicyRevision",
+      100,
+    ),
     acknowledgeWithdrawalException: true,
   } as const;
+}
+
+function assertCheckoutContactMatches(
+  snapshot: Prisma.JsonValue | null,
+  input: Readonly<{ email: string; fullName: string }>,
+): void {
+  if (snapshot === null) return;
+  const contact = asRecord(snapshot);
+  if (contact?.email !== input.email || contact.fullName !== input.fullName) {
+    throw new ConflictException(
+      "Checkout contact differs from accepted order contact",
+    );
+  }
 }
 
 function paymentDto(payment: {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertBindingQuoteFlowsEnabled,
   assertCheckoutAcceptanceRevisionsCurrent,
+  assertCheckoutClaimPolicyRevisionCurrent,
   assertCheckoutPaymentFlowsEnabled,
   assertQuotePhotoUploadsEnabled,
   approvedCheckoutClaimPolicyRevision,
@@ -157,6 +158,21 @@ describe("launch approval gates", () => {
           termsRevision: "terms-v1-approved",
           claimPolicyRevision: "claims-v1-approved",
         },
+      ),
+    ).not.toThrow();
+  });
+
+  it("requires the checkout request to bind the approved claim policy", () => {
+    expect(() =>
+      assertCheckoutClaimPolicyRevisionCurrent(
+        "claims-v0",
+        "claims-v1-approved",
+      ),
+    ).toThrowError(ServiceUnavailableException);
+    expect(() =>
+      assertCheckoutClaimPolicyRevisionCurrent(
+        "claims-v1-approved",
+        "claims-v1-approved",
       ),
     ).not.toThrow();
   });

@@ -986,6 +986,12 @@
           "acknowledgeWithdrawalException": {
             "type": "boolean"
           },
+          "claimPolicyRevision": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
           "email": {
             "format": "email",
             "maxLength": 320,
@@ -1009,6 +1015,7 @@
           "method",
           "acceptTerms",
           "acceptClaimPolicy",
+          "claimPolicyRevision",
           "acknowledgeWithdrawalException"
         ],
         "type": "object"

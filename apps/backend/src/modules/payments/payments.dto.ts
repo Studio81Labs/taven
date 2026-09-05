@@ -1,5 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger";
 
+const NON_BLANK_TEXT_PATTERN = "\\S";
+
 export class PaymentCapabilitiesDto {
   @ApiProperty({ type: String })
   provider!: string;
@@ -23,6 +25,14 @@ export class CreateCheckoutPaymentDto {
 
   @ApiProperty({ type: Boolean })
   acceptClaimPolicy!: boolean;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
+  claimPolicyRevision!: string;
 
   @ApiProperty({ type: Boolean })
   acknowledgeWithdrawalException!: boolean;

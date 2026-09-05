@@ -777,6 +777,7 @@ export interface components {
             acceptClaimPolicy: boolean;
             acceptTerms: boolean;
             acknowledgeWithdrawalException: boolean;
+            claimPolicyRevision: string;
             /** Format: email */
             email: string;
             fullName: string;

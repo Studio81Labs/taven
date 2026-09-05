@@ -73,6 +73,7 @@ export type AutomaticCheckoutFixtureOptions = Readonly<{
   publicTokenHash: string;
   configurationRevision?: number;
   expressRequested?: boolean;
+  preacceptCheckout?: boolean;
 }>;
 
 type CapacityInterval = { startsAt: Date; endsAt: Date };
@@ -1185,22 +1186,33 @@ export class PersistenceFactory {
         "UPDATE orders SET status = 'QUOTED', quoted_at = $2, updated_at = $2 WHERE id = $1",
         [input.orderId, t],
       );
-      await this.sql.query(
-        `UPDATE orders
-         SET accepted_order_price_binding_id = $3,
-             accepted_terms_revision = (
-               SELECT list.terms_revision
-               FROM order_price_bindings binding
-               JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
-               JOIN price_lists list ON list.id = snapshot.price_list_id
-               WHERE binding.id = $3 AND binding.order_id = $1
-             ),
-             accepted_claim_policy_revision = 'claim-policy-v1',
-             withdrawal_exception_acknowledged_at = $2,
-             updated_at = $2
-         WHERE id = $1`,
-        [input.orderId, t, input.orderPriceBindingId],
-      );
+      if (input.automaticCheckout?.preacceptCheckout !== false) {
+        await this.sql.query(
+          `UPDATE orders
+           SET accepted_order_price_binding_id = $3,
+               accepted_terms_revision = (
+                 SELECT list.terms_revision
+                 FROM order_price_bindings binding
+                 JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
+                 JOIN price_lists list ON list.id = snapshot.price_list_id
+                 WHERE binding.id = $3 AND binding.order_id = $1
+               ),
+               accepted_claim_policy_revision = 'claim-policy-v1',
+               withdrawal_exception_acknowledged_at = $2,
+               checkout_contact_snapshot = jsonb_build_object(
+                 'email', $4::text,
+                 'fullName', 'Test customer'
+               ),
+               updated_at = $2
+           WHERE id = $1`,
+          [
+            input.orderId,
+            t,
+            input.orderPriceBindingId,
+            `${this.hash(input.name).slice(0, 24)}@example.test`,
+          ],
+        );
+      }
       await this.sql.query(
         "INSERT INTO audit_events (id, quote_id, order_id, event_type, payload, created_at) VALUES ($1,$2,$3,'order.quoted',$4::jsonb,$5)",
         [
@@ -1286,6 +1298,10 @@ export class PersistenceFactory {
            ),
            accepted_claim_policy_revision = 'claim-policy-v1',
            withdrawal_exception_acknowledged_at = $2,
+           checkout_contact_snapshot = jsonb_build_object(
+             'email', 'test@example.test',
+             'fullName', 'Test customer'
+           ),
            updated_at = $2
        WHERE id = $1
          AND status = 'QUOTED'

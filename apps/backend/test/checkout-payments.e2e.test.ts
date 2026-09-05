@@ -1494,7 +1494,7 @@ describe("checkout payment capture protocol", () => {
       const fixtures = new PersistenceFactory(
         setupClient,
         `${scope}:http-sandbox`,
-        { publicTokenHash },
+        { publicTokenHash, preacceptCheckout: false },
       );
       foundation = await prepareReservedFoundation(
         setupClient,
@@ -1533,7 +1533,10 @@ describe("checkout payment capture protocol", () => {
       const outageFixtures = new PersistenceFactory(
         setupClient,
         `${scope}:http-outage`,
-        { publicTokenHash: outagePublicTokenHash },
+        {
+          publicTokenHash: outagePublicTokenHash,
+          preacceptCheckout: false,
+        },
       );
       outageFoundation = await prepareReservedFoundation(
         setupClient,
@@ -1571,7 +1574,10 @@ describe("checkout payment capture protocol", () => {
       const returnedIntentFixtures = new PersistenceFactory(
         setupClient,
         `${scope}:http-returned-intent`,
-        { publicTokenHash: returnedIntentPublicTokenHash },
+        {
+          publicTokenHash: returnedIntentPublicTokenHash,
+          preacceptCheckout: false,
+        },
       );
       returnedIntentFoundation = await prepareReservedFoundation(
         setupClient,
@@ -1609,7 +1615,10 @@ describe("checkout payment capture protocol", () => {
       const callbackFixtures = new PersistenceFactory(
         setupClient,
         `${scope}:http-callback-finalization`,
-        { publicTokenHash: callbackPublicTokenHash },
+        {
+          publicTokenHash: callbackPublicTokenHash,
+          preacceptCheckout: false,
+        },
       );
       callbackFoundation = await prepareReservedFoundation(
         setupClient,
@@ -1647,7 +1656,10 @@ describe("checkout payment capture protocol", () => {
       const ambiguousCallbackFixtures = new PersistenceFactory(
         setupClient,
         `${scope}:http-callback-ambiguity`,
-        { publicTokenHash: ambiguousCallbackPublicTokenHash },
+        {
+          publicTokenHash: ambiguousCallbackPublicTokenHash,
+          preacceptCheckout: false,
+        },
       );
       ambiguousCallbackFoundation = await prepareReservedFoundation(
         setupClient,
@@ -1686,7 +1698,10 @@ describe("checkout payment capture protocol", () => {
       const ambiguousCaptureFixtures = new PersistenceFactory(
         setupClient,
         `${scope}:http-ambiguous-capture`,
-        { publicTokenHash: ambiguousCapturePublicTokenHash },
+        {
+          publicTokenHash: ambiguousCapturePublicTokenHash,
+          preacceptCheckout: false,
+        },
       );
       ambiguousCaptureFoundation = await prepareReservedFoundation(
         setupClient,
@@ -1941,6 +1956,7 @@ describe("checkout payment capture protocol", () => {
               method: "BANK_TRANSFER",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
           },
@@ -1964,6 +1980,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
           },
@@ -1987,6 +2004,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
           },
@@ -2036,6 +2054,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
               ...overrides,
             }),
@@ -2060,6 +2079,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
           },
@@ -2083,6 +2103,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
           },
@@ -2133,6 +2154,39 @@ describe("checkout payment capture protocol", () => {
       expect(unapprovedTermsResponse.status).toBe(503);
       expect(providerCreateCalls).toBe(providerCallsBeforeUnapprovedTerms);
       process.env.TAVEN_TERMS_REVISION = "terms-v1";
+
+      const providerCallsBeforeStaleClaimPolicy = providerCreateCalls;
+      process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
+      const staleClaimPolicyResponse = await createPayment(
+        "sandbox-http-stale-claim-policy",
+      );
+      expect(staleClaimPolicyResponse.status).toBe(503);
+      expect(providerCreateCalls).toBe(providerCallsBeforeStaleClaimPolicy);
+      await expect(
+        Promise.all([
+          prisma.payment.count({ where: { orderId: foundation.orderId } }),
+          prisma.order.findUniqueOrThrow({
+            where: { id: foundation.orderId },
+            select: {
+              acceptedOrderPriceBindingId: true,
+              acceptedTermsRevision: true,
+              acceptedClaimPolicyRevision: true,
+              withdrawalExceptionAcknowledgedAt: true,
+              checkoutContactSnapshot: true,
+            },
+          }),
+        ]),
+      ).resolves.toEqual([
+        0,
+        {
+          acceptedOrderPriceBindingId: null,
+          acceptedTermsRevision: null,
+          acceptedClaimPolicyRevision: null,
+          withdrawalExceptionAcknowledgedAt: null,
+          checkoutContactSnapshot: null,
+        },
+      ]);
+      process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
 
       let returnedIntentCloseFailures = 0;
       const returnedIntentTransactionSpy = vi
@@ -2328,13 +2382,32 @@ describe("checkout payment capture protocol", () => {
           }),
           prisma.order.findUniqueOrThrow({
             where: { id: foundation.orderId },
-            select: { customerId: true },
+            select: { customerId: true, checkoutContactSnapshot: true },
           }),
         ]),
       ).resolves.toEqual([
         { customerId: foundation.customerId },
-        { customerId: foundation.customerId },
+        {
+          customerId: foundation.customerId,
+          checkoutContactSnapshot: {
+            email: customerEmail,
+            fullName: "Sandbox Customer",
+          },
+        },
       ]);
+      await expect(
+        prisma.order.update({
+          where: { id: foundation.orderId },
+          data: {
+            checkoutContactSnapshot: {
+              email: customerEmail,
+              fullName: "Changed after checkout",
+            },
+          },
+        }),
+      ).rejects.toThrow(
+        "checkout contact snapshot is immutable acceptance evidence",
+      );
       const callsAfterInitialPayment = providerCreateCalls;
       process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
       const changedActivePolicyResponse = await createPayment(

@@ -92,6 +92,17 @@ export function assertCheckoutAcceptanceRevisionsCurrent(
   }
 }
 
+export function assertCheckoutClaimPolicyRevisionCurrent(
+  requestedRevision: string,
+  approvedRevision: string,
+): void {
+  if (requestedRevision !== approvedRevision) {
+    throw launchApprovalRequired(
+      "Checkout request does not use the currently approved claim-policy revision",
+    );
+  }
+}
+
 export function approvedCheckoutTermsRevision(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
