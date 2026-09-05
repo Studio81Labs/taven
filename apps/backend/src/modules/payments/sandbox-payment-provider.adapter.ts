@@ -4,6 +4,7 @@ import type { PaymentProviderConfig } from "./payment-provider.config";
 import type {
   CreatePaymentIntentInput,
   CreatedPaymentIntent,
+  PaymentEventLocator,
   PaymentProviderPort,
   ProviderRefundResult,
   VerifiedPaymentEvent,
@@ -43,6 +44,29 @@ export class SandboxPaymentProviderAdapter implements PaymentProviderPort {
     headers: Readonly<Record<string, string | string[] | undefined>>;
     body: unknown;
   }): Promise<VerifiedPaymentEvent> {
+    const locator = this.locateEvent(input);
+    const body = eventBody(input.body);
+    return {
+      provider: "sandbox",
+      providerEventId: requiredText(
+        body.providerEventId,
+        "providerEventId",
+        255,
+      ),
+      providerTransactionId: locator.providerTransactionId,
+      merchantReference: locator.merchantReference,
+      status: paymentStatus(body.status),
+      amountMinor: positiveBigInt(body.amountMinor, "amountMinor"),
+      currency: currency(body.currency),
+      occurredAt: timestamp(body.occurredAt),
+      evidence: { source: "signed-sandbox-webhook" },
+    };
+  }
+
+  locateEvent(input: {
+    headers: Readonly<Record<string, string | string[] | undefined>>;
+    body: unknown;
+  }): PaymentEventLocator {
     const body = eventBody(input.body);
     const signature = firstHeader(input.headers["x-taven-sandbox-signature"]);
     const expected = sandboxEventSignature(
@@ -58,12 +82,6 @@ export class SandboxPaymentProviderAdapter implements PaymentProviderPort {
       throw new UnauthorizedException("Sandbox payment signature is invalid");
     }
     return {
-      provider: "sandbox",
-      providerEventId: requiredText(
-        body.providerEventId,
-        "providerEventId",
-        255,
-      ),
       providerTransactionId: requiredText(
         body.providerTransactionId,
         "providerTransactionId",
@@ -74,11 +92,6 @@ export class SandboxPaymentProviderAdapter implements PaymentProviderPort {
         "merchantReference",
         255,
       ),
-      status: paymentStatus(body.status),
-      amountMinor: positiveBigInt(body.amountMinor, "amountMinor"),
-      currency: currency(body.currency),
-      occurredAt: timestamp(body.occurredAt),
-      evidence: { source: "signed-sandbox-webhook" },
     };
   }
 

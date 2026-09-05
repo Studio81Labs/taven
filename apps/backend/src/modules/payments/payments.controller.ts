@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Ip,
   Param,
   Post,
   Query,
@@ -21,6 +22,7 @@ import {
   ApiQuery,
   ApiServiceUnavailableResponse,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import {
@@ -121,11 +123,20 @@ export class PaymentsController {
   @ApiBody({ schema: { type: "object", additionalProperties: true } })
   @ApiOperation({ summary: "Consume an authenticated payment-provider event" })
   @ApiOkResponse({ type: PaymentWebhookAcceptedDto })
+  @ApiTooManyRequestsResponse({
+    description: "Payment webhook verification limit is exhausted",
+  })
   webhook(
     @Param("provider") provider: string,
     @Body() body: unknown,
     @Headers() headers: Record<string, string | string[] | undefined>,
+    @Ip() clientAddress: string,
   ): Promise<PaymentWebhookAcceptedDto> {
-    return this.payments.consumeProviderEvent(provider, headers, body);
+    return this.payments.consumeProviderEvent(
+      provider,
+      headers,
+      body,
+      clientAddress,
+    );
   }
 }

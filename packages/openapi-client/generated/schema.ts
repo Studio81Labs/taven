@@ -1922,6 +1922,13 @@ export interface operations {
                     "application/json": components["schemas"]["PaymentWebhookAcceptedDto"];
                 };
             };
+            /** @description Payment webhook verification limit is exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     QuoteRequestsController_create: {

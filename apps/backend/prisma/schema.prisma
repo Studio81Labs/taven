@@ -639,6 +639,18 @@ model AnonymousQuoteLimit {
   @@map("anonymous_quote_limits")
 }
 
+model PaymentWebhookLimit {
+  subjectHash     String   @id @map("subject_hash") @db.VarChar(64)
+  windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+  windowExpiresAt DateTime @map("window_expires_at") @db.Timestamptz(3)
+  issuedCount     Int      @default(0) @map("issued_count")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([windowExpiresAt])
+  @@map("payment_webhook_limits")
+}
+
 model ObjectStorageSweepCursor {
   sweepName       String   @id @map("sweep_name") @db.VarChar(64)
   cursorObjectKey String?  @map("cursor_object_key") @db.Text

@@ -26,10 +26,12 @@ import type {
 import {
   PAYMENT_PROVIDER,
   type CheckoutPaymentMethod,
+  type PaymentEventLocator,
   PaymentIntentCreationError,
   type PaymentProviderPort,
   type VerifiedPaymentEvent,
 } from "./payment-provider.port";
+import { reservePaymentWebhookVerification } from "./payment-webhook-limit";
 
 const CHECKOUT_CAPTURE_MILLISECONDS = 60 * 60 * 1_000;
 const IDEMPOTENCY_DAYS = 7;
@@ -384,11 +386,23 @@ export class PaymentsService {
     provider: string,
     headers: Readonly<Record<string, string | string[] | undefined>>,
     body: unknown,
+    clientAddress?: string,
   ): Promise<{ outcome: string }> {
     if (provider !== this.provider.providerName()) {
       throw new NotFoundException("Payment provider webhook is unavailable");
     }
+    const locator = this.provider.locateEvent({ headers, body });
+    await this.prefilterProviderEvent(provider, locator, clientAddress);
     const event = await this.provider.verifyEvent({ headers, body });
+    if (
+      event.provider !== provider ||
+      event.providerTransactionId !== locator.providerTransactionId ||
+      event.merchantReference !== locator.merchantReference
+    ) {
+      throw new UnauthorizedException(
+        "Payment provider event identity changed during verification",
+      );
+    }
     const captureContextCurrent =
       event.status === "CAPTURED"
         ? await this.isCaptureContextCurrent(event)
@@ -413,6 +427,36 @@ export class PaymentsService {
       ) AS outcome
     `;
     return { outcome: rows[0]?.outcome ?? "IGNORED" };
+  }
+
+  private async prefilterProviderEvent(
+    provider: string,
+    locator: PaymentEventLocator,
+    clientAddress?: string,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      const payment = await transaction.payment.findFirst({
+        where: {
+          provider,
+          merchantReference: locator.merchantReference,
+          OR: [
+            { providerIntentId: locator.providerTransactionId },
+            { providerIntentId: null },
+          ],
+        },
+        select: { id: true },
+      });
+      if (!payment) {
+        throw new NotFoundException("Payment provider event is unavailable");
+      }
+      if (clientAddress) {
+        await reservePaymentWebhookVerification(transaction, {
+          provider,
+          clientAddress,
+          paymentId: payment.id,
+        });
+      }
+    });
   }
 
   private async isCaptureContextCurrent(

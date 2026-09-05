@@ -43,6 +43,11 @@ export type VerifiedPaymentEvent = Readonly<{
   evidence: Readonly<Record<string, string | number | boolean | null>>;
 }>;
 
+export type PaymentEventLocator = Readonly<{
+  providerTransactionId: string;
+  merchantReference: string;
+}>;
+
 export type PaymentIntentCreationOutcome = "DEFINITIVE_FAILURE" | "AMBIGUOUS";
 
 export class PaymentIntentCreationError extends Error {
@@ -73,6 +78,12 @@ export interface PaymentProviderPort {
   refundRetrySafety(): RefundRetrySafety;
 
   createIntent(input: CreatePaymentIntentInput): Promise<CreatedPaymentIntent>;
+
+  /** Authenticate locally available callback evidence and extract identifiers without I/O. */
+  locateEvent(input: {
+    headers: Readonly<Record<string, string | string[] | undefined>>;
+    body: unknown;
+  }): PaymentEventLocator;
 
   verifyEvent(input: {
     headers: Readonly<Record<string, string | string[] | undefined>>;

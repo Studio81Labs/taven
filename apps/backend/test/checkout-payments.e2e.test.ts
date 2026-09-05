@@ -797,6 +797,7 @@ describe("checkout payment capture protocol", () => {
     let providerFailure: "DEFINITIVE" | "AMBIGUOUS" | null = null;
     let deliveryResolutionError: Error | null = null;
     let providerCreateCalls = 0;
+    let providerVerifyCalls = 0;
     let sandboxCheckoutBaseUrl = "http://sandbox.local";
     let latestReturnUrls:
       | Readonly<{ success: string; cancelled: string; pending: string }>
@@ -826,7 +827,11 @@ describe("checkout payment capture protocol", () => {
           ).toString(),
         };
       },
-      verifyEvent: (input) => sandbox.verifyEvent(input),
+      locateEvent: (input) => sandbox.locateEvent(input),
+      verifyEvent: (input) => {
+        providerVerifyCalls += 1;
+        return sandbox.verifyEvent(input);
+      },
       cancelIntent: (providerIntentId) =>
         sandbox.cancelIntent(providerIntentId),
       refund: (input) => sandbox.refund(input),
@@ -1058,6 +1063,18 @@ describe("checkout payment capture protocol", () => {
         currency: created.currency,
         occurredAt: new Date().toISOString(),
       };
+      const sendPublicWebhook = (payload: unknown) =>
+        fetch(new URL("/payments/webhooks/sandbox", baseUrl), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-taven-sandbox-signature": sandboxEventSignature(
+              payload,
+              signingSecret,
+            ),
+          },
+          body: JSON.stringify(payload),
+        });
       const unsignedResponse = await fetch(
         new URL("/payments/webhooks/sandbox", baseUrl),
         {
@@ -1071,6 +1088,36 @@ describe("checkout payment capture protocol", () => {
       );
       expect(unsignedResponse.status).toBe(401);
 
+      const unknownEvent = {
+        ...event,
+        providerEventId: `sandbox-http-unknown-${randomUUID()}`,
+        providerTransactionId: `sandbox-${randomUUID()}`,
+        merchantReference: randomUUID(),
+      };
+      const callsBeforeUnknownEvent = providerVerifyCalls;
+      const unknownResponse = await sendPublicWebhook(unknownEvent);
+      expect(unknownResponse.status).toBe(404);
+      expect(providerVerifyCalls).toBe(callsBeforeUnknownEvent);
+
+      const pendingEvent = {
+        ...event,
+        providerEventId: `sandbox-http-pending-${created.paymentId}`,
+        status: "PENDING",
+      };
+      const callsBeforeRateLimit = providerVerifyCalls;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const response = await sendPublicWebhook(pendingEvent);
+        expect(response.status).toBe(200);
+        await response.json();
+      }
+      const rateLimitedResponse = await sendPublicWebhook(pendingEvent);
+      expect(rateLimitedResponse.status).toBe(429);
+      expect(providerVerifyCalls).toBe(callsBeforeRateLimit + 12);
+      const eventsBeforeTransientCapture =
+        await prisma.paymentProviderEvent.count({
+          where: { paymentId: created.paymentId },
+        });
+
       const sendSandboxOutcome = (outcome: string) =>
         fetch(`${created.checkoutUrl}/${outcome}`, { method: "POST" });
       deliveryResolutionError = new Error(
@@ -1078,20 +1125,22 @@ describe("checkout payment capture protocol", () => {
       );
       const transientCaptureResponse = await sendSandboxOutcome("capture");
       expect(transientCaptureResponse.status).toBe(500);
-      await expect(
-        prisma.payment.findUniqueOrThrow({
+      const paymentAfterTransientCapture =
+        await prisma.payment.findUniqueOrThrow({
           where: { id: created.paymentId },
           select: {
             status: true,
             providerEvents: { select: { id: true } },
             refunds: { select: { id: true } },
           },
-        }),
-      ).resolves.toEqual({
+        });
+      expect(paymentAfterTransientCapture).toMatchObject({
         status: "PENDING",
-        providerEvents: [],
         refunds: [],
       });
+      expect(paymentAfterTransientCapture.providerEvents).toHaveLength(
+        eventsBeforeTransientCapture,
+      );
       deliveryResolutionError = null;
       const capturedResponse = await sendSandboxOutcome("capture");
       expect(capturedResponse.status).toBe(200);

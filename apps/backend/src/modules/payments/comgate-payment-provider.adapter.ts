@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { BadGatewayException, UnauthorizedException } from "@nestjs/common";
 import type { PaymentProviderConfig } from "./payment-provider.config";
 import { PaymentIntentCreationError } from "./payment-provider.port";
@@ -7,6 +7,7 @@ import type {
   CreatePaymentIntentInput,
   CreatedPaymentIntent,
   PaymentProviderPort,
+  PaymentEventLocator,
   ProviderRefundResult,
   VerifiedPaymentEvent,
 } from "./payment-provider.port";
@@ -120,15 +121,11 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
     headers: Readonly<Record<string, string | string[] | undefined>>;
     body: unknown;
   }): Promise<VerifiedPaymentEvent> {
-    const callback = bodyRecord(input.body);
-    const transactionId = requiredCallbackText(
-      callback.transId ?? callback.transactionId,
-      "transId",
-    );
+    const locator = this.locateEvent(input);
     // A callback URL is not proof of payment. Always ask Comgate for current
     // authenticated state before returning a normalized event.
     const status = await this.request(
-      `/payment/transId/${encodeURIComponent(transactionId)}.json`,
+      `/payment/transId/${encodeURIComponent(locator.providerTransactionId)}.json`,
       { method: "GET" },
     );
     const providerStatus = requiredResponseText(status, "status");
@@ -148,14 +145,19 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
     const amountMinor = positiveResponseBigInt(status.price, "price");
     const currency = requiredResponseText(status, "curr").toUpperCase();
     const merchantReference = requiredResponseText(status, "refId");
+    if (merchantReference !== locator.merchantReference) {
+      throw new UnauthorizedException(
+        "Payment callback reference does not match provider status",
+      );
+    }
     const occurredAt = new Date();
     return {
       provider: "comgate",
       providerEventId: `comgate:${createProviderEventHash(
-        transactionId,
+        locator.providerTransactionId,
         providerStatus,
       )}`,
-      providerTransactionId: transactionId,
+      providerTransactionId: locator.providerTransactionId,
       merchantReference,
       status: normalizedStatus,
       amountMinor,
@@ -166,6 +168,31 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
         providerStatus,
         test: this.config.testMode,
       },
+    };
+  }
+
+  locateEvent(input: {
+    headers: Readonly<Record<string, string | string[] | undefined>>;
+    body: unknown;
+  }): PaymentEventLocator {
+    const callback = bodyRecord(input.body);
+    const merchant = requiredCallbackText(callback.merchant, "merchant");
+    const secret = requiredCallbackText(callback.secret, "secret");
+    if (
+      merchant !== this.config.merchantId ||
+      !constantTimeTextEqual(secret, this.config.secret)
+    ) {
+      throw new UnauthorizedException("Payment callback identity is invalid");
+    }
+    return {
+      providerTransactionId: requiredCallbackText(
+        callback.transId ?? callback.transactionId,
+        "transId",
+      ),
+      merchantReference: requiredCallbackText(
+        callback.refId ?? callback.merchantReference,
+        "refId",
+      ),
     };
   }
 
@@ -325,6 +352,12 @@ function requiredCallbackText(value: unknown, name: string): string {
     throw new UnauthorizedException(`Payment callback ${name} is invalid`);
   }
   return value.trim();
+}
+
+function constantTimeTextEqual(left: string, right: string): boolean {
+  const leftDigest = createHash("sha256").update(left).digest();
+  const rightDigest = createHash("sha256").update(right).digest();
+  return timingSafeEqual(leftDigest, rightDigest);
 }
 
 function requiredResponseText(

@@ -3480,6 +3480,9 @@
               }
             },
             "description": ""
+          },
+          "429": {
+            "description": "Payment webhook verification limit is exhausted"
           }
         },
         "summary": "Consume an authenticated payment-provider event",
