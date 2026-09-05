@@ -320,6 +320,10 @@ export class OrdersService {
           throw new ConflictException("Job has no submitted QC evidence");
         }
         const qcApprovedAt = await databaseNow(tx);
+        const phase = await tx.orderPhase.findUniqueOrThrow({
+          where: { id: job.orderPhaseId },
+          select: { qcPassedAt: true },
+        });
         await tx.job.update({
           where: { id: jobId },
           data: { status: JobStatus.QC_APPROVED, qcApprovedAt },
@@ -345,7 +349,7 @@ export class OrdersService {
             },
             data: {
               status: OrderPhaseStatus.QC_PASSED,
-              qcPassedAt: qcApprovedAt,
+              ...(phase.qcPassedAt ? {} : { qcPassedAt: qcApprovedAt }),
             },
           });
           await tx.order.updateMany({
@@ -476,15 +480,30 @@ export class OrdersService {
           },
         });
         if (
-          [JobStatus.QC_APPROVED, JobStatus.PACKED].includes(
+          [
+            JobStatus.PRINTING,
+            JobStatus.PRINTED,
+            JobStatus.PHOTO_SUBMITTED,
+            JobStatus.QC_APPROVED,
+            JobStatus.PACKED,
+          ].includes(
             job.status as
-              typeof JobStatus.QC_APPROVED | typeof JobStatus.PACKED,
+              | typeof JobStatus.PRINTING
+              | typeof JobStatus.PRINTED
+              | typeof JobStatus.PHOTO_SUBMITTED
+              | typeof JobStatus.QC_APPROVED
+              | typeof JobStatus.PACKED,
           )
         ) {
           await tx.orderPhase.updateMany({
             where: {
               id: job.orderPhaseId,
-              status: OrderPhaseStatus.QC_PASSED,
+              status: {
+                in: [
+                  OrderPhaseStatus.IN_PRODUCTION,
+                  OrderPhaseStatus.QC_PASSED,
+                ],
+              },
             },
             data: { status: OrderPhaseStatus.RECOVERY_PENDING },
           });
@@ -492,7 +511,11 @@ export class OrdersService {
             where: {
               id: orderId,
               status: {
-                in: [OrderStatus.QC_PASSED, OrderStatus.READY_TO_SHIP],
+                in: [
+                  OrderStatus.IN_PRODUCTION,
+                  OrderStatus.QC_PASSED,
+                  OrderStatus.READY_TO_SHIP,
+                ],
               },
             },
             data: { status: OrderStatus.RECOVERY_PENDING },
@@ -513,12 +536,16 @@ export class OrdersService {
     body: CreateReplacementDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    assertUuid(body.candidateResourceEstimateId, "candidateResourceEstimateId");
     const requestedPlanKey = optionalText(body.planKey, "planKey", 255);
     return this.command(
       orderId,
       `job:${sourceJobId}:replacement`,
       key,
-      { planKey: requestedPlanKey ?? null },
+      {
+        candidateResourceEstimateId: body.candidateResourceEstimateId,
+        planKey: requestedPlanKey ?? null,
+      },
       async (tx) => {
         const source = await this.lockJob(tx, orderId, sourceJobId);
         if (
@@ -544,9 +571,41 @@ export class OrdersService {
           throw new ConflictException("Replacement source plan is incomplete");
         }
         const now = await databaseNow(tx);
+        const replacementCandidate =
+          await tx.candidateResourceEstimate.findFirst({
+            where: {
+              id: {
+                equals: body.candidateResourceEstimateId,
+                not: sourcePlanJob.candidateResourceEstimateId,
+              },
+              nodeId: source.nodeId,
+              shipmentPlanId: source.shipmentPlanId,
+              modelGeometryId:
+                sourcePlanJob.candidateResourceEstimate.modelGeometryId,
+              printConfigRevisionId:
+                sourcePlanJob.candidateResourceEstimate.printConfigRevisionId,
+              quantity: sourcePlanJob.candidateResourceEstimate.quantity,
+              calculatedAt: { gte: request.createdAt },
+            },
+            include: { capacityIntervals: true },
+          });
+        if (
+          !replacementCandidate ||
+          replacementCandidate.capacityIntervals.length === 0 ||
+          replacementCandidate.capacityIntervals.some(
+            (interval) =>
+              interval.startsAt.getTime() <= now.getTime() ||
+              interval.endsAt.getTime() >
+                replacementCandidate.expiresAt.getTime(),
+          )
+        ) {
+          throw new ConflictException(
+            "Replacement requires a freshly calculated compatible candidate with future capacity",
+          );
+        }
         const expiresAt = new Date(
           Math.min(
-            sourcePlanJob.candidateResourceEstimate.expiresAt.getTime(),
+            replacementCandidate.expiresAt.getTime(),
             now.getTime() + 30 * 60 * 1_000,
           ),
         );
@@ -568,9 +627,7 @@ export class OrdersService {
             nodeId: source.nodeId,
             orderPhaseId: source.orderPhaseId,
             requiredFulfilmentSlotIds: slotIds,
-            eligibleCandidateEstimateIds: [
-              sourcePlanJob.candidateResourceEstimateId,
-            ],
+            eligibleCandidateEstimateIds: [replacementCandidate.id],
             snapshotHash: createHash("sha256")
               .update(`replacement-snapshot\0${commandDigest}`)
               .digest("hex"),
@@ -591,8 +648,7 @@ export class OrdersService {
           data: {
             nodeId: source.nodeId,
             phaseResourcePlanId: plan.id,
-            candidateResourceEstimateId:
-              sourcePlanJob.candidateResourceEstimateId,
+            candidateResourceEstimateId: replacementCandidate.id,
             plannedJobKey: `replacement:${commandDigest}`,
           },
         });
@@ -1037,10 +1093,38 @@ export class OrdersService {
       evidence,
       async (tx) => {
         const shipment = await this.lockShipment(tx, orderId, shipmentId);
+        if (!shipment.carrier || !shipment.carrierLabelId) {
+          throw new ConflictException("Shipment has no carrier identity");
+        }
+        const existing = await tx.shipmentProviderEvent.findUnique({
+          where: {
+            carrier_providerEventId: {
+              carrier: shipment.carrier,
+              providerEventId: evidence.providerEventId,
+            },
+          },
+        });
+        if (existing) {
+          if (
+            existing.shipmentId === shipmentId &&
+            existing.kind === ShipmentProviderEventKind.ACCEPTANCE_SCAN &&
+            existing.providerTransactionId === evidence.providerTransactionId &&
+            existing.occurredAt.getTime() === evidence.occurredAt.getTime() &&
+            shipment.providerAcceptanceScanId === evidence.providerEventId &&
+            shipment.handedOverAt?.getTime() === existing.verifiedAt.getTime()
+          ) {
+            return result(orderId, "SHIPMENT_HANDOFF_ALREADY_APPLIED", {
+              shipmentId,
+              handedOverAt: shipment.handedOverAt,
+            });
+          }
+          throw new ConflictException(
+            "Provider event identity is already bound to different evidence",
+          );
+        }
         if (
-          shipment.status !== ShipmentStatus.LABEL_CREATED ||
-          !shipment.carrier ||
-          !shipment.carrierLabelId
+          shipment.status !== ShipmentStatus.LABEL_CREATED &&
+          shipment.status !== ShipmentStatus.CANCELLATION_PENDING
         ) {
           throw new ConflictException("Shipment is not ready for handoff");
         }
@@ -1088,6 +1172,33 @@ export class OrdersService {
           );
         }
         const verifiedAt = await databaseNow(tx);
+        if (shipment.status === ShipmentStatus.CANCELLATION_PENDING) {
+          const voidCommand = await tx.outboxMessage.findUnique({
+            where: {
+              deduplicationKey: `void_carrier_label:${shipmentId}:${shipment.carrierLabelId}`,
+            },
+          });
+          if (
+            !voidCommand ||
+            voidCommand.aggregateType !== "Shipment" ||
+            voidCommand.aggregateId !== shipmentId ||
+            voidCommand.messageType !== "void_carrier_label" ||
+            voidCommand.status === "DELIVERED"
+          ) {
+            throw new ConflictException(
+              "Carrier label void command cannot be superseded",
+            );
+          }
+          await tx.outboxMessage.update({
+            where: { id: voidCommand.id },
+            data: {
+              status: "SUPERSEDED",
+              lockedAt: null,
+              lastError: `superseded by carrier acceptance scan ${evidence.providerEventId}`,
+              updatedAt: verifiedAt,
+            },
+          });
+        }
         await tx.shipmentProviderEvent.create({
           data: {
             shipmentId,
@@ -1480,12 +1591,45 @@ export class OrdersService {
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
     const amountMinor = positiveBigInt(body.amountMinor, "amountMinor");
-    const reason = requiredText(body.reason, "reason", 100);
+    const reason = enumValue(
+      {
+        EXPRESS_BREACH: PriceAdjustmentReason.EXPRESS_BREACH,
+        PRODUCTION_FAILURE: PriceAdjustmentReason.PRODUCTION_FAILURE,
+        SHIPMENT_INCIDENT: PriceAdjustmentReason.SHIPMENT_INCIDENT,
+        POST_DELIVERY_ISSUE: PriceAdjustmentReason.POST_DELIVERY_ISSUE,
+      } as const,
+      requiredText(body.reason, "reason", 100),
+      "reason",
+    );
     if (body.paymentId) assertUuid(body.paymentId, "paymentId");
     if (body.claimId) assertUuid(body.claimId, "claimId");
     if (!body.allocation || typeof body.allocation !== "object") {
       throw new BadRequestException("allocation is invalid");
     }
+    const slotCredits = priceAdjustmentSlotCredits(
+      body.allocation,
+      reason !== PriceAdjustmentReason.EXPRESS_BREACH,
+    );
+    const allocatedAmount = slotCredits.reduce(
+      (total, credit) => total + credit.amountMinor,
+      0n,
+    );
+    if (slotCredits.length > 0 && allocatedAmount !== amountMinor) {
+      throw new BadRequestException(
+        "allocation slotCredits must sum to amountMinor",
+      );
+    }
+    const allocation = {
+      ...body.allocation,
+      ...(slotCredits.length > 0
+        ? {
+            slotCredits: slotCredits.map((credit) => ({
+              fulfilmentSlotId: credit.fulfilmentSlotId,
+              amountMinor: credit.amountMinor.toString(),
+            })),
+          }
+        : {}),
+    };
     return this.command(
       orderId,
       "price-adjustment:create",
@@ -1495,22 +1639,72 @@ export class OrdersService {
         amountMinor: amountMinor.toString(),
         paymentId: body.paymentId ?? null,
         claimId: body.claimId ?? null,
-        allocation: body.allocation,
+        allocation,
       },
       async (tx) => {
         await this.lockOrder(tx, orderId);
+        if (slotCredits.length > 0) {
+          const ownedSlotCount = await tx.fulfilmentSlot.count({
+            where: {
+              orderId,
+              id: {
+                in: slotCredits.map(({ fulfilmentSlotId }) => fulfilmentSlotId),
+              },
+            },
+          });
+          if (ownedSlotCount !== slotCredits.length) {
+            throw new NotFoundException(
+              "Price adjustment fulfilment slot was not found",
+            );
+          }
+        }
+        let selectedPaymentAvailable: bigint | undefined;
         if (body.paymentId) {
-          const payment = await tx.payment.findFirst({
+          const selectedPayment = await tx.payment.findFirst({
             where: {
               id: body.paymentId,
               orderId,
               capturedAmountMinor: { not: null },
             },
-            select: { id: true },
+            include: {
+              refunds: {
+                where: {
+                  status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
+                },
+                select: { amountMinor: true },
+              },
+              priceAdjustments: {
+                include: {
+                  refunds: {
+                    where: {
+                      status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
+                    },
+                    select: { amountMinor: true },
+                  },
+                },
+              },
+            },
           });
-          if (!payment) {
+          if (!selectedPayment) {
             throw new NotFoundException("Captured Payment was not found");
           }
+          const refunded = selectedPayment.refunds.reduce(
+            (total, refund) => total + refund.amountMinor,
+            0n,
+          );
+          const reserved = selectedPayment.priceAdjustments.reduce(
+            (total, adjustment) => {
+              const committed = adjustment.refunds.reduce(
+                (sum, refund) => sum + refund.amountMinor,
+                0n,
+              );
+              const outstanding = adjustment.amountMinor - committed;
+              return total + (outstanding > 0n ? outstanding : 0n);
+            },
+            0n,
+          );
+          selectedPaymentAvailable =
+            selectedPayment.capturedAmountMinor! - refunded - reserved;
         }
         const currencyRows = await tx.$queryRaw<Array<{ currency: string }>>`
           SELECT snapshot.currency
@@ -1560,6 +1754,14 @@ export class OrdersService {
             "Price adjustment exceeds the uncredited captured amount",
           );
         }
+        if (
+          selectedPaymentAvailable !== undefined &&
+          selectedPaymentAvailable < amountMinor
+        ) {
+          throw new ConflictException(
+            "Price adjustment exceeds the selected Payment refundable balance",
+          );
+        }
         const adjustment = await tx.priceAdjustment.create({
           data: {
             orderId,
@@ -1570,19 +1772,10 @@ export class OrdersService {
               orderId,
               key!,
             ),
-            reason: enumValue(
-              {
-                EXPRESS_BREACH: "EXPRESS_BREACH",
-                PRODUCTION_FAILURE: "PRODUCTION_FAILURE",
-                SHIPMENT_INCIDENT: "SHIPMENT_INCIDENT",
-                POST_DELIVERY_ISSUE: "POST_DELIVERY_ISSUE",
-              } as const,
-              reason,
-              "reason",
-            ),
+            reason,
             amountMinor,
             currency,
-            allocation: body.allocation as Prisma.InputJsonObject,
+            allocation: allocation as Prisma.InputJsonObject,
           },
         });
         return result(orderId, "PRICE_ADJUSTMENT_CREATED", {
@@ -1637,6 +1830,16 @@ export class OrdersService {
                 status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
               },
             },
+            priceAdjustments: {
+              where: { id: { not: adjustment.id } },
+              include: {
+                refunds: {
+                  where: {
+                    status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
+                  },
+                },
+              },
+            },
           },
           orderBy: [{ capturedAt: "asc" }, { id: "asc" }],
         });
@@ -1647,7 +1850,15 @@ export class OrdersService {
             payment.refunds.reduce(
               (allocated, refund) => allocated + refund.amountMinor,
               0n,
-            ),
+            ) -
+            payment.priceAdjustments.reduce((reserved, otherAdjustment) => {
+              const committed = otherAdjustment.refunds.reduce(
+                (allocated, refund) => allocated + refund.amountMinor,
+                0n,
+              );
+              const outstanding = otherAdjustment.amountMinor - committed;
+              return reserved + (outstanding > 0n ? outstanding : 0n);
+            }, 0n),
           0n,
         );
         if (available < adjustment.amountMinor) {
@@ -1665,8 +1876,19 @@ export class OrdersService {
             (total, refund) => total + refund.amountMinor,
             0n,
           );
+          const reserved = payment.priceAdjustments.reduce(
+            (total, otherAdjustment) => {
+              const committed = otherAdjustment.refunds.reduce(
+                (allocated, refund) => allocated + refund.amountMinor,
+                0n,
+              );
+              const outstanding = otherAdjustment.amountMinor - committed;
+              return total + (outstanding > 0n ? outstanding : 0n);
+            },
+            0n,
+          );
           const paymentAvailable =
-            payment.capturedAmountMinor! - alreadyAllocated;
+            payment.capturedAmountMinor! - alreadyAllocated - reserved;
           if (paymentAvailable <= 0n) continue;
           const amountMinor =
             paymentAvailable < remaining ? paymentAvailable : remaining;
@@ -1746,9 +1968,66 @@ export class OrdersService {
           claim.origin === ClaimOrigin.POST_DELIVERY_QUALITY
             ? RefundReason.POST_DELIVERY_ISSUE
             : RefundReason.SHIPMENT_INCIDENT;
-        const amountMinor = claim.resolutions.reduce(
-          (total, resolution) =>
-            total + resolution.fulfilmentSlot.settlementAmountMinor,
+        const priorAdjustments = await tx.priceAdjustment.findMany({
+          where: { orderId },
+          include: {
+            refunds: {
+              where: { status: "SUCCEEDED" },
+              select: { amountMinor: true },
+            },
+          },
+        });
+        const creditedBySlot = new Map<string, bigint>();
+        for (const priorAdjustment of priorAdjustments) {
+          const successfullyRefunded = priorAdjustment.refunds.reduce(
+            (total, refund) => total + refund.amountMinor,
+            0n,
+          );
+          if (successfullyRefunded !== priorAdjustment.amountMinor) {
+            throw new ConflictException(
+              "Resolve existing price adjustments before refunding a Claim",
+            );
+          }
+          let credits: PriceAdjustmentSlotCredit[];
+          try {
+            credits = priceAdjustmentSlotCredits(
+              priorAdjustment.allocation,
+              false,
+            );
+          } catch {
+            throw new ConflictException(
+              "Persisted price adjustment allocation is invalid",
+            );
+          }
+          for (const credit of credits) {
+            creditedBySlot.set(
+              credit.fulfilmentSlotId,
+              (creditedBySlot.get(credit.fulfilmentSlotId) ?? 0n) +
+                credit.amountMinor,
+            );
+          }
+        }
+        const claimSlotCredits = claim.resolutions.flatMap((resolution) => {
+          const credited =
+            creditedBySlot.get(resolution.fulfilmentSlotId) ?? 0n;
+          const remaining =
+            resolution.fulfilmentSlot.settlementAmountMinor - credited;
+          if (remaining < 0n) {
+            throw new ConflictException(
+              "Prior credits exceed a Claim fulfilment slot value",
+            );
+          }
+          return remaining === 0n
+            ? []
+            : [
+                {
+                  fulfilmentSlotId: resolution.fulfilmentSlotId,
+                  amountMinor: remaining,
+                },
+              ];
+        });
+        const amountMinor = claimSlotCredits.reduce(
+          (total, credit) => total + credit.amountMinor,
           0n,
         );
         if (amountMinor <= 0n) {
@@ -1801,9 +2080,10 @@ export class OrdersService {
             currency,
             allocation: {
               claimId,
-              fulfilmentSlotIds: claim.resolutions.map(
-                ({ fulfilmentSlotId }) => fulfilmentSlotId,
-              ),
+              slotCredits: claimSlotCredits.map((credit) => ({
+                fulfilmentSlotId: credit.fulfilmentSlotId,
+                amountMinor: credit.amountMinor.toString(),
+              })),
             },
           },
         });
@@ -2259,6 +2539,68 @@ function positiveBigInt(
     throw new BadRequestException(`${name} is invalid`);
   }
   return parsed;
+}
+
+type PriceAdjustmentSlotCredit = {
+  fulfilmentSlotId: string;
+  amountMinor: bigint;
+};
+
+function priceAdjustmentSlotCredits(
+  allocation: unknown,
+  required: boolean,
+): PriceAdjustmentSlotCredit[] {
+  if (
+    !allocation ||
+    typeof allocation !== "object" ||
+    Array.isArray(allocation)
+  ) {
+    throw new BadRequestException("allocation is invalid");
+  }
+  const raw = (allocation as Record<string, unknown>).slotCredits;
+  if (raw === undefined) {
+    if (required) {
+      throw new BadRequestException(
+        "allocation.slotCredits is required for this adjustment reason",
+      );
+    }
+    return [];
+  }
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new BadRequestException("allocation.slotCredits is invalid");
+  }
+  const seen = new Set<string>();
+  return raw.map((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new BadRequestException(
+        `allocation.slotCredits[${index}] is invalid`,
+      );
+    }
+    const record = value as Record<string, unknown>;
+    const fulfilmentSlotId = record.fulfilmentSlotId;
+    if (typeof fulfilmentSlotId !== "string") {
+      throw new BadRequestException(
+        `allocation.slotCredits[${index}].fulfilmentSlotId is invalid`,
+      );
+    }
+    assertUuid(
+      fulfilmentSlotId,
+      `allocation.slotCredits[${index}].fulfilmentSlotId`,
+    );
+    if (seen.has(fulfilmentSlotId)) {
+      throw new BadRequestException(
+        "allocation.slotCredits contains duplicate fulfilment slots",
+      );
+    }
+    seen.add(fulfilmentSlotId);
+    return {
+      fulfilmentSlotId,
+      amountMinor: positiveBigInt(
+        record.amountMinor,
+        `allocation.slotCredits[${index}].amountMinor`,
+      ),
+    };
+  });
 }
 
 function enumValue<T extends Record<string, string>>(

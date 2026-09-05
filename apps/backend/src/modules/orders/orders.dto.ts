@@ -41,6 +41,13 @@ export class JobFailureDto {
 }
 
 export class CreateReplacementDto {
+  @ApiProperty({
+    ...UUID,
+    description:
+      "Compatible candidate calculated after the source failure with future capacity",
+  })
+  candidateResourceEstimateId!: string;
+
   @ApiPropertyOptional({
     type: String,
     minLength: 1,
@@ -97,6 +104,24 @@ export class ShipmentEventDto extends ShipmentProviderEvidenceDto {
   kind!: "TRANSIT_SCAN" | "DELIVERY_SCAN" | "LOST" | "RETURNED" | "RECOVERED";
 }
 
+export class PriceAdjustmentSlotCreditDto {
+  @ApiProperty(UUID)
+  fulfilmentSlotId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[1-9][0-9]*$" })
+  amountMinor!: string;
+}
+
+export class PriceAdjustmentAllocationDto {
+  @ApiPropertyOptional({
+    type: [PriceAdjustmentSlotCreditDto],
+    minItems: 1,
+    description:
+      "Exact per-slot credit allocation; required for non-express adjustments",
+  })
+  slotCredits?: PriceAdjustmentSlotCreditDto[];
+}
+
 export class CreatePriceAdjustmentDto {
   @ApiProperty({
     type: String,
@@ -118,8 +143,8 @@ export class CreatePriceAdjustmentDto {
   @ApiPropertyOptional(UUID)
   claimId?: string;
 
-  @ApiProperty({ type: Object })
-  allocation!: Record<string, unknown>;
+  @ApiProperty({ type: PriceAdjustmentAllocationDto })
+  allocation!: PriceAdjustmentAllocationDto & Record<string, unknown>;
 }
 
 export class CreateClaimDto {

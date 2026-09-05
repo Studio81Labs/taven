@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { OrdersService } from "../src/modules/orders/orders.service";
@@ -24,6 +25,7 @@ type FulfilmentFixture = {
 async function preparePaidOrder(
   name: string,
   parcelCount = 1,
+  paymentScheduleKind: "FULL" | "DEPOSIT_BALANCE" = "FULL",
 ): Promise<FulfilmentFixture> {
   const client = await pool.connect();
   await client.query("BEGIN");
@@ -36,6 +38,15 @@ async function preparePaidOrder(
       undefined,
       undefined,
       parcelCount,
+      undefined,
+      "QUOTED",
+      undefined,
+      {},
+      paymentScheduleKind === "DEPOSIT_BALANCE" ? "INDIVIDUAL" : "AUTOMATIC",
+      true,
+      true,
+      true,
+      paymentScheduleKind,
     );
     const productions: ProductionReservationFixture[] = [];
     for (const [index] of foundation.fulfilmentSlotIds.entries()) {
@@ -173,9 +184,65 @@ async function makeGcodeReady(jobId: string): Promise<void> {
   );
 }
 
+async function createFreshReplacementCandidate(
+  fixture: FulfilmentFixture,
+  index: number,
+): Promise<string> {
+  const source = await prisma.candidateResourceEstimate.findUniqueOrThrow({
+    where: { id: fixture.productions[index]!.candidateResourceEstimateId },
+    include: { capacityIntervals: { orderBy: { intervalIndex: "asc" } } },
+  });
+  const observed = await pool.query<{ observed_at: Date }>(
+    "SELECT clock_timestamp() AS observed_at",
+  );
+  const calculatedAt = observed.rows[0]?.observed_at;
+  if (!calculatedAt) throw new Error("database clock is unavailable");
+  const candidateId = randomUUID();
+  const startsAt = new Date(calculatedAt.getTime() + 60 * 60 * 1_000);
+  const intervals = source.capacityIntervals.map((interval, intervalIndex) => {
+    const duration = interval.endsAt.getTime() - interval.startsAt.getTime();
+    const intervalStartsAt = new Date(
+      startsAt.getTime() + intervalIndex * (duration + 60_000),
+    );
+    return {
+      id: randomUUID(),
+      intervalIndex,
+      startsAt: intervalStartsAt,
+      endsAt: new Date(intervalStartsAt.getTime() + duration),
+    };
+  });
+  await prisma.candidateResourceEstimate.create({
+    data: {
+      id: candidateId,
+      nodeId: source.nodeId,
+      estimateKey: `replacement-candidate:${candidateId}`,
+      modelGeometryId: source.modelGeometryId,
+      primarySliceResultId: source.primarySliceResultId,
+      tailSliceResultId: source.tailSliceResultId,
+      printConfigRevisionId: source.printConfigRevisionId,
+      machineProfileId: source.machineProfileId,
+      machineCalibrationId: source.machineCalibrationId,
+      machineId: source.machineId,
+      inventoryId: source.inventoryId,
+      shipmentPlanId: source.shipmentPlanId,
+      arrangementRevisionId: source.arrangementRevisionId,
+      quantity: source.quantity,
+      partsPerPlate: source.partsPerPlate,
+      requiredMaterialMilligrams: source.requiredMaterialMilligrams,
+      requiredMachineSeconds: source.requiredMachineSeconds,
+      resourceSnapshot: source.resourceSnapshot as Prisma.InputJsonObject,
+      calculatedAt,
+      expiresAt: new Date(calculatedAt.getTime() + 4 * 60 * 60 * 1_000),
+      capacityIntervals: { create: intervals },
+    },
+  });
+  return candidateId;
+}
+
 async function advanceThroughQc(
   fixture: FulfilmentFixture,
   index: number,
+  photoAssetId?: string,
 ): Promise<void> {
   const jobId = fixture.productions[index]!.jobId;
   const orderId = fixture.foundation.orderId;
@@ -191,7 +258,9 @@ async function advanceThroughQc(
   await orders.submitQc(
     orderId,
     jobId,
-    { omissionReason: "v0 operator visual inspection" },
+    photoAssetId
+      ? { photoAssetId }
+      : { omissionReason: "v0 operator visual inspection" },
     `qc-submit-${index}-key`,
   );
   await orders.approveQc(orderId, jobId, `qc-approve-${index}-key`);
@@ -310,21 +379,46 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const { orderId } = fixture.foundation;
     const sourceJobId = fixture.productions[0]!.jobId;
     await orders.acceptJob(orderId, sourceJobId, "replacement-accept");
+    await makeGcodeReady(sourceJobId);
+    await orders.startPrinting(orderId, sourceJobId, "replacement-printing");
+    await orders.finishPrinting(
+      orderId,
+      sourceJobId,
+      { actualMaterialMilligrams: "50" },
+      "replacement-printed",
+    );
 
     const failure = await orders.failJob(
       orderId,
       sourceJobId,
       {
-        stage: "GCODE",
-        reason: "production package could not be prepared",
+        stage: "POST_PRINT",
+        reason: "printed part failed dimensional inspection",
         recovery: "REPLACE",
       },
       "replacement-failure",
     );
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        {
+          candidateResourceEstimateId:
+            fixture.productions[0]!.candidateResourceEstimateId,
+        },
+        "replacement-stale-candidate",
+      ),
+    ).rejects.toThrow(
+      "Replacement requires a freshly calculated compatible candidate",
+    );
+    const candidateResourceEstimateId = await createFreshReplacementCandidate(
+      fixture,
+      0,
+    );
     const replacement = await orders.createReplacement(
       orderId,
       sourceJobId,
-      {},
+      { candidateResourceEstimateId },
       "replacement-create",
     );
 
@@ -342,17 +436,42 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     });
     const reservations = await prisma.productionReservation.findMany({
       where: { jobId: { in: jobs.map(({ id }) => id) } },
+      include: {
+        phaseResourcePlanJob: {
+          select: { candidateResourceEstimateId: true },
+        },
+      },
       orderBy: { createdAt: "asc" },
     });
     expect(reservations).toHaveLength(2);
-    expect(reservations[0]?.status).toBe("RELEASED");
+    expect(reservations[0]?.status).toBe("CONSUMED");
     expect(reservations[1]?.status).toBe("HELD");
     expect(reservations[1]?.id).not.toBe(reservations[0]?.id);
+    expect(
+      reservations[1]?.phaseResourcePlanJob.candidateResourceEstimateId,
+    ).toBe(candidateResourceEstimateId);
   });
 
   it("enforces parcel barriers and completes a delivered order once", async () => {
     const fixture = await preparePaidOrder("delivery");
-    await advanceThroughQc(fixture, 0);
+    const photoAssetId = randomUUID();
+    const originalPhotoDeadline = new Date(Date.now() + 60 * 60 * 1_000);
+    await prisma.photoAsset.create({
+      data: {
+        id: photoAssetId,
+        kind: "QC",
+        scopeKind: "JOB",
+        scopeId: fixture.productions[0]!.jobId,
+        storageObjectKey: `qc/${photoAssetId}`,
+        contentHash: "b".repeat(64),
+        mediaType: "image/jpeg",
+        sizeBytes: 1n,
+        uploadedAt: new Date(),
+        photoDeleteAfter: originalPhotoDeadline,
+        retentionHold: "ACTIVE_ORDER",
+      },
+    });
+    await advanceThroughQc(fixture, 0, photoAssetId);
     await labelAndPack(fixture, 0);
     await handoff(fixture, 0);
     await carrierEvent(fixture, 0, "TRANSIT_SCAN");
@@ -392,6 +511,15 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(projection.jobs).toEqual([
       expect.objectContaining({ status: "SETTLED" }),
     ]);
+    await expect(
+      prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetId } }),
+    ).resolves.toMatchObject({ retentionHold: "NONE" });
+    const releasedPhoto = await prisma.photoAsset.findUniqueOrThrow({
+      where: { id: photoAssetId },
+    });
+    expect(releasedPhoto.photoDeleteAfter.getTime()).toBeGreaterThan(
+      originalPhotoDeadline.getTime(),
+    );
   });
 
   it("settles a later-parcel loss as partial fulfilment without moving the first parcel", async () => {
@@ -461,6 +589,151 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ]);
   });
 
+  it("resolves a Claim when a failed refund is replaced by a successful retry", async () => {
+    const fixture = await preparePaidOrder("returned-refund-retry", 2);
+    await advanceThroughQc(fixture, 0);
+    await advanceThroughQc(fixture, 1);
+    await labelAndPack(fixture, 0);
+    await labelAndPack(fixture, 1);
+    await handoff(fixture, 0);
+    await handoff(fixture, 1);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 1, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN");
+    await carrierEvent(fixture, 1, "RETURNED");
+    const claim = await prisma.claim.findUniqueOrThrow({
+      where: { incidentShipmentId: fixture.foundation.shipmentIds[1]! },
+    });
+    const pending = await orders.refundClaim(
+      fixture.foundation.orderId,
+      claim.id,
+      "returned-refund-retry-key",
+    );
+    const failedRefundId = (pending.result.refundIds as string[])[0];
+    if (!failedRefundId) throw new Error("claim refund was not created");
+
+    const retryRefundId = randomUUID();
+    const failedAt = new Date();
+    const failureProviderEventId = `refund-failed-${failedRefundId}`;
+    const failureProviderRefundId = `provider-refund-failed-${failedRefundId}`;
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      const fixtures = new PersistenceFactory(
+        client,
+        `${testScope}:returned-refund-retry`,
+      );
+      await client.query("SELECT taven_claim_refund_dispatch($1)", [
+        failedRefundId,
+      ]);
+      await fixtures.persistRefundProviderEvent(
+        failedRefundId,
+        "REFUND_FAILED",
+        failureProviderRefundId,
+        failedAt,
+        failureProviderEventId,
+      );
+      const failureEvent = await client.query<{ id: string }>(
+        `SELECT id FROM payment_provider_events
+         WHERE provider_event_id = $1`,
+        [failureProviderEventId],
+      );
+      const failureEventId = failureEvent.rows[0]?.id;
+      if (!failureEventId)
+        throw new Error("refund failure event was not created");
+      await client.query(
+        `UPDATE refund_transactions
+         SET status = 'FAILED', provider_refund_id = $2,
+             provider_result_event_id = $3, updated_at = $4
+         WHERE id = $1`,
+        [failedRefundId, failureProviderRefundId, failureEventId, failedAt],
+      );
+
+      await client.query("SAVEPOINT invalid_retry_scope");
+      await expect(
+        client.query(
+          `INSERT INTO refund_transactions
+             (id, payment_id, claim_id, price_adjustment_id,
+              replaces_refund_transaction_id,
+              replaces_failure_provider_event_id, idempotency_key, provider,
+              amount_minor, reason, status, requested_at, created_at, updated_at)
+           SELECT gen_random_uuid(), source.payment_id, NULL,
+                  source.price_adjustment_id, source.id, $2,
+                  $3, source.provider, source.amount_minor, source.reason,
+                  'PENDING', $4, $4, $4
+           FROM refund_transactions source
+           WHERE source.id = $1`,
+          [
+            failedRefundId,
+            failureEventId,
+            `invalid-retry-scope-${failedRefundId}`,
+            new Date(failedAt.getTime() + 1),
+          ],
+        ),
+      ).rejects.toThrow(
+        "refund retry must preserve claim and adjustment scope",
+      );
+      await client.query("ROLLBACK TO SAVEPOINT invalid_retry_scope");
+
+      const retryRequestedAt = new Date(failedAt.getTime() + 2);
+      await client.query(
+        `INSERT INTO refund_transactions
+           (id, payment_id, claim_id, price_adjustment_id,
+            replaces_refund_transaction_id,
+            replaces_failure_provider_event_id, idempotency_key, provider,
+            amount_minor, reason, status, requested_at, created_at, updated_at)
+         SELECT $1, source.payment_id, source.claim_id,
+                source.price_adjustment_id, source.id, $2,
+                $3, source.provider, source.amount_minor, source.reason,
+                'PENDING', $4, $4, $4
+         FROM refund_transactions source
+         WHERE source.id = $5`,
+        [
+          retryRefundId,
+          failureEventId,
+          `retry-${failedRefundId}`,
+          retryRequestedAt,
+          failedRefundId,
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    await succeedRefund(retryRefundId);
+
+    await expect(
+      prisma.refundTransaction.findMany({
+        where: { id: { in: [failedRefundId, retryRefundId] } },
+        orderBy: { requestedAt: "asc" },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: failedRefundId,
+        status: "FAILED",
+        claimId: claim.id,
+      }),
+      expect.objectContaining({
+        id: retryRefundId,
+        status: "SUCCEEDED",
+        claimId: claim.id,
+        replacesRefundTransactionId: failedRefundId,
+      }),
+    ]);
+    await expect(
+      prisma.claim.findUniqueOrThrow({ where: { id: claim.id } }),
+    ).resolves.toMatchObject({ status: "RESOLVED_REFUND" });
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "PARTIALLY_FULFILLED" });
+  });
+
   it("keeps cancellation pending until the exact carrier label void is confirmed", async () => {
     const fixture = await preparePaidOrder("label-void");
     await advanceThroughQc(fixture, 0);
@@ -508,6 +781,77 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({ status: "DELIVERED" });
   });
 
+  it("lets a verified acceptance scan supersede pending label cancellation", async () => {
+    const fixture = await preparePaidOrder("label-void-acceptance-wins");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "customer cancelled while carrier acceptance was racing" },
+      "acceptance-wins-cancel-key",
+    );
+
+    const evidence = {
+      providerEventId: `acceptance-${fixture.foundation.shipmentId}`,
+      providerTransactionId: `acceptance-tx-${fixture.foundation.shipmentId}`,
+      occurredAt: new Date().toISOString(),
+    };
+    const accepted = await orders.handoffShipment(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      evidence,
+      "acceptance-wins-handoff-key",
+    );
+    const replay = await orders.handoffShipment(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      evidence,
+      "acceptance-wins-handoff-replay-key",
+    );
+
+    expect(accepted.status).toBe("SHIPMENT_HANDED_OVER");
+    expect(replay.status).toBe("SHIPMENT_HANDOFF_ALREADY_APPLIED");
+    await expect(
+      orders.confirmLabelVoid(
+        fixture.foundation.orderId,
+        fixture.foundation.shipmentId,
+        {
+          providerEventId: `late-void-${fixture.foundation.shipmentId}`,
+          providerTransactionId: `late-void-tx-${fixture.foundation.shipmentId}`,
+          occurredAt: new Date().toISOString(),
+        },
+        "acceptance-wins-late-void-key",
+      ),
+    ).rejects.toThrow("Shipment is not awaiting provider label cancellation");
+    await expect(
+      prisma.outboxMessage.findUniqueOrThrow({
+        where: {
+          deduplicationKey: `void_carrier_label:${fixture.foundation.shipmentId}:label-${fixture.foundation.shipmentId}`,
+        },
+      }),
+    ).resolves.toMatchObject({ status: "SUPERSEDED" });
+    await expect(
+      prisma.outboxMessage.update({
+        where: {
+          deduplicationKey: `void_carrier_label:${fixture.foundation.shipmentId}:label-${fixture.foundation.shipmentId}`,
+        },
+        data: { status: "PENDING" },
+      }),
+    ).rejects.toThrow("terminal outbox message");
+    await expect(
+      prisma.refundTransaction.count({
+        where: { payment: { orderId: fixture.foundation.orderId } },
+      }),
+    ).resolves.toBe(0);
+    const projection = await orders.getFulfilment(fixture.foundation.orderId);
+    expect(projection).toMatchObject({
+      orderStatus: "SHIPPED",
+      phase: { status: "SHIPPED" },
+      jobs: [expect.objectContaining({ status: "HANDED_OVER" })],
+      shipments: [expect.objectContaining({ status: "HANDED_OVER" })],
+    });
+  });
+
   it("blocks handoff until an express PriceAdjustment refund succeeds", async () => {
     const fixture = await preparePaidOrder("express-adjustment");
     await advanceThroughQc(fixture, 0);
@@ -546,6 +890,109 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({ reason: "EXPRESS_BREACH" });
   });
 
+  it("reserves explicit payment balances without stranding split-payment adjustments", async () => {
+    const fixture = await preparePaidOrder(
+      "split-payment-adjustment",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    const deposit = await prisma.payment.findUniqueOrThrow({
+      where: { id: fixture.foundation.paymentId },
+    });
+    const balance = await prisma.payment.findFirstOrThrow({
+      where: {
+        orderId: fixture.foundation.orderId,
+        role: "BALANCE",
+      },
+    });
+
+    const client = await pool.connect();
+    await client.query("BEGIN");
+    try {
+      await client.query("SET LOCAL session_replication_role = 'replica'");
+      await client.query(
+        `UPDATE payments
+         SET status = 'CAPTURED', captured_amount_minor = requested_amount_minor,
+             provider_intent_id = $3,
+             provider_capture_id = $2, captured_at = clock_timestamp(),
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [
+          balance.id,
+          `split-capture-${balance.id}`,
+          `split-intent-${balance.id}`,
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const exhausted = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: deposit.capturedAmountMinor!.toString(),
+        paymentId: deposit.id,
+        allocation: { component: "deposit", reason: "full deposit credit" },
+      },
+      "split-exhaust-deposit-key",
+    );
+    const exhaustedRefund = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      exhausted.result.priceAdjustmentId as string,
+      "split-exhaust-deposit-refund-key",
+    );
+    const exhaustedRefundId = (exhaustedRefund.result.refundIds as string[])[0];
+    if (!exhaustedRefundId) {
+      throw new Error("deposit refund was not created");
+    }
+    await succeedRefund(exhaustedRefundId);
+
+    await expect(
+      orders.createPriceAdjustment(
+        fixture.foundation.orderId,
+        {
+          reason: "EXPRESS_BREACH",
+          amountMinor: "1",
+          paymentId: deposit.id,
+          allocation: { component: "deposit", reason: "already exhausted" },
+        },
+        "split-explicit-exhausted-key",
+      ),
+    ).rejects.toThrow(
+      "Price adjustment exceeds the selected Payment refundable balance",
+    );
+
+    const unbound = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: "1",
+        allocation: { component: "order", reason: "use remaining balance" },
+      },
+      "split-unbound-adjustment-key",
+    );
+    const unboundRefund = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      unbound.result.priceAdjustmentId as string,
+      "split-unbound-refund-key",
+    );
+    const unboundRefundId = (unboundRefund.result.refundIds as string[])[0];
+    if (!unboundRefundId) {
+      throw new Error("unbound split-payment refund was not created");
+    }
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({
+        where: { id: unboundRefundId },
+      }),
+    ).resolves.toMatchObject({ paymentId: balance.id, amountMinor: 1n });
+  });
+
   it("records and refunds a manual post-delivery Claim without rewinding completion", async () => {
     const fixture = await preparePaidOrder("post-delivery-claim");
     await advanceThroughQc(fixture, 0);
@@ -557,6 +1004,37 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       fixture.foundation.orderId,
       "post-delivery-complete-key",
     );
+    const slot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
+    });
+    const priorCredit = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "POST_DELIVERY_ISSUE",
+        amountMinor: "1",
+        allocation: {
+          slotCredits: [
+            {
+              fulfilmentSlotId: slot.id,
+              amountMinor: "1",
+            },
+          ],
+        },
+      },
+      "post-delivery-prior-credit-key",
+    );
+    const priorCreditRefund = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      priorCredit.result.priceAdjustmentId as string,
+      "post-delivery-prior-credit-refund-key",
+    );
+    const priorCreditRefundId = (
+      priorCreditRefund.result.refundIds as string[]
+    )[0];
+    if (!priorCreditRefundId) {
+      throw new Error("prior post-delivery refund was not created");
+    }
+    await succeedRefund(priorCreditRefundId);
 
     const opened = await orders.createClaim(
       fixture.foundation.orderId,
@@ -574,6 +1052,24 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       claimId,
       "post-delivery-refund-key",
     );
+    expect(pending.result.amountMinor).toBe(
+      (slot.settlementAmountMinor - 1n).toString(),
+    );
+    await expect(
+      prisma.priceAdjustment.findUniqueOrThrow({
+        where: { id: pending.result.priceAdjustmentId as string },
+      }),
+    ).resolves.toMatchObject({
+      allocation: {
+        claimId,
+        slotCredits: [
+          {
+            fulfilmentSlotId: slot.id,
+            amountMinor: (slot.settlementAmountMinor - 1n).toString(),
+          },
+        ],
+      },
+    });
     const refundId = (pending.result.refundIds as string[])[0];
     if (!refundId) throw new Error("post-delivery refund was not created");
     await succeedRefund(refundId);

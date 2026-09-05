@@ -10,6 +10,237 @@ ALTER TYPE "shipment_provider_event_kind" ADD VALUE 'RECOVERED';
 ALTER TYPE "refund_reason" ADD VALUE 'EXPRESS_BREACH';
 ALTER TYPE "refund_reason" ADD VALUE 'SHIPMENT_INCIDENT';
 ALTER TYPE "refund_reason" ADD VALUE 'POST_DELIVERY_ISSUE';
+ALTER TYPE "outbox_status" ADD VALUE 'SUPERSEDED';
+
+ALTER TABLE "orders" DROP CONSTRAINT "orders_timestamps_check";
+ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
+    ("quoted_at" IS NULL OR "quoted_at" >= "created_at" - interval '5 seconds')
+    AND ("confirmed_at" IS NULL OR ("quoted_at" IS NOT NULL AND "confirmed_at" >= "quoted_at"))
+    AND (
+        "withdrawal_exception_acknowledged_at" IS NULL
+        OR (
+            "quoted_at" IS NOT NULL
+            AND "withdrawal_exception_acknowledged_at" >= "quoted_at"
+        )
+    )
+    AND (
+        ("status" = 'DRAFT' AND "quoted_at" IS NULL AND "confirmed_at" IS NULL)
+        OR ("status" IN ('QUOTED', 'EXPIRED') AND "quoted_at" IS NOT NULL AND "confirmed_at" IS NULL)
+        OR (
+            "status" IN (
+                'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED', 'AWAITING_BALANCE',
+                'READY_TO_SHIP', 'SHIPPED', 'DELIVERED', 'COMPLETED',
+                'RECOVERY_PENDING', 'PARTIALLY_FULFILLED'
+            )
+            AND "quoted_at" IS NOT NULL
+            AND "confirmed_at" IS NOT NULL
+        )
+        OR (
+            "status" IN ('CANCELLED', 'REFUNDED', 'CANCELLED_SETTLED')
+            AND "quoted_at" IS NOT NULL
+        )
+    )
+);
+
+CREATE OR REPLACE FUNCTION taven_protect_delivered_outbox_message()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD."status" IN ('DELIVERED', 'SUPERSEDED') AND (
+        NEW."status" IS DISTINCT FROM OLD."status" OR
+        NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+    ) THEN
+        RAISE EXCEPTION 'terminal outbox message % cannot be requeued or redelivered', OLD."id"
+            USING ERRCODE = '23514', CONSTRAINT = 'outbox_messages_delivered_terminal_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION taven_reconcile_payment_capture_activation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_payment_id uuid;
+    target_order_status "order_status";
+BEGIN
+    -- BALANCE capture is a post-QC readiness transition.  It must never
+    -- recreate or reactivate the initial reservation topology.
+    IF TG_TABLE_NAME = 'payments'
+       AND (to_jsonb(NEW) ->> 'role') = 'BALANCE' THEN
+        RETURN NULL;
+    END IF;
+
+    CASE TG_TABLE_NAME
+        WHEN 'payments' THEN
+            target_order_id := (to_jsonb(NEW) ->> 'order_id')::uuid;
+            target_payment_id := (to_jsonb(NEW) ->> 'id')::uuid;
+        WHEN 'orders' THEN
+            target_order_id := (to_jsonb(NEW) ->> 'id')::uuid;
+        WHEN 'order_phases' THEN
+            target_order_id := (to_jsonb(NEW) ->> 'order_id')::uuid;
+        ELSE
+            SELECT phase."order_id"
+            INTO target_order_id
+            FROM "phase_reservation_sets" reservation_set
+            JOIN "phase_resource_plans" plan
+              ON plan."id" = reservation_set."phase_resource_plan_id"
+             AND plan."node_id" = reservation_set."node_id"
+            JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+            WHERE reservation_set."id" = (to_jsonb(NEW) ->> 'id')::uuid;
+    END CASE;
+
+    SELECT "status"
+    INTO target_order_status
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    -- Initial capture activation has already been reconciled once an order
+    -- enters fulfilment recovery. A replacement reservation must still use
+    -- the reservation lifecycle guards, but it must not be judged as a
+    -- second checkout activation topology.
+    IF TG_TABLE_NAME = 'phase_reservation_sets'
+       AND target_order_status <> 'CONFIRMED' THEN
+        RETURN NULL;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "orders" target_order
+        JOIN "order_phases" phase
+          ON phase."order_id" = target_order."id"
+         AND phase."kind" = 'SINGLE'
+         AND phase."status" = 'ACTIVE'
+         AND phase."activated_at" IS NOT NULL
+        JOIN "payments" payment
+          ON payment."order_id" = target_order."id"
+         AND payment."status" = 'CAPTURED'
+         AND payment."role" IN ('FULL', 'DEPOSIT')
+         AND payment."captured_amount_minor" = payment."requested_amount_minor"
+        JOIN "order_active_price_bindings" active_binding
+          ON active_binding."order_id" = target_order."id"
+         AND active_binding."order_price_binding_id" = payment."order_price_binding_id"
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."order_phase_id" = phase."id"
+         AND resource_plan."expires_at" > clock_timestamp()
+        JOIN "phase_reservation_sets" reservation_set
+          ON reservation_set."phase_resource_plan_id" = resource_plan."id"
+         AND reservation_set."node_id" = resource_plan."node_id"
+         AND reservation_set."status" = 'HELD'
+         AND reservation_set."expires_at" > clock_timestamp()
+        WHERE target_order."id" = target_order_id
+          AND target_order."status" = 'CONFIRMED'
+          AND target_order."confirmed_at" IS NOT NULL
+          AND target_order."accepted_order_price_binding_id" = payment."order_price_binding_id"
+          AND target_order."accepted_terms_revision" IS NOT NULL
+          AND taven_order_accepts_bound_price_list_terms(
+              target_order."id", payment."order_price_binding_id"
+          )
+          AND target_order."accepted_claim_policy_revision" IS NOT NULL
+          AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
+          AND target_order."confirmed_at" >= payment."captured_at" - interval '5 seconds'
+          AND phase."activated_at" >= payment."captured_at" - interval '5 seconds'
+          AND (target_payment_id IS NULL OR payment."id" = target_payment_id)
+          AND (
+              SELECT count(*)
+              FROM "phase_reservation_sets" held_set
+              JOIN "phase_resource_plans" held_plan
+                ON held_plan."id" = held_set."phase_resource_plan_id"
+               AND held_plan."node_id" = held_set."node_id"
+              WHERE held_plan."order_phase_id" = phase."id"
+                AND held_set."status" = 'HELD'
+          ) = 1
+          AND EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
+              JOIN "candidate_resource_estimates" candidate
+                ON candidate."id" = plan_job."candidate_resource_estimate_id"
+               AND candidate."node_id" = plan_job."node_id"
+              JOIN "shipment_plans" candidate_plan
+                ON candidate_plan."id" = candidate."shipment_plan_id"
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+                AND candidate_plan."order_price_binding_id" IS DISTINCT FROM payment."order_price_binding_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_reservation_sets" competing_set
+              JOIN "phase_resource_plans" competing_plan
+                ON competing_plan."id" = competing_set."phase_resource_plan_id"
+               AND competing_plan."node_id" = competing_set."node_id"
+              WHERE competing_plan."order_phase_id" = phase."id"
+                AND competing_set."id" <> reservation_set."id"
+                AND competing_set."status" IN ('BUILDING', 'RESERVED', 'HELD')
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_jobs" plan_job
+              LEFT JOIN "production_reservations" production
+                ON production."phase_reservation_set_id" = reservation_set."id"
+               AND production."phase_resource_plan_job_id" = plan_job."id"
+               AND production."node_id" = plan_job."node_id"
+              LEFT JOIN "jobs" job
+                ON job."id" = production."job_id"
+               AND job."node_id" = production."node_id"
+               AND job."phase_resource_plan_job_id" = production."phase_resource_plan_job_id"
+              WHERE plan_job."phase_resource_plan_id" = resource_plan."id"
+                AND plan_job."node_id" = resource_plan."node_id"
+                AND (
+                    production."id" IS NULL
+                    OR production."status" <> 'HELD'
+                    OR production."job_id" IS NULL
+                    OR job."id" IS NULL
+                    OR job."order_id" <> target_order."id"
+                    OR job."order_phase_id" <> phase."id"
+                    OR job."status" <> 'CREATED'
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM "inventory_reservations" inventory_reservation
+                        WHERE inventory_reservation."production_reservation_id" = production."id"
+                          AND inventory_reservation."node_id" = production."node_id"
+                          AND inventory_reservation."status" = 'HELD'
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM "inventory_reservations" inventory_reservation
+                        WHERE inventory_reservation."production_reservation_id" = production."id"
+                          AND inventory_reservation."node_id" = production."node_id"
+                          AND inventory_reservation."status" <> 'HELD'
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM "capacity_reservations" capacity_reservation
+                        WHERE capacity_reservation."production_reservation_id" = production."id"
+                          AND capacity_reservation."node_id" = production."node_id"
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM "capacity_reservations" capacity_reservation
+                        WHERE capacity_reservation."production_reservation_id" = production."id"
+                          AND capacity_reservation."node_id" = production."node_id"
+                          AND capacity_reservation."status" <> 'HELD'
+                    )
+                )
+          )
+    ) THEN
+        RAISE EXCEPTION 'captured payment requires atomic order, phase, reservation, and Job activation'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_activation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
 
 CREATE TYPE "replacement_request_reason" AS ENUM ('JOB_FAILED', 'QC_REJECTED');
 CREATE TYPE "replacement_request_status" AS ENUM ('OPEN', 'JOB_CREATED', 'REFUND_REQUIRED', 'RESOLVED');
@@ -193,6 +424,81 @@ CREATE INDEX "price_adjustments_order_id_created_at_idx"
     ON "price_adjustments"("order_id", "created_at");
 CREATE INDEX "price_adjustments_claim_id_idx" ON "price_adjustments"("claim_id");
 
+CREATE FUNCTION taven_validate_price_adjustment_allocation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    slot_credits jsonb := NEW."allocation" -> 'slotCredits';
+    credit jsonb;
+    slot_id uuid;
+    slot_ids uuid[] := ARRAY[]::uuid[];
+    credit_amount bigint;
+    allocated_amount bigint := 0;
+BEGIN
+    IF jsonb_typeof(NEW."allocation") <> 'object' THEN
+        RAISE EXCEPTION 'PriceAdjustment allocation must be an object'
+            USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
+    END IF;
+
+    IF slot_credits IS NULL THEN
+        IF NEW."reason" <> 'EXPRESS_BREACH' THEN
+            RAISE EXCEPTION 'non-express PriceAdjustment requires slotCredits'
+                USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF jsonb_typeof(slot_credits) <> 'array'
+       OR jsonb_array_length(slot_credits) = 0 THEN
+        RAISE EXCEPTION 'PriceAdjustment slotCredits must be a non-empty array'
+            USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
+    END IF;
+
+    FOR credit IN SELECT value FROM jsonb_array_elements(slot_credits)
+    LOOP
+        IF jsonb_typeof(credit) <> 'object'
+           OR jsonb_typeof(credit -> 'fulfilmentSlotId') <> 'string'
+           OR jsonb_typeof(credit -> 'amountMinor') <> 'string'
+           OR (credit ->> 'fulfilmentSlotId') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+           OR (credit ->> 'amountMinor') !~ '^[1-9][0-9]*$' THEN
+            RAISE EXCEPTION 'PriceAdjustment slot credit is invalid'
+                USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
+        END IF;
+
+        IF (credit ->> 'amountMinor')::numeric > 9223372036854775807 THEN
+            RAISE EXCEPTION 'PriceAdjustment slot credit amount is invalid'
+                USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
+        END IF;
+
+        slot_id := (credit ->> 'fulfilmentSlotId')::uuid;
+        credit_amount := (credit ->> 'amountMinor')::bigint;
+        IF slot_id = ANY(slot_ids)
+           OR NOT EXISTS (
+               SELECT 1 FROM "fulfilment_slots" slot
+               WHERE slot."id" = slot_id
+                 AND slot."order_id" = NEW."order_id"
+           ) THEN
+            RAISE EXCEPTION 'PriceAdjustment slot credit scope is invalid'
+                USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
+        END IF;
+        slot_ids := array_append(slot_ids, slot_id);
+        allocated_amount := allocated_amount + credit_amount;
+    END LOOP;
+
+    IF allocated_amount <> NEW."amount_minor" THEN
+        RAISE EXCEPTION 'PriceAdjustment slot credits must equal its amount'
+            USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "price_adjustments_allocation_valid"
+BEFORE INSERT ON "price_adjustments"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_price_adjustment_allocation();
+
 ALTER TABLE "refund_transactions"
     ADD COLUMN "claim_id" uuid,
     ADD COLUMN "price_adjustment_id" uuid,
@@ -204,6 +510,39 @@ CREATE INDEX "refund_transactions_claim_id_status_idx"
     ON "refund_transactions"("claim_id", "status");
 CREATE INDEX "refund_transactions_price_adjustment_id_idx"
     ON "refund_transactions"("price_adjustment_id");
+
+CREATE FUNCTION taven_protect_fulfilment_refund_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'UPDATE'
+       AND (NEW."claim_id" IS DISTINCT FROM OLD."claim_id"
+            OR NEW."price_adjustment_id" IS DISTINCT FROM OLD."price_adjustment_id") THEN
+        RAISE EXCEPTION 'refund fulfilment scope is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_fulfilment_scope_immutable_check';
+    END IF;
+
+    IF NEW."replaces_refund_transaction_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "refund_transactions" source
+           WHERE source."id" = NEW."replaces_refund_transaction_id"
+             AND source."claim_id" IS NOT DISTINCT FROM NEW."claim_id"
+             AND source."price_adjustment_id" IS NOT DISTINCT FROM NEW."price_adjustment_id"
+       ) THEN
+        RAISE EXCEPTION 'refund retry must preserve claim and adjustment scope'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_retry_fulfilment_scope_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "refund_transactions_fulfilment_scope_protected"
+BEFORE INSERT OR UPDATE OF "claim_id", "price_adjustment_id", "replaces_refund_transaction_id"
+ON "refund_transactions"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_fulfilment_refund_scope();
 
 CREATE FUNCTION taven_reject_immutable_fulfilment_history_mutation()
 RETURNS trigger
@@ -1003,6 +1342,11 @@ BEGIN
         SELECT 1
         FROM "refund_transactions" refund
         WHERE refund."claim_id" = target_claim_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "refund_transactions" retry
+              WHERE retry."replaces_refund_transaction_id" = refund."id"
+          )
           AND refund."status" NOT IN ('SUCCEEDED', 'SUPERSEDED')
     ) THEN
         RETURN NULL;
@@ -2779,7 +3123,7 @@ BEGIN
            (OLD."status" = 'DRAFT' AND NEW."status" = 'QUOTED')
            OR (OLD."status" = 'QUOTED' AND NEW."status" IN ('CONFIRMED', 'EXPIRED', 'CANCELLED'))
            OR (OLD."status" = 'CONFIRMED' AND NEW."status" IN ('IN_PRODUCTION', 'CANCELLED'))
-           OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'CANCELLED'))
+           OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'RECOVERY_PENDING', 'CANCELLED'))
            OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('READY_TO_SHIP', 'RECOVERY_PENDING', 'CANCELLED'))
            OR (OLD."status" = 'READY_TO_SHIP' AND NEW."status" IN ('SHIPPED', 'RECOVERY_PENDING', 'CANCELLED'))
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'SHIPPED'
@@ -2884,7 +3228,7 @@ BEGIN
        AND NOT (
            (OLD."status" = 'QUOTED' AND NEW."status" IN ('ACTIVE', 'CANCELLED'))
            OR (OLD."status" = 'ACTIVE' AND NEW."status" IN ('IN_PRODUCTION', 'CANCELLED'))
-           OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'CANCELLED'))
+           OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'RECOVERY_PENDING', 'CANCELLED'))
            OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('SHIPPED', 'RECOVERY_PENDING', 'CANCELLED'))
            OR (OLD."status" = 'SHIPPED' AND NEW."status" IN ('DELIVERED', 'PARTIALLY_FULFILLED', 'CANCELLED_REFUNDED'))
            OR (OLD."status" = 'RECOVERY_PENDING' AND NEW."status" IN ('QC_PASSED', 'PARTIALLY_FULFILLED', 'CANCELLED_REFUNDED'))
@@ -2998,9 +3342,16 @@ BEGIN
                AND (to_jsonb(NEW) - ARRAY['status', 'updated_at']) =
                    (to_jsonb(OLD) - ARRAY['status', 'updated_at']))
            OR (OLD."status" = 'RECOVERY_PENDING'
-               AND NEW."status" IN ('QC_PASSED', 'CANCELLED_REFUNDED')
+               AND NEW."status" = 'CANCELLED_REFUNDED'
                AND (to_jsonb(NEW) - ARRAY['status', 'updated_at']) =
                    (to_jsonb(OLD) - ARRAY['status', 'updated_at']))
+           OR (OLD."status" = 'RECOVERY_PENDING'
+               AND NEW."status" = 'QC_PASSED'
+               AND NEW."qc_passed_at" IS NOT NULL
+               AND (OLD."qc_passed_at" IS NULL
+                    OR NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at")
+               AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'qc_passed_at']) =
+                   (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'qc_passed_at']))
        ) THEN
         RAISE EXCEPTION 'order phase transition may assign only its own lifecycle evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';
@@ -3008,7 +3359,7 @@ BEGIN
 
     IF (NEW."status" IN ('ACTIVE', 'IN_PRODUCTION', 'QC_PASSED', 'SHIPPED', 'DELIVERED', 'COMPLETED', 'RECOVERY_PENDING', 'PARTIALLY_FULFILLED')
         AND NEW."activated_at" IS NULL)
-       OR (NEW."status" IN ('QC_PASSED', 'SHIPPED', 'DELIVERED', 'COMPLETED', 'RECOVERY_PENDING', 'PARTIALLY_FULFILLED')
+       OR (NEW."status" IN ('QC_PASSED', 'SHIPPED', 'DELIVERED', 'COMPLETED', 'PARTIALLY_FULFILLED')
            AND NEW."qc_passed_at" IS NULL)
        OR (NEW."status" IN ('SHIPPED', 'DELIVERED', 'COMPLETED', 'PARTIALLY_FULFILLED')
            AND NEW."shipped_at" IS NULL)

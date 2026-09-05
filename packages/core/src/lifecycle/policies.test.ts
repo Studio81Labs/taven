@@ -4420,13 +4420,15 @@ function contextForTransition(target: string, current?: string) {
   const shipmentReadinessCurrentStateCommandKey = `order-${current ?? "qc_passed"}-command-1`;
   const postQcOrderSourceStatus =
     target === "recovery_pending" &&
-    (current === "qc_passed" ||
+    (current === "in_production" ||
+      current === "qc_passed" ||
       current === "awaiting_balance" ||
       current === "ready_to_ship")
       ? current
       : "qc_passed";
   const postQcPhaseSourceStatus =
-    target === "recovery_pending" && current === "qc_passed"
+    target === "recovery_pending" &&
+    (current === "in_production" || current === "qc_passed")
       ? current
       : "qc_passed";
   const qcCompletionSourceStatus =
@@ -4809,10 +4811,6 @@ function contextForTransition(target: string, current?: string) {
             },
           ],
     failureStage,
-    postQcFailureJobPreviousStatus:
-      (current === "qc_approved" || current === "packed") && target === "failed"
-        ? current
-        : permittedContext.postQcFailureJobPreviousStatus,
     jobFailureResultId,
     jobFailurePreviousJobResultId,
     jobFailureCurrentStateCommandKey,
@@ -4845,12 +4843,27 @@ function contextForTransition(target: string, current?: string) {
     jobFailureCompleted: true,
     jobFailureAtomic: true,
     postQcFailureFailureStage:
-      (current === "qc_approved" || current === "packed") && target === "failed"
-        ? failureStage
-        : permittedContext.postQcFailureFailureStage,
+      current === "in_production" && target === "recovery_pending"
+        ? "post_print"
+        : (current === "qc_approved" || current === "packed") &&
+            target === "failed"
+          ? failureStage
+          : permittedContext.postQcFailureFailureStage,
+    postQcFailureJobPreviousStatus:
+      current === "in_production" && target === "recovery_pending"
+        ? "printed"
+        : (current === "qc_approved" || current === "packed") &&
+            target === "failed"
+          ? current
+          : permittedContext.postQcFailureJobPreviousStatus,
+    postQcFailurePhasePreviousStatus:
+      current === "in_production" && target === "recovery_pending"
+        ? "in_production"
+        : permittedContext.postQcFailurePhasePreviousStatus,
     postQcFailureOrderPreviousStatus:
       target === "recovery_pending" &&
-      (current === "qc_passed" ||
+      (current === "in_production" ||
+        current === "qc_passed" ||
         current === "awaiting_balance" ||
         current === "ready_to_ship")
         ? current
@@ -5628,7 +5641,8 @@ function commandAnchors(
   }
   if (
     policy.name === "Order" &&
-    (current === "qc_passed" ||
+    (current === "in_production" ||
+      current === "qc_passed" ||
       current === "awaiting_balance" ||
       current === "ready_to_ship") &&
     target === "recovery_pending"
@@ -5641,13 +5655,13 @@ function commandAnchors(
   }
   if (
     policy.name === "OrderPhase(single)" &&
-    current === "qc_passed" &&
+    (current === "in_production" || current === "qc_passed") &&
     target === "recovery_pending"
   ) {
     return {
       aggregateId: "phase-1",
-      currentStateCommandKey: "phase-qc_passed-command-1",
-      currentStateResultId: "phase-qc_passed-result-1",
+      currentStateCommandKey: `phase-${current}-command-1`,
+      currentStateResultId: `phase-${current}-result-1`,
     };
   }
   if (

@@ -7502,12 +7502,7 @@ function requirePostQcJobFailureResolution<S extends string>(
       : undefined;
   const resultId = command.context?.postQcFailureResultId;
   const jobPreviousStatus = command.context?.postQcFailureJobPreviousStatus;
-  const expectedFailureStage =
-    jobPreviousStatus === "qc_approved"
-      ? "post_qc"
-      : jobPreviousStatus === "packed"
-        ? "packing"
-        : undefined;
+  const failureStage = command.context?.postQcFailureFailureStage;
   if (
     typeof jobId !== "string" ||
     jobId.length === 0 ||
@@ -7522,9 +7517,9 @@ function requirePostQcJobFailureResolution<S extends string>(
     command.context?.postQcFailureOrderId !== orderId ||
     typeof resultId !== "string" ||
     resultId.trim().length === 0 ||
-    expectedFailureStage === undefined ||
+    typeof jobPreviousStatus !== "string" ||
+    !isJobFailureStageForCurrent(jobPreviousStatus, failureStage) ||
     command.context?.postQcFailureJobTargetStatus !== "failed" ||
-    command.context?.postQcFailureFailureStage !== expectedFailureStage ||
     typeof command.context?.postQcFailureFailureReason !== "string" ||
     command.context.postQcFailureFailureReason.trim().length === 0 ||
     command.context?.postQcFailureJobResultId !== resultId ||
@@ -7590,7 +7585,8 @@ function requirePostQcJobFailureResolution<S extends string>(
   if (kind === "pre_handoff_recovery") {
     if (
       command.context?.phaseHasPriorHandoff !== false ||
-      command.context?.postQcFailurePhasePreviousStatus !== "qc_passed" ||
+      (command.context?.postQcFailurePhasePreviousStatus !== "in_production" &&
+        command.context?.postQcFailurePhasePreviousStatus !== "qc_passed") ||
       command.context?.postQcFailurePhaseTargetStatus !== "recovery_pending" ||
       command.context?.postQcFailureOrderTargetStatus !== "recovery_pending" ||
       command.context?.postQcFailureShipmentPlanId !== undefined ||
@@ -7607,6 +7603,7 @@ function requirePostQcJobFailureResolution<S extends string>(
     const previousOrderStatus =
       command.context?.postQcFailureOrderPreviousStatus;
     if (
+      previousOrderStatus !== "in_production" &&
       previousOrderStatus !== "qc_passed" &&
       previousOrderStatus !== "awaiting_balance" &&
       previousOrderStatus !== "ready_to_ship"
@@ -9754,7 +9751,7 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
     draft: ["quoted"],
     quoted: ["confirmed", "expired", "cancelled"],
     confirmed: ["in_production", "cancelled"],
-    in_production: ["qc_passed", "cancelled"],
+    in_production: ["qc_passed", "recovery_pending", "cancelled"],
     qc_passed: [
       "awaiting_balance",
       "ready_to_ship",
@@ -9823,7 +9820,8 @@ export const orderPolicy: TransitionPolicy<OrderStatus> = {
       requireBalancePaymentDeadlineSetup("Order", command, true);
     }
     if (
-      (command.current === "qc_passed" ||
+      (command.current === "in_production" ||
+        command.current === "qc_passed" ||
         command.current === "awaiting_balance" ||
         command.current === "ready_to_ship") &&
       command.target === "recovery_pending"
@@ -9972,7 +9970,7 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
     transitions: {
       quoted: ["active", "cancelled"],
       active: ["in_production", "cancelled"],
-      in_production: ["qc_passed", "cancelled"],
+      in_production: ["qc_passed", "recovery_pending", "cancelled"],
       qc_passed: ["shipped", "recovery_pending", "cancelled"],
       shipped: ["delivered", "partially_fulfilled", "cancelled_refunded"],
       delivered: ["completed"],
@@ -9999,7 +9997,8 @@ export const singleOrderPhasePolicy: TransitionPolicy<SingleOrderPhaseStatus> =
         requireAtomicOrderPhaseQcCompletion("OrderPhase(single)", command);
       }
       if (
-        command.current === "qc_passed" &&
+        (command.current === "in_production" ||
+          command.current === "qc_passed") &&
         command.target === "recovery_pending"
       ) {
         requirePostQcJobFailureResolution("OrderPhase(single)", command);

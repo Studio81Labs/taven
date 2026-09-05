@@ -196,6 +196,7 @@ enum OutboxStatus {
   PROCESSING
   DELIVERED
   FAILED
+  SUPERSEDED
 
   @@map("outbox_status")
 }
