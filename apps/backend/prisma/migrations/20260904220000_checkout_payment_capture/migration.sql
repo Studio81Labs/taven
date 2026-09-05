@@ -21,8 +21,10 @@ DECLARE
     target_currency char(3);
     target_provider_intent_id varchar(255);
     target_provider_capture_id varchar(255);
+    target_merchant_reference varchar(255);
     target_payment_created_at timestamptz;
     target_returned_intent_matched boolean := false;
+    target_terminal_merchant_reference_matched boolean := false;
     target_refund_payment_id uuid;
     target_refund_status "refund_status";
     target_refund_amount bigint;
@@ -67,10 +69,12 @@ BEGIN
 
     SELECT payment."provider", payment."status", payment."requested_amount_minor",
            payment."currency", payment."provider_intent_id",
-           payment."provider_capture_id", payment."created_at"
+           payment."provider_capture_id", payment."merchant_reference",
+           payment."created_at"
     INTO target_provider, target_payment_status, target_requested_amount,
          target_currency, target_provider_intent_id,
-         target_provider_capture_id, target_payment_created_at
+         target_provider_capture_id, target_merchant_reference,
+         target_payment_created_at
     FROM "payments" payment
     WHERE payment."id" = NEW."payment_id"
     FOR UPDATE;
@@ -100,6 +104,18 @@ BEGIN
         ) INTO target_returned_intent_matched;
     END IF;
 
+    -- An ambiguous create can be closed without ever learning the provider
+    -- intent. The authenticated merchant reference still binds a later
+    -- non-capture terminal callback to that exact durable payment command.
+    IF target_payment_status = 'VOIDED'
+       AND target_provider_intent_id IS NULL
+       AND NEW."kind" IN ('PAYMENT_PENDING', 'PAYMENT_FAILED') THEN
+        target_terminal_merchant_reference_matched :=
+            target_merchant_reference IS NOT NULL
+            AND NEW."payload" ->> 'merchantReference'
+                IS NOT DISTINCT FROM target_merchant_reference;
+    END IF;
+
     IF NEW."kind" IN (
         'PAYMENT_PENDING', 'PAYMENT_CAPTURED', 'PAYMENT_FAILED'
     ) THEN
@@ -110,7 +126,8 @@ BEGIN
                    'PENDING', 'FAILED', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
                    'PARTIALLY_REFUNDED', 'REFUNDED'
                )
-               OR (NOT target_returned_intent_matched AND (
+               OR (NOT target_returned_intent_matched
+                   AND NOT target_terminal_merchant_reference_matched AND (
                    target_provider_intent_id IS NULL
                    OR target_provider_intent_id !~ '[^[:space:]]'
                    OR NEW."provider_transaction_id" IS DISTINCT FROM
@@ -134,7 +151,8 @@ BEGIN
                    'PENDING', 'FAILED', 'VOIDED', 'CAPTURED',
                    'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'
                )
-               OR (NOT target_returned_intent_matched AND (
+               OR (NOT target_returned_intent_matched
+                   AND NOT target_terminal_merchant_reference_matched AND (
                    target_provider_intent_id IS NULL
                    OR target_provider_intent_id !~ '[^[:space:]]'
                    OR NEW."provider_transaction_id" IS DISTINCT FROM
@@ -189,6 +207,190 @@ CREATE UNIQUE INDEX "payments_checkout_command_id_key"
   ON "payments"("checkout_command_id");
 CREATE UNIQUE INDEX "payments_provider_merchant_reference_key"
   ON "payments"("provider", "merchant_reference");
+
+CREATE OR REPLACE FUNCTION taven_reconcile_payment_provider_event_consumption()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (NEW."kind" = 'PAYMENT_CAPTURED'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM "payments" payment
+            WHERE payment."id" = NEW."payment_id"
+              AND payment."status" IN (
+                  'CAPTURED', 'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'
+              )
+              AND payment."provider" = NEW."provider"
+              AND payment."provider_capture_id" = NEW."provider_transaction_id"
+              AND payment."captured_amount_minor" = NEW."amount_minor"
+              AND payment."currency" = NEW."currency"
+              AND (
+                  payment."captured_at" = NEW."verified_at"
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "payment_provider_events" exact_event
+                      WHERE exact_event."id" <> NEW."id"
+                        AND exact_event."payment_id" = NEW."payment_id"
+                        AND exact_event."refund_transaction_id" IS NULL
+                        AND exact_event."provider" = NEW."provider"
+                        AND exact_event."kind" = 'PAYMENT_CAPTURED'
+                        AND exact_event."provider_transaction_id" =
+                            NEW."provider_transaction_id"
+                        AND exact_event."amount_minor" = NEW."amount_minor"
+                        AND exact_event."currency" = NEW."currency"
+                        AND exact_event."verified_at" = payment."captured_at"
+                  )
+              )
+        ))
+       OR (NEW."kind" = 'PAYMENT_FAILED'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "payments" payment
+               WHERE payment."id" = NEW."payment_id"
+                 AND payment."status" IN (
+                     'FAILED', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
+                     'PARTIALLY_REFUNDED', 'REFUNDED'
+                 )
+                 AND payment."provider" = NEW."provider"
+                 AND payment."requested_amount_minor" = NEW."amount_minor"
+                 AND payment."currency" = NEW."currency"
+                 AND (
+                     payment."provider_intent_id" =
+                         NEW."provider_transaction_id"
+                     OR (
+                         payment."status" = 'VOIDED'
+                         AND payment."provider_intent_id" IS NULL
+                         AND (
+                             (
+                                 payment."merchant_reference" IS NOT NULL
+                                 AND NEW."payload" ->> 'merchantReference'
+                                     IS NOT DISTINCT FROM
+                                     payment."merchant_reference"
+                             )
+                             OR EXISTS (
+                                 SELECT 1
+                                 FROM "outbox_messages" command
+                                 WHERE command."aggregate_type" = 'Payment'
+                                   AND command."aggregate_id" = payment."id"
+                                   AND command."message_type" = 'void_payment'
+                                   AND command."payload" ->> 'paymentId' =
+                                       payment."id"::text
+                                   AND command."payload" ->> 'provider' =
+                                       NEW."provider"
+                                   AND command."payload" ->> 'providerIntentId' =
+                                       NEW."provider_transaction_id"
+                                   AND command."payload" ->> 'action' =
+                                       'void_payment'
+                             )
+                         )
+                     )
+                 )
+           ))
+       OR (NEW."kind" = 'REFUND_SUCCEEDED'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "refund_transactions" refund
+               LEFT JOIN "payment_provider_events" selected_event
+                 ON selected_event."id" = refund."provider_result_event_id"
+                AND selected_event."refund_transaction_id" = refund."id"
+               WHERE refund."id" = NEW."refund_transaction_id"
+                 AND refund."payment_id" = NEW."payment_id"
+                 AND refund."provider" = NEW."provider"
+                 AND refund."provider_refund_id" = NEW."provider_transaction_id"
+                 AND refund."amount_minor" = NEW."amount_minor"
+                 AND (
+                     (refund."status" = 'SUCCEEDED'
+                      AND taven_refund_result_event_matches(
+                          refund."id", refund."provider_result_event_id",
+                          'SUCCEEDED'::"refund_status"
+                      ))
+                     OR (refund."status" = 'FAILED'
+                         AND taven_refund_result_event_matches(
+                             refund."id", refund."provider_result_event_id",
+                             'FAILED'::"refund_status"
+                         )
+                         AND (
+                             EXISTS (
+                                 SELECT 1
+                                 FROM "payment_provider_events" later_failure
+                                 WHERE later_failure."payment_id" = NEW."payment_id"
+                                   AND later_failure."refund_transaction_id" =
+                                       NEW."refund_transaction_id"
+                                   AND later_failure."provider" = NEW."provider"
+                                   AND later_failure."kind" = 'REFUND_FAILED'
+                                   AND later_failure."provider_transaction_id" =
+                                       NEW."provider_transaction_id"
+                                   AND later_failure."amount_minor" = NEW."amount_minor"
+                                   AND later_failure."currency" = NEW."currency"
+                                   AND later_failure."occurred_at" >= NEW."occurred_at"
+                             )
+                             OR EXISTS (
+                                 SELECT 1
+                                 FROM "refund_transactions" retry
+                                 WHERE retry."replaces_refund_transaction_id" =
+                                       refund."id"
+                                   AND retry."replaces_failure_provider_event_id" =
+                                       refund."provider_result_event_id"
+                                   AND retry."status" = 'SUSPENDED'
+                                   AND retry."source_success_provider_event_id" =
+                                       NEW."id"
+                                   AND retry."reconciliation_started_at" =
+                                       NEW."verified_at"
+                             )
+                         ))
+                     OR (refund."status" = 'SUSPENDED'
+                         AND refund."source_success_provider_event_id" IS NOT NULL
+                         AND refund."reconciliation_started_at" IS NOT NULL
+                         AND refund."provider_result_event_id" = NEW."id")
+                 )
+           ))
+       OR (NEW."kind" = 'REFUND_FAILED'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM "refund_transactions" refund
+               LEFT JOIN "payment_provider_events" selected_event
+                 ON selected_event."id" = refund."provider_result_event_id"
+                AND selected_event."refund_transaction_id" = refund."id"
+               WHERE refund."id" = NEW."refund_transaction_id"
+                 AND refund."payment_id" = NEW."payment_id"
+                 AND refund."provider" = NEW."provider"
+                 AND refund."provider_refund_id" = NEW."provider_transaction_id"
+                 AND refund."amount_minor" = NEW."amount_minor"
+                 AND (
+                     (refund."status" = 'FAILED'
+                      AND taven_refund_result_event_matches(
+                          refund."id", refund."provider_result_event_id",
+                          'FAILED'::"refund_status"
+                      ))
+                     OR (refund."status" = 'SUCCEEDED'
+                         AND taven_refund_result_event_matches(
+                             refund."id", refund."provider_result_event_id",
+                             'SUCCEEDED'::"refund_status"
+                         )
+                         AND EXISTS (
+                             SELECT 1
+                             FROM "payment_provider_events" later_success
+                             WHERE later_success."payment_id" = NEW."payment_id"
+                               AND later_success."refund_transaction_id" =
+                                   NEW."refund_transaction_id"
+                               AND later_success."provider" = NEW."provider"
+                               AND later_success."kind" = 'REFUND_SUCCEEDED'
+                               AND later_success."provider_transaction_id" =
+                                   NEW."provider_transaction_id"
+                               AND later_success."amount_minor" = NEW."amount_minor"
+                               AND later_success."currency" = NEW."currency"
+                               AND later_success."occurred_at" >= NEW."occurred_at"
+                         ))
+                 )
+           )) THEN
+        RAISE EXCEPTION 'Payment provider event and its financial outcome must commit atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_consumption_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
 
 -- A provider intent can return after checkout cancellation already won the
 -- Payment lock. Its durable void command remains the authoritative intent
@@ -1131,11 +1333,7 @@ BEGIN
               payment."provider_intent_id" IS NULL
               AND event_merchant_reference IS NOT NULL
               AND payment."merchant_reference" = event_merchant_reference
-              AND (
-                  payment."status" = 'CREATED'
-                  OR (event_kind = 'PAYMENT_CAPTURED'
-                      AND payment."status" = 'VOIDED')
-              )
+              AND payment."status" IN ('CREATED', 'VOIDED')
           )
           OR (
               payment."provider_intent_id" IS NULL
@@ -1173,11 +1371,7 @@ BEGIN
               payment."provider_intent_id" IS NULL
               AND event_merchant_reference IS NOT NULL
               AND payment."merchant_reference" = event_merchant_reference
-              AND (
-                  payment."status" = 'CREATED'
-                  OR (event_kind = 'PAYMENT_CAPTURED'
-                      AND payment."status" = 'VOIDED')
-              )
+              AND payment."status" IN ('CREATED', 'VOIDED')
           )
           OR (
               payment."provider_intent_id" IS NULL

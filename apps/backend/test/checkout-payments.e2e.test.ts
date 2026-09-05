@@ -2873,6 +2873,120 @@ describe("checkout payment capture protocol", () => {
       expect(cancelResponse.status).toBe(200);
 
       const lateTransactionId = `late-${ambiguousPayment.id}`;
+      const mismatchedTerminalEventId = `sandbox-ambiguous-mismatched-${ambiguousPayment.id}`;
+      await expect(
+        prisma.$executeRaw`
+          WITH receipt AS (
+            SELECT jsonb_build_object(
+              'paymentId', ${ambiguousPayment.id}::text,
+              'providerEventId', ${mismatchedTerminalEventId}::text,
+              'providerTransactionId', ${lateTransactionId}::text,
+              'merchantReference', ${randomUUID()}::text,
+              'kind', 'PAYMENT_PENDING',
+              'amountMinor', ${ambiguousPayment.requestedAmountMinor}::text,
+              'currency', ${ambiguousPayment.currency}::text,
+              'evidence', '{}'::jsonb
+            ) AS payload
+          )
+          INSERT INTO "payment_provider_events" (
+            "id", "payment_id", "refund_transaction_id", "provider",
+            "provider_event_id", "provider_transaction_id", "kind",
+            "amount_minor", "currency", "payload", "payload_hash",
+            "occurred_at", "authenticated_at", "verified_at", "created_at"
+          )
+          SELECT gen_random_uuid(), ${ambiguousPayment.id}::uuid, NULL,
+                 'sandbox', ${mismatchedTerminalEventId}, ${lateTransactionId},
+                 'PAYMENT_PENDING'::"payment_provider_event_kind",
+                 ${ambiguousPayment.requestedAmountMinor},
+                 ${ambiguousPayment.currency}, receipt.payload,
+                 encode(sha256(convert_to(receipt.payload::text, 'UTF8')), 'hex'),
+                 clock_timestamp(), clock_timestamp(), clock_timestamp(),
+                 clock_timestamp()
+          FROM receipt
+        `,
+      ).rejects.toThrow(
+        "Payment provider event does not match its exact Payment outcome scope",
+      );
+
+      const terminalCallbacks = [
+        {
+          providerEventId: `sandbox-ambiguous-pending-${ambiguousPayment.id}`,
+          status: "PENDING",
+          kind: "PAYMENT_PENDING",
+        },
+        {
+          providerEventId: `sandbox-ambiguous-failed-${ambiguousPayment.id}`,
+          status: "FAILED",
+          kind: "PAYMENT_FAILED",
+        },
+      ] as const;
+      for (const terminal of terminalCallbacks) {
+        const payload = {
+          providerEventId: terminal.providerEventId,
+          providerTransactionId: lateTransactionId,
+          merchantReference: ambiguousPayment.merchantReference,
+          status: terminal.status,
+          amountMinor: ambiguousPayment.requestedAmountMinor.toString(),
+          currency: ambiguousPayment.currency,
+          occurredAt: new Date().toISOString(),
+        };
+        const terminalResponse = await sendPublicWebhook(payload);
+        expect(terminalResponse.status).toBe(200);
+        await expect(terminalResponse.json()).resolves.toEqual({
+          outcome: "IGNORED_TERMINAL",
+        });
+        const terminalReplay = await sendPublicWebhook(payload);
+        expect(terminalReplay.status).toBe(200);
+        await expect(terminalReplay.json()).resolves.toEqual({
+          outcome: "DUPLICATE",
+        });
+      }
+
+      await expect(
+        Promise.all([
+          prisma.payment.findUniqueOrThrow({
+            where: { id: ambiguousPayment.id },
+            select: { status: true, providerIntentId: true },
+          }),
+          prisma.order.findUniqueOrThrow({
+            where: { id: outageFoundation.orderId },
+            select: { status: true },
+          }),
+          prisma.paymentProviderEvent.findMany({
+            where: {
+              paymentId: ambiguousPayment.id,
+              kind: { in: terminalCallbacks.map(({ kind }) => kind) },
+            },
+            orderBy: { createdAt: "asc" },
+            select: { kind: true, payload: true },
+          }),
+          prisma.refundTransaction.count({
+            where: { paymentId: ambiguousPayment.id },
+          }),
+          prisma.job.count({
+            where: { orderId: outageFoundation.orderId },
+          }),
+          prisma.outboxMessage.count({
+            where: {
+              aggregateId: ambiguousPayment.id,
+              messageType: "void_payment",
+            },
+          }),
+        ]),
+      ).resolves.toEqual([
+        { status: "VOIDED", providerIntentId: null },
+        { status: "CANCELLED" },
+        terminalCallbacks.map(({ kind }) => ({
+          kind,
+          payload: expect.objectContaining({
+            merchantReference: ambiguousPayment.merchantReference,
+          }),
+        })),
+        0,
+        0,
+        0,
+      ]);
+
       const lateCapture = {
         providerEventId: `sandbox-ambiguous-capture-${ambiguousPayment.id}`,
         providerTransactionId: lateTransactionId,
