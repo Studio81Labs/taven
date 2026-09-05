@@ -26,6 +26,7 @@ import type {
 import {
   PAYMENT_PROVIDER,
   type CheckoutPaymentMethod,
+  PaymentIntentCreationError,
   type PaymentProviderPort,
   type VerifiedPaymentEvent,
 } from "./payment-provider.port";
@@ -190,9 +191,10 @@ export class PaymentsService {
             : { withdrawalExceptionAcknowledgedAt: observedAt }),
         },
       });
+      const paymentId = randomUUID();
       const payment = await transaction.payment.create({
         data: {
-          id: randomUUID(),
+          id: paymentId,
           orderId: context.order.id,
           priceSnapshotId: binding.priceSnapshotId,
           orderPriceBindingId: binding.id,
@@ -200,6 +202,8 @@ export class PaymentsService {
           role: schedule.role,
           provider: capabilities.provider,
           checkoutMethod: input.method,
+          merchantReference: paymentId,
+          checkoutCommandId: record.id,
           requestedAmountMinor: schedule.grossAmountMinor,
           currency: binding.priceSnapshot.currency,
           checkoutCaptureExpiresAt: new Date(
@@ -220,6 +224,7 @@ export class PaymentsService {
     try {
       intent = await this.provider.createIntent({
         paymentId: staged.payment.id,
+        merchantReference: staged.payment.merchantReference!,
         orderReference: staged.orderReference,
         amountMinor: staged.payment.requestedAmountMinor,
         currency: staged.payment.currency,
@@ -229,12 +234,36 @@ export class PaymentsService {
         expiresAt: staged.payment.checkoutCaptureExpiresAt!,
         returnUrls,
       });
-    } catch {
-      await this.recordIntentFailure(
-        staged.payment.id,
-        staged.idempotencyRecordId,
-        staged.idempotencyRecordId,
-      );
+    } catch (error) {
+      if (
+        error instanceof PaymentIntentCreationError &&
+        error.providerIntentId
+      ) {
+        const closed = await this.closeReturnedIntent(
+          staged.payment.id,
+          staged.idempotencyRecordId,
+          error.providerIntentId,
+        ).catch(() => null);
+        if (closed) return closed;
+        await this.provider
+          .cancelIntent(error.providerIntentId)
+          .catch(() => undefined);
+      } else if (
+        error instanceof PaymentIntentCreationError &&
+        error.outcome === "DEFINITIVE_FAILURE"
+      ) {
+        await this.recordIntentFailure(
+          staged.payment.id,
+          staged.idempotencyRecordId,
+          staged.idempotencyRecordId,
+        );
+      } else {
+        const reconciled = await this.recordIntentAmbiguity(
+          staged.payment.id,
+          staged.idempotencyRecordId,
+        );
+        if (reconciled) return reconciled;
+      }
       throw new BadGatewayException("Payment provider is unavailable");
     }
 
@@ -245,6 +274,23 @@ export class PaymentsService {
           where: { id: staged.payment.id },
         });
         if (payment.status !== PaymentStatus.CREATED) {
+          if (payment.providerIntentId === intent.providerIntentId) {
+            const reconciled =
+              payment.status === PaymentStatus.PENDING &&
+              !payment.providerCheckoutUrl
+                ? await transaction.payment.update({
+                    where: { id: payment.id },
+                    data: { providerCheckoutUrl: intent.checkoutUrl },
+                  })
+                : payment;
+            const response = paymentDto(reconciled);
+            await completeIdempotency(
+              transaction,
+              staged.idempotencyRecordId,
+              response,
+            );
+            return response;
+          }
           throw new ConflictException(
             "Checkout payment closed during intent creation",
           );
@@ -349,7 +395,7 @@ export class PaymentsService {
         ${kind}::payment_provider_event_kind,
         ${event.amountMinor}, ${event.currency}::char(3),
         ${event.occurredAt}, ${jsonInput(event.evidence)}::jsonb,
-        ${captureContextCurrent}
+        ${captureContextCurrent}, ${event.merchantReference}
       ) AS outcome
     `;
     return { outcome: rows[0]?.outcome ?? "IGNORED" };
@@ -359,12 +405,16 @@ export class PaymentsService {
     event: VerifiedPaymentEvent,
   ): Promise<boolean> {
     try {
-      const payment = await this.prisma.payment.findUnique({
+      const payment = await this.prisma.payment.findFirst({
         where: {
-          provider_providerIntentId: {
-            provider: event.provider,
-            providerIntentId: event.providerTransactionId,
-          },
+          provider: event.provider,
+          OR: [
+            { providerIntentId: event.providerTransactionId },
+            {
+              providerIntentId: null,
+              merchantReference: event.merchantReference,
+            },
+          ],
         },
         select: {
           orderId: true,
@@ -399,12 +449,16 @@ export class PaymentsService {
   }
 
   private async tryReacquireForCapture(event: VerifiedPaymentEvent) {
-    const payment = await this.prisma.payment.findUnique({
+    const payment = await this.prisma.payment.findFirst({
       where: {
-        provider_providerIntentId: {
-          provider: event.provider,
-          providerIntentId: event.providerTransactionId,
-        },
+        provider: event.provider,
+        OR: [
+          { providerIntentId: event.providerTransactionId },
+          {
+            providerIntentId: null,
+            merchantReference: event.merchantReference,
+          },
+        ],
       },
       include: {
         orderPriceBinding: true,
@@ -413,7 +467,8 @@ export class PaymentsService {
     });
     if (
       !payment ||
-      payment.status !== PaymentStatus.PENDING ||
+      (payment.status !== PaymentStatus.CREATED &&
+        payment.status !== PaymentStatus.PENDING) ||
       !payment.captureAuthorized ||
       !payment.checkoutCaptureExpiresAt ||
       payment.checkoutCaptureExpiresAt.getTime() <= Date.now()
@@ -512,6 +567,38 @@ export class PaymentsService {
         paymentId,
         status: "FAILED",
       });
+    });
+  }
+
+  private async recordIntentAmbiguity(
+    paymentId: string,
+    idempotencyRecordId: string,
+  ): Promise<CheckoutPaymentDto | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      await lockPayment(transaction, paymentId);
+      const payment = await transaction.payment.findUniqueOrThrow({
+        where: { id: paymentId },
+      });
+      if (payment.status !== PaymentStatus.CREATED) {
+        const response = paymentDto(payment);
+        await completeIdempotency(transaction, idempotencyRecordId, response);
+        return response;
+      }
+      await transaction.auditEvent.create({
+        data: {
+          orderId: payment.orderId,
+          paymentId: payment.id,
+          correlationId: idempotencyRecordId,
+          eventType: "checkout.payment_intent_creation_ambiguous",
+          actorKind: "SYSTEM",
+          payload: jsonInput({
+            checkoutCommandId: idempotencyRecordId,
+            merchantReference: payment.merchantReference,
+            provider: payment.provider,
+          }),
+        },
+      });
+      return null;
     });
   }
 
@@ -810,6 +897,21 @@ async function checkoutIdempotencyAfterLock(
     existing.status !== IdempotencyStatus.COMPLETED ||
     !existing.responseBody
   ) {
+    const reconciledPayment = await transaction.payment.findUnique({
+      where: { checkoutCommandId: existing.id },
+    });
+    if (
+      reconciledPayment &&
+      reconciledPayment.status !== PaymentStatus.CREATED
+    ) {
+      const replay = paymentDto(reconciledPayment);
+      await completeIdempotency(transaction, existing.id, replay);
+      return {
+        replay,
+        nextGeneration: existing.generation,
+        observedAt,
+      };
+    }
     throw new ConflictException("Payment intent creation is still incomplete");
   }
   const response = existing.responseBody as Record<string, unknown>;

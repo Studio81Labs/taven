@@ -1250,6 +1250,8 @@ model IdempotencyRecord {
   createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  checkoutPayment Payment? @relation("CheckoutPaymentCommand")
+
   @@unique([namespace, idempotencyKey, generation], map: "idempotency_records_namespace_key_generation_key")
   @@index([expiresAt])
   @@map("idempotency_records")
@@ -2133,6 +2135,8 @@ model Payment {
   role                          PaymentRole
   provider                      String        @db.VarChar(100)
   checkoutMethod                String        @default("ALL") @map("checkout_method") @db.VarChar(50)
+  merchantReference             String?       @map("merchant_reference") @db.VarChar(255)
+  checkoutCommandId             String?       @unique @map("checkout_command_id") @db.Uuid
   providerIntentId              String?       @map("provider_intent_id") @db.VarChar(255)
   providerCheckoutUrl           String?       @map("provider_checkout_url") @db.Text
   providerCaptureId             String?       @map("provider_capture_id") @db.VarChar(255)
@@ -2150,6 +2154,7 @@ model Payment {
   updatedAt                     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   orderPriceBinding              OrderPriceBinding             @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
+  checkoutCommand                IdempotencyRecord?            @relation("CheckoutPaymentCommand", fields: [checkoutCommandId], references: [id], onDelete: Restrict, map: "payments_checkout_command_fkey")
   priceSnapshot                  PriceSnapshot                 @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
   paymentSchedule                PaymentSchedule               @relation(fields: [paymentScheduleId, priceSnapshotId, role, requestedAmountMinor], references: [id, priceSnapshotId, role, grossAmountMinor], onDelete: Restrict, map: "payments_schedule_contract_fkey")
   intentCreationFailureEvidence  PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailurePayment")
@@ -2164,6 +2169,7 @@ model Payment {
 
   @@unique([id, orderId])
   @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
+  @@unique([provider, merchantReference], map: "payments_provider_merchant_reference_key")
   @@unique([provider, providerCaptureId], map: "payments_provider_provider_capture_id_key")
   @@unique([intentCreationFailureResultId, id, provider], map: "payments_intent_creation_failure_scope_key")
   @@index([orderId, status])

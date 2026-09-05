@@ -10,10 +10,14 @@ import {
 } from "../src/modules/automatic-quotes/delivery-capability.port";
 import {
   PAYMENT_PROVIDER,
+  PaymentIntentCreationError,
   type PaymentProviderPort,
 } from "../src/modules/payments/payment-provider.port";
 import { PaymentsModule } from "../src/modules/payments/payments.module";
-import { SandboxPaymentProviderAdapter } from "../src/modules/payments/sandbox-payment-provider.adapter";
+import {
+  SandboxPaymentProviderAdapter,
+  sandboxEventSignature,
+} from "../src/modules/payments/sandbox-payment-provider.adapter";
 import { PrismaService } from "../src/prisma/prisma.service";
 import {
   PersistenceFactory,
@@ -774,7 +778,8 @@ describe("checkout payment capture protocol", () => {
       publicBaseUrl: "http://sandbox.local",
       webhookSigningSecret: signingSecret,
     });
-    let providerAvailable = true;
+    let providerFailure: "DEFINITIVE" | "AMBIGUOUS" | null = null;
+    let providerCreateCalls = 0;
     let sandboxCheckoutBaseUrl = "http://sandbox.local";
     let latestReturnUrls:
       | Readonly<{ success: string; cancelled: string; pending: string }>
@@ -784,7 +789,16 @@ describe("checkout payment capture protocol", () => {
       capabilities: () => sandbox.capabilities(),
       refundRetrySafety: () => sandbox.refundRetrySafety(),
       createIntent: async (input) => {
-        if (!providerAvailable) throw new Error("simulated provider outage");
+        providerCreateCalls += 1;
+        if (providerFailure === "DEFINITIVE") {
+          throw new PaymentIntentCreationError(
+            "DEFINITIVE_FAILURE",
+            "simulated provider rejection",
+          );
+        }
+        if (providerFailure === "AMBIGUOUS") {
+          throw new Error("simulated lost provider response");
+        }
         latestReturnUrls = input.returnUrls;
         const intent = await sandbox.createIntent(input);
         return {
@@ -825,7 +839,7 @@ describe("checkout payment capture protocol", () => {
       sandboxCheckoutBaseUrl = baseUrl.origin;
 
       const outageIdempotencyKey = "sandbox-http-outage-1";
-      const createOutagePayment = () =>
+      const createOutagePayment = (idempotencyKey = outageIdempotencyKey) =>
         fetch(
           new URL(
             `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/payments`,
@@ -836,7 +850,7 @@ describe("checkout payment capture protocol", () => {
             headers: {
               authorization: `Bearer ${outageToken}`,
               "content-type": "application/json",
-              "idempotency-key": outageIdempotencyKey,
+              "idempotency-key": idempotencyKey,
             },
             body: JSON.stringify({
               email: outageCustomerEmail,
@@ -927,6 +941,7 @@ describe("checkout payment capture protocol", () => {
       const event = {
         providerEventId: `sandbox-http-capture-${created.paymentId}`,
         providerTransactionId: `sandbox-${created.paymentId}`,
+        merchantReference: created.paymentId,
         status: "CAPTURED",
         amountMinor: String(created.amountMinor),
         currency: created.currency,
@@ -987,7 +1002,7 @@ describe("checkout payment capture protocol", () => {
       expect(replayResponse.status).toBe(200);
       await expect(replayResponse.json()).resolves.toEqual(created);
 
-      providerAvailable = false;
+      providerFailure = "DEFINITIVE";
       const outageResponse = await createOutagePayment();
       expect(outageResponse.status).toBe(502);
       await expect(
@@ -1039,6 +1054,103 @@ describe("checkout payment capture protocol", () => {
           where: { orderId: outageFoundation.orderId, status: "FAILED" },
         }),
       ).resolves.toBe(2);
+
+      providerFailure = "AMBIGUOUS";
+      const ambiguousKey = "sandbox-http-ambiguous-1";
+      const callsBeforeAmbiguity = providerCreateCalls;
+      const ambiguousResponse = await createOutagePayment(ambiguousKey);
+      expect(ambiguousResponse.status).toBe(502);
+      const ambiguousPayment = await prisma.payment.findFirstOrThrow({
+        where: {
+          orderId: outageFoundation.orderId,
+          status: "CREATED",
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      expect(ambiguousPayment).toMatchObject({
+        merchantReference: ambiguousPayment.id,
+        checkoutCommandId: expect.any(String),
+        intentCreationFailureResultId: null,
+      });
+      await expect(
+        prisma.auditEvent.count({
+          where: {
+            paymentId: ambiguousPayment.id,
+            eventType: "checkout.payment_intent_creation_ambiguous",
+          },
+        }),
+      ).resolves.toBe(1);
+
+      const blockedRetry = await createOutagePayment(
+        "sandbox-http-ambiguous-other",
+      );
+      expect(blockedRetry.status).toBe(409);
+      expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 1);
+
+      const cancelResponse = await fetch(
+        new URL(
+          `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/payment`,
+          baseUrl,
+        ),
+        {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${outageToken}` },
+        },
+      );
+      expect(cancelResponse.status).toBe(200);
+
+      const lateTransactionId = `late-${ambiguousPayment.id}`;
+      const lateCapture = {
+        providerEventId: `sandbox-ambiguous-capture-${ambiguousPayment.id}`,
+        providerTransactionId: lateTransactionId,
+        merchantReference: ambiguousPayment.merchantReference,
+        status: "CAPTURED",
+        amountMinor: ambiguousPayment.requestedAmountMinor.toString(),
+        currency: ambiguousPayment.currency,
+        occurredAt: new Date().toISOString(),
+      };
+      const lateCaptureResponse = await fetch(
+        new URL("/payments/webhooks/sandbox", baseUrl),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-taven-sandbox-signature": sandboxEventSignature(
+              lateCapture,
+              signingSecret,
+            ),
+          },
+          body: JSON.stringify(lateCapture),
+        },
+      );
+      expect(lateCaptureResponse.status).toBe(200);
+      await expect(lateCaptureResponse.json()).resolves.toEqual({
+        outcome: "REFUND_PENDING",
+      });
+      await expect(
+        prisma.payment.findUniqueOrThrow({
+          where: { id: ambiguousPayment.id },
+          select: {
+            status: true,
+            providerIntentId: true,
+            providerCaptureId: true,
+            refunds: { select: { status: true } },
+          },
+        }),
+      ).resolves.toEqual({
+        status: "REFUND_PENDING",
+        providerIntentId: null,
+        providerCaptureId: lateTransactionId,
+        refunds: [{ status: "PENDING" }],
+      });
+
+      const reconciledReplay = await createOutagePayment(ambiguousKey);
+      expect(reconciledReplay.status).toBe(200);
+      await expect(reconciledReplay.json()).resolves.toMatchObject({
+        paymentId: ambiguousPayment.id,
+        status: "REFUND_PENDING",
+      });
+      expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 1);
     } finally {
       await app?.close();
       restoreEnvironment(

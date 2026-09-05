@@ -55,6 +55,7 @@ export class SandboxCheckoutController {
     const body = {
       providerEventId: `sandbox-checkout:${payment.id}:${status}`,
       providerTransactionId: providerIntentId,
+      merchantReference: payment.merchantReference,
       status,
       amountMinor: payment.requestedAmountMinor.toString(),
       currency: payment.currency,
@@ -85,6 +86,7 @@ export class SandboxCheckoutController {
       select: {
         id: true,
         providerIntentId: true,
+        merchantReference: true,
         status: true,
         requestedAmountMinor: true,
         currency: true,

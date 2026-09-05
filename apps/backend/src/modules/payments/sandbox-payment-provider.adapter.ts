@@ -69,6 +69,11 @@ export class SandboxPaymentProviderAdapter implements PaymentProviderPort {
         "providerTransactionId",
         255,
       ),
+      merchantReference: requiredText(
+        body.merchantReference,
+        "merchantReference",
+        255,
+      ),
       status: paymentStatus(body.status),
       amountMinor: positiveBigInt(body.amountMinor, "amountMinor"),
       currency: currency(body.currency),

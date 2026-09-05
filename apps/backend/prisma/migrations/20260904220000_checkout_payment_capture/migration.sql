@@ -142,11 +142,30 @@ $$;
 
 ALTER TABLE "payments"
   ADD COLUMN "checkout_method" varchar(50) NOT NULL DEFAULT 'ALL',
+  ADD COLUMN "merchant_reference" varchar(255),
+  ADD COLUMN "checkout_command_id" uuid,
   ADD COLUMN "provider_checkout_url" text;
 
 ALTER TABLE "payments"
   ADD CONSTRAINT "payments_checkout_method_check"
-  CHECK ("checkout_method" IN ('ALL', 'CARD', 'BANK_TRANSFER'));
+  CHECK ("checkout_method" IN ('ALL', 'CARD', 'BANK_TRANSFER')),
+  ADD CONSTRAINT "payments_checkout_command_values_check" CHECK (
+      ("checkout_method" = 'ALL'
+       AND "merchant_reference" IS NULL
+       AND "checkout_command_id" IS NULL)
+      OR ("checkout_method" IN ('CARD', 'BANK_TRANSFER')
+          AND "merchant_reference" IS NOT NULL
+          AND "merchant_reference" ~ '[^[:space:]]'
+          AND "checkout_command_id" IS NOT NULL)
+  ),
+  ADD CONSTRAINT "payments_checkout_command_fkey"
+  FOREIGN KEY ("checkout_command_id") REFERENCES "idempotency_records"("id")
+  ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+
+CREATE UNIQUE INDEX "payments_checkout_command_id_key"
+  ON "payments"("checkout_command_id");
+CREATE UNIQUE INDEX "payments_provider_merchant_reference_key"
+  ON "payments"("provider", "merchant_reference");
 
 -- A provider intent can return after checkout cancellation already won the
 -- Payment lock. Its durable void command remains the authoritative intent
@@ -173,19 +192,30 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        IF NEW."provider_checkout_url" IS NOT NULL THEN
-            RAISE EXCEPTION 'new Payment cannot already contain a provider checkout URL'
+        IF NEW."provider_checkout_url" IS NOT NULL
+           OR (NEW."checkout_method" IN ('CARD', 'BANK_TRANSFER') AND (
+               NEW."merchant_reference" IS NULL
+               OR NEW."checkout_command_id" IS NULL
+           )) THEN
+            RAISE EXCEPTION 'new checkout Payment requires its command and merchant reference before provider dispatch'
                 USING ERRCODE = '23514', CONSTRAINT = 'payment_checkout_identity_check';
         END IF;
         RETURN NEW;
     END IF;
 
     IF NEW."checkout_method" IS DISTINCT FROM OLD."checkout_method"
+       OR NEW."merchant_reference" IS DISTINCT FROM OLD."merchant_reference"
+       OR NEW."checkout_command_id" IS DISTINCT FROM OLD."checkout_command_id"
        OR (OLD."provider_checkout_url" IS NOT NULL
            AND NEW."provider_checkout_url" IS DISTINCT FROM OLD."provider_checkout_url")
        OR (OLD."provider_checkout_url" IS NULL
            AND NEW."provider_checkout_url" IS NOT NULL
-           AND NOT (OLD."status" = 'CREATED' AND NEW."status" = 'PENDING'))
+           AND NOT (
+               (OLD."status" = 'CREATED' AND NEW."status" = 'PENDING')
+               OR (OLD."status" = 'PENDING' AND NEW."status" = 'PENDING'
+                   AND OLD."provider_intent_id" IS NOT NULL
+                   AND NEW."provider_intent_id" = OLD."provider_intent_id")
+           ))
        OR (NEW."provider_checkout_url" IS NOT NULL
            AND NEW."provider_checkout_url" !~ '^https?://[^[:space:]]+$') THEN
         RAISE EXCEPTION 'Payment checkout identity is immutable and assigned only with its provider intent'
@@ -480,7 +510,8 @@ CREATE FUNCTION taven_apply_checkout_payment_event(
     event_currency char(3),
     event_occurred_at timestamptz,
     event_evidence jsonb,
-    event_capture_context_valid boolean DEFAULT true
+    event_capture_context_valid boolean DEFAULT true,
+    event_merchant_reference text DEFAULT NULL
 )
 RETURNS text
 LANGUAGE plpgsql
@@ -529,6 +560,16 @@ BEGIN
       AND (
           payment."provider_intent_id" = event_transaction_id
           OR (
+              payment."provider_intent_id" IS NULL
+              AND event_merchant_reference IS NOT NULL
+              AND payment."merchant_reference" = event_merchant_reference
+              AND (
+                  payment."status" = 'CREATED'
+                  OR (event_kind = 'PAYMENT_CAPTURED'
+                      AND payment."status" = 'VOIDED')
+              )
+          )
+          OR (
               event_kind = 'PAYMENT_CAPTURED'
               AND payment."provider_intent_id" IS NULL
               AND payment."status" = 'VOIDED'
@@ -561,6 +602,16 @@ BEGIN
       AND payment."provider" = event_provider
       AND (
           payment."provider_intent_id" = event_transaction_id
+          OR (
+              payment."provider_intent_id" IS NULL
+              AND event_merchant_reference IS NOT NULL
+              AND payment."merchant_reference" = event_merchant_reference
+              AND (
+                  payment."status" = 'CREATED'
+                  OR (event_kind = 'PAYMENT_CAPTURED'
+                      AND payment."status" = 'VOIDED')
+              )
+          )
           OR (
               event_kind = 'PAYMENT_CAPTURED'
               AND payment."provider_intent_id" IS NULL
@@ -610,11 +661,31 @@ BEGIN
         RAISE EXCEPTION 'provider amount or currency does not match the Payment'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
     END IF;
+    IF target_payment."merchant_reference" IS NOT NULL
+       AND event_merchant_reference IS DISTINCT FROM
+           target_payment."merchant_reference" THEN
+        RAISE EXCEPTION 'provider merchant reference does not match the Payment command'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
+    END IF;
+
+    -- A create request can be accepted even when its HTTP response is lost.
+    -- The provider-authenticated merchant reference binds that intent back to
+    -- the one durable checkout command before any provider event is applied.
+    IF target_payment."status" = 'CREATED' THEN
+        UPDATE "payments"
+        SET "status" = 'PENDING',
+            "provider_intent_id" = event_transaction_id,
+            "updated_at" = verified_at
+        WHERE "id" = target_payment."id";
+        SELECT * INTO target_payment FROM "payments"
+        WHERE "id" = target_payment."id" FOR UPDATE;
+    END IF;
 
     receipt_payload := jsonb_build_object(
         'paymentId', target_payment."id"::text,
         'providerEventId', event_id,
         'providerTransactionId', event_transaction_id,
+        'merchantReference', event_merchant_reference,
         'kind', event_kind::text,
         'amountMinor', event_amount_minor::text,
         'currency', event_currency,

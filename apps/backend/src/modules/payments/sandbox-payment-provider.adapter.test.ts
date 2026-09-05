@@ -21,6 +21,7 @@ describe("SandboxPaymentProviderAdapter", () => {
     await expect(
       adapter.createIntent({
         paymentId: "00000000-0000-4000-8000-000000000001",
+        merchantReference: "00000000-0000-4000-8000-000000000001",
         orderReference: "TAV-1",
         amountMinor: 12_300n,
         currency: "CZK",
@@ -45,6 +46,7 @@ describe("SandboxPaymentProviderAdapter", () => {
     const body = {
       providerEventId: "event-1",
       providerTransactionId: "sandbox-payment-1",
+      merchantReference: "00000000-0000-4000-8000-000000000001",
       status: "CAPTURED",
       amountMinor: "12300",
       currency: "CZK",

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComgatePaymentProviderAdapter } from "./comgate-payment-provider.adapter";
+import { PaymentIntentCreationError } from "./payment-provider.port";
 
 const adapter = new ComgatePaymentProviderAdapter({
   provider: "comgate",
@@ -56,6 +57,7 @@ describe("ComgatePaymentProviderAdapter", () => {
     );
     const result = await adapter.createIntent({
       paymentId: "00000000-0000-4000-8000-000000000001",
+      merchantReference: "00000000-0000-4000-8000-000000000001",
       orderReference: "TAV-1",
       amountMinor: 12_300n,
       currency: "CZK",
@@ -103,6 +105,7 @@ describe("ComgatePaymentProviderAdapter", () => {
           status: "PAID",
           price: "12300",
           curr: "CZK",
+          refId: "00000000-0000-4000-8000-000000000001",
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
@@ -116,6 +119,7 @@ describe("ComgatePaymentProviderAdapter", () => {
       provider: "comgate",
       providerEventId: expect.stringMatching(/^comgate:[0-9a-f]{64}$/),
       status: "CAPTURED",
+      merchantReference: "00000000-0000-4000-8000-000000000001",
       amountMinor: 12_300n,
       currency: "CZK",
       evidence: { source: "authenticated-status-api" },
@@ -147,6 +151,7 @@ describe("ComgatePaymentProviderAdapter", () => {
     await expect(
       adapter.createIntent({
         paymentId: "00000000-0000-4000-8000-000000000001",
+        merchantReference: "00000000-0000-4000-8000-000000000001",
         orderReference: "TAV-1",
         amountMinor: 12_300n,
         currency: "CZK",
@@ -160,11 +165,95 @@ describe("ComgatePaymentProviderAdapter", () => {
           pending: "https://taven.cz/pending",
         },
       }),
-    ).rejects.toThrow("unsafe URL");
+    ).rejects.toMatchObject({
+      outcome: "AMBIGUOUS",
+      providerIntentId: "bank-intent",
+    } satisfies Partial<PaymentIntentCreationError>);
     const body = JSON.parse(
       String(fetchMock.mock.calls[0]?.[1]?.body),
     ) as Record<string, unknown>;
     expect(body.method).toBe("BANK_ONLY");
+  });
+
+  it("classifies a lost create response as ambiguous", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new Error("connection reset"),
+    );
+
+    await expect(
+      adapter.createIntent({
+        paymentId: "00000000-0000-4000-8000-000000000001",
+        merchantReference: "00000000-0000-4000-8000-000000000001",
+        orderReference: "TAV-1",
+        amountMinor: 12_300n,
+        currency: "CZK",
+        method: "CARD",
+        email: "customer@example.test",
+        fullName: "Customer",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+        returnUrls: {
+          success: "https://taven.cz/success",
+          cancelled: "https://taven.cz/cancelled",
+          pending: "https://taven.cz/pending",
+        },
+      }),
+    ).rejects.toMatchObject({ outcome: "AMBIGUOUS" });
+  });
+
+  it("classifies an explicit create rejection as definitive", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: 1309, message: "invalid amount" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(
+      adapter.createIntent({
+        paymentId: "00000000-0000-4000-8000-000000000001",
+        merchantReference: "00000000-0000-4000-8000-000000000001",
+        orderReference: "TAV-1",
+        amountMinor: 12_300n,
+        currency: "CZK",
+        method: "CARD",
+        email: "customer@example.test",
+        fullName: "Customer",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+        returnUrls: {
+          success: "https://taven.cz/success",
+          cancelled: "https://taven.cz/cancelled",
+          pending: "https://taven.cz/pending",
+        },
+      }),
+    ).rejects.toMatchObject({ outcome: "DEFINITIVE_FAILURE" });
+  });
+
+  it("keeps an explicit provider-side database error ambiguous", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: 1200, message: "database error" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(
+      adapter.createIntent({
+        paymentId: "00000000-0000-4000-8000-000000000001",
+        merchantReference: "00000000-0000-4000-8000-000000000001",
+        orderReference: "TAV-1",
+        amountMinor: 12_300n,
+        currency: "CZK",
+        method: "CARD",
+        email: "customer@example.test",
+        fullName: "Customer",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+        returnUrls: {
+          success: "https://taven.cz/success",
+          cancelled: "https://taven.cz/cancelled",
+          pending: "https://taven.cz/pending",
+        },
+      }),
+    ).rejects.toMatchObject({ outcome: "AMBIGUOUS" });
   });
 
   it("accepts a successful empty cancellation response", async () => {

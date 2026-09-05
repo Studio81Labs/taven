@@ -11,6 +11,7 @@ export type RefundRetrySafety = "IDEMPOTENT" | "MANUAL_RECONCILIATION";
 
 export type CreatePaymentIntentInput = Readonly<{
   paymentId: string;
+  merchantReference: string;
   orderReference: string;
   amountMinor: bigint;
   currency: string;
@@ -34,12 +35,29 @@ export type VerifiedPaymentEvent = Readonly<{
   provider: string;
   providerEventId: string;
   providerTransactionId: string;
+  merchantReference: string;
   status: "PENDING" | "CAPTURED" | "FAILED";
   amountMinor: bigint;
   currency: string;
   occurredAt: Date;
   evidence: Readonly<Record<string, string | number | boolean | null>>;
 }>;
+
+export type PaymentIntentCreationOutcome = "DEFINITIVE_FAILURE" | "AMBIGUOUS";
+
+export class PaymentIntentCreationError extends Error {
+  constructor(
+    readonly outcome: PaymentIntentCreationOutcome,
+    message: string,
+    options?: ErrorOptions & Readonly<{ providerIntentId?: string }>,
+  ) {
+    super(message, options);
+    this.name = "PaymentIntentCreationError";
+    this.providerIntentId = options?.providerIntentId;
+  }
+
+  readonly providerIntentId: string | undefined;
+}
 
 export type ProviderRefundResult = Readonly<{
   providerRefundId: string;

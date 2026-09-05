@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { BadGatewayException, UnauthorizedException } from "@nestjs/common";
 import type { PaymentProviderConfig } from "./payment-provider.config";
+import { PaymentIntentCreationError } from "./payment-provider.port";
 import type {
   CheckoutPaymentMethod,
   CreatePaymentIntentInput,
@@ -58,32 +59,61 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
   async createIntent(
     input: CreatePaymentIntentInput,
   ): Promise<CreatedPaymentIntent> {
-    const response = await this.request("/payment.json", {
-      method: "POST",
-      body: JSON.stringify({
-        test: this.config.testMode,
-        country: "CZ",
-        price: providerAmount(input.amountMinor),
-        curr: input.currency,
-        label: "TAVEN order",
-        refId: input.paymentId,
-        method: input.method === "CARD" ? "CARD_ALL" : "BANK_ONLY",
-        email: input.email,
-        fullName: input.fullName,
-        delivery: "HOME_DELIVERY",
-        category: "PHYSICAL_GOODS_ONLY",
-        lang: "cs",
-        expirationTime: `${expirationMinutes(input.expiresAt)}m`,
-        dynamicExpiration: true,
-        url_paid: input.returnUrls.success,
-        url_cancelled: input.returnUrls.cancelled,
-        url_pending: input.returnUrls.pending,
-      }),
-    });
-    return {
-      providerIntentId: requiredResponseText(response, "transId"),
-      checkoutUrl: absoluteCheckoutUrl(response.redirect),
-    };
+    let response: Record<string, unknown>;
+    try {
+      response = await this.request(
+        "/payment.json",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            test: this.config.testMode,
+            country: "CZ",
+            price: providerAmount(input.amountMinor),
+            curr: input.currency,
+            label: "TAVEN order",
+            refId: input.merchantReference,
+            method: input.method === "CARD" ? "CARD_ALL" : "BANK_ONLY",
+            email: input.email,
+            fullName: input.fullName,
+            delivery: "HOME_DELIVERY",
+            category: "PHYSICAL_GOODS_ONLY",
+            lang: "cs",
+            expirationTime: `${expirationMinutes(input.expiresAt)}m`,
+            dynamicExpiration: true,
+            url_paid: input.returnUrls.success,
+            url_cancelled: input.returnUrls.cancelled,
+            url_pending: input.returnUrls.pending,
+          }),
+        },
+        "AMBIGUOUS",
+      );
+    } catch (error) {
+      if (error instanceof PaymentIntentCreationError) throw error;
+      throw new PaymentIntentCreationError(
+        "DEFINITIVE_FAILURE",
+        "Payment provider rejected the request",
+        { cause: error },
+      );
+    }
+    const providerIntentId = optionalResponseText(response, "transId");
+    if (!providerIntentId) {
+      throw new PaymentIntentCreationError(
+        "AMBIGUOUS",
+        "Payment provider omitted transId",
+      );
+    }
+    try {
+      return {
+        providerIntentId,
+        checkoutUrl: absoluteCheckoutUrl(response.redirect),
+      };
+    } catch (error) {
+      throw new PaymentIntentCreationError(
+        "AMBIGUOUS",
+        "Payment provider returned an invalid checkout result",
+        { cause: error, providerIntentId },
+      );
+    }
   }
 
   async verifyEvent(input: {
@@ -117,6 +147,7 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
     }
     const amountMinor = positiveResponseBigInt(status.price, "price");
     const currency = requiredResponseText(status, "curr").toUpperCase();
+    const merchantReference = requiredResponseText(status, "refId");
     const occurredAt = new Date();
     return {
       provider: "comgate",
@@ -125,6 +156,7 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
         providerStatus,
       )}`,
       providerTransactionId: transactionId,
+      merchantReference,
       status: normalizedStatus,
       amountMinor,
       currency,
@@ -179,6 +211,7 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
   private async request(
     path: string,
     init: Readonly<{ method: "GET" | "POST" | "DELETE"; body?: string }>,
+    transportFailure: "DEFINITIVE_FAILURE" | "AMBIGUOUS" = "DEFINITIVE_FAILURE",
   ): Promise<Record<string, unknown>> {
     let response: Response;
     try {
@@ -194,25 +227,72 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
         ...(init.body ? { body: init.body } : {}),
         signal: AbortSignal.timeout(10_000),
       });
-    } catch {
+    } catch (error) {
+      if (transportFailure === "AMBIGUOUS") {
+        throw new PaymentIntentCreationError(
+          "AMBIGUOUS",
+          "Payment provider result is unknown",
+          { cause: error },
+        );
+      }
       throw new BadGatewayException("Payment provider is unavailable");
     }
     if (response.ok && response.status === 204) return { code: 0 };
     let body: unknown;
     try {
       body = await response.json();
-    } catch {
+    } catch (error) {
+      if (transportFailure === "AMBIGUOUS") {
+        throw new PaymentIntentCreationError(
+          "AMBIGUOUS",
+          "Payment provider returned an unreadable creation result",
+          { cause: error },
+        );
+      }
       throw new BadGatewayException("Payment provider returned invalid JSON");
     }
     if (!body || typeof body !== "object" || Array.isArray(body)) {
+      if (transportFailure === "AMBIGUOUS") {
+        throw new PaymentIntentCreationError(
+          "AMBIGUOUS",
+          "Payment provider returned an unreadable creation result",
+        );
+      }
       throw new BadGatewayException("Payment provider returned invalid JSON");
     }
     const record = body as Record<string, unknown>;
     if (!response.ok || (record.code !== undefined && record.code !== 0)) {
+      if (record.code !== undefined && record.code !== 0) {
+        if (transportFailure === "AMBIGUOUS") {
+          throw new PaymentIntentCreationError(
+            isDefinitiveCreationRejectionCode(record.code)
+              ? "DEFINITIVE_FAILURE"
+              : "AMBIGUOUS",
+            "Payment provider rejected the request",
+          );
+        }
+        throw new BadGatewayException("Payment provider rejected the request");
+      }
+      if (transportFailure === "AMBIGUOUS") {
+        throw new PaymentIntentCreationError(
+          "AMBIGUOUS",
+          "Payment provider creation result is unknown",
+        );
+      }
       throw new BadGatewayException("Payment provider rejected the request");
     }
     return record;
   }
+}
+
+function isDefinitiveCreationRejectionCode(value: unknown): boolean {
+  return (
+    typeof value === "number" &&
+    [
+      1102, 1103, 1107, 1301, 1303, 1304, 1305, 1306, 1308, 1309, 1310, 1311,
+      1316, 1317, 1400,
+    ].includes(value)
+  );
 }
 
 function providerAmount(value: bigint): number {
