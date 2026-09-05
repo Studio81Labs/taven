@@ -1007,6 +1007,12 @@
               "BANK_TRANSFER"
             ],
             "type": "string"
+          },
+          "termsRevision": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
           }
         },
         "required": [
@@ -1015,6 +1021,7 @@
           "method",
           "acceptTerms",
           "acceptClaimPolicy",
+          "termsRevision",
           "claimPolicyRevision",
           "acknowledgeWithdrawalException"
         ],

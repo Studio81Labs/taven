@@ -32,6 +32,14 @@ export class CreateCheckoutPaymentDto {
     maxLength: 100,
     pattern: NON_BLANK_TEXT_PATTERN,
   })
+  termsRevision!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
   claimPolicyRevision!: string;
 
   @ApiProperty({ type: Boolean })

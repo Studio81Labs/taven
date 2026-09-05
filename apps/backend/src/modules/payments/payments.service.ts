@@ -13,7 +13,9 @@ import { IdempotencyStatus, PaymentStatus, Prisma } from "@prisma/client";
 import {
   assertCheckoutAcceptanceRevisionsCurrent,
   assertCheckoutClaimPolicyRevisionCurrent,
+  assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
+  assertCheckoutTermsRevisionCurrent,
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
@@ -98,6 +100,10 @@ export class PaymentsService {
       initial.order.activePriceBinding!.orderPriceBinding.priceSnapshot
         .priceList.termsRevision,
     );
+    assertCheckoutTermsRevisionCurrent(
+      input.termsRevision,
+      initialLegalRevisions.termsRevision,
+    );
     assertCheckoutClaimPolicyRevisionCurrent(
       input.claimPolicyRevision,
       initialLegalRevisions.claimPolicyRevision,
@@ -111,6 +117,7 @@ export class PaymentsService {
     );
 
     const capabilities = await this.provider.capabilities();
+    assertCheckoutPaymentMethodsAvailable(capabilities.methods);
     if (!capabilities.methods.includes(input.method)) {
       throw new BadRequestException("Payment method is unavailable");
     }
@@ -139,6 +146,10 @@ export class PaymentsService {
       const binding = context.order.activePriceBinding!.orderPriceBinding;
       const legalRevisions = assertCheckoutPaymentFlowsEnabled(
         binding.priceSnapshot.priceList.termsRevision,
+      );
+      assertCheckoutTermsRevisionCurrent(
+        input.termsRevision,
+        legalRevisions.termsRevision,
       );
       assertCheckoutClaimPolicyRevisionCurrent(
         input.claimPolicyRevision,
@@ -1075,6 +1086,7 @@ function checkoutInput(value: CreateCheckoutPaymentDto) {
     method: method as CheckoutPaymentMethod,
     acceptTerms: true,
     acceptClaimPolicy: true,
+    termsRevision: requiredText(value.termsRevision, "termsRevision", 100),
     claimPolicyRevision: requiredText(
       value.claimPolicyRevision,
       "claimPolicyRevision",

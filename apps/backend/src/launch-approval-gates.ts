@@ -103,6 +103,30 @@ export function assertCheckoutClaimPolicyRevisionCurrent(
   }
 }
 
+export function assertCheckoutTermsRevisionCurrent(
+  requestedRevision: string,
+  approvedRevision: string,
+): void {
+  if (requestedRevision !== approvedRevision) {
+    throw launchApprovalRequired(
+      "Checkout request does not use the currently approved terms revision",
+    );
+  }
+}
+
+export function assertCheckoutPaymentMethodsAvailable(
+  availableMethods: readonly string[],
+): void {
+  if (
+    !availableMethods.includes("CARD") ||
+    !availableMethods.includes("BANK_TRANSFER")
+  ) {
+    throw launchApprovalRequired(
+      "Checkout payment flows require card and bank-transfer provider capabilities",
+    );
+  }
+}
+
 export function approvedCheckoutTermsRevision(
   env: NodeJS.ProcessEnv = process.env,
 ): string {

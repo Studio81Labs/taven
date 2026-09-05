@@ -11,6 +11,7 @@ import {
 import {
   PAYMENT_PROVIDER,
   PaymentIntentCreationError,
+  type CheckoutPaymentMethod,
   type PaymentProviderPort,
 } from "../src/modules/payments/payment-provider.port";
 import { PaymentsModule } from "../src/modules/payments/payments.module";
@@ -1768,6 +1769,10 @@ describe("checkout payment capture protocol", () => {
       webhookSigningSecret: signingSecret,
     });
     let providerFailure: "DEFINITIVE" | "AMBIGUOUS" | null = null;
+    let providerMethods: readonly CheckoutPaymentMethod[] = [
+      "CARD",
+      "BANK_TRANSFER",
+    ];
     let deliveryResolutionError: Error | null = null;
     let providerCreateCalls = 0;
     let providerVerifyCalls = 0;
@@ -1789,7 +1794,10 @@ describe("checkout payment capture protocol", () => {
       | undefined;
     const provider: PaymentProviderPort = {
       providerName: () => sandbox.providerName(),
-      capabilities: () => sandbox.capabilities(),
+      capabilities: async () => ({
+        provider: sandbox.providerName(),
+        methods: providerMethods,
+      }),
       refundRetrySafety: () => sandbox.refundRetrySafety(),
       createIntent: async (input) => {
         providerCreateCalls += 1;
@@ -1956,6 +1964,7 @@ describe("checkout payment capture protocol", () => {
               method: "BANK_TRANSFER",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
@@ -1980,6 +1989,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
@@ -2004,6 +2014,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
@@ -2034,6 +2045,7 @@ describe("checkout payment capture protocol", () => {
           email: string;
           fullName: string;
           method: "CARD" | "BANK_TRANSFER";
+          termsRevision: string;
         }> = {},
       ) =>
         fetch(
@@ -2054,6 +2066,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
               ...overrides,
@@ -2079,6 +2092,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
@@ -2103,6 +2117,7 @@ describe("checkout payment capture protocol", () => {
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
+              termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
             }),
@@ -2155,6 +2170,14 @@ describe("checkout payment capture protocol", () => {
       expect(providerCreateCalls).toBe(providerCallsBeforeUnapprovedTerms);
       process.env.TAVEN_TERMS_REVISION = "terms-v1";
 
+      const providerCallsBeforeStaleTerms = providerCreateCalls;
+      const staleTermsResponse = await createPayment(
+        "sandbox-http-stale-terms",
+        { termsRevision: "terms-v0" },
+      );
+      expect(staleTermsResponse.status).toBe(503);
+      expect(providerCreateCalls).toBe(providerCallsBeforeStaleTerms);
+
       const providerCallsBeforeStaleClaimPolicy = providerCreateCalls;
       process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
       const staleClaimPolicyResponse = await createPayment(
@@ -2187,6 +2210,30 @@ describe("checkout payment capture protocol", () => {
         },
       ]);
       process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
+
+      for (const [name, methods] of [
+        ["card-only", ["CARD"]],
+        ["bank-transfer-only", ["BANK_TRANSFER"]],
+      ] as const) {
+        providerMethods = methods;
+        const callsBeforeIncompleteCapabilities = providerCreateCalls;
+        const incompleteCapabilitiesResponse = await createPayment(
+          `sandbox-http-${name}`,
+        );
+        expect(incompleteCapabilitiesResponse.status).toBe(503);
+        expect(providerCreateCalls).toBe(callsBeforeIncompleteCapabilities);
+      }
+      providerMethods = ["CARD", "BANK_TRANSFER"];
+      await expect(
+        Promise.all([
+          prisma.payment.count({ where: { orderId: foundation.orderId } }),
+          prisma.idempotencyRecord.count({
+            where: {
+              namespace: `checkout-payment:${foundation.quoteSessionId}`,
+            },
+          }),
+        ]),
+      ).resolves.toEqual([0, 0]);
 
       let returnedIntentCloseFailures = 0;
       const returnedIntentTransactionSpy = vi

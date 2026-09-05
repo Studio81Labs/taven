@@ -4,7 +4,9 @@ import {
   assertBindingQuoteFlowsEnabled,
   assertCheckoutAcceptanceRevisionsCurrent,
   assertCheckoutClaimPolicyRevisionCurrent,
+  assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
+  assertCheckoutTermsRevisionCurrent,
   assertQuotePhotoUploadsEnabled,
   approvedCheckoutClaimPolicyRevision,
   approvedCheckoutTermsRevision,
@@ -174,6 +176,37 @@ describe("launch approval gates", () => {
         "claims-v1-approved",
         "claims-v1-approved",
       ),
+    ).not.toThrow();
+  });
+
+  it("requires the checkout request to bind the approved terms", () => {
+    expect(() =>
+      assertCheckoutTermsRevisionCurrent("terms-v0", "terms-v1-approved"),
+    ).toThrowError(ServiceUnavailableException);
+    expect(() =>
+      assertCheckoutTermsRevisionCurrent(
+        "terms-v1-approved",
+        "terms-v1-approved",
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    { name: "none", methods: [] },
+    { name: "card only", methods: ["CARD"] },
+    { name: "bank transfer only", methods: ["BANK_TRANSFER"] },
+  ])(
+    "rejects incomplete checkout payment capabilities: $name",
+    ({ methods }) => {
+      expect(() => assertCheckoutPaymentMethodsAvailable(methods)).toThrowError(
+        ServiceUnavailableException,
+      );
+    },
+  );
+
+  it("accepts the complete checkout payment capability set", () => {
+    expect(() =>
+      assertCheckoutPaymentMethodsAvailable(["BANK_TRANSFER", "CARD"]),
     ).not.toThrow();
   });
 

@@ -783,6 +783,7 @@ export interface components {
             fullName: string;
             /** @enum {string} */
             method: "CARD" | "BANK_TRANSFER";
+            termsRevision: string;
         };
         CreateQuoteRequestDto: {
             attribution?: {
