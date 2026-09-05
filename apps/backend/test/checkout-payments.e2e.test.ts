@@ -689,16 +689,23 @@ describe("checkout payment capture protocol", () => {
     const callbackPublicTokenHash = createHash("sha256")
       .update(callbackToken)
       .digest("hex");
+    const ambiguousCallbackToken = randomBytes(32).toString("base64url");
+    const ambiguousCallbackPublicTokenHash = createHash("sha256")
+      .update(ambiguousCallbackToken)
+      .digest("hex");
     const setupClient = await pool.connect();
     let foundation: PersistenceFoundation;
     let outageFoundation: PersistenceFoundation;
     let callbackFoundation: PersistenceFoundation;
+    let ambiguousCallbackFoundation: PersistenceFoundation;
     let customerEmail: string;
     let outageCustomerEmail: string;
     let callbackCustomerEmail: string;
+    let ambiguousCallbackCustomerEmail: string;
     let destination: ResolvedDeliveryCapability;
     let outageDestination: ResolvedDeliveryCapability;
     let callbackDestination: ResolvedDeliveryCapability;
+    let ambiguousCallbackDestination: ResolvedDeliveryCapability;
     try {
       await setupClient.query("BEGIN");
       const fixtures = new PersistenceFactory(
@@ -816,6 +823,45 @@ describe("checkout payment capture protocol", () => {
           callbackDestinationRow.capability_snapshot as Prisma.InputJsonObject,
         supportedCategoryIds: ["standard"],
       };
+      const ambiguousCallbackFixtures = new PersistenceFactory(
+        setupClient,
+        `${scope}:http-callback-ambiguity`,
+        { publicTokenHash: ambiguousCallbackPublicTokenHash },
+      );
+      ambiguousCallbackFoundation = await prepareReservedFoundation(
+        setupClient,
+        ambiguousCallbackFixtures,
+        "http-callback-ambiguity",
+      );
+      ambiguousCallbackCustomerEmail = (
+        await setupClient.query<{ email: string }>(
+          "SELECT email FROM customers WHERE id = $1",
+          [ambiguousCallbackFoundation.customerId],
+        )
+      ).rows[0]!.email;
+      const ambiguousCallbackDestinationRow = (
+        await setupClient.query<{
+          provider_endpoint_id: string;
+          endpoint_type: string;
+          address_snapshot: Record<string, unknown>;
+          capability_snapshot: Record<string, unknown>;
+        }>(
+          `SELECT provider_endpoint_id, endpoint_type, address_snapshot,
+                  capability_snapshot
+           FROM delivery_destinations WHERE id = $1`,
+          [ambiguousCallbackFoundation.deliveryDestinationId],
+        )
+      ).rows[0]!;
+      ambiguousCallbackDestination = {
+        providerEndpointId:
+          ambiguousCallbackDestinationRow.provider_endpoint_id,
+        endpointType: ambiguousCallbackDestinationRow.endpoint_type,
+        addressSnapshot:
+          ambiguousCallbackDestinationRow.address_snapshot as Prisma.InputJsonObject,
+        capabilitySnapshot:
+          ambiguousCallbackDestinationRow.capability_snapshot as Prisma.InputJsonObject,
+        supportedCategoryIds: ["standard"],
+      };
       await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
       await setupClient.query("COMMIT");
     } catch (error) {
@@ -875,7 +921,10 @@ describe("checkout payment capture protocol", () => {
         }
         latestReturnUrls = input.returnUrls;
         const intent = await sandbox.createIntent(input);
-        if (input.email === callbackCustomerEmail) {
+        if (
+          input.email === callbackCustomerEmail ||
+          input.email === ambiguousCallbackCustomerEmail
+        ) {
           if (!applicationBaseUrl) {
             throw new Error("callback test application URL is unavailable");
           }
@@ -904,6 +953,11 @@ describe("checkout payment capture protocol", () => {
           );
           if (!pendingResponse.ok) {
             throw new Error("callback staging failed during intent creation");
+          }
+          if (input.email === ambiguousCallbackCustomerEmail) {
+            throw new Error(
+              "simulated lost provider response after pending callback",
+            );
           }
           failNextFinalizationBeforeCommit = true;
         }
@@ -947,6 +1001,12 @@ describe("checkout payment capture protocol", () => {
               callbackDestination.providerEndpointId
             ) {
               return callbackDestination;
+            }
+            if (
+              input.providerEndpointId ===
+              ambiguousCallbackDestination.providerEndpointId
+            ) {
+              return ambiguousCallbackDestination;
             }
             return outageDestination;
           },
@@ -1062,6 +1122,29 @@ describe("checkout payment capture protocol", () => {
             }),
           },
         );
+      const createAmbiguousCallbackPayment = () =>
+        fetch(
+          new URL(
+            `/automatic-quote-sessions/${ambiguousCallbackFoundation.quoteSessionId}/checkout/payments`,
+            baseUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${ambiguousCallbackToken}`,
+              "content-type": "application/json",
+              "idempotency-key": "sandbox-callback-ambiguity-1",
+            },
+            body: JSON.stringify({
+              email: ambiguousCallbackCustomerEmail,
+              fullName: "Ambiguous Callback Customer",
+              method: "CARD",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              acknowledgeWithdrawalException: true,
+            }),
+          },
+        );
       const readPayment = (
         sessionId: string,
         sessionToken: string,
@@ -1108,6 +1191,42 @@ describe("checkout payment capture protocol", () => {
       expect(unapprovedTermsResponse.status).toBe(503);
       expect(providerCreateCalls).toBe(providerCallsBeforeUnapprovedTerms);
       process.env.TAVEN_TERMS_REVISION = "terms-v1";
+
+      const ambiguousCallbackResponse = await createAmbiguousCallbackPayment();
+      expect(ambiguousCallbackResponse.status).toBe(200);
+      const ambiguousCallbackPayment = await prisma.payment.findFirstOrThrow({
+        where: { orderId: ambiguousCallbackFoundation.orderId },
+        include: { checkoutCommand: true },
+      });
+      await expect(ambiguousCallbackResponse.json()).resolves.toMatchObject({
+        paymentId: ambiguousCallbackPayment.id,
+        status: "VOIDED",
+        checkoutUrl: null,
+      });
+      expect(ambiguousCallbackPayment).toMatchObject({
+        status: "VOIDED",
+        providerIntentId: `sandbox-${ambiguousCallbackPayment.id}`,
+        providerCheckoutUrl: null,
+        checkoutCommand: { status: "COMPLETED" },
+      });
+      await expect(
+        prisma.outboxMessage.count({
+          where: {
+            aggregateId: ambiguousCallbackPayment.id,
+            messageType: "void_payment",
+          },
+        }),
+      ).resolves.toBe(1);
+      const providerCallsAfterAmbiguousCallback = providerCreateCalls;
+      const ambiguousCallbackReplay = await createAmbiguousCallbackPayment();
+      expect(ambiguousCallbackReplay.status).toBe(200);
+      await expect(ambiguousCallbackReplay.json()).resolves.toMatchObject({
+        paymentId: ambiguousCallbackPayment.id,
+        status: "VOIDED",
+        checkoutUrl: null,
+      });
+      expect(providerCreateCalls).toBe(providerCallsAfterAmbiguousCallback);
+      expect(providerCancelCalls).toBe(0);
 
       const callbackTransactionSpy = vi
         .spyOn(transactions, "$transaction")

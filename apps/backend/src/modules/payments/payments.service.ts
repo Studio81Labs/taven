@@ -153,6 +153,14 @@ export class PaymentsService {
           "Payment intent creation is still incomplete",
         );
       }
+      if (
+        active?.status === PaymentStatus.PENDING &&
+        !active.providerCheckoutUrl
+      ) {
+        throw new ConflictException(
+          "Payment intent creation is still incomplete",
+        );
+      }
       const record = await transaction.idempotencyRecord.create({
         data: {
           namespace: checkoutNamespace(sessionId),
@@ -713,7 +721,26 @@ export class PaymentsService {
       const payment = await transaction.payment.findUniqueOrThrow({
         where: { id: paymentId },
       });
+      if (
+        payment.status === PaymentStatus.PENDING &&
+        payment.checkoutCommandId === idempotencyRecordId &&
+        payment.providerIntentId &&
+        !payment.providerCheckoutUrl
+      ) {
+        return closeReturnedIntentAfterLock(
+          transaction,
+          paymentId,
+          idempotencyRecordId,
+          payment.providerIntentId,
+        );
+      }
       if (payment.status !== PaymentStatus.CREATED) {
+        if (
+          payment.status === PaymentStatus.PENDING &&
+          !payment.providerCheckoutUrl
+        ) {
+          return null;
+        }
         const response = paymentDto(payment);
         await completeIdempotency(transaction, idempotencyRecordId, response);
         return response;
@@ -745,66 +772,12 @@ export class PaymentsService {
       await transaction.$queryRaw`
         SELECT taven_lock_checkout_payment_envelope(${paymentId}::uuid)::text
       `;
-      let payment = await transaction.payment.findUniqueOrThrow({
-        where: { id: paymentId },
-      });
-      const callbackStagedPending =
-        payment.status === PaymentStatus.PENDING &&
-        payment.checkoutCommandId === idempotencyRecordId &&
-        payment.providerIntentId === providerIntentId &&
-        payment.providerCheckoutUrl === null;
-      if (payment.status === PaymentStatus.CREATED || callbackStagedPending) {
-        await transaction.$queryRaw`
-          SELECT taven_close_initial_checkout_payment(
-            ${paymentId}::uuid, 'CUSTOMER_CANCELLED'
-          )::text
-        `;
-        payment = await transaction.payment.findUniqueOrThrow({
-          where: { id: paymentId },
-        });
-      } else if (payment.status !== PaymentStatus.VOIDED) {
-        return null;
-      }
-      const existingOwner = await transaction.payment.findFirst({
-        where: {
-          provider: payment.provider,
-          providerIntentId,
-          id: { not: paymentId },
-        },
-        select: { id: true },
-      });
-      if (existingOwner) {
-        const closed = await transaction.payment.findUniqueOrThrow({
-          where: { id: paymentId },
-        });
-        const response = paymentDto(closed);
-        await completeIdempotency(transaction, idempotencyRecordId, response);
-        return response;
-      }
-      await transaction.outboxMessage.createMany({
-        data: [
-          {
-            deduplicationKey: `void_payment:v1:${paymentId}`,
-            aggregateType: "Payment",
-            aggregateId: paymentId,
-            messageType: "void_payment",
-            schemaVersion: 1,
-            payload: jsonInput({
-              paymentId,
-              provider: payment.provider,
-              providerIntentId,
-              action: "void_payment",
-            }),
-          },
-        ],
-        skipDuplicates: true,
-      });
-      const closed = await transaction.payment.findUniqueOrThrow({
-        where: { id: paymentId },
-      });
-      const response = paymentDto(closed);
-      await completeIdempotency(transaction, idempotencyRecordId, response);
-      return response;
+      return closeReturnedIntentAfterLock(
+        transaction,
+        paymentId,
+        idempotencyRecordId,
+        providerIntentId,
+      );
     });
   }
 
@@ -1068,12 +1041,39 @@ async function checkoutIdempotencyAfterLock(
     existing.status !== IdempotencyStatus.COMPLETED ||
     !existing.responseBody
   ) {
-    const reconciledPayment = await transaction.payment.findUnique({
+    let reconciledPayment = await transaction.payment.findUnique({
       where: { checkoutCommandId: existing.id },
     });
     if (
+      reconciledPayment?.status === PaymentStatus.PENDING &&
+      reconciledPayment.providerIntentId &&
+      !reconciledPayment.providerCheckoutUrl
+    ) {
+      await lockPaymentEnvelope(transaction, reconciledPayment.id);
+      const closed = await closeReturnedIntentAfterLock(
+        transaction,
+        reconciledPayment.id,
+        existing.id,
+        reconciledPayment.providerIntentId,
+      );
+      if (closed) {
+        return {
+          replay: closed,
+          nextGeneration: existing.generation,
+          observedAt,
+        };
+      }
+      reconciledPayment = await transaction.payment.findUnique({
+        where: { checkoutCommandId: existing.id },
+      });
+    }
+    if (
       reconciledPayment &&
-      reconciledPayment.status !== PaymentStatus.CREATED
+      reconciledPayment.status !== PaymentStatus.CREATED &&
+      !(
+        reconciledPayment.status === PaymentStatus.PENDING &&
+        !reconciledPayment.providerCheckoutUrl
+      )
     ) {
       const replay = paymentDto(reconciledPayment);
       await completeIdempotency(transaction, existing.id, replay);
@@ -1089,11 +1089,99 @@ async function checkoutIdempotencyAfterLock(
   if (response.status === "FAILED") {
     throw new BadGatewayException("Payment provider is unavailable");
   }
+  if (response.status === PaymentStatus.PENDING && !response.checkoutUrl) {
+    const callbackStagedPayment = await transaction.payment.findUnique({
+      where: { checkoutCommandId: existing.id },
+    });
+    if (
+      callbackStagedPayment?.status === PaymentStatus.PENDING &&
+      callbackStagedPayment.providerIntentId &&
+      !callbackStagedPayment.providerCheckoutUrl
+    ) {
+      await lockPaymentEnvelope(transaction, callbackStagedPayment.id);
+      const closed = await closeReturnedIntentAfterLock(
+        transaction,
+        callbackStagedPayment.id,
+        existing.id,
+        callbackStagedPayment.providerIntentId,
+      );
+      if (closed) {
+        return {
+          replay: closed,
+          nextGeneration: existing.generation,
+          observedAt,
+        };
+      }
+    }
+    throw new ConflictException("Payment intent creation is still incomplete");
+  }
   return {
     replay: response as unknown as CheckoutPaymentDto,
     nextGeneration: existing.generation,
     observedAt,
   };
+}
+
+async function closeReturnedIntentAfterLock(
+  transaction: Transaction,
+  paymentId: string,
+  idempotencyRecordId: string,
+  providerIntentId: string,
+): Promise<CheckoutPaymentDto | null> {
+  let payment = await transaction.payment.findUniqueOrThrow({
+    where: { id: paymentId },
+  });
+  const callbackStagedPending =
+    payment.status === PaymentStatus.PENDING &&
+    payment.checkoutCommandId === idempotencyRecordId &&
+    payment.providerIntentId === providerIntentId &&
+    payment.providerCheckoutUrl === null;
+  if (payment.status === PaymentStatus.CREATED || callbackStagedPending) {
+    await transaction.$queryRaw`
+      SELECT taven_close_initial_checkout_payment(
+        ${paymentId}::uuid, 'CUSTOMER_CANCELLED'
+      )::text
+    `;
+    payment = await transaction.payment.findUniqueOrThrow({
+      where: { id: paymentId },
+    });
+  } else if (payment.status !== PaymentStatus.VOIDED) {
+    return null;
+  }
+  const existingOwner = await transaction.payment.findFirst({
+    where: {
+      provider: payment.provider,
+      providerIntentId,
+      id: { not: paymentId },
+    },
+    select: { id: true },
+  });
+  if (!existingOwner) {
+    await transaction.outboxMessage.createMany({
+      data: [
+        {
+          deduplicationKey: `void_payment:v1:${paymentId}`,
+          aggregateType: "Payment",
+          aggregateId: paymentId,
+          messageType: "void_payment",
+          schemaVersion: 1,
+          payload: jsonInput({
+            paymentId,
+            provider: payment.provider,
+            providerIntentId,
+            action: "void_payment",
+          }),
+        },
+      ],
+      skipDuplicates: true,
+    });
+  }
+  const closed = await transaction.payment.findUniqueOrThrow({
+    where: { id: paymentId },
+  });
+  const response = paymentDto(closed);
+  await completeIdempotency(transaction, idempotencyRecordId, response);
+  return response;
 }
 
 async function completeIdempotency(
