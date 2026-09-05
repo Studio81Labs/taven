@@ -54,15 +54,21 @@ export function readPaymentProviderConfig(
   if (provider !== "comgate") {
     throw new Error("TAVEN_PAYMENT_PROVIDER must be sandbox or comgate");
   }
+  const testMode = parseBoolean(
+    env.TAVEN_COMGATE_TEST_MODE,
+    true,
+    env.NODE_ENV === "production",
+  );
+  if (env.NODE_ENV === "production" && testMode) {
+    throw new Error(
+      "TAVEN_COMGATE_TEST_MODE=true is unavailable in production",
+    );
+  }
   return {
     provider,
     merchantId: required(env, "TAVEN_COMGATE_MERCHANT_ID"),
     secret: required(env, "TAVEN_COMGATE_SECRET"),
-    testMode: parseBoolean(
-      env.TAVEN_COMGATE_TEST_MODE,
-      true,
-      env.NODE_ENV === "production",
-    ),
+    testMode,
     apiBaseUrl: absoluteHttpsUrl(
       env.TAVEN_COMGATE_API_BASE_URL?.trim() ||
         "https://payments.comgate.cz/v2.0",

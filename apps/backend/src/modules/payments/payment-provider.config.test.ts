@@ -57,4 +57,26 @@ describe("payment provider configuration", () => {
       }),
     ).toThrow("must use HTTPS");
   });
+
+  it("rejects Comgate test mode in production", () => {
+    expect(() =>
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_PAYMENT_PROVIDER: "comgate",
+        TAVEN_COMGATE_MERCHANT_ID: "merchant",
+        TAVEN_COMGATE_SECRET: "secret",
+        TAVEN_COMGATE_TEST_MODE: "true",
+      }),
+    ).toThrow("TAVEN_COMGATE_TEST_MODE=true is unavailable in production");
+
+    expect(
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_PAYMENT_PROVIDER: "comgate",
+        TAVEN_COMGATE_MERCHANT_ID: "merchant",
+        TAVEN_COMGATE_SECRET: "secret",
+        TAVEN_COMGATE_TEST_MODE: "false",
+      }),
+    ).toMatchObject({ provider: "comgate", testMode: false });
+  });
 });
