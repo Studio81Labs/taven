@@ -441,6 +441,7 @@ enum RefundReason {
   EXPRESS_BREACH
   SHIPMENT_INCIDENT
   POST_DELIVERY_ISSUE
+  PARTIAL_CANCELLATION
 
   @@map("refund_reason")
 }
@@ -497,6 +498,7 @@ enum PriceAdjustmentReason {
   PRODUCTION_FAILURE
   SHIPMENT_INCIDENT
   POST_DELIVERY_ISSUE
+  CUSTOMER_CANCELLATION
 
   @@map("price_adjustment_reason")
 }

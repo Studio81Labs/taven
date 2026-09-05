@@ -558,6 +558,12 @@ export class OrdersService {
         if (!request || request.status !== ReplacementRequestStatus.OPEN) {
           throw new ConflictException("Replacement request is not open");
         }
+        const now = await databaseNow(tx);
+        if (request.deadlineAt.getTime() <= now.getTime()) {
+          throw new ConflictException(
+            "Replacement request deadline has expired",
+          );
+        }
         const sourcePlanJob = await tx.phaseResourcePlanJob.findUnique({
           where: { id: source.phaseResourcePlanJobId },
           include: {
@@ -568,7 +574,6 @@ export class OrdersService {
         if (!sourcePlanJob || sourcePlanJob.slots.length === 0) {
           throw new ConflictException("Replacement source plan is incomplete");
         }
-        const now = await databaseNow(tx);
         const replacementCandidate =
           await tx.candidateResourceEstimate.findFirst({
             where: {
@@ -1074,6 +1079,38 @@ export class OrdersService {
             cancelledAt: verifiedAt,
           },
         });
+        const custodyAlreadyTransferred = await tx.shipment.count({
+          where: {
+            orderId,
+            id: { not: shipmentId },
+            status: {
+              in: [
+                ShipmentStatus.HANDED_OVER,
+                ShipmentStatus.IN_TRANSIT,
+                ShipmentStatus.DELIVERED,
+                ShipmentStatus.LOST,
+                ShipmentStatus.RETURNED,
+                ShipmentStatus.RECOVERED,
+              ],
+            },
+            replacementShipment: null,
+          },
+        });
+        if (custodyAlreadyTransferred > 0) {
+          const refundIds = await this.finalizePartialCancellation(
+            tx,
+            orderId,
+            shipment.shipmentPlanId,
+            verifiedAt,
+            key!,
+          );
+          return result(orderId, "LABEL_VOID_CONFIRMED_PARTIAL_CANCELLATION", {
+            shipmentId,
+            providerEventId: evidence.providerEventId,
+            providerVoidedAt: verifiedAt,
+            refundIds,
+          });
+        }
         const remainingLiveLabels = await tx.shipment.count({
           where: {
             orderId,
@@ -1155,11 +1192,43 @@ export class OrdersService {
             "Provider event identity is already bound to different evidence",
           );
         }
+        const postVoidCancellation =
+          shipment.status === ShipmentStatus.CANCELLED;
         if (
           shipment.status !== ShipmentStatus.LABEL_CREATED &&
-          shipment.status !== ShipmentStatus.CANCELLATION_PENDING
+          shipment.status !== ShipmentStatus.CANCELLATION_PENDING &&
+          !postVoidCancellation
         ) {
           throw new ConflictException("Shipment is not ready for handoff");
+        }
+        const voidEvent = postVoidCancellation
+          ? await tx.shipmentProviderEvent.findFirst({
+              where: {
+                shipmentId,
+                kind: ShipmentProviderEventKind.LABEL_VOIDED,
+                providerEventId: shipment.providerVoidId!,
+                verifiedAt: shipment.providerVoidedAt!,
+              },
+            })
+          : null;
+        if (
+          postVoidCancellation &&
+          (!voidEvent ||
+            evidence.occurredAt.getTime() >= voidEvent.occurredAt.getTime())
+        ) {
+          throw new ConflictException(
+            "Cancelled Shipment accepts only custody scans that physically predate its exact provider void",
+          );
+        }
+        if (
+          postVoidCancellation &&
+          (await tx.shipment.count({
+            where: { replacesShipmentId: shipmentId },
+          })) > 0
+        ) {
+          throw new ConflictException(
+            "Replaced cancelled Shipment requires exact manual handoff reconciliation",
+          );
         }
         const readiness = await tx.$queryRaw<
           Array<{ packingReady: boolean; financialReady: boolean }>
@@ -1203,9 +1272,10 @@ export class OrdersService {
           ) AS "financialReady"
         `;
         if (
-          !readiness[0]?.packingReady ||
+          (!postVoidCancellation && !readiness[0]?.packingReady) ||
           (!readiness[0]?.financialReady &&
-            shipment.status !== ShipmentStatus.CANCELLATION_PENDING)
+            shipment.status !== ShipmentStatus.CANCELLATION_PENDING &&
+            !postVoidCancellation)
         ) {
           throw new ConflictException(
             "Shipment packing or financial handoff barriers are not satisfied",
@@ -1241,7 +1311,7 @@ export class OrdersService {
             });
           }
         }
-        await tx.shipmentProviderEvent.create({
+        const acceptanceEvent = await tx.shipmentProviderEvent.create({
           data: {
             shipmentId,
             carrier: shipment.carrier,
@@ -1255,6 +1325,21 @@ export class OrdersService {
             verifiedAt,
           },
         });
+        if (postVoidCancellation) {
+          await this.reconcileCancelledShipmentHandoff(
+            tx,
+            orderId,
+            shipment,
+            voidEvent!,
+            acceptanceEvent.id,
+            evidence.providerEventId,
+            verifiedAt,
+          );
+          return result(orderId, "SHIPMENT_HANDOFF_RECONCILED", {
+            shipmentId,
+            handedOverAt: verifiedAt,
+          });
+        }
         await tx.job.updateMany({
           where: {
             status: JobStatus.PACKED,
@@ -1407,6 +1492,42 @@ export class OrdersService {
               where: { id: orderId, status: OrderStatus.SHIPPED },
               data: { status: OrderStatus.DELIVERED, updatedAt: verifiedAt },
             });
+          } else {
+            const partial = await tx.$queryRaw<Array<{ ready: boolean }>>`
+              SELECT EXISTS (
+                SELECT 1 FROM fulfilment_slots
+                WHERE order_id = ${orderId}::uuid AND outcome = 'DELIVERED'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM fulfilment_slots
+                WHERE order_id = ${orderId}::uuid
+                  AND outcome NOT IN ('DELIVERED', 'CANCELLED_REFUNDED')
+              ) AND NOT EXISTS (
+                SELECT 1 FROM claims claim
+                WHERE claim.order_id = ${orderId}::uuid
+                  AND claim.status IN ('OPEN', 'ACTIVE')
+              ) AND NOT EXISTS (
+                SELECT 1 FROM refund_transactions refund
+                JOIN payments payment ON payment.id = refund.payment_id
+                WHERE payment.order_id = ${orderId}::uuid
+                  AND refund.status IN ('PENDING', 'SUSPENDED')
+              ) AS ready
+            `;
+            if (partial[0]?.ready) {
+              await tx.orderPhase.updateMany({
+                where: {
+                  id: shipment.orderPhaseId,
+                  status: OrderPhaseStatus.SHIPPED,
+                },
+                data: { status: OrderPhaseStatus.PARTIALLY_FULFILLED },
+              });
+              await tx.order.updateMany({
+                where: { id: orderId, status: OrderStatus.SHIPPED },
+                data: {
+                  status: OrderStatus.PARTIALLY_FULFILLED,
+                  updatedAt: verifiedAt,
+                },
+              });
+            }
           }
         } else {
           const nextStatus =
@@ -2354,6 +2475,537 @@ export class OrdersService {
     });
   }
 
+  private async reconcileCancelledShipmentHandoff(
+    tx: Transaction,
+    orderId: string,
+    shipment: {
+      id: string;
+      orderPhaseId: string;
+      shipmentPlanId: string;
+      deliveryDestinationId: string;
+      cancellationRequestedAt: Date | null;
+    },
+    voidEvent: { id: string },
+    acceptanceEventId: string,
+    providerAcceptanceScanId: string,
+    reconciledAt: Date,
+  ): Promise<void> {
+    if (!shipment.cancellationRequestedAt) {
+      throw new ConflictException(
+        "Cancelled Shipment has no cancellation request evidence",
+      );
+    }
+    const currentJobs = await tx.job.findMany({
+      where: {
+        orderId,
+        shipmentPlanId: shipment.shipmentPlanId,
+        replacementJob: null,
+      },
+      select: { status: true },
+    });
+    if (
+      currentJobs.length === 0 ||
+      currentJobs.some(({ status }) => status !== JobStatus.CANCELLED)
+    ) {
+      throw new ConflictException(
+        "Failed production cancellation requires exact manual handoff reconciliation",
+      );
+    }
+    const shipmentSlotIds = new Set(
+      (
+        await tx.fulfilmentSlot.findMany({
+          where: {
+            orderId,
+            shipmentPlanAllocations: {
+              some: { shipmentPlanId: shipment.shipmentPlanId },
+            },
+          },
+          select: { id: true },
+        })
+      ).map(({ id }) => id),
+    );
+    const partialCancellationAdjustments = await tx.priceAdjustment.findMany({
+      where: {
+        orderId,
+        reason: PriceAdjustmentReason.CUSTOMER_CANCELLATION,
+      },
+      select: { allocation: true },
+    });
+    if (
+      partialCancellationAdjustments.some(({ allocation }) =>
+        priceAdjustmentSlotCredits(allocation, false).some(
+          ({ fulfilmentSlotId }) => shipmentSlotIds.has(fulfilmentSlotId),
+        ),
+      )
+    ) {
+      throw new ConflictException(
+        "Partially cancelled Shipment requires exact manual financial reconciliation before handoff",
+      );
+    }
+    const currentShipments = await tx.shipment.count({
+      where: { orderId, replacementShipment: null },
+    });
+    if (currentShipments !== 1) {
+      throw new ConflictException(
+        "Multi-parcel cancelled Shipment requires exact manual handoff reconciliation",
+      );
+    }
+    const cancellationRefunds = await tx.refundTransaction.findMany({
+      where: {
+        payment: { orderId },
+        reason: RefundReason.CUSTOMER_CANCELLATION,
+        status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
+      },
+      include: {
+        payment: { include: { priceSnapshot: true } },
+        providerResultEvent: true,
+      },
+      orderBy: { requestedAt: "asc" },
+    });
+    const succeededRefunds = cancellationRefunds.filter(
+      ({ status }) => status === "SUCCEEDED",
+    );
+
+    let refundedReconciliation:
+      | {
+          settlementId: string;
+          paymentId: string;
+          refundTransactionId: string;
+          refundProviderEventId: string;
+        }
+      | undefined;
+    if (succeededRefunds.length > 0) {
+      const refund = succeededRefunds[0]!;
+      const payment = refund.payment;
+      if (
+        succeededRefunds.length !== 1 ||
+        cancellationRefunds.some(
+          ({ status }) => status === "PENDING" || status === "SUSPENDED",
+        ) ||
+        payment.status !== "REFUNDED" ||
+        payment.capturedAmountMinor === null ||
+        !payment.capturedAt ||
+        payment.capturedAt.getTime() >= reconciledAt.getTime() ||
+        refund.amountMinor !== payment.capturedAmountMinor ||
+        !refund.completedAt ||
+        refund.completedAt.getTime() > reconciledAt.getTime() ||
+        !refund.providerResultEventId ||
+        !refund.providerResultEvent
+      ) {
+        throw new ConflictException(
+          "Refunded cancellation requires exact manual financial reconciliation",
+        );
+      }
+      const capturedPayments = await tx.payment.count({
+        where: {
+          orderId,
+          capturedAmountMinor: { gt: 0n },
+          capturedAt: { lt: reconciledAt },
+        },
+      });
+      if (capturedPayments !== 1) {
+        throw new ConflictException(
+          "Refunded cancellation requires exact manual financial reconciliation",
+        );
+      }
+      await tx.fulfilmentSlot.updateMany({
+        where: { orderId, outcome: "CANCELLED" },
+        data: {
+          outcome: "CANCELLED_REFUNDED",
+          updatedAt: refund.completedAt,
+        },
+      });
+      await tx.orderPhase.updateMany({
+        where: { orderId, status: OrderPhaseStatus.CANCELLED },
+        data: { status: OrderPhaseStatus.CANCELLED_REFUNDED },
+      });
+      await tx.order.updateMany({
+        where: { id: orderId, status: OrderStatus.CANCELLED },
+        data: { status: OrderStatus.REFUNDED, updatedAt: refund.completedAt },
+      });
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          captureAuthorized: false,
+          captureCutoffAt: reconciledAt,
+          updatedAt: reconciledAt,
+        },
+      });
+      const settlement = await tx.orderSettlement.create({
+        data: {
+          orderId,
+          orderPhaseId: shipment.orderPhaseId,
+          orderPriceBindingId: payment.orderPriceBindingId,
+          priceSnapshotId: payment.priceSnapshotId,
+          paymentId: payment.id,
+          refundTransactionId: refund.id,
+          kind: "UNAUTHORIZED_HANDOFF",
+          currency: payment.currency,
+          contractTotalMinor: payment.priceSnapshot.contractTotalMinor,
+          capturedTotalMinor: payment.capturedAmountMinor,
+          earnedAmountMinor: 0n,
+          retainedAmountMinor: 0n,
+          refundAmountMinor: refund.amountMinor,
+          writtenOffAmountMinor: 0n,
+          unearnedCancelledAmountMinor:
+            payment.priceSnapshot.contractTotalMinor,
+          amountDueMinor: 0n,
+          refundableBalanceMinor: 0n,
+          cutoffAt: reconciledAt,
+          settledAt: reconciledAt,
+        },
+      });
+      refundedReconciliation = {
+        settlementId: settlement.id,
+        paymentId: payment.id,
+        refundTransactionId: refund.id,
+        refundProviderEventId: refund.providerResultEventId,
+      };
+    } else {
+      const pendingRefunds = cancellationRefunds.filter(
+        ({ status }) => status === "PENDING",
+      );
+      if (
+        pendingRefunds.some(
+          ({ replacesRefundTransactionId }) =>
+            replacesRefundTransactionId !== null,
+        ) ||
+        cancellationRefunds.some(({ status }) => status === "SUSPENDED") ||
+        pendingRefunds.some(
+          ({ dispatchClaimedAt, providerRefundId, providerResultEventId }) =>
+            dispatchClaimedAt !== null ||
+            providerRefundId !== null ||
+            providerResultEventId !== null,
+        )
+      ) {
+        throw new ConflictException(
+          "Retried or dispatched cancellation refund must reach an exact provider outcome before handoff reconciliation",
+        );
+      }
+      if (pendingRefunds.length > 0) {
+        await tx.refundTransaction.updateMany({
+          where: { id: { in: pendingRefunds.map(({ id }) => id) } },
+          data: { status: "SUPERSEDED", updatedAt: reconciledAt },
+        });
+      }
+      const paymentIds = [
+        ...new Set(pendingRefunds.map(({ paymentId }) => paymentId)),
+      ];
+      for (const paymentId of paymentIds) {
+        const payment = await tx.payment.findUniqueOrThrow({
+          where: { id: paymentId },
+          select: { capturedAmountMinor: true },
+        });
+        const refunds = await tx.refundTransaction.findMany({
+          where: { paymentId },
+          select: { amountMinor: true, status: true },
+        });
+        const succeeded = refunds.reduce(
+          (total, refund) =>
+            total + (refund.status === "SUCCEEDED" ? refund.amountMinor : 0n),
+          0n,
+        );
+        const hasPending = refunds.some(
+          ({ status }) => status === "PENDING" || status === "SUSPENDED",
+        );
+        const captured = payment.capturedAmountMinor ?? 0n;
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: {
+            status: hasPending
+              ? "REFUND_PENDING"
+              : succeeded === 0n
+                ? "CAPTURED"
+                : succeeded === captured
+                  ? "REFUNDED"
+                  : "PARTIALLY_REFUNDED",
+            updatedAt: reconciledAt,
+          },
+        });
+      }
+    }
+
+    if (refundedReconciliation) {
+      await tx.handoffReconciliation.create({
+        data: {
+          orderId,
+          orderPhaseId: shipment.orderPhaseId,
+          shipmentId: shipment.id,
+          shipmentPlanId: shipment.shipmentPlanId,
+          deliveryDestinationId: shipment.deliveryDestinationId,
+          acceptanceEventId,
+          voidEventId: voidEvent.id,
+          paymentId: refundedReconciliation.paymentId,
+          refundTransactionId: refundedReconciliation.refundTransactionId,
+          refundProviderEventId: refundedReconciliation.refundProviderEventId,
+          orderSettlementId: refundedReconciliation.settlementId,
+          status: "COMPLETED",
+          cancellationRequestedAt: shipment.cancellationRequestedAt,
+          reconciledAt,
+        },
+      });
+    }
+
+    await tx.shipment.update({
+      where: { id: shipment.id },
+      data: {
+        status: ShipmentStatus.HANDED_OVER,
+        providerAcceptanceScanId,
+        handedOverAt: reconciledAt,
+      },
+    });
+    await tx.fulfilmentSlot.updateMany({
+      where: {
+        outcome: { in: ["CANCELLED", "CANCELLED_REFUNDED"] },
+        shipmentPlanAllocations: {
+          some: { shipmentPlanId: shipment.shipmentPlanId },
+        },
+      },
+      data: { outcome: "PENDING", updatedAt: reconciledAt },
+    });
+    await tx.job.updateMany({
+      where: {
+        orderId,
+        orderPhaseId: shipment.orderPhaseId,
+        shipmentPlanId: shipment.shipmentPlanId,
+        status: JobStatus.CANCELLED,
+        replacementJob: null,
+      },
+      data: { status: JobStatus.HANDED_OVER, handedOverAt: reconciledAt },
+    });
+    await tx.orderPhase.update({
+      where: { id: shipment.orderPhaseId },
+      data: { status: OrderPhaseStatus.SHIPPED, shippedAt: reconciledAt },
+    });
+    await tx.order.update({
+      where: { id: orderId },
+      data: { status: OrderStatus.SHIPPED, updatedAt: reconciledAt },
+    });
+  }
+
+  private async finalizePartialCancellation(
+    tx: Transaction,
+    orderId: string,
+    shipmentPlanId: string,
+    at: Date,
+    key: string,
+  ): Promise<string[]> {
+    const jobs = await tx.job.findMany({
+      where: {
+        orderId,
+        shipmentPlanId,
+        replacementJob: null,
+        status: JobStatus.PACKED,
+      },
+      select: { id: true },
+    });
+    if (jobs.length === 0) {
+      throw new ConflictException(
+        "Partially cancelled Shipment has no packed Job scope",
+      );
+    }
+    await tx.job.updateMany({
+      where: { id: { in: jobs.map(({ id }) => id) } },
+      data: {
+        status: JobStatus.CANCELLED,
+        cancelledAt: at,
+        cancellationReason: "ORDER_CANCELLED",
+      },
+    });
+    const slots = await tx.fulfilmentSlot.findMany({
+      where: {
+        orderId,
+        outcome: "PENDING",
+        shipmentPlanAllocations: { some: { shipmentPlanId } },
+      },
+      select: { id: true, settlementAmountMinor: true },
+      orderBy: { id: "asc" },
+    });
+    if (slots.length === 0) {
+      throw new ConflictException(
+        "Partially cancelled Shipment has no pending fulfilment scope",
+      );
+    }
+    const priorAdjustments = await tx.priceAdjustment.findMany({
+      where: { orderId },
+      include: {
+        refunds: {
+          where: { status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] } },
+          select: { amountMinor: true },
+        },
+      },
+    });
+    const creditedBySlot = new Map<string, bigint>();
+    for (const adjustment of priorAdjustments) {
+      for (const credit of priceAdjustmentSlotCredits(
+        adjustment.allocation,
+        false,
+      )) {
+        creditedBySlot.set(
+          credit.fulfilmentSlotId,
+          (creditedBySlot.get(credit.fulfilmentSlotId) ?? 0n) +
+            credit.amountMinor,
+        );
+      }
+    }
+    const slotCredits = slots.flatMap((slot) => {
+      const remaining =
+        slot.settlementAmountMinor - (creditedBySlot.get(slot.id) ?? 0n);
+      if (remaining < 0n) {
+        throw new ConflictException(
+          "Prior credits exceed a cancelled fulfilment Slot value",
+        );
+      }
+      return remaining === 0n
+        ? []
+        : [{ fulfilmentSlotId: slot.id, amountMinor: remaining }];
+    });
+    const amountMinor = slotCredits.reduce(
+      (total, credit) => total + credit.amountMinor,
+      0n,
+    );
+    const payments = await tx.payment.findMany({
+      where: { orderId, capturedAmountMinor: { not: null } },
+      include: {
+        refunds: {
+          where: { status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] } },
+        },
+      },
+      orderBy: [{ capturedAt: "asc" }, { id: "asc" }],
+    });
+    const currency = payments[0]?.currency;
+    if (
+      !currency ||
+      payments.some((payment) => payment.currency !== currency)
+    ) {
+      throw new ConflictException(
+        "Partial cancellation payment currency is unavailable",
+      );
+    }
+    const reservedAdjustments = priorAdjustments.reduce((total, adjustment) => {
+      const committed = adjustment.refunds.reduce(
+        (sum, refund) => sum + refund.amountMinor,
+        0n,
+      );
+      const outstanding = adjustment.amountMinor - committed;
+      return total + (outstanding > 0n ? outstanding : 0n);
+    }, 0n);
+    const available =
+      payments.reduce(
+        (total, payment) =>
+          total +
+          payment.capturedAmountMinor! -
+          payment.refunds.reduce((sum, refund) => sum + refund.amountMinor, 0n),
+        0n,
+      ) - reservedAdjustments;
+    if (available < amountMinor) {
+      throw new ConflictException(
+        "Partial cancellation exceeds the refundable balance",
+      );
+    }
+
+    let adjustmentId: string | undefined;
+    if (amountMinor > 0n) {
+      adjustmentId = (
+        await tx.priceAdjustment.create({
+          data: {
+            orderId,
+            idempotencyKey: persistenceKey(
+              "partial-cancellation-adjustment",
+              orderId,
+              shipmentPlanId,
+              key,
+            ),
+            reason: PriceAdjustmentReason.CUSTOMER_CANCELLATION,
+            amountMinor,
+            currency,
+            allocation: {
+              shipmentPlanId,
+              slotCredits: slotCredits.map((credit) => ({
+                fulfilmentSlotId: credit.fulfilmentSlotId,
+                amountMinor: credit.amountMinor.toString(),
+              })),
+            },
+          },
+        })
+      ).id;
+    }
+    await tx.fulfilmentSlot.updateMany({
+      where: { id: { in: slots.map(({ id }) => id) } },
+      data: { outcome: "CANCELLED", updatedAt: at },
+    });
+    if (!adjustmentId) return [];
+
+    let remaining = amountMinor;
+    let unboundReserved = priorAdjustments.reduce((total, adjustment) => {
+      if (adjustment.paymentId) return total;
+      const committed = adjustment.refunds.reduce(
+        (sum, refund) => sum + refund.amountMinor,
+        0n,
+      );
+      const outstanding = adjustment.amountMinor - committed;
+      return total + (outstanding > 0n ? outstanding : 0n);
+    }, 0n);
+    const refundIds: string[] = [];
+    for (const payment of payments) {
+      if (remaining === 0n) break;
+      const allocated = payment.refunds.reduce(
+        (sum, refund) => sum + refund.amountMinor,
+        0n,
+      );
+      const selectedReserved = priorAdjustments.reduce((total, adjustment) => {
+        if (adjustment.paymentId !== payment.id) return total;
+        const committed = adjustment.refunds.reduce(
+          (sum, refund) => sum + refund.amountMinor,
+          0n,
+        );
+        const outstanding = adjustment.amountMinor - committed;
+        return total + (outstanding > 0n ? outstanding : 0n);
+      }, 0n);
+      let paymentAvailable =
+        payment.capturedAmountMinor! - allocated - selectedReserved;
+      const unboundForPayment =
+        paymentAvailable <= 0n
+          ? 0n
+          : paymentAvailable < unboundReserved
+            ? paymentAvailable
+            : unboundReserved;
+      paymentAvailable -= unboundForPayment;
+      unboundReserved -= unboundForPayment;
+      if (paymentAvailable <= 0n) continue;
+      const refundAmount =
+        paymentAvailable < remaining ? paymentAvailable : remaining;
+      const refund = await tx.refundTransaction.create({
+        data: {
+          paymentId: payment.id,
+          priceAdjustmentId: adjustmentId,
+          provider: payment.provider,
+          idempotencyKey: persistenceKey(
+            "partial-cancellation-refund",
+            adjustmentId,
+            key,
+            payment.id,
+          ),
+          amountMinor: refundAmount,
+          reason: RefundReason.PARTIAL_CANCELLATION,
+          requestedAt: at,
+        },
+      });
+      refundIds.push(refund.id);
+      remaining -= refundAmount;
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: "REFUND_PENDING", updatedAt: at },
+      });
+    }
+    if (remaining !== 0n) {
+      throw new ConflictException(
+        "Partial cancellation refund allocation is incomplete",
+      );
+    }
+    return refundIds;
+  }
+
   private async finalizeCancellation(
     tx: Transaction,
     orderId: string,
@@ -3015,6 +3667,8 @@ function adjustmentRefundReason(reason: PriceAdjustmentReason): RefundReason {
       return RefundReason.SHIPMENT_INCIDENT;
     case PriceAdjustmentReason.POST_DELIVERY_ISSUE:
       return RefundReason.POST_DELIVERY_ISSUE;
+    case PriceAdjustmentReason.CUSTOMER_CANCELLATION:
+      return RefundReason.PARTIAL_CANCELLATION;
   }
 }
 

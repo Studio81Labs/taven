@@ -324,13 +324,145 @@ async function carrierEvent(
   );
 }
 
-async function succeedRefund(refundId: string): Promise<void> {
+async function succeedRefund(
+  refundId: string,
+  providerEventSuffix = "",
+): Promise<void> {
   await pool.query(
     `SELECT taven_apply_checkout_refund_success(
        $1::uuid, $2, $3, clock_timestamp(), '{}'::jsonb
      )`,
-    [refundId, `provider-refund-${refundId}`, `refund-success-${refundId}`],
+    [
+      refundId,
+      `provider-refund-${refundId}`,
+      `refund-success${providerEventSuffix}-${refundId}`,
+    ],
   );
+}
+
+async function failRefund(refundId: string): Promise<void> {
+  const client = await pool.connect();
+  await client.query("BEGIN");
+  try {
+    const fixtures = new PersistenceFactory(
+      client,
+      `${testScope}:refund-failure:${refundId}`,
+    );
+    await client.query("SELECT taven_claim_refund_dispatch($1)", [refundId]);
+    const failedAt = new Date();
+    const providerRefundId = `provider-refund-failed-${refundId}`;
+    const providerEventId = `refund-failed-${refundId}`;
+    await fixtures.persistRefundProviderEvent(
+      refundId,
+      "REFUND_FAILED",
+      providerRefundId,
+      failedAt,
+      providerEventId,
+    );
+    const providerEvent = await client.query<{ id: string }>(
+      `SELECT id FROM payment_provider_events
+       WHERE provider_event_id = $1`,
+      [providerEventId],
+    );
+    if (!providerEvent.rows[0]?.id) {
+      throw new Error("refund failure provider event was not created");
+    }
+    await client.query(
+      `UPDATE refund_transactions
+       SET status = 'FAILED', provider_refund_id = $2,
+           provider_result_event_id = $3, updated_at = $4
+       WHERE id = $1`,
+      [refundId, providerRefundId, providerEvent.rows[0].id, failedAt],
+    );
+    await client.query(
+      `UPDATE payments
+       SET status = 'CAPTURED', updated_at = $2
+       WHERE id = (
+         SELECT payment_id FROM refund_transactions WHERE id = $1
+       )`,
+      [refundId, failedAt],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function reverseSucceededRefund(refundId: string): Promise<void> {
+  const client = await pool.connect();
+  await client.query("BEGIN");
+  try {
+    const fixtures = new PersistenceFactory(
+      client,
+      `${testScope}:refund-reversal:${refundId}`,
+    );
+    const refund = await client.query<{ provider_refund_id: string | null }>(
+      `SELECT provider_refund_id
+       FROM refund_transactions
+       WHERE id = $1 AND status = 'SUCCEEDED'`,
+      [refundId],
+    );
+    const providerRefundId = refund.rows[0]?.provider_refund_id;
+    if (!providerRefundId) {
+      throw new Error("successful refund has no provider identity");
+    }
+    const failedAt = new Date();
+    const providerEventId = `refund-reversed-${refundId}`;
+    await fixtures.persistRefundProviderEvent(
+      refundId,
+      "REFUND_FAILED",
+      providerRefundId,
+      failedAt,
+      providerEventId,
+    );
+    const providerEvent = await client.query<{ id: string }>(
+      `SELECT id FROM payment_provider_events
+       WHERE provider_event_id = $1`,
+      [providerEventId],
+    );
+    if (!providerEvent.rows[0]?.id) {
+      throw new Error("refund reversal provider event was not created");
+    }
+    await client.query(
+      `UPDATE refund_transactions
+       SET status = 'FAILED', provider_result_event_id = $2,
+           completed_at = NULL, updated_at = $3
+       WHERE id = $1`,
+      [refundId, providerEvent.rows[0].id, failedAt],
+    );
+    await client.query(
+      `UPDATE payments payment
+       SET status = CASE
+             WHEN totals.succeeded_minor = 0 THEN 'CAPTURED'::payment_status
+             WHEN totals.succeeded_minor = payment.captured_amount_minor
+               THEN 'REFUNDED'::payment_status
+             ELSE 'PARTIALLY_REFUNDED'::payment_status
+           END,
+           updated_at = $2
+       FROM (
+         SELECT candidate.payment_id,
+                coalesce(sum(candidate.amount_minor) FILTER (
+                  WHERE candidate.status = 'SUCCEEDED'
+                ), 0) AS succeeded_minor
+         FROM refund_transactions candidate
+         WHERE candidate.payment_id = (
+           SELECT payment_id FROM refund_transactions WHERE id = $1
+         )
+         GROUP BY candidate.payment_id
+       ) totals
+       WHERE payment.id = totals.payment_id`,
+      [refundId, failedAt],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function markSlotPriceComponentExpress(slotId: string): Promise<void> {
@@ -339,12 +471,31 @@ async function markSlotPriceComponentExpress(slotId: string): Promise<void> {
   try {
     await client.query("SET LOCAL session_replication_role = 'replica'");
     const updated = await client.query(
-      `UPDATE price_snapshot_components component
+      `WITH target_snapshot AS (
+         SELECT component.price_snapshot_id
+         FROM price_snapshot_components component
+         JOIN price_component_fulfilment_allocations allocation
+           ON allocation.price_snapshot_component_id = component.id
+         WHERE allocation.fulfilment_slot_id = $1
+         LIMIT 1
+       ), selected AS (
+         SELECT component.id
+         FROM price_snapshot_components component
+         JOIN target_snapshot
+           ON target_snapshot.price_snapshot_id = component.price_snapshot_id
+         WHERE component.kind = 'ORDER_MIN_PRINT'
+         LIMIT 1
+       ), moved AS (
+         UPDATE price_component_fulfilment_allocations allocation
+         SET fulfilment_slot_id = $1
+         FROM selected
+         WHERE allocation.price_snapshot_component_id = selected.id
+         RETURNING allocation.price_snapshot_component_id
+       )
+       UPDATE price_snapshot_components component
        SET kind = 'EXPRESS'
-       FROM price_component_fulfilment_allocations allocation
-       WHERE allocation.price_snapshot_component_id = component.id
-         AND allocation.fulfilment_slot_id = $1
-         AND component.kind = 'ORDER_MIN_PRINT'`,
+       FROM moved
+       WHERE component.id = moved.price_snapshot_component_id`,
       [slotId],
     );
     if (updated.rowCount !== 1) {
@@ -527,6 +678,49 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       status: "CONSUMED",
       phaseReservationSet: { status: "SETTLED" },
     });
+  });
+
+  it("rejects replacement creation after its database deadline", async () => {
+    const fixture = await preparePaidOrder("replacement-expired");
+    const { orderId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PACKING",
+        reason: "packed part failed final dimensional inspection",
+        recovery: "REPLACE",
+      },
+      "replacement-expired-failure",
+    );
+    const candidateResourceEstimateId = await createFreshReplacementCandidate(
+      fixture,
+      0,
+    );
+    await prisma.replacementRequest.update({
+      where: { sourceJobId },
+      data: { deadlineAt: new Date(0) },
+    });
+
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        { candidateResourceEstimateId },
+        "replacement-expired-create",
+      ),
+    ).rejects.toThrow("Replacement request deadline has expired");
+    await expect(
+      prisma.replacementRequest.findUniqueOrThrow({ where: { sourceJobId } }),
+    ).resolves.toMatchObject({
+      status: "OPEN",
+      replacementJobId: null,
+      phaseReservationSetId: null,
+    });
+    await expect(prisma.job.count({ where: { orderId } })).resolves.toBe(1);
   });
 
   it("records a QC rejection without invalid failure metadata", async () => {
@@ -1019,6 +1213,323 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         },
       }),
     ).resolves.toMatchObject({ outboxMessageId: delivered.id });
+  });
+
+  it("cancels and refunds only the parcel whose final void follows a sibling handoff", async () => {
+    const fixture = await preparePaidOrder("partial-label-void", 2);
+    await advanceThroughQc(fixture, 0);
+    await advanceThroughQc(fixture, 1);
+    await labelAndPack(fixture, 0);
+    await labelAndPack(fixture, 1);
+    const cancelledSlotId = fixture.foundation.fulfilmentSlotIds[1]!;
+    await markSlotPriceComponentExpress(cancelledSlotId);
+    const priorAdjustment = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: "1",
+        paymentId: fixture.foundation.paymentId,
+        allocation: {
+          reason: "express credit before cancellation",
+          slotCredits: [
+            { fulfilmentSlotId: cancelledSlotId, amountMinor: "1" },
+          ],
+        },
+      },
+      "partial-label-void-prior-adjustment",
+    );
+    const priorRefund = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      priorAdjustment.result.priceAdjustmentId as string,
+      "partial-label-void-prior-refund",
+    );
+    const priorRefundId = (priorRefund.result.refundIds as string[])[0];
+    if (!priorRefundId) throw new Error("prior express refund was not created");
+    await succeedRefund(priorRefundId);
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "customer cancelled while the first parcel was handed over" },
+      "partial-label-void-cancel",
+    );
+    await handoff(fixture, 0);
+
+    const shipmentId = fixture.foundation.shipmentIds[1]!;
+    const voidOccurredAt = new Date();
+    const confirmed = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      shipmentId,
+      {
+        providerEventId: `partial-void-${shipmentId}`,
+        providerTransactionId: `partial-void-tx-${shipmentId}`,
+        occurredAt: voidOccurredAt.toISOString(),
+      },
+      "partial-label-void-confirm",
+    );
+    const refundId = (confirmed.result.refundIds as string[])[0];
+    expect(confirmed.status).toBe("LABEL_VOID_CONFIRMED_PARTIAL_CANCELLATION");
+    if (!refundId)
+      throw new Error("partial cancellation refund was not created");
+    await expect(
+      orders.handoffShipment(
+        fixture.foundation.orderId,
+        shipmentId,
+        {
+          providerEventId: `late-partial-acceptance-${shipmentId}`,
+          providerTransactionId: `late-partial-acceptance-tx-${shipmentId}`,
+          occurredAt: new Date(voidOccurredAt.getTime() - 1).toISOString(),
+        },
+        "partial-label-void-late-acceptance",
+      ),
+    ).rejects.toThrow(
+      "Partially cancelled Shipment requires exact manual financial reconciliation before handoff",
+    );
+    await expect(
+      prisma.shipmentProviderEvent.count({
+        where: {
+          shipmentId,
+          kind: "ACCEPTANCE_SCAN",
+        },
+      }),
+    ).resolves.toBe(0);
+
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN", "partial-delivery");
+    await succeedRefund(refundId);
+
+    const projection = await orders.getFulfilment(fixture.foundation.orderId);
+    expect(projection.orderStatus).toBe("PARTIALLY_FULFILLED");
+    expect(projection.shipments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "DELIVERED" }),
+        expect.objectContaining({ status: "CANCELLED" }),
+      ]),
+    );
+    expect(projection.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "HANDED_OVER" }),
+        expect.objectContaining({ status: "CANCELLED" }),
+      ]),
+    );
+    expect(projection.slots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ outcome: "DELIVERED" }),
+        expect.objectContaining({ outcome: "CANCELLED_REFUNDED" }),
+      ]),
+    );
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+    ).resolves.toMatchObject({
+      reason: "PARTIAL_CANCELLATION",
+      status: "SUCCEEDED",
+    });
+
+    await reverseSucceededRefund(refundId);
+
+    const reversed = await orders.getFulfilment(fixture.foundation.orderId);
+    expect(reversed.orderStatus).toBe("SHIPPED");
+    expect(reversed.phase.status).toBe("SHIPPED");
+    expect(reversed.slots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ outcome: "DELIVERED" }),
+        expect.objectContaining({ outcome: "CANCELLED" }),
+      ]),
+    );
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+    ).resolves.toMatchObject({ status: "FAILED" });
+
+    await succeedRefund(refundId, "-after-reversal");
+    await expect(
+      orders.getFulfilment(fixture.foundation.orderId),
+    ).resolves.toMatchObject({ orderStatus: "PARTIALLY_FULFILLED" });
+    await expect(
+      prisma.order.update({
+        where: { id: fixture.foundation.orderId },
+        data: { status: "SHIPPED" },
+      }),
+    ).rejects.toThrow("order status transition is not allowed");
+  }, 10_000);
+
+  it("retains a scoped partial cancellation when its refund attempt fails", async () => {
+    const fixture = await preparePaidOrder("partial-label-void-failed", 2);
+    await advanceThroughQc(fixture, 0);
+    await advanceThroughQc(fixture, 1);
+    await labelAndPack(fixture, 0);
+    await labelAndPack(fixture, 1);
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "customer cancelled while the first parcel was handed over" },
+      "partial-label-void-failed-cancel",
+    );
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN", "partial-failed-transit");
+    await carrierEvent(fixture, 0, "LOST", "partial-failed-lost");
+
+    const shipmentId = fixture.foundation.shipmentIds[1]!;
+    const confirmed = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      shipmentId,
+      {
+        providerEventId: `partial-failed-void-${shipmentId}`,
+        providerTransactionId: `partial-failed-void-tx-${shipmentId}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "partial-label-void-failed-confirm",
+    );
+    const refundId = (confirmed.result.refundIds as string[])[0];
+    if (!refundId)
+      throw new Error("partial cancellation refund was not created");
+
+    await failRefund(refundId);
+
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+    ).resolves.toMatchObject({
+      reason: "PARTIAL_CANCELLATION",
+      status: "FAILED",
+    });
+    const projection = await orders.getFulfilment(fixture.foundation.orderId);
+    expect(projection.orderStatus).toBe("SHIPPED");
+    expect(projection.shipments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "LOST" }),
+        expect.objectContaining({ status: "CANCELLED" }),
+      ]),
+    );
+    expect(projection.slots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ outcome: "PENDING" }),
+        expect.objectContaining({ outcome: "CANCELLED" }),
+      ]),
+    );
+  });
+
+  it("reconciles a pre-void acceptance scan after an undispatched cancellation refund", async () => {
+    const fixture = await preparePaidOrder("post-void-handoff-pending");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "carrier acceptance was delayed" },
+      "post-void-handoff-pending-cancel",
+    );
+    const voidOccurredAt = new Date();
+    const confirmed = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      {
+        providerEventId: `post-void-${fixture.foundation.shipmentId}`,
+        providerTransactionId: `post-void-tx-${fixture.foundation.shipmentId}`,
+        occurredAt: voidOccurredAt.toISOString(),
+      },
+      "post-void-handoff-pending-confirm",
+    );
+    const refundId = (confirmed.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("cancellation refund was not created");
+    await expect(
+      prisma.refundTransaction.update({
+        where: { id: refundId },
+        data: { status: "SUPERSEDED" },
+      }),
+    ).rejects.toThrow("exact post-void handoff evidence");
+
+    const evidence = {
+      providerEventId: `post-void-acceptance-${fixture.foundation.shipmentId}`,
+      providerTransactionId: `post-void-acceptance-tx-${fixture.foundation.shipmentId}`,
+      occurredAt: new Date(voidOccurredAt.getTime() - 1).toISOString(),
+    };
+    const reconciled = await orders.handoffShipment(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      evidence,
+      "post-void-handoff-pending-acceptance",
+    );
+    const replay = await orders.handoffShipment(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      evidence,
+      "post-void-handoff-pending-replay",
+    );
+
+    expect(reconciled.status).toBe("SHIPMENT_HANDOFF_RECONCILED");
+    expect(replay.status).toBe("SHIPMENT_HANDOFF_ALREADY_APPLIED");
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+    ).resolves.toMatchObject({ status: "SUPERSEDED" });
+    await expect(
+      prisma.payment.findUniqueOrThrow({
+        where: { id: fixture.foundation.paymentId },
+      }),
+    ).resolves.toMatchObject({ status: "CAPTURED" });
+    const projection = await orders.getFulfilment(fixture.foundation.orderId);
+    expect(projection).toMatchObject({
+      orderStatus: "SHIPPED",
+      phase: { status: "SHIPPED" },
+      jobs: [expect.objectContaining({ status: "HANDED_OVER" })],
+      shipments: [expect.objectContaining({ status: "HANDED_OVER" })],
+      slots: [expect.objectContaining({ outcome: "PENDING" })],
+    });
+  });
+
+  it("records the settlement when a pre-void acceptance arrives after refund", async () => {
+    const fixture = await preparePaidOrder("post-void-handoff-refunded");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "carrier acceptance was delayed past the refund" },
+      "post-void-handoff-refunded-cancel",
+    );
+    const voidOccurredAt = new Date();
+    const confirmed = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      {
+        providerEventId: `refunded-post-void-${fixture.foundation.shipmentId}`,
+        providerTransactionId: `refunded-post-void-tx-${fixture.foundation.shipmentId}`,
+        occurredAt: voidOccurredAt.toISOString(),
+      },
+      "post-void-handoff-refunded-confirm",
+    );
+    const refundId = (confirmed.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("cancellation refund was not created");
+    await succeedRefund(refundId);
+
+    const reconciled = await orders.handoffShipment(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      {
+        providerEventId: `refunded-post-void-acceptance-${fixture.foundation.shipmentId}`,
+        providerTransactionId: `refunded-post-void-acceptance-tx-${fixture.foundation.shipmentId}`,
+        occurredAt: new Date(voidOccurredAt.getTime() - 1).toISOString(),
+      },
+      "post-void-handoff-refunded-acceptance",
+    );
+
+    expect(reconciled.status).toBe("SHIPMENT_HANDOFF_RECONCILED");
+    await expect(
+      prisma.orderSettlement.findFirstOrThrow({
+        where: { orderId: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({
+      kind: "UNAUTHORIZED_HANDOFF",
+      refundTransactionId: refundId,
+    });
+    await expect(
+      prisma.handoffReconciliation.findUniqueOrThrow({
+        where: { shipmentId: fixture.foundation.shipmentId },
+      }),
+    ).resolves.toMatchObject({
+      status: "COMPLETED",
+      refundTransactionId: refundId,
+    });
+    const projection = await orders.getFulfilment(fixture.foundation.orderId);
+    expect(projection).toMatchObject({
+      orderStatus: "SHIPPED",
+      phase: { status: "SHIPPED" },
+      jobs: [expect.objectContaining({ status: "HANDED_OVER" })],
+      shipments: [expect.objectContaining({ status: "HANDED_OVER" })],
+      slots: [expect.objectContaining({ outcome: "PENDING" })],
+    });
   });
 
   it("lets a verified acceptance scan supersede pending label cancellation", async () => {

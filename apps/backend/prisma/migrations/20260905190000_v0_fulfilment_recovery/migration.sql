@@ -10,6 +10,7 @@ ALTER TYPE "shipment_provider_event_kind" ADD VALUE 'RECOVERED';
 ALTER TYPE "refund_reason" ADD VALUE 'EXPRESS_BREACH';
 ALTER TYPE "refund_reason" ADD VALUE 'SHIPMENT_INCIDENT';
 ALTER TYPE "refund_reason" ADD VALUE 'POST_DELIVERY_ISSUE';
+ALTER TYPE "refund_reason" ADD VALUE 'PARTIAL_CANCELLATION';
 ALTER TYPE "outbox_status" ADD VALUE 'SUPERSEDED';
 
 ALTER TABLE "orders" DROP CONSTRAINT "orders_timestamps_check";
@@ -98,7 +99,9 @@ BEGIN
 
     IF target_order_status NOT IN ('CANCELLED', 'REFUNDED')
        AND NOT (
-           target_order_status IN ('SHIPPED', 'DELIVERED', 'COMPLETED')
+           target_order_status IN (
+               'SHIPPED', 'DELIVERED', 'COMPLETED', 'PARTIALLY_FULFILLED'
+           )
            AND taven_has_refunded_post_void_handoff_reconciliation(
                target_order_id
            )
@@ -476,7 +479,8 @@ CREATE TYPE "claim_slot_resolution_status" AS ENUM (
     'DELIVERED_REPLACEMENT', 'DELIVERED_RESHIP', 'REFUNDED', 'REJECTED'
 );
 CREATE TYPE "price_adjustment_reason" AS ENUM (
-    'EXPRESS_BREACH', 'PRODUCTION_FAILURE', 'SHIPMENT_INCIDENT', 'POST_DELIVERY_ISSUE'
+    'EXPRESS_BREACH', 'PRODUCTION_FAILURE', 'SHIPMENT_INCIDENT',
+    'POST_DELIVERY_ISSUE', 'CUSTOMER_CANCELLATION'
 );
 
 ALTER TABLE "jobs"
@@ -1698,6 +1702,522 @@ CREATE TRIGGER "refund_transactions_claim_success_reconciled"
 AFTER UPDATE OF "status" ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_reconcile_claim_refund_success();
 
+CREATE FUNCTION taven_has_scoped_partial_cancellation(
+    target_order_id uuid,
+    target_shipment_plan_id uuid DEFAULT NULL,
+    target_job_id uuid DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "shipments" shipment
+        WHERE shipment."order_id" = target_order_id
+          AND shipment."status" = 'CANCELLED'
+          AND shipment."cancelled_at" IS NOT NULL
+          AND (target_shipment_plan_id IS NULL
+               OR shipment."shipment_plan_id" = target_shipment_plan_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM "shipments" replacement
+              WHERE replacement."replaces_shipment_id" = shipment."id"
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "shipment_provider_events" void_event
+              WHERE void_event."shipment_id" = shipment."id"
+                AND void_event."kind" = 'LABEL_VOIDED'
+                AND void_event."provider_event_id" = shipment."provider_void_id"
+                AND void_event."verified_at" = shipment."provider_voided_at"
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "shipments" handed_over
+              WHERE handed_over."order_id" = shipment."order_id"
+                AND handed_over."id" <> shipment."id"
+                AND handed_over."status" IN (
+                    'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED',
+                    'LOST', 'RETURNED', 'RECOVERED'
+                )
+                AND handed_over."handed_over_at" IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM "shipments" replacement
+                    WHERE replacement."replaces_shipment_id" = handed_over."id"
+                )
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              JOIN "fulfilment_slots" slot
+                ON slot."id" = allocation."fulfilment_slot_id"
+              WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+                AND (
+                    slot."order_id" <> shipment."order_id"
+                    OR slot."order_phase_id" <> shipment."order_phase_id"
+                    OR slot."outcome" NOT IN ('CANCELLED', 'CANCELLED_REFUNDED')
+                    OR coalesce((
+                        SELECT sum((credit.value ->> 'amountMinor')::bigint)
+                        FROM "price_adjustments" adjustment
+                        CROSS JOIN LATERAL jsonb_array_elements(
+                            adjustment."allocation" -> 'slotCredits'
+                        ) credit(value)
+                        WHERE adjustment."order_id" = shipment."order_id"
+                          AND (credit.value ->> 'fulfilmentSlotId')::uuid = slot."id"
+                    ), 0) <> slot."settlement_amount_minor"
+                    OR EXISTS (
+                        SELECT 1
+                        FROM "price_adjustments" adjustment
+                        WHERE adjustment."order_id" = shipment."order_id"
+                          AND EXISTS (
+                              SELECT 1
+                              FROM jsonb_array_elements(
+                                  adjustment."allocation" -> 'slotCredits'
+                              ) credit(value)
+                              WHERE (credit.value ->> 'fulfilmentSlotId')::uuid = slot."id"
+                          )
+                          AND coalesce((
+                              SELECT sum(refund."amount_minor")
+                              FROM "refund_transactions" refund
+                              WHERE refund."price_adjustment_id" = adjustment."id"
+                                AND refund."replaces_refund_transaction_id" IS NULL
+                          ), 0) <> adjustment."amount_minor"
+                    )
+                )
+          )
+          AND EXISTS (
+              SELECT 1 FROM "jobs" job
+              WHERE job."order_id" = shipment."order_id"
+                AND job."order_phase_id" = shipment."order_phase_id"
+                AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                AND NOT EXISTS (
+                    SELECT 1 FROM "jobs" replacement
+                    WHERE replacement."replaces_job_id" = job."id"
+                )
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM "jobs" job
+              WHERE job."order_id" = shipment."order_id"
+                AND job."order_phase_id" = shipment."order_phase_id"
+                AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                AND NOT EXISTS (
+                    SELECT 1 FROM "jobs" replacement
+                    WHERE replacement."replaces_job_id" = job."id"
+                )
+                AND (
+                    job."status" <> 'CANCELLED'
+                    OR job."cancellation_reason" <> 'ORDER_CANCELLED'
+                    OR job."cancelled_at" IS NULL
+                    OR job."cancelled_at" < shipment."cancelled_at"
+                )
+          )
+          AND (
+              target_job_id IS NULL
+              OR EXISTS (
+                  SELECT 1 FROM "jobs" job
+                  WHERE job."id" = target_job_id
+                    AND job."order_id" = shipment."order_id"
+                    AND job."order_phase_id" = shipment."order_phase_id"
+                    AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                    AND job."status" = 'CANCELLED'
+              )
+          )
+    );
+$$;
+
+CREATE FUNCTION taven_has_unresolved_scoped_partial_cancellation(
+    target_order_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "shipment_plan_fulfilment_slots" allocation
+        JOIN "fulfilment_slots" slot
+          ON slot."id" = allocation."fulfilment_slot_id"
+        WHERE slot."order_id" = target_order_id
+          AND slot."outcome" = 'CANCELLED'
+          AND taven_has_scoped_partial_cancellation(
+              target_order_id, allocation."shipment_plan_id"
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM "shipment_plan_fulfilment_slots" allocation
+        JOIN "fulfilment_slots" slot
+          ON slot."id" = allocation."fulfilment_slot_id"
+        JOIN "price_adjustments" adjustment
+          ON adjustment."order_id" = slot."order_id"
+         AND EXISTS (
+             SELECT 1
+             FROM jsonb_array_elements(
+                 adjustment."allocation" -> 'slotCredits'
+             ) credit(value)
+             WHERE (credit.value ->> 'fulfilmentSlotId')::uuid = slot."id"
+         )
+        JOIN "refund_transactions" refund
+          ON refund."price_adjustment_id" = adjustment."id"
+         AND refund."status" = 'SUSPENDED'
+        JOIN "payments" payment ON payment."id" = refund."payment_id"
+        WHERE slot."order_id" = target_order_id
+          AND taven_has_scoped_partial_cancellation(
+              target_order_id, allocation."shipment_plan_id"
+          )
+          AND taven_payment_has_suspended_refund_incident(payment."id")
+    );
+$$;
+
+CREATE FUNCTION taven_reconcile_partial_cancellation_refund_success()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    refund_resolved_at timestamptz;
+    delivered_count bigint;
+    unresolved_count bigint;
+BEGIN
+    IF NEW."status" IS NOT DISTINCT FROM OLD."status" THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT payment."order_id"
+    INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = NEW."payment_id";
+    refund_resolved_at := coalesce(NEW."completed_at", NEW."updated_at");
+
+    UPDATE "fulfilment_slots" slot
+    SET "outcome" = 'CANCELLED',
+        "updated_at" = NEW."updated_at"
+    WHERE slot."order_id" = target_order_id
+      AND slot."outcome" = 'CANCELLED_REFUNDED'
+      AND EXISTS (
+          SELECT 1
+          FROM "shipment_plan_fulfilment_slots" allocation
+          WHERE allocation."fulfilment_slot_id" = slot."id"
+            AND taven_has_scoped_partial_cancellation(
+                target_order_id, allocation."shipment_plan_id"
+            )
+      )
+      AND EXISTS (
+          SELECT 1
+          FROM "price_adjustments" adjustment
+          WHERE adjustment."order_id" = target_order_id
+            AND EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(
+                    adjustment."allocation" -> 'slotCredits'
+                ) credit(value)
+                WHERE (credit.value ->> 'fulfilmentSlotId')::uuid = slot."id"
+            )
+            AND coalesce((
+                SELECT sum(refund."amount_minor")
+                FROM "refund_transactions" refund
+                WHERE refund."price_adjustment_id" = adjustment."id"
+                  AND refund."status" = 'SUCCEEDED'
+            ), 0) <> adjustment."amount_minor"
+      );
+
+    IF EXISTS (
+        SELECT 1 FROM "orders" target_order
+        WHERE target_order."id" = target_order_id
+          AND target_order."status" = 'PARTIALLY_FULFILLED'
+    ) AND taven_has_unresolved_scoped_partial_cancellation(
+        target_order_id
+    ) THEN
+        UPDATE "order_phases"
+        SET "status" = 'SHIPPED', "updated_at" = NEW."updated_at"
+        WHERE "order_id" = target_order_id
+          AND "status" = 'PARTIALLY_FULFILLED';
+        UPDATE "orders"
+        SET "status" = 'SHIPPED', "updated_at" = NEW."updated_at"
+        WHERE "id" = target_order_id
+          AND "status" = 'PARTIALLY_FULFILLED';
+    END IF;
+
+    UPDATE "fulfilment_slots" slot
+    SET "outcome" = 'CANCELLED_REFUNDED',
+        "updated_at" = refund_resolved_at
+    WHERE slot."order_id" = target_order_id
+      AND slot."outcome" = 'CANCELLED'
+      AND EXISTS (
+          SELECT 1
+          FROM "shipment_plan_fulfilment_slots" allocation
+          WHERE allocation."fulfilment_slot_id" = slot."id"
+            AND taven_has_scoped_partial_cancellation(
+                target_order_id, allocation."shipment_plan_id"
+            )
+      )
+      AND coalesce((
+          SELECT sum((credit.value ->> 'amountMinor')::bigint)
+          FROM "price_adjustments" adjustment
+          CROSS JOIN LATERAL jsonb_array_elements(
+              adjustment."allocation" -> 'slotCredits'
+          ) credit(value)
+          WHERE adjustment."order_id" = target_order_id
+            AND (credit.value ->> 'fulfilmentSlotId')::uuid = slot."id"
+      ), 0) = slot."settlement_amount_minor"
+      AND NOT EXISTS (
+          SELECT 1
+          FROM "price_adjustments" adjustment
+          WHERE adjustment."order_id" = target_order_id
+            AND EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(
+                    adjustment."allocation" -> 'slotCredits'
+                ) credit(value)
+                WHERE (credit.value ->> 'fulfilmentSlotId')::uuid = slot."id"
+            )
+            AND coalesce((
+                SELECT sum(refund."amount_minor")
+                FROM "refund_transactions" refund
+                WHERE refund."price_adjustment_id" = adjustment."id"
+                  AND refund."status" = 'SUCCEEDED'
+            ), 0) <> adjustment."amount_minor"
+      );
+
+    SELECT count(*) FILTER (WHERE slot."outcome" = 'DELIVERED'),
+           count(*) FILTER (
+               WHERE slot."outcome" NOT IN ('DELIVERED', 'CANCELLED_REFUNDED')
+           )
+    INTO delivered_count, unresolved_count
+    FROM "fulfilment_slots" slot
+    WHERE slot."order_id" = target_order_id;
+
+    IF unresolved_count = 0
+       AND delivered_count > 0
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "claims" claim
+           WHERE claim."order_id" = target_order_id
+             AND claim."status" IN ('OPEN', 'ACTIVE')
+       )
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "refund_transactions" refund
+           JOIN "payments" payment ON payment."id" = refund."payment_id"
+           WHERE payment."order_id" = target_order_id
+             AND refund."status" IN ('PENDING', 'SUSPENDED')
+       ) THEN
+        UPDATE "order_phases"
+        SET "status" = 'PARTIALLY_FULFILLED',
+            "updated_at" = refund_resolved_at
+        WHERE "order_id" = target_order_id AND "status" = 'SHIPPED';
+        UPDATE "orders"
+        SET "status" = 'PARTIALLY_FULFILLED',
+            "updated_at" = refund_resolved_at
+        WHERE "id" = target_order_id AND "status" = 'SHIPPED';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "refund_transactions_partial_cancellation_success_reconciled"
+AFTER UPDATE OF "status" ON "refund_transactions"
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_partial_cancellation_refund_success();
+
+-- A provider can reverse a successful partial-cancellation refund after the
+-- aggregate became terminal. The status guards below validate that narrow
+-- PARTIALLY_FULFILLED -> SHIPPED recovery; keep its source assets held without
+-- routing it through the older generic terminal-state rejection trigger.
+DROP TRIGGER "orders_hold_confirmed_sources" ON "orders";
+CREATE TRIGGER "orders_hold_confirmed_sources"
+AFTER UPDATE OF "status" ON "orders"
+FOR EACH ROW
+WHEN (NOT (
+    OLD."status" = 'PARTIALLY_FULFILLED'
+    AND NEW."status" = 'SHIPPED'
+))
+EXECUTE FUNCTION taven_hold_confirmed_order_sources();
+
+CREATE FUNCTION taven_hold_reopened_partial_order_sources()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE "model_files" source
+    SET "retention_hold" = CASE
+        WHEN source."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL')
+            THEN source."retention_hold"
+        ELSE 'ACTIVE_ORDER'::"retention_hold"
+    END
+    FROM "order_items" item
+    WHERE item."order_id" = NEW."id"
+      AND source."id" = item."source_model_file_id";
+
+    UPDATE "photo_assets" photo
+    SET "retention_hold" = CASE
+        WHEN photo."retention_hold" IN ('ACTIVE_CLAIM', 'LEGAL')
+            THEN photo."retention_hold"
+        ELSE 'ACTIVE_ORDER'::"retention_hold"
+    END
+    FROM "individual_order_origins" origin
+    JOIN "quotes" quote ON quote."id" = origin."quote_id"
+    WHERE origin."order_id" = NEW."id"
+      AND photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+      AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+      AND photo."scope_id" = quote."quote_request_id";
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "orders_hold_reopened_partial_sources"
+AFTER UPDATE OF "status" ON "orders"
+FOR EACH ROW
+WHEN (
+    OLD."status" = 'PARTIALLY_FULFILLED'
+    AND NEW."status" = 'SHIPPED'
+)
+EXECUTE FUNCTION taven_hold_reopened_partial_order_sources();
+
+CREATE FUNCTION taven_validate_undispatched_cancellation_refund_supersession()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - ARRAY['status', 'updated_at']) IS DISTINCT FROM
+       (to_jsonb(OLD) - ARRAY['status', 'updated_at'])
+       OR OLD."status" <> 'PENDING'
+       OR NEW."status" <> 'SUPERSEDED'
+       OR OLD."reason" <> 'CUSTOMER_CANCELLATION'
+       OR OLD."dispatch_claimed_at" IS NOT NULL
+       OR OLD."provider_refund_id" IS NOT NULL
+       OR OLD."provider_result_event_id" IS NOT NULL
+       OR OLD."replaces_refund_transaction_id" IS NOT NULL
+       OR OLD."replaces_failure_provider_event_id" IS NOT NULL
+       OR OLD."source_success_provider_event_id" IS NOT NULL
+       OR OLD."reconciliation_started_at" IS NOT NULL
+       OR NOT EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           JOIN "shipments" shipment
+             ON shipment."order_id" = payment."order_id"
+            AND shipment."status" = 'CANCELLED'
+           JOIN "shipment_provider_events" acceptance_event
+             ON acceptance_event."shipment_id" = shipment."id"
+            AND acceptance_event."kind" = 'ACCEPTANCE_SCAN'
+            AND acceptance_event."source_shipment_status" = 'CANCELLED'
+            AND acceptance_event."verified_at" = NEW."updated_at"
+           JOIN "shipment_provider_events" void_event
+             ON void_event."shipment_id" = shipment."id"
+            AND void_event."kind" = 'LABEL_VOIDED'
+            AND void_event."provider_event_id" = shipment."provider_void_id"
+            AND void_event."verified_at" = shipment."provider_voided_at"
+           WHERE payment."id" = NEW."payment_id"
+             AND acceptance_event."carrier" = shipment."carrier"
+             AND acceptance_event."carrier_label_id" = shipment."carrier_label_id"
+             AND acceptance_event."occurred_at" < void_event."occurred_at"
+       ) THEN
+        RAISE EXCEPTION 'undispatched cancellation refund may be superseded only by exact post-void handoff evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_handoff_supersession_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+ALTER TABLE "refund_transactions"
+    DROP CONSTRAINT "refund_transactions_source_reconciliation_check";
+ALTER TABLE "refund_transactions"
+    ADD CONSTRAINT "refund_transactions_source_reconciliation_check" CHECK (
+        (
+            "status" IN ('SUPERSEDED', 'SUSPENDED')
+            AND "replaces_refund_transaction_id" IS NOT NULL
+            AND "replaces_failure_provider_event_id" IS NOT NULL
+            AND "source_success_provider_event_id" IS NOT NULL
+            AND "reconciliation_started_at" IS NOT NULL
+            AND "completed_at" IS NULL
+            AND (
+                ("status" = 'SUPERSEDED'
+                    AND "dispatch_claimed_at" IS NULL
+                    AND "provider_result_event_id" IS NULL)
+                OR ("status" = 'SUSPENDED'
+                    AND "dispatch_claimed_at" IS NOT NULL)
+            )
+        )
+        OR (
+            "status" = 'SUPERSEDED'
+            AND "reason" = 'CUSTOMER_CANCELLATION'
+            AND "replaces_refund_transaction_id" IS NULL
+            AND "replaces_failure_provider_event_id" IS NULL
+            AND "source_success_provider_event_id" IS NULL
+            AND "reconciliation_started_at" IS NULL
+            AND "dispatch_claimed_at" IS NULL
+            AND "provider_refund_id" IS NULL
+            AND "provider_result_event_id" IS NULL
+            AND "completed_at" IS NULL
+        )
+        OR (
+            "status" = 'FAILED'
+            AND "replaces_refund_transaction_id" IS NOT NULL
+            AND "replaces_failure_provider_event_id" IS NOT NULL
+            AND "dispatch_claimed_at" IS NOT NULL
+            AND "source_success_provider_event_id" IS NOT NULL
+            AND "reconciliation_started_at" IS NOT NULL
+            AND "provider_result_event_id" IS NOT NULL
+            AND "completed_at" IS NULL
+        )
+        OR (
+            "status" NOT IN ('SUPERSEDED', 'SUSPENDED')
+            AND "source_success_provider_event_id" IS NULL
+            AND "reconciliation_started_at" IS NULL
+        )
+    );
+
+DROP TRIGGER "refund_transactions_identity_protected" ON "refund_transactions";
+CREATE TRIGGER "refund_transactions_identity_protected_insert_delete"
+BEFORE INSERT OR DELETE ON "refund_transactions"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_refund_transaction_identity();
+CREATE TRIGGER "refund_transactions_identity_protected_update"
+BEFORE UPDATE ON "refund_transactions"
+FOR EACH ROW
+WHEN (NOT (
+    OLD."status" = 'PENDING'
+    AND NEW."status" = 'SUPERSEDED'
+    AND OLD."reason" = 'CUSTOMER_CANCELLATION'
+    AND OLD."dispatch_claimed_at" IS NULL
+    AND OLD."replaces_refund_transaction_id" IS NULL
+))
+EXECUTE FUNCTION taven_protect_refund_transaction_identity();
+CREATE TRIGGER "refund_transactions_handoff_supersession_validated"
+BEFORE UPDATE ON "refund_transactions"
+FOR EACH ROW
+WHEN (
+    OLD."status" = 'PENDING'
+    AND NEW."status" = 'SUPERSEDED'
+    AND OLD."reason" = 'CUSTOMER_CANCELLATION'
+    AND OLD."dispatch_claimed_at" IS NULL
+    AND OLD."replaces_refund_transaction_id" IS NULL
+)
+EXECUTE FUNCTION taven_validate_undispatched_cancellation_refund_supersession();
+
+DROP TRIGGER "refund_transactions_source_reconciliation_reconciled"
+ON "refund_transactions";
+CREATE CONSTRAINT TRIGGER "refund_transactions_source_reconciliation_reconciled"
+AFTER UPDATE OF "status", "provider_result_event_id", "completed_at",
+    "dispatch_claimed_at", "source_success_provider_event_id",
+    "reconciliation_started_at"
+ON "refund_transactions"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (NOT (
+    OLD."status" = 'PENDING'
+    AND NEW."status" = 'SUPERSEDED'
+    AND OLD."reason" = 'CUSTOMER_CANCELLATION'
+    AND OLD."dispatch_claimed_at" IS NULL
+    AND OLD."replaces_refund_transaction_id" IS NULL
+))
+EXECUTE FUNCTION taven_validate_refund_retry_source_reconciliation();
+
 
 -- The original checkout primitive only supported full refunds. Recovery claims
 -- can refund one fulfilled subset, so reconcile the Payment from all committed
@@ -2004,7 +2524,9 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    IF target_status IN ('SHIPPED', 'DELIVERED', 'COMPLETED')
+    IF target_status IN (
+           'SHIPPED', 'DELIVERED', 'COMPLETED', 'PARTIALLY_FULFILLED'
+       )
        AND EXISTS (
            SELECT 1
            FROM "payments" payment
@@ -2367,8 +2889,13 @@ BEGIN
               AND shipment."status" NOT IN ('LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'RETURNED', 'RECOVERED')
               AND NOT (
                   shipment."status" = 'CANCELLED'
-                  AND taven_has_refunded_post_void_handoff_reconciliation(
-                      target_order_id
+                  AND (
+                      taven_has_refunded_post_void_handoff_reconciliation(
+                          target_order_id
+                      )
+                      OR taven_has_scoped_partial_cancellation(
+                          target_order_id, shipment."shipment_plan_id"
+                      )
                   )
               )
               AND NOT EXISTS (
@@ -2391,8 +2918,13 @@ BEGIN
               AND "status" NOT IN ('PACKED', 'HANDED_OVER')
               AND NOT (
                   "status" = 'CANCELLED'
-                  AND taven_has_refunded_post_void_handoff_reconciliation(
-                      target_order_id
+                  AND (
+                      taven_has_refunded_post_void_handoff_reconciliation(
+                          target_order_id
+                      )
+                      OR taven_has_scoped_partial_cancellation(
+                          target_order_id, job."shipment_plan_id", job."id"
+                      )
                   )
               )
         ) OR EXISTS (
@@ -3430,6 +3962,9 @@ BEGIN
                AND taven_has_refunded_post_void_handoff_reconciliation(NEW."id"))
            OR (OLD."status" = 'REFUNDED' AND NEW."status" = 'CANCELLED'
                AND taven_order_has_newer_refund_failure(NEW."id"))
+           OR (OLD."status" = 'PARTIALLY_FULFILLED'
+               AND NEW."status" = 'SHIPPED'
+               AND taven_has_unresolved_scoped_partial_cancellation(NEW."id"))
            OR (OLD."status" = 'SHIPPED' AND NEW."status" IN ('DELIVERED', 'PARTIALLY_FULFILLED', 'CANCELLED', 'REFUNDED'))
            OR (OLD."status" = 'RECOVERY_PENDING' AND NEW."status" IN ('QC_PASSED', 'PARTIALLY_FULFILLED', 'CANCELLED'))
            OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
@@ -3540,6 +4075,11 @@ BEGIN
            OR (OLD."status" = 'CANCELLED_REFUNDED'
                AND NEW."status" = 'CANCELLED'
                AND taven_order_has_newer_refund_failure(NEW."order_id"))
+           OR (OLD."status" = 'PARTIALLY_FULFILLED'
+               AND NEW."status" = 'SHIPPED'
+               AND taven_has_unresolved_scoped_partial_cancellation(
+                   NEW."order_id"
+               ))
        ) THEN
         RAISE EXCEPTION 'order phase status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_status_transition_check';
@@ -3636,6 +4176,10 @@ BEGIN
                AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
                AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
                AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
+           OR (OLD."status" = 'PARTIALLY_FULFILLED'
+               AND NEW."status" = 'SHIPPED'
+               AND (to_jsonb(NEW) - ARRAY['status', 'updated_at']) =
+                   (to_jsonb(OLD) - ARRAY['status', 'updated_at']))
            OR (NEW."status" IN ('RECOVERY_PENDING', 'PARTIALLY_FULFILLED')
                AND (to_jsonb(NEW) - ARRAY['status', 'updated_at']) =
                    (to_jsonb(OLD) - ARRAY['status', 'updated_at']))
