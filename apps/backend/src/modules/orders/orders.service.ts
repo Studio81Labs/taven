@@ -452,8 +452,6 @@ export class OrdersService {
               ? {
                   status: terminalStatus,
                   qcRejectedAt: failedAt,
-                  failureStage: stage,
-                  failureReason: reason,
                 }
               : {
                   status: terminalStatus,
@@ -1128,7 +1126,9 @@ export class OrdersService {
         ) {
           throw new ConflictException("Shipment is not ready for handoff");
         }
-        const readiness = await tx.$queryRaw<Array<{ ready: boolean }>>`
+        const readiness = await tx.$queryRaw<
+          Array<{ packingReady: boolean; financialReady: boolean }>
+        >`
           SELECT EXISTS (
             SELECT 1 FROM jobs job
             JOIN job_shipment_assignments assignment ON assignment.job_id = job.id
@@ -1147,7 +1147,8 @@ export class OrdersService {
                     AND assignment.shipment_id = ${shipmentId}::uuid
                 )
               )
-          ) AND NOT EXISTS (
+          ) AS "packingReady",
+          NOT EXISTS (
             SELECT 1
             FROM price_adjustments adjustment
             LEFT JOIN LATERAL (
@@ -1164,9 +1165,13 @@ export class OrdersService {
             JOIN payments payment ON payment.id = refund.payment_id
             WHERE payment.order_id = ${orderId}::uuid
               AND refund.status IN ('PENDING', 'SUSPENDED')
-          ) AS ready
+          ) AS "financialReady"
         `;
-        if (!readiness[0]?.ready) {
+        if (
+          !readiness[0]?.packingReady ||
+          (!readiness[0]?.financialReady &&
+            shipment.status !== ShipmentStatus.CANCELLATION_PENDING)
+        ) {
           throw new ConflictException(
             "Shipment packing or financial handoff barriers are not satisfied",
           );
@@ -2179,7 +2184,19 @@ export class OrdersService {
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
     const reason = requiredText(body.reason, "reason", 2_000);
-    return this.command(orderId, "cancel", key, { reason }, async (tx) => {
+    const printingConsumptions = cancellationPrintingConsumptions(
+      body.printingConsumptions,
+    );
+    const commandInput = {
+      reason,
+      printingConsumptions: [...printingConsumptions]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([jobId, actualMaterialMilligrams]) => ({
+          jobId,
+          actualMaterialMilligrams: actualMaterialMilligrams.toString(),
+        })),
+    };
+    return this.command(orderId, "cancel", key, commandInput, async (tx) => {
       const order = await this.lockOrder(tx, orderId);
       if (
         [
@@ -2231,7 +2248,13 @@ export class OrdersService {
           shipmentIds: liveLabels.map(({ id }) => id),
         });
       }
-      const refundIds = await this.finalizeCancellation(tx, orderId, at, key!);
+      const refundIds = await this.finalizeCancellation(
+        tx,
+        orderId,
+        at,
+        key!,
+        printingConsumptions,
+      );
       return result(orderId, "ORDER_CANCELLED", { refundIds, reason });
     });
   }
@@ -2241,11 +2264,37 @@ export class OrdersService {
     orderId: string,
     at: Date,
     key: string,
+    printingConsumptions = new Map<string, bigint>(),
   ): Promise<string[]> {
     await tx.shipment.updateMany({
       where: { orderId, status: ShipmentStatus.PLANNED },
       data: { status: ShipmentStatus.CANCELLED, cancelledAt: at },
     });
+    const printing = await tx.productionReservation.findMany({
+      where: {
+        job: { orderId, status: JobStatus.PRINTING },
+        status: "PRINTING",
+      },
+      select: { id: true, jobId: true },
+    });
+    if (
+      printing.length !== printingConsumptions.size ||
+      printing.some(
+        ({ jobId }) => !jobId || printingConsumptions.get(jobId) === undefined,
+      )
+    ) {
+      throw new BadRequestException(
+        "printingConsumptions must cover every actively printing Job",
+      );
+    }
+    for (const production of printing) {
+      await tx.$queryRaw`
+        SELECT taven_settle_printing_production_reservation(
+          ${production.id}::uuid,
+          ${printingConsumptions.get(production.jobId!)!}
+        )::text
+      `;
+    }
     const preprint = await tx.productionReservation.findMany({
       where: {
         job: { orderId },
@@ -2268,6 +2317,7 @@ export class OrdersService {
             JobStatus.CREATED,
             JobStatus.ACCEPTED,
             JobStatus.GCODE_READY,
+            JobStatus.PRINTING,
             JobStatus.PRINTED,
             JobStatus.PHOTO_SUBMITTED,
             JobStatus.QC_APPROVED,
@@ -2601,6 +2651,42 @@ function priceAdjustmentSlotCredits(
       ),
     };
   });
+}
+
+function cancellationPrintingConsumptions(input: unknown): Map<string, bigint> {
+  if (input === undefined) return new Map();
+  if (!Array.isArray(input)) {
+    throw new BadRequestException("printingConsumptions is invalid");
+  }
+  const consumptions = new Map<string, bigint>();
+  input.forEach((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new BadRequestException(
+        `printingConsumptions[${index}] is invalid`,
+      );
+    }
+    const record = value as Record<string, unknown>;
+    if (typeof record.jobId !== "string") {
+      throw new BadRequestException(
+        `printingConsumptions[${index}].jobId is invalid`,
+      );
+    }
+    assertUuid(record.jobId, `printingConsumptions[${index}].jobId`);
+    if (consumptions.has(record.jobId)) {
+      throw new BadRequestException(
+        "printingConsumptions contains duplicate Jobs",
+      );
+    }
+    consumptions.set(
+      record.jobId,
+      positiveBigInt(
+        record.actualMaterialMilligrams,
+        `printingConsumptions[${index}].actualMaterialMilligrams`,
+        true,
+      ),
+    );
+  });
+  return consumptions;
 }
 
 function enumValue<T extends Record<string, string>>(

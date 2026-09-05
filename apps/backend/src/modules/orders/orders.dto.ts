@@ -164,9 +164,24 @@ export class CreateClaimDto {
   incidentShipmentId?: string;
 }
 
+export class CancellationPrintingConsumptionDto {
+  @ApiProperty(UUID)
+  jobId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[0-9]+$" })
+  actualMaterialMilligrams!: string;
+}
+
 export class CancelOrderDto {
   @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
   reason!: string;
+
+  @ApiPropertyOptional({
+    type: [CancellationPrintingConsumptionDto],
+    description:
+      "Exact material consumption for every Job that is actively printing",
+  })
+  printingConsumptions?: CancellationPrintingConsumptionDto[];
 }
 
 export class FulfilmentCommandResultDto {

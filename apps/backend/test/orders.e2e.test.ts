@@ -307,7 +307,7 @@ async function handoff(
 async function carrierEvent(
   fixture: FulfilmentFixture,
   index: number,
-  kind: "TRANSIT_SCAN" | "DELIVERY_SCAN" | "LOST" | "RETURNED",
+  kind: "TRANSIT_SCAN" | "DELIVERY_SCAN" | "LOST" | "RETURNED" | "RECOVERED",
   suffix = kind.toLowerCase(),
 ) {
   const shipmentId = fixture.foundation.shipmentIds[index]!;
@@ -452,6 +452,47 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).toBe(candidateResourceEstimateId);
   });
 
+  it("records a QC rejection without invalid failure metadata", async () => {
+    const fixture = await preparePaidOrder("qc-rejection");
+    const { orderId } = fixture.foundation;
+    const jobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, jobId, "qc-rejection-accept");
+    await makeGcodeReady(jobId);
+    await orders.startPrinting(orderId, jobId, "qc-rejection-printing");
+    await orders.finishPrinting(
+      orderId,
+      jobId,
+      { actualMaterialMilligrams: "50" },
+      "qc-rejection-printed",
+    );
+    await orders.submitQc(
+      orderId,
+      jobId,
+      { omissionReason: "dimensional inspection evidence" },
+      "qc-rejection-submit",
+    );
+
+    const rejected = await orders.failJob(
+      orderId,
+      jobId,
+      {
+        stage: "POST_PRINT",
+        reason: "dimensional inspection failed",
+        recovery: "REPLACE",
+      },
+      "qc-rejection-fail",
+    );
+
+    expect(rejected.status).toBe("QC_REJECTED");
+    await expect(
+      prisma.job.findUniqueOrThrow({ where: { id: jobId } }),
+    ).resolves.toMatchObject({
+      status: "QC_REJECTED",
+      failureStage: null,
+      failureReason: null,
+    });
+  });
+
   it("enforces parcel barriers and completes a delivered order once", async () => {
     const fixture = await preparePaidOrder("delivery");
     const photoAssetId = randomUUID();
@@ -587,6 +628,62 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(projection.slots).toEqual([
       expect.objectContaining({ outcome: "CANCELLED_REFUNDED" }),
     ]);
+  });
+
+  it("enforces incident chronology and atomic consumption through recovery", async () => {
+    const fixture = await preparePaidOrder("incident-recovery");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    const shipment = await prisma.shipment.findUniqueOrThrow({
+      where: { id: fixture.foundation.shipmentId },
+    });
+    if (!shipment.handedOverAt) throw new Error("handoff was not recorded");
+
+    await expect(
+      prisma.shipmentProviderEvent.create({
+        data: {
+          shipmentId: shipment.id,
+          carrier: shipment.carrier!,
+          carrierLabelId: shipment.carrierLabelId!,
+          providerEventId: `orphan-loss-${shipment.id}`,
+          providerTransactionId: `orphan-loss-tx-${shipment.id}`,
+          kind: "LOST",
+          occurredAt: new Date(),
+          authenticatedAt: new Date(),
+          verifiedAt: new Date(),
+        },
+      }),
+    ).rejects.toThrow("must commit atomically");
+    await expect(
+      orders.applyShipmentEvent(
+        fixture.foundation.orderId,
+        shipment.id,
+        {
+          kind: "LOST",
+          providerEventId: `stale-loss-${shipment.id}`,
+          providerTransactionId: `stale-loss-tx-${shipment.id}`,
+          occurredAt: new Date(
+            shipment.handedOverAt.getTime() - 60_000,
+          ).toISOString(),
+        },
+        "stale-loss-key",
+      ),
+    ).rejects.toThrow("chronology");
+
+    await carrierEvent(fixture, 0, "LOST");
+    const claimCount = await prisma.claim.count({
+      where: { incidentShipmentId: shipment.id },
+    });
+    await carrierEvent(fixture, 0, "RECOVERED");
+
+    await expect(
+      prisma.shipment.findUniqueOrThrow({ where: { id: shipment.id } }),
+    ).resolves.toMatchObject({ status: "RECOVERED" });
+    await expect(
+      prisma.claim.count({ where: { incidentShipmentId: shipment.id } }),
+    ).resolves.toBe(claimCount);
   });
 
   it("resolves a Claim when a failed refund is replaced by a successful retry", async () => {
@@ -850,6 +947,57 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       jobs: [expect.objectContaining({ status: "HANDED_OVER" })],
       shipments: [expect.objectContaining({ status: "HANDED_OVER" })],
     });
+  });
+
+  it("records cancellation-race handoff while an adjustment refund is pending", async () => {
+    const fixture = await preparePaidOrder("acceptance-pending-adjustment");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    const adjustment = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: "1",
+        paymentId: fixture.foundation.paymentId,
+        allocation: { component: "express", reason: "deadline missed" },
+      },
+      "acceptance-pending-adjustment-create",
+    );
+    const pending = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      adjustment.result.priceAdjustmentId as string,
+      "acceptance-pending-adjustment-refund",
+    );
+    const refundId = (pending.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("adjustment refund was not created");
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "carrier acceptance raced with cancellation" },
+      "acceptance-pending-adjustment-cancel",
+    );
+
+    const accepted = await orders.handoffShipment(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      {
+        providerEventId: `acceptance-pending-${fixture.foundation.shipmentId}`,
+        providerTransactionId: `acceptance-pending-tx-${fixture.foundation.shipmentId}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "acceptance-pending-adjustment-handoff",
+    );
+
+    expect(accepted.status).toBe("SHIPMENT_HANDED_OVER");
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+    ).resolves.toMatchObject({ status: "PENDING" });
+    await expect(
+      prisma.outboxMessage.findUniqueOrThrow({
+        where: {
+          deduplicationKey: `void_carrier_label:${fixture.foundation.shipmentId}:label-${fixture.foundation.shipmentId}`,
+        },
+      }),
+    ).resolves.toMatchObject({ status: "SUPERSEDED" });
   });
 
   it("blocks handoff until an express PriceAdjustment refund succeeds", async () => {
@@ -1131,4 +1279,39 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       ).toMatchObject({ status: "CANCELLED" });
     },
   );
+
+  it("settles active printing consumption before cancellation", async () => {
+    const fixture = await preparePaidOrder("cancel-printing");
+    const { orderId } = fixture.foundation;
+    const jobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, jobId, "cancel-printing-accept");
+    await makeGcodeReady(jobId);
+    await orders.startPrinting(orderId, jobId, "cancel-printing-start");
+
+    await expect(
+      orders.cancelOrder(
+        orderId,
+        { reason: "stop the active print" },
+        "cancel-printing-missing-consumption",
+      ),
+    ).rejects.toThrow(
+      "printingConsumptions must cover every actively printing Job",
+    );
+    const cancelled = await orders.cancelOrder(
+      orderId,
+      {
+        reason: "stop the active print",
+        printingConsumptions: [{ jobId, actualMaterialMilligrams: "25" }],
+      },
+      "cancel-printing-with-consumption",
+    );
+
+    expect(cancelled.status).toBe("ORDER_CANCELLED");
+    await expect(
+      prisma.productionReservation.findFirstOrThrow({ where: { jobId } }),
+    ).resolves.toMatchObject({ status: "CONSUMED" });
+    await expect(
+      prisma.job.findUniqueOrThrow({ where: { id: jobId } }),
+    ).resolves.toMatchObject({ status: "CANCELLED" });
+  });
 });

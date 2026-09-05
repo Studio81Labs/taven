@@ -242,6 +242,92 @@ BEGIN
 END;
 $$;
 
+-- Incident events extend the original provider-event state machine. Keep the
+-- original broad guards stable and add the incident-specific scope,
+-- chronology, and atomic-consumption requirements here.
+CREATE FUNCTION taven_validate_shipment_incident_provider_event()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_status "shipment_status";
+    target_carrier varchar(100);
+    target_label_id varchar(255);
+    target_handed_over_at timestamptz;
+BEGIN
+    SELECT shipment."status", shipment."carrier", shipment."carrier_label_id",
+           shipment."handed_over_at"
+    INTO target_status, target_carrier, target_label_id,
+         target_handed_over_at
+    FROM "shipments" shipment
+    WHERE shipment."id" = NEW."shipment_id"
+    FOR UPDATE;
+
+    IF NOT FOUND
+       OR NEW."outbox_message_id" IS NOT NULL
+       OR NEW."carrier" IS DISTINCT FROM target_carrier
+       OR NEW."carrier_label_id" IS DISTINCT FROM target_label_id
+       OR NEW."source_shipment_status" IS DISTINCT FROM target_status
+       OR (NEW."kind" IN ('LOST', 'RETURNED')
+           AND target_status <> 'IN_TRANSIT')
+       OR (NEW."kind" = 'RECOVERED' AND target_status <> 'LOST') THEN
+        RAISE EXCEPTION 'Shipment incident provider event must match the exact lifecycle scope without an outbox command'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
+    END IF;
+
+    IF target_handed_over_at IS NULL
+       OR NEW."occurred_at" < target_handed_over_at - interval '5 seconds'
+       OR (NEW."kind" = 'RECOVERED' AND NOT EXISTS (
+           SELECT 1
+           FROM "shipment_provider_events" lost_event
+           WHERE lost_event."shipment_id" = NEW."shipment_id"
+             AND lost_event."kind" = 'LOST'
+             AND lost_event."carrier" = NEW."carrier"
+             AND lost_event."carrier_label_id" = NEW."carrier_label_id"
+             AND lost_event."occurred_at" <= NEW."occurred_at" + interval '5 seconds'
+       )) THEN
+        RAISE EXCEPTION 'Shipment incident provider event timestamps must follow handoff and incident chronology'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_evidence_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "shipment_provider_events_zz_incident_scope_validated"
+AFTER INSERT ON "shipment_provider_events"
+FOR EACH ROW
+WHEN (NEW."kind" IN ('LOST', 'RETURNED', 'RECOVERED'))
+EXECUTE FUNCTION taven_validate_shipment_incident_provider_event();
+
+CREATE FUNCTION taven_reconcile_shipment_incident_provider_event_consumption()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "shipments" shipment
+        WHERE shipment."id" = NEW."shipment_id"
+          AND shipment."carrier" = NEW."carrier"
+          AND shipment."carrier_label_id" = NEW."carrier_label_id"
+          AND shipment."status"::text = NEW."kind"::text
+    ) THEN
+        RAISE EXCEPTION 'Shipment incident provider event and its lifecycle outcome must commit atomically'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_consumption_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "shipment_provider_events_zz_incident_consumed"
+AFTER INSERT ON "shipment_provider_events"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (NEW."kind" IN ('LOST', 'RETURNED', 'RECOVERED'))
+EXECUTE FUNCTION taven_reconcile_shipment_incident_provider_event_consumption();
+
 CREATE TYPE "replacement_request_reason" AS ENUM ('JOB_FAILED', 'QC_REJECTED');
 CREATE TYPE "replacement_request_status" AS ENUM ('OPEN', 'JOB_CREATED', 'REFUND_REQUIRED', 'RESOLVED');
 CREATE TYPE "claim_origin" AS ENUM ('SHIPMENT_INCIDENT', 'POST_DELIVERY_QUALITY');
