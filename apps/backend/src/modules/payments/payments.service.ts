@@ -628,6 +628,12 @@ export class PaymentsService {
       .flatMap(({ phaseResourcePlans }) => phaseResourcePlans)
       .find((plan) => plan?.id === previous?.phaseResourcePlanId);
     if (!previous || !previousPlan) return;
+    if (
+      payment.status === PaymentStatus.CREATED &&
+      !(await this.stageCreatedPaymentForVerifiedCapture(payment.id, event))
+    ) {
+      return;
+    }
     try {
       if (previous.status === "RESERVED") {
         await this.reservations.releaseBeforeCapture(payment.id, previous.id);
@@ -690,6 +696,20 @@ export class PaymentsService {
       // evidence is discarded and no Job is created on this path.
       throw error;
     }
+  }
+
+  private async stageCreatedPaymentForVerifiedCapture(
+    paymentId: string,
+    event: VerifiedPaymentEvent,
+  ): Promise<boolean> {
+    const rows = await this.prisma.$queryRaw<Array<{ staged: boolean }>>`
+      SELECT taven_stage_created_checkout_payment_for_capture(
+        ${paymentId}::uuid, ${event.provider}, ${event.providerTransactionId},
+        ${event.merchantReference}, ${event.amountMinor},
+        ${event.currency}::char(3), ${event.occurredAt}
+      ) AS staged
+    `;
+    return rows[0]?.staged ?? false;
   }
 
   private async recordIntentFailure(

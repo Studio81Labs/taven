@@ -859,22 +859,29 @@ describe("checkout payment capture protocol", () => {
     const ambiguousCallbackPublicTokenHash = createHash("sha256")
       .update(ambiguousCallbackToken)
       .digest("hex");
+    const ambiguousCaptureToken = randomBytes(32).toString("base64url");
+    const ambiguousCapturePublicTokenHash = createHash("sha256")
+      .update(ambiguousCaptureToken)
+      .digest("hex");
     const setupClient = await pool.connect();
     let foundation: PersistenceFoundation;
     let outageFoundation: PersistenceFoundation;
     let returnedIntentFoundation: PersistenceFoundation;
     let callbackFoundation: PersistenceFoundation;
     let ambiguousCallbackFoundation: PersistenceFoundation;
+    let ambiguousCaptureFoundation: PersistenceFoundation;
     let customerEmail: string;
     let outageCustomerEmail: string;
     let returnedIntentCustomerEmail: string;
     let callbackCustomerEmail: string;
     let ambiguousCallbackCustomerEmail: string;
+    let ambiguousCaptureCustomerEmail: string;
     let destination: ResolvedDeliveryCapability;
     let outageDestination: ResolvedDeliveryCapability;
     let returnedIntentDestination: ResolvedDeliveryCapability;
     let callbackDestination: ResolvedDeliveryCapability;
     let ambiguousCallbackDestination: ResolvedDeliveryCapability;
+    let ambiguousCaptureDestination: ResolvedDeliveryCapability;
     try {
       await setupClient.query("BEGIN");
       const fixtures = new PersistenceFactory(
@@ -1069,6 +1076,44 @@ describe("checkout payment capture protocol", () => {
           ambiguousCallbackDestinationRow.capability_snapshot as Prisma.InputJsonObject,
         supportedCategoryIds: ["standard"],
       };
+      const ambiguousCaptureFixtures = new PersistenceFactory(
+        setupClient,
+        `${scope}:http-ambiguous-capture`,
+        { publicTokenHash: ambiguousCapturePublicTokenHash },
+      );
+      ambiguousCaptureFoundation = await prepareReservedFoundation(
+        setupClient,
+        ambiguousCaptureFixtures,
+        "http-ambiguous-capture",
+      );
+      ambiguousCaptureCustomerEmail = (
+        await setupClient.query<{ email: string }>(
+          "SELECT email FROM customers WHERE id = $1",
+          [ambiguousCaptureFoundation.customerId],
+        )
+      ).rows[0]!.email;
+      const ambiguousCaptureDestinationRow = (
+        await setupClient.query<{
+          provider_endpoint_id: string;
+          endpoint_type: string;
+          address_snapshot: Record<string, unknown>;
+          capability_snapshot: Record<string, unknown>;
+        }>(
+          `SELECT provider_endpoint_id, endpoint_type, address_snapshot,
+                  capability_snapshot
+           FROM delivery_destinations WHERE id = $1`,
+          [ambiguousCaptureFoundation.deliveryDestinationId],
+        )
+      ).rows[0]!;
+      ambiguousCaptureDestination = {
+        providerEndpointId: ambiguousCaptureDestinationRow.provider_endpoint_id,
+        endpointType: ambiguousCaptureDestinationRow.endpoint_type,
+        addressSnapshot:
+          ambiguousCaptureDestinationRow.address_snapshot as Prisma.InputJsonObject,
+        capabilitySnapshot:
+          ambiguousCaptureDestinationRow.capability_snapshot as Prisma.InputJsonObject,
+        supportedCategoryIds: ["standard"],
+      };
       await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
       await setupClient.query("COMMIT");
     } catch (error) {
@@ -1230,6 +1275,12 @@ describe("checkout payment capture protocol", () => {
             ) {
               return returnedIntentDestination;
             }
+            if (
+              input.providerEndpointId ===
+              ambiguousCaptureDestination.providerEndpointId
+            ) {
+              return ambiguousCaptureDestination;
+            }
             return outageDestination;
           },
         })
@@ -1265,6 +1316,29 @@ describe("checkout payment capture protocol", () => {
               email: outageCustomerEmail,
               fullName: "Outage Customer",
               method: "BANK_TRANSFER",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              acknowledgeWithdrawalException: true,
+            }),
+          },
+        );
+      const createAmbiguousCapturePayment = () =>
+        fetch(
+          new URL(
+            `/automatic-quote-sessions/${ambiguousCaptureFoundation.quoteSessionId}/checkout/payments`,
+            baseUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${ambiguousCaptureToken}`,
+              "content-type": "application/json",
+              "idempotency-key": "sandbox-ambiguous-capture-1",
+            },
+            body: JSON.stringify({
+              email: ambiguousCaptureCustomerEmail,
+              fullName: "Ambiguous Capture Customer",
+              method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
               acknowledgeWithdrawalException: true,
@@ -2004,6 +2078,78 @@ describe("checkout payment capture protocol", () => {
       expect(blockedRetry.status).toBe(409);
       expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 1);
 
+      const ambiguousCaptureResponse = await createAmbiguousCapturePayment();
+      expect(ambiguousCaptureResponse.status).toBe(502);
+      const ambiguousCapturePayment = await prisma.payment.findFirstOrThrow({
+        where: {
+          orderId: ambiguousCaptureFoundation.orderId,
+          status: "CREATED",
+        },
+      });
+      await prisma.$queryRaw`
+        SELECT taven_release_phase_reservation_set(
+          ${ambiguousCaptureFoundation.phaseReservationSetId}::uuid
+        )
+      `;
+      const recoveredTransactionId = `sandbox-${ambiguousCapturePayment.id}`;
+      const recoveredCapture = {
+        providerEventId: `sandbox-recovered-capture-${ambiguousCapturePayment.id}`,
+        providerTransactionId: recoveredTransactionId,
+        merchantReference: ambiguousCapturePayment.merchantReference,
+        status: "CAPTURED",
+        amountMinor: ambiguousCapturePayment.requestedAmountMinor.toString(),
+        currency: ambiguousCapturePayment.currency,
+        occurredAt: new Date().toISOString(),
+      };
+      const recoveredCaptureResponse =
+        await sendPublicWebhook(recoveredCapture);
+      expect(recoveredCaptureResponse.status).toBe(200);
+      await expect(recoveredCaptureResponse.json()).resolves.toEqual({
+        outcome: "CAPTURED",
+      });
+      await expect(
+        Promise.all([
+          prisma.payment.findUniqueOrThrow({
+            where: { id: ambiguousCapturePayment.id },
+            select: {
+              status: true,
+              providerIntentId: true,
+              providerCaptureId: true,
+              refunds: { select: { id: true } },
+            },
+          }),
+          prisma.order.findUniqueOrThrow({
+            where: { id: ambiguousCaptureFoundation.orderId },
+            select: { status: true },
+          }),
+          prisma.job.count({
+            where: { orderId: ambiguousCaptureFoundation.orderId },
+          }),
+          prisma.phaseReservationSet.count({
+            where: {
+              reacquisitionPaymentId: ambiguousCapturePayment.id,
+              status: "HELD",
+            },
+          }),
+        ]),
+      ).resolves.toEqual([
+        {
+          status: "CAPTURED",
+          providerIntentId: recoveredTransactionId,
+          providerCaptureId: recoveredTransactionId,
+          refunds: [],
+        },
+        { status: "CONFIRMED" },
+        1,
+        1,
+      ]);
+      const recoveredCaptureReplay = await sendPublicWebhook(recoveredCapture);
+      expect(recoveredCaptureReplay.status).toBe(200);
+      await expect(recoveredCaptureReplay.json()).resolves.toEqual({
+        outcome: "DUPLICATE",
+      });
+      expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 2);
+
       const staleCancelResponse = await cancelPayment(
         outageFoundation.quoteSessionId,
         outageToken,
@@ -2095,7 +2241,7 @@ describe("checkout payment capture protocol", () => {
         paymentId: ambiguousPayment.id,
         status: "REFUND_PENDING",
       });
-      expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 1);
+      expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 2);
     } finally {
       await app?.close();
       restoreEnvironment(

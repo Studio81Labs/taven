@@ -297,6 +297,93 @@ BEGIN
 END;
 $$;
 
+-- A provider-authenticated capture can be the first conclusive response for an
+-- intent whose create request lost its acknowledgement. Bind that exact intent
+-- before reservation reacquisition so the generic resource function continues
+-- to accept only Payments with durable provider identity. The provider event is
+-- intentionally recorded later by taven_apply_checkout_payment_event, together
+-- with capture, Job creation, or compensation.
+CREATE FUNCTION taven_stage_created_checkout_payment_for_capture(
+    target_payment_id uuid,
+    event_provider text,
+    event_transaction_id text,
+    event_merchant_reference text,
+    event_amount_minor bigint,
+    event_currency char(3),
+    event_occurred_at timestamptz
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_payment "payments"%ROWTYPE;
+    staged_at timestamptz := clock_timestamp();
+BEGIN
+    PERFORM taven_lock_checkout_payment_envelope(target_payment_id);
+
+    SELECT payment.* INTO target_payment
+    FROM "payments" payment
+    WHERE payment."id" = target_payment_id
+    FOR UPDATE;
+
+    IF target_payment."status" NOT IN ('CREATED', 'PENDING') THEN
+        RETURN false;
+    END IF;
+
+    IF event_provider IS NULL
+       OR event_transaction_id IS NULL
+       OR event_transaction_id !~ '[^[:space:]]'
+       OR char_length(event_transaction_id) > 255
+       OR event_merchant_reference IS NULL
+       OR event_occurred_at IS NULL
+       OR target_payment."provider" IS DISTINCT FROM event_provider
+       OR target_payment."merchant_reference" IS DISTINCT FROM
+          event_merchant_reference
+       OR target_payment."requested_amount_minor" IS DISTINCT FROM
+          event_amount_minor
+       OR target_payment."currency" IS DISTINCT FROM event_currency
+       OR event_occurred_at < target_payment."created_at" - interval '5 seconds'
+       OR target_payment."role" NOT IN ('FULL', 'DEPOSIT')
+       OR target_payment."checkout_method" NOT IN ('CARD', 'BANK_TRANSFER')
+       OR target_payment."checkout_command_id" IS NULL THEN
+        RAISE EXCEPTION 'verified capture does not match its checkout Payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_verified_capture_staging_check';
+    END IF;
+
+    IF NOT target_payment."capture_authorized"
+       OR target_payment."capture_cutoff_at" IS NOT NULL
+       OR target_payment."checkout_capture_expires_at" IS NULL
+       OR target_payment."checkout_capture_expires_at" <= staged_at THEN
+        RETURN false;
+    END IF;
+
+    IF target_payment."status" = 'PENDING' THEN
+        IF target_payment."provider_intent_id" IS DISTINCT FROM
+           event_transaction_id THEN
+            RAISE EXCEPTION 'verified capture conflicts with the assigned provider intent'
+                USING ERRCODE = '23514', CONSTRAINT = 'payment_verified_capture_staging_check';
+        END IF;
+        RETURN true;
+    END IF;
+
+    IF target_payment."provider_intent_id" IS NOT NULL
+       OR target_payment."provider_checkout_url" IS NOT NULL
+       OR target_payment."intent_creation_failure_result_id" IS NOT NULL THEN
+        RAISE EXCEPTION 'created checkout Payment already has conflicting provider evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_verified_capture_staging_check';
+    END IF;
+
+    UPDATE "payments"
+    SET "status" = 'PENDING',
+        "provider_intent_id" = event_transaction_id,
+        "updated_at" = staged_at
+    WHERE "id" = target_payment_id
+      AND "status" = 'CREATED';
+
+    RETURN FOUND;
+END;
+$$;
+
 -- Checkout-driven release must join the same Order-first serialization fence
 -- as cancellation and provider capture before it touches reservation rows.
 -- The generic release function remains reusable for non-checkout workflows;
