@@ -204,4 +204,81 @@ describe("PaymentOutboxDispatcherService", () => {
       }),
     );
   });
+
+  it("retries persisting a confirmed non-idempotent refund result", async () => {
+    const message = {
+      id: "00000000-0000-4000-8000-000000000030",
+      attempts: 1,
+      message_type: "refund_payment" as const,
+      aggregate_id: "00000000-0000-4000-8000-000000000031",
+      payload: {
+        refundTransactionId: "00000000-0000-4000-8000-000000000031",
+        paymentId: "00000000-0000-4000-8000-000000000032",
+        provider: "comgate",
+        providerIntentId: "comgate-payment-2",
+        amountMinor: "12300",
+        currency: "CZK",
+        idempotencyKey: "late_initial_capture:event-3",
+        action: "refund_payment",
+      },
+    };
+    const claim = vi.fn().mockResolvedValue([message]);
+    const queryRaw = vi
+      .fn()
+      .mockResolvedValueOnce([{ claimed_at: new Date() }])
+      .mockRejectedValueOnce(new Error("database temporarily unavailable"))
+      .mockResolvedValueOnce([]);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const prisma = {
+      $transaction: vi.fn(
+        async (work: (transaction: { $queryRaw: typeof claim }) => unknown) =>
+          work({ $queryRaw: claim }),
+      ),
+      $queryRaw: queryRaw,
+      refundTransaction: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: message.aggregate_id,
+          paymentId: "00000000-0000-4000-8000-000000000032",
+          status: "PENDING",
+          amountMinor: 12_300n,
+          idempotencyKey: "late_initial_capture:event-3",
+          payment: {
+            provider: "comgate",
+            providerIntentId: "comgate-payment-2",
+            currency: "CZK",
+          },
+        }),
+      },
+      outboxMessage: { updateMany },
+    };
+    const refund = vi.fn().mockResolvedValue({
+      providerRefundId: "comgate-refund-1",
+      occurredAt: new Date("2026-09-04T12:00:00Z"),
+      evidence: { source: "comgate" },
+    });
+    const service = new PaymentOutboxDispatcherService(prisma as never, {
+      providerName: () => "comgate",
+      capabilities: async () => ({ provider: "comgate", methods: ["CARD"] }),
+      refundRetrySafety: () => "MANUAL_RECONCILIATION",
+      createIntent: vi.fn(),
+      locateEvent: vi.fn(),
+      verifyEvent: vi.fn(),
+      cancelIntent: vi.fn(),
+      refund,
+    });
+
+    await expect(service.runOnce()).resolves.toBe(1);
+    expect(refund).toHaveBeenCalledTimes(1);
+    expect(queryRaw).toHaveBeenCalledTimes(3);
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "DELIVERED",
+          lockedAt: null,
+          lastError: null,
+        }),
+      }),
+    );
+  });
 });

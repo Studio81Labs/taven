@@ -9,6 +9,7 @@ import {
 
 const CLAIM_LEASE_MILLISECONDS = 5 * 60 * 1_000;
 const MAX_LAST_ERROR_LENGTH = 1_000;
+const REFUND_RESULT_PERSISTENCE_ATTEMPTS = 3;
 
 type ClaimedMessage = {
   id: string;
@@ -146,15 +147,26 @@ export class PaymentOutboxDispatcherService {
         "utf8",
       )
       .digest("hex")}`;
-    await this.prisma.$queryRaw`
-      SELECT taven_apply_checkout_refund_success(
-        ${refund.id}::uuid,
-        ${providerRefundId},
-        ${resultEventId},
-        ${result.occurredAt},
-        ${jsonInput(result.evidence)}::jsonb
-      )
-    `;
+    for (
+      let attempt = 1;
+      attempt <= REFUND_RESULT_PERSISTENCE_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        await this.prisma.$queryRaw`
+          SELECT taven_apply_checkout_refund_success(
+            ${refund.id}::uuid,
+            ${providerRefundId},
+            ${resultEventId},
+            ${result.occurredAt},
+            ${jsonInput(result.evidence)}::jsonb
+          )
+        `;
+        return;
+      } catch (error) {
+        if (attempt === REFUND_RESULT_PERSISTENCE_ATTEMPTS) throw error;
+      }
+    }
   }
 
   private assertProvider(provider: string): void {
