@@ -286,6 +286,7 @@ enum OrderStatus {
   SHIPPED
   DELIVERED
   COMPLETED
+  RECOVERY_PENDING
   CANCELLED
   REFUNDED
   PARTIALLY_FULFILLED
@@ -308,9 +309,11 @@ enum OrderPhaseStatus {
   SHIPPED
   DELIVERED
   COMPLETED
+  RECOVERY_PENDING
   CANCELLED
   CANCELLED_REFUNDED
   CANCELLED_SETTLED
+  PARTIALLY_FULFILLED
 
   @@map("order_phase_status")
 }
@@ -332,6 +335,9 @@ enum ShipmentStatus {
   IN_TRANSIT
   DELIVERED
   CANCELLED
+  LOST
+  RETURNED
+  RECOVERED
 
   @@map("shipment_status")
 }
@@ -341,6 +347,9 @@ enum ShipmentProviderEventKind {
   ACCEPTANCE_SCAN
   TRANSIT_SCAN
   DELIVERY_SCAN
+  LOST
+  RETURNED
+  RECOVERED
 
   @@map("shipment_provider_event_kind")
 }
@@ -428,8 +437,67 @@ enum RefundReason {
   PRODUCTION_FAILURE
   LATE_CAPTURE_COMPENSATION
   BALANCE_SETTLEMENT
+  EXPRESS_BREACH
+  SHIPMENT_INCIDENT
+  POST_DELIVERY_ISSUE
 
   @@map("refund_reason")
+}
+
+enum ReplacementRequestReason {
+  JOB_FAILED
+  QC_REJECTED
+
+  @@map("replacement_request_reason")
+}
+
+enum ReplacementRequestStatus {
+  OPEN
+  JOB_CREATED
+  REFUND_REQUIRED
+  RESOLVED
+
+  @@map("replacement_request_status")
+}
+
+enum ClaimOrigin {
+  SHIPMENT_INCIDENT
+  POST_DELIVERY_QUALITY
+
+  @@map("claim_origin")
+}
+
+enum ClaimStatus {
+  OPEN
+  ACTIVE
+  RESOLVED_REPLACEMENT
+  RESOLVED_RESHIP
+  RESOLVED_REFUND
+  RESOLVED_REJECTED
+
+  @@map("claim_status")
+}
+
+enum ClaimSlotResolutionStatus {
+  PENDING
+  REPLACEMENT_PENDING
+  RESHIP_PENDING
+  REFUND_PENDING
+  DELIVERED_REPLACEMENT
+  DELIVERED_RESHIP
+  REFUNDED
+  REJECTED
+
+  @@map("claim_slot_resolution_status")
+}
+
+enum PriceAdjustmentReason {
+  EXPRESS_BREACH
+  PRODUCTION_FAILURE
+  SHIPMENT_INCIDENT
+  POST_DELIVERY_ISSUE
+
+  @@map("price_adjustment_reason")
 }
 
 enum OrderSettlementKind {
@@ -1101,6 +1169,7 @@ model PhaseReservationSet {
   replacementPhaseReservationSets   PhaseReservationSet[]   @relation("PhaseReservationSetReacquisition")
   reacquisitionPayment              Payment?                @relation(fields: [reacquisitionPaymentId], references: [id], onDelete: Restrict, map: "phase_reservation_sets_reacquisition_payment_fkey")
   productionReservations            ProductionReservation[]
+  replacementRequest                ReplacementRequest?
 
   @@unique([id, nodeId])
   @@unique([id, nodeId, phaseResourcePlanId])
@@ -1448,19 +1517,19 @@ model QuoteShipmentPlan {
 }
 
 model PriceSnapshot {
-  id                 String    @id @default(uuid()) @db.Uuid
-  priceListId        String    @map("price_list_id") @db.Uuid
-  currency           String    @db.Char(3)
-  contractTotalMinor BigInt    @map("contract_total_minor")
+  id                 String          @id @default(uuid()) @db.Uuid
+  priceListId        String          @map("price_list_id") @db.Uuid
+  currency           String          @db.Char(3)
+  contractTotalMinor BigInt          @map("contract_total_minor")
   taxRegime          SellerTaxRegime @map("tax_regime")
-  vatRateBasisPoints Int       @map("vat_rate_basis_points")
-  netAmountMinor     BigInt     @map("net_amount_minor")
-  vatAmountMinor     BigInt     @map("vat_amount_minor")
-  pricingRevision    String    @map("pricing_revision") @db.VarChar(100)
-  inputSnapshot      Json      @map("input_snapshot") @db.JsonB
-  snapshotHash       String    @unique @map("snapshot_hash") @db.VarChar(64)
-  sealedAt           DateTime? @map("sealed_at") @db.Timestamptz(3)
-  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  vatRateBasisPoints Int             @map("vat_rate_basis_points")
+  netAmountMinor     BigInt          @map("net_amount_minor")
+  vatAmountMinor     BigInt          @map("vat_amount_minor")
+  pricingRevision    String          @map("pricing_revision") @db.VarChar(100)
+  inputSnapshot      Json            @map("input_snapshot") @db.JsonB
+  snapshotHash       String          @unique @map("snapshot_hash") @db.VarChar(64)
+  sealedAt           DateTime?       @map("sealed_at") @db.Timestamptz(3)
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
   priceList                     PriceList                         @relation(fields: [priceListId, currency, pricingRevision], references: [id, currency, revision], onDelete: Restrict)
   quoteBinding                  QuotePriceBinding?
@@ -1595,6 +1664,9 @@ model Order {
   jobs                   Job[]
   auditEvents            AuditEvent[]
   fulfilmentSlots        FulfilmentSlot[]
+  replacementRequests    ReplacementRequest[]
+  claims                 Claim[]
+  priceAdjustments       PriceAdjustment[]
   settlements            OrderSettlement[]
   handoffReconciliations HandoffReconciliation[]
   automaticQuoteDraft    AutomaticQuoteDraft?
@@ -1857,6 +1929,8 @@ model OrderPhase {
   shipmentPlans          ShipmentPlan[]
   shipments              Shipment[]
   jobs                   Job[]
+  replacementRequests    ReplacementRequest[]
+  claims                 Claim[]
   settlements            OrderSettlement[]
   handoffReconciliations HandoffReconciliation[]
 
@@ -1893,6 +1967,7 @@ model ShipmentPlan {
   shipments                 Shipment[]
   candidateEstimates        CandidateResourceEstimate[]
   jobs                      Job[]
+  replacementRequests       ReplacementRequest[]
 
   @@unique([orderPhaseId, orderPriceBindingId, ordinal])
   @@unique([id, orderPriceBindingId])
@@ -1922,6 +1997,7 @@ model FulfilmentSlot {
   planSlots                 PhaseResourcePlanSlot[]
   shipmentPlanAllocations   ShipmentPlanFulfilmentSlot[]
   priceComponentAllocations PriceComponentFulfilmentAllocation[]
+  claimResolutions          ClaimSlotResolution[]
 
   @@unique([orderItemId, orderPhaseId, quantityOrdinal])
   @@unique([orderId, packingUnitKey])
@@ -1967,16 +2043,20 @@ model Shipment {
   createdAt                DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order                 Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderPhase            OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
-  shipmentPlan          ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
-  deliveryDestination   DeliveryDestination     @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
-  replacesShipment      Shipment?               @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
-  replacementShipment   Shipment?               @relation("ShipmentReplacementLineage")
-  providerEvents        ShipmentProviderEvent[]
-  handoffReconciliation HandoffReconciliation?
+  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase             OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan           ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
+  deliveryDestination    DeliveryDestination     @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  replacesShipment       Shipment?               @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
+  replacementShipment    Shipment?               @relation("ShipmentReplacementLineage")
+  providerEvents         ShipmentProviderEvent[]
+  jobAssignments         JobShipmentAssignment[]
+  incidentClaims         Claim[]                 @relation("ClaimIncidentShipment")
+  replacementResolutions ClaimSlotResolution[]   @relation("ClaimResolutionReplacementShipment")
+  handoffReconciliation  HandoffReconciliation?
 
   @@unique([id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_lineage_scope_key")
+  @@unique([id, shipmentPlanId, orderId, orderPhaseId], map: "shipments_job_scope_key")
   @@unique([carrier, providerShipmentId], map: "shipments_carrier_provider_shipment_id_key")
   @@unique([carrier, carrierLabelId], map: "shipments_carrier_carrier_label_id_key")
   @@unique([carrier, providerVoidId], map: "shipments_carrier_provider_void_id_key")
@@ -2094,51 +2174,75 @@ model ShipmentProviderEvent {
 }
 
 model Job {
-  id                      String                 @id @default(uuid()) @db.Uuid
-  nodeId                  String                 @map("node_id") @db.Uuid
-  orderId                 String                 @map("order_id") @db.Uuid
-  orderPhaseId            String                 @map("order_phase_id") @db.Uuid
-  shipmentPlanId          String                 @map("shipment_plan_id") @db.Uuid
-  phaseResourcePlanJobId  String                 @map("phase_resource_plan_job_id") @db.Uuid
-  status                  JobStatus              @default(CREATED)
-  acceptedAt              DateTime?              @map("accepted_at") @db.Timestamptz(3)
-  payoutAmount            BigInt?                @map("payout_amount")
-  payoutCurrency          String?                @map("payout_currency") @db.Char(3)
-  gcodeReadyAt            DateTime?              @map("gcode_ready_at") @db.Timestamptz(3)
-  productionSliceResultId String?                @map("production_slice_result_id") @db.Uuid
-  productionArtifactHash  String?                @map("production_artifact_hash") @db.VarChar(64)
-  printingAt              DateTime?              @map("printing_at") @db.Timestamptz(3)
-  printedAt               DateTime?              @map("printed_at") @db.Timestamptz(3)
-  photoSubmittedAt        DateTime?              @map("photo_submitted_at") @db.Timestamptz(3)
-  qcPhotoAssetId          String?                @unique @map("qc_photo_asset_id") @db.Uuid
-  qcApprovedAt            DateTime?              @map("qc_approved_at") @db.Timestamptz(3)
-  qcRejectedAt            DateTime?              @map("qc_rejected_at") @db.Timestamptz(3)
-  packedAt                DateTime?              @map("packed_at") @db.Timestamptz(3)
-  handedOverAt            DateTime?              @map("handed_over_at") @db.Timestamptz(3)
-  settledAt               DateTime?              @map("settled_at") @db.Timestamptz(3)
-  failedAt                DateTime?              @map("failed_at") @db.Timestamptz(3)
-  failureStage            JobFailureStage?       @map("failure_stage")
-  failureReason           String?                @map("failure_reason") @db.Text
-  cancelledAt             DateTime?              @map("cancelled_at") @db.Timestamptz(3)
-  cancellationReason      JobCancellationReason? @map("cancellation_reason")
-  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                       String                 @id @default(uuid()) @db.Uuid
+  nodeId                   String                 @map("node_id") @db.Uuid
+  orderId                  String                 @map("order_id") @db.Uuid
+  orderPhaseId             String                 @map("order_phase_id") @db.Uuid
+  shipmentPlanId           String                 @map("shipment_plan_id") @db.Uuid
+  phaseResourcePlanJobId   String                 @map("phase_resource_plan_job_id") @db.Uuid
+  replacesJobId            String?                @unique @map("replaces_job_id") @db.Uuid
+  status                   JobStatus              @default(CREATED)
+  acceptedAt               DateTime?              @map("accepted_at") @db.Timestamptz(3)
+  payoutAmount             BigInt?                @map("payout_amount")
+  payoutCurrency           String?                @map("payout_currency") @db.Char(3)
+  gcodeReadyAt             DateTime?              @map("gcode_ready_at") @db.Timestamptz(3)
+  productionSliceResultId  String?                @map("production_slice_result_id") @db.Uuid
+  productionArtifactHash   String?                @map("production_artifact_hash") @db.VarChar(64)
+  printingAt               DateTime?              @map("printing_at") @db.Timestamptz(3)
+  printedAt                DateTime?              @map("printed_at") @db.Timestamptz(3)
+  photoSubmittedAt         DateTime?              @map("photo_submitted_at") @db.Timestamptz(3)
+  qcPhotoAssetId           String?                @unique @map("qc_photo_asset_id") @db.Uuid
+  qcEvidenceOmissionReason String?                @map("qc_evidence_omission_reason") @db.VarChar(500)
+  qcApprovedAt             DateTime?              @map("qc_approved_at") @db.Timestamptz(3)
+  qcRejectedAt             DateTime?              @map("qc_rejected_at") @db.Timestamptz(3)
+  packedAt                 DateTime?              @map("packed_at") @db.Timestamptz(3)
+  handedOverAt             DateTime?              @map("handed_over_at") @db.Timestamptz(3)
+  settledAt                DateTime?              @map("settled_at") @db.Timestamptz(3)
+  failedAt                 DateTime?              @map("failed_at") @db.Timestamptz(3)
+  failureStage             JobFailureStage?       @map("failure_stage")
+  failureReason            String?                @map("failure_reason") @db.Text
+  cancelledAt              DateTime?              @map("cancelled_at") @db.Timestamptz(3)
+  cancellationReason       JobCancellationReason? @map("cancellation_reason")
+  createdAt                DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  node                   Node                    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
-  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderPhase             OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
-  shipmentPlan           ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict)
-  phaseResourcePlanJob   PhaseResourcePlanJob    @relation(fields: [phaseResourcePlanJobId, nodeId], references: [id, nodeId], onDelete: Restrict)
-  productionSliceResult  SliceResult?            @relation("JobProductionSliceResult", fields: [productionSliceResultId], references: [id], onDelete: Restrict)
-  qcPhotoAsset           PhotoAsset?             @relation("JobQcPhotoAsset", fields: [qcPhotoAssetId], references: [id], onDelete: Restrict)
-  productionReservations ProductionReservation[] @relation("ProductionReservationJob")
+  node                     Node                    @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  order                    Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase               OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan             ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict)
+  phaseResourcePlanJob     PhaseResourcePlanJob    @relation(fields: [phaseResourcePlanJobId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  replacesJob              Job?                    @relation("JobReplacementLineage", fields: [replacesJobId], references: [id], onDelete: Restrict)
+  replacementJob           Job?                    @relation("JobReplacementLineage")
+  replacementRequestSource ReplacementRequest?     @relation("ReplacementRequestSourceJob")
+  replacementRequestResult ReplacementRequest?     @relation("ReplacementRequestResultJob")
+  productionSliceResult    SliceResult?            @relation("JobProductionSliceResult", fields: [productionSliceResultId], references: [id], onDelete: Restrict)
+  qcPhotoAsset             PhotoAsset?             @relation("JobQcPhotoAsset", fields: [qcPhotoAssetId], references: [id], onDelete: Restrict)
+  productionReservations   ProductionReservation[] @relation("ProductionReservationJob")
+  shipmentAssignment       JobShipmentAssignment?
 
   @@unique([id, nodeId, phaseResourcePlanJobId])
+  @@unique([id, shipmentPlanId, orderId, orderPhaseId], map: "jobs_shipment_scope_key")
   @@unique([phaseResourcePlanJobId])
   @@index([shipmentPlanId, status])
   @@index([nodeId, status])
   @@index([productionSliceResultId])
   @@map("jobs")
+}
+
+model JobShipmentAssignment {
+  jobId          String   @id @map("job_id") @db.Uuid
+  shipmentId     String   @map("shipment_id") @db.Uuid
+  shipmentPlanId String   @map("shipment_plan_id") @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
+  orderPhaseId   String   @map("order_phase_id") @db.Uuid
+  assignedAt     DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  job      Job      @relation(fields: [jobId, shipmentPlanId, orderId, orderPhaseId], references: [id, shipmentPlanId, orderId, orderPhaseId], onDelete: Restrict)
+  shipment Shipment @relation(fields: [shipmentId, shipmentPlanId, orderId, orderPhaseId], references: [id, shipmentPlanId, orderId, orderPhaseId], onDelete: Restrict)
+
+  @@unique([jobId, shipmentPlanId, orderId, orderPhaseId], map: "job_shipment_assignments_job_scope_key")
+  @@index([shipmentId])
+  @@map("job_shipment_assignments")
 }
 
 model Payment {
@@ -2175,6 +2279,7 @@ model Payment {
   intentCreationFailureEvidence  PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailurePayment")
   intentCreationFailureResult    PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailureResult", fields: [intentCreationFailureResultId, id, provider], references: [id, paymentId, provider], onDelete: Restrict, map: "payments_intent_creation_failure_result_fkey")
   refunds                        RefundTransaction[]
+  priceAdjustments               PriceAdjustment[]
   providerEvents                 PaymentProviderEvent[]
   auditEvents                    AuditEvent[]
   handoffReconciliations         HandoffReconciliation[]
@@ -2212,9 +2317,106 @@ model PaymentIntentCreationFailure {
   @@map("payment_intent_creation_failures")
 }
 
+model ReplacementRequest {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  orderId               String                   @map("order_id") @db.Uuid
+  orderPhaseId          String                   @map("order_phase_id") @db.Uuid
+  shipmentPlanId        String                   @map("shipment_plan_id") @db.Uuid
+  sourceJobId           String                   @unique @map("source_job_id") @db.Uuid
+  replacementJobId      String?                  @unique @map("replacement_job_id") @db.Uuid
+  phaseReservationSetId String?                  @unique @map("phase_reservation_set_id") @db.Uuid
+  reason                ReplacementRequestReason
+  status                ReplacementRequestStatus @default(OPEN)
+  deadlineAt            DateTime                 @map("deadline_at") @db.Timestamptz(3)
+  resolvedAt            DateTime?                @map("resolved_at") @db.Timestamptz(3)
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order               Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase          OrderPhase           @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan        ShipmentPlan         @relation(fields: [shipmentPlanId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict)
+  sourceJob           Job                  @relation("ReplacementRequestSourceJob", fields: [sourceJobId], references: [id], onDelete: Restrict)
+  replacementJob      Job?                 @relation("ReplacementRequestResultJob", fields: [replacementJobId], references: [id], onDelete: Restrict)
+  phaseReservationSet PhaseReservationSet? @relation(fields: [phaseReservationSetId], references: [id], onDelete: Restrict)
+  claimResolution     ClaimSlotResolution?
+
+  @@index([orderId, status, deadlineAt])
+  @@map("replacement_requests")
+}
+
+model Claim {
+  id                 String      @id @default(uuid()) @db.Uuid
+  orderId            String      @map("order_id") @db.Uuid
+  orderPhaseId       String      @map("order_phase_id") @db.Uuid
+  incidentShipmentId String?     @map("incident_shipment_id") @db.Uuid
+  origin             ClaimOrigin
+  status             ClaimStatus @default(OPEN)
+  reason             String      @db.Text
+  openedAt           DateTime    @default(now()) @map("opened_at") @db.Timestamptz(3)
+  resolvedAt         DateTime?   @map("resolved_at") @db.Timestamptz(3)
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order            Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase       OrderPhase            @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  incidentShipment Shipment?             @relation("ClaimIncidentShipment", fields: [incidentShipmentId], references: [id], onDelete: Restrict)
+  resolutions      ClaimSlotResolution[]
+  refunds          RefundTransaction[]
+  priceAdjustments PriceAdjustment[]
+
+  @@unique([incidentShipmentId], map: "claims_incident_shipment_id_key")
+  @@index([orderId, status])
+  @@map("claims")
+}
+
+model ClaimSlotResolution {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  claimId               String                    @map("claim_id") @db.Uuid
+  fulfilmentSlotId      String                    @map("fulfilment_slot_id") @db.Uuid
+  replacementRequestId  String?                   @unique @map("replacement_request_id") @db.Uuid
+  replacementShipmentId String?                   @map("replacement_shipment_id") @db.Uuid
+  status                ClaimSlotResolutionStatus @default(PENDING)
+  resolvedAt            DateTime?                 @map("resolved_at") @db.Timestamptz(3)
+  createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  claim               Claim               @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  fulfilmentSlot      FulfilmentSlot      @relation(fields: [fulfilmentSlotId], references: [id], onDelete: Restrict)
+  replacementRequest  ReplacementRequest? @relation(fields: [replacementRequestId], references: [id], onDelete: Restrict)
+  replacementShipment Shipment?           @relation("ClaimResolutionReplacementShipment", fields: [replacementShipmentId], references: [id], onDelete: Restrict)
+
+  @@unique([claimId, fulfilmentSlotId])
+  @@index([fulfilmentSlotId, status])
+  @@map("claim_slot_resolutions")
+}
+
+model PriceAdjustment {
+  id             String                @id @default(uuid()) @db.Uuid
+  orderId        String                @map("order_id") @db.Uuid
+  paymentId      String?               @map("payment_id") @db.Uuid
+  claimId        String?               @map("claim_id") @db.Uuid
+  idempotencyKey String                @unique @map("idempotency_key") @db.VarChar(255)
+  reason         PriceAdjustmentReason
+  amountMinor    BigInt                @map("amount_minor")
+  currency       String                @db.Char(3)
+  allocation     Json                  @db.JsonB
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order   Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payment Payment?            @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  claim   Claim?              @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  refunds RefundTransaction[]
+
+  @@index([orderId, createdAt])
+  @@index([claimId])
+  @@map("price_adjustments")
+}
+
 model RefundTransaction {
   id                             String       @id @default(uuid()) @db.Uuid
   paymentId                      String       @map("payment_id") @db.Uuid
+  claimId                        String?      @map("claim_id") @db.Uuid
+  priceAdjustmentId              String?      @map("price_adjustment_id") @db.Uuid
   replacesRefundTransactionId    String?      @map("replaces_refund_transaction_id") @db.Uuid
   replacesFailureProviderEventId String?      @map("replaces_failure_provider_event_id") @db.Uuid
   idempotencyKey                 String       @map("idempotency_key") @db.VarChar(255)
@@ -2233,6 +2435,8 @@ model RefundTransaction {
   updatedAt                      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   payment                       Payment                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  claim                         Claim?                  @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  priceAdjustment               PriceAdjustment?        @relation(fields: [priceAdjustmentId], references: [id], onDelete: Restrict)
   replacesRefundTransaction     RefundTransaction?      @relation("RefundRetryLineage", fields: [replacesRefundTransactionId, paymentId], references: [id, paymentId], onDelete: Restrict, map: "refund_transactions_replaces_scope_fkey")
   replacementRefundTransactions RefundTransaction[]     @relation("RefundRetryLineage")
   replacesFailureProviderEvent  PaymentProviderEvent?   @relation("RefundRetryFailureEvent", fields: [replacesFailureProviderEventId, replacesRefundTransactionId], references: [id, refundTransactionId], onDelete: Restrict, map: "refund_transactions_replaces_failure_event_scope_fkey")
@@ -2252,6 +2456,8 @@ model RefundTransaction {
   @@unique([sourceSuccessProviderEventId, replacesRefundTransactionId], map: "refund_transactions_source_success_event_scope_key")
   @@index([replacesRefundTransactionId, paymentId], map: "refund_transactions_replaces_payment_id_idx")
   @@index([paymentId, status])
+  @@index([claimId, status])
+  @@index([priceAdjustmentId])
   @@map("refund_transactions")
 }
 
