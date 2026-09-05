@@ -8,6 +8,7 @@ export const CHECKOUT_PAYMENT_FLOWS_ENV =
   "TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED" as const;
 export const CHECKOUT_CLAIM_POLICY_REVISION_ENV =
   "TAVEN_CLAIM_POLICY_REVISION" as const;
+export const CHECKOUT_TERMS_REVISION_ENV = "TAVEN_TERMS_REVISION" as const;
 
 const LAUNCH_APPROVAL_REQUIRED = "LAUNCH_APPROVAL_REQUIRED";
 
@@ -49,14 +50,40 @@ export function assertQuotePhotoUploadsEnabled(
 }
 
 export function assertCheckoutPaymentFlowsEnabled(
+  boundTermsRevision: string,
   env: NodeJS.ProcessEnv = process.env,
-): string {
+): Readonly<{ claimPolicyRevision: string; termsRevision: string }> {
   if (!isExplicitlyEnabled(env, CHECKOUT_PAYMENT_FLOWS_ENV)) {
     throw launchApprovalRequired(
       "Checkout payment flows are unavailable until legal documents and provider launch inputs are approved",
     );
   }
-  return approvedCheckoutClaimPolicyRevision(env);
+  const termsRevision = approvedCheckoutTermsRevision(env);
+  if (boundTermsRevision !== termsRevision) {
+    throw launchApprovalRequired(
+      "Checkout price binding does not use the approved terms revision",
+    );
+  }
+  return {
+    claimPolicyRevision: approvedCheckoutClaimPolicyRevision(env),
+    termsRevision,
+  };
+}
+
+export function approvedCheckoutTermsRevision(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const revision = env[CHECKOUT_TERMS_REVISION_ENV]?.trim();
+  if (
+    !revision ||
+    revision.length > 100 ||
+    /(?:^|[-_.\s])(draft|pending)(?:$|[-_.\s])/i.test(revision)
+  ) {
+    throw launchApprovalRequired(
+      "Checkout payment flows require an explicit approved terms revision",
+    );
+  }
+  return revision;
 }
 
 export function approvedCheckoutClaimPolicyRevision(

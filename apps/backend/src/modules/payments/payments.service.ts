@@ -38,6 +38,8 @@ import {
 import { reservePaymentWebhookVerification } from "./payment-webhook-limit";
 
 const CHECKOUT_CAPTURE_MILLISECONDS = 60 * 60 * 1_000;
+const REACQUISITION_RESERVATION_MILLISECONDS = 15 * 60 * 1_000;
+const MAX_REACQUISITION_PLAN_GENERATIONS = 8;
 const IDEMPOTENCY_DAYS = 7;
 type Transaction = Prisma.TransactionClient;
 
@@ -86,13 +88,16 @@ export class PaymentsService {
       },
     );
     if (initialIdempotency.replay) return initialIdempotency.replay;
-    const claimPolicyRevision = assertCheckoutPaymentFlowsEnabled();
+    assertCheckoutContext(initial, token);
+    assertCheckoutPaymentFlowsEnabled(
+      initial.order.activePriceBinding!.orderPriceBinding.priceSnapshot
+        .priceList.termsRevision,
+    );
 
     const capabilities = await this.provider.capabilities();
     if (!capabilities.methods.includes(input.method)) {
       throw new BadRequestException("Payment method is unavailable");
     }
-    assertCheckoutContext(initial, token);
     const destination =
       initial.order.automaticQuoteDraft!.selectedDeliveryDestination!;
     const resolvedDestination = await this.deliveryCapabilities.resolve({
@@ -116,6 +121,9 @@ export class PaymentsService {
       assertCheckoutContext(context, token);
       assertDestinationStillCurrent(context, resolvedDestination);
       const binding = context.order.activePriceBinding!.orderPriceBinding;
+      const legalRevisions = assertCheckoutPaymentFlowsEnabled(
+        binding.priceSnapshot.priceList.termsRevision,
+      );
       const schedule = binding.priceSnapshot.paymentSchedules.find(
         ({ role }) => role === "FULL",
       );
@@ -195,13 +203,12 @@ export class PaymentsService {
           ...(context.order.acceptedTermsRevision
             ? {}
             : {
-                acceptedTermsRevision:
-                  binding.priceSnapshot.priceList.termsRevision,
+                acceptedTermsRevision: legalRevisions.termsRevision,
               }),
           ...(context.order.acceptedClaimPolicyRevision
             ? {}
             : {
-                acceptedClaimPolicyRevision: claimPolicyRevision,
+                acceptedClaimPolicyRevision: legalRevisions.claimPolicyRevision,
               }),
           ...(context.order.withdrawalExceptionAcknowledgedAt
             ? {}
@@ -603,18 +610,48 @@ export class PaymentsService {
         .update(event.providerEventId)
         .digest("hex")
         .slice(0, 24);
-      const plan = await this.eligibilityPlans.createCompletePlan({
-        nodeId: previous.nodeId,
-        orderPhaseId: phase.id,
-        planKey: `capture-reacquire-plan:${payment.id}:${suffix}`,
-      });
-      await this.reservations.reacquireForCapture({
-        previousPhaseReservationSetId: previous.id,
-        nodeId: previous.nodeId,
-        phaseResourcePlanId: plan.phaseResourcePlanId,
-        reservationKey: `capture-reacquire:${payment.id}:${suffix}`,
-        paymentId: payment.id,
-      });
+      const basePlanKey = `capture-reacquire-plan:${payment.id}:${suffix}`;
+      const usedPlanIds = new Set(
+        sets.map(({ phaseResourcePlanId }) => phaseResourcePlanId),
+      );
+      let planKey = basePlanKey;
+      for (
+        let generation = 0;
+        generation < MAX_REACQUISITION_PLAN_GENERATIONS;
+        generation += 1
+      ) {
+        const plan = await this.eligibilityPlans.createCompletePlan({
+          nodeId: previous.nodeId,
+          orderPhaseId: phase.id,
+          planKey,
+        });
+        if (
+          usedPlanIds.has(plan.phaseResourcePlanId) ||
+          plan.expiresAt.getTime() <=
+            Date.now() + REACQUISITION_RESERVATION_MILLISECONDS
+        ) {
+          planKey = `${basePlanKey}:after-${createHash("sha256")
+            .update(plan.phaseResourcePlanId)
+            .digest("hex")
+            .slice(0, 24)}`;
+          continue;
+        }
+        const reservationSuffix = createHash("sha256")
+          .update(`${event.providerEventId}\0${plan.phaseResourcePlanId}`)
+          .digest("hex")
+          .slice(0, 24);
+        await this.reservations.reacquireForCapture({
+          previousPhaseReservationSetId: previous.id,
+          nodeId: previous.nodeId,
+          phaseResourcePlanId: plan.phaseResourcePlanId,
+          reservationKey: `capture-reacquire:${payment.id}:${reservationSuffix}`,
+          paymentId: payment.id,
+        });
+        return;
+      }
+      throw new ResourceConflictError(
+        "No current unreserved resource plan is available for capture",
+      );
     } catch (error) {
       if (
         error instanceof ResourceConflictError ||
@@ -711,7 +748,12 @@ export class PaymentsService {
       let payment = await transaction.payment.findUniqueOrThrow({
         where: { id: paymentId },
       });
-      if (payment.status === PaymentStatus.CREATED) {
+      const callbackStagedPending =
+        payment.status === PaymentStatus.PENDING &&
+        payment.checkoutCommandId === idempotencyRecordId &&
+        payment.providerIntentId === providerIntentId &&
+        payment.providerCheckoutUrl === null;
+      if (payment.status === PaymentStatus.CREATED || callbackStagedPending) {
         await transaction.$queryRaw`
           SELECT taven_close_initial_checkout_payment(
             ${paymentId}::uuid, 'CUSTOMER_CANCELLED'

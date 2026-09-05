@@ -5,9 +5,11 @@ import {
   assertCheckoutPaymentFlowsEnabled,
   assertQuotePhotoUploadsEnabled,
   approvedCheckoutClaimPolicyRevision,
+  approvedCheckoutTermsRevision,
   BINDING_QUOTE_FLOWS_ENV,
   CHECKOUT_CLAIM_POLICY_REVISION_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
+  CHECKOUT_TERMS_REVISION_ENV,
   QUOTE_PHOTO_UPLOADS_ENV,
 } from "./launch-approval-gates";
 
@@ -63,7 +65,7 @@ describe("launch approval gates", () => {
     "keeps checkout payments disabled for %s",
     (value) => {
       expect(() =>
-        assertCheckoutPaymentFlowsEnabled({
+        assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
           [CHECKOUT_PAYMENT_FLOWS_ENV]: value,
         }),
       ).toThrowError(ServiceUnavailableException);
@@ -72,9 +74,10 @@ describe("launch approval gates", () => {
 
   it("enables checkout payments only with an explicit true", () => {
     expect(() =>
-      assertCheckoutPaymentFlowsEnabled({
+      assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
       }),
     ).not.toThrow();
   });
@@ -83,13 +86,37 @@ describe("launch approval gates", () => {
     "rejects unapproved checkout claim policy %s",
     (revision) => {
       expect(() =>
-        assertCheckoutPaymentFlowsEnabled({
+        assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
           [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
           [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: revision,
+          [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
         }),
       ).toThrowError(ServiceUnavailableException);
     },
   );
+
+  it.each([undefined, "", "terms-draft-v0", "terms-pending"])(
+    "rejects unapproved checkout terms %s",
+    (revision) => {
+      expect(() =>
+        assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
+          [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+          [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+          [CHECKOUT_TERMS_REVISION_ENV]: revision,
+        }),
+      ).toThrowError(ServiceUnavailableException);
+    },
+  );
+
+  it("rejects a price binding with a different terms revision", () => {
+    expect(() =>
+      assertCheckoutPaymentFlowsEnabled("terms-v0", {
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
+      }),
+    ).toThrowError(ServiceUnavailableException);
+  });
 
   it("returns the trimmed approved claim-policy revision", () => {
     expect(
@@ -97,5 +124,13 @@ describe("launch approval gates", () => {
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: " claims-v1-approved ",
       }),
     ).toBe("claims-v1-approved");
+  });
+
+  it("returns the trimmed approved terms revision", () => {
+    expect(
+      approvedCheckoutTermsRevision({
+        [CHECKOUT_TERMS_REVISION_ENV]: " terms-v1-approved ",
+      }),
+    ).toBe("terms-v1-approved");
   });
 });

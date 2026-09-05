@@ -19,6 +19,7 @@ import {
   sandboxEventSignature,
 } from "../src/modules/payments/sandbox-payment-provider.adapter";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import {
   PersistenceFactory,
@@ -684,13 +685,20 @@ describe("checkout payment capture protocol", () => {
     const outagePublicTokenHash = createHash("sha256")
       .update(outageToken)
       .digest("hex");
+    const callbackToken = randomBytes(32).toString("base64url");
+    const callbackPublicTokenHash = createHash("sha256")
+      .update(callbackToken)
+      .digest("hex");
     const setupClient = await pool.connect();
     let foundation: PersistenceFoundation;
     let outageFoundation: PersistenceFoundation;
+    let callbackFoundation: PersistenceFoundation;
     let customerEmail: string;
     let outageCustomerEmail: string;
+    let callbackCustomerEmail: string;
     let destination: ResolvedDeliveryCapability;
     let outageDestination: ResolvedDeliveryCapability;
+    let callbackDestination: ResolvedDeliveryCapability;
     try {
       await setupClient.query("BEGIN");
       const fixtures = new PersistenceFactory(
@@ -770,6 +778,44 @@ describe("checkout payment capture protocol", () => {
           outageDestinationRow.capability_snapshot as Prisma.InputJsonObject,
         supportedCategoryIds: ["standard"],
       };
+      const callbackFixtures = new PersistenceFactory(
+        setupClient,
+        `${scope}:http-callback-finalization`,
+        { publicTokenHash: callbackPublicTokenHash },
+      );
+      callbackFoundation = await prepareReservedFoundation(
+        setupClient,
+        callbackFixtures,
+        "http-callback-finalization",
+      );
+      callbackCustomerEmail = (
+        await setupClient.query<{ email: string }>(
+          "SELECT email FROM customers WHERE id = $1",
+          [callbackFoundation.customerId],
+        )
+      ).rows[0]!.email;
+      const callbackDestinationRow = (
+        await setupClient.query<{
+          provider_endpoint_id: string;
+          endpoint_type: string;
+          address_snapshot: Record<string, unknown>;
+          capability_snapshot: Record<string, unknown>;
+        }>(
+          `SELECT provider_endpoint_id, endpoint_type, address_snapshot,
+                  capability_snapshot
+           FROM delivery_destinations WHERE id = $1`,
+          [callbackFoundation.deliveryDestinationId],
+        )
+      ).rows[0]!;
+      callbackDestination = {
+        providerEndpointId: callbackDestinationRow.provider_endpoint_id,
+        endpointType: callbackDestinationRow.endpoint_type,
+        addressSnapshot:
+          callbackDestinationRow.address_snapshot as Prisma.InputJsonObject,
+        capabilitySnapshot:
+          callbackDestinationRow.capability_snapshot as Prisma.InputJsonObject,
+        supportedCategoryIds: ["standard"],
+      };
       await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
       await setupClient.query("COMMIT");
     } catch (error) {
@@ -782,6 +828,7 @@ describe("checkout payment capture protocol", () => {
     const previousEnvironment = {
       gate: process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED,
       claimPolicyRevision: process.env.TAVEN_CLAIM_POLICY_REVISION,
+      termsRevision: process.env.TAVEN_TERMS_REVISION,
       provider: process.env.TAVEN_PAYMENT_PROVIDER,
       secret: process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET,
       providerUrl: process.env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL,
@@ -790,6 +837,7 @@ describe("checkout payment capture protocol", () => {
     const signingSecret = "e2e-sandbox-payment-signing-secret-32";
     process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
     process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v1-approved";
+    process.env.TAVEN_TERMS_REVISION = "terms-v1";
     process.env.TAVEN_PAYMENT_PROVIDER = "sandbox";
     process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET = signingSecret;
     process.env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL = "http://sandbox.local";
@@ -805,6 +853,8 @@ describe("checkout payment capture protocol", () => {
     let providerVerifyCalls = 0;
     let providerCancelCalls = 0;
     let sandboxCheckoutBaseUrl = "http://sandbox.local";
+    let applicationBaseUrl: URL | undefined;
+    let failNextFinalizationBeforeCommit = false;
     let latestReturnUrls:
       | Readonly<{ success: string; cancelled: string; pending: string }>
       | undefined;
@@ -825,6 +875,38 @@ describe("checkout payment capture protocol", () => {
         }
         latestReturnUrls = input.returnUrls;
         const intent = await sandbox.createIntent(input);
+        if (input.email === callbackCustomerEmail) {
+          if (!applicationBaseUrl) {
+            throw new Error("callback test application URL is unavailable");
+          }
+          const pendingEvent = {
+            providerEventId: `sandbox-create-pending-${input.paymentId}`,
+            providerTransactionId: intent.providerIntentId,
+            merchantReference: input.merchantReference,
+            status: "PENDING",
+            amountMinor: input.amountMinor.toString(),
+            currency: input.currency,
+            occurredAt: new Date().toISOString(),
+          };
+          const pendingResponse = await fetch(
+            new URL("/payments/webhooks/sandbox", applicationBaseUrl),
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-taven-sandbox-signature": sandboxEventSignature(
+                  pendingEvent,
+                  signingSecret,
+                ),
+              },
+              body: JSON.stringify(pendingEvent),
+            },
+          );
+          if (!pendingResponse.ok) {
+            throw new Error("callback staging failed during intent creation");
+          }
+          failNextFinalizationBeforeCommit = true;
+        }
         return {
           ...intent,
           checkoutUrl: new URL(
@@ -857,9 +939,16 @@ describe("checkout payment capture protocol", () => {
             endpointType: string;
           }) => {
             if (deliveryResolutionError) throw deliveryResolutionError;
-            return input.providerEndpointId === destination.providerEndpointId
-              ? destination
-              : outageDestination;
+            if (input.providerEndpointId === destination.providerEndpointId) {
+              return destination;
+            }
+            if (
+              input.providerEndpointId ===
+              callbackDestination.providerEndpointId
+            ) {
+              return callbackDestination;
+            }
+            return outageDestination;
           },
         })
         .overrideProvider(PAYMENT_PROVIDER)
@@ -868,6 +957,7 @@ describe("checkout payment capture protocol", () => {
       app = moduleRef.createNestApplication();
       await app.listen(0, "127.0.0.1");
       const baseUrl = new URL(await app.getUrl());
+      applicationBaseUrl = baseUrl;
       sandboxCheckoutBaseUrl = baseUrl.origin;
       const prisma = app.get(PrismaService);
       await prisma.customer.update({
@@ -949,6 +1039,29 @@ describe("checkout payment capture protocol", () => {
             }),
           },
         );
+      const createCallbackPayment = () =>
+        fetch(
+          new URL(
+            `/automatic-quote-sessions/${callbackFoundation.quoteSessionId}/checkout/payments`,
+            baseUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${callbackToken}`,
+              "content-type": "application/json",
+              "idempotency-key": "sandbox-callback-finalization-1",
+            },
+            body: JSON.stringify({
+              email: callbackCustomerEmail,
+              fullName: "Callback Customer",
+              method: "CARD",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              acknowledgeWithdrawalException: true,
+            }),
+          },
+        );
       const readPayment = (
         sessionId: string,
         sessionToken: string,
@@ -986,6 +1099,60 @@ describe("checkout payment capture protocol", () => {
         $transaction: InteractiveTransaction;
       };
       const originalTransaction = transactions.$transaction.bind(prisma);
+
+      process.env.TAVEN_TERMS_REVISION = "terms-pending";
+      const providerCallsBeforeUnapprovedTerms = providerCreateCalls;
+      const unapprovedTermsResponse = await createPayment(
+        "sandbox-http-unapproved-terms",
+      );
+      expect(unapprovedTermsResponse.status).toBe(503);
+      expect(providerCreateCalls).toBe(providerCallsBeforeUnapprovedTerms);
+      process.env.TAVEN_TERMS_REVISION = "terms-v1";
+
+      const callbackTransactionSpy = vi
+        .spyOn(transactions, "$transaction")
+        .mockImplementation(async (work) => {
+          if (failNextFinalizationBeforeCommit) {
+            failNextFinalizationBeforeCommit = false;
+            throw new Error("simulated finalization transaction failure");
+          }
+          return originalTransaction(work);
+        });
+      const callbackResponse = await createCallbackPayment();
+      callbackTransactionSpy.mockRestore();
+      expect(callbackResponse.status).toBe(200);
+      const callbackPayment = await prisma.payment.findFirstOrThrow({
+        where: { orderId: callbackFoundation.orderId },
+        include: { checkoutCommand: true },
+      });
+      await expect(callbackResponse.json()).resolves.toMatchObject({
+        paymentId: callbackPayment.id,
+        status: "VOIDED",
+      });
+      expect(callbackPayment).toMatchObject({
+        status: "VOIDED",
+        providerIntentId: `sandbox-${callbackPayment.id}`,
+        providerCheckoutUrl: null,
+        checkoutCommand: { status: "COMPLETED" },
+      });
+      await expect(
+        prisma.outboxMessage.count({
+          where: {
+            aggregateId: callbackPayment.id,
+            messageType: "void_payment",
+          },
+        }),
+      ).resolves.toBe(1);
+      const providerCallsAfterCallbackClose = providerCreateCalls;
+      const callbackReplay = await createCallbackPayment();
+      expect(callbackReplay.status).toBe(200);
+      await expect(callbackReplay.json()).resolves.toMatchObject({
+        paymentId: callbackPayment.id,
+        status: "VOIDED",
+      });
+      expect(providerCreateCalls).toBe(providerCallsAfterCallbackClose);
+      expect(providerCancelCalls).toBe(0);
+
       let checkoutTransactionCount = 0;
       const transactionSpy = vi
         .spyOn(transactions, "$transaction")
@@ -1163,6 +1330,22 @@ describe("checkout payment capture protocol", () => {
 
       const sendSandboxOutcome = (outcome: string) =>
         fetch(`${created.checkoutUrl}/${outcome}`, { method: "POST" });
+      const eligibilityPlanService = app.get(EligibilityPlanService);
+      const createCompletePlan = eligibilityPlanService.createCompletePlan.bind(
+        eligibilityPlanService,
+      );
+      let firstReacquisitionPlanKey: string | undefined;
+      const reacquisitionPlanKeys: string[] = [];
+      const eligibilityPlan = vi
+        .spyOn(eligibilityPlanService, "createCompletePlan")
+        .mockImplementation(async (input) => {
+          const plan = await createCompletePlan(input);
+          firstReacquisitionPlanKey ??= input.planKey;
+          reacquisitionPlanKeys.push(input.planKey);
+          return input.planKey === firstReacquisitionPlanKey
+            ? { ...plan, expiresAt: new Date(0) }
+            : plan;
+        });
       const reacquireForCapture = vi
         .spyOn(app.get(ResourceReservationService), "reacquireForCapture")
         .mockRejectedValueOnce(
@@ -1210,6 +1393,9 @@ describe("checkout payment capture protocol", () => {
       expect(await capturedResponse.text()).toContain(
         "Webhook outcome: <strong>CAPTURED</strong>",
       );
+      eligibilityPlan.mockRestore();
+      expect(reacquisitionPlanKeys).toHaveLength(4);
+      expect(new Set(reacquisitionPlanKeys).size).toBe(2);
       const duplicateResponse = await sendSandboxOutcome("capture");
       expect(duplicateResponse.status).toBe(200);
       expect(await duplicateResponse.text()).toContain(
@@ -1464,6 +1650,10 @@ describe("checkout payment capture protocol", () => {
       restoreEnvironment(
         "TAVEN_CLAIM_POLICY_REVISION",
         previousEnvironment.claimPolicyRevision,
+      );
+      restoreEnvironment(
+        "TAVEN_TERMS_REVISION",
+        previousEnvironment.termsRevision,
       );
       restoreEnvironment(
         "TAVEN_PAYMENT_PROVIDER",
