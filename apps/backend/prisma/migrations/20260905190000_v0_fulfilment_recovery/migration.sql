@@ -717,7 +717,86 @@ FOR EACH ROW
 WHEN (NEW."kind" IN ('LOST', 'RETURNED', 'RECOVERED'))
 EXECUTE FUNCTION taven_reconcile_shipment_incident_provider_event_consumption();
 
-CREATE TYPE "replacement_request_reason" AS ENUM ('JOB_FAILED', 'QC_REJECTED');
+-- A delivered label-void result may arrive after a previously accepted parcel
+-- has advanced into an incident state. It is immutable provider evidence, but
+-- it must remain a lifecycle no-op just like the existing post-handoff cases.
+DROP TRIGGER "shipment_provider_events_scope_validated"
+    ON "shipment_provider_events";
+CREATE TRIGGER "shipment_provider_events_scope_validated"
+AFTER INSERT ON "shipment_provider_events"
+FOR EACH ROW
+WHEN (NOT (
+    NEW."kind" = 'LABEL_VOIDED'
+    AND NEW."source_shipment_status" IN ('LOST', 'RETURNED', 'RECOVERED')
+))
+EXECUTE FUNCTION taven_validate_shipment_provider_event_scope();
+
+CREATE FUNCTION taven_validate_late_incident_label_void()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "shipments" shipment
+        JOIN "shipment_provider_events" acceptance
+          ON acceptance."shipment_id" = shipment."id"
+         AND acceptance."kind" = 'ACCEPTANCE_SCAN'
+         AND acceptance."provider_event_id" =
+             shipment."provider_acceptance_scan_id"
+         AND acceptance."verified_at" = shipment."handed_over_at"
+        JOIN "outbox_messages" message
+          ON message."id" = NEW."outbox_message_id"
+         AND message."deduplication_key" =
+             'void_carrier_label:' || shipment."id"::text || ':' ||
+             shipment."carrier_label_id"
+         AND message."aggregate_type" = 'Shipment'
+         AND message."aggregate_id" = shipment."id"
+         AND message."message_type" = 'void_carrier_label'
+         AND message."schema_version" = 1
+         AND message."status" = 'DELIVERED'
+         AND message."delivered_at" IS NOT NULL
+        WHERE shipment."id" = NEW."shipment_id"
+          AND shipment."status" = NEW."source_shipment_status"
+          AND shipment."status" IN ('LOST', 'RETURNED', 'RECOVERED')
+          AND NEW."carrier" = shipment."carrier"
+          AND NEW."carrier_label_id" = shipment."carrier_label_id"
+          AND NEW."occurred_at" >=
+              shipment."cancellation_requested_at" - interval '5 seconds'
+          AND message."delivered_at" <= NEW."occurred_at" + interval '5 seconds'
+          AND acceptance."occurred_at" < NEW."occurred_at"
+    ) THEN
+        RAISE EXCEPTION 'Late incident label void requires the exact delivered command and prior acceptance evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'shipment_provider_event_scope_check';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER "shipment_provider_events_late_incident_void_validated"
+AFTER INSERT ON "shipment_provider_events"
+FOR EACH ROW
+WHEN (
+    NEW."kind" = 'LABEL_VOIDED'
+    AND NEW."source_shipment_status" IN ('LOST', 'RETURNED', 'RECOVERED')
+)
+EXECUTE FUNCTION taven_validate_late_incident_label_void();
+
+DROP TRIGGER "shipment_provider_events_consumed"
+    ON "shipment_provider_events";
+CREATE CONSTRAINT TRIGGER "shipment_provider_events_consumed"
+AFTER INSERT ON "shipment_provider_events"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+WHEN (NOT (
+    NEW."kind" = 'LABEL_VOIDED'
+    AND NEW."source_shipment_status" IN ('LOST', 'RETURNED', 'RECOVERED')
+))
+EXECUTE FUNCTION taven_reconcile_shipment_provider_event_consumption();
+
+CREATE TYPE "replacement_request_reason" AS ENUM (
+    'JOB_FAILED', 'QC_REJECTED', 'SHIPMENT_LOST'
+);
 CREATE TYPE "replacement_request_status" AS ENUM ('OPEN', 'JOB_CREATED', 'REFUND_REQUIRED', 'RESOLVED');
 CREATE TYPE "claim_origin" AS ENUM ('SHIPMENT_INCIDENT', 'POST_DELIVERY_QUALITY');
 CREATE TYPE "claim_status" AS ENUM (
@@ -776,6 +855,7 @@ CREATE TABLE "replacement_requests" (
     "source_job_id" uuid NOT NULL UNIQUE,
     "replacement_job_id" uuid UNIQUE,
     "phase_reservation_set_id" uuid UNIQUE,
+    "claim_id" uuid,
     "reason" "replacement_request_reason" NOT NULL,
     "status" "replacement_request_status" NOT NULL DEFAULT 'OPEN',
     "deadline_at" timestamptz(3) NOT NULL,
@@ -809,6 +889,8 @@ CREATE TABLE "replacement_requests" (
 );
 CREATE INDEX "replacement_requests_order_id_status_deadline_at_idx"
     ON "replacement_requests"("order_id", "status", "deadline_at");
+CREATE INDEX "replacement_requests_claim_id_idx"
+    ON "replacement_requests"("claim_id");
 
 CREATE TABLE "claims" (
     "id" uuid PRIMARY KEY,
@@ -841,11 +923,15 @@ CREATE TABLE "claims" (
 );
 CREATE INDEX "claims_order_id_status_idx" ON "claims"("order_id", "status");
 
+ALTER TABLE "replacement_requests"
+    ADD CONSTRAINT "replacement_requests_claim_id_fkey"
+        FOREIGN KEY ("claim_id") REFERENCES "claims"("id") ON DELETE RESTRICT;
+
 CREATE TABLE "claim_slot_resolutions" (
     "id" uuid PRIMARY KEY,
     "claim_id" uuid NOT NULL,
     "fulfilment_slot_id" uuid NOT NULL,
-    "replacement_request_id" uuid UNIQUE,
+    "replacement_request_id" uuid,
     "replacement_shipment_id" uuid,
     "status" "claim_slot_resolution_status" NOT NULL DEFAULT 'PENDING',
     "resolved_at" timestamptz(3),
@@ -969,6 +1055,89 @@ AS $$
         FROM "reshipment_authorizations" auth
         WHERE auth."reshipment_shipment_id" = target_reshipment_shipment_id
           AND auth."consumed_at" IS NOT NULL
+    );
+$$;
+
+CREATE FUNCTION taven_is_claim_reprint(
+    target_original_shipment_id uuid,
+    target_replacement_shipment_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "claims" claim
+        JOIN "shipments" original
+          ON original."id" = claim."incident_shipment_id"
+        JOIN "shipments" replacement
+          ON replacement."id" = target_replacement_shipment_id
+         AND replacement."replaces_shipment_id" = original."id"
+        WHERE original."id" = target_original_shipment_id
+          AND original."status" = 'LOST'
+          AND claim."origin" = 'SHIPMENT_INCIDENT'
+          AND claim."status" IN (
+              'ACTIVE', 'RESOLVED_REPLACEMENT', 'RESOLVED_REFUND'
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "claim_slot_resolutions" resolution
+              JOIN "replacement_requests" request
+                ON request."id" = resolution."replacement_request_id"
+               AND request."claim_id" = claim."id"
+               AND request."reason" = 'SHIPMENT_LOST'
+               AND request."status" = 'JOB_CREATED'
+              WHERE resolution."claim_id" = claim."id"
+                AND resolution."replacement_shipment_id" = replacement."id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              WHERE allocation."shipment_plan_id" = original."shipment_plan_id"
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM "claim_slot_resolutions" resolution
+                    WHERE resolution."claim_id" = claim."id"
+                      AND resolution."fulfilment_slot_id" =
+                          allocation."fulfilment_slot_id"
+                      AND resolution."replacement_request_id" IS NOT NULL
+                      AND resolution."replacement_shipment_id" = replacement."id"
+                )
+          )
+    );
+$$;
+
+CREATE FUNCTION taven_is_claim_reprint_predecessor(
+    target_original_shipment_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "shipments" replacement
+        WHERE replacement."replaces_shipment_id" = target_original_shipment_id
+          AND taven_is_claim_reprint(
+              target_original_shipment_id, replacement."id"
+          )
+    );
+$$;
+
+CREATE FUNCTION taven_is_claim_reprint_job(target_job_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "replacement_requests" request
+        JOIN "claims" claim ON claim."id" = request."claim_id"
+        WHERE request."replacement_job_id" = target_job_id
+          AND request."reason" = 'SHIPMENT_LOST'
+          AND request."status" = 'JOB_CREATED'
+          AND claim."status" = 'ACTIVE'
     );
 $$;
 
@@ -1760,8 +1929,11 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'job_failure_cancellation_check';
     ELSIF has_production_failure_refund
           AND (NOT has_failed_job
-               OR target_order_status NOT IN ('CANCELLED', 'REFUNDED')) THEN
-        RAISE EXCEPTION 'production-failure refunds require retained failure evidence in a cancelled order lifecycle'
+               OR (target_order_status NOT IN ('CANCELLED', 'REFUNDED')
+                   AND NOT taven_has_scoped_production_failure_refund(
+                       target_order_id
+                   ))) THEN
+        RAISE EXCEPTION 'production-failure refunds require retained failure evidence in a complete cancellation or scoped post-handoff lifecycle'
             USING ERRCODE = '23514', CONSTRAINT = 'job_failure_cancellation_check';
     END IF;
 
@@ -2378,6 +2550,186 @@ AS $$
     );
 $$;
 
+CREATE FUNCTION taven_has_scoped_production_failure_refund(
+    target_order_id uuid,
+    target_shipment_plan_id uuid DEFAULT NULL,
+    target_job_id uuid DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "shipments" shipment
+        JOIN "replacement_requests" request
+          ON request."order_id" = shipment."order_id"
+         AND request."order_phase_id" = shipment."order_phase_id"
+         AND request."shipment_plan_id" = shipment."shipment_plan_id"
+         AND request."reason" IN ('JOB_FAILED', 'QC_REJECTED')
+         AND request."status" = 'RESOLVED'
+         AND request."resolved_at" IS NOT NULL
+        JOIN "jobs" failed_job
+          ON failed_job."id" = request."source_job_id"
+         AND failed_job."status" IN ('FAILED', 'QC_REJECTED')
+        JOIN "price_adjustments" adjustment
+          ON adjustment."order_id" = shipment."order_id"
+         AND adjustment."reason" = 'PRODUCTION_FAILURE'
+         AND adjustment."allocation" ->> 'replacementRequestId' = request."id"::text
+         AND adjustment."allocation" ->> 'shipmentPlanId' = shipment."shipment_plan_id"::text
+        WHERE shipment."order_id" = target_order_id
+          AND shipment."status" = 'CANCELLED'
+          AND shipment."cancelled_at" IS NOT NULL
+          AND (target_shipment_plan_id IS NULL
+               OR shipment."shipment_plan_id" = target_shipment_plan_id)
+          AND (target_job_id IS NULL OR failed_job."id" = target_job_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM "shipments" successor
+              WHERE successor."replaces_shipment_id" = shipment."id"
+          )
+          AND (
+              (shipment."label_created_at" IS NULL
+               AND shipment."carrier" IS NULL
+               AND shipment."provider_shipment_id" IS NULL
+               AND shipment."carrier_label_id" IS NULL
+               AND shipment."cancellation_requested_at" IS NULL
+               AND shipment."provider_void_id" IS NULL
+               AND shipment."provider_voided_at" IS NULL)
+              OR EXISTS (
+                  SELECT 1
+                  FROM "shipment_provider_events" void_event
+                  WHERE void_event."shipment_id" = shipment."id"
+                    AND void_event."kind" = 'LABEL_VOIDED'
+                    AND void_event."provider_event_id" = shipment."provider_void_id"
+                    AND void_event."verified_at" = shipment."provider_voided_at"
+              )
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "shipments" handed_over
+              WHERE handed_over."order_id" = shipment."order_id"
+                AND handed_over."id" <> shipment."id"
+                AND handed_over."status" IN (
+                    'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED',
+                    'LOST', 'RETURNED', 'RECOVERED'
+                )
+                AND handed_over."handed_over_at" IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM "shipments" successor
+                    WHERE successor."replaces_shipment_id" = handed_over."id"
+                )
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "jobs" current_job
+              WHERE current_job."order_id" = shipment."order_id"
+                AND current_job."shipment_plan_id" = shipment."shipment_plan_id"
+                AND NOT EXISTS (
+                    SELECT 1 FROM "jobs" successor
+                    WHERE successor."replaces_job_id" = current_job."id"
+                )
+                AND current_job."id" <> failed_job."id"
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipment_plan_fulfilment_slots" allocation
+              JOIN "fulfilment_slots" slot
+                ON slot."id" = allocation."fulfilment_slot_id"
+              WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+                AND (
+                    slot."order_id" <> shipment."order_id"
+                    OR slot."order_phase_id" <> shipment."order_phase_id"
+                    OR slot."outcome" NOT IN ('CANCELLED', 'CANCELLED_REFUNDED')
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM "phase_resource_plan_slots" job_slot
+                        WHERE job_slot."phase_resource_plan_job_id" =
+                              failed_job."phase_resource_plan_job_id"
+                          AND job_slot."fulfilment_slot_id" = slot."id"
+                    )
+                    OR coalesce((
+                        SELECT sum((credit.value ->> 'amountMinor')::bigint)
+                        FROM "price_adjustments" slot_adjustment
+                        CROSS JOIN LATERAL jsonb_array_elements(
+                            slot_adjustment."allocation" -> 'slotCredits'
+                        ) credit(value)
+                        WHERE slot_adjustment."order_id" = shipment."order_id"
+                          AND (credit.value ->> 'fulfilmentSlotId')::uuid = slot."id"
+                    ), 0) <> slot."settlement_amount_minor"
+                    OR coalesce((
+                        SELECT sum(refund."amount_minor")
+                        FROM "refund_transactions" refund
+                        WHERE refund."price_adjustment_id" = adjustment."id"
+                          AND refund."replaces_refund_transaction_id" IS NULL
+                    ), 0) <> adjustment."amount_minor"
+                )
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "phase_resource_plan_slots" job_slot
+              WHERE job_slot."phase_resource_plan_job_id" =
+                    failed_job."phase_resource_plan_job_id"
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM "shipment_plan_fulfilment_slots" allocation
+                    WHERE allocation."shipment_plan_id" = shipment."shipment_plan_id"
+                      AND allocation."fulfilment_slot_id" =
+                          job_slot."fulfilment_slot_id"
+                )
+          )
+    );
+$$;
+
+CREATE FUNCTION taven_has_pending_post_handoff_production_failure(
+    target_order_id uuid,
+    target_job_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "replacement_requests" request
+        JOIN "jobs" failed_job ON failed_job."id" = request."source_job_id"
+        JOIN "shipments" shipment
+          ON shipment."order_id" = request."order_id"
+         AND shipment."order_phase_id" = request."order_phase_id"
+         AND shipment."shipment_plan_id" = request."shipment_plan_id"
+        WHERE request."order_id" = target_order_id
+          AND request."source_job_id" = target_job_id
+          AND request."status" = 'REFUND_REQUIRED'
+          AND request."reason" IN ('JOB_FAILED', 'QC_REJECTED')
+          AND failed_job."status" IN ('FAILED', 'QC_REJECTED')
+          AND shipment."status" = 'CANCELLATION_PENDING'
+          AND shipment."cancellation_requested_at" IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM "shipments" successor
+              WHERE successor."replaces_shipment_id" = shipment."id"
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM "shipments" handed_over
+              WHERE handed_over."order_id" = target_order_id
+                AND handed_over."id" <> shipment."id"
+                AND handed_over."status" IN (
+                    'HANDED_OVER', 'IN_TRANSIT', 'DELIVERED',
+                    'LOST', 'RETURNED', 'RECOVERED'
+                )
+                AND handed_over."handed_over_at" IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM "shipments" successor
+                    WHERE successor."replaces_shipment_id" = handed_over."id"
+                )
+          )
+    );
+$$;
+
 CREATE FUNCTION taven_has_unresolved_scoped_partial_cancellation(
     target_order_id uuid
 )
@@ -2392,8 +2744,12 @@ AS $$
           ON slot."id" = allocation."fulfilment_slot_id"
         WHERE slot."order_id" = target_order_id
           AND slot."outcome" = 'CANCELLED'
-          AND taven_has_scoped_partial_cancellation(
-              target_order_id, allocation."shipment_plan_id"
+          AND (
+              taven_has_scoped_partial_cancellation(
+                  target_order_id, allocation."shipment_plan_id"
+              ) OR taven_has_scoped_production_failure_refund(
+                  target_order_id, allocation."shipment_plan_id"
+              )
           )
     ) OR EXISTS (
         SELECT 1
@@ -2414,8 +2770,12 @@ AS $$
          AND refund."status" = 'SUSPENDED'
         JOIN "payments" payment ON payment."id" = refund."payment_id"
         WHERE slot."order_id" = target_order_id
-          AND taven_has_scoped_partial_cancellation(
-              target_order_id, allocation."shipment_plan_id"
+          AND (
+              taven_has_scoped_partial_cancellation(
+                  target_order_id, allocation."shipment_plan_id"
+              ) OR taven_has_scoped_production_failure_refund(
+                  target_order_id, allocation."shipment_plan_id"
+              )
           )
           AND taven_payment_has_suspended_refund_incident(payment."id")
     );
@@ -2450,8 +2810,12 @@ BEGIN
           SELECT 1
           FROM "shipment_plan_fulfilment_slots" allocation
           WHERE allocation."fulfilment_slot_id" = slot."id"
-            AND taven_has_scoped_partial_cancellation(
-                target_order_id, allocation."shipment_plan_id"
+            AND (
+                taven_has_scoped_partial_cancellation(
+                    target_order_id, allocation."shipment_plan_id"
+                ) OR taven_has_scoped_production_failure_refund(
+                    target_order_id, allocation."shipment_plan_id"
+                )
             )
       )
       AND EXISTS (
@@ -2499,8 +2863,12 @@ BEGIN
           SELECT 1
           FROM "shipment_plan_fulfilment_slots" allocation
           WHERE allocation."fulfilment_slot_id" = slot."id"
-            AND taven_has_scoped_partial_cancellation(
-                target_order_id, allocation."shipment_plan_id"
+            AND (
+                taven_has_scoped_partial_cancellation(
+                    target_order_id, allocation."shipment_plan_id"
+                ) OR taven_has_scoped_production_failure_refund(
+                    target_order_id, allocation."shipment_plan_id"
+                )
             )
       )
       AND coalesce((
@@ -2912,6 +3280,9 @@ BEGIN
           AND NOT taven_is_consumed_custody_reshipment(
               predecessor."id", replacement."id"
           )
+          AND NOT taven_is_claim_reprint(
+              predecessor."id", replacement."id"
+          )
     ) THEN
         RAISE EXCEPTION 'a replaced Shipment must be terminally cancelled before its successor is attached'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_replacement_predecessor_terminal_check';
@@ -3116,6 +3487,22 @@ BEGIN
            JOIN "payments" payment ON payment."id" = refund."payment_id"
            WHERE payment."order_id" = target_order_id
              AND refund."status" IN ('PENDING', 'SUSPENDED', 'FAILED')
+       ) THEN
+        RETURN NULL;
+    END IF;
+
+    -- During a whole-parcel LOST reprint the order remains SHIPPED while the
+    -- successor Job moves through production. The Claim/request/reservation
+    -- constraints validate that bounded graph until the successor is handed
+    -- over and delivered.
+    IF target_status = 'SHIPPED'
+       AND EXISTS (
+           SELECT 1
+           FROM "shipments" replacement
+           JOIN "shipments" original
+             ON original."id" = replacement."replaces_shipment_id"
+           WHERE replacement."order_id" = target_order_id
+             AND taven_is_claim_reprint(original."id", replacement."id")
        ) THEN
         RETURN NULL;
     END IF;
@@ -3422,17 +3809,25 @@ BEGIN
             WHERE phase."order_id" = target_order_id
               AND phase."status" = 'SHIPPED'
               AND phase."shipped_at" IS NOT NULL
-        ) OR NOT EXISTS (
-            SELECT 1
-            FROM "shipments" shipment
-            WHERE shipment."order_id" = target_order_id
-              AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'RETURNED', 'RECOVERED')
-              AND shipment."handed_over_at" IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM "shipments" replacement
-                  WHERE replacement."replaces_shipment_id" = shipment."id"
-              )
+        ) OR (
+            NOT EXISTS (
+                SELECT 1
+                FROM "shipments" shipment
+                WHERE shipment."order_id" = target_order_id
+                  AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'RETURNED', 'RECOVERED')
+                  AND shipment."handed_over_at" IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "shipments" replacement
+                      WHERE replacement."replaces_shipment_id" = shipment."id"
+                  )
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM "jobs" job
+                WHERE job."order_id" = target_order_id
+                  AND taven_job_is_current(job."id")
+                  AND taven_is_claim_reprint_job(job."id")
+            )
         ) OR EXISTS (
             SELECT 1
             FROM "shipments" shipment
@@ -3447,6 +3842,15 @@ BEGIN
                       OR taven_has_scoped_partial_cancellation(
                           target_order_id, shipment."shipment_plan_id"
                       )
+                      OR taven_has_scoped_production_failure_refund(
+                          target_order_id, shipment."shipment_plan_id"
+                      )
+                  )
+              )
+              AND NOT (
+                  shipment."replaces_shipment_id" IS NOT NULL
+                  AND taven_is_claim_reprint(
+                      shipment."replaces_shipment_id", shipment."id"
                   )
               )
               AND NOT EXISTS (
@@ -3454,13 +3858,21 @@ BEGIN
                   FROM "shipments" replacement
                   WHERE replacement."replaces_shipment_id" = shipment."id"
               )
-        ) OR NOT EXISTS (
-            SELECT 1
-            FROM "jobs" job
-            WHERE job."order_id" = target_order_id
-              AND taven_job_is_current(job."id")
-              AND "status" = 'HANDED_OVER'
-              AND "handed_over_at" IS NOT NULL
+        ) OR (
+            NOT EXISTS (
+                SELECT 1
+                FROM "jobs" job
+                WHERE job."order_id" = target_order_id
+                  AND taven_job_is_current(job."id")
+                  AND "status" = 'HANDED_OVER'
+                  AND "handed_over_at" IS NOT NULL
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM "jobs" job
+                WHERE job."order_id" = target_order_id
+                  AND taven_job_is_current(job."id")
+                  AND taven_is_claim_reprint_job(job."id")
+            )
         ) OR EXISTS (
             SELECT 1
             FROM "jobs" job
@@ -3468,15 +3880,24 @@ BEGIN
               AND taven_job_is_current(job."id")
               AND "status" NOT IN ('PACKED', 'HANDED_OVER')
               AND NOT (
-                  "status" = 'CANCELLED'
-                  AND (
-                      taven_has_refunded_post_void_handoff_reconciliation(
-                          target_order_id
-                      )
-                      OR taven_has_scoped_partial_cancellation(
-                          target_order_id, job."shipment_plan_id", job."id"
-                      )
-                  )
+                  ("status" = 'CANCELLED' AND (
+                       taven_has_refunded_post_void_handoff_reconciliation(
+                           target_order_id
+                       )
+                       OR taven_has_scoped_partial_cancellation(
+                           target_order_id, job."shipment_plan_id", job."id"
+                       )
+                   ))
+                  OR ("status" IN ('FAILED', 'QC_REJECTED')
+                      AND (
+                          taven_has_pending_post_handoff_production_failure(
+                              target_order_id, job."id"
+                          )
+                          OR taven_has_scoped_production_failure_refund(
+                              target_order_id, job."shipment_plan_id", job."id"
+                          )
+                      ))
+                  OR taven_is_claim_reprint_job(job."id")
               )
         ) OR EXISTS (
             SELECT 1
@@ -3834,6 +4255,22 @@ BEGIN
         IF NOT FOUND
            OR (scoped_order_id, scoped_phase_id, scoped_plan_id)
               IS DISTINCT FROM (NEW."order_id", NEW."order_phase_id", NEW."shipment_plan_id")
+           OR (NEW."reason" = 'SHIPMENT_LOST' AND (
+                NEW."claim_id" IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM "claims" claim
+                    JOIN "shipments" incident
+                      ON incident."id" = claim."incident_shipment_id"
+                    WHERE claim."id" = NEW."claim_id"
+                      AND claim."origin" = 'SHIPMENT_INCIDENT'
+                      AND claim."order_id" = NEW."order_id"
+                      AND claim."order_phase_id" = NEW."order_phase_id"
+                      AND incident."shipment_plan_id" = NEW."shipment_plan_id"
+                      AND incident."status" = 'LOST'
+                )
+           ))
+           OR (NEW."reason" <> 'SHIPMENT_LOST' AND NEW."claim_id" IS NOT NULL)
            OR (NEW."replacement_job_id" IS NOT NULL AND NOT EXISTS (
                 SELECT 1 FROM "jobs" replacement
                 WHERE replacement."id" = NEW."replacement_job_id"
@@ -3890,6 +4327,24 @@ BEGIN
               AND auth."reshipment_shipment_id" =
                   NEW."replacement_shipment_id"
               AND auth."consumed_at" IS NOT NULL
+        )) OR (NEW."status" IN ('REPLACEMENT_PENDING', 'DELIVERED_REPLACEMENT')
+               AND NOT EXISTS (
+            SELECT 1
+            FROM "replacement_requests" request
+            JOIN "jobs" source ON source."id" = request."source_job_id"
+            JOIN "phase_resource_plan_slots" plan_slot
+              ON plan_slot."phase_resource_plan_job_id" =
+                 source."phase_resource_plan_job_id"
+             AND plan_slot."fulfilment_slot_id" = NEW."fulfilment_slot_id"
+            JOIN "claims" claim ON claim."id" = request."claim_id"
+            JOIN "shipments" incident ON incident."id" = claim."incident_shipment_id"
+            JOIN "shipments" replacement
+              ON replacement."id" = NEW."replacement_shipment_id"
+             AND replacement."replaces_shipment_id" = incident."id"
+            WHERE request."id" = NEW."replacement_request_id"
+              AND request."claim_id" = NEW."claim_id"
+              AND request."reason" = 'SHIPMENT_LOST'
+              AND request."status" = 'JOB_CREATED'
         )) THEN
             RAISE EXCEPTION 'Claim slot resolution must preserve exact order, phase, slot, and Shipment scope'
                 USING ERRCODE = '23514', CONSTRAINT = 'claim_slot_resolution_scope_check';
@@ -3958,7 +4413,29 @@ BEGIN
           ON reservation_set."id" = production."phase_reservation_set_id"
         WHERE replacement."id" = target_job_id
           AND (
-              source."status" NOT IN ('FAILED', 'QC_REJECTED')
+              NOT (
+                  (request."reason" IN ('JOB_FAILED', 'QC_REJECTED')
+                   AND source."status" IN ('FAILED', 'QC_REJECTED'))
+                  OR
+                  (request."reason" = 'SHIPMENT_LOST'
+                   AND source."status" IN ('HANDED_OVER', 'SETTLED')
+                   AND request."claim_id" IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1
+                       FROM "claims" claim
+                       JOIN "shipments" incident
+                         ON incident."id" = claim."incident_shipment_id"
+                       JOIN "job_shipment_assignments" assignment
+                         ON assignment."job_id" = source."id"
+                        AND assignment."shipment_id" = incident."id"
+                       WHERE claim."id" = request."claim_id"
+                         AND claim."origin" = 'SHIPMENT_INCIDENT'
+                         AND claim."status" IN (
+                             'ACTIVE', 'RESOLVED_REPLACEMENT', 'RESOLVED_REFUND'
+                         )
+                         AND incident."status" = 'LOST'
+                   ))
+              )
               OR source."order_id" <> replacement."order_id"
               OR source."order_phase_id" <> replacement."order_phase_id"
               OR source."shipment_plan_id" <> replacement."shipment_plan_id"
@@ -4080,6 +4557,9 @@ BEGIN
                     AND NOT taven_is_consumed_custody_reshipment(
                         shipment."id", successor."id"
                     )
+                    AND NOT taven_is_claim_reprint(
+                        shipment."id", successor."id"
+                    )
               )
               OR (job."status" IN ('HANDED_OVER', 'SETTLED')
                   AND shipment."status" NOT IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'RETURNED', 'RECOVERED'))
@@ -4090,6 +4570,7 @@ BEGIN
         WHERE shipment."order_id" = target_order_id
           AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'RETURNED', 'RECOVERED')
           AND NOT taven_is_consumed_custody_reshipment_shipment(shipment."id")
+          AND NOT taven_is_claim_reprint_predecessor(shipment."id")
           AND NOT EXISTS (
               SELECT 1
               FROM "jobs" job

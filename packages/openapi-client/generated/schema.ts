@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve and create a whole-parcel reprint for a LOST Claim */
+        post: operations["OrdersController_createClaimReprint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reshipment-handoff": {
         parameters: {
             query?: never;
@@ -1112,6 +1129,15 @@ export interface components {
             /** @enum {string} */
             status: "CREATED" | "PENDING" | "CAPTURED" | "FAILED" | "VOIDED" | "REFUND_PENDING" | "PARTIALLY_REFUNDED" | "REFUNDED";
         };
+        ClaimReprintJobDto: {
+            /**
+             * Format: uuid
+             * @description Compatible candidate calculated after the parcel loss with future capacity
+             */
+            candidateResourceEstimateId: string;
+            /** Format: uuid */
+            sourceJobId: string;
+        };
         ConfigureAutomaticQuoteDraftItemDto: {
             bodyIds: string[];
             color?: string;
@@ -1182,6 +1208,11 @@ export interface components {
             /** @enum {string} */
             origin: "SHIPMENT_INCIDENT" | "POST_DELIVERY_QUALITY";
             reason: string;
+        };
+        CreateClaimReprintDto: {
+            /** @description Stable reprint identity; omitted values derive from the command key */
+            planKey?: string;
+            replacements: components["schemas"]["ClaimReprintJobDto"][];
         };
         CreatePriceAdjustmentDto: {
             allocation: components["schemas"]["PriceAdjustmentAllocationDto"];
@@ -1794,6 +1825,42 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["FulfilmentCommandResultDto"];
                 };
+            };
+        };
+    };
+    OrdersController_createClaimReprint: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateClaimReprintDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Claim scope or fresh replacement capacity is unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

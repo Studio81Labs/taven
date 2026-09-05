@@ -58,6 +58,32 @@ export class CreateReplacementDto {
   planKey?: string;
 }
 
+export class ClaimReprintJobDto {
+  @ApiProperty(UUID)
+  sourceJobId!: string;
+
+  @ApiProperty({
+    ...UUID,
+    description:
+      "Compatible candidate calculated after the parcel loss with future capacity",
+  })
+  candidateResourceEstimateId!: string;
+}
+
+export class CreateClaimReprintDto {
+  @ApiProperty({ type: [ClaimReprintJobDto], minItems: 1 })
+  replacements!: ClaimReprintJobDto[];
+
+  @ApiPropertyOptional({
+    type: String,
+    minLength: 1,
+    maxLength: 255,
+    description:
+      "Stable reprint identity; omitted values derive from the command key",
+  })
+  planKey?: string;
+}
+
 export class PackJobDto {
   @ApiProperty(UUID)
   shipmentId!: string;

@@ -113,7 +113,7 @@ describe("OpenAPI artifact", () => {
       ),
     );
 
-    expect(idempotencyHeaders).toHaveLength(36);
+    expect(idempotencyHeaders).toHaveLength(37);
     expect(idempotencyHeaders).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -194,6 +194,7 @@ describe("OpenAPI artifact", () => {
       [`${fulfilmentPrefix}/claims`]: "CreateClaimDto",
       [`${fulfilmentPrefix}/claims/{claimId}/reshipment-handoff`]:
         "HandoffReshipmentDto",
+      [`${fulfilmentPrefix}/claims/{claimId}/reprint`]: "CreateClaimReprintDto",
       [`${fulfilmentPrefix}/cancel`]: "CancelOrderDto",
     };
     for (const [path, schemaName] of Object.entries(requestBodies)) {

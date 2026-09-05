@@ -449,6 +449,7 @@ enum RefundReason {
 enum ReplacementRequestReason {
   JOB_FAILED
   QC_REJECTED
+  SHIPMENT_LOST
 
   @@map("replacement_request_reason")
 }
@@ -2333,6 +2334,7 @@ model ReplacementRequest {
   sourceJobId           String                   @unique @map("source_job_id") @db.Uuid
   replacementJobId      String?                  @unique @map("replacement_job_id") @db.Uuid
   phaseReservationSetId String?                  @unique @map("phase_reservation_set_id") @db.Uuid
+  claimId               String?                  @map("claim_id") @db.Uuid
   reason                ReplacementRequestReason
   status                ReplacementRequestStatus @default(OPEN)
   deadlineAt            DateTime                 @map("deadline_at") @db.Timestamptz(3)
@@ -2346,7 +2348,8 @@ model ReplacementRequest {
   sourceJob           Job                  @relation("ReplacementRequestSourceJob", fields: [sourceJobId], references: [id], onDelete: Restrict)
   replacementJob      Job?                 @relation("ReplacementRequestResultJob", fields: [replacementJobId], references: [id], onDelete: Restrict)
   phaseReservationSet PhaseReservationSet? @relation(fields: [phaseReservationSetId], references: [id], onDelete: Restrict)
-  claimResolution     ClaimSlotResolution?
+  claim               Claim?               @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  claimResolutions    ClaimSlotResolution[]
 
   @@index([orderId, status, deadlineAt])
   @@map("replacement_requests")
@@ -2372,6 +2375,7 @@ model Claim {
   refunds                 RefundTransaction[]
   priceAdjustments        PriceAdjustment[]
   reshipmentAuthorization ReshipmentAuthorization?
+  replacementRequests     ReplacementRequest[]
 
   @@unique([incidentShipmentId], map: "claims_incident_shipment_id_key")
   @@index([orderId, status])
@@ -2414,7 +2418,7 @@ model ClaimSlotResolution {
   id                    String                    @id @default(uuid()) @db.Uuid
   claimId               String                    @map("claim_id") @db.Uuid
   fulfilmentSlotId      String                    @map("fulfilment_slot_id") @db.Uuid
-  replacementRequestId  String?                   @unique @map("replacement_request_id") @db.Uuid
+  replacementRequestId  String?                   @map("replacement_request_id") @db.Uuid
   replacementShipmentId String?                   @map("replacement_shipment_id") @db.Uuid
   status                ClaimSlotResolutionStatus @default(PENDING)
   resolvedAt            DateTime?                 @map("resolved_at") @db.Timestamptz(3)

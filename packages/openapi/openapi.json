@@ -952,6 +952,24 @@
         ],
         "type": "object"
       },
+      "ClaimReprintJobDto": {
+        "properties": {
+          "candidateResourceEstimateId": {
+            "description": "Compatible candidate calculated after the parcel loss with future capacity",
+            "format": "uuid",
+            "type": "string"
+          },
+          "sourceJobId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceJobId",
+          "candidateResourceEstimateId"
+        ],
+        "type": "object"
+      },
       "ConfigureAutomaticQuoteDraftItemDto": {
         "properties": {
           "bodyIds": {
@@ -1214,6 +1232,27 @@
           "origin",
           "reason",
           "fulfilmentSlotIds"
+        ],
+        "type": "object"
+      },
+      "CreateClaimReprintDto": {
+        "properties": {
+          "planKey": {
+            "description": "Stable reprint identity; omitted values derive from the command key",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "replacements": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimReprintJobDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "replacements"
         ],
         "type": "object"
       },
@@ -3153,6 +3192,76 @@
           }
         ],
         "summary": "Credit and refund every unresolved slot in a Claim",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint": {
+      "post": {
+        "operationId": "OrdersController_createClaimReprint",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClaimReprintDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Claim scope or fresh replacement capacity is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reserve and create a whole-parcel reprint for a LOST Claim",
         "tags": [
           "operator fulfilment"
         ]

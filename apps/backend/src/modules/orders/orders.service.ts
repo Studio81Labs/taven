@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
   CancelOrderDto,
+  CreateClaimReprintDto,
   CreateClaimDto,
   CreatePriceAdjustmentDto,
   CreateReplacementDto,
@@ -524,6 +525,83 @@ export class OrdersService {
             data: { status: OrderStatus.RECOVERY_PENDING },
           });
         }
+        if (body.recovery === "REFUND") {
+          const custodyAlreadyTransferred = await tx.shipment.count({
+            where: {
+              orderId,
+              shipmentPlanId: { not: job.shipmentPlanId },
+              status: {
+                in: [
+                  ShipmentStatus.HANDED_OVER,
+                  ShipmentStatus.IN_TRANSIT,
+                  ShipmentStatus.DELIVERED,
+                  ShipmentStatus.LOST,
+                  ShipmentStatus.RETURNED,
+                  ShipmentStatus.RECOVERED,
+                ],
+              },
+              replacementShipment: null,
+            },
+          });
+          if (custodyAlreadyTransferred > 0) {
+            const shipment = await tx.shipment.findFirst({
+              where: {
+                orderId,
+                shipmentPlanId: job.shipmentPlanId,
+                replacementShipment: null,
+              },
+            });
+            if (!shipment) {
+              throw new ConflictException(
+                "Production failure refund requires its exact parcel",
+              );
+            }
+            if (shipment.status === ShipmentStatus.LABEL_CREATED) {
+              await tx.shipment.update({
+                where: { id: shipment.id },
+                data: {
+                  status: ShipmentStatus.CANCELLATION_PENDING,
+                  cancellationRequestedAt: failedAt,
+                },
+              });
+              return result(
+                orderId,
+                "PRODUCTION_FAILURE_LABEL_CANCELLATION_PENDING",
+                {
+                  jobId,
+                  shipmentId: shipment.id,
+                  replacementRequestId: request.id,
+                  recovery: body.recovery,
+                },
+              );
+            }
+            if (shipment.status !== ShipmentStatus.PLANNED) {
+              throw new ConflictException(
+                "Production failure parcel is not refundable before handoff",
+              );
+            }
+            await tx.shipment.update({
+              where: { id: shipment.id },
+              data: { status: ShipmentStatus.CANCELLED, cancelledAt: failedAt },
+            });
+            const refundIds =
+              await this.finalizePostHandoffProductionFailureRefund(
+                tx,
+                orderId,
+                job.shipmentPlanId,
+                request.id,
+                failedAt,
+                key!,
+              );
+            return result(orderId, "PRODUCTION_FAILURE_REFUND_PENDING", {
+              jobId,
+              shipmentId: shipment.id,
+              replacementRequestId: request.id,
+              refundIds,
+              recovery: body.recovery,
+            });
+          }
+        }
         return result(orderId, terminalStatus, {
           jobId,
           replacementRequestId: request.id,
@@ -981,6 +1059,9 @@ export class OrdersService {
           ShipmentStatus.HANDED_OVER,
           ShipmentStatus.IN_TRANSIT,
           ShipmentStatus.DELIVERED,
+          ShipmentStatus.LOST,
+          ShipmentStatus.RETURNED,
+          ShipmentStatus.RECOVERED,
         ];
         const postHandoffVoid = postHandoffStatuses.includes(shipment.status);
         if (existing) {
@@ -1102,19 +1183,49 @@ export class OrdersService {
           },
         });
         if (custodyAlreadyTransferred > 0) {
-          const refundIds = await this.finalizePartialCancellation(
-            tx,
+          const productionFailureRequests =
+            await tx.replacementRequest.findMany({
+              where: {
+                orderId,
+                shipmentPlanId: shipment.shipmentPlanId,
+                status: ReplacementRequestStatus.REFUND_REQUIRED,
+              },
+              select: { id: true },
+            });
+          const productionFailure = productionFailureRequests[0];
+          if (productionFailureRequests.length > 1) {
+            throw new ConflictException(
+              "Production failure parcel has ambiguous refund obligations",
+            );
+          }
+          const refundIds = productionFailure
+            ? await this.finalizePostHandoffProductionFailureRefund(
+                tx,
+                orderId,
+                shipment.shipmentPlanId,
+                productionFailure.id,
+                verifiedAt,
+                key!,
+              )
+            : await this.finalizePartialCancellation(
+                tx,
+                orderId,
+                shipment.shipmentPlanId,
+                verifiedAt,
+                key!,
+              );
+          return result(
             orderId,
-            shipment.shipmentPlanId,
-            verifiedAt,
-            key!,
+            productionFailure
+              ? "LABEL_VOID_CONFIRMED_PRODUCTION_FAILURE_REFUND"
+              : "LABEL_VOID_CONFIRMED_PARTIAL_CANCELLATION",
+            {
+              shipmentId,
+              providerEventId: evidence.providerEventId,
+              providerVoidedAt: verifiedAt,
+              refundIds,
+            },
           );
-          return result(orderId, "LABEL_VOID_CONFIRMED_PARTIAL_CANCELLATION", {
-            shipmentId,
-            providerEventId: evidence.providerEventId,
-            providerVoidedAt: verifiedAt,
-            refundIds,
-          });
         }
         const remainingLiveLabels = await tx.shipment.count({
           where: {
@@ -1411,6 +1522,15 @@ export class OrdersService {
           await tx.reshipmentAuthorization.findUnique({
             where: { reshipmentShipmentId: shipmentId },
           });
+        const reprintResolution = await tx.claimSlotResolution.findFirst({
+          where: {
+            replacementShipmentId: shipmentId,
+            replacementRequest: {
+              reason: ReplacementRequestReason.SHIPMENT_LOST,
+            },
+          },
+          select: { claimId: true },
+        });
         const existing = await tx.shipmentProviderEvent.findUnique({
           where: {
             carrier_providerEventId: {
@@ -1500,6 +1620,46 @@ export class OrdersService {
             ) {
               throw new ConflictException(
                 "Reshipment delivery does not match its active Claim remedy",
+              );
+            }
+          } else if (reprintResolution) {
+            const resolutionCount = await tx.claimSlotResolution.count({
+              where: {
+                claimId: reprintResolution.claimId,
+                replacementShipmentId: shipmentId,
+              },
+            });
+            const deliveredResolutions =
+              await tx.claimSlotResolution.updateMany({
+                where: {
+                  claimId: reprintResolution.claimId,
+                  replacementShipmentId: shipmentId,
+                  status: ClaimSlotResolutionStatus.REPLACEMENT_PENDING,
+                },
+                data: {
+                  status: ClaimSlotResolutionStatus.DELIVERED_REPLACEMENT,
+                  resolvedAt: verifiedAt,
+                  updatedAt: verifiedAt,
+                },
+              });
+            const resolvedClaim = await tx.claim.updateMany({
+              where: {
+                id: reprintResolution.claimId,
+                status: ClaimStatus.ACTIVE,
+              },
+              data: {
+                status: ClaimStatus.RESOLVED_REPLACEMENT,
+                resolvedAt: verifiedAt,
+                updatedAt: verifiedAt,
+              },
+            });
+            if (
+              resolutionCount === 0 ||
+              deliveredResolutions.count !== resolutionCount ||
+              resolvedClaim.count !== 1
+            ) {
+              throw new ConflictException(
+                "Reprint delivery does not match its active Claim remedy",
               );
             }
           }
@@ -1619,6 +1779,33 @@ export class OrdersService {
               ) {
                 throw new ConflictException(
                   "Reshipment incident does not match its active Claim remedy",
+                );
+              }
+            } else if (reprintResolution) {
+              const resolutionCount = await tx.claimSlotResolution.count({
+                where: {
+                  claimId: reprintResolution.claimId,
+                  replacementShipmentId: shipmentId,
+                },
+              });
+              const recoveredResolutions =
+                await tx.claimSlotResolution.updateMany({
+                  where: {
+                    claimId: reprintResolution.claimId,
+                    replacementShipmentId: shipmentId,
+                    status: ClaimSlotResolutionStatus.REPLACEMENT_PENDING,
+                  },
+                  data: {
+                    status: ClaimSlotResolutionStatus.PENDING,
+                    updatedAt: verifiedAt,
+                  },
+                });
+              if (
+                resolutionCount === 0 ||
+                recoveredResolutions.count !== resolutionCount
+              ) {
+                throw new ConflictException(
+                  "Reprint incident does not match its active Claim remedy",
                 );
               }
             } else {
@@ -1822,6 +2009,398 @@ export class OrdersService {
           claimId: claim.id,
           origin,
           fulfilmentSlotIds: slotIds,
+        });
+      },
+    );
+  }
+
+  createClaimReprint(
+    orderId: string,
+    claimId: string,
+    body: CreateClaimReprintDto,
+    key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    assertUuid(claimId, "claimId");
+    if (!Array.isArray(body.replacements) || body.replacements.length === 0) {
+      throw new BadRequestException("replacements is invalid");
+    }
+    const replacements = body.replacements
+      .map(({ sourceJobId, candidateResourceEstimateId }) => {
+        assertUuid(sourceJobId, "sourceJobId");
+        assertUuid(candidateResourceEstimateId, "candidateResourceEstimateId");
+        return { sourceJobId, candidateResourceEstimateId };
+      })
+      .sort((left, right) => left.sourceJobId.localeCompare(right.sourceJobId));
+    if (
+      new Set(replacements.map(({ sourceJobId }) => sourceJobId)).size !==
+        replacements.length ||
+      new Set(
+        replacements.map(
+          ({ candidateResourceEstimateId }) => candidateResourceEstimateId,
+        ),
+      ).size !== replacements.length
+    ) {
+      throw new BadRequestException(
+        "replacements must contain unique source Jobs and candidates",
+      );
+    }
+    const requestedPlanKey = optionalText(body.planKey, "planKey", 255);
+    return this.command(
+      orderId,
+      `claim:${claimId}:reprint`,
+      key,
+      { replacements, planKey: requestedPlanKey ?? null },
+      async (tx) => {
+        const order = await this.lockOrder(tx, orderId);
+        if (order.status !== OrderStatus.SHIPPED) {
+          throw new ConflictException(
+            "Parcel reprint requires a shipped Order",
+          );
+        }
+        await tx.$queryRaw`
+          SELECT id FROM claims
+          WHERE id = ${claimId}::uuid AND order_id = ${orderId}::uuid
+          FOR UPDATE
+        `;
+        const claim = await tx.claim.findFirst({
+          where: { id: claimId, orderId },
+          include: {
+            incidentShipment: true,
+            resolutions: { orderBy: { fulfilmentSlotId: "asc" } },
+          },
+        });
+        if (!claim) throw new NotFoundException("Claim was not found");
+        const original = claim.incidentShipment;
+        if (
+          claim.origin !== ClaimOrigin.SHIPMENT_INCIDENT ||
+          claim.status !== ClaimStatus.OPEN ||
+          !original ||
+          original.status !== ShipmentStatus.LOST
+        ) {
+          throw new ConflictException(
+            "Only an open LOST parcel Claim can authorize a reprint",
+          );
+        }
+        await tx.$queryRaw`
+          SELECT id FROM fulfilment_slots
+          WHERE order_id = ${orderId}::uuid
+          ORDER BY id
+          FOR UPDATE
+        `;
+        await tx.$queryRaw`
+          SELECT id FROM claim_slot_resolutions
+          WHERE claim_id = ${claimId}::uuid
+          ORDER BY id
+          FOR UPDATE
+        `;
+        const planSlotIds = (
+          await tx.shipmentPlanFulfilmentSlot.findMany({
+            where: { shipmentPlanId: original.shipmentPlanId },
+            select: { fulfilmentSlotId: true },
+            orderBy: { fulfilmentSlotId: "asc" },
+          })
+        ).map(({ fulfilmentSlotId }) => fulfilmentSlotId);
+        const claimedSlotIds = claim.resolutions.map(
+          ({ fulfilmentSlotId }) => fulfilmentSlotId,
+        );
+        const successorCount = await tx.shipment.count({
+          where: { replacesShipmentId: original.id },
+        });
+        const financialWork =
+          (await tx.refundTransaction.count({ where: { claimId } })) +
+          (await tx.priceAdjustment.count({ where: { claimId } }));
+        if (
+          successorCount !== 0 ||
+          financialWork !== 0 ||
+          planSlotIds.length === 0 ||
+          planSlotIds.length !== claimedSlotIds.length ||
+          planSlotIds.some(
+            (slotId, index) => slotId !== claimedSlotIds[index],
+          ) ||
+          claim.resolutions.some(
+            ({ status, replacementRequestId, replacementShipmentId }) =>
+              status !== ClaimSlotResolutionStatus.PENDING ||
+              replacementRequestId !== null ||
+              replacementShipmentId !== null,
+          )
+        ) {
+          throw new ConflictException(
+            "Parcel reprint requires the whole unresolved LOST Claim",
+          );
+        }
+        const pendingSlots = await tx.fulfilmentSlot.count({
+          where: { id: { in: planSlotIds }, orderId, outcome: "PENDING" },
+        });
+        if (pendingSlots !== planSlotIds.length) {
+          throw new ConflictException(
+            "Parcel reprint requires unresolved fulfilment slots",
+          );
+        }
+        const sourceJobs = await tx.job.findMany({
+          where: {
+            orderId,
+            orderPhaseId: original.orderPhaseId,
+            shipmentPlanId: original.shipmentPlanId,
+            replacementJob: null,
+          },
+          include: {
+            shipmentAssignment: true,
+            phaseResourcePlanJob: {
+              include: {
+                candidateResourceEstimate: true,
+                slots: { orderBy: { fulfilmentSlotId: "asc" } },
+              },
+            },
+          },
+          orderBy: { id: "asc" },
+        });
+        if (
+          sourceJobs.length === 0 ||
+          sourceJobs.length !== replacements.length ||
+          sourceJobs.some(
+            ({ id, status, shipmentAssignment }) =>
+              ![JobStatus.HANDED_OVER, JobStatus.SETTLED].includes(
+                status as
+                  typeof JobStatus.HANDED_OVER | typeof JobStatus.SETTLED,
+              ) ||
+              shipmentAssignment?.shipmentId !== original.id ||
+              !replacements.some(({ sourceJobId }) => sourceJobId === id),
+          )
+        ) {
+          throw new ConflictException(
+            "Parcel reprint requires every original handed-over Job",
+          );
+        }
+        const sourceSlotIds = sourceJobs
+          .flatMap(({ phaseResourcePlanJob }) =>
+            phaseResourcePlanJob.slots.map(
+              ({ fulfilmentSlotId }) => fulfilmentSlotId,
+            ),
+          )
+          .sort();
+        if (
+          sourceSlotIds.length !== planSlotIds.length ||
+          new Set(sourceSlotIds).size !== sourceSlotIds.length ||
+          sourceSlotIds.some((slotId, index) => slotId !== planSlotIds[index])
+        ) {
+          throw new ConflictException(
+            "Original Jobs do not form the exact parcel slot partition",
+          );
+        }
+        const nodeIds = new Set(sourceJobs.map(({ nodeId }) => nodeId));
+        if (nodeIds.size !== 1) {
+          throw new ConflictException(
+            "A v0 parcel reprint must be reserved on one production node",
+          );
+        }
+        const now = await databaseNow(tx);
+        const commandDigest = createHash("sha256")
+          .update(`${claimId}\0${requestedPlanKey ?? key ?? "claim-reprint"}`)
+          .digest("hex");
+        const successor = await tx.shipment.create({
+          data: {
+            orderId,
+            orderPhaseId: original.orderPhaseId,
+            shipmentPlanId: original.shipmentPlanId,
+            deliveryDestinationId: original.deliveryDestinationId,
+            replacesShipmentId: original.id,
+          },
+        });
+        const replacementJobs: Array<{
+          sourceJobId: string;
+          replacementJobId: string;
+          replacementRequestId: string;
+          phaseReservationSetId: string;
+        }> = [];
+        for (const [index, source] of sourceJobs.entries()) {
+          const replacementInput = replacements.find(
+            ({ sourceJobId }) => sourceJobId === source.id,
+          )!;
+          const sourcePlanJob = source.phaseResourcePlanJob;
+          const candidate = await tx.candidateResourceEstimate.findFirst({
+            where: {
+              id: {
+                equals: replacementInput.candidateResourceEstimateId,
+                not: sourcePlanJob.candidateResourceEstimateId,
+              },
+              nodeId: source.nodeId,
+              shipmentPlanId: source.shipmentPlanId,
+              modelGeometryId:
+                sourcePlanJob.candidateResourceEstimate.modelGeometryId,
+              printConfigRevisionId:
+                sourcePlanJob.candidateResourceEstimate.printConfigRevisionId,
+              quantity: sourcePlanJob.candidateResourceEstimate.quantity,
+              calculatedAt: { gte: claim.openedAt },
+            },
+            include: { capacityIntervals: true },
+          });
+          if (
+            !candidate ||
+            candidate.capacityIntervals.length === 0 ||
+            candidate.capacityIntervals.some(
+              (interval) =>
+                interval.startsAt.getTime() <= now.getTime() ||
+                interval.endsAt.getTime() > candidate.expiresAt.getTime(),
+            )
+          ) {
+            throw new ConflictException(
+              "Parcel reprint requires freshly calculated compatible candidates with future capacity",
+            );
+          }
+          const expiresAt = new Date(
+            Math.min(
+              candidate.expiresAt.getTime(),
+              now.getTime() + 30 * 60 * 1_000,
+            ),
+          );
+          if (expiresAt.getTime() <= now.getTime() + 15 * 60 * 1_000) {
+            throw new ConflictException(
+              "Parcel reprint candidate is stale; refresh resource estimates",
+            );
+          }
+          const jobDigest = createHash("sha256")
+            .update(`${commandDigest}\0${source.id}\0${index}`)
+            .digest("hex");
+          const slotIds = sourcePlanJob.slots.map(
+            ({ fulfilmentSlotId }) => fulfilmentSlotId,
+          );
+          const snapshot = await tx.eligibilitySnapshot.create({
+            data: {
+              nodeId: source.nodeId,
+              orderPhaseId: source.orderPhaseId,
+              requiredFulfilmentSlotIds: slotIds,
+              eligibleCandidateEstimateIds: [candidate.id],
+              snapshotHash: createHash("sha256")
+                .update(`claim-reprint-snapshot\0${jobDigest}`)
+                .digest("hex"),
+              calculatedAt: now,
+              expiresAt,
+            },
+          });
+          const plan = await tx.phaseResourcePlan.create({
+            data: {
+              nodeId: source.nodeId,
+              orderPhaseId: source.orderPhaseId,
+              eligibilitySnapshotId: snapshot.id,
+              planKey: `claim-reprint-plan:${jobDigest}`,
+              expiresAt,
+            },
+          });
+          const planJob = await tx.phaseResourcePlanJob.create({
+            data: {
+              nodeId: source.nodeId,
+              phaseResourcePlanId: plan.id,
+              candidateResourceEstimateId: candidate.id,
+              plannedJobKey: `claim-reprint:${jobDigest}`,
+            },
+          });
+          await tx.phaseResourcePlanSlot.createMany({
+            data: slotIds.map((fulfilmentSlotId) => ({
+              nodeId: source.nodeId,
+              phaseResourcePlanId: plan.id,
+              phaseResourcePlanJobId: planJob.id,
+              fulfilmentSlotId,
+            })),
+          });
+          const reservationRows = await tx.$queryRaw<
+            Array<{ phase_reservation_set_id: string }>
+          >`
+            SELECT phase_reservation_set_id
+            FROM taven_create_phase_reservation(
+              ${source.nodeId}::uuid, ${plan.id}::uuid,
+              ${`claim-reprint-reservation:${jobDigest}`}
+            )
+          `;
+          const phaseReservationSetId =
+            reservationRows[0]?.phase_reservation_set_id;
+          if (!phaseReservationSetId) {
+            throw new ConflictException(
+              "Parcel reprint reservation was not created",
+            );
+          }
+          const replacementJob = await tx.job.create({
+            data: {
+              nodeId: source.nodeId,
+              orderId,
+              orderPhaseId: source.orderPhaseId,
+              shipmentPlanId: source.shipmentPlanId,
+              phaseResourcePlanJobId: planJob.id,
+              replacesJobId: source.id,
+            },
+          });
+          await tx.inventoryReservation.updateMany({
+            where: {
+              productionReservation: { phaseReservationSetId },
+              status: "RESERVED",
+            },
+            data: { status: "HELD", updatedAt: now },
+          });
+          await tx.capacityReservation.updateMany({
+            where: {
+              productionReservation: { phaseReservationSetId },
+              status: "RESERVED",
+            },
+            data: { status: "HELD", updatedAt: now },
+          });
+          await tx.productionReservation.updateMany({
+            where: { phaseReservationSetId },
+            data: {
+              status: "HELD",
+              jobId: replacementJob.id,
+              updatedAt: now,
+            },
+          });
+          await tx.phaseReservationSet.update({
+            where: { id: phaseReservationSetId },
+            data: { status: "HELD", updatedAt: now },
+          });
+          const request = await tx.replacementRequest.create({
+            data: {
+              orderId,
+              orderPhaseId: source.orderPhaseId,
+              shipmentPlanId: source.shipmentPlanId,
+              sourceJobId: source.id,
+              replacementJobId: replacementJob.id,
+              phaseReservationSetId,
+              claimId,
+              reason: ReplacementRequestReason.SHIPMENT_LOST,
+              status: ReplacementRequestStatus.JOB_CREATED,
+              deadlineAt: addDays(now, 2),
+            },
+          });
+          const updated = await tx.claimSlotResolution.updateMany({
+            where: {
+              claimId,
+              fulfilmentSlotId: { in: slotIds },
+              status: ClaimSlotResolutionStatus.PENDING,
+            },
+            data: {
+              status: ClaimSlotResolutionStatus.REPLACEMENT_PENDING,
+              replacementRequestId: request.id,
+              replacementShipmentId: successor.id,
+            },
+          });
+          if (updated.count !== slotIds.length) {
+            throw new ConflictException(
+              "Parcel reprint Job does not match the Claim slot partition",
+            );
+          }
+          replacementJobs.push({
+            sourceJobId: source.id,
+            replacementJobId: replacementJob.id,
+            replacementRequestId: request.id,
+            phaseReservationSetId,
+          });
+        }
+        await tx.claim.update({
+          where: { id: claimId },
+          data: { status: ClaimStatus.ACTIVE },
+        });
+        return result(orderId, "CLAIM_REPRINT_CREATED", {
+          claimId,
+          originalShipmentId: original.id,
+          replacementShipmentId: successor.id,
+          replacementJobs,
         });
       },
     );
@@ -2513,7 +3092,7 @@ export class OrdersService {
           include: {
             resolutions: {
               where: { status: ClaimSlotResolutionStatus.PENDING },
-              include: { fulfilmentSlot: true },
+              include: { fulfilmentSlot: true, replacementShipment: true },
               orderBy: { fulfilmentSlotId: "asc" },
             },
             reshipmentAuthorization: {
@@ -2535,9 +3114,28 @@ export class OrdersService {
               | typeof ShipmentStatus.RETURNED
               | typeof ShipmentStatus.RECOVERED,
           );
+        const reprintIncidentRefundable =
+          claim.status === ClaimStatus.ACTIVE &&
+          claim.resolutions.length > 0 &&
+          claim.resolutions.every(
+            ({ replacementRequestId, replacementShipment }) =>
+              replacementRequestId !== null &&
+              replacementShipment !== null &&
+              [
+                ShipmentStatus.LOST,
+                ShipmentStatus.RETURNED,
+                ShipmentStatus.RECOVERED,
+              ].includes(
+                replacementShipment.status as
+                  | typeof ShipmentStatus.LOST
+                  | typeof ShipmentStatus.RETURNED
+                  | typeof ShipmentStatus.RECOVERED,
+              ),
+          );
         if (
           (claim.status !== ClaimStatus.OPEN &&
-            !reshipmentIncidentRefundable) ||
+            !reshipmentIncidentRefundable &&
+            !reprintIncidentRefundable) ||
           claim.resolutions.length === 0
         ) {
           throw new ConflictException("Claim is not awaiting a remedy");
@@ -3188,6 +3786,271 @@ export class OrdersService {
       where: { id: orderId },
       data: { status: OrderStatus.SHIPPED, updatedAt: reconciledAt },
     });
+  }
+
+  private async finalizePostHandoffProductionFailureRefund(
+    tx: Transaction,
+    orderId: string,
+    shipmentPlanId: string,
+    replacementRequestId: string,
+    at: Date,
+    key: string,
+  ): Promise<string[]> {
+    const request = await tx.replacementRequest.findFirst({
+      where: {
+        id: replacementRequestId,
+        orderId,
+        shipmentPlanId,
+        status: ReplacementRequestStatus.REFUND_REQUIRED,
+      },
+      include: {
+        sourceJob: {
+          include: {
+            phaseResourcePlanJob: {
+              include: { slots: true },
+            },
+          },
+        },
+      },
+    });
+    if (
+      !request ||
+      ![JobStatus.FAILED, JobStatus.QC_REJECTED].includes(
+        request.sourceJob.status as
+          typeof JobStatus.FAILED | typeof JobStatus.QC_REJECTED,
+      )
+    ) {
+      throw new ConflictException(
+        "Production failure refund obligation is not active",
+      );
+    }
+    const currentJobs = await tx.job.findMany({
+      where: { orderId, shipmentPlanId, replacementJob: null },
+      select: { id: true },
+    });
+    const planSlotIds = (
+      await tx.shipmentPlanFulfilmentSlot.findMany({
+        where: { shipmentPlanId },
+        select: { fulfilmentSlotId: true },
+        orderBy: { fulfilmentSlotId: "asc" },
+      })
+    ).map(({ fulfilmentSlotId }) => fulfilmentSlotId);
+    const jobSlotIds = request.sourceJob.phaseResourcePlanJob.slots
+      .map(({ fulfilmentSlotId }) => fulfilmentSlotId)
+      .sort();
+    const shipment = await tx.shipment.findFirst({
+      where: {
+        orderId,
+        shipmentPlanId,
+        status: ShipmentStatus.CANCELLED,
+        replacementShipment: null,
+      },
+    });
+    if (
+      !shipment ||
+      currentJobs.length !== 1 ||
+      currentJobs[0]?.id !== request.sourceJobId ||
+      planSlotIds.length === 0 ||
+      planSlotIds.length !== jobSlotIds.length ||
+      planSlotIds.some((slotId, index) => slotId !== jobSlotIds[index])
+    ) {
+      throw new ConflictException(
+        "Production failure refund requires one exact whole-parcel Job scope",
+      );
+    }
+    const slots = await tx.fulfilmentSlot.findMany({
+      where: { id: { in: planSlotIds }, orderId, outcome: "PENDING" },
+      select: { id: true, settlementAmountMinor: true },
+      orderBy: { id: "asc" },
+    });
+    if (slots.length !== planSlotIds.length) {
+      throw new ConflictException(
+        "Production failure refund requires pending parcel slots",
+      );
+    }
+    const priorAdjustments = await tx.priceAdjustment.findMany({
+      where: { orderId },
+      include: {
+        refunds: {
+          where: { status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] } },
+          select: { amountMinor: true },
+        },
+      },
+    });
+    const creditedBySlot = new Map<string, bigint>();
+    for (const adjustment of priorAdjustments) {
+      for (const credit of priceAdjustmentSlotCredits(
+        adjustment.allocation,
+        false,
+      )) {
+        creditedBySlot.set(
+          credit.fulfilmentSlotId,
+          (creditedBySlot.get(credit.fulfilmentSlotId) ?? 0n) +
+            credit.amountMinor,
+        );
+      }
+    }
+    const slotCredits = slots.flatMap((slot) => {
+      const remaining =
+        slot.settlementAmountMinor - (creditedBySlot.get(slot.id) ?? 0n);
+      if (remaining < 0n) {
+        throw new ConflictException(
+          "Prior credits exceed a failed fulfilment Slot value",
+        );
+      }
+      return remaining === 0n
+        ? []
+        : [{ fulfilmentSlotId: slot.id, amountMinor: remaining }];
+    });
+    const amountMinor = slotCredits.reduce(
+      (total, credit) => total + credit.amountMinor,
+      0n,
+    );
+    if (amountMinor <= 0n) {
+      throw new ConflictException(
+        "Production failure parcel has no refundable contract value",
+      );
+    }
+    const payments = await tx.payment.findMany({
+      where: { orderId, capturedAmountMinor: { not: null } },
+      include: {
+        refunds: {
+          where: { status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] } },
+        },
+      },
+      orderBy: [{ capturedAt: "asc" }, { id: "asc" }],
+    });
+    const currency = payments[0]?.currency;
+    if (
+      !currency ||
+      payments.some((payment) => payment.currency !== currency)
+    ) {
+      throw new ConflictException(
+        "Production failure payment currency is unavailable",
+      );
+    }
+    const reservedAdjustments = priorAdjustments.reduce((total, adjustment) => {
+      const committed = adjustment.refunds.reduce(
+        (sum, refund) => sum + refund.amountMinor,
+        0n,
+      );
+      const outstanding = adjustment.amountMinor - committed;
+      return total + (outstanding > 0n ? outstanding : 0n);
+    }, 0n);
+    const available =
+      payments.reduce(
+        (total, payment) =>
+          total +
+          payment.capturedAmountMinor! -
+          payment.refunds.reduce((sum, refund) => sum + refund.amountMinor, 0n),
+        0n,
+      ) - reservedAdjustments;
+    if (available < amountMinor) {
+      throw new ConflictException(
+        "Production failure refund exceeds the refundable balance",
+      );
+    }
+    const adjustment = await tx.priceAdjustment.create({
+      data: {
+        orderId,
+        idempotencyKey: persistenceKey(
+          "production-failure-adjustment",
+          orderId,
+          replacementRequestId,
+          key,
+        ),
+        reason: PriceAdjustmentReason.PRODUCTION_FAILURE,
+        amountMinor,
+        currency,
+        allocation: {
+          shipmentPlanId,
+          replacementRequestId,
+          slotCredits: slotCredits.map((credit) => ({
+            fulfilmentSlotId: credit.fulfilmentSlotId,
+            amountMinor: credit.amountMinor.toString(),
+          })),
+        },
+      },
+    });
+    await tx.fulfilmentSlot.updateMany({
+      where: { id: { in: planSlotIds } },
+      data: { outcome: "CANCELLED", updatedAt: at },
+    });
+    await tx.replacementRequest.update({
+      where: { id: request.id },
+      data: {
+        status: ReplacementRequestStatus.RESOLVED,
+        resolvedAt: at,
+      },
+    });
+    let remaining = amountMinor;
+    let unboundReserved = priorAdjustments.reduce((total, prior) => {
+      if (prior.paymentId) return total;
+      const committed = prior.refunds.reduce(
+        (sum, refund) => sum + refund.amountMinor,
+        0n,
+      );
+      const outstanding = prior.amountMinor - committed;
+      return total + (outstanding > 0n ? outstanding : 0n);
+    }, 0n);
+    const refundIds: string[] = [];
+    for (const payment of payments) {
+      if (remaining === 0n) break;
+      const allocated = payment.refunds.reduce(
+        (sum, refund) => sum + refund.amountMinor,
+        0n,
+      );
+      const selectedReserved = priorAdjustments.reduce((total, prior) => {
+        if (prior.paymentId !== payment.id) return total;
+        const committed = prior.refunds.reduce(
+          (sum, refund) => sum + refund.amountMinor,
+          0n,
+        );
+        const outstanding = prior.amountMinor - committed;
+        return total + (outstanding > 0n ? outstanding : 0n);
+      }, 0n);
+      let paymentAvailable =
+        payment.capturedAmountMinor! - allocated - selectedReserved;
+      const unboundForPayment =
+        paymentAvailable <= 0n
+          ? 0n
+          : paymentAvailable < unboundReserved
+            ? paymentAvailable
+            : unboundReserved;
+      paymentAvailable -= unboundForPayment;
+      unboundReserved -= unboundForPayment;
+      if (paymentAvailable <= 0n) continue;
+      const refundAmount =
+        paymentAvailable < remaining ? paymentAvailable : remaining;
+      const refund = await tx.refundTransaction.create({
+        data: {
+          paymentId: payment.id,
+          priceAdjustmentId: adjustment.id,
+          provider: payment.provider,
+          idempotencyKey: persistenceKey(
+            "production-failure-refund",
+            adjustment.id,
+            key,
+            payment.id,
+          ),
+          amountMinor: refundAmount,
+          reason: RefundReason.PRODUCTION_FAILURE,
+          requestedAt: at,
+        },
+      });
+      refundIds.push(refund.id);
+      remaining -= refundAmount;
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: "REFUND_PENDING", updatedAt: at },
+      });
+    }
+    if (remaining !== 0n) {
+      throw new ConflictException(
+        "Production failure refund allocation is incomplete",
+      );
+    }
+    return refundIds;
   }
 
   private async finalizePartialCancellation(

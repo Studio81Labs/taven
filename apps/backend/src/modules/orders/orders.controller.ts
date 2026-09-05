@@ -22,6 +22,7 @@ import {
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
 import {
   CancelOrderDto,
+  CreateClaimReprintDto,
   CreateClaimDto,
   CreatePriceAdjustmentDto,
   CreateReplacementDto,
@@ -366,6 +367,28 @@ export class OrdersController {
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
     return this.orders.handoffReshipment(orderId, claimId, body, key);
+  }
+
+  @Post("claims/:claimId/reprint")
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Reserve and create a whole-parcel reprint for a LOST Claim",
+  })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(CLAIM_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreateClaimReprintDto })
+  @ApiConflictResponse({
+    description: "Claim scope or fresh replacement capacity is unavailable",
+  })
+  @ApiOkResponse({ type: FulfilmentCommandResultDto })
+  createClaimReprint(
+    @Param("orderId") orderId: string,
+    @Param("claimId") claimId: string,
+    @Body() body: CreateClaimReprintDto,
+    @Headers("idempotency-key") key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    return this.orders.createClaimReprint(orderId, claimId, body, key);
   }
 
   @Post("claims/:claimId/refund")
