@@ -967,30 +967,41 @@ export class OrdersService {
             },
           },
         });
-        if (shipment.status === ShipmentStatus.CANCELLED && existing) {
+        const postHandoffStatuses: ShipmentStatus[] = [
+          ShipmentStatus.HANDED_OVER,
+          ShipmentStatus.IN_TRANSIT,
+          ShipmentStatus.DELIVERED,
+        ];
+        const postHandoffVoid = postHandoffStatuses.includes(shipment.status);
+        if (existing) {
           if (
             existing.shipmentId !== shipmentId ||
             existing.kind !== ShipmentProviderEventKind.LABEL_VOIDED ||
             existing.providerTransactionId !== evidence.providerTransactionId ||
-            existing.occurredAt.getTime() !== evidence.occurredAt.getTime()
+            existing.occurredAt.getTime() !== evidence.occurredAt.getTime() ||
+            (shipment.status !== ShipmentStatus.CANCELLED && !postHandoffVoid)
           ) {
             throw new ConflictException(
               "Provider event identity is already bound to different evidence",
             );
           }
-          return result(orderId, "LABEL_VOID_ALREADY_APPLIED", {
-            shipmentId,
-            providerEventId: evidence.providerEventId,
-          });
-        }
-        if (shipment.status !== ShipmentStatus.CANCELLATION_PENDING) {
-          throw new ConflictException(
-            "Shipment is not awaiting provider label cancellation",
+          return result(
+            orderId,
+            shipment.status === ShipmentStatus.CANCELLED
+              ? "LABEL_VOID_ALREADY_APPLIED"
+              : "LABEL_VOID_ALREADY_RECORDED_AFTER_HANDOFF",
+            {
+              shipmentId,
+              providerEventId: evidence.providerEventId,
+            },
           );
         }
-        if (existing) {
+        if (
+          shipment.status !== ShipmentStatus.CANCELLATION_PENDING &&
+          !postHandoffVoid
+        ) {
           throw new ConflictException(
-            "Provider event identity is already bound to different evidence",
+            "Shipment is not awaiting provider label cancellation",
           );
         }
         const outbox = await tx.outboxMessage.findUnique({
@@ -1006,13 +1017,21 @@ export class OrdersService {
         ) {
           throw new ConflictException("Carrier label void command is missing");
         }
-        const verifiedAt = await databaseNow(tx);
         if (outbox.status === "SUPERSEDED") {
           throw new ConflictException(
             "Carrier label void command was superseded",
           );
         }
-        if (outbox.status !== "DELIVERED") {
+        if (
+          postHandoffVoid &&
+          (outbox.status !== "DELIVERED" || !outbox.deliveredAt)
+        ) {
+          throw new ConflictException(
+            "Carrier label void command has not been delivered",
+          );
+        }
+        const verifiedAt = await databaseNow(tx);
+        if (!postHandoffVoid && outbox.status !== "DELIVERED") {
           await tx.outboxMessage.update({
             where: { id: outbox.id },
             data: {
@@ -1033,12 +1052,19 @@ export class OrdersService {
             providerEventId: evidence.providerEventId,
             providerTransactionId: evidence.providerTransactionId,
             kind: ShipmentProviderEventKind.LABEL_VOIDED,
-            sourceShipmentStatus: ShipmentStatus.CANCELLATION_PENDING,
+            sourceShipmentStatus: shipment.status,
             occurredAt: evidence.occurredAt,
             authenticatedAt: verifiedAt,
             verifiedAt,
           },
         });
+        if (postHandoffVoid) {
+          return result(orderId, "LABEL_VOID_RECORDED_AFTER_HANDOFF", {
+            shipmentId,
+            providerEventId: evidence.providerEventId,
+            verifiedAt,
+          });
+        }
         await tx.shipment.update({
           where: { id: shipmentId },
           data: {
@@ -1197,21 +1223,23 @@ export class OrdersService {
             voidCommand.aggregateType !== "Shipment" ||
             voidCommand.aggregateId !== shipmentId ||
             voidCommand.messageType !== "void_carrier_label" ||
-            voidCommand.status === "DELIVERED"
+            voidCommand.status === "SUPERSEDED"
           ) {
             throw new ConflictException(
               "Carrier label void command cannot be superseded",
             );
           }
-          await tx.outboxMessage.update({
-            where: { id: voidCommand.id },
-            data: {
-              status: "SUPERSEDED",
-              lockedAt: null,
-              lastError: `superseded by carrier acceptance scan ${evidence.providerEventId}`,
-              updatedAt: verifiedAt,
-            },
-          });
+          if (voidCommand.status !== "DELIVERED") {
+            await tx.outboxMessage.update({
+              where: { id: voidCommand.id },
+              data: {
+                status: "SUPERSEDED",
+                lockedAt: null,
+                lastError: `superseded by carrier acceptance scan ${evidence.providerEventId}`,
+                updatedAt: verifiedAt,
+              },
+            });
+          }
         }
         await tx.shipmentProviderEvent.create({
           data: {
@@ -1658,9 +1686,13 @@ export class OrdersService {
       async (tx) => {
         await this.lockOrder(tx, orderId);
         const slotCredits =
-          reason === PriceAdjustmentReason.EXPRESS_BREACH &&
-          requestedSlotCredits.length === 0
-            ? await this.expressAdjustmentSlotCredits(tx, orderId, amountMinor)
+          reason === PriceAdjustmentReason.EXPRESS_BREACH
+            ? await this.expressAdjustmentSlotCredits(
+                tx,
+                orderId,
+                amountMinor,
+                requestedSlotCredits,
+              )
             : requestedSlotCredits;
         const allocation = {
           ...body.allocation,
@@ -2489,48 +2521,102 @@ export class OrdersService {
     tx: Transaction,
     orderId: string,
     amountMinor: bigint,
+    requestedSlotCredits: PriceAdjustmentSlotCredit[],
   ): Promise<PriceAdjustmentSlotCredit[]> {
     const targets = await tx.$queryRaw<
-      Array<{ fulfilmentSlotId: string; basisMinor: bigint; currency: string }>
+      Array<{
+        fulfilmentSlotId: string;
+        basisMinor: bigint;
+        creditedMinor: bigint;
+        currency: string;
+      }>
     >`
-      SELECT allocation.fulfilment_slot_id AS "fulfilmentSlotId",
-             sum(allocation.amount_minor)::bigint AS "basisMinor",
-             snapshot.currency
-      FROM order_active_price_bindings active_binding
-      JOIN order_price_bindings binding
-        ON binding.id = active_binding.order_price_binding_id
-       AND binding.order_id = active_binding.order_id
-      JOIN price_snapshots snapshot
-        ON snapshot.id = binding.price_snapshot_id
-      JOIN price_snapshot_components component
-        ON component.price_snapshot_id = snapshot.id
-       AND component.kind = 'EXPRESS'
-      JOIN price_component_fulfilment_allocations allocation
-        ON allocation.price_snapshot_component_id = component.id
-      WHERE active_binding.order_id = ${orderId}::uuid
-      GROUP BY allocation.fulfilment_slot_id, snapshot.currency
-      ORDER BY allocation.fulfilment_slot_id
+      WITH express_allocations AS (
+        SELECT allocation.fulfilment_slot_id,
+               sum(allocation.amount_minor)::bigint AS basis_minor,
+               snapshot.currency
+        FROM order_active_price_bindings active_binding
+        JOIN order_price_bindings binding
+          ON binding.id = active_binding.order_price_binding_id
+         AND binding.order_id = active_binding.order_id
+        JOIN price_snapshots snapshot
+          ON snapshot.id = binding.price_snapshot_id
+        JOIN price_snapshot_components component
+          ON component.price_snapshot_id = snapshot.id
+         AND component.kind = 'EXPRESS'
+        JOIN price_component_fulfilment_allocations allocation
+          ON allocation.price_snapshot_component_id = component.id
+        WHERE active_binding.order_id = ${orderId}::uuid
+        GROUP BY allocation.fulfilment_slot_id, snapshot.currency
+      ), prior_credits AS (
+        SELECT (credit.value ->> 'fulfilmentSlotId')::uuid AS fulfilment_slot_id,
+               sum((credit.value ->> 'amountMinor')::bigint)::bigint AS credited_minor
+        FROM price_adjustments adjustment
+        CROSS JOIN LATERAL jsonb_array_elements(
+          coalesce(adjustment.allocation -> 'slotCredits', '[]'::jsonb)
+        ) credit(value)
+        WHERE adjustment.order_id = ${orderId}::uuid
+          AND adjustment.reason = 'EXPRESS_BREACH'
+        GROUP BY (credit.value ->> 'fulfilmentSlotId')::uuid
+      )
+      SELECT express.fulfilment_slot_id AS "fulfilmentSlotId",
+             express.basis_minor AS "basisMinor",
+             coalesce(prior.credited_minor, 0)::bigint AS "creditedMinor",
+             express.currency
+      FROM express_allocations express
+      LEFT JOIN prior_credits prior
+        ON prior.fulfilment_slot_id = express.fulfilment_slot_id
+      ORDER BY express.fulfilment_slot_id
     `;
-    const totalBasis = targets.reduce(
-      (total, target) => total + target.basisMinor,
-      0n,
-    );
     const currency = targets[0]?.currency;
     if (
       !currency ||
       targets.some((target) => target.currency !== currency) ||
-      totalBasis <= 0n
+      targets.some(
+        (target) =>
+          target.basisMinor <= 0n ||
+          target.creditedMinor < 0n ||
+          target.creditedMinor > target.basisMinor,
+      )
     ) {
       throw new ConflictException("Order has no allocated express surcharge");
     }
-    const { allocateMoney, Money } = await import("@taven/core");
-    return allocateMoney(
-      Money.of(amountMinor, currency),
-      targets.map((target) => ({
+    const remainingBySlot = new Map(
+      targets.map((target) => [
+        target.fulfilmentSlotId,
+        target.basisMinor - target.creditedMinor,
+      ]),
+    );
+    if (requestedSlotCredits.length > 0) {
+      if (
+        requestedSlotCredits.some(
+          (credit) =>
+            !remainingBySlot.has(credit.fulfilmentSlotId) ||
+            credit.amountMinor > remainingBySlot.get(credit.fulfilmentSlotId)!,
+        )
+      ) {
+        throw new ConflictException(
+          "Price adjustment exceeds the remaining allocated express surcharge",
+        );
+      }
+      return requestedSlotCredits;
+    }
+    const remainingTargets = targets
+      .map((target) => ({
         id: target.fulfilmentSlotId,
-        basis: target.basisMinor,
-      })),
-    )
+        basis: target.basisMinor - target.creditedMinor,
+      }))
+      .filter((target) => target.basis > 0n);
+    if (
+      amountMinor >
+      remainingTargets.reduce((total, target) => total + target.basis, 0n)
+    ) {
+      throw new ConflictException(
+        "Price adjustment exceeds the remaining allocated express surcharge",
+      );
+    }
+    const { allocateMoney, Money } = await import("@taven/core");
+    return allocateMoney(Money.of(amountMinor, currency), remainingTargets)
       .filter((allocation) => allocation.amount.minorUnits > 0n)
       .map((allocation) => ({
         fulfilmentSlotId: allocation.targetId,

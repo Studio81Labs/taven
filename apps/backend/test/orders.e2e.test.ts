@@ -404,22 +404,19 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const fixture = await preparePaidOrder("replacement");
     const { orderId } = fixture.foundation;
     const sourceJobId = fixture.productions[0]!.jobId;
-    await orders.acceptJob(orderId, sourceJobId, "replacement-accept");
-    await makeGcodeReady(sourceJobId);
-    await orders.startPrinting(orderId, sourceJobId, "replacement-printing");
-    await orders.finishPrinting(
-      orderId,
-      sourceJobId,
-      { actualMaterialMilligrams: "50" },
-      "replacement-printed",
-    );
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    const sourceAssignment =
+      await prisma.jobShipmentAssignment.findUniqueOrThrow({
+        where: { jobId: sourceJobId },
+      });
 
     const failure = await orders.failJob(
       orderId,
       sourceJobId,
       {
-        stage: "POST_PRINT",
-        reason: "printed part failed dimensional inspection",
+        stage: "PACKING",
+        reason: "packed part failed final dimensional inspection",
         recovery: "REPLACE",
       },
       "replacement-failure",
@@ -502,10 +499,25 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       replacementJobId,
       "replacement-job-qc-approve",
     );
+    await orders.packJob(
+      orderId,
+      replacementJobId,
+      { shipmentId: fixture.foundation.shipmentId },
+      "replacement-job-pack",
+    );
+    await handoff(fixture, 0);
 
     await expect(
       prisma.job.findUniqueOrThrow({ where: { id: replacementJobId } }),
-    ).resolves.toMatchObject({ status: "QC_APPROVED" });
+    ).resolves.toMatchObject({ status: "HANDED_OVER" });
+    await expect(
+      prisma.job.findUniqueOrThrow({ where: { id: sourceJobId } }),
+    ).resolves.toMatchObject({ status: "FAILED" });
+    await expect(
+      prisma.jobShipmentAssignment.findUniqueOrThrow({
+        where: { jobId: sourceJobId },
+      }),
+    ).resolves.toEqual(sourceAssignment);
     await expect(
       prisma.productionReservation.findFirstOrThrow({
         where: { jobId: replacementJobId },
@@ -1050,7 +1062,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         },
         "acceptance-wins-late-void-key",
       ),
-    ).rejects.toThrow("Shipment is not awaiting provider label cancellation");
+    ).rejects.toThrow("Carrier label void command was superseded");
     await expect(
       prisma.outboxMessage.findUniqueOrThrow({
         where: {
@@ -1080,10 +1092,111 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     });
   });
 
+  it("records a late provider void after dispatched cancellation loses to handoff", async () => {
+    const fixture = await preparePaidOrder("delivered-void-acceptance-wins");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "carrier acceptance raced with dispatched cancellation" },
+      "delivered-void-acceptance-cancel",
+    );
+    const deduplicationKey = `void_carrier_label:${fixture.foundation.shipmentId}:label-${fixture.foundation.shipmentId}`;
+    const deliveredAt = new Date();
+    const delivered = await prisma.outboxMessage.update({
+      where: { deduplicationKey },
+      data: { status: "DELIVERED", deliveredAt, lockedAt: null },
+    });
+    const acceptanceOccurredAt = new Date(deliveredAt.getTime() + 1);
+
+    const accepted = await orders.handoffShipment(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      {
+        providerEventId: `delivered-void-acceptance-${fixture.foundation.shipmentId}`,
+        providerTransactionId: `delivered-void-acceptance-tx-${fixture.foundation.shipmentId}`,
+        occurredAt: acceptanceOccurredAt.toISOString(),
+      },
+      "delivered-void-acceptance-handoff",
+    );
+
+    expect(accepted.status).toBe("SHIPMENT_HANDED_OVER");
+    await expect(
+      prisma.outboxMessage.findUniqueOrThrow({
+        where: { deduplicationKey },
+      }),
+    ).resolves.toMatchObject({
+      status: "DELIVERED",
+      deliveredAt: delivered.deliveredAt,
+    });
+    await expect(
+      orders.confirmLabelVoid(
+        fixture.foundation.orderId,
+        fixture.foundation.shipmentId,
+        {
+          providerEventId: `predating-void-${fixture.foundation.shipmentId}`,
+          providerTransactionId: `predating-void-tx-${fixture.foundation.shipmentId}`,
+          occurredAt: new Date(
+            acceptanceOccurredAt.getTime() - 1_000,
+          ).toISOString(),
+        },
+        "delivered-void-predating-confirm",
+      ),
+    ).rejects.toThrow(
+      "Post-handoff provider void is a no-op only when the exact acceptance scan physically won",
+    );
+
+    const voidEvidence = {
+      providerEventId: `late-delivered-void-${fixture.foundation.shipmentId}`,
+      providerTransactionId: `late-delivered-void-tx-${fixture.foundation.shipmentId}`,
+      occurredAt: new Date().toISOString(),
+    };
+    const recorded = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      voidEvidence,
+      "delivered-void-late-confirm",
+    );
+    const replay = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      voidEvidence,
+      "delivered-void-late-replay",
+    );
+
+    expect(recorded.status).toBe("LABEL_VOID_RECORDED_AFTER_HANDOFF");
+    expect(replay.status).toBe("LABEL_VOID_ALREADY_RECORDED_AFTER_HANDOFF");
+    await expect(
+      prisma.shipmentProviderEvent.findFirstOrThrow({
+        where: {
+          shipmentId: fixture.foundation.shipmentId,
+          kind: "LABEL_VOIDED",
+        },
+      }),
+    ).resolves.toMatchObject({ outboxMessageId: delivered.id });
+    await expect(
+      prisma.refundTransaction.count({
+        where: { payment: { orderId: fixture.foundation.orderId } },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.shipment.findUniqueOrThrow({
+        where: { id: fixture.foundation.shipmentId },
+      }),
+    ).resolves.toMatchObject({
+      status: "HANDED_OVER",
+      providerVoidId: null,
+      providerVoidedAt: null,
+    });
+  });
+
   it("records cancellation-race handoff while an adjustment refund is pending", async () => {
     const fixture = await preparePaidOrder("acceptance-pending-adjustment");
     await advanceThroughQc(fixture, 0);
     await labelAndPack(fixture, 0);
+    await markSlotPriceComponentExpress(
+      fixture.foundation.fulfilmentSlotIds[0]!,
+    );
     const adjustment = await orders.createPriceAdjustment(
       fixture.foundation.orderId,
       {
@@ -1144,6 +1257,9 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const fixture = await preparePaidOrder("express-adjustment");
     await advanceThroughQc(fixture, 0);
     await labelAndPack(fixture, 0);
+    await markSlotPriceComponentExpress(
+      fixture.foundation.fulfilmentSlotIds[0]!,
+    );
     const adjustment = await orders.createPriceAdjustment(
       fixture.foundation.orderId,
       {
@@ -1232,7 +1348,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const exhausted = await orders.createPriceAdjustment(
       fixture.foundation.orderId,
       {
-        reason: "EXPRESS_BREACH",
+        reason: "POST_DELIVERY_ISSUE",
         amountMinor: deposit.capturedAmountMinor!.toString(),
         paymentId: deposit.id,
         allocation: {
@@ -1263,7 +1379,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       orders.createPriceAdjustment(
         fixture.foundation.orderId,
         {
-          reason: "EXPRESS_BREACH",
+          reason: "POST_DELIVERY_ISSUE",
           amountMinor: "1",
           paymentId: deposit.id,
           allocation: {
@@ -1286,7 +1402,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const unbound = await orders.createPriceAdjustment(
       fixture.foundation.orderId,
       {
-        reason: "EXPRESS_BREACH",
+        reason: "POST_DELIVERY_ISSUE",
         amountMinor: "1",
         allocation: {
           component: "order",
@@ -1325,7 +1441,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const first = await orders.createPriceAdjustment(
       fixture.foundation.orderId,
       {
-        reason: "EXPRESS_BREACH",
+        reason: "POST_DELIVERY_ISSUE",
         amountMinor: slot.settlementAmountMinor.toString(),
         allocation: {
           slotCredits: [
@@ -1351,7 +1467,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       orders.createPriceAdjustment(
         fixture.foundation.orderId,
         {
-          reason: "EXPRESS_BREACH",
+          reason: "POST_DELIVERY_ISSUE",
           amountMinor: "1",
           allocation: {
             slotCredits: [{ fulfilmentSlotId: slot.id, amountMinor: "1" }],
@@ -1362,6 +1478,113 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).rejects.toThrow(
       "Price adjustment exceeds a fulfilment Slot settlement amount",
     );
+  });
+
+  it("caps express credits at each Slot's remaining active surcharge", async () => {
+    const fixture = await preparePaidOrder("express-credit-cap", 2);
+    const expressSlotId = fixture.foundation.fulfilmentSlotIds[0]!;
+    const nonExpressSlotId = fixture.foundation.fulfilmentSlotIds[1]!;
+    await markSlotPriceComponentExpress(expressSlotId);
+    const expressRows = await pool.query<{
+      fulfilment_slot_id: string;
+      amount_minor: string;
+      currency: string;
+    }>(
+      `SELECT allocation.fulfilment_slot_id,
+              sum(allocation.amount_minor)::text AS amount_minor,
+              snapshot.currency
+       FROM order_active_price_bindings active_binding
+       JOIN order_price_bindings binding
+         ON binding.id = active_binding.order_price_binding_id
+       JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
+       JOIN price_snapshot_components component
+         ON component.price_snapshot_id = snapshot.id
+        AND component.kind = 'EXPRESS'
+       JOIN price_component_fulfilment_allocations allocation
+         ON allocation.price_snapshot_component_id = component.id
+       WHERE active_binding.order_id = $1
+       GROUP BY allocation.fulfilment_slot_id, snapshot.currency`,
+      [fixture.foundation.orderId],
+    );
+    expect(expressRows.rows).toHaveLength(1);
+    expect(expressRows.rows[0]?.fulfilment_slot_id).toBe(expressSlotId);
+    const expressAmount = BigInt(expressRows.rows[0]!.amount_minor);
+
+    await expect(
+      orders.createPriceAdjustment(
+        fixture.foundation.orderId,
+        {
+          reason: "EXPRESS_BREACH",
+          amountMinor: "1",
+          allocation: {
+            slotCredits: [
+              { fulfilmentSlotId: nonExpressSlotId, amountMinor: "1" },
+            ],
+          },
+        },
+        "express-credit-cap-non-express-slot",
+      ),
+    ).rejects.toThrow(
+      "Price adjustment exceeds the remaining allocated express surcharge",
+    );
+
+    const first = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: "1",
+        allocation: { reason: "partial express deadline credit" },
+      },
+      "express-credit-cap-first",
+    );
+    await expect(
+      prisma.priceAdjustment.findUniqueOrThrow({
+        where: { id: first.result.priceAdjustmentId as string },
+      }),
+    ).resolves.toMatchObject({
+      allocation: {
+        slotCredits: [{ fulfilmentSlotId: expressSlotId, amountMinor: "1" }],
+      },
+    });
+
+    await expect(
+      orders.createPriceAdjustment(
+        fixture.foundation.orderId,
+        {
+          reason: "EXPRESS_BREACH",
+          amountMinor: expressAmount.toString(),
+          allocation: { reason: "credit beyond remaining express surcharge" },
+        },
+        "express-credit-cap-second",
+      ),
+    ).rejects.toThrow(
+      "Price adjustment exceeds the remaining allocated express surcharge",
+    );
+
+    await expect(
+      pool.query(
+        `INSERT INTO price_adjustments
+           (id, order_id, idempotency_key, reason, amount_minor, currency, allocation)
+         VALUES ($1, $2, $3, 'EXPRESS_BREACH', $4, $5, $6::jsonb)`,
+        [
+          randomUUID(),
+          fixture.foundation.orderId,
+          `direct-express-over-cap-${randomUUID()}`,
+          expressAmount.toString(),
+          expressRows.rows[0]!.currency,
+          JSON.stringify({
+            slotCredits: [
+              {
+                fulfilmentSlotId: expressSlotId,
+                amountMinor: expressAmount.toString(),
+              },
+            ],
+          }),
+        ],
+      ),
+    ).rejects.toMatchObject({
+      constraint: "price_adjustment_express_credit_cap_check",
+    });
   });
 
   it("deducts a derived express slot credit from a post-delivery Claim", async () => {
@@ -1475,7 +1698,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const adjustment = await orders.createPriceAdjustment(
       fixture.foundation.orderId,
       {
-        reason: "EXPRESS_BREACH",
+        reason: "POST_DELIVERY_ISSUE",
         amountMinor: "1",
         paymentId: payment.id,
         allocation: {

@@ -658,6 +658,8 @@ DECLARE
     credit_amount bigint;
     slot_settlement_amount bigint;
     prior_credit_amount numeric;
+    express_allocation_amount numeric;
+    prior_express_credit_amount numeric;
     allocated_amount bigint := 0;
 BEGIN
     IF jsonb_typeof(NEW."allocation") <> 'object' THEN
@@ -666,11 +668,8 @@ BEGIN
     END IF;
 
     IF slot_credits IS NULL THEN
-        IF NEW."reason" <> 'EXPRESS_BREACH' THEN
-            RAISE EXCEPTION 'non-express PriceAdjustment requires slotCredits'
-                USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
-        END IF;
-        RETURN NEW;
+        RAISE EXCEPTION 'PriceAdjustment requires slotCredits'
+            USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
     END IF;
 
     IF jsonb_typeof(slot_credits) <> 'array'
@@ -729,6 +728,38 @@ BEGIN
         IF prior_credit_amount + credit_amount > slot_settlement_amount THEN
             RAISE EXCEPTION 'PriceAdjustment credits exceed the FulfilmentSlot settlement amount'
                 USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_slot_credit_cap_check';
+        END IF;
+
+        IF NEW."reason" = 'EXPRESS_BREACH' THEN
+            SELECT coalesce(sum(allocation."amount_minor"), 0)
+            INTO express_allocation_amount
+            FROM "order_active_price_bindings" active_binding
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active_binding."order_price_binding_id"
+             AND binding."order_id" = active_binding."order_id"
+            JOIN "price_snapshot_components" component
+              ON component."price_snapshot_id" = binding."price_snapshot_id"
+             AND component."kind" = 'EXPRESS'
+            JOIN "price_component_fulfilment_allocations" allocation
+              ON allocation."price_snapshot_component_id" = component."id"
+             AND allocation."fulfilment_slot_id" = slot_id
+            WHERE active_binding."order_id" = NEW."order_id";
+
+            SELECT coalesce(sum((prior_credit.value ->> 'amountMinor')::bigint), 0)
+            INTO prior_express_credit_amount
+            FROM "price_adjustments" prior_adjustment
+            CROSS JOIN LATERAL jsonb_array_elements(
+                coalesce(prior_adjustment."allocation" -> 'slotCredits', '[]'::jsonb)
+            ) prior_credit(value)
+            WHERE prior_adjustment."order_id" = NEW."order_id"
+              AND prior_adjustment."reason" = 'EXPRESS_BREACH'
+              AND (prior_credit.value ->> 'fulfilmentSlotId')::uuid = slot_id;
+
+            IF express_allocation_amount <= 0
+               OR prior_express_credit_amount + credit_amount > express_allocation_amount THEN
+                RAISE EXCEPTION 'Express PriceAdjustment credits exceed the remaining allocated surcharge'
+                    USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_express_credit_cap_check';
+            END IF;
         END IF;
         slot_ids := array_append(slot_ids, slot_id);
         allocated_amount := allocated_amount + credit_amount;
@@ -2381,6 +2412,7 @@ BEGIN
                       WHERE job."order_id" = shipment."order_id"
                         AND job."order_phase_id" = shipment."order_phase_id"
                         AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                        AND taven_job_is_current(job."id")
                   )
                   OR EXISTS (
                       SELECT 1
@@ -2388,6 +2420,7 @@ BEGIN
                       WHERE job."order_id" = shipment."order_id"
                         AND job."order_phase_id" = shipment."order_phase_id"
                         AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                        AND taven_job_is_current(job."id")
                         AND (
                             job."status" <> 'HANDED_OVER'
                             OR job."handed_over_at" IS NULL
@@ -2949,10 +2982,6 @@ BEGIN
         WHERE assignment."order_id" = target_order_id
           AND (
               job."shipment_plan_id" <> shipment."shipment_plan_id"
-              OR EXISTS (
-                  SELECT 1 FROM "jobs" replacement
-                  WHERE replacement."replaces_job_id" = job."id"
-              )
               OR EXISTS (
                   SELECT 1 FROM "shipments" successor
                   WHERE successor."replaces_shipment_id" = shipment."id"
