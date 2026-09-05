@@ -935,6 +935,26 @@ export class PaymentsService {
     providerIntentId: string,
     checkoutUrl: string,
   ): Promise<CheckoutPaymentDto | null> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.readCommittedIntentFinalization(
+          paymentId,
+          idempotencyRecordId,
+          providerIntentId,
+          checkoutUrl,
+        );
+      } catch (error) {
+        if (attempt >= INTENT_RECONCILIATION_ATTEMPTS) throw error;
+      }
+    }
+  }
+
+  private async readCommittedIntentFinalization(
+    paymentId: string,
+    idempotencyRecordId: string,
+    providerIntentId: string,
+    checkoutUrl: string,
+  ): Promise<CheckoutPaymentDto | null> {
     const payment = await this.prisma.payment.findUnique({
       where: { id: paymentId },
       include: {

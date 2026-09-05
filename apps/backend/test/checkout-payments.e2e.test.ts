@@ -2663,6 +2663,11 @@ describe("checkout payment capture protocol", () => {
           }
           return result;
         });
+      const ownershipReadSpy = vi
+        .spyOn(prisma.payment, "findUnique")
+        .mockRejectedValueOnce(
+          new Error("simulated ownership reconciliation read failure"),
+        );
       const actualApplicationNow = Date.now();
       const applicationClock = vi
         .spyOn(Date, "now")
@@ -2670,6 +2675,8 @@ describe("checkout payment capture protocol", () => {
       const createdResponse = await createPayment().finally(() => {
         applicationClock.mockRestore();
       });
+      expect(ownershipReadSpy).toHaveBeenCalledTimes(2);
+      ownershipReadSpy.mockRestore();
       transactionSpy.mockRestore();
       expect(createdResponse.status).toBe(200);
       expect(checkoutTransactionCount).toBe(3);
