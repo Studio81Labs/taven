@@ -482,6 +482,11 @@ export class PaymentsService {
         captureReacquisitionResolved,
       );
     }
+    if (outcome === "REACQUIRE_REQUIRED") {
+      throw new BadGatewayException(
+        "Payment capture resource reacquisition remains unresolved",
+      );
+    }
     return { outcome };
   }
 

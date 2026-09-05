@@ -862,6 +862,182 @@ describe("checkout payment capture protocol", () => {
     }
   });
 
+  it("rejects an unresolved capture handshake under application clock skew", async () => {
+    const name = `capture-clock-skew-${randomUUID().slice(0, 8)}`;
+    const setupClient = await pool.connect();
+    const captureExpiresAt = new Date(Date.now() + 60 * 60 * 1_000);
+    let foundation: PersistenceFoundation;
+    let providerIntentId: string;
+    let merchantReference: string;
+    let amountMinor: string;
+    let currency: string;
+    let destination: ResolvedDeliveryCapability;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(setupClient, `${scope}:${name}`, {
+        publicTokenHash: createHash("sha256")
+          .update(`${scope}:${name}:checkout-token`)
+          .digest("hex"),
+      });
+      ({ foundation, providerIntentId } = await preparePayment(
+        setupClient,
+        fixtures,
+        name,
+        captureExpiresAt,
+      ));
+      await setupClient.query(`SET LOCAL session_replication_role = 'replica'`);
+      await ageReservationGraph(
+        setupClient,
+        foundation.phaseReservationSetId,
+        new Date(Date.now() + 500),
+      );
+      const checkoutCommandId = randomUUID();
+      await setupClient.query(
+        `INSERT INTO idempotency_records
+           (id, namespace, idempotency_key, request_fingerprint, status,
+            expires_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'PROCESSING',
+                 clock_timestamp() + interval '1 hour',
+                 clock_timestamp(), clock_timestamp())`,
+        [
+          checkoutCommandId,
+          `checkout-payment:${foundation.quoteSessionId}`,
+          `${name}-checkout`,
+          createHash("sha256").update(`${name}:request`).digest("hex"),
+        ],
+      );
+      await setupClient.query(
+        `UPDATE payments
+         SET checkout_method = 'CARD', merchant_reference = id::text,
+             checkout_command_id = $2
+         WHERE id = $1`,
+        [foundation.paymentId, checkoutCommandId],
+      );
+      await setupClient.query(`SET LOCAL session_replication_role = 'origin'`);
+      ({
+        amount_minor: amountMinor,
+        currency,
+        merchant_reference: merchantReference,
+      } = (
+        await setupClient.query<{
+          amount_minor: string;
+          currency: string;
+          merchant_reference: string;
+        }>(
+          `SELECT requested_amount_minor::text AS amount_minor, currency,
+                    merchant_reference
+             FROM payments WHERE id = $1`,
+          [foundation.paymentId],
+        )
+      ).rows[0]!);
+      const destinationRow = (
+        await setupClient.query<{
+          provider_endpoint_id: string;
+          endpoint_type: string;
+          address_snapshot: Record<string, unknown>;
+          capability_snapshot: Record<string, unknown>;
+        }>(
+          `SELECT provider_endpoint_id, endpoint_type, address_snapshot,
+                  capability_snapshot
+           FROM delivery_destinations WHERE id = $1`,
+          [foundation.deliveryDestinationId],
+        )
+      ).rows[0]!;
+      destination = {
+        providerEndpointId: destinationRow.provider_endpoint_id,
+        endpointType: destinationRow.endpoint_type,
+        addressSnapshot:
+          destinationRow.address_snapshot as Prisma.InputJsonObject,
+        capabilitySnapshot:
+          destinationRow.capability_snapshot as Prisma.InputJsonObject,
+        supportedCategoryIds: ["standard"],
+      };
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const signingSecret = `capture-clock-skew-${randomUUID()}`;
+    const sandbox = new SandboxPaymentProviderAdapter({
+      provider: "sandbox",
+      publicBaseUrl: "http://sandbox.local",
+      webhookSigningSecret: signingSecret,
+    });
+    const moduleRef = await Test.createTestingModule({
+      imports: [PaymentsModule],
+    })
+      .overrideProvider(DELIVERY_CAPABILITY)
+      .useValue({
+        list: async () => [],
+        resolve: async () => destination,
+      })
+      .overrideProvider(PAYMENT_PROVIDER)
+      .useValue(sandbox)
+      .compile();
+    const app = moduleRef.createNestApplication();
+    try {
+      await app.init();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const event = {
+        providerEventId: `${name}-capture`,
+        providerTransactionId: providerIntentId,
+        merchantReference,
+        status: "CAPTURED" as const,
+        amountMinor,
+        currency,
+        occurredAt: new Date().toISOString(),
+      };
+      const applicationClock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(captureExpiresAt.getTime() + 1_000);
+      try {
+        await expect(
+          app.get(PaymentsService).consumeProviderEvent(
+            "sandbox",
+            {
+              "x-taven-sandbox-signature": sandboxEventSignature(
+                event,
+                signingSecret,
+              ),
+            },
+            event,
+          ),
+        ).rejects.toThrow(
+          "Payment capture resource reacquisition remains unresolved",
+        );
+      } finally {
+        applicationClock.mockRestore();
+      }
+      expect(
+        (
+          await pool.query(
+            `SELECT payment.status::text AS payment_status,
+                    (SELECT count(*)::int FROM payment_provider_events
+                     WHERE payment_id = payment.id) AS event_count,
+                    (SELECT count(*)::int FROM refund_transactions
+                     WHERE payment_id = payment.id) AS refund_count
+             FROM payments payment WHERE payment.id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        { payment_status: "PENDING", event_count: 0, refund_count: 0 },
+      ]);
+    } finally {
+      await pool.query(
+        `SELECT taven_close_initial_checkout_payment(
+           $1, 'CUSTOMER_CANCELLED'
+         )`,
+        [foundation.paymentId],
+      );
+      await app.close();
+    }
+  });
+
   it("reacquires once for concurrent service applies which cross expiry", async () => {
     const name = `service-capture-expiry-${randomUUID().slice(0, 8)}`;
     const setupClient = await pool.connect();
