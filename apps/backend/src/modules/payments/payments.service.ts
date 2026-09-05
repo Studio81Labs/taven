@@ -1446,9 +1446,9 @@ function requiredText(value: unknown, name: string, maximum: number): string {
   return value.trim();
 }
 
-function publicSiteUrl(): string {
-  const configured = process.env.TAVEN_PUBLIC_SITE_URL?.trim();
-  if (process.env.NODE_ENV === "production" && !configured) {
+export function publicSiteUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.TAVEN_PUBLIC_SITE_URL?.trim();
+  if (env.NODE_ENV === "production" && !configured) {
     throw new Error("TAVEN_PUBLIC_SITE_URL is required in production");
   }
   const raw = configured || "http://localhost:3000";
@@ -1460,6 +1460,9 @@ function publicSiteUrl(): string {
   }
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error("TAVEN_PUBLIC_SITE_URL must be an HTTP(S) URL");
+  }
+  if (env.NODE_ENV === "production" && parsed.protocol !== "https:") {
+    throw new Error("TAVEN_PUBLIC_SITE_URL must use HTTPS in production");
   }
   return parsed.toString().replace(/\/$/, "");
 }
