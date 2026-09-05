@@ -863,6 +863,121 @@ describe("checkout payment capture protocol", () => {
     }
   });
 
+  it("expires a capture whose lock wait crosses the checkout deadline", async () => {
+    const name = `capture-checkout-expiry-lock-${randomUUID().slice(0, 8)}`;
+    const setupClient = await pool.connect();
+    let foundation: PersistenceFoundation;
+    let providerIntentId: string;
+    let amountMinor: string;
+    let currency: string;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(setupClient, `${scope}:${name}`, {
+        publicTokenHash: createHash("sha256")
+          .update(`${scope}:${name}:checkout-token`)
+          .digest("hex"),
+      });
+      ({ foundation, providerIntentId } = await preparePayment(
+        setupClient,
+        fixtures,
+        name,
+        new Date(Date.now() + 60 * 60 * 1_000),
+        500,
+      ));
+      ({ amount_minor: amountMinor, currency } = (
+        await setupClient.query<{
+          amount_minor: string;
+          currency: string;
+        }>(
+          `SELECT requested_amount_minor::text AS amount_minor, currency
+           FROM payments WHERE id = $1`,
+          [foundation.paymentId],
+        )
+      ).rows[0]!);
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const orderLocker = await pool.connect();
+    const captureClient = await pool.connect();
+    try {
+      await orderLocker.query("BEGIN");
+      const blockingProcessId = (
+        await orderLocker.query<{ pid: number }>(
+          "SELECT pg_backend_pid() AS pid",
+        )
+      ).rows[0]!.pid;
+      await orderLocker.query(
+        `SELECT id FROM orders WHERE id = $1 FOR UPDATE`,
+        [foundation.orderId],
+      );
+      await captureClient.query(`SET statement_timeout = '5s'`);
+      const capturePromise = captureClient.query<{ outcome: string }>(
+        `SELECT taven_apply_checkout_payment_event(
+           'sandbox', $1, $2, 'PAYMENT_CAPTURED', $3, $4,
+           clock_timestamp(), '{"source":"checkout-expiry-lock-e2e"}'::jsonb,
+           true
+         ) AS outcome`,
+        [`${name}-capture`, providerIntentId, amountMinor, currency],
+      );
+      await waitForBlockedBy(blockingProcessId);
+      await orderLocker.query(`SELECT pg_sleep(0.6)`);
+      await orderLocker.query("COMMIT");
+
+      await expect(capturePromise).resolves.toMatchObject({
+        rows: [{ outcome: "REFUND_PENDING" }],
+      });
+      expect(
+        (
+          await captureClient.query(
+            `SELECT payment.status::text AS payment_status,
+                    target_order.status::text AS order_status,
+                    closed.payload ->> 'reason' AS close_reason,
+                    compensation.payload ->> 'kind' AS compensation_kind,
+                    payment.capture_cutoff_at =
+                      payment.checkout_capture_expires_at AS cutoff_at_deadline,
+                    (SELECT count(*)::int FROM jobs
+                     WHERE order_id = target_order.id) AS job_count,
+                    (SELECT count(*)::int FROM refund_transactions
+                     WHERE payment_id = payment.id) AS refund_count
+             FROM payments payment
+             JOIN orders target_order ON target_order.id = payment.order_id
+             JOIN audit_events closed
+               ON closed.payment_id = payment.id
+              AND closed.event_type = 'checkout.payment_closed'
+             JOIN audit_events compensation
+               ON compensation.payment_id = payment.id
+              AND compensation.event_type =
+                  'checkout.late_capture_compensation_created'
+             WHERE payment.id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          payment_status: "REFUND_PENDING",
+          order_status: "EXPIRED",
+          close_reason: "CHECKOUT_EXPIRED",
+          compensation_kind: "initial_checkout_expired",
+          cutoff_at_deadline: true,
+          job_count: 0,
+          refund_count: 1,
+        },
+      ]);
+    } catch (error) {
+      await orderLocker.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      orderLocker.release();
+      captureClient.release();
+    }
+  });
+
   it("rejects an unresolved capture handshake under application clock skew", async () => {
     const name = `capture-clock-skew-${randomUUID().slice(0, 8)}`;
     const setupClient = await pool.connect();

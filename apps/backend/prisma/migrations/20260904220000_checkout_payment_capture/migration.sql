@@ -1632,7 +1632,9 @@ BEGIN
         event_id, event_transaction_id, event_kind,
         event_amount_minor, event_currency, receipt_payload,
         encode(sha256(convert_to(receipt_payload::text, 'UTF8')), 'hex'),
-        event_occurred_at, verified_at, verified_at, verified_at
+        event_occurred_at, verified_at,
+        coalesce(capture_evaluated_at, verified_at),
+        coalesce(capture_evaluated_at, verified_at)
     );
 
     IF event_kind = 'PAYMENT_PENDING' THEN
@@ -1664,11 +1666,12 @@ BEGIN
         SET "status" = 'CAPTURED',
             "captured_amount_minor" = "requested_amount_minor",
             "provider_capture_id" = event_transaction_id,
-            "captured_at" = verified_at, "updated_at" = verified_at
+            "captured_at" = capture_evaluated_at,
+            "updated_at" = capture_evaluated_at
         WHERE "id" = target_payment."id";
 
         UPDATE "inventory_reservations" inventory_reservation
-        SET "status" = 'HELD', "updated_at" = verified_at
+        SET "status" = 'HELD', "updated_at" = capture_evaluated_at
         FROM "production_reservations" production
         WHERE production."phase_reservation_set_id" = active_set_id
           AND inventory_reservation."production_reservation_id" = production."id"
@@ -1676,7 +1679,7 @@ BEGIN
           AND inventory_reservation."status" = 'RESERVED';
 
         UPDATE "capacity_reservations" capacity_reservation
-        SET "status" = 'HELD', "updated_at" = verified_at
+        SET "status" = 'HELD', "updated_at" = capture_evaluated_at
         FROM "production_reservations" production
         WHERE production."phase_reservation_set_id" = active_set_id
           AND capacity_reservation."production_reservation_id" = production."id"
@@ -1707,24 +1710,24 @@ BEGIN
                 created_job_id, production_row."node_id", target_payment."order_id",
                 target_phase_id, production_row."shipment_plan_id",
                 production_row."phase_resource_plan_job_id", 'CREATED',
-                verified_at, verified_at
+                capture_evaluated_at, capture_evaluated_at
             );
             UPDATE "production_reservations"
             SET "status" = 'HELD', "job_id" = created_job_id,
-                "updated_at" = verified_at
+                "updated_at" = capture_evaluated_at
             WHERE "id" = production_row."production_id";
         END LOOP;
 
         UPDATE "phase_reservation_sets"
-        SET "status" = 'HELD', "updated_at" = verified_at
+        SET "status" = 'HELD', "updated_at" = capture_evaluated_at
         WHERE "id" = active_set_id;
         UPDATE "orders"
-        SET "status" = 'CONFIRMED', "confirmed_at" = verified_at,
-            "updated_at" = verified_at
+        SET "status" = 'CONFIRMED', "confirmed_at" = capture_evaluated_at,
+            "updated_at" = capture_evaluated_at
         WHERE "id" = target_payment."order_id";
         UPDATE "order_phases"
-        SET "status" = 'ACTIVE', "activated_at" = verified_at,
-            "updated_at" = verified_at
+        SET "status" = 'ACTIVE', "activated_at" = capture_evaluated_at,
+            "updated_at" = capture_evaluated_at
         WHERE "id" = target_phase_id;
         RETURN 'CAPTURED';
     END IF;
@@ -1738,21 +1741,22 @@ BEGIN
         -- so release it first and let the common close path finish the order.
         IF event_capture_context_valid
            AND active_set_id IS NOT NULL
-           AND active_set_expires_at > verified_at
+           AND active_set_expires_at > capture_evaluated_at
            AND NOT active_set_capture_eligible THEN
             PERFORM taven_release_phase_reservation_set(active_set_id);
         END IF;
         PERFORM taven_close_initial_checkout_payment(
             target_payment."id",
-            CASE WHEN target_payment."checkout_capture_expires_at" <= verified_at
+            CASE WHEN target_payment."checkout_capture_expires_at" <=
+                           capture_evaluated_at
                  THEN 'CHECKOUT_EXPIRED'
                  WHEN event_capture_context_valid
                       AND (active_set_id IS NULL
-                           OR active_set_expires_at <= verified_at
+                           OR active_set_expires_at <= capture_evaluated_at
                            OR NOT active_set_capture_eligible)
                  THEN 'CAPACITY_UNAVAILABLE'
                  ELSE 'CUSTOMER_CANCELLED' END,
-            verified_at
+            capture_evaluated_at
         );
         SELECT * INTO target_payment FROM "payments"
         WHERE "id" = target_payment."id" FOR UPDATE;
@@ -1784,7 +1788,8 @@ BEGIN
         SET "status" = 'REFUND_PENDING',
             "captured_amount_minor" = "requested_amount_minor",
             "provider_capture_id" = event_transaction_id,
-            "captured_at" = verified_at, "updated_at" = verified_at
+            "captured_at" = capture_evaluated_at,
+            "updated_at" = capture_evaluated_at
         WHERE "id" = target_payment."id";
 
         refund_id := gen_random_uuid();
@@ -1800,7 +1805,7 @@ BEGIN
             refund_id, target_payment."id",
             refund_key, event_provider,
             event_amount_minor, 'LATE_CAPTURE_COMPENSATION', 'PENDING',
-            verified_at, verified_at, verified_at
+            capture_evaluated_at, capture_evaluated_at, capture_evaluated_at
         ) ON CONFLICT ("payment_id", "idempotency_key") DO NOTHING;
 
         INSERT INTO "audit_events" (
@@ -1816,7 +1821,7 @@ BEGIN
                 'providerTransactionId', event_transaction_id,
                 'amountMinor', event_amount_minor::text,
                 'currency', event_currency
-            ), verified_at
+            ), capture_evaluated_at
         );
 
         INSERT INTO "outbox_messages" (
@@ -1836,7 +1841,8 @@ BEGIN
                 'idempotencyKey', refund_key,
                 'compensationKind', compensation_kind,
                 'action', 'refund_payment'
-            ), 'PENDING', 0, verified_at, verified_at, verified_at
+            ), 'PENDING', 0, capture_evaluated_at, capture_evaluated_at,
+            capture_evaluated_at
         ) ON CONFLICT ("deduplication_key") DO NOTHING;
         RETURN 'REFUND_PENDING';
     END IF;
