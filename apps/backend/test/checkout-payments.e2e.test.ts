@@ -965,6 +965,23 @@ describe("checkout payment capture protocol", () => {
           headers: { authorization: `Bearer ${sessionToken}` },
         });
       };
+      const cancelPayment = (
+        sessionId: string,
+        sessionToken: string,
+        paymentId?: string,
+      ) => {
+        const url = new URL(
+          `/automatic-quote-sessions/${sessionId}/checkout/payment`,
+          baseUrl,
+        );
+        if (paymentId !== undefined) {
+          url.searchParams.set("paymentId", paymentId);
+        }
+        return fetch(url, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${sessionToken}` },
+        });
+      };
       const transactions = prisma as unknown as {
         $transaction: InteractiveTransaction;
       };
@@ -1346,15 +1363,43 @@ describe("checkout payment capture protocol", () => {
       expect(blockedRetry.status).toBe(409);
       expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 1);
 
-      const cancelResponse = await fetch(
-        new URL(
-          `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/payment`,
-          baseUrl,
+      const staleCancelResponse = await cancelPayment(
+        outageFoundation.quoteSessionId,
+        outageToken,
+        firstFailedPayment.id,
+      );
+      expect(staleCancelResponse.status).toBe(200);
+      await expect(staleCancelResponse.json()).resolves.toMatchObject({
+        paymentId: firstFailedPayment.id,
+        status: "FAILED",
+      });
+      await expect(
+        Promise.all([
+          prisma.payment.findUniqueOrThrow({
+            where: { id: ambiguousPayment.id },
+            select: { status: true },
+          }),
+          prisma.order.findUniqueOrThrow({
+            where: { id: outageFoundation.orderId },
+            select: { status: true },
+          }),
+        ]),
+      ).resolves.toEqual([{ status: "CREATED" }, { status: "QUOTED" }]);
+
+      await expect(
+        cancelPayment(
+          outageFoundation.quoteSessionId,
+          outageToken,
+          created.paymentId,
         ),
-        {
-          method: "DELETE",
-          headers: { authorization: `Bearer ${outageToken}` },
-        },
+      ).resolves.toMatchObject({ status: 404 });
+      await expect(
+        cancelPayment(outageFoundation.quoteSessionId, outageToken),
+      ).resolves.toMatchObject({ status: 400 });
+      const cancelResponse = await cancelPayment(
+        outageFoundation.quoteSessionId,
+        outageToken,
+        ambiguousPayment.id,
       );
       expect(cancelResponse.status).toBe(200);
 

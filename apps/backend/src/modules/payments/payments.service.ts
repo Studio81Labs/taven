@@ -370,6 +370,7 @@ export class PaymentsService {
 
   async cancelCheckoutPayment(
     sessionIdInput: string,
+    paymentIdInput: string,
     authorization?: string,
   ): Promise<CheckoutPaymentDto> {
     const context = await this.loadContext(
@@ -377,8 +378,10 @@ export class PaymentsService {
     );
     assertSessionCapability(context, bearerCapability(authorization));
     const payment = await this.prisma.payment.findFirst({
-      where: { orderId: context.order.id },
-      orderBy: { createdAt: "desc" },
+      where: {
+        id: normalizedUuid(paymentIdInput, "paymentId"),
+        orderId: context.order.id,
+      },
     });
     if (!payment) throw new NotFoundException("Checkout payment was not found");
     await this.prisma.$queryRaw`

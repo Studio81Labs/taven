@@ -1395,7 +1395,9 @@ export interface operations {
     };
     PaymentsController_cancel: {
         parameters: {
-            query?: never;
+            query: {
+                paymentId: string;
+            };
             header?: never;
             path: {
                 sessionId: string;

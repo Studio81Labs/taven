@@ -107,13 +107,19 @@ export class PaymentsController {
   @Delete("automatic-quote-sessions/:sessionId/checkout/payment")
   @ApiBearerAuth()
   @ApiParam(SESSION_ID)
+  @ApiQuery({ name: "paymentId", type: String, format: "uuid", required: true })
   @ApiOperation({ summary: "Cancel an open checkout payment" })
   @ApiOkResponse({ type: CheckoutPaymentDto })
   cancel(
     @Param("sessionId") sessionId: string,
+    @Query("paymentId") paymentId: string,
     @Headers("authorization") authorization?: string,
   ): Promise<CheckoutPaymentDto> {
-    return this.payments.cancelCheckoutPayment(sessionId, authorization);
+    return this.payments.cancelCheckoutPayment(
+      sessionId,
+      paymentId,
+      authorization,
+    );
   }
 
   @Post("payments/webhooks/:provider")
