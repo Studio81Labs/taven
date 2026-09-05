@@ -904,6 +904,22 @@ describe("checkout payment capture protocol", () => {
             }),
           },
         );
+      const readPayment = (
+        sessionId: string,
+        sessionToken: string,
+        paymentId?: string,
+      ) => {
+        const url = new URL(
+          `/automatic-quote-sessions/${sessionId}/checkout/payment`,
+          baseUrl,
+        );
+        if (paymentId !== undefined) {
+          url.searchParams.set("paymentId", paymentId);
+        }
+        return fetch(url, {
+          headers: { authorization: `Bearer ${sessionToken}` },
+        });
+      };
       const createdResponse = await createPayment();
       expect(createdResponse.status).toBe(200);
       const created = (await createdResponse.json()) as {
@@ -918,12 +934,36 @@ describe("checkout payment capture protocol", () => {
         currency: "EUR",
         checkoutUrl: `${baseUrl.origin}/payments/sandbox/sandbox-${created.paymentId}`,
       });
-      const returnQuery = `?sessionId=${foundation.quoteSessionId}`;
+      const returnQuery = `?sessionId=${foundation.quoteSessionId}&paymentId=${created.paymentId}`;
       expect(latestReturnUrls).toEqual({
         success: `https://taven.cz/checkout/payment/success${returnQuery}`,
         cancelled: `https://taven.cz/checkout/payment/cancelled${returnQuery}`,
         pending: `https://taven.cz/checkout/payment/pending${returnQuery}`,
       });
+
+      const exactStatusResponse = await readPayment(
+        foundation.quoteSessionId,
+        token,
+        created.paymentId,
+      );
+      expect(exactStatusResponse.status).toBe(200);
+      await expect(exactStatusResponse.json()).resolves.toMatchObject({
+        paymentId: created.paymentId,
+        status: "PENDING",
+      });
+      await expect(
+        readPayment(foundation.quoteSessionId, token),
+      ).resolves.toMatchObject({ status: 400 });
+      await expect(
+        readPayment(foundation.quoteSessionId, token, "invalid-payment-id"),
+      ).resolves.toMatchObject({ status: 400 });
+      await expect(
+        readPayment(
+          outageFoundation.quoteSessionId,
+          outageToken,
+          created.paymentId,
+        ),
+      ).resolves.toMatchObject({ status: 404 });
 
       const checkoutPageResponse = await fetch(created.checkoutUrl);
       expect(checkoutPageResponse.status).toBe(200);
@@ -1007,15 +1047,15 @@ describe("checkout payment capture protocol", () => {
       providerFailure = "DEFINITIVE";
       const outageResponse = await createOutagePayment();
       expect(outageResponse.status).toBe(502);
-      await expect(
-        prisma.payment.findFirstOrThrow({
-          where: { orderId: outageFoundation.orderId },
-          select: {
-            status: true,
-            intentCreationFailureResultId: true,
-          },
-        }),
-      ).resolves.toMatchObject({
+      const firstFailedPayment = await prisma.payment.findFirstOrThrow({
+        where: { orderId: outageFoundation.orderId },
+        select: {
+          id: true,
+          status: true,
+          intentCreationFailureResultId: true,
+        },
+      });
+      expect(firstFailedPayment).toMatchObject({
         status: "FAILED",
         intentCreationFailureResultId: expect.any(String),
       });
@@ -1056,6 +1096,37 @@ describe("checkout payment capture protocol", () => {
           where: { orderId: outageFoundation.orderId, status: "FAILED" },
         }),
       ).resolves.toBe(2);
+      const failedPayments = await prisma.payment.findMany({
+        where: { orderId: outageFoundation.orderId, status: "FAILED" },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        select: { id: true },
+      });
+      const firstAttemptStatus = await readPayment(
+        outageFoundation.quoteSessionId,
+        outageToken,
+        firstFailedPayment.id,
+      );
+      expect(firstAttemptStatus.status).toBe(200);
+      await expect(firstAttemptStatus.json()).resolves.toMatchObject({
+        paymentId: firstFailedPayment.id,
+        status: "FAILED",
+      });
+      const secondFailedPayment = failedPayments.find(
+        ({ id }) => id !== firstFailedPayment.id,
+      );
+      if (!secondFailedPayment) {
+        throw new Error("Second failed payment was not created");
+      }
+      const secondAttemptStatus = await readPayment(
+        outageFoundation.quoteSessionId,
+        outageToken,
+        secondFailedPayment.id,
+      );
+      expect(secondAttemptStatus.status).toBe(200);
+      await expect(secondAttemptStatus.json()).resolves.toMatchObject({
+        paymentId: secondFailedPayment.id,
+        status: "FAILED",
+      });
 
       providerFailure = "AMBIGUOUS";
       const ambiguousKey = "sandbox-http-ambiguous-1";

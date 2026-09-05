@@ -94,7 +94,7 @@ export class PaymentsService {
       endpointType: destination.endpointType,
     });
     assertDestinationStillCurrent(initial, resolvedDestination);
-    const returnUrls = checkoutReturnUrls(publicSiteUrl(), sessionId);
+    const siteUrl = publicSiteUrl();
 
     const staged = await this.prisma.$transaction(async (transaction) => {
       await lockIdempotencyKey(transaction, sessionId, idempotencyKey);
@@ -232,7 +232,7 @@ export class PaymentsService {
         email: input.email,
         fullName: input.fullName,
         expiresAt: staged.payment.checkoutCaptureExpiresAt!,
-        returnUrls,
+        returnUrls: checkoutReturnUrls(siteUrl, sessionId, staged.payment.id),
       });
     } catch (error) {
       if (
@@ -327,6 +327,7 @@ export class PaymentsService {
 
   async getCheckoutPayment(
     sessionIdInput: string,
+    paymentIdInput: string,
     authorization?: string,
   ): Promise<CheckoutPaymentDto> {
     const context = await this.loadContext(
@@ -334,8 +335,10 @@ export class PaymentsService {
     );
     assertSessionCapability(context, bearerCapability(authorization));
     const payment = await this.prisma.payment.findFirst({
-      where: { orderId: context.order.id },
-      orderBy: { createdAt: "desc" },
+      where: {
+        id: normalizedUuid(paymentIdInput, "paymentId"),
+        orderId: context.order.id,
+      },
     });
     if (!payment) throw new NotFoundException("Checkout payment was not found");
     return paymentDto(payment);
@@ -1036,10 +1039,15 @@ function publicSiteUrl(): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-function checkoutReturnUrls(siteUrl: string, sessionId: string) {
+function checkoutReturnUrls(
+  siteUrl: string,
+  sessionId: string,
+  paymentId: string,
+) {
   const target = (result: "success" | "cancelled" | "pending") => {
     const url = new URL(`/checkout/payment/${result}`, `${siteUrl}/`);
     url.searchParams.set("sessionId", sessionId);
+    url.searchParams.set("paymentId", paymentId);
     return url.toString();
   };
   return {

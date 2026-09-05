@@ -2635,6 +2635,15 @@
         "operationId": "PaymentsController_status",
         "parameters": [
           {
+            "in": "query",
+            "name": "paymentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "sessionId",
             "required": true,
@@ -2661,7 +2670,7 @@
             "bearer": []
           }
         ],
-        "summary": "Read the current checkout payment state",
+        "summary": "Read a specific checkout payment state",
         "tags": [
           "payments"
         ]

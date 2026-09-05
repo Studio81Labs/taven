@@ -62,11 +62,18 @@ async function refreshPayment(): Promise<void> {
     if (requestedSessionId && requestedSessionId !== stored.sessionId) {
       throw new Error("Návrat neodpovídá uložené relaci objednávky.");
     }
+    const requestedPaymentId = queryValue(route.query.paymentId);
+    if (!requestedPaymentId) {
+      throw new Error("Návrat neobsahuje identifikátor platby.");
+    }
     session.value = stored;
     const response = await $api.GET(
       "/automatic-quote-sessions/{sessionId}/checkout/payment",
       {
-        params: { path: { sessionId: stored.sessionId } },
+        params: {
+          path: { sessionId: stored.sessionId },
+          query: { paymentId: requestedPaymentId },
+        },
         headers: { Authorization: `Bearer ${stored.sessionToken}` },
       },
     );

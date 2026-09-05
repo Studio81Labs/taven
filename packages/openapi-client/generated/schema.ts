@@ -147,7 +147,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read the current checkout payment state */
+        /** Read a specific checkout payment state */
         get: operations["PaymentsController_status"];
         put?: never;
         post?: never;
@@ -1372,7 +1372,9 @@ export interface operations {
     };
     PaymentsController_status: {
         parameters: {
-            query?: never;
+            query: {
+                paymentId: string;
+            };
             header?: never;
             path: {
                 sessionId: string;

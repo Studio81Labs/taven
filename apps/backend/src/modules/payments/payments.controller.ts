@@ -7,6 +7,7 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
@@ -17,6 +18,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiServiceUnavailableResponse,
   ApiTags,
   ApiUnauthorizedResponse,
@@ -85,13 +87,19 @@ export class PaymentsController {
   @Get("automatic-quote-sessions/:sessionId/checkout/payment")
   @ApiBearerAuth()
   @ApiParam(SESSION_ID)
-  @ApiOperation({ summary: "Read the current checkout payment state" })
+  @ApiQuery({ name: "paymentId", type: String, format: "uuid", required: true })
+  @ApiOperation({ summary: "Read a specific checkout payment state" })
   @ApiOkResponse({ type: CheckoutPaymentDto })
   status(
     @Param("sessionId") sessionId: string,
+    @Query("paymentId") paymentId: string,
     @Headers("authorization") authorization?: string,
   ): Promise<CheckoutPaymentDto> {
-    return this.payments.getCheckoutPayment(sessionId, authorization);
+    return this.payments.getCheckoutPayment(
+      sessionId,
+      paymentId,
+      authorization,
+    );
   }
 
   @Delete("automatic-quote-sessions/:sessionId/checkout/payment")
