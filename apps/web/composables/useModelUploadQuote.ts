@@ -850,6 +850,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       configurationEditable: false,
       configurationOptions: [],
       configurationRevision: 0,
+      checkoutEvidenceAccepted: false,
       deliveryOptions: [],
       selectedDeliveryDestination: null,
       quantityComparisons: [],

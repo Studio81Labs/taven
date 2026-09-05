@@ -516,6 +516,9 @@
             "nullable": true,
             "type": "object"
           },
+          "checkoutEvidenceAccepted": {
+            "type": "boolean"
+          },
           "checkoutReady": {
             "type": "boolean"
           },
@@ -627,6 +630,7 @@
           "phase",
           "configurationRevision",
           "configurationEditable",
+          "checkoutEvidenceAccepted",
           "modelFiles",
           "items",
           "configurationOptions",
@@ -649,6 +653,9 @@
             ],
             "nullable": true,
             "type": "object"
+          },
+          "checkoutEvidenceAccepted": {
+            "type": "boolean"
           },
           "checkoutReady": {
             "type": "boolean"
@@ -757,6 +764,7 @@
           "phase",
           "configurationRevision",
           "configurationEditable",
+          "checkoutEvidenceAccepted",
           "modelFiles",
           "items",
           "configurationOptions",

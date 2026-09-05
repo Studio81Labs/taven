@@ -3405,6 +3405,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(ownReservationRead.body).toMatchObject({
       phase: "CHECKOUT_READY",
       checkoutReady: true,
+      checkoutEvidenceAccepted: false,
       handoff: null,
       selectedDeliveryDestination: {
         providerEndpointId: "test-pickup",

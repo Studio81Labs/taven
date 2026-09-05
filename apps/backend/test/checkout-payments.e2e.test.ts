@@ -2795,6 +2795,33 @@ describe("checkout payment capture protocol", () => {
           photoPublicationConsentRevision: null,
         },
       ]);
+      const destinationChangeAfterCheckout = await fetch(
+        new URL(
+          `/automatic-quote-sessions/${foundation.quoteSessionId}/delivery-destination`,
+          baseUrl,
+        ),
+        {
+          method: "PUT",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            "idempotency-key": "destination-after-checkout",
+          },
+          body: JSON.stringify({
+            providerEndpointId: outageDestination.providerEndpointId,
+            endpointType: outageDestination.endpointType,
+          }),
+        },
+      );
+      expect(destinationChangeAfterCheckout.status).toBe(409);
+      await expect(
+        prisma.automaticQuoteDraft.findUniqueOrThrow({
+          where: { orderId: foundation.orderId },
+          select: { selectedDeliveryDestinationId: true },
+        }),
+      ).resolves.toEqual({
+        selectedDeliveryDestinationId: foundation.deliveryDestinationId,
+      });
       await expect(
         prisma.order.update({
           where: { id: foundation.orderId },

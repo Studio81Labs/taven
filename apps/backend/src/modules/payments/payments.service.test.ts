@@ -5,7 +5,45 @@ import {
   CHECKOUT_PHOTO_CONSENT_REVISION_ENV,
   CHECKOUT_TERMS_REVISION_ENV,
 } from "../../launch-approval-gates";
-import { PaymentsService, publicSiteUrl } from "./payments.service";
+import {
+  checkoutContactSnapshotMatches,
+  PaymentsService,
+  publicSiteUrl,
+} from "./payments.service";
+
+describe("checkout contact snapshot compatibility", () => {
+  const input = {
+    email: "ada@example.test",
+    fullName: "Ada Lovelace",
+    billing: {
+      name: "Ada Lovelace",
+      addressLine1: "Nová 12",
+      city: "Brno",
+      postalCode: "602 00",
+      countryCode: "CZ",
+    },
+  };
+
+  it("preserves pre-migration contact-only checkout retries", () => {
+    expect(
+      checkoutContactSnapshotMatches(
+        { email: input.email, fullName: input.fullName },
+        input,
+      ),
+    ).toBe(true);
+  });
+
+  it("requires exact billing evidence for version 2 snapshots", () => {
+    const snapshot = { version: 2, ...input };
+    expect(checkoutContactSnapshotMatches(snapshot, input)).toBe(true);
+    expect(
+      checkoutContactSnapshotMatches(snapshot, {
+        ...input,
+        billing: { ...input.billing, city: "Praha" },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("payment capabilities", () => {
   it("hides provider methods while checkout is disabled", async () => {

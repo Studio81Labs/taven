@@ -664,6 +664,7 @@ export interface components {
         };
         AutomaticQuoteSessionCreatedDto: {
             bindingQuote?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            checkoutEvidenceAccepted: boolean;
             checkoutReady: boolean;
             configurationEditable: boolean;
             configurationOptions: components["schemas"]["AutomaticQuoteConfigurationOptionDto"][];
@@ -690,6 +691,7 @@ export interface components {
         };
         AutomaticQuoteSessionDto: {
             bindingQuote?: components["schemas"]["AutomaticQuotePriceDto"] | null;
+            checkoutEvidenceAccepted: boolean;
             checkoutReady: boolean;
             configurationEditable: boolean;
             configurationOptions: components["schemas"]["AutomaticQuoteConfigurationOptionDto"][];

@@ -1264,17 +1264,29 @@ function assertCheckoutContactMatches(
     billing: unknown;
   }>,
 ): void {
-  if (snapshot === null) return;
-  const contact = asRecord(snapshot);
-  if (
-    contact?.email !== input.email ||
-    contact.fullName !== input.fullName ||
-    canonicalJson(contact.billing) !== canonicalJson(input.billing)
-  ) {
+  if (!checkoutContactSnapshotMatches(snapshot, input)) {
     throw new ConflictException(
       "Checkout contact differs from accepted order contact",
     );
   }
+}
+
+export function checkoutContactSnapshotMatches(
+  snapshot: Prisma.JsonValue | null,
+  input: Readonly<{
+    email: string;
+    fullName: string;
+    billing: unknown;
+  }>,
+): boolean {
+  if (snapshot === null) return true;
+  const contact = asRecord(snapshot);
+  return Boolean(
+    contact?.email === input.email &&
+    contact.fullName === input.fullName &&
+    (contact.version !== 2 ||
+      canonicalJson(contact.billing) === canonicalJson(input.billing)),
+  );
 }
 
 function paymentDto(payment: {

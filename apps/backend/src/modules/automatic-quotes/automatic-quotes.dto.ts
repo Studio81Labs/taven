@@ -332,6 +332,9 @@ export class AutomaticQuoteSessionDto {
   @ApiProperty({ type: Boolean })
   configurationEditable!: boolean;
 
+  @ApiProperty({ type: Boolean })
+  checkoutEvidenceAccepted!: boolean;
+
   @ApiProperty({ type: [AutomaticQuoteModelFileDto] })
   modelFiles!: AutomaticQuoteModelFileDto[];
 

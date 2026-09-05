@@ -835,7 +835,7 @@ function quantityPrice(choice: {
     <section
       v-if="
         quote.phase === 'DESTINATION_REQUIRED' ||
-        quote.phase === 'CHECKOUT_READY'
+        (quote.phase === 'CHECKOUT_READY' && !quote.checkoutEvidenceAccepted)
       "
       class="configurator-section"
     >

@@ -1023,7 +1023,10 @@ export class AutomaticQuotesService {
         if (!origin) throw new ConflictException("Automatic order is missing");
         const draft = await transaction.automaticQuoteDraft.findUniqueOrThrow({
           where: { orderId: origin.orderId },
-          include: { selectedDeliveryDestination: true },
+          include: {
+            order: { select: { acceptedOrderPriceBindingId: true } },
+            selectedDeliveryDestination: true,
+          },
         });
         const current = draft.selectedDeliveryDestination;
         if (
@@ -1036,6 +1039,11 @@ export class AutomaticQuotesService {
             fingerprintOf(resolved.capabilitySnapshot)
         ) {
           return;
+        }
+        if (draft.order.acceptedOrderPriceBindingId) {
+          throw new ConflictException(
+            "Delivery destination is immutable after checkout acceptance",
+          );
         }
         const destination = await transaction.deliveryDestination.create({
           data: {
@@ -4489,6 +4497,7 @@ export class AutomaticQuotesService {
       phase,
       configurationRevision: draft.configurationRevision,
       configurationEditable: !expired && order.items.length === 0,
+      checkoutEvidenceAccepted: Boolean(order.acceptedOrderPriceBindingId),
       modelFiles,
       items: itemDtos,
       configurationOptions,
