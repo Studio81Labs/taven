@@ -61,7 +61,6 @@ export class PaymentsService {
     authorization?: string,
     idempotencyKeyInput?: string,
   ): Promise<CheckoutPaymentDto> {
-    const claimPolicyRevision = assertCheckoutPaymentFlowsEnabled();
     const sessionId = normalizedUuid(sessionIdInput, "sessionId");
     const token = bearerCapability(authorization);
     const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
@@ -81,6 +80,7 @@ export class PaymentsService {
       },
     );
     if (initialIdempotency.replay) return initialIdempotency.replay;
+    const claimPolicyRevision = assertCheckoutPaymentFlowsEnabled();
 
     const capabilities = await this.provider.capabilities();
     if (!capabilities.methods.includes(input.method)) {
@@ -269,7 +269,7 @@ export class PaymentsService {
 
     try {
       return await this.prisma.$transaction(async (transaction) => {
-        await lockPayment(transaction, staged.payment.id);
+        await lockPaymentEnvelope(transaction, staged.payment.id);
         const payment = await transaction.payment.findUniqueOrThrow({
           where: { id: staged.payment.id },
         });
@@ -538,7 +538,7 @@ export class PaymentsService {
     attemptKey: string,
   ): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
-      await lockPayment(transaction, paymentId);
+      await lockPaymentEnvelope(transaction, paymentId);
       const payment = await transaction.payment.findUniqueOrThrow({
         where: { id: paymentId },
       });
@@ -575,7 +575,7 @@ export class PaymentsService {
     idempotencyRecordId: string,
   ): Promise<CheckoutPaymentDto | null> {
     return this.prisma.$transaction(async (transaction) => {
-      await lockPayment(transaction, paymentId);
+      await lockPaymentEnvelope(transaction, paymentId);
       const payment = await transaction.payment.findUniqueOrThrow({
         where: { id: paymentId },
       });
@@ -609,7 +609,7 @@ export class PaymentsService {
   ): Promise<CheckoutPaymentDto | null> {
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`
-        SELECT taven_lock_checkout_payment_envelope(${paymentId}::uuid)
+        SELECT taven_lock_checkout_payment_envelope(${paymentId}::uuid)::text
       `;
       let payment = await transaction.payment.findUniqueOrThrow({
         where: { id: paymentId },
@@ -954,9 +954,12 @@ async function lockIdempotencyKey(
   `;
 }
 
-async function lockPayment(transaction: Transaction, paymentId: string) {
+async function lockPaymentEnvelope(
+  transaction: Transaction,
+  paymentId: string,
+) {
   await transaction.$queryRaw`
-    SELECT id FROM payments WHERE id = ${paymentId}::uuid FOR UPDATE
+    SELECT taven_lock_checkout_payment_envelope(${paymentId}::uuid)::text
   `;
 }
 

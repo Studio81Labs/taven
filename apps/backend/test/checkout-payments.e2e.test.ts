@@ -998,9 +998,11 @@ describe("checkout payment capture protocol", () => {
         }),
       ).resolves.toEqual([{ status: "RELEASED" }, { status: "HELD" }]);
 
+      process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "false";
       const replayResponse = await createPayment();
       expect(replayResponse.status).toBe(200);
       await expect(replayResponse.json()).resolves.toEqual(created);
+      process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
 
       providerFailure = "DEFINITIVE";
       const outageResponse = await createOutagePayment();
