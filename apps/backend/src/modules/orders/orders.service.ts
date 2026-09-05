@@ -831,13 +831,8 @@ export class OrdersService {
               orderId,
               shipmentPlanId: plan.id,
               replacementShipment: null,
-              status: {
-                in: [
-                  ShipmentStatus.LOST,
-                  ShipmentStatus.RETURNED,
-                  ShipmentStatus.CANCELLED,
-                ],
-              },
+              status: ShipmentStatus.CANCELLED,
+              cancelledAt: { not: null },
             },
           });
           if (!predecessor) {
@@ -1059,7 +1054,14 @@ export class OrdersService {
         });
         const refundIds =
           remainingLiveLabels === 0
-            ? await this.finalizeCancellation(tx, orderId, verifiedAt, key!)
+            ? await this.finalizeCancellation(
+                tx,
+                orderId,
+                verifiedAt,
+                key!,
+                await this.pendingCancellationPrintingConsumptions(tx, orderId),
+                true,
+              )
             : [];
         return result(
           orderId,
@@ -1649,17 +1651,50 @@ export class OrdersService {
       async (tx) => {
         await this.lockOrder(tx, orderId);
         if (slotCredits.length > 0) {
-          const ownedSlotCount = await tx.fulfilmentSlot.count({
+          const ownedSlots = await tx.fulfilmentSlot.findMany({
             where: {
               orderId,
               id: {
                 in: slotCredits.map(({ fulfilmentSlotId }) => fulfilmentSlotId),
               },
             },
+            select: { id: true, settlementAmountMinor: true },
           });
-          if (ownedSlotCount !== slotCredits.length) {
+          if (ownedSlots.length !== slotCredits.length) {
             throw new NotFoundException(
               "Price adjustment fulfilment slot was not found",
+            );
+          }
+          const priorAdjustments = await tx.priceAdjustment.findMany({
+            where: { orderId },
+            select: { allocation: true },
+          });
+          const priorCredits = new Map<string, bigint>();
+          for (const priorAdjustment of priorAdjustments) {
+            for (const credit of priceAdjustmentSlotCredits(
+              priorAdjustment.allocation,
+              false,
+            )) {
+              priorCredits.set(
+                credit.fulfilmentSlotId,
+                (priorCredits.get(credit.fulfilmentSlotId) ?? 0n) +
+                  credit.amountMinor,
+              );
+            }
+          }
+          const settlementBySlot = new Map(
+            ownedSlots.map((slot) => [slot.id, slot.settlementAmountMinor]),
+          );
+          if (
+            slotCredits.some(
+              (credit) =>
+                (priorCredits.get(credit.fulfilmentSlotId) ?? 0n) +
+                  credit.amountMinor >
+                settlementBySlot.get(credit.fulfilmentSlotId)!,
+            )
+          ) {
+            throw new ConflictException(
+              "Price adjustment exceeds a fulfilment Slot settlement amount",
             );
           }
         }
@@ -2230,6 +2265,15 @@ export class OrdersService {
       });
       const at = await databaseNow(tx);
       if (liveLabels.length > 0) {
+        const activePrinting = await this.activePrintingReservations(
+          tx,
+          orderId,
+        );
+        assertPrintingConsumptionCoverage(
+          activePrinting,
+          printingConsumptions,
+          false,
+        );
         await tx.shipment.updateMany({
           where: {
             id: {
@@ -2265,28 +2309,18 @@ export class OrdersService {
     at: Date,
     key: string,
     printingConsumptions = new Map<string, bigint>(),
+    allowSettledConsumptions = false,
   ): Promise<string[]> {
     await tx.shipment.updateMany({
       where: { orderId, status: ShipmentStatus.PLANNED },
       data: { status: ShipmentStatus.CANCELLED, cancelledAt: at },
     });
-    const printing = await tx.productionReservation.findMany({
-      where: {
-        job: { orderId, status: JobStatus.PRINTING },
-        status: "PRINTING",
-      },
-      select: { id: true, jobId: true },
-    });
-    if (
-      printing.length !== printingConsumptions.size ||
-      printing.some(
-        ({ jobId }) => !jobId || printingConsumptions.get(jobId) === undefined,
-      )
-    ) {
-      throw new BadRequestException(
-        "printingConsumptions must cover every actively printing Job",
-      );
-    }
+    const printing = await this.activePrintingReservations(tx, orderId);
+    assertPrintingConsumptionCoverage(
+      printing,
+      printingConsumptions,
+      allowSettledConsumptions,
+    );
     for (const production of printing) {
       await tx.$queryRaw`
         SELECT taven_settle_printing_production_reservation(
@@ -2363,7 +2397,11 @@ export class OrdersService {
     }
     const payments = await tx.payment.findMany({
       where: { orderId, capturedAmountMinor: { not: null } },
-      include: { refunds: { where: { status: "SUCCEEDED" } } },
+      include: {
+        refunds: {
+          where: { status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] } },
+        },
+      },
       orderBy: { id: "asc" },
     });
     const refundIds: string[] = [];
@@ -2399,6 +2437,33 @@ export class OrdersService {
       });
     }
     return refundIds;
+  }
+
+  private activePrintingReservations(tx: Transaction, orderId: string) {
+    return tx.productionReservation.findMany({
+      where: {
+        job: { orderId, status: JobStatus.PRINTING },
+        status: "PRINTING",
+      },
+      select: { id: true, jobId: true },
+    });
+  }
+
+  private async pendingCancellationPrintingConsumptions(
+    tx: Transaction,
+    orderId: string,
+  ): Promise<Map<string, bigint>> {
+    const rows = await tx.$queryRaw<Array<{ printingConsumptions: unknown }>>`
+      SELECT event.payload #> '{input,printingConsumptions}' AS "printingConsumptions"
+      FROM audit_events event
+      WHERE event.order_id = ${orderId}::uuid
+        AND event.event_type = 'fulfilment.command_completed'
+        AND event.payload ->> 'operation' = 'cancel'
+        AND event.payload #>> '{response,status}' = 'LABEL_CANCELLATION_PENDING'
+      ORDER BY event.created_at DESC, event.id DESC
+      LIMIT 1
+    `;
+    return cancellationPrintingConsumptions(rows[0]?.printingConsumptions);
   }
 
   private async command(
@@ -2687,6 +2752,23 @@ function cancellationPrintingConsumptions(input: unknown): Map<string, bigint> {
     );
   });
   return consumptions;
+}
+
+function assertPrintingConsumptionCoverage(
+  printing: Array<{ jobId: string | null }>,
+  consumptions: Map<string, bigint>,
+  allowSettledConsumptions: boolean,
+): void {
+  if (
+    (!allowSettledConsumptions && printing.length !== consumptions.size) ||
+    printing.some(
+      ({ jobId }) => !jobId || consumptions.get(jobId) === undefined,
+    )
+  ) {
+    throw new BadRequestException(
+      "printingConsumptions must cover every actively printing Job",
+    );
+  }
 }
 
 function enumValue<T extends Record<string, string>>(

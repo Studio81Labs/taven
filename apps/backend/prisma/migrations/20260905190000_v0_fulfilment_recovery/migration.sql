@@ -59,6 +59,142 @@ BEGIN
 END;
 $$;
 
+-- Cancellation refunds reserve only the capture balance not already committed by
+-- another active refund. Keep the order-level obligation aligned with the same
+-- PENDING/SUSPENDED/SUCCEEDED accounting used by the capture guard.
+CREATE OR REPLACE FUNCTION taven_reconcile_customer_cancellation_refund_order()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+    target_order_status "order_status";
+    has_failed_job boolean;
+BEGIN
+    IF TG_TABLE_NAME = 'orders' THEN
+        target_order_id := NEW."id";
+    ELSIF TG_TABLE_NAME = 'payments' THEN
+        target_order_id := NEW."order_id";
+    ELSE
+        SELECT payment."order_id"
+        INTO target_order_id
+        FROM "payments" payment
+        WHERE payment."id" = NEW."payment_id";
+    END IF;
+
+    SELECT target_order."status"
+    INTO target_order_status
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM "jobs" job
+        WHERE job."order_id" = target_order_id
+          AND job."status" IN ('FAILED', 'QC_REJECTED')
+    )
+    INTO has_failed_job;
+
+    IF target_order_status NOT IN ('CANCELLED', 'REFUNDED')
+       AND NOT (
+           target_order_status IN ('SHIPPED', 'DELIVERED', 'COMPLETED')
+           AND taven_has_refunded_post_void_handoff_reconciliation(
+               target_order_id
+           )
+       )
+       AND EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           JOIN "refund_transactions" refund
+             ON refund."payment_id" = payment."id"
+           WHERE payment."order_id" = target_order_id
+             AND refund."reason" = 'CUSTOMER_CANCELLATION'
+             AND refund."status" IN ('PENDING', 'SUSPENDED', 'SUCCEEDED')
+       ) THEN
+        RAISE EXCEPTION 'customer-cancellation refund requires a cancelled order lifecycle'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_customer_cancellation_refund_lifecycle_check';
+    END IF;
+
+    IF target_order_status = 'CANCELLED'
+       AND NOT has_failed_job
+       AND EXISTS (
+           SELECT 1
+           FROM "payments" payment
+           CROSS JOIN LATERAL (
+               SELECT coalesce(sum(refund."amount_minor") FILTER (
+                          WHERE refund."status" = 'SUCCEEDED'
+                      ), 0) AS succeeded_total,
+                      coalesce(sum(refund."amount_minor") FILTER (
+                          WHERE refund."status" IN ('PENDING', 'SUSPENDED')
+                      ), 0) AS active_pending_total
+               FROM "refund_transactions" refund
+               WHERE refund."payment_id" = payment."id"
+           ) refund_totals
+           LEFT JOIN LATERAL (
+               SELECT refund."amount_minor", refund."status"
+               FROM "refund_transactions" refund
+               LEFT JOIN "payment_provider_events" selected_event
+                 ON selected_event."id" = refund."provider_result_event_id"
+                AND selected_event."refund_transaction_id" = refund."id"
+               WHERE refund."payment_id" = payment."id"
+                 AND refund."reason" = 'CUSTOMER_CANCELLATION'
+               ORDER BY selected_event."occurred_at" DESC NULLS LAST,
+                        refund."requested_at" DESC,
+                        refund."created_at" DESC,
+                        refund."id" DESC
+               LIMIT 1
+           ) latest_customer_cancellation_refund ON true
+           WHERE payment."order_id" = target_order_id
+             AND payment."captured_amount_minor" IS NOT NULL
+             AND NOT (
+                 NOT payment."capture_authorized"
+                 AND payment."capture_cutoff_at" IS NOT NULL
+                 AND payment."captured_at" IS NOT NULL
+                 AND payment."captured_at" >= payment."capture_cutoff_at"
+             )
+             AND NOT (
+                 (
+                     payment."captured_amount_minor"
+                       - refund_totals.succeeded_total = 0
+                     AND payment."status" = 'REFUNDED'
+                 )
+                 OR (
+                     payment."captured_amount_minor"
+                       - refund_totals.succeeded_total > 0
+                     AND refund_totals.active_pending_total
+                       = payment."captured_amount_minor"
+                         - refund_totals.succeeded_total
+                     AND payment."status" = 'REFUND_PENDING'
+                 )
+                 OR (
+                     payment."captured_amount_minor"
+                       - refund_totals.succeeded_total
+                       - refund_totals.active_pending_total > 0
+                     AND latest_customer_cancellation_refund."status"
+                       IS NOT DISTINCT FROM 'FAILED'::"refund_status"
+                     AND latest_customer_cancellation_refund."amount_minor"
+                       = payment."captured_amount_minor"
+                         - refund_totals.succeeded_total
+                         - refund_totals.active_pending_total
+                     AND payment."status" = CASE
+                         WHEN refund_totals.active_pending_total > 0
+                             THEN 'REFUND_PENDING'::"payment_status"
+                         WHEN refund_totals.succeeded_total = 0
+                             THEN 'CAPTURED'::"payment_status"
+                         ELSE 'PARTIALLY_REFUNDED'::"payment_status"
+                     END
+                 )
+             )
+       ) THEN
+        RAISE EXCEPTION 'ordinary cancelled orders require complete customer-cancellation refund work for every captured payment'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_customer_cancellation_refund_obligation_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION taven_reconcile_payment_capture_activation()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -520,6 +656,8 @@ DECLARE
     slot_id uuid;
     slot_ids uuid[] := ARRAY[]::uuid[];
     credit_amount bigint;
+    slot_settlement_amount bigint;
+    prior_credit_amount numeric;
     allocated_amount bigint := 0;
 BEGIN
     IF jsonb_typeof(NEW."allocation") <> 'object' THEN
@@ -540,6 +678,11 @@ BEGIN
         RAISE EXCEPTION 'PriceAdjustment slotCredits must be a non-empty array'
             USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
     END IF;
+
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = NEW."order_id"
+    FOR UPDATE;
 
     FOR credit IN SELECT value FROM jsonb_array_elements(slot_credits)
     LOOP
@@ -567,6 +710,25 @@ BEGIN
            ) THEN
             RAISE EXCEPTION 'PriceAdjustment slot credit scope is invalid'
                 USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_allocation_check';
+        END IF;
+
+        SELECT slot."settlement_amount_minor"
+        INTO slot_settlement_amount
+        FROM "fulfilment_slots" slot
+        WHERE slot."id" = slot_id;
+
+        SELECT coalesce(sum((prior_credit.value ->> 'amountMinor')::bigint), 0)
+        INTO prior_credit_amount
+        FROM "price_adjustments" prior_adjustment
+        CROSS JOIN LATERAL jsonb_array_elements(
+            coalesce(prior_adjustment."allocation" -> 'slotCredits', '[]'::jsonb)
+        ) prior_credit(value)
+        WHERE prior_adjustment."order_id" = NEW."order_id"
+          AND (prior_credit.value ->> 'fulfilmentSlotId')::uuid = slot_id;
+
+        IF prior_credit_amount + credit_amount > slot_settlement_amount THEN
+            RAISE EXCEPTION 'PriceAdjustment credits exceed the FulfilmentSlot settlement amount'
+                USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_slot_credit_cap_check';
         END IF;
         slot_ids := array_append(slot_ids, slot_id);
         allocated_amount := allocated_amount + credit_amount;

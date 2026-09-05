@@ -686,6 +686,26 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toBe(claimCount);
   });
 
+  it("does not bypass incident remedy authorization with a parcel successor", async () => {
+    const fixture = await preparePaidOrder("lost-parcel-replacement");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "LOST");
+
+    await expect(
+      orders.createShipment(
+        fixture.foundation.orderId,
+        {
+          shipmentPlanId: fixture.foundation.shipmentPlanId,
+          replacesShipmentId: fixture.foundation.shipmentId,
+        },
+        "lost-parcel-replacement-key",
+      ),
+    ).rejects.toThrow("Shipment is not replaceable");
+  });
+
   it("resolves a Claim when a failed refund is replaced by a successful retry", async () => {
     const fixture = await preparePaidOrder("returned-refund-retry", 2);
     await advanceThroughQc(fixture, 0);
@@ -1141,6 +1161,53 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({ paymentId: balance.id, amountMinor: 1n });
   });
 
+  it("caps cumulative manual credits at each fulfilment Slot settlement", async () => {
+    const fixture = await preparePaidOrder("slot-credit-cap", 2);
+    const slot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
+    });
+    const first = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: slot.settlementAmountMinor.toString(),
+        allocation: {
+          slotCredits: [
+            {
+              fulfilmentSlotId: slot.id,
+              amountMinor: slot.settlementAmountMinor.toString(),
+            },
+          ],
+        },
+      },
+      "slot-credit-cap-first",
+    );
+    const pending = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      first.result.priceAdjustmentId as string,
+      "slot-credit-cap-refund",
+    );
+    const refundId = (pending.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("slot credit refund was not created");
+    await succeedRefund(refundId);
+
+    await expect(
+      orders.createPriceAdjustment(
+        fixture.foundation.orderId,
+        {
+          reason: "EXPRESS_BREACH",
+          amountMinor: "1",
+          allocation: {
+            slotCredits: [{ fulfilmentSlotId: slot.id, amountMinor: "1" }],
+          },
+        },
+        "slot-credit-cap-second",
+      ),
+    ).rejects.toThrow(
+      "Price adjustment exceeds a fulfilment Slot settlement amount",
+    );
+  });
+
   it("records and refunds a manual post-delivery Claim without rewinding completion", async () => {
     const fixture = await preparePaidOrder("post-delivery-claim");
     await advanceThroughQc(fixture, 0);
@@ -1238,6 +1305,63 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
       }),
     ).resolves.toMatchObject({ outcome: "DELIVERED" });
+  });
+
+  it("subtracts pending refund commitments from a cancellation refund", async () => {
+    const fixture = await preparePaidOrder("cancel-pending-refund");
+    const payment = await prisma.payment.findUniqueOrThrow({
+      where: { id: fixture.foundation.paymentId },
+    });
+    const adjustment = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: "1",
+        paymentId: payment.id,
+        allocation: { component: "express", reason: "deadline missed" },
+      },
+      "cancel-pending-refund-adjustment",
+    );
+    const adjustmentRefund = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      adjustment.result.priceAdjustmentId as string,
+      "cancel-pending-refund-dispatch",
+    );
+    const adjustmentRefundId = (
+      adjustmentRefund.result.refundIds as string[]
+    )[0];
+    if (!adjustmentRefundId) {
+      throw new Error("pending adjustment refund was not created");
+    }
+
+    const cancelled = await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "cancel with an existing refund commitment" },
+      "cancel-pending-refund-order",
+    );
+    const cancellationRefundId = (cancelled.result.refundIds as string[])[0];
+    if (!cancellationRefundId) {
+      throw new Error("remaining cancellation refund was not created");
+    }
+
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({
+        where: { id: cancellationRefundId },
+      }),
+    ).resolves.toMatchObject({
+      status: "PENDING",
+      amountMinor: payment.capturedAmountMinor! - 1n,
+    });
+    const committed = await prisma.refundTransaction.findMany({
+      where: {
+        paymentId: payment.id,
+        status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
+      },
+      select: { amountMinor: true },
+    });
+    expect(
+      committed.reduce((total, refund) => total + refund.amountMinor, 0n),
+    ).toBe(payment.capturedAmountMinor);
   });
 
   it.each(["pre-print", "post-print", "post-QC"])(
