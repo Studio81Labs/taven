@@ -20189,6 +20189,10 @@ describe("commerce persistence foundations", () => {
           `${fixtureScope}:lock-ordered-refund-insert`,
         ],
       );
+      const refundInsertAssertion = expect(refundInsert).rejects.toMatchObject({
+        code: "23514",
+        constraint: "refund_captured_payment_check",
+      });
 
       let refundInsertWaitsForOrder = false;
       for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -20221,10 +20225,7 @@ describe("commerce persistence foundations", () => {
       ).resolves.toBeDefined();
 
       await refundHolder.query("ROLLBACK");
-      await expect(refundInsert).rejects.toMatchObject({
-        code: "23514",
-        constraint: "refund_captured_payment_check",
-      });
+      await refundInsertAssertion;
       await receiptWriter.query("ROLLBACK");
       refundInsert = undefined;
 
