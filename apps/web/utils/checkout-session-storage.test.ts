@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearCheckoutSession,
   checkoutRequestFingerprint,
   loadCheckoutSession,
   recoverableCheckoutDraft,
@@ -89,5 +90,12 @@ describe("checkout session storage", () => {
     storage.setItem("taven:checkout-session:v1", "not-json");
     expect(loadCheckoutSession(storage, "session-a")).toBeUndefined();
     expect(storage.values.size).toBe(0);
+  });
+
+  it("clears checkout state when starting a fresh quote", () => {
+    const storage = new MemoryStorage();
+    saveCheckoutSession(storage, stored);
+    expect(clearCheckoutSession(storage)).toBe(true);
+    expect(loadCheckoutSession(storage, "session-a")).toBeUndefined();
   });
 });

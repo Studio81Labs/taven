@@ -35,6 +35,7 @@ const props = defineProps<{
   onDecideRisk: (decision: RiskDecision) => Promise<boolean>;
   onPrepare: () => Promise<boolean>;
   onRefresh: () => Promise<void>;
+  onRestart: () => void;
   onSelectDestination: (destination: DeliveryDestination) => Promise<boolean>;
   onSetExpress: (requested: boolean) => Promise<boolean>;
 }>();
@@ -893,6 +894,7 @@ function quantityPrice(choice: {
     <OrderCheckoutPanel
       v-if="quote.phase === 'CHECKOUT_READY'"
       :on-refresh="onRefresh"
+      :on-restart="onRestart"
       :quote="quote"
     />
 

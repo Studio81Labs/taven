@@ -83,6 +83,15 @@ export function saveCheckoutSession(
   }
 }
 
+export function clearCheckoutSession(storage: StorageLike): boolean {
+  try {
+    storage.removeItem(STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function redactCheckoutCustomerInput(
   storage: StorageLike,
   sessionId: string,

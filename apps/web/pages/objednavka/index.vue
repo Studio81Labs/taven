@@ -415,6 +415,7 @@ function inspectionLabel(status: string | undefined): string {
             :on-prepare="prepareQuote"
             :on-refresh="refreshQuote"
             :on-replace-configuration="replaceConfiguration"
+            :on-restart="chooseAnotherFile"
             :on-select-destination="selectDestination"
             :on-set-express="setExpress"
             :pending="commandPending"

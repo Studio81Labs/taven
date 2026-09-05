@@ -20,6 +20,16 @@ export interface PaymentReturnPresentation {
   tone: PaymentReturnTone;
 }
 
+export type PaymentRestartMode = "PAYMENT" | "QUOTE" | null;
+
+export function paymentRestartMode(
+  status: CheckoutPaymentStatus,
+): PaymentRestartMode {
+  if (status === "FAILED") return "PAYMENT";
+  if (status === "VOIDED") return "QUOTE";
+  return null;
+}
+
 export function initialPaymentReturnPresentation(
   kind: PaymentReturnKind,
 ): PaymentReturnPresentation {
@@ -70,7 +80,7 @@ export function paymentReturnPresentation(
       restartable: false,
     };
   }
-  if (status === "FAILED" || status === "VOIDED") {
+  if (status === "FAILED") {
     return {
       label: "PLATBA NEDOKONČENA",
       title: "Platba nebyla dokončena.",
@@ -78,6 +88,17 @@ export function paymentReturnPresentation(
         "Objednávka nebyla předána do výroby. Vraťte se ke kalkulaci a vytvořte nový platební pokus.",
       tone: "failure",
       refreshable: true,
+      restartable: true,
+    };
+  }
+  if (status === "VOIDED") {
+    return {
+      label: "OBJEDNÁVKA ZRUŠENA",
+      title: "Platební pokus byl zrušen.",
+      description:
+        "Objednávka nebyla předána do výroby. Pro další objednání začněte novou kalkulaci.",
+      tone: "failure",
+      refreshable: false,
       restartable: true,
     };
   }

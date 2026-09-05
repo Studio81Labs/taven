@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   initialPaymentReturnPresentation,
+  paymentRestartMode,
   paymentReturnPresentation,
   type CheckoutPaymentStatus,
 } from "./payment-return";
@@ -26,16 +27,23 @@ describe("payment return presentation", () => {
     });
   });
 
-  it.each(["FAILED", "VOIDED"] satisfies CheckoutPaymentStatus[])(
-    "allows a fresh attempt after %s",
-    (status) => {
-      expect(paymentReturnPresentation(status)).toMatchObject({
-        tone: "failure",
-        refreshable: true,
-        restartable: true,
-      });
-    },
-  );
+  it("retries only failed payments on the accepted quote", () => {
+    expect(paymentReturnPresentation("FAILED")).toMatchObject({
+      tone: "failure",
+      refreshable: true,
+      restartable: true,
+    });
+    expect(paymentRestartMode("FAILED")).toBe("PAYMENT");
+  });
+
+  it("routes voided payments to a fresh quote", () => {
+    expect(paymentReturnPresentation("VOIDED")).toMatchObject({
+      tone: "failure",
+      refreshable: false,
+      restartable: true,
+    });
+    expect(paymentRestartMode("VOIDED")).toBe("QUOTE");
+  });
 
   it.each([
     ["REFUND_PENDING", true],

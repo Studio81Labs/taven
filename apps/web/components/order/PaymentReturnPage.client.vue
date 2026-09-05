@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
 import {
+  clearQuoteSession,
   getSessionStorage,
   loadPaymentReturnSession,
   type StoredQuoteSession,
 } from "../../utils/quote-session-storage";
 import {
+  clearCheckoutSession,
   loadCheckoutSession,
   redactCheckoutCustomerInput,
 } from "../../utils/checkout-session-storage";
 import {
   initialPaymentReturnPresentation,
+  paymentRestartMode,
   paymentReturnPresentation,
   type PaymentReturnKind,
 } from "../../utils/payment-return";
@@ -35,6 +38,9 @@ const presentation = computed(() =>
   payment.value
     ? paymentReturnPresentation(payment.value.status)
     : initialPaymentReturnPresentation(props.returnKind),
+);
+const restartMode = computed(() =>
+  payment.value ? paymentRestartMode(payment.value.status) : null,
 );
 const toneClass = computed(() => {
   switch (presentation.value.tone) {
@@ -174,6 +180,15 @@ async function cancelPayment(): Promise<void> {
   }
 }
 
+async function startFreshQuote(): Promise<void> {
+  const storage = getSessionStorage(window);
+  if (storage) {
+    clearCheckoutSession(storage);
+    clearQuoteSession(storage);
+  }
+  await navigateTo("/objednavka");
+}
+
 function queryValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
@@ -226,13 +241,21 @@ function queryValue(value: unknown): string | undefined {
           {{ cancelling ? "Rušíme…" : "Opravdu zrušit platební pokus" }}
         </button>
         <NuxtLink
-          v-if="presentation.restartable"
+          v-if="restartMode === 'PAYMENT'"
           class="inline-flex min-h-12 items-center border border-[#1a1a16] px-6 font-semibold"
           to="/objednavka"
           no-prefetch
         >
           Zpět ke kalkulaci
         </NuxtLink>
+        <button
+          v-if="restartMode === 'QUOTE'"
+          class="inline-flex min-h-12 items-center border border-[#1a1a16] px-6 font-semibold"
+          type="button"
+          @click="startFreshQuote"
+        >
+          Začít novou kalkulaci
+        </button>
         <NuxtLink
           class="inline-flex min-h-12 items-center px-2 font-semibold underline decoration-[#1b44e8] decoration-2 underline-offset-4"
           to="/"

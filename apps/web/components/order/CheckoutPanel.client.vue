@@ -24,7 +24,10 @@ import {
   loadPaymentReturnSession,
   type StoredQuoteSession,
 } from "../../utils/quote-session-storage";
-import { paymentReturnPresentation } from "../../utils/payment-return";
+import {
+  paymentRestartMode,
+  paymentReturnPresentation,
+} from "../../utils/payment-return";
 
 type CheckoutPayment = components["schemas"]["CheckoutPaymentDto"];
 type CreateCheckoutPayment = components["schemas"]["CreateCheckoutPaymentDto"];
@@ -33,6 +36,7 @@ type PaymentCapabilities = components["schemas"]["PaymentCapabilitiesDto"];
 const props = defineProps<{
   quote: QuoteSession;
   onRefresh: () => Promise<void>;
+  onRestart: () => void;
 }>();
 const { $api } = useNuxtApp();
 const form = ref<HTMLFormElement>();
@@ -82,6 +86,9 @@ const selectedDestination = computed(
 );
 const paymentPresentation = computed(() =>
   payment.value ? paymentReturnPresentation(payment.value.status) : undefined,
+);
+const restartMode = computed(() =>
+  payment.value ? paymentRestartMode(payment.value.status) : null,
 );
 const canSubmit = computed(
   () =>
@@ -427,12 +434,20 @@ function compactBilling(
           {{ cancelling ? "Rušíme…" : "Zrušit platební pokus" }}
         </button>
         <button
-          v-if="payment.status === 'FAILED' || payment.status === 'VOIDED'"
+          v-if="restartMode === 'PAYMENT'"
           class="min-h-11 bg-[#1b44e8] px-5 font-semibold text-white"
           type="button"
           @click="startNewAttempt"
         >
           Zvolit nový platební pokus
+        </button>
+        <button
+          v-if="restartMode === 'QUOTE'"
+          class="min-h-11 bg-[#1b44e8] px-5 font-semibold text-white"
+          type="button"
+          @click="onRestart"
+        >
+          Začít novou kalkulaci
         </button>
         <button
           class="min-h-11 px-2 font-semibold underline decoration-2 underline-offset-4"
