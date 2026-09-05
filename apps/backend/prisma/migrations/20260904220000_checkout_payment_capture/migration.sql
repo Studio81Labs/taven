@@ -1,5 +1,3 @@
-ALTER TYPE "payment_provider_event_kind" ADD VALUE 'PAYMENT_PENDING';
-
 BEGIN;
 
 ALTER TABLE "payment_provider_events"
@@ -296,6 +294,151 @@ BEGIN
         RAISE EXCEPTION 'checkout Payment identity changed during lock acquisition'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_order_binding_immutable_check';
     END IF;
+END;
+$$;
+
+-- Checkout-driven release must join the same Order-first serialization fence
+-- as cancellation and provider capture before it touches reservation rows.
+-- The generic release function remains reusable for non-checkout workflows;
+-- this wrapper also proves that the set belongs to the Payment's Order.
+CREATE FUNCTION taven_release_checkout_phase_reservation_set(
+    target_payment_id uuid,
+    target_set_id uuid
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+BEGIN
+    PERFORM taven_lock_checkout_payment_envelope(target_payment_id);
+
+    SELECT payment."order_id" INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = target_payment_id;
+
+    PERFORM 1
+    FROM "phase_reservation_sets" reservation_set
+    JOIN "phase_resource_plans" resource_plan
+      ON resource_plan."id" = reservation_set."phase_resource_plan_id"
+     AND resource_plan."node_id" = reservation_set."node_id"
+    JOIN "order_phases" phase
+      ON phase."id" = resource_plan."order_phase_id"
+    WHERE reservation_set."id" = target_set_id
+      AND phase."order_id" = target_order_id
+    FOR UPDATE OF reservation_set;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'checkout reservation set does not belong to the Payment order'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_capture_reacquire_guard_check';
+    END IF;
+
+    RETURN taven_release_phase_reservation_set(target_set_id);
+END;
+$$;
+
+-- Preserve the reservation-key fence as the first blocking lock, then add the
+-- canonical checkout envelope before the existing Payment/resource mutation.
+-- This keeps retries compatible while preventing Payment/phase inversion with
+-- concurrent cancellation.
+ALTER FUNCTION taven_reacquire_phase_reservation_for_capture(
+    uuid, uuid, uuid, text, uuid
+) RENAME TO taven_reacquire_phase_reservation_after_checkout_lock;
+
+CREATE FUNCTION taven_reacquire_phase_reservation_for_capture(
+    previous_phase_reservation_set_id uuid,
+    target_node_id uuid,
+    target_phase_resource_plan_id uuid,
+    target_reservation_key text,
+    target_payment_id uuid
+)
+RETURNS TABLE (
+    phase_reservation_set_id uuid,
+    phase_reservation_set_status "phase_reservation_set_status",
+    expires_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    existing_replacement_set "phase_reservation_sets"%ROWTYPE;
+    target_order_id uuid;
+    payment_order_id uuid;
+BEGIN
+    IF target_reservation_key IS NULL OR btrim(target_reservation_key) = ''
+       OR octet_length(target_reservation_key) > 255 THEN
+        RAISE EXCEPTION 'reservation key must be a non-empty value up to 255 bytes'
+            USING ERRCODE = '22023', CONSTRAINT = 'phase_reservation_set_reservation_key_input_check';
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(hashtextextended(target_reservation_key, 0));
+
+    -- A committed replay does not mutate checkout state, so it can return
+    -- under the reservation-key fence without joining the Order envelope.
+    -- Preserve the original function's identity and terminal checks exactly.
+    SELECT * INTO existing_replacement_set
+    FROM "phase_reservation_sets"
+    WHERE "reservation_key" = target_reservation_key
+    FOR UPDATE;
+    IF FOUND THEN
+        IF existing_replacement_set."node_id" <> target_node_id
+           OR existing_replacement_set."phase_resource_plan_id" <> target_phase_resource_plan_id
+           OR existing_replacement_set."reacquired_from_phase_reservation_set_id"
+                IS DISTINCT FROM previous_phase_reservation_set_id
+           OR existing_replacement_set."reacquisition_payment_id"
+                IS DISTINCT FROM target_payment_id THEN
+            RAISE EXCEPTION 'reservation key is already bound to another reacquisition identity'
+                USING ERRCODE = '23505', CONSTRAINT = 'phase_reservation_sets_reacquisition_identity_check';
+        END IF;
+
+        IF existing_replacement_set."status" NOT IN ('RESERVED', 'HELD')
+           OR (
+               existing_replacement_set."status" = 'RESERVED'
+               AND existing_replacement_set."expires_at" <= clock_timestamp()
+           ) THEN
+            RAISE EXCEPTION 'terminal replacement reservation cannot be revived'
+                USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_terminal_reacquire_check';
+        END IF;
+
+        RETURN QUERY
+        SELECT existing_replacement_set."id",
+               existing_replacement_set."status",
+               existing_replacement_set."expires_at";
+        RETURN;
+    END IF;
+
+    SELECT payment."order_id" INTO payment_order_id
+    FROM "payments" payment
+    WHERE payment."id" = target_payment_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'capture payment does not exist for reservation reacquisition'
+            USING ERRCODE = '23503', CONSTRAINT = 'payments_pkey';
+    END IF;
+
+    SELECT phase."order_id" INTO target_order_id
+    FROM "phase_resource_plans" plan
+    JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
+    WHERE plan."id" = target_phase_resource_plan_id
+      AND plan."node_id" = target_node_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'replacement phase resource plan does not exist for the requested node'
+            USING ERRCODE = '23503', CONSTRAINT = 'phase_reservation_sets_phase_resource_plan_id_node_id_fkey';
+    END IF;
+    IF target_order_id IS DISTINCT FROM payment_order_id THEN
+        RAISE EXCEPTION 'replacement reservation must belong to the Payment order'
+            USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_capture_reacquire_guard_check';
+    END IF;
+
+    PERFORM taven_lock_checkout_payment_envelope(target_payment_id);
+
+    RETURN QUERY
+    SELECT *
+    FROM taven_reacquire_phase_reservation_after_checkout_lock(
+        previous_phase_reservation_set_id,
+        target_node_id,
+        target_phase_resource_plan_id,
+        target_reservation_key,
+        target_payment_id
+    );
 END;
 $$;
 

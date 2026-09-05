@@ -630,7 +630,7 @@ export class PaymentsService {
     if (!previous || !previousPlan) return;
     try {
       if (previous.status === "RESERVED") {
-        await this.reservations.releaseBeforePrint(previous.id);
+        await this.reservations.releaseBeforeCapture(payment.id, previous.id);
       }
       const suffix = createHash("sha256")
         .update(event.providerEventId)

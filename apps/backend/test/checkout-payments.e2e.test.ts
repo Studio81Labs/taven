@@ -2166,6 +2166,84 @@ describe("checkout payment capture protocol", () => {
     });
   });
 
+  it("takes the Order fence before releasing a checkout reservation", async () => {
+    const name = `release-lock-order-${randomUUID().slice(0, 8)}`;
+    const setupClient = await pool.connect();
+    let foundation: PersistenceFoundation;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(setupClient, `${scope}:${name}`, {
+        publicTokenHash: createHash("sha256")
+          .update(`${scope}:${name}:checkout-token`)
+          .digest("hex"),
+      });
+      ({ foundation } = await preparePayment(setupClient, fixtures, name));
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const cancellationClient = await pool.connect();
+    const releaseClient = await pool.connect();
+    const applicationName = `checkout-release-lock-${randomUUID()}`;
+    try {
+      await cancellationClient.query("BEGIN");
+      await cancellationClient.query("SET LOCAL statement_timeout = '5s'");
+      await cancellationClient.query(
+        `SELECT id FROM orders WHERE id = $1 FOR UPDATE`,
+        [foundation.orderId],
+      );
+      await releaseClient.query(
+        `SELECT set_config('application_name', $1, false)`,
+        [applicationName],
+      );
+      await releaseClient.query(`SET statement_timeout = '5s'`);
+      const releaseResult = expect(
+        releaseClient.query<{ released: boolean }>(
+          `SELECT taven_release_checkout_phase_reservation_set(
+             $1, $2
+           ) AS released`,
+          [foundation.paymentId, foundation.phaseReservationSetId],
+        ),
+      ).resolves.toMatchObject({ rows: [{ released: false }] });
+      await waitForDatabaseLock(applicationName);
+
+      const close = await cancellationClient.query<{ status: string }>(
+        `SELECT taven_close_initial_checkout_payment(
+           $1, 'CUSTOMER_CANCELLED'
+         )::text AS status`,
+        [foundation.paymentId],
+      );
+      expect(close.rows).toEqual([{ status: "VOIDED" }]);
+      await cancellationClient.query("COMMIT");
+      await releaseResult;
+
+      expect(
+        (
+          await pool.query(
+            `SELECT payment.status::text AS payment_status,
+                    reservation_set.status::text AS set_status
+             FROM payments payment
+             JOIN phase_reservation_sets reservation_set
+               ON reservation_set.id = $2
+             WHERE payment.id = $1`,
+            [foundation.paymentId, foundation.phaseReservationSetId],
+          )
+        ).rows,
+      ).toEqual([{ payment_status: "VOIDED", set_status: "RELEASED" }]);
+    } catch (error) {
+      await cancellationClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      cancellationClient.release();
+      releaseClient.release();
+    }
+  });
+
   it("serializes a real capture-versus-cancel race without unmatched money", async () => {
     const name = `concurrent-race-${randomUUID().slice(0, 8)}`;
     const setupClient = await pool.connect();

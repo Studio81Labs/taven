@@ -12,7 +12,7 @@ const paymentId = "00000000-0000-4000-8000-000000000005";
 const expiresAt = new Date("2026-08-30T12:15:00.000Z");
 
 describe("ResourceReservationService", () => {
-  it("keeps reacquisition key validation and fencing ahead of the order lock", () => {
+  it("keeps base reacquisition validation and fencing ahead of its mutation locks", () => {
     const migration = readFileSync(
       resolve(
         process.cwd(),
@@ -46,6 +46,47 @@ describe("ResourceReservationService", () => {
     expect(identityValidation).toBeGreaterThan(reservationFence);
     expect(replayReturn).toBeGreaterThan(identityValidation);
     expect(orderLock).toBeGreaterThan(reservationFence);
+  });
+
+  it("locks the checkout envelope before release and reacquisition resources", () => {
+    const migration = readFileSync(
+      resolve(
+        process.cwd(),
+        "prisma/migrations/20260904220000_checkout_payment_capture/migration.sql",
+      ),
+      "utf8",
+    );
+    const release = migration.slice(
+      migration.indexOf(
+        "CREATE FUNCTION taven_release_checkout_phase_reservation_set(",
+      ),
+      migration.indexOf(
+        "-- Preserve the reservation-key fence as the first blocking lock",
+      ),
+    );
+    const reacquire = migration.slice(
+      migration.indexOf(
+        "CREATE FUNCTION taven_reacquire_phase_reservation_for_capture(",
+      ),
+      migration.indexOf("-- Close one initial checkout attempt"),
+    );
+
+    expect(
+      release.indexOf("taven_lock_checkout_payment_envelope"),
+    ).toBeLessThan(release.indexOf("FOR UPDATE OF reservation_set"));
+    expect(release.indexOf("FOR UPDATE OF reservation_set")).toBeLessThan(
+      release.indexOf("taven_release_phase_reservation_set"),
+    );
+    expect(reacquire.indexOf("pg_advisory_xact_lock")).toBeLessThan(
+      reacquire.indexOf("taven_lock_checkout_payment_envelope"),
+    );
+    expect(
+      reacquire.indexOf("taven_lock_checkout_payment_envelope"),
+    ).toBeLessThan(
+      reacquire.indexOf(
+        "taven_reacquire_phase_reservation_after_checkout_lock",
+      ),
+    );
   });
 
   it("executes a single database-owned atomic reservation claim", async () => {
@@ -99,6 +140,18 @@ describe("ResourceReservationService", () => {
       status: "RESERVED",
       expiresAt,
     });
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the checkout lock envelope for pre-capture release", async () => {
+    const queryRaw = vi.fn().mockResolvedValue([{ released: true }]);
+    const service = new ResourceReservationService({
+      $queryRaw: queryRaw,
+    } as never);
+
+    await expect(service.releaseBeforeCapture(paymentId, setId)).resolves.toBe(
+      true,
+    );
     expect(queryRaw).toHaveBeenCalledTimes(1);
   });
 
